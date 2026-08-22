@@ -21,6 +21,12 @@ static DINPUT_KB_ALSO_MOUSE: AtomicBool = AtomicBool::new(false);
 static DINPUT_KB_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_MOUSE_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
+/// Set while the mouse pointer sits inside the overlay's minimize/maximize button.
+static POINTER_OVER_OVERLAY: AtomicBool = AtomicBool::new(false);
+/// Mouse reads whose left button was blanked because the pointer was over that button. Elden
+/// Ring polls the mouse through DirectInput, so without this a click on the overlay is also a
+/// weapon swing.
+static DINPUT_SUPPRESSED_MOUSE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_PREVIOUS_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_QUEUED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_REPEATED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
@@ -143,6 +149,15 @@ pub(crate) fn dinput_mouse_hook_fires() -> usize {
     DINPUT_MOUSE_HOOK_FIRES.load(Ordering::Relaxed)
 }
 
+pub(crate) fn dinput_suppressed_mouse_clicks() -> usize {
+    DINPUT_SUPPRESSED_MOUSE_CLICKS.load(Ordering::Relaxed)
+}
+
+/// Tell the DirectInput hooks whether the pointer is currently over the overlay's button.
+pub(crate) fn set_pointer_over_overlay(over: bool) {
+    POINTER_OVER_OVERLAY.store(over, Ordering::Relaxed);
+}
+
 pub(crate) fn dinput_suppressed_arrow_keys() -> usize {
     DINPUT_SUPPRESSED_ARROW_KEYS.load(Ordering::Relaxed)
 }
@@ -218,6 +233,9 @@ unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, dat
         zero_dinput_arrow_state(hr, size, data);
     } else {
         DINPUT_NON_KEYBOARD_READS.fetch_add(1, Ordering::Relaxed);
+        // Same vtable entry, so the mouse arrives here too and needs the same click blanking as
+        // the dedicated mouse hook below.
+        blank_overlay_mouse_click(hr, size, data);
     }
     hr
 }
@@ -233,7 +251,29 @@ unsafe extern "system" fn dinput_mouse_get_state_hook(
         return 0;
     }
     let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
-    unsafe { original(device, size, data) }
+    let hr = unsafe { original(device, size, data) };
+    blank_overlay_mouse_click(hr, size, data);
+    hr
+}
+
+/// Blank the left mouse button in a DirectInput mouse read while the pointer is over the
+/// overlay's minimize/maximize button.
+///
+/// The click still reaches imgui -- hudhook feeds that from the window procedure, which this
+/// never touches -- so the button works while the swing it would otherwise trigger does not.
+fn blank_overlay_mouse_click(hr: i32, size: u32, data: *mut u8) {
+    if hr < 0 || data.is_null() || !POINTER_OVER_OVERLAY.load(Ordering::Relaxed) {
+        return;
+    }
+    if !dinput_state::is_mouse_state(size) {
+        return;
+    }
+    let button = unsafe { data.add(dinput_state::MOUSE_BUTTON0_OFFSET) };
+    if unsafe { *button } & 0x80 == 0 {
+        return;
+    }
+    unsafe { *button = 0 };
+    DINPUT_SUPPRESSED_MOUSE_CLICKS.fetch_add(1, Ordering::Relaxed);
 }
 
 fn dinput_key_down(size: u32, data: *mut u8, offset: usize) -> bool {

@@ -4,6 +4,7 @@ use crate::{
     config::runtime_config,
     crash_telemetry,
     effects::{self, NetEffectsState},
+    present_overlay,
 };
 
 pub(crate) fn write_telemetry_throttled(state: &mut NetEffectsState, player_available: bool) {
@@ -49,7 +50,7 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_dinput_queued_selector_keys\": {},\n  \"effect_dinput_repeated_selector_keys\": {},\n  \"effect_dinput_non_keyboard_reads\": {},\n  \"effect_owned_removals\": {},\n  \"effect_unowned_removals_skipped\": {},\n  \"effect_permanent_effects\": \"{}\",\n  \"effect_duration_filtered\": {},\n  \"effect_stacked_count\": {},\n  \"effect_stack_write_failures\": {},\n",
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_dinput_suppressed_mouse_clicks\": {},\n  \"effect_dinput_queued_selector_keys\": {},\n  \"effect_dinput_repeated_selector_keys\": {},\n  \"effect_dinput_non_keyboard_reads\": {},\n  \"effect_owned_removals\": {},\n  \"effect_unowned_removals_skipped\": {},\n  \"effect_permanent_effects\": \"{}\",\n  \"effect_duration_filtered\": {},\n  \"effect_stacked_count\": {},\n  \"effect_stack_write_failures\": {},\n",
         effects::effect_hotkey_hook_active(),
         effects::effect_hotkey_hook_hits(),
         effects::effect_hotkey_applied_actions(),
@@ -58,6 +59,7 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         effects::dinput_kb_hook_fires(),
         effects::dinput_mouse_hook_fires(),
         effects::dinput_suppressed_arrow_keys(),
+        effects::dinput_suppressed_mouse_clicks(),
         effects::dinput_queued_selector_keys(),
         effects::dinput_repeated_selector_keys(),
         effects::dinput_non_keyboard_reads(),
@@ -69,9 +71,11 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         effects::stack_write_failures()
     ));
     body.push_str(&format!(
-        "  \"effect_selector_visible\": {},\n  \"effect_selector_text\": \"{}\",\n",
+        "  \"effect_selector_visible\": {},\n  \"effect_selector_text\": \"{}\",\n  \"overlay_collapsed\": {},\n  \"overlay_toggle_clicks\": {},\n",
         state.effect_selector_visible,
-        json_escape(&effects::effect_selector_text())
+        json_escape(&effects::effect_selector_text()),
+        present_overlay::overlay_collapsed(),
+        present_overlay::overlay_toggle_clicks()
     ));
     body.push_str(&crash_telemetry::telemetry_json_fields());
     body.push_str(&format!(
