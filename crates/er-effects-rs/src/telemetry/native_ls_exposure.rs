@@ -56,6 +56,11 @@ pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
     };
     let update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) as u64;
     let now_ms = crate::experiments::boot_view_epoch_ms().max(1);
+    // One line, once, mapping this clock to the log's `[+Nms]` prefix. Placed here because this is
+    // the earliest thing that runs every frame AND already reads the boot-view clock, so it neither
+    // needs a home of its own nor risks anchoring that clock. One atomic load per frame after the
+    // first.
+    log_clock_map_once();
     // MIRROR PATH (2026-08-22). The staleness test below is what made this function blind to the
     // "loading screen reappears after Escape" report: the defect happens AFTER the native screen
     // has stopped ticking, which is precisely when this returns. Those frames are not

@@ -27,6 +27,17 @@
 //       the stop. A legitimate NEW load starting inside the watch span (a death, a fast travel)
 //       would also show here, so read these next to `oracle_portrait_loadwin_history` rather than
 //       alone.
+//   oracle_in_game_menu_open_first_ms_after_cover_stop
+//       when the user opened the in-world pause/System menu after the cover released -- the Escape
+//       press the report is about. Subtract it from
+//       `oracle_cover_plate_visible_after_release_first_ms` and the answer is the press-to-
+//       reappearance interval, which used to be a hand pairing of a log line against an oracle. 0
+//       means no menu open was seen past a cover stop, which makes any plate hit above NOT the
+//       reported defect. `_edges` / `_last_ms` cover the whole session; see
+//       `in_game_menu_note_run_tick` for what the edge is and what it costs in precision.
+//   oracle_log_epoch_offset_ms
+//       the constant separating this log's `[+Nms]` prefixes from every telemetry `*_ms` above:
+//       `log = telemetry + offset`. Emitted so nobody measures it again by hand.
 //
 // This changes NOTHING that is drawn. It is telemetry, and it deliberately does not attempt a
 // pixel probe: whether the plate is up is answerable from RAM, and a full-frame readback in the
@@ -42,6 +53,25 @@
 /// still bounds the per-frame cost to one span per cover window. It is a COST bound, not a
 /// judgement about when a spurious cover may occur.
 const COVER_AFTER_RELEASE_WATCH_MS: u64 = 30_000;
+
+/// How long a break in `02_000_IngameTop` `MenuWindowJob::Run` ticks separates one menu session
+/// from the next.
+///
+/// The job runs once per presented frame while that menu is up. Measured cadence in the shipped
+/// DLL's own log of a real session (2026-08-22 11:41:30, game-dir `er-effects-autoload-debug.log`):
+/// 47-62 ms apart early, 21-23 ms apart later -- i.e. the frame period at ~16 fps and ~45 fps. One
+/// second is more than an order of magnitude above that, so a slow frame or a hitch cannot be
+/// mistaken for the menu having closed and reopened.
+///
+/// The threshold is deliberately biased toward UNDER-counting: two genuine opens less than a second
+/// apart read as one. That is the safe direction for a stamp meant to be trusted -- a missing edge
+/// is visible as a zero, a fabricated one would be read as the user's press.
+const IN_GAME_MENU_TICK_GAP_MS: u64 = 1_000;
+
+/// How far the telemetry clock may advance across the clock-map's own pair of readings before the
+/// pair is discarded as not simultaneous. 1 ms is the resolution of both clocks, so this accepts a
+/// clean reading and rejects any thread delay big enough to show up in the answer.
+const CLOCK_MAP_MAX_BRACKET_MS: u64 = 1;
 
 /// Sample the post-release state for one presented frame. Called from
 /// [`native_ls_exposure_record`] on exactly the frames that function declines to judge -- the ones
@@ -114,6 +144,107 @@ pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
     }
 }
 
+/// Note one `02_000_IngameTop` `MenuWindowJob::Run` tick, and stamp the ones that START a menu
+/// session.
+///
+/// WHY THIS EXISTS. The watch above can say a cover plate came back at ms X. The user's report says
+/// the trigger is pressing Escape quickly after a load, while the location banner is still up.
+/// Nothing stamped that press, so X could only be tied to it by hand -- on a defect whose entire
+/// signature is the interval between the two.
+///
+/// WHY THIS SIGNAL. `02_000_IngameTop` is the game's own resource name for the in-world pause/System
+/// menu (the window `request_open_ingame_menu` opens via `CSPopupMenu+0x121`), and its
+/// `MenuWindowJob` runs once per presented frame while that menu is up and not at all otherwise.
+/// Both halves are ground truth from the shipped DLL's own log of a real session (2026-08-22
+/// 11:41:30 run): zero `02_000_IngameTop` `MenuWindowJob::Run` lines across the first 39.9 s of
+/// boot, character load and gameplay, then a first line at `[+39905ms]` carrying `prev=0x0`,
+/// followed by one line every ~20-60 ms until the log cap. So a tick after a gap is an OPEN.
+///
+/// Called from the product `MenuWindowJob::Run` post-hook, which already resolves the resource name
+/// to maintain `SYSTEM_QUIT_INGAME_TOP_WINDOW` -- no new hook, no new task, and no per-frame work
+/// added anywhere that was not already running.
+pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {
+    use er_telemetry::counters::{
+        BOOT_VIEW_STOP_MS, BOOT_VIEW_STOPPED, IN_GAME_MENU_OPEN_EDGES,
+        IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP, IN_GAME_MENU_OPEN_LAST_MS,
+        IN_GAME_MENU_RUN_LAST_MS,
+    };
+    // Read the boot-view clock without STARTING it: every telemetry `*_ms` is measured from that
+    // epoch, so anchoring it here -- from a menu hook, for a stamp -- would move the origin of the
+    // whole run's timeline. Before it exists there is no cover window to correlate against anyway.
+    let Some(now_ms) = crate::experiments::boot_view_epoch_ms_if_anchored() else {
+        return;
+    };
+    let now = now_ms.max(1) as usize;
+    let prev = IN_GAME_MENU_RUN_LAST_MS.swap(now, Ordering::SeqCst) as u64;
+    if prev != 0 && now_ms.saturating_sub(prev) <= IN_GAME_MENU_TICK_GAP_MS {
+        // Still the same menu session: this is a later frame of a menu that was already up.
+        return;
+    }
+    let n = IN_GAME_MENU_OPEN_EDGES.fetch_add(1, Ordering::SeqCst) + 1;
+    IN_GAME_MENU_OPEN_LAST_MS.store(now, Ordering::SeqCst);
+    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
+        // A menu opened, but no cover has released, so this cannot be the press in the report and
+        // there is nothing to correlate it against. Counted, not logged: opening the menu is
+        // ordinary play and the log must not narrate it.
+        return;
+    }
+    let first = IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP
+        .compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+    let stop_ms = BOOT_VIEW_STOP_MS.load(Ordering::SeqCst) as u64;
+    // One line per OPEN past a cover stop -- rare by construction (the menu is not open during
+    // gameplay and the tick is de-duplicated above), so this cannot become an IO storm.
+    append_autoload_debug(format_args!(
+        "IN-GAME MENU OPEN #{n}: the game's own 02_000_IngameTop MenuWindowJob started running at {now}ms, {}ms after our cover stopped (boot_view_stop_ms={stop_ms} first_after_cover_stop={first} job=0x{job:x} window=0x{window:x}) -- correlate this against oracle_cover_plate_visible_after_release_first_ms",
+        now_ms.saturating_sub(stop_ms),
+    ));
+}
+
+/// State once, in the log, how the log's own `[+Nms]` prefix and the telemetry `*_ms` fields relate.
+///
+/// They are two lazily-anchored `Instant`s: the log's starts at the first log line (near
+/// DLL_PROCESS_ATTACH), the telemetry clock's at the first `boot_view_epoch_ms()` call (once the
+/// boot view runs, seconds later). The difference is a constant for the process -- but nothing
+/// emitted it, so every session that wanted to line a log line up against an oracle re-derived it by
+/// pairing a stamp against the line that wrote it, by hand, from scratch. The DLL holds both
+/// numbers; one line ends the re-derivation for good.
+///
+/// Called from the per-Present exposure recorder purely because that is somewhere that already runs
+/// early and already reads the boot-view clock. Steady-state cost is one atomic load.
+pub(crate) fn log_clock_map_once() {
+    use er_telemetry::counters::{LOG_EPOCH_OFFSET_LOGGED, LOG_EPOCH_OFFSET_MS};
+    if LOG_EPOCH_OFFSET_LOGGED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    if LOG_EPOCH_OFFSET_LOGGED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Some(telemetry_ms) = crate::experiments::boot_view_epoch_ms_if_anchored() else {
+        // The telemetry clock has not started, so there is no offset to state yet. Re-arm rather
+        // than reporting a made-up one; the next frame tries again.
+        LOG_EPOCH_OFFSET_LOGGED.store(0, Ordering::SeqCst);
+        return;
+    };
+    let log_ms = process_log_elapsed_ms() as u64;
+    // BRACKET THE READING. The offset is the difference between two clocks read a few instructions
+    // apart, so anything that delays the thread BETWEEN them -- a Wine scheduler preemption is the
+    // realistic one -- inflates it by exactly that delay, and the result would be trusted. Read the
+    // telemetry clock again afterwards: if it moved, the two readings were not simultaneous and the
+    // difference is not the epoch gap. Re-arm and let a later frame produce a clean pair rather than
+    // publishing a number that is off by an unknown amount.
+    let telemetry_after = crate::experiments::boot_view_epoch_ms_if_anchored().unwrap_or(u64::MAX);
+    if telemetry_after.saturating_sub(telemetry_ms) > CLOCK_MAP_MAX_BRACKET_MS {
+        LOG_EPOCH_OFFSET_LOGGED.store(0, Ordering::SeqCst);
+        return;
+    }
+    let offset = log_ms.saturating_sub(telemetry_ms);
+    LOG_EPOCH_OFFSET_MS.store(offset as usize, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "CLOCK MAP: this log's [+Nms] prefix and every telemetry *_ms field are DIFFERENT epochs. Read back to back just now: log=+{log_ms}ms telemetry={telemetry_ms}ms, so offset = log - telemetry = {offset}ms, constant for this process. To convert: log_ms = telemetry_ms + {offset}; telemetry_ms = log_ms - {offset}. (log epoch = first log line, near DLL_PROCESS_ATTACH; telemetry epoch = first boot-view tick. Also emitted as oracle_log_epoch_offset_ms.)"
+    ));
+}
+
 /// Emit the post-release watch oracles plus the boot-view null detector. Called from the telemetry
 /// writer.
 pub(crate) fn cover_after_release_write(body: &mut String) {
@@ -122,6 +253,8 @@ pub(crate) fn cover_after_release_write(body: &mut String) {
         BOOT_VIEW_DRAW_AFTER_STOP_TOTAL, BOOT_VIEW_STOP_MS, COVER_PLATE_AFTER_RELEASE_SAMPLES,
         COVER_PLATE_VISIBLE_AFTER_RELEASE, COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS,
         COVER_PLATE_VISIBLE_AFTER_RELEASE_LAST_MS, COVER_PLATE_VISIBLE_AFTER_RELEASE_MAX_RUN,
+        IN_GAME_MENU_OPEN_EDGES, IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP,
+        IN_GAME_MENU_OPEN_LAST_MS, LOG_EPOCH_OFFSET_MS,
         NATIVE_LS_ACTIVITY_AFTER_RELEASE_FADEOUTS, NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS,
         NATIVE_LS_ACTIVITY_AFTER_RELEASE_UPDATES,
     };
@@ -184,5 +317,28 @@ pub(crate) fn cover_after_release_write(body: &mut String) {
         body,
         "oracle_native_ls_activity_after_release_first_ms",
         NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_in_game_menu_open_edges",
+        IN_GAME_MENU_OPEN_EDGES.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_in_game_menu_open_last_ms",
+        IN_GAME_MENU_OPEN_LAST_MS.load(Ordering::SeqCst),
+    );
+    // The one to read next to `oracle_cover_plate_visible_after_release_first_ms`: same clock, so
+    // the interval between the user's press and the cover coming back is a subtraction.
+    push_json_usize(
+        body,
+        "oracle_in_game_menu_open_first_ms_after_cover_stop",
+        IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP.load(Ordering::SeqCst),
+    );
+    // Add to any `*_ms` above to reach the matching `[+Nms]` DLL-log prefix; subtract to go back.
+    push_json_usize(
+        body,
+        "oracle_log_epoch_offset_ms",
+        LOG_EPOCH_OFFSET_MS.load(Ordering::SeqCst),
     );
 }

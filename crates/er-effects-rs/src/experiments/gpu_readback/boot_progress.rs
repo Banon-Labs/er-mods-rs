@@ -739,6 +739,20 @@ pub(crate) fn boot_view_epoch_ms() -> u64 {
     epoch.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
+/// The same clock as [`boot_view_epoch_ms`], read WITHOUT starting it: `None` until boot-view code
+/// has anchored the epoch.
+///
+/// The distinction is not pedantry. `boot_view_epoch_ms` anchors on first call, so a caller outside
+/// the boot view that happens to run first would silently move the origin of the clock every
+/// telemetry `*_ms` field is measured against -- rewriting the meaning of the whole run's timeline
+/// to stamp one event. Callers that only want to READ the timeline (the in-game menu open stamp,
+/// the clock map) use this and simply decline to stamp while the clock does not exist yet.
+pub(crate) fn boot_view_epoch_ms_if_anchored() -> Option<u64> {
+    BOOT_VIEW_EPOCH
+        .get()
+        .map(|epoch| epoch.elapsed().as_millis().min(u64::MAX as u128) as u64)
+}
+
 /// Reopen the first-start custom loading bar for an own-menu character switch. The original boot view
 /// deliberately stops forever once the first loading window/world takes over; the custom System->Quit
 /// ProfileSelect path reuses the title/autoload pipeline later in the same process, so it needs a

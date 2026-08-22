@@ -1305,6 +1305,65 @@ pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FADEOUTS: AtomicUsize = AtomicUsize:
 /// Boot-view-epoch ms the first post-release native activity was observed (0 = none).
 pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
 
+// IN-GAME MENU OPEN STAMP (2026-08-22). The post-release cover watch above can say a cover plate
+// came back at ms X, and the user's report says the trigger is pressing Escape quickly after a
+// load. Nothing in telemetry stamped the Escape press, so X could only be tied to the press BY
+// HAND -- on a defect whose entire signature is the interval between the two. The three oracles
+// below (plus one internal edge-detector state) make that interval a measured number.
+//
+// THE SIGNAL. Not a new hook and not a state poll: the game's own `02_000_IngameTop`
+// `MenuWindowJob` running. The product `MenuWindowJob::Run` detour (the PAB one, the deterministic
+// winner at 0x7ad1c0) already dispatches on that wide resource name to maintain
+// `SYSTEM_QUIT_INGAME_TOP_WINDOW`, and `02_000_IngameTop` is the game's own name for the in-world
+// pause/System menu -- the window Escape opens. The job runs once per frame WHILE that menu is up
+// and not at all otherwise, so a tick after a gap IS the open. Ground truth for both halves of
+// that claim, from the shipped DLL's own log of a real session (2026-08-22 11:41:30 run, game-dir
+// `er-effects-autoload-debug.log`): zero `02_000_IngameTop` `MenuWindowJob::Run` lines through the
+// first 39.9 s of boot, character load and gameplay, then a first line at `[+39905ms]` carrying
+// `prev=0x0`, followed by lines every ~20-60 ms -- one per presented frame -- while the menu was
+// open.
+//
+// WHAT THE EDGE COSTS IN PRECISION. "After a gap" needs a threshold
+// (`IN_GAME_MENU_TICK_GAP_MS`), so two menu sessions closer together than that read as one, and
+// if the job ever pauses while a SUBMENU owns the screen, coming Back reads as a second open. Both
+// errors are in `_EDGES`; the latch below takes only the FIRST edge past a cover stop, which is
+// the press being asked about.
+/// Boot-view-epoch ms of the most recent `02_000_IngameTop` `MenuWindowJob::Run` tick (0 = never).
+/// This is the edge detector's own state, not an answer: it is compared against the next tick to
+/// decide whether that tick continues a menu session or starts one.
+pub static IN_GAME_MENU_RUN_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Times the in-game menu was observed OPENING (a tick more than `IN_GAME_MENU_TICK_GAP_MS` after
+/// the previous one, or the first ever). Session-cumulative.
+pub static IN_GAME_MENU_OPEN_EDGES: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the most recent open edge (0 = the menu never opened this session).
+pub static IN_GAME_MENU_OPEN_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the FIRST open edge that landed while `BOOT_VIEW_STOPPED` was set -- i.e.
+/// the first time the user opened the menu after a cover released. That is the press the
+/// 2026-08-22 report describes, so `COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS` minus this is the
+/// press-to-reappearance interval, on one clock, with no hand derivation. 0 = no such open.
+///
+/// Process-lifetime, deliberately: the counter it is meant to be subtracted from has exactly the
+/// same lifetime (also a compare-exchange-from-0 latch that no rearm clears), so on a run with
+/// several loads both describe the FIRST occurrence and the subtraction stays meaningful. Give this
+/// one a per-window reset and the pair would silently start describing different windows.
+pub static IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP: AtomicUsize = AtomicUsize::new(0);
+
+// THE TWO CLOCKS (2026-08-22). The DLL debug log's `[+Nms]` prefix and every telemetry `*_ms`
+// field are measured from DIFFERENT epochs, both lazily anchored `Instant`s: the log's
+// `PROCESS_LOG_EPOCH` starts at the first log line (near DLL_PROCESS_ATTACH) and the telemetry
+// clock's `BOOT_VIEW_EPOCH` starts at the first `boot_view_epoch_ms()` call (once the boot view
+// runs, seconds later). The gap between them is a constant for the whole process, but it had to be
+// measured by pairing a log line against the oracle it wrote -- by hand, once per session, from
+// scratch every time. Measured this way on the 2026-08-22 run: log `+40554` == `fade_complete_ms
+// 37714`, log `+35735` == `release_ready_ms 32895`, log `+39281` == `fade_start_ms 36440` -- 2840,
+// 2840, 2841. The DLL knows both numbers; it can simply say so.
+/// `log_ms - telemetry_ms`: ADD this to any telemetry `*_ms` to get the `[+Nms]` log prefix it
+/// corresponds to, SUBTRACT it from a log prefix to get the telemetry clock. Measured once, from
+/// both clocks read back to back. 0 = not measured yet (the boot-view clock had not started).
+pub static LOG_EPOCH_OFFSET_MS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the clock-map log line, so it is stated once per process and not per frame.
+pub static LOG_EPOCH_OFFSET_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
 // COVER RELEASE LATCHES (er-effects-rs-drb7). The cover's release needs the player to be
 // render-ready AND the native loading screen to be finishing. Both happen in a normal session but
 // NOT at the same instant (measured: render-ready at +27491ms, native close much later), and the
