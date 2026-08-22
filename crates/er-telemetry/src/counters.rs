@@ -1184,6 +1184,71 @@ pub static BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS: AtomicUsize = AtomicUsize::new(0
 pub static BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_STOP_NATIVE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE: AtomicUsize = AtomicUsize::new(0);
+
+// ONE-WAY RELEASE FADE (user report 2026-08-22, second round: "I still see my portrait come back
+// very briefly if I press escape too quickly after getting in game").
+//
+// THE DEFECT THESE MEASURE. `native_gfx_hold_pending` in `composite_boot_progress_inner` is
+// recomputed from scratch every frame out of two RECENCY predicates -- "the loading screen's
+// Scaleform fade-out was stamped in the last 600 ms" and "CS::LoadingScreen::Update ticked in the
+// last 900 ms". It was written as a START GATE for the release fade ("is it safe to begin fading
+// yet?"), but nothing stopped it being re-asked once the fade was already running, and when it
+// re-asserted the code fell through to the OPAQUE cover path -- which, unlike the fade frame,
+// rasterizes with `draw_portrait: true`. So a single fresh stamp mid-fade put the portrait back on
+// screen at full alpha and then let the fade finish, which is exactly the "comes back very briefly
+// and tears down" the user described.
+//
+// The stamp that does it is not the loading screen's. `scaleform_label_goto_hook` stamps
+// `LOADING_SCREEN_GFX_FADEOUT_LAST_MS` on ANY timeline label merely CONTAINING "fadeout", on ANY
+// movie -- an over-match already documented at that hook and at the release predicate -- so opening
+// the in-world menu is enough to refresh it.
+/// `LOADING_SCREEN_UPDATE_HITS` snapshotted the frame the release fade started.
+///
+/// This is what tells a REAL hold from an over-matched one. Only the `CS::LoadingScreen::Update`
+/// detour writes that counter, so a hold arriving mid-fade is backed by the game's own loading
+/// screen if and only if the count has moved past this snapshot. A Scaleform label from some other
+/// movie cannot move it. Per cover window.
+pub static BOOT_VIEW_FADE_START_LS_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Frames the OPAQUE cover path drew while this process's release fade was already running and had
+/// not yet completed. THE defect counter: it is the number that was 10 in the reproducing run
+/// br-20260822-184123-fa3d (draws 528 -> 538 across the fade window) while every existing detector
+/// read 0, because they were all gated on `BOOT_VIEW_STOPPED`, which the fade had not set yet.
+///
+/// Expected 0 for the life of the process now that the fade is one-way. Session-cumulative and
+/// never cleared at a rearm, for the reason spelled out at `BOOT_VIEW_DRAW_AFTER_STOP_TOTAL`: a
+/// detector a rearm can silently empty is not a detector.
+pub static BOOT_VIEW_NONFADE_DRAW_DURING_FADE: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the first such frame (0 = never). Subtract `oracle_boot_view_fade_start_ms`
+/// and the answer is how far into the fade the cover went opaque again.
+pub static BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Frames on which the start-gate predicate (`fadeout_pending || update_quiet_pending`) was true
+/// while the release fade was already running -- i.e. every frame the old code would have taken
+/// back to full opacity. Counted whether or not the hold was then honored, so the raw pressure on
+/// the fade stays visible even when the new rule refuses all of it. Session-cumulative.
+pub static BOOT_VIEW_FADE_HOLD_REASSERTS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the first re-assert (0 = none).
+pub static BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Re-asserts REFUSED: no `CS::LoadingScreen::Update` tick past
+/// `BOOT_VIEW_FADE_START_LS_UPDATE_HITS` backed them, so they were an over-matched Scaleform label
+/// and the fade carried on. This is the fix engaging; a nonzero value with
+/// `BOOT_VIEW_NONFADE_DRAW_DURING_FADE == 0` is the defect being caught and refused.
+pub static BOOT_VIEW_FADE_HOLD_REFUSED: AtomicUsize = AtomicUsize::new(0);
+/// Re-asserts HONORED: the game's own loading screen really did tick again mid-fade, so the fade
+/// PAUSED at its current alpha rather than completing over live loading art (er-effects-rs-wmw
+/// defect #1, the vanilla flash-through, is what that pause protects).
+pub static BOOT_VIEW_FADE_HOLD_HONORED: AtomicUsize = AtomicUsize::new(0);
+/// Total ms this cover window's release fade spent PAUSED by honored holds. The fade clock
+/// subtracts it, so the visible fade is always the full `BOOT_VIEW_RELEASE_FADE_MS` of ramp however
+/// often it was interrupted. Uncapped on purpose: the cap is applied where it is USED, so this
+/// stays the honest measure of how long the game held us.
+pub static BOOT_VIEW_FADE_HELD_MS: AtomicUsize = AtomicUsize::new(0);
+/// Pause accumulator state, not an answer: the boot-view ms of the previous PAUSED frame, or 0 when
+/// the last frame was not paused. Differencing it is what turns per-frame pauses into `_HELD_MS`.
+pub static BOOT_VIEW_FADE_HOLD_TICK_MS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive re-asserting frames right now; 0 on any fade frame with no re-assert. Only the
+/// frame that takes it from 0 to 1 logs, so one Escape press produces one line instead of the ~36
+/// a 600 ms recency window would otherwise emit from inside Present.
+pub static BOOT_VIEW_FADE_HOLD_REASSERT_RUN: AtomicUsize = AtomicUsize::new(0);
 // Loud gap oracle: nonzero means the boot cover stopped from the bail clock before
 // the native loading screen produced enough update ticks to be visibly lit.
 pub static BOOT_VIEW_DARK_GAP_FAILURES: AtomicUsize = AtomicUsize::new(0);
@@ -1243,6 +1308,149 @@ pub static NATIVE_LS_EXPOSURE_LAST_STOP_REASON: AtomicUsize = AtomicUsize::new(0
 /// Per-gate exposure tallies, indexed by the `NATIVE_LS_GATE_*` codes.
 pub static NATIVE_LS_EXPOSURE_BY_GATE: [AtomicUsize; NATIVE_LS_GATE_COUNT] =
     [const { AtomicUsize::new(0) }; NATIVE_LS_GATE_COUNT];
+
+// COVER-AFTER-RELEASE SEMAPHORES (user report 2026-08-22: "pressing Escape quickly after the
+// loading screen fades out -- while the location banner is still on screen -- makes the loading
+// screen and portrait BRIEFLY REAPPEAR and tear down").
+//
+// The run that reproduced it (br-20260822-184123-fa3d) left ZERO trace in the DLL log, and that
+// invisibility is what this group exists to end. Every per-frame oracle we had switches itself off
+// in exactly the window where the defect happens: `native_ls_exposure_record` early-returns unless
+// the game's `CS::LoadingScreen` ticked within 250 ms, and in that run the native screen stopped
+// ticking ~2.2 s BEFORE our cover stopped. So the one moment worth watching was the one moment
+// nothing was watching.
+//
+// Two independent questions, deliberately kept apart:
+//   1. Did OUR compositor draw after it latched stopped?  -> `BOOT_VIEW_DRAW_AFTER_STOP*`.
+//      Expected 0 forever. It is a NULL DETECTOR: the whole diagnosis rests on the claim that our
+//      cover did not draw the thing the user saw, and this is the counter that can refute it.
+//   2. Was the GAME's own cover plate up, and was its loading screen still working?
+//      -> `COVER_PLATE_*_AFTER_RELEASE` / `NATIVE_LS_ACTIVITY_AFTER_RELEASE_*`.
+/// Frames on which the boot-view compositor incremented a draw/fade counter while
+/// `BOOT_VIEW_STOPPED` was ALREADY set. Per cover window (cleared at every rearm).
+///
+/// Gate on this being NONZERO -- it is the check firing when it should not (bd k979). A nonzero
+/// value means the 2026-08-22 diagnosis is wrong and our own compositor is drawing after release.
+pub static BOOT_VIEW_DRAW_AFTER_STOP: AtomicUsize = AtomicUsize::new(0);
+/// Session-cumulative twin of `BOOT_VIEW_DRAW_AFTER_STOP`, never cleared. The per-window counter
+/// is the one to read when asking about the CURRENT cover window, but a rearm zeroes it, and a
+/// detector that a rearm can silently empty is not a detector. This is the copy that remembers.
+pub static BOOT_VIEW_DRAW_AFTER_STOP_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the first post-stop draw in the current cover window (0 = none).
+pub static BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms at which the current cover window latched `BOOT_VIEW_STOPPED` (0 = armed).
+///
+/// Deliberately NOT `BOOT_VIEW_FADE_COMPLETE_MS`, which the FPS-bail exit never sets. Written at
+/// both stop sites, cleared at rearm and by the FPS-bail resume, so it always describes the live
+/// latch rather than the last release fade.
+pub static BOOT_VIEW_STOP_MS: AtomicUsize = AtomicUsize::new(0);
+/// `LOADING_SCREEN_UPDATE_HITS` snapshotted at the stop, so post-release native ticks are a delta.
+pub static BOOT_VIEW_STOP_LS_UPDATE_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// `LOADING_SCREEN_GFX_FADEOUT_HITS` snapshotted at the stop, for the same reason.
+pub static BOOT_VIEW_STOP_LS_FADEOUT_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// Present frames the post-release watch actually sampled. 0 means the watch never opened, which
+/// is NOT the same answer as "sampled and saw nothing" -- without it every zero below is ambiguous.
+pub static COVER_PLATE_AFTER_RELEASE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+/// Sampled frames where the game's own `CSFakeLoadingScreenImp` cover plate read VISIBLE after our
+/// cover had already released. This is the decisive one: it says whether the surface the user
+/// reported was the GAME's plate, on a frame that actually reached Present.
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE: AtomicUsize = AtomicUsize::new(0);
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive visible-plate frames right now; resets on any sampled frame with the plate down.
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN: AtomicUsize = AtomicUsize::new(0);
+/// Longest consecutive visible-plate run since release. A brief reappearance is a short run; a
+/// plate that simply never went down is one run as long as the watch.
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_MAX_RUN: AtomicUsize = AtomicUsize::new(0);
+/// Largest `LOADING_SCREEN_UPDATE_HITS` delta observed past the stop baseline: the game's own
+/// loading screen still ticking after our cover let go.
+pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_UPDATES: AtomicUsize = AtomicUsize::new(0);
+/// Same for `LOADING_SCREEN_GFX_FADEOUT_HITS` (Scaleform fade-out stamps past the stop).
+pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FADEOUTS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms the first post-release native activity was observed (0 = none).
+pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+
+// IN-GAME MENU OPEN STAMP (2026-08-22). The post-release cover watch above can say a cover plate
+// came back at ms X, and the user's report says the trigger is pressing Escape quickly after a
+// load. Nothing in telemetry stamped the Escape press, so X could only be tied to the press BY
+// HAND -- on a defect whose entire signature is the interval between the two. The three oracles
+// below (plus one internal edge-detector state) make that interval a measured number.
+//
+// THE SIGNAL. Not a new hook and not a state poll: the game's own `02_000_IngameTop`
+// `MenuWindowJob` running. The product `MenuWindowJob::Run` detour (the PAB one, the deterministic
+// winner at 0x7ad1c0) already dispatches on that wide resource name to maintain
+// `SYSTEM_QUIT_INGAME_TOP_WINDOW`, and `02_000_IngameTop` is the game's own name for the in-world
+// pause/System menu -- the window Escape opens. The job runs once per frame WHILE that menu is up
+// and not at all otherwise, so a tick after a gap IS the open. Ground truth for both halves of
+// that claim, from the shipped DLL's own log of a real session (2026-08-22 11:41:30 run, game-dir
+// `er-effects-autoload-debug.log`): zero `02_000_IngameTop` `MenuWindowJob::Run` lines through the
+// first 39.9 s of boot, character load and gameplay, then a first line at `[+39905ms]` carrying
+// `prev=0x0`, followed by lines every ~20-60 ms -- one per presented frame -- while the menu was
+// open.
+//
+// WHAT THE EDGE COSTS IN PRECISION. "After a gap" needs a threshold
+// (`IN_GAME_MENU_TICK_GAP_MS`), so two menu sessions closer together than that read as one, and
+// if the job ever pauses while a SUBMENU owns the screen, coming Back reads as a second open. Both
+// errors are in `_EDGES`; the latch below takes only the FIRST edge past a cover stop, which is
+// the press being asked about.
+/// Boot-view-epoch ms of the most recent `02_000_IngameTop` `MenuWindowJob::Run` tick (0 = never).
+/// This is the edge detector's own state, not an answer: it is compared against the next tick to
+/// decide whether that tick continues a menu session or starts one.
+pub static IN_GAME_MENU_RUN_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Times the in-game menu was observed OPENING (a tick more than `IN_GAME_MENU_TICK_GAP_MS` after
+/// the previous one, or the first ever). Session-cumulative.
+pub static IN_GAME_MENU_OPEN_EDGES: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the most recent open edge (0 = the menu never opened this session).
+pub static IN_GAME_MENU_OPEN_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the FIRST open edge that landed while `BOOT_VIEW_STOPPED` was set -- i.e.
+/// the first time the user opened the menu after a cover released. That is the press the
+/// 2026-08-22 report describes, so `COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS` minus this is the
+/// press-to-reappearance interval, on one clock, with no hand derivation. 0 = no such open.
+///
+/// Process-lifetime, deliberately: the counter it is meant to be subtracted from has exactly the
+/// same lifetime (also a compare-exchange-from-0 latch that no rearm clears), so on a run with
+/// several loads both describe the FIRST occurrence and the subtraction stays meaningful. Give this
+/// one a per-window reset and the pair would silently start describing different windows.
+pub static IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP: AtomicUsize = AtomicUsize::new(0);
+/// How many of the session's EARLIEST open edges are stamped individually.
+///
+/// Eight, because the reported defect is driven by the FIRST press after a load and the loads that
+/// matter come a handful of menu sessions into a run; carrying more would cost atomics in a Present
+/// path for edges nobody reads.
+pub const IN_GAME_MENU_OPEN_MS_FIRST_N_LEN: usize = 8;
+/// Boot-view-epoch ms of the FIRST open edge of the session, whenever it happened (0 = never).
+///
+/// WHY IT EXISTS. The 2026-08-22 round shipped only `_LAST_MS` and
+/// `_FIRST_MS_AFTER_COVER_STOP`, and both missed the press being investigated: in run
+/// br-20260822-184123-fa3d the user's fast Escape landed DURING the release fade, before
+/// `BOOT_VIEW_STOPPED` latched, so the after-stop latch recorded the LATER control press (36537 ms)
+/// and edge #1's timestamp was simply not recoverable from telemetry at all. A press that precedes
+/// the stop is precisely the press the report is about, so it must be in the record.
+pub static IN_GAME_MENU_OPEN_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// The first `IN_GAME_MENU_OPEN_MS_FIRST_N_LEN` open edges, in order, each at its own index.
+///
+/// Edges past the end are counted by `IN_GAME_MENU_OPEN_EDGES` and stamped by `_LAST_MS`; they are
+/// not individually recoverable, which is the deliberate cost of a fixed-size array in a per-frame
+/// path. Zero at an index below `_EDGES` means that edge fired before the boot-view clock was
+/// anchored, not that it did not happen.
+pub static IN_GAME_MENU_OPEN_MS_FIRST_N: [AtomicUsize; IN_GAME_MENU_OPEN_MS_FIRST_N_LEN] =
+    [const { AtomicUsize::new(0) }; IN_GAME_MENU_OPEN_MS_FIRST_N_LEN];
+
+// THE TWO CLOCKS (2026-08-22). The DLL debug log's `[+Nms]` prefix and every telemetry `*_ms`
+// field are measured from DIFFERENT epochs, both lazily anchored `Instant`s: the log's
+// `PROCESS_LOG_EPOCH` starts at the first log line (near DLL_PROCESS_ATTACH) and the telemetry
+// clock's `BOOT_VIEW_EPOCH` starts at the first `boot_view_epoch_ms()` call (once the boot view
+// runs, seconds later). The gap between them is a constant for the whole process, but it had to be
+// measured by pairing a log line against the oracle it wrote -- by hand, once per session, from
+// scratch every time. Measured this way on the 2026-08-22 run: log `+40554` == `fade_complete_ms
+// 37714`, log `+35735` == `release_ready_ms 32895`, log `+39281` == `fade_start_ms 36440` -- 2840,
+// 2840, 2841. The DLL knows both numbers; it can simply say so.
+/// `log_ms - telemetry_ms`: ADD this to any telemetry `*_ms` to get the `[+Nms]` log prefix it
+/// corresponds to, SUBTRACT it from a log prefix to get the telemetry clock. Measured once, from
+/// both clocks read back to back. 0 = not measured yet (the boot-view clock had not started).
+pub static LOG_EPOCH_OFFSET_MS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the clock-map log line, so it is stated once per process and not per frame.
+pub static LOG_EPOCH_OFFSET_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 // COVER RELEASE LATCHES (er-effects-rs-drb7). The cover's release needs the player to be
 // render-ready AND the native loading screen to be finishing. Both happen in a normal session but

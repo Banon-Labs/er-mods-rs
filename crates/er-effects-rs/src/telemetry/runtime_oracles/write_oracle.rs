@@ -10,6 +10,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
     write_stepfinish_gate_oracle(body);
     portrait_loadwin_sample_and_write(body);
     native_ls_exposure_write(body);
+    cover_after_release_write(body);
 }
 
 /// STEP_Finish sub-gate diagnostic (bd render-handoff-freeze-second-gate-pins-2026-07-18). The

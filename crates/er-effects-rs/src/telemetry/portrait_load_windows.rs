@@ -87,6 +87,14 @@ fn portrait_published_identity_check(published_slot_tag: usize) -> &'static str 
 
 /// Window considered CLOSED after the native LoadingScreen update has been quiet this long.
 const LOADWIN_QUIET_CLOSE_MS: usize = 1500;
+/// Backstop for the deferred window-state release: if the boot-view cover has still not latched
+/// stopped this long after a window closed, release anyway.
+///
+/// The measured gap it has to cover is ~710 ms (run br-20260822-184123-fa3d: native LoadingScreen
+/// last ticked at 35504 ms so the window closes at 37004 ms, and the cover's release fade completed
+/// at 37714 ms). This is that gap with a large margin, and it exists only so a session where the
+/// cover never arms at all cannot leave the release pending forever.
+const LOADWIN_RESET_COVER_GRACE_MS: usize = 5000;
 /// Published side at/above this = the full-size product portrait.
 const LOADWIN_FULL_MIN_SIDE: usize = 1024;
 /// Windows shorter than this get the `+short` suffix (below the measured ~2.3s confirm->publish
@@ -112,6 +120,11 @@ static LOADWIN_BASE_EXPOSURE: AtomicUsize = AtomicUsize::new(0);
 // Maxima tracked while the window is open.
 static LOADWIN_MAX_CAP_SIDE: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_MAX_PUB_SIDE: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a window has closed and its portrait-state release has not yet been able to run. The
+/// release cannot happen at the close itself -- see `portrait_loadwin_try_release_window_state`.
+static LOADWIN_RESET_PENDING: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms the pending release was armed, for the grace backstop.
+static LOADWIN_RESET_PENDING_MS: AtomicUsize = AtomicUsize::new(0);
 // Last update-hook timestamp observed while the window was open. The close path must use THIS,
 // not the live counter: boot-view resets LOADING_SCREEN_UPDATE_LAST_MS to 0 at its window
 // teardown, which made window #1 close with dur_ms=0 (run 20260731-090100).
@@ -220,6 +233,10 @@ fn portrait_loadwin_tick() {
         LOADWIN_MAX_CAP_SIDE.store(0, Ordering::SeqCst);
         LOADWIN_MAX_PUB_SIDE.store(0, Ordering::SeqCst);
         LOADWIN_LAST_LIVE_MS.store(update_last, Ordering::SeqCst);
+        // A new window supersedes any deferred release from the previous one: this window will arm
+        // its own at close. Without this, a release deferred behind a character switch would fire
+        // in the middle of the switch's next window.
+        LOADWIN_RESET_PENDING.store(0, Ordering::SeqCst);
         LOADWIN_STATE.store(LOADWIN_OPEN, Ordering::SeqCst);
         let i = LOADWIN_INDEX.fetch_add(1, Ordering::SeqCst) + 1;
         append_autoload_debug(format_args!(
@@ -265,6 +282,11 @@ fn portrait_loadwin_tick() {
                     .max(LOADWIN_OPEN_MS.load(Ordering::SeqCst)),
             );
         }
+    }
+    // Deferred portrait-state release. Runs on the closing tick and on every later tick until its
+    // preconditions hold; skipped entirely while a window is open.
+    if LOADWIN_STATE.load(Ordering::SeqCst) == LOADWIN_CLOSED {
+        portrait_loadwin_try_release_window_state(now_ms);
     }
 }
 
@@ -357,4 +379,82 @@ fn portrait_loadwin_close(close_ms: usize) {
         guard.remove(0);
     }
     guard.push(record);
+    drop(guard);
+    // ARM the portrait-state release. It cannot run here -- see
+    // `portrait_loadwin_try_release_window_state` for why the close is too early.
+    LOADWIN_RESET_PENDING.store(1, Ordering::SeqCst);
+    // Stamped NOW, not with `close_ms`: `close_ms` is the window's last LIVE native tick, so the
+    // grace below would silently start `LOADWIN_QUIET_CLOSE_MS` in the past.
+    LOADWIN_RESET_PENDING_MS.store(
+        crate::experiments::boot_view_epoch_ms().max(1) as usize,
+        Ordering::SeqCst,
+    );
+}
+
+/// Release the portrait pipeline's per-window state once the loading window is over AND nothing is
+/// still displaying its head.
+///
+/// THE DANGLING WINDOW (2026-08-22). `loading_portrait_window_reset` had ZERO callers in the whole
+/// workspace; the only live reset was its switch variant, reached solely from
+/// `rearm_boot_progress_for_own_menu_load` -- a System->Quit slot confirm. So a NORMAL load never
+/// released the published head, the frozen crop envelope, `LOADING_BG_PORTRAIT_SPARED_RENDERER` (a
+/// live `CSMenuProfModelRend` retained forever and never delete-enqueued),
+/// `PORTRAIT_ANIM_BOUND_RENDERER`, `PROFILE_RT_PIN`/`PROFILE_DEPTH_PIN`, or
+/// `PORTRAIT_WINDOW_TARGET_SLOT`.
+///
+/// WHAT IT BUYS, honestly: a future spurious cover has no portrait left to put on screen, and the
+/// per-session renderer leak stops. It does NOT stop the cover surface itself reappearing -- our
+/// compositor is not what draws that (`cover_after_release.rs` is the instrumentation that will
+/// say what does).
+///
+/// WHY IT IS DEFERRED RATHER THAN DONE AT THE CLOSE. The window closes `LOADWIN_QUIET_CLOSE_MS`
+/// after the native loading screen stops ticking, and OUR cover outlives that by its release fade.
+/// In run br-20260822-184123-fa3d the native screen last ticked at 35504 ms, so the window closes
+/// at 37004 ms, while the cover's release fade did not complete until 37714 ms -- and
+/// `portrait_onto_draw_hits` advanced by 10 across exactly that stretch. Releasing at the close
+/// would therefore have blanked the portrait for the last ~710 ms of a fade that was still on
+/// screen. So the close only ARMS the release; this runs it on a later ~4 Hz tick, once
+/// `BOOT_VIEW_STOPPED` says the cover has genuinely let go.
+///
+/// MAKE-BEFORE-BREAK is preserved by two guards:
+///   * a System->Quit switch in flight (`BOOT_VIEW_OWN_MENU_LOAD_ACTIVE`) is skipped outright. That
+///     latch is set at the switch rearm and cleared only when the switch's cover stops, so it spans
+///     the return-to-title teardown window -- whose close would otherwise wipe state the
+///     character-load window that follows is about to need. The pending flag is dropped when that
+///     next window opens and re-armed at its close, so nothing is lost by waiting.
+///   * inside the reset itself, an outstanding provisional same-identity hold keeps the bridge and
+///     the frozen crop envelope, exactly as the switch variant does -- so the head a confirm-press
+///     chose to keep survives this path too.
+///
+/// ORDER vs THE VERDICT. The reset clears counters `PORTRAIT-LOADWIN VERDICT` reads --
+/// `LS_PORTRAIT_PUBLISHED_SLOT` (its `slot_tag` and its whole `identity=` check),
+/// `PORTRAIT_TARGET_NAME_HASH`, and `PORTRAIT_KICK_SLOT_KEY` (`kicked=`). Deferring past the close
+/// puts it strictly after the verdict line and the history record, so those numbers still describe
+/// the window they name.
+fn portrait_loadwin_try_release_window_state(now_ms: usize) {
+    if LOADWIN_RESET_PENDING.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    // A switch still in flight waits, and is NOT subject to the grace backstop below: the gap
+    // between a switch's teardown window and its character-load window can legitimately exceed any
+    // grace period, and firing inside it is the one outcome this must never produce.
+    if er_telemetry::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let cover_released = crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0;
+    let waited_ms = now_ms.saturating_sub(LOADWIN_RESET_PENDING_MS.load(Ordering::SeqCst));
+    // The backstop covers only the case where the cover never armed at all, so its stop latch will
+    // never be set and the release would otherwise stay pending for the life of the process.
+    if !cover_released && waited_ms < LOADWIN_RESET_COVER_GRACE_MS {
+        return;
+    }
+    LOADWIN_RESET_PENDING.store(0, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "portrait-loadwin: releasing portrait window state at {now_ms}ms ({waited_ms}ms after the window closed, cover_released={}) -- dropping the published head, crop envelope, pins, anim binding and spared renderer so nothing survives into gameplay",
+        cover_released as u8
+    ));
+    // Telemetry-writer/game-task thread, not the render thread. The reset bounded-drains in-flight
+    // portrait jobs for up to ~15 ms; once per loading window, and the same drain the switch rearm
+    // already performs from the confirm-press hook.
+    er_loading_portrait::loading_portrait_window_reset("loadwin-close");
 }

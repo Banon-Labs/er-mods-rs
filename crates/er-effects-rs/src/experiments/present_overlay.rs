@@ -287,6 +287,10 @@ fn composite_suppressed_on_native() -> bool {
 /// `er_telemetry::counters::NATIVE_LS_GATE_*` code. The caller feeds that to
 /// [`native_ls_exposure_record`], which latches the frames where the game's own loading screen was
 /// live but our cover did not draw -- er-effects-rs-wmw defect #1, the vanilla flash-through.
+///
+/// `base` is passed through for the same function's post-release MIRROR path (2026-08-22): on the
+/// frames where the native loading screen is stale, and the exposure judgement therefore does not
+/// apply, the frame is handed to the post-release cover watch instead of being dropped.
 unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
     use er_telemetry::counters::NATIVE_LS_GATE_OVERLAY_DISABLED;
     // Time the boot-view composite (the suspected per-frame WORK stall on reloads). Gated on the
@@ -300,7 +304,7 @@ unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
     };
     er_telemetry::counters::COMPOSITE_LAST_US
         .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
-    crate::telemetry::native_ls_exposure_record(gate);
+    crate::telemetry::native_ls_exposure_record(base, gate);
 }
 
 /// Returns the `NATIVE_LS_GATE_*` code describing whether the cover drew this frame, and if not,
