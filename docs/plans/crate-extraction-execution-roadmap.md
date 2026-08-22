@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,718 |
+| all `experiments/**` | 76 | 49,968 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -103,7 +103,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 62 | product GPU-readback facade | R4-R5 |
-| `gpu_readback/boot_progress.rs` | 2,719 | loading-bar, boot-cover, and product adapter families | R4-R5 |
+| `gpu_readback/boot_progress.rs` | 2,969 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/gpu_draw_shared.rs` | 469 | boot-cover draw helper family | R5 and R27-R30 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
 | `input_block.rs` | 1,404 | product input ownership | `STAY` |

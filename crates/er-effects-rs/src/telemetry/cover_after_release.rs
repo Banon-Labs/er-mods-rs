@@ -165,9 +165,9 @@ pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
 /// added anywhere that was not already running.
 pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {
     use er_telemetry::counters::{
-        BOOT_VIEW_STOP_MS, BOOT_VIEW_STOPPED, IN_GAME_MENU_OPEN_EDGES,
+        BOOT_VIEW_STOP_MS, BOOT_VIEW_STOPPED, IN_GAME_MENU_OPEN_EDGES, IN_GAME_MENU_OPEN_FIRST_MS,
         IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP, IN_GAME_MENU_OPEN_LAST_MS,
-        IN_GAME_MENU_RUN_LAST_MS,
+        IN_GAME_MENU_OPEN_MS_FIRST_N, IN_GAME_MENU_OPEN_MS_FIRST_N_LEN, IN_GAME_MENU_RUN_LAST_MS,
     };
     // Read the boot-view clock without STARTING it: every telemetry `*_ms` is measured from that
     // epoch, so anchoring it here -- from a menu hook, for a stamp -- would move the origin of the
@@ -183,6 +183,16 @@ pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {
     }
     let n = IN_GAME_MENU_OPEN_EDGES.fetch_add(1, Ordering::SeqCst) + 1;
     IN_GAME_MENU_OPEN_LAST_MS.store(now, Ordering::SeqCst);
+    // STAMP EVERY EARLY EDGE, ABOVE THE COVER-STOP TEST (2026-08-22, second round). The latch below
+    // only takes edges that land AFTER a cover stop, and the press the user is reporting lands
+    // BEFORE it -- during the release fade. In run br-20260822-184123-fa3d that is exactly what
+    // happened: the after-stop latch recorded the LATER control press at 36537 ms and edge #1, the
+    // fast one that caused the defect, left no timestamp anywhere. These two writes are what make a
+    // press that precedes the stop recoverable at all.
+    let _ = IN_GAME_MENU_OPEN_FIRST_MS.compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst);
+    if n <= IN_GAME_MENU_OPEN_MS_FIRST_N_LEN {
+        IN_GAME_MENU_OPEN_MS_FIRST_N[n - 1].store(now, Ordering::SeqCst);
+    }
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
         // A menu opened, but no cover has released, so this cannot be the press in the report and
         // there is nothing to correlate it against. Counted, not logged: opening the menu is
@@ -250,13 +260,17 @@ pub(crate) fn log_clock_map_once() {
 pub(crate) fn cover_after_release_write(body: &mut String) {
     use er_telemetry::counters::{
         BOOT_VIEW_DRAW_AFTER_STOP, BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS,
-        BOOT_VIEW_DRAW_AFTER_STOP_TOTAL, BOOT_VIEW_STOP_MS, COVER_PLATE_AFTER_RELEASE_SAMPLES,
-        COVER_PLATE_VISIBLE_AFTER_RELEASE, COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS,
-        COVER_PLATE_VISIBLE_AFTER_RELEASE_LAST_MS, COVER_PLATE_VISIBLE_AFTER_RELEASE_MAX_RUN,
-        IN_GAME_MENU_OPEN_EDGES, IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP,
-        IN_GAME_MENU_OPEN_LAST_MS, LOG_EPOCH_OFFSET_MS,
-        NATIVE_LS_ACTIVITY_AFTER_RELEASE_FADEOUTS, NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS,
-        NATIVE_LS_ACTIVITY_AFTER_RELEASE_UPDATES,
+        BOOT_VIEW_DRAW_AFTER_STOP_TOTAL, BOOT_VIEW_FADE_HELD_MS, BOOT_VIEW_FADE_HOLD_HONORED,
+        BOOT_VIEW_FADE_HOLD_REASSERTS, BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS,
+        BOOT_VIEW_FADE_HOLD_REFUSED, BOOT_VIEW_NONFADE_DRAW_DURING_FADE,
+        BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS, BOOT_VIEW_STOP_MS,
+        COVER_PLATE_AFTER_RELEASE_SAMPLES, COVER_PLATE_VISIBLE_AFTER_RELEASE,
+        COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS, COVER_PLATE_VISIBLE_AFTER_RELEASE_LAST_MS,
+        COVER_PLATE_VISIBLE_AFTER_RELEASE_MAX_RUN, IN_GAME_MENU_OPEN_EDGES,
+        IN_GAME_MENU_OPEN_FIRST_MS, IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP,
+        IN_GAME_MENU_OPEN_LAST_MS, IN_GAME_MENU_OPEN_MS_FIRST_N, IN_GAME_MENU_OPEN_MS_FIRST_N_LEN,
+        LOG_EPOCH_OFFSET_MS, NATIVE_LS_ACTIVITY_AFTER_RELEASE_FADEOUTS,
+        NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS, NATIVE_LS_ACTIVITY_AFTER_RELEASE_UPDATES,
     };
     push_json_usize(
         body,
@@ -318,6 +332,57 @@ pub(crate) fn cover_after_release_write(body: &mut String) {
         "oracle_native_ls_activity_after_release_first_ms",
         NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS.load(Ordering::SeqCst),
     );
+    // THE FADE WINDOW (2026-08-22, second round). Everything above opens only once
+    // `BOOT_VIEW_STOPPED` has latched, and the reported defect happens BEFORE that -- during the
+    // release fade. These seven measure the fade window itself:
+    //   oracle_boot_view_nonfade_draw_during_fade > 0
+    //       the opaque cover path (which rasterizes the portrait) drew while the fade was running.
+    //       That IS the defect. Expected 0; `_first_ms` minus `oracle_boot_view_fade_start_ms` says
+    //       how far into the fade it happened.
+    //   oracle_boot_view_fade_hold_reasserts > 0
+    //       the native-loading hold went true again mid-fade -- the pressure the fix exists to
+    //       absorb. Split into `_refused` (an over-matched Scaleform "fadeout" label from another
+    //       movie, e.g. the in-world menu opening; the fade carried on) and `_honored` (the game's
+    //       own `CS::LoadingScreen::Update` genuinely ticked again, so the fade paused instead of
+    //       completing over live loading art). Refused > 0 with nonfade_draw == 0 is the fix working.
+    //   oracle_boot_view_fade_held_ms
+    //       total ms honored holds paused the fade. Nonzero means a fade took longer in wall clock
+    //       than `BOOT_VIEW_RELEASE_FADE_MS` while still showing the full ramp.
+    push_json_usize(
+        body,
+        "oracle_boot_view_nonfade_draw_during_fade",
+        BOOT_VIEW_NONFADE_DRAW_DURING_FADE.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_boot_view_nonfade_draw_during_fade_first_ms",
+        BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_boot_view_fade_hold_reasserts",
+        BOOT_VIEW_FADE_HOLD_REASSERTS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_boot_view_fade_hold_reasserts_first_ms",
+        BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_boot_view_fade_hold_refused",
+        BOOT_VIEW_FADE_HOLD_REFUSED.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_boot_view_fade_hold_honored",
+        BOOT_VIEW_FADE_HOLD_HONORED.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_boot_view_fade_held_ms",
+        BOOT_VIEW_FADE_HELD_MS.load(Ordering::SeqCst),
+    );
     push_json_usize(
         body,
         "oracle_in_game_menu_open_edges",
@@ -335,6 +400,26 @@ pub(crate) fn cover_after_release_write(body: &mut String) {
         "oracle_in_game_menu_open_first_ms_after_cover_stop",
         IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP.load(Ordering::SeqCst),
     );
+    // Every edge, not just the ones past a cover stop. A press that lands DURING the release fade
+    // -- the one the report is about -- has no entry in the after-stop latch above, and edge #1's
+    // timestamp used to be unrecoverable from telemetry for exactly that reason. A 0 at an index
+    // below `_edges` means that edge fired before the boot-view clock was anchored.
+    push_json_usize(
+        body,
+        "oracle_in_game_menu_open_first_ms",
+        IN_GAME_MENU_OPEN_FIRST_MS.load(Ordering::SeqCst),
+    );
+    let menu_edges = (0..IN_GAME_MENU_OPEN_MS_FIRST_N_LEN)
+        .map(|i| {
+            IN_GAME_MENU_OPEN_MS_FIRST_N[i]
+                .load(Ordering::SeqCst)
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    body.push_str(&format!(
+        "  \"oracle_in_game_menu_open_ms_first_n\": [{menu_edges}],\n"
+    ));
     // Add to any `*_ms` above to reach the matching `[+Nms]` DLL-log prefix; subtract to go back.
     push_json_usize(
         body,
