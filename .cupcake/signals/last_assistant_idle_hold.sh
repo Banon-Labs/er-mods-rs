@@ -67,7 +67,8 @@ path = scan.latest_transcript()
 if not path:
     sys.exit(0)
 
-turn = scan.last_text_turn(scan.split_turns(scan.load_events(path)))
+events = scan.load_events(path)
+turn = scan.last_text_turn(scan.split_turns(events))
 if turn is None:
     sys.exit(0)
 last_turn = turn.text
@@ -154,8 +155,34 @@ phrase = find_idle_phrase(scrubbed)
 # -> VERBOSEPAUSE. Measured on the raw last-turn text (not the quote-scrubbed copy) so length is not
 # undercounted; user-block is checked on the scrubbed copy so a merely-quoted "wait for you" does not
 # exempt.
+# A PROSE-ONLY ANSWER IS NOT A PAUSE. VERBOSEPAUSE is about a turn that stops WITH SOMETHING
+# PENDING: either live background work still running at turn-end, or a message that announces an
+# idle/hold itself. A turn that simply answers the user's question in prose waits on nothing, and
+# neither does the corrective rewrite the wall_of_text guard forces -- that one has no tool_use BY
+# CONSTRUCTION, since its whole job is to restate an answer. Without this gate the rule degenerates
+# into "no prose answer may exceed 450 chars", which is the wall_of_text guard's job and not this
+# one's. Measured 2026-08-22: it halted three consecutive prose answers with no background task
+# running at all, twice on rewrites the wall_of_text halt had just demanded.
+# Three ways a turn can BE a pause. Events alone are not enough: a turn can narrate work in flight
+# that the transcript cannot see (a subagent compiling, a gate running elsewhere), and that turn does
+# owe a terse blocked-note. What none of these match is a plain ANSWER.
+PENDING_WORK_RE = re.compile(
+    r"\b(?:still (?:running|compiling|building|going|underway|in flight)"
+    r"|while (?:it|that|they|those) (?:run|runs|compile|compiles|build|builds)"
+    r"|once (?:it|that|they|the \w+) (?:lands|land|finishes|finish|completes|complete|returns|return|is done|are done)"
+    r"|when (?:it|that|they) (?:lands|land|finishes|finish|completes|complete|returns|return)"
+    r"|pick (?:this|it) back up"
+    r"|in the meantime)\b",
+    re.IGNORECASE,
+)
+
 verbose_n = None
-if not turn_has_work and not scan.blocked_on_user(scrubbed):
+turn_is_pause = (
+    bool(phrase)
+    or bool(scan.live_background_work(events))
+    or bool(PENDING_WORK_RE.search(scrubbed))
+)
+if turn_is_pause and not turn_has_work and not scan.blocked_on_user(scrubbed):
     verbose_n = verbose_char_count(last_turn)
 
 if verbose_n is not None:
