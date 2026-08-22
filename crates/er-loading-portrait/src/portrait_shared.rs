@@ -186,6 +186,9 @@ fn loading_portrait_drop_published_bridge() {
     PORTRAIT_CROP_MAXX.store(0, Ordering::SeqCst);
     PORTRAIT_CROP_MAXY.store(0, Ordering::SeqCst);
     PORTRAIT_CROP_SEED_FRAMES.store(0, Ordering::SeqCst);
+    // Growth events belong to ONE window's settle. Carrying the previous window's count forward would
+    // make the `portrait-crop[..]` growth numbers and the oracle disagree about which window they describe.
+    PORTRAIT_CROP_GROWTH_EVENTS.store(0, Ordering::SeqCst);
 }
 
 /// Resolve an outstanding provisional bridge hold against the build kick's record-vs-preview FACE

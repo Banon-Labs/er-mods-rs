@@ -1315,7 +1315,27 @@ pub static PORTRAIT_CROP_MINX: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MAXX: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_CROP_MAXY: AtomicUsize = AtomicUsize::new(0);
+/// Frames actually FOLDED INTO the crop envelope, saturating at `PORTRAIT_CROP_SEED_N` (40).
+///
+/// It used to increment on every `portrait_onto` call, seeding or not, which made its name a lie
+/// and its value useless: a live run read 324 against a seed window of 40, so the one question the
+/// counter exists to answer -- "is the envelope frozen yet?" -- could not be answered from it at
+/// all. Saturating makes `== PORTRAIT_CROP_SEED_N` mean FROZEN and `< N` mean still seeding, which
+/// is what every reader already assumed it meant. Written by `er_loading_portrait::portrait_onto`;
+/// read by `oracle_portrait_crop_seed_frames`; reset per portrait window alongside the four bounds.
 pub static PORTRAIT_CROP_SEED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Times a seeding frame actually MOVED one of the four crop bounds outward, i.e. the number of
+/// times the frozen-to-be rect changed shape during the seed window.
+///
+/// Separate from the frame count because the two answer different questions and only this one is
+/// about the defect the user reported -- the portrait making "micro adjustments for a few frames
+/// before settling". Apparent head size is `dst_h / crop_h` (`crop_w` cancels out of the scale), so
+/// every growth event is one visible size step, and the count is how many steps the settle took.
+/// 1 means the envelope was right from the first frame and never moved; a large count means the
+/// head shrank repeatedly on screen. Written by `er_loading_portrait::portrait_onto` next to the
+/// `portrait-crop[..]` log lines that carry the per-event detail; read by
+/// `oracle_portrait_crop_growth_events`; reset per portrait window with the bounds.
+pub static PORTRAIT_CROP_GROWTH_EVENTS: AtomicUsize = AtomicUsize::new(0);
 /// Frames the portrait compositor REFUSED to draw because the source frame was not depth-keyed --
 /// every pixel opaque, i.e. the mask cut nothing. Written by the mask gate in
 /// `er_loading_portrait::portrait_onto`; read by `oracle_portrait_draw_refused_unmasked`.
