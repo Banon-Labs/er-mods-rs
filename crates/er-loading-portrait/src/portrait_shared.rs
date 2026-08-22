@@ -79,10 +79,39 @@ pub unsafe fn portrait_slot_name_hash(slot: i32) -> usize {
 /// renderers are new objects), and clear the teardown-spared renderer so the NEXT load's teardown re-spares
 /// the new character (LOADING_BG_PORTRAIT_SPARED_RENDERER is gated `== 0` and was otherwise never reset --
 /// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
-/// use-after-free). Idempotent. (Sole current caller: the own-menu-switch rearm, via
-/// `loading_portrait_window_reset_for_switch`.)
+/// use-after-free). Idempotent.
+///
+/// THIS HAD ZERO CALLERS UNTIL 2026-08-22, and the doc comment claimed one it did not have. The
+/// only live reset was `loading_portrait_window_reset_for_switch`, called from exactly one place --
+/// `rearm_boot_progress_for_own_menu_load`, i.e. a System->Quit slot confirm. So a NORMAL load
+/// (boot, death, fast travel) never released ANY of it: the published head and its frozen crop
+/// envelope stayed live in gameplay, `LOADING_BG_PORTRAIT_SPARED_RENDERER` kept one live
+/// `CSMenuProfModelRend` retained forever and never delete-enqueued, and the pins/anim binding/
+/// target slot all stayed pointed at the finished load. `portrait_loadwin_try_release_window_state`
+/// now calls this after every loading window that is not a character switch in flight -- deferred
+/// past the close until the boot-view cover has actually released, because the cover outlives the
+/// native loading screen by its release fade and is still drawing the head across it.
+///
+/// BE CLEAR ABOUT WHAT THAT BUYS. It removes the portrait from any future SPURIOUS cover -- there
+/// is no published head left to draw -- and it stops leaking a renderer per session. It does NOT
+/// stop a cover surface reappearing after a load, because our compositor is not what draws it (see
+/// `cover_after_release.rs`). Fixing the leak is worth doing on its own terms; do not read it as a
+/// fix for the user-visible flash.
+///
+/// AND WHAT IT COSTS. Dropping the head at a normal close also means a LATER same-identity bridge
+/// hold has nothing to hold: `loading_portrait_window_reset_for_switch` will see `have_head ==
+/// false` at the next switch and start head-less, paying the ~2.3 s confirm->publish latency that
+/// the bridge existed to hide. That trade is deliberate -- a head that survives into gameplay is
+/// exactly the thing a spurious cover can put back on screen.
+///
+/// MAKE-BEFORE-BREAK IS PRESERVED for a switch that is actually in flight: an outstanding
+/// provisional hold (`PORTRAIT_BRIDGE_HOLD_PROVISIONAL`) keeps the bridge and the frozen crop
+/// envelope through this reset, exactly as `..._for_switch` does when it decides to hold. Without
+/// that, the switch's return-to-title teardown window would close under the hold and drop the head
+/// the confirm-press had just decided to keep. Every OTHER per-window pin/latch still resets.
 pub fn loading_portrait_window_reset(reason: &str) {
-    loading_portrait_window_reset_inner(reason, false)
+    let hold_bridge = PORTRAIT_BRIDGE_HOLD_PROVISIONAL.load(Ordering::SeqCst) != 0;
+    loading_portrait_window_reset_inner(reason, hold_bridge)
 }
 
 /// Own-menu-switch variant (bd er-effects-rs-dpf6 Phase 3): if the INCOMING target identity

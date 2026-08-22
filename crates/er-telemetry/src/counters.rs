@@ -1244,6 +1244,67 @@ pub static NATIVE_LS_EXPOSURE_LAST_STOP_REASON: AtomicUsize = AtomicUsize::new(0
 pub static NATIVE_LS_EXPOSURE_BY_GATE: [AtomicUsize; NATIVE_LS_GATE_COUNT] =
     [const { AtomicUsize::new(0) }; NATIVE_LS_GATE_COUNT];
 
+// COVER-AFTER-RELEASE SEMAPHORES (user report 2026-08-22: "pressing Escape quickly after the
+// loading screen fades out -- while the location banner is still on screen -- makes the loading
+// screen and portrait BRIEFLY REAPPEAR and tear down").
+//
+// The run that reproduced it (br-20260822-184123-fa3d) left ZERO trace in the DLL log, and that
+// invisibility is what this group exists to end. Every per-frame oracle we had switches itself off
+// in exactly the window where the defect happens: `native_ls_exposure_record` early-returns unless
+// the game's `CS::LoadingScreen` ticked within 250 ms, and in that run the native screen stopped
+// ticking ~2.2 s BEFORE our cover stopped. So the one moment worth watching was the one moment
+// nothing was watching.
+//
+// Two independent questions, deliberately kept apart:
+//   1. Did OUR compositor draw after it latched stopped?  -> `BOOT_VIEW_DRAW_AFTER_STOP*`.
+//      Expected 0 forever. It is a NULL DETECTOR: the whole diagnosis rests on the claim that our
+//      cover did not draw the thing the user saw, and this is the counter that can refute it.
+//   2. Was the GAME's own cover plate up, and was its loading screen still working?
+//      -> `COVER_PLATE_*_AFTER_RELEASE` / `NATIVE_LS_ACTIVITY_AFTER_RELEASE_*`.
+/// Frames on which the boot-view compositor incremented a draw/fade counter while
+/// `BOOT_VIEW_STOPPED` was ALREADY set. Per cover window (cleared at every rearm).
+///
+/// Gate on this being NONZERO -- it is the check firing when it should not (bd k979). A nonzero
+/// value means the 2026-08-22 diagnosis is wrong and our own compositor is drawing after release.
+pub static BOOT_VIEW_DRAW_AFTER_STOP: AtomicUsize = AtomicUsize::new(0);
+/// Session-cumulative twin of `BOOT_VIEW_DRAW_AFTER_STOP`, never cleared. The per-window counter
+/// is the one to read when asking about the CURRENT cover window, but a rearm zeroes it, and a
+/// detector that a rearm can silently empty is not a detector. This is the copy that remembers.
+pub static BOOT_VIEW_DRAW_AFTER_STOP_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the first post-stop draw in the current cover window (0 = none).
+pub static BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms at which the current cover window latched `BOOT_VIEW_STOPPED` (0 = armed).
+///
+/// Deliberately NOT `BOOT_VIEW_FADE_COMPLETE_MS`, which the FPS-bail exit never sets. Written at
+/// both stop sites, cleared at rearm and by the FPS-bail resume, so it always describes the live
+/// latch rather than the last release fade.
+pub static BOOT_VIEW_STOP_MS: AtomicUsize = AtomicUsize::new(0);
+/// `LOADING_SCREEN_UPDATE_HITS` snapshotted at the stop, so post-release native ticks are a delta.
+pub static BOOT_VIEW_STOP_LS_UPDATE_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// `LOADING_SCREEN_GFX_FADEOUT_HITS` snapshotted at the stop, for the same reason.
+pub static BOOT_VIEW_STOP_LS_FADEOUT_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// Present frames the post-release watch actually sampled. 0 means the watch never opened, which
+/// is NOT the same answer as "sampled and saw nothing" -- without it every zero below is ambiguous.
+pub static COVER_PLATE_AFTER_RELEASE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+/// Sampled frames where the game's own `CSFakeLoadingScreenImp` cover plate read VISIBLE after our
+/// cover had already released. This is the decisive one: it says whether the surface the user
+/// reported was the GAME's plate, on a frame that actually reached Present.
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE: AtomicUsize = AtomicUsize::new(0);
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive visible-plate frames right now; resets on any sampled frame with the plate down.
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN: AtomicUsize = AtomicUsize::new(0);
+/// Longest consecutive visible-plate run since release. A brief reappearance is a short run; a
+/// plate that simply never went down is one run as long as the watch.
+pub static COVER_PLATE_VISIBLE_AFTER_RELEASE_MAX_RUN: AtomicUsize = AtomicUsize::new(0);
+/// Largest `LOADING_SCREEN_UPDATE_HITS` delta observed past the stop baseline: the game's own
+/// loading screen still ticking after our cover let go.
+pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_UPDATES: AtomicUsize = AtomicUsize::new(0);
+/// Same for `LOADING_SCREEN_GFX_FADEOUT_HITS` (Scaleform fade-out stamps past the stop).
+pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FADEOUTS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms the first post-release native activity was observed (0 = none).
+pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+
 // COVER RELEASE LATCHES (er-effects-rs-drb7). The cover's release needs the player to be
 // render-ready AND the native loading screen to be finishing. Both happen in a normal session but
 // NOT at the same instant (measured: render-ready at +27491ms, native close much later), and the

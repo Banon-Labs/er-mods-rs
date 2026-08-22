@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,613 |
+| all `experiments/**` | 76 | 49,695 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -103,7 +103,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 62 | product GPU-readback facade | R4-R5 |
-| `gpu_readback/boot_progress.rs` | 2,627 | loading-bar, boot-cover, and product adapter families | R4-R5 |
+| `gpu_readback/boot_progress.rs` | 2,705 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/gpu_draw_shared.rs` | 469 | boot-cover draw helper family | R5 and R27-R30 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
 | `input_block.rs` | 1,404 | product input ownership | `STAY` |
@@ -128,7 +128,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
 | `own_stepper/bootstrap_drive.rs` | 874 | product bootstrap-drive policy | D5 |
 | `own_stepper/load_steps.rs` | 741 | product load-step policy | D5 |
-| `present_overlay.rs` | 946 | product present mechanism | R3 |
+| `present_overlay.rs` | 950 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |

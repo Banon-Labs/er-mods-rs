@@ -557,11 +557,82 @@ fn boot_view_reset_native_loading_semaphores() {
     LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(0, Ordering::SeqCst);
 }
 
+/// NULL DETECTOR for the 2026-08-22 "loading screen briefly reappears after Escape" report.
+///
+/// Called at BOTH boot-view composite counter sites, reading `BOOT_VIEW_STOPPED` BEFORE the frame
+/// makes its own store, so a nonzero read means the cover latched stopped on an EARLIER frame and
+/// this one drew anyway. `BOOT_VIEW_STOPPED` deliberately, not `BOOT_VIEW_FADE_COMPLETE_MS`: the
+/// FPS-bail exit never sets the latter, so a bail-stopped window would look armed forever.
+///
+/// It is expected to stay 0 for the life of the process, and that is precisely the point. The
+/// diagnosis of that report rests on the claim that OUR compositor did not draw what the user saw
+/// (`oracle_boot_view_stop_reason=1`, epoch_seq 0, fps_bail_resumes 0 -- none of the clearing paths
+/// ran). If this ever fires, that claim is false and the next reader learns it from one number
+/// instead of re-deriving it.
+///
+/// ONE KNOWN WAY IT COULD OVER-REPORT, so a single hit is read and not merely believed: both stop
+/// stores happen BEFORE `BOOT_VIEW_DRAW_BUSY` is taken, so if the self-present pump thread and the
+/// render thread were ever inside the composite together, one could latch the stop while the other
+/// was already past the entry guard. That needs the pump still running at a release fade, and the
+/// pump stops at the game's first present ~30 s earlier -- but the log line carries `stop_ms` for
+/// exactly this reason: a same-instant stop is that race, a stop seconds earlier is not.
+fn boot_view_note_draw_after_stop(site: &str) {
+    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let n = er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP.fetch_add(1, Ordering::SeqCst) + 1;
+    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_TOTAL.fetch_add(1, Ordering::SeqCst);
+    let now_ms = boot_view_epoch_ms().max(1) as usize;
+    let _ = er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.compare_exchange(
+        0,
+        now_ms,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    // First of the window only. This runs inside Present; if the latch is ever wrong it is wrong
+    // every frame, and a per-frame log would turn a render stall into an IO storm.
+    if n == 1 {
+        append_autoload_debug(format_args!(
+            "boot-view: DRAW AFTER STOP at {now_ms}ms site={site} -- the cover composited a frame with BOOT_VIEW_STOPPED already set (stop_reason={} stop_ms={} epoch_seq={}); the 2026-08-22 \"our compositor did not draw it\" diagnosis does not hold",
+            BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
+            er_telemetry::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst),
+            BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
+        ));
+    }
+}
+
+/// Snapshot everything the post-release watch measures deltas against, at the instant the cover
+/// latches stopped. Called from BOTH stop sites (release fade and FPS bail) so the watch behaves
+/// the same whichever way the window ended.
+fn boot_view_stamp_stop_baselines(now_ms: usize) {
+    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(now_ms.max(1), Ordering::SeqCst);
+    // A new watch starts with a clean RUN. The watch only samples inside its window, so a run left
+    // part-way through when the previous window's watch expired would otherwise be continued by the
+    // next one -- and `_max_run` is exactly the number that tells a brief reappearance apart from a
+    // plate that never went down, so carrying a stale count into it corrupts the one reading it is
+    // for. The cumulative frame/first/last counters are session totals and deliberately survive.
+    er_telemetry::counters::COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(
+        LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(
+        LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+}
+
 /// Re-arm the cover DRAWING WINDOW: stop latch, window clock, handoff/fade/dark-gap state, draw cache.
 /// This is "start covering again", independent of whether the phase walk is also starting over.
 fn boot_view_reset_cover_window() {
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
+    // Post-stop draw detector + the post-release watch's baselines belong to ONE window.
+    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(0, Ordering::SeqCst);
     BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
     BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
     BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
@@ -2152,6 +2223,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
     if !unsafe { execute_and_wait(queue, list, fence) } {
         return false;
     }
+    boot_view_note_draw_after_stop("release-fade");
     BOOT_VIEW_FADE_HITS.fetch_add(1, Ordering::SeqCst);
     true
 }
@@ -2235,6 +2307,9 @@ fn boot_view_try_fps_bail_resume_on_publish() -> bool {
     );
     BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    // The window is drawing again, so the post-release watch must close with it -- otherwise a
+    // resumed cover would keep sampling against a stop that has been taken back.
+    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
     let n = BOOT_VIEW_FPS_BAIL_RESUMES.fetch_add(1, Ordering::SeqCst) + 1;
     append_autoload_debug(format_args!(
         "boot-view: FPS-bail RESUME #{n} on portrait publish (version {bail_version} -> {version}, update_recent={update_recent} fadeout_recent={fadeout_recent}) -- compositing the published head for the rest of the window; release fade owns the end"
@@ -2434,6 +2509,7 @@ unsafe fn composite_boot_progress_inner(
                 if fade_elapsed >= BOOT_VIEW_RELEASE_FADE_MS {
                     if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                         BOOT_VIEW_FADE_COMPLETE_MS.store(now_ms, Ordering::SeqCst);
+                        boot_view_stamp_stop_baselines(now_ms);
                         // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): stop reason
                         // (can-move world proof vs render-release) + arm->stop duration.
                         BOOT_VIEW_STOP_REASON.store(
@@ -2509,6 +2585,7 @@ unsafe fn composite_boot_progress_inner(
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and
                 // slot-key snapshots the publish-triggered resume compares/restores against.
                 BOOT_VIEW_STOP_REASON.store(BOOT_VIEW_STOP_REASON_FPS_BAIL, Ordering::SeqCst);
+                boot_view_stamp_stop_baselines(now_ms as usize);
                 BOOT_VIEW_COVER_WINDOW_MS_LAST.store(
                     (now_ms as usize)
                         .saturating_sub(BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst)),
@@ -2616,6 +2693,7 @@ unsafe fn composite_boot_progress_inner(
         }
     }
 
+    boot_view_note_draw_after_stop("composite");
     let hits = BOOT_VIEW_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 {
         append_autoload_debug(format_args!(

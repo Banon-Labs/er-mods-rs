@@ -27,6 +27,13 @@
 //   oracle_native_ls_exposure_last_stop_reason  BOOT_VIEW_STOP_REASON at the last exposure frame
 //                                      (1 = release fade, 2 = FPS bail, 3 = world handoff)
 //
+// THE OTHER HALF OF THE FRAME (2026-08-22). This module only judges frames where the native
+// loading screen is LIVE, and that turned out to be a blind spot as large as the one it closed: the
+// "loading screen reappears after Escape" report happens AFTER the native screen stops ticking, so
+// the only per-frame oracle in the DLL switched itself off for the whole window the user was
+// describing and the reproducing run logged nothing at all. The stale frames now go to
+// `cover_after_release.rs` instead of being dropped. Nothing here changed to make room for it.
+//
 // A frame is only judged while the native loading screen is LIVE. `LOADING_SCREEN_UPDATE_LAST_MS` is
 // stamped by the native CS::LoadingScreen::Update hook every frame the screen ticks, so freshness is
 // the live signal. The window is deliberately wider than one frame (the game presents as slowly as
@@ -37,7 +44,9 @@ const NATIVE_LS_LIVE_FRESH_MS: u64 = 250;
 
 /// Called once per Present on the game swapchain with the gate that decided this frame's cover.
 /// Cheap by construction (a handful of relaxed atomics) -- it runs on the render thread.
-pub(crate) fn native_ls_exposure_record(gate: usize) {
+///
+/// `base` is the game module base, used only by the post-release MIRROR path below.
+pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
     use er_telemetry::counters::{
         BOOT_VIEW_STOP_REASON, LOADING_SCREEN_UPDATE_LAST_MS, NATIVE_LS_COVERED_FRAMES,
         NATIVE_LS_EXPOSURE_BY_GATE, NATIVE_LS_EXPOSURE_CUR_RUN, NATIVE_LS_EXPOSURE_FIRST_MS,
@@ -46,12 +55,17 @@ pub(crate) fn native_ls_exposure_record(gate: usize) {
         NATIVE_LS_GATE_DREW,
     };
     let update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) as u64;
-    if update_last == 0 {
-        return;
-    }
     let now_ms = crate::experiments::boot_view_epoch_ms().max(1);
-    if now_ms.saturating_sub(update_last) > NATIVE_LS_LIVE_FRESH_MS {
-        // The game's loading screen is not on screen this frame; nothing to be exposed.
+    // MIRROR PATH (2026-08-22). The staleness test below is what made this function blind to the
+    // "loading screen reappears after Escape" report: the defect happens AFTER the native screen
+    // has stopped ticking, which is precisely when this returns. Those frames are not
+    // uninteresting, they are the interesting ones -- hand them to the post-release watch instead
+    // of dropping them. The accounting below is untouched; this is an added path, not a changed
+    // one, and the two are mutually exclusive by construction.
+    if update_last == 0 || now_ms.saturating_sub(update_last) > NATIVE_LS_LIVE_FRESH_MS {
+        // The game's loading screen is not on screen this frame; nothing to be EXPOSED -- but
+        // something may still be COVERING, which is a different question with its own oracles.
+        cover_after_release_record(base, now_ms);
         return;
     }
     if gate == NATIVE_LS_GATE_DREW {
