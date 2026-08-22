@@ -42,117 +42,36 @@
 # "Last completed turn" = the last non-empty run of assistant text bounded by real user prompts;
 # tool-result carrier "user" events do NOT split a turn.
 #
+# THE SHARED HALF LIVES IN scripts/cupcake_turn_scan.py (2026-08-22): transcript discovery, turn
+# bucketing, the status-peek command list, and the blocked-on-user phrasing are imported, not copied,
+# so this guard and last_assistant_unexecuted_promise.sh can never drift into disagreeing about
+# whether the same turn did real work. Only the idle-specific prose classification is local.
+#
 # Double-quoted spans are stripped before prose matching so quoting the ban (this file, the reminder
 # text, or a meta-discussion like the phrase "I'm holding") does not false-trip; a real unquoted
 # announcement still matches. Fail-open (empty output) on any error so a transcript hiccup cannot
 # wedge the session.
 set -uo pipefail
+CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
+export CUPCAKE_SIGNAL_REPO_ROOT
 python3 - <<'PY' 2>/dev/null || true
-import glob, json, os, re, sys
+import os, re, sys
 
-cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-key = cwd.replace("/", "-")
-tdir = os.path.join(os.path.expanduser("~/.claude/projects"), key)
-files = sorted(glob.glob(os.path.join(tdir, "*.jsonl")),
-               key=lambda p: os.path.getmtime(p), reverse=True)
-if not files:
-    sys.exit(0)
-
-
-def is_real_user_prompt(ev):
-    """A genuine user prompt starts a new turn. Tool-result 'user' events do NOT (they are the harness
-    handing tool output back mid-turn), so they must not split the assistant turn."""
-    if ev.get("type") != "user":
-        return False
-    content = ev.get("message", {}).get("content")
-    if isinstance(content, str):
-        return content.strip() != ""
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                return False  # tool-result carrier, not a prompt
-        return True
-    return False
-
-
-def assistant_text(ev):
-    out = []
-    for block in ev.get("message", {}).get("content", []) or []:
-        if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
-            out.append(block["text"])
-    return "\n".join(out)
-
-
-# Command names that make a Bash call a mere "status peek" (looking at a log/output), NOT real work.
-PEEK_CMDS = {"tail", "cat", "head", "wc", "grep", "ls", "echo", "less", "more"}
-
-
-def bash_is_status_peek(cmd):
-    """True when EVERY command in the (possibly piped/chained) Bash invocation is a peek command.
-    Any non-peek command (cargo, python, bd remember, a build, ...) makes the call substantive."""
-    if not isinstance(cmd, str) or not cmd.strip():
-        return False  # empty command -> not a peek (but also handled as non-substantive by caller)
-    # Strip quoted spans so a quoted pipe/pattern (grep "a|b") does not desync the segment split.
-    stripped = re.sub(r'"[^"]*"', " ", cmd)
-    stripped = re.sub(r"'[^']*'", " ", stripped)
-    segments = re.split(r"\|\||&&|[|;\n]", stripped)
-    names = []
-    for seg in segments:
-        toks = seg.strip().split()
-        i = 0
-        while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
-            i += 1  # skip leading FOO=bar env assignments
-        if i < len(toks):
-            names.append(toks[i].split("/")[-1])  # basename of the command
-    if not names:
-        return False
-    return all(n in PEEK_CMDS for n in names)
-
-
-def assistant_has_substantive_tool(ev):
-    """A turn is doing real work if it has an Edit/Write/Agent tool_use, or a Bash call that is not a
-    pure status/log peek."""
-    for block in ev.get("message", {}).get("content", []) or []:
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
-            continue
-        name = block.get("name")
-        if name in ("Edit", "Write", "Agent"):
-            return True
-        if name == "Bash":
-            cmd = (block.get("input") or {}).get("command", "")
-            if isinstance(cmd, str) and cmd.strip() and not bash_is_status_peek(cmd):
-                return True
-    return False
-
-
-# Bucket assistant text AND substantive-tool flags into turns delimited by real user prompts; keep
-# the last bucket that has any text (its own substantive flag decides exemption (b)).
-turns = [{"text": [], "work": False}]
+sys.path.insert(0, os.path.join(os.environ.get("CUPCAKE_SIGNAL_REPO_ROOT", "."), "scripts"))
 try:
-    with open(files[0], encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            try:
-                ev = json.loads(line)
-            except ValueError:
-                continue
-            if is_real_user_prompt(ev):
-                turns.append({"text": [], "work": False})
-            elif ev.get("type") == "assistant":
-                t = assistant_text(ev)
-                if t:
-                    turns[-1]["text"].append(t)
-                if assistant_has_substantive_tool(ev):
-                    turns[-1]["work"] = True
-except OSError:
+    import cupcake_turn_scan as scan
+except Exception:
+    sys.exit(0)  # fail open: a missing helper must never wedge a session
+
+path = scan.latest_transcript()
+if not path:
     sys.exit(0)
 
-last_turn = ""
-turn_has_work = False
-for bucket in reversed(turns):
-    if bucket["text"]:
-        last_turn = "\n".join(bucket["text"])
-        turn_has_work = bucket["work"]
-        break
+turn = scan.last_text_turn(scan.split_turns(scan.load_events(path)))
+if turn is None:
+    sys.exit(0)
+last_turn = turn.text
+turn_has_work = turn.work
 
 # Strip DOUBLE-quoted spans so quoting the ban does not count as using it (single quotes are left
 # alone because the phrases themselves contain apostrophes, e.g. I'm / I'll).
@@ -202,25 +121,8 @@ def find_idle_phrase(text):
 # (n = char count of the message). VERBOSEPAUSE takes precedence over IDLEHOLD (its "be terse"
 # guidance is the more specific correction, and it must fire even when a justification paragraph is
 # present -- that is exactly the long "justified" hold the new rule bans).
-
-# Phrases that mean the turn is legitimately BLOCKED ON THE USER (awaiting their answer/drive). Kept
-# specific so an incidental "you"/"your" in ordinary prose does not over-exempt a verbose pause.
-USER_WAIT_RE = re.compile(
-    r"\bwait(?:ing)?\s+for\s+(?:the\s+)?(?:user|you)\b"
-    r"|\bblocked\s+on\s+(?:the\s+)?(?:user|you)\b"
-    r"|\b(?:awaiting|await)\s+(?:the\s+)?(?:user'?s?|your)\b"
-    r"|\bneed\s+(?:the\s+)?(?:user|you)\s+to\b"
-    r"|\b(?:for|until)\s+you\s+to\b"
-    r"|\bi'?ll\s+wait\s+for\s+you\b"
-    r"|\bover\s+to\s+you\b"
-    r"|\bhand(?:ing)?\s+(?:it\s+|this\s+)?(?:back\s+|off\s+)?to\s+you\b",
-    re.IGNORECASE,
-)
-
-
-def blocked_on_user(text):
-    return bool(USER_WAIT_RE.search(text))
-
+#
+# The blocked-on-user phrasing (USER_WAIT_RE) is shared: scan.blocked_on_user.
 
 # Long / multi-topic heuristic: a blocked-pause note should be one or two short sentences. Flag when the
 # message is >450 chars, OR has >3 sentences, OR contains any heading/bullet/numbered line, OR spans
@@ -253,7 +155,7 @@ phrase = find_idle_phrase(scrubbed)
 # undercounted; user-block is checked on the scrubbed copy so a merely-quoted "wait for you" does not
 # exempt.
 verbose_n = None
-if not turn_has_work and not blocked_on_user(scrubbed):
+if not turn_has_work and not scan.blocked_on_user(scrubbed):
     verbose_n = verbose_char_count(last_turn)
 
 if verbose_n is not None:

@@ -46,5 +46,5 @@ violation := msg if {
 	startswith(raw, "WALLOFTEXT:")
 	parts := split(raw, ":")
 	count(parts) >= 3
-	msg := sprintf("You wrote %s paragraphs of prose. The user reads ONE and skims the rest, so everything after the first paragraph was NOT read -- including anything important you put there. Rewrite the answer as a SINGLE paragraph. If it will not fit, that is the signal to cut content, not to add a paragraph: lead with the answer, drop the reasoning the user did not ask for, and put any remaining structure in a table or code block (those are exempt). First paragraph began: %s", [parts[1], concat(":", array.slice(parts, 2, count(parts)))])
+	msg := concat("", ["You wrote ", parts[1], " paragraphs of prose. The user reads ONE and skims the rest, so everything after the first paragraph was NOT read -- including anything important you put there. Rewrite the answer as a SINGLE paragraph. If it will not fit, that is the signal to cut content, not to add a paragraph: lead with the answer, drop the reasoning the user did not ask for, and put any remaining structure in a table or code block (those are exempt). First paragraph began: ", concat(":", array.slice(parts, 2, count(parts)))])
 }

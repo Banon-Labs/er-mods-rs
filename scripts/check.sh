@@ -47,11 +47,32 @@ command -v cupcake >/dev/null 2>&1 || {
 }
 cupcake validate --log-level error
 python3 "$repo_root/scripts/test-cupcake-policies.py"
+# EVERY CUPCAKE GUARD IN THIS REPO WAS PARTLY OR WHOLLY INERT UNTIL 2026-08-22, and the suite was
+# green the whole time. `cupcake eval` does not run policies in the OPA interpreter -- it compiles
+# them to WASM and executes them in its own runtime, where a builtin the runtime has no host
+# implementation for (`sprintf`, `regex.find_n`) returns UNDEFINED instead of raising. The rule body
+# fails, the decision set comes back empty, and cupcake reports a clean ALLOW with exit code 0. The
+# old coverage could not see it: the signal tests ran the shell scripts alone, the .rego tests ran
+# the INTERPRETER, and the only real-binary test used PreToolUse events -- so all five Stop guards
+# (36 days), the launch guard's non-`command` payload scan (63 days) and the tmp-script guard's Bash
+# branch were dead in production while passing every check.
+#
+# First gate: every builtin the policies call must be PROVEN to execute in the live WASM runtime, and
+# a builtin with no probe recipe is a hard failure -- so a new policy reaching for an unverified
+# builtin breaks the build instead of quietly not firing. Selftest first, so the gate is never
+# trusted on its own say-so.
+python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py" --selftest
+python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
+# Second gate: drive real transcripts through the real Stop hook command out of .claude/settings.json
+# and assert the halt actually comes back -- plus a clean turn that must still be allowed, because a
+# guard that halts everything wedges every session just as badly as one that halts nothing.
+python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
+python3 "$repo_root/scripts/test-unexecuted-promise-signal.py"
 python3 "$repo_root/scripts/test-native-ownership-vocab-signal.py"
 python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
-command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
