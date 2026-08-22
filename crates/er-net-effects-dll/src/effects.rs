@@ -1046,6 +1046,11 @@ fn truncated_effect_name(call: &NamedEffectCall) -> Option<String> {
 fn sync_effect_selector_input_suppression(visible: bool) {
     EFFECT_SELECTOR_VISIBLE_FOR_HOOK.store(visible, Ordering::SeqCst);
     input_suppression::set_arrow_key_suppression(visible);
+    if !visible {
+        // A bar that is not drawn cannot be hovered. Clearing it from the game thread too means
+        // a stalled render loop can never leave the left mouse button blanked for good.
+        input_suppression::set_pointer_over_overlay(false);
+    }
 }
 
 pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
@@ -2048,6 +2053,10 @@ pub(crate) fn dinput_mouse_hook_fires() -> usize {
 
 pub(crate) fn dinput_suppressed_arrow_keys() -> usize {
     input_suppression::dinput_suppressed_arrow_keys()
+}
+
+pub(crate) fn dinput_suppressed_mouse_clicks() -> usize {
+    input_suppression::dinput_suppressed_mouse_clicks()
 }
 
 pub(crate) fn dinput_queued_selector_keys() -> usize {

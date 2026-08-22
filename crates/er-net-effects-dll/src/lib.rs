@@ -21,6 +21,8 @@ mod hold_repeat;
 mod input_suppression;
 #[cfg(windows)]
 mod log;
+// Ungated on purpose: pure overlay geometry, so its tests run on the host.
+mod overlay_layout;
 #[cfg(windows)]
 mod present_overlay;
 // Ungated on purpose: pure config-list editing, so its tests run on the host.
