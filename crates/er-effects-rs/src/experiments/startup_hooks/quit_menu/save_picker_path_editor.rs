@@ -165,7 +165,7 @@ static BUILD_URL_EDITOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
 /// caller may position it; `false` once the window is terminal and its SceneObjProxy teardown has
 /// begun, after which writing a transform through that proxy is a use-after-free.
 pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
-    if path_editor_window_is_live(state) {
+    if text_input_02_990_window_is_live(state) {
         if BUILD_URL_EDITOR_WINDOW.swap(window, Ordering::SeqCst) == 0 {
             // A fresh field. The window pointer is recycled across opens, so this 0 -> window
             // transition is the only per-open signal there is.

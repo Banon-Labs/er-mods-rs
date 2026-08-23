@@ -214,19 +214,15 @@ fn reset_build_url_mirror() {
     EDITOR_WINDOW.store(0, Ordering::SeqCst);
 }
 
-/// Does the link field own this 02_990 MenuWindow?
-///
-/// The keyboard being up settles it outright. Past that, only a window this editor was already
-/// driving counts, and only while the save picker has no editor of its own running -- so a recycled
-/// window address can never make the picker's field answer to the link field's state.
-pub(crate) fn build_url_editor_owns_window(window: usize) -> bool {
-    if build_url_keyboard_active() {
-        return true;
-    }
-    window != 0
-        && EDITOR_WINDOW.load(Ordering::SeqCst) == window
-        && !save_picker_path_editor_active()
-}
+// THE LINK FIELD IS TOLD APART BY ITS RESOURCE NAME, NOT BY ASKING WHO OWNS THE WINDOW.
+//
+// A `build_url_editor_owns_window` helper lived here, deciding between the two 02_990 fields from
+// keyboard-active state plus a remembered window address. It became dead on 2026-08-23, when the
+// link field gained its own Scaleform cache key (`02_990_TextInput_BuildUrl`): the run post-hook
+// now separates the two windows by the game's own `CSScaleformLoadInfo::filename`, which cannot go
+// stale, cannot be confused by a recycled window address, and needs no cross-editor interlock.
+// Deleted rather than kept "just in case" -- a second answer to a question the filename already
+// settles is exactly how the two fields got tangled in the first place.
 
 /// Should this frame read the clipboard for real, rather than trusting its sequence number?
 ///
