@@ -55,6 +55,17 @@ pub const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d68078;
 /// SAVE_BUFFER_ALLOCATOR_GLOBAL_RVA (a role name in er-save-loader; that crate now derives
 /// from here, so the misnomer is documented at its declaration rather than duplicated).
 pub const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
+/// Menu heap allocator singleton global (`GLOBAL_MenuHeapAllocator`, `DLAllocator*`), the
+/// allocator every menu-owned allocation goes through. Sits 0x70 past the main heap allocator
+/// above; the two are easy to transpose, which is the second reason it is pinned here.
+/// Identified from the 1.16.2 Ghidra dump: 401 xrefs, and the accessor
+/// `DLAllocator *GetMenuHeapAllocator(void)` (0x1407a72a0) is nothing but
+/// `return GLOBAL_MenuHeapAllocator;` reading this address.
+/// Aliased in the tree as GLOBAL_MENU_HEAP_ALLOCATOR_RVA (er-effects-rs save-picker path editor,
+/// which passes it as the allocator argument of the SoftwareKeyboard job alloc) /
+/// MENU_HEAP_ALLOCATOR_POINTER_RVA (er-player-name-filter-dll, which passes it to
+/// `DLString<wchar_t>::FromU16Array` exactly as `GetPlayerChrName` does).
+pub const GLOBAL_MENU_HEAP_ALLOCATOR_RVA: usize = 0x3d87350;
 /// SaveLoad IO device singleton global. Its lazy getter is 0x140e6e060, and
 /// `GameMan::WriteSaveToSlot` fetches the device through that getter before submitting a save.
 /// Aliased as IODEV_GLOBAL_RVA (er-title-flow) / SL_IODEV_GLOBAL_RVA (er-save-suppress); both
