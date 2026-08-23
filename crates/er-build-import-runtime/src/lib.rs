@@ -563,7 +563,6 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         log_line(&format!(
             "[build-import] EQUIPPED ASHES (read back from the worn armament): {correct}/{asked}              correct"
         ));
-        log_line(&format!(
         for (slot, id, idx, got) in &worn.dispatch {
             // Both ids in the same base, because the whole point of this line is that a reader
             // can adjudicate it without a calculator. `-1` is the position being empty.
