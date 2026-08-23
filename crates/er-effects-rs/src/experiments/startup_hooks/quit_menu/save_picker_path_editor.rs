@@ -155,6 +155,15 @@ pub(crate) enum KeyboardPurpose {
 }
 
 static BUILD_URL_EDITOR_ACTIVE_JOB: AtomicUsize = AtomicUsize::new(0);
+
+/// The `PROFILE_SELECT_WINDOW_RUN_TICKS` value when the link field's window was last seen RUNNING.
+///
+/// A closed 02_990 window is not reported terminal to us -- it simply stops being run, so the
+/// live->terminal transition the first fix watched for never arrives (measured `dll:9caf1a27`,
+/// 2026-08-23: zero releases across four opens closed with B). Absence is the only signal the
+/// closed field emits, and this stamp is what makes absence measurable. The save picker's own
+/// editor has carried the same stamp since long before this.
+static BUILD_URL_EDITOR_WINDOW_LAST_TICK: AtomicUsize = AtomicUsize::new(0);
 static BUILD_URL_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>>> = OnceLock::new();
 /// The link field's own live 02_990 MenuWindow, kept apart from the picker's for the same reason
 /// their movies are: the picker's stale-window watchdog would otherwise see this window, decide its
@@ -166,6 +175,10 @@ static BUILD_URL_EDITOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
 /// begun, after which writing a transform through that proxy is a use-after-free.
 pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
     if text_input_02_990_window_is_live(state) {
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(
+            er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         if BUILD_URL_EDITOR_WINDOW.swap(window, Ordering::SeqCst) == 0 {
             // A fresh field. The window pointer is recycled across opens, so this 0 -> window
             // transition is the only per-open signal there is.
@@ -201,6 +214,39 @@ pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> b
 /// Deposits `Cancelled` only if no outcome is already waiting: an accept records its text from the
 /// terminal callback and its window goes terminal immediately afterwards, so overwriting here would
 /// turn every accepted link into a cancel.
+/// How many window-run ticks the link field may go unseen before its latch is treated as debris.
+///
+/// The counter advances once per 02_990 MenuWindow run, so this is the game's own cadence rather
+/// than wall-clock: a field that is genuinely up stamps it every pass and can never reach the
+/// threshold, while a closed one stops stamping immediately. Small enough that the row is pressable
+/// again well inside the time it takes a player to move the cursor back to it.
+const BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT: usize = 8;
+
+/// Has the link field's window stopped being run while its keyboard is still latched?
+///
+/// This is the case the terminal-state release cannot see. A MenuWindow that closes is not reported
+/// to us as terminal -- it stops being pumped at all, so the only evidence of the close is that the
+/// window never appears again. Comparing the last-seen stamp against the live counter turns that
+/// absence into a verdict.
+pub(crate) fn build_url_keyboard_latch_is_abandoned() -> bool {
+    if keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    let last = BUILD_URL_EDITOR_WINDOW_LAST_TICK.load(Ordering::SeqCst);
+    if last == 0 {
+        return false;
+    }
+    let now = er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst);
+    now.saturating_sub(last) > BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT
+}
+
+/// Release an abandoned link-field latch, reported so the next occurrence is legible.
+pub(crate) fn release_abandoned_build_url_keyboard() {
+    let window = BUILD_URL_EDITOR_WINDOW.swap(0, Ordering::SeqCst);
+    BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(0, Ordering::SeqCst);
+    release_build_url_keyboard_on_window_close(window);
+}
+
 fn release_build_url_keyboard_on_window_close(window: usize) {
     let job = keyboard_active_job_slot(KeyboardPurpose::BuildUrl).swap(0, Ordering::SeqCst);
     if job == 0 {
@@ -1221,5 +1267,56 @@ mod tests {
             matches!(outcome, Some(PathEditorOutcome::Accepted(text)) if text.contains("?b=abc")),
             "the accepted text must outlive its window"
         );
+    }
+    /// A CLOSED 02_990 WINDOW IS NEVER REPORTED TERMINAL -- IT JUST STOPS BEING RUN.
+    ///
+    /// `dll:9caf1a27`, 2026-08-23: four link fields opened and closed with B, and the
+    /// live->terminal release fired zero times, because the transition never reaches us. Absence is
+    /// the only evidence a closed field leaves, so the latch has to be released from the window
+    /// going UNSEEN, measured in the game's own window-run ticks.
+    #[test]
+    fn a_link_field_window_that_stops_running_abandons_its_latch() {
+        use er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS;
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0x7777_0000, Ordering::SeqCst);
+        // The counter starts at 0 off the game thread, and every case here reasons about ticks
+        // BEFORE `now`; give it a base so those subtractions describe a real elapsed window instead
+        // of underflowing.
+        let now = 1_000;
+        PROFILE_SELECT_WINDOW_RUN_TICKS.store(now, Ordering::SeqCst);
+
+        // Seen this very tick: a field that is genuinely up must NEVER be judged abandoned.
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(now, Ordering::SeqCst);
+        assert!(!build_url_keyboard_latch_is_abandoned());
+
+        // Seen exactly at the limit is still within tolerance.
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK
+            .store(now - BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT, Ordering::SeqCst);
+        assert!(!build_url_keyboard_latch_is_abandoned());
+
+        // Past it, the window has stopped running and the row must become pressable again.
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(
+            now - BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT - 1,
+            Ordering::SeqCst,
+        );
+        assert!(build_url_keyboard_latch_is_abandoned());
+
+        release_abandoned_build_url_keyboard();
+        assert_eq!(
+            keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst),
+            0
+        );
+        let _ = keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+    }
+
+    /// With no keyboard latched there is nothing to abandon -- the watchdog must stay silent rather
+    /// than firing every frame the menu is open.
+    #[test]
+    fn an_idle_link_field_is_never_abandoned() {
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+        BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(1, Ordering::SeqCst);
+        assert!(!build_url_keyboard_latch_is_abandoned());
     }
 }

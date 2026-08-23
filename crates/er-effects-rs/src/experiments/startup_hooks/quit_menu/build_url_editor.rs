@@ -370,6 +370,15 @@ unsafe fn mirror_clipboard_into_field(base: usize, menu_window: usize, frame: us
 ///
 /// Menu-pump context only.
 pub(crate) unsafe fn build_url_editor_menu_pump() {
+    // 0. A latch whose window stopped running is debris. The field's 02_990 MenuWindow is not
+    //    reported terminal when it closes -- it simply stops being run -- so neither the 0x81d3d0
+    //    cancel gate, the 0x81d220 terminal callback, nor the live->terminal release can see a
+    //    field the player closed with the back action. Absence is the only signal it emits, and
+    //    this is where it is acted on: the row must never stay dead for the rest of the session
+    //    because a close went unreported (user report + `dll:9caf1a27`, 2026-08-23).
+    if build_url_keyboard_latch_is_abandoned() {
+        release_abandoned_build_url_keyboard();
+    }
     // 1. Consume a finished field first, so an accept that re-opens is submitted in this same pass
     //    rather than a frame later.
     if let Some(outcome) = take_build_url_keyboard_outcome() {

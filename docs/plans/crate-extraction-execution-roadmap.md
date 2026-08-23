@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 79 | 51,875 |
+| all `experiments/**` | 79 | 51,981 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -149,7 +149,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 473 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/build_url_clipboard.rs` | 141 | clipboard read plus the per-frame mirror that lets a paste land in an already-open build-url field | R18 |
-| `startup_hooks/quit_menu/build_url_editor.rs` | 690 | System>Quit link field: submit, validate on accept, re-open on refusal | R18 |
+| `startup_hooks/quit_menu/build_url_editor.rs` | 699 | System>Quit link field: submit, validate on accept, re-open on refusal | R18 |
 | `startup_hooks/quit_menu/build_url_row.rs` | 178 | System>Quit "Load Build from URL" row: press -> `er-build-import-runtime::request`, FrameBegin tick -> `::tick` | R18 |
 | `startup_hooks/quit_menu/mod.rs` | 77 | quit-menu module facade | R10-R20 |
 | `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,943 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
@@ -157,7 +157,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 1,227 | System>Quit destination commit family | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,894 | native picker, destination, and row-builder families | R17-R19 |
-| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,225 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
+| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,322 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,226 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,555 | System>Quit dialog implementation and picker adapter | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 681 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
