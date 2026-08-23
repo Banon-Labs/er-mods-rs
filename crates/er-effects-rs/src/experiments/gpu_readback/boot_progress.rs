@@ -106,8 +106,21 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_IDX;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_PERMILLE;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_COMPLETE_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_FAILURES;
+/// One-way release fade (2026-08-22): how long the fade was PAUSED by an honored hold, the pause
+/// accumulator's own previous-frame stamp, and the re-assert tallies the pause is decided from.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HELD_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HITS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_HONORED;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REASSERT_RUN;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REASSERTS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REFUSED;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_TICK_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_LAST_ALPHA;
+/// `LOADING_SCREEN_UPDATE_HITS` as it stood when this window's release fade began -- the snapshot a
+/// mid-fade hold is tested against, so an over-matched Scaleform label cannot pass for the game's
+/// own loading screen still running.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_START_LS_UPDATE_HITS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_START_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_FENCE;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE;
@@ -117,6 +130,10 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_LIST;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS;
+/// THE defect counter for the 2026-08-22 "portrait comes back if I press escape too quickly"
+/// report: opaque cover draws that happened while the release fade was already running. Expected 0.
+pub(crate) use er_telemetry::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE;
+pub(crate) use er_telemetry::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_PRE_WORLD_STOP_FAILURES;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_PRESENT_COVER_FAILURES;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_PRESENT_FULL_CLEAR_HITS;
@@ -200,6 +217,22 @@ const BOOT_VIEW_RELEASE_FADE_MS: u64 = 640;
 /// gameplay instead of the loading art.
 const BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS: u64 = 600;
 const BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS: u64 = 900;
+/// Largest single-frame step the fade's pause accumulator will credit.
+///
+/// The step is a frame period, and Elden Ring presents as slowly as ~5 fps while loading, so 250 ms
+/// accepts every real frame. Its job is the pathological one: if the render thread is descheduled
+/// for seconds between two paused frames, that whole gap must not be credited as pause and silently
+/// stretch a 640 ms fade into a multi-second one.
+const BOOT_VIEW_FADE_HOLD_MAX_STEP_MS: u64 = 250;
+/// Total pause the release fade will absorb before it proceeds regardless.
+///
+/// A honored hold clears once `CS::LoadingScreen::Update` has been quiet for
+/// `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS`, so a genuine one is always well inside this. The cap
+/// exists because the fade is the ONLY exit from a world-handoff cover window -- the FPS bail below
+/// is reachable only through the `own_menu_active` branch this code never falls to once
+/// `world_handoff` is true -- so an unbounded pause would be an unbounded cover, and the per-frame
+/// GPU readback behind it would sit on the frame rate forever.
+const BOOT_VIEW_FADE_MAX_HELD_MS: u64 = 2_000;
 
 static BOOT_VIEW_FADE_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_FADE_PSO: AtomicUsize = AtomicUsize::new(0);
@@ -557,11 +590,229 @@ fn boot_view_reset_native_loading_semaphores() {
     LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(0, Ordering::SeqCst);
 }
 
+/// ONE-WAY RELEASE FADE (user report 2026-08-22, second round: "I still see my portrait come back
+/// very briefly if I press escape too quickly after getting in game").
+///
+/// THE MECHANISM, confirmed in source rather than assumed. `native_gfx_hold_pending` is rebuilt
+/// every frame from two RECENCY predicates -- a Scaleform fade-out stamped within
+/// `BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS`, or a `CS::LoadingScreen::Update` tick within
+/// `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS`. Neither can become true again on its own as time
+/// passes; both need a FRESH stamp. One of the two writers takes any stamp at all:
+/// `scaleform_label_goto_hook` calls `stamp_loading_gfx_fadeout` for ANY timeline label merely
+/// CONTAINING "fadeout", on ANY movie, matched case-insensitively (`bounded_ascii_contains`
+/// lowercases). Opening the in-world menu is enough, and that is measured rather than assumed: of
+/// the 106 vanilla menu `.gfx` movies in the local extraction, 98 carry a frame label literally
+/// named `FadeOut` -- including `02_000_ingametop.gfx`, the pause menu Escape opens, whose label
+/// table reads `FadeIn` / `Loop` / `FadeOut`, and `01_000_fe.gfx`, the HUD that fades out when it
+/// does. So this stamp is not a loading-screen signal at all; almost any menu transition refreshes
+/// it. The hold then re-asserts mid-fade and the old code fell through to the OPAQUE cover path,
+/// which rasterizes with
+/// `draw_portrait: true` where the fade frame is built with `draw_portrait: false` -- so the head
+/// was not riding the fade down, it was being re-drawn at full alpha, and then the fade finished
+/// and took it away again. Reappear and tear down, exactly as reported.
+///
+/// THE RULE. The hold was written as a START GATE ("is it safe to begin fading yet?") and it is now
+/// only asked as one. Once `BOOT_VIEW_FADE_START_MS` is set, the fade owns the rest of the window
+/// and can never hand it back to the opaque path. But the gate is not simply switched off, because
+/// it defends a real case: fading out while the game's own loading screen is still on the
+/// backbuffer is the vanilla flash-through (er-effects-rs-wmw defect #1). So the two halves are
+/// separated by what they can actually prove:
+///
+///   * the Scaleform half is a start gate ONLY. It cannot tell the loading screen's own fade from
+///     a menu's, and the over-match is documented at both the hook and the release predicate.
+///   * the `CS::LoadingScreen::Update` half stays live during the fade, but only for ticks past
+///     `BOOT_VIEW_FADE_START_LS_UPDATE_HITS`. Only the loading-screen detour writes that counter, so
+///     a tick past the snapshot IS the game's loading screen running again, with no ambiguity.
+///
+/// A honored hold PAUSES the fade at its current alpha (see [`boot_view_fade_hold_tick`]) instead of
+/// cancelling it, so the cover stays as opaque as it already was, never brighter, and the full ramp
+/// still plays once the loading screen goes quiet.
+///
+/// WHY A GENUINE HOLD IS ALMOST UNREACHABLE HERE, and why that is not an argument for skipping it.
+/// The fade only starts once the loading screen has been quiet for 900 ms, and a genuinely new load
+/// re-arms the cover window -- `boot_view_reset_cover_window` clears `BOOT_VIEW_FADE_START_MS`, so
+/// "mid-fade" cannot survive into a new load. The honored path is therefore expected to stay at 0,
+/// which is precisely why it is CHEAP to keep: it costs one comparison per fade frame and removes
+/// the need to argue that no such case exists.
+fn boot_view_note_fade_hold_reassert(
+    now_ms: usize,
+    honored: bool,
+    fadeout_pending: bool,
+    update_quiet_pending: bool,
+    ls_ticked_since_fade_start: bool,
+) {
+    let n = BOOT_VIEW_FADE_HOLD_REASSERTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS.compare_exchange(
+        0,
+        now_ms,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    if honored {
+        BOOT_VIEW_FADE_HOLD_HONORED.fetch_add(1, Ordering::SeqCst);
+    } else {
+        BOOT_VIEW_FADE_HOLD_REFUSED.fetch_add(1, Ordering::SeqCst);
+    }
+    // First frame of each contiguous run only. A single stamp keeps the recency window true for up
+    // to 600 ms, which at 60 fps is ~36 frames from ONE Escape press; this is inside Present, so
+    // that would be a log line per frame of a render stall. One press, one line.
+    if BOOT_VIEW_FADE_HOLD_REASSERT_RUN.fetch_add(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "boot-view: FADE HOLD RE-ASSERT #{n} at {now_ms}ms -- the native-loading hold went true again {}ms into a release fade that had already started (honored={honored} fadeout_pending={fadeout_pending} update_quiet_pending={update_quiet_pending} ls_ticked_since_fade_start={ls_ticked_since_fade_start} alpha={} held_ms={}); refused holds are an over-matched Scaleform \"fadeout\" label from some other movie and the fade carries on, honored ones pause it",
+        (now_ms as u64).saturating_sub(BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) as u64),
+        BOOT_VIEW_FADE_LAST_ALPHA.load(Ordering::SeqCst),
+        BOOT_VIEW_FADE_HELD_MS.load(Ordering::SeqCst),
+    ));
+}
+
+/// Accumulate the time the release fade spends PAUSED by an honored hold, and return the total the
+/// fade clock should subtract.
+///
+/// Differencing consecutive paused frames, rather than timing the hold from its start, is what makes
+/// this safe to call from Present: there is no state to unwind if the hold ends on a frame that
+/// never runs, and a hold that stops and restarts simply contributes two runs. `_TICK_MS` is cleared
+/// on every unpaused frame so the first frame of a new pause contributes nothing (it has no
+/// predecessor to difference against) instead of crediting the whole gap since the last pause.
+///
+/// The returned total is clamped to `BOOT_VIEW_FADE_MAX_HELD_MS` while the stored one is not: the
+/// cap is a safety bound on the fade, not a claim about how long the game held us, and the honest
+/// number is the one worth reading afterwards.
+fn boot_view_fade_hold_tick(now_ms: u64, held: bool) -> u64 {
+    let stamp = if held { now_ms.max(1) as usize } else { 0 };
+    let prev = BOOT_VIEW_FADE_HOLD_TICK_MS.swap(stamp, Ordering::SeqCst) as u64;
+    if !held || prev == 0 {
+        return (BOOT_VIEW_FADE_HELD_MS.load(Ordering::SeqCst) as u64)
+            .min(BOOT_VIEW_FADE_MAX_HELD_MS);
+    }
+    let step = now_ms
+        .saturating_sub(prev)
+        .min(BOOT_VIEW_FADE_HOLD_MAX_STEP_MS);
+    let total = BOOT_VIEW_FADE_HELD_MS.fetch_add(step as usize, Ordering::SeqCst) as u64 + step;
+    total.min(BOOT_VIEW_FADE_MAX_HELD_MS)
+}
+
+/// Count an OPAQUE cover draw that reached the backbuffer while this window's release fade was
+/// already running and had not yet completed.
+///
+/// THIS IS THE NUMBER THE PREVIOUS ROUND OF DETECTORS COULD NOT PRODUCE. Both of them --
+/// [`boot_view_note_draw_after_stop`] and the `cover_plate_visible_after_release` watch -- open only
+/// once `BOOT_VIEW_STOPPED` latches, and the reported defect happens BEFORE that, during the fade.
+/// So they were structurally incapable of firing on it and duly returned 0, which read as "our
+/// compositor did not draw what the user saw". It did. In run br-20260822-184123-fa3d the menu
+/// opened at log +39905 ms, inside a fade window of +39281 to +40554, and across it
+/// `boot_view_draw_hits` went 528 -> 538: ten opaque draws this counter would have named
+/// immediately.
+///
+/// Expected 0 now that the fade is one-way; a nonzero value means a path back to the opaque
+/// rasterizer survived, and `_FIRST_MS` minus `oracle_boot_view_fade_start_ms` says how far into the
+/// fade it was.
+fn boot_view_note_nonfade_draw_during_fade() {
+    if BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) == 0
+        || BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
+    let n = BOOT_VIEW_NONFADE_DRAW_DURING_FADE.fetch_add(1, Ordering::SeqCst) + 1;
+    let now_ms = boot_view_epoch_ms().max(1) as usize;
+    let _ = BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS.compare_exchange(
+        0,
+        now_ms,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    // First of the window only: this runs inside Present, and if the fade has lost the frame once it
+    // will lose every frame until it completes.
+    if n == 1 {
+        append_autoload_debug(format_args!(
+            "boot-view: NON-FADE DRAW DURING FADE at {now_ms}ms -- the OPAQUE cover path (draw_portrait=true) drew {}ms into the release fade, which is the 2026-08-22 \"portrait comes back briefly\" defect (fade_start_ms={} last_alpha={} hold_reasserts={} refused={} honored={})",
+            (now_ms as u64).saturating_sub(BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) as u64),
+            BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst),
+            BOOT_VIEW_FADE_LAST_ALPHA.load(Ordering::SeqCst),
+            BOOT_VIEW_FADE_HOLD_REASSERTS.load(Ordering::SeqCst),
+            BOOT_VIEW_FADE_HOLD_REFUSED.load(Ordering::SeqCst),
+            BOOT_VIEW_FADE_HOLD_HONORED.load(Ordering::SeqCst),
+        ));
+    }
+}
+
+/// NULL DETECTOR for the 2026-08-22 "loading screen briefly reappears after Escape" report.
+///
+/// Called at BOTH boot-view composite counter sites, reading `BOOT_VIEW_STOPPED` BEFORE the frame
+/// makes its own store, so a nonzero read means the cover latched stopped on an EARLIER frame and
+/// this one drew anyway. `BOOT_VIEW_STOPPED` deliberately, not `BOOT_VIEW_FADE_COMPLETE_MS`: the
+/// FPS-bail exit never sets the latter, so a bail-stopped window would look armed forever.
+///
+/// It is expected to stay 0 for the life of the process, and that is precisely the point. The
+/// diagnosis of that report rests on the claim that OUR compositor did not draw what the user saw
+/// (`oracle_boot_view_stop_reason=1`, epoch_seq 0, fps_bail_resumes 0 -- none of the clearing paths
+/// ran). If this ever fires, that claim is false and the next reader learns it from one number
+/// instead of re-deriving it.
+///
+/// ONE KNOWN WAY IT COULD OVER-REPORT, so a single hit is read and not merely believed: both stop
+/// stores happen BEFORE `BOOT_VIEW_DRAW_BUSY` is taken, so if the self-present pump thread and the
+/// render thread were ever inside the composite together, one could latch the stop while the other
+/// was already past the entry guard. That needs the pump still running at a release fade, and the
+/// pump stops at the game's first present ~30 s earlier -- but the log line carries `stop_ms` for
+/// exactly this reason: a same-instant stop is that race, a stop seconds earlier is not.
+fn boot_view_note_draw_after_stop(site: &str) {
+    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let n = er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP.fetch_add(1, Ordering::SeqCst) + 1;
+    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_TOTAL.fetch_add(1, Ordering::SeqCst);
+    let now_ms = boot_view_epoch_ms().max(1) as usize;
+    let _ = er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.compare_exchange(
+        0,
+        now_ms,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    // First of the window only. This runs inside Present; if the latch is ever wrong it is wrong
+    // every frame, and a per-frame log would turn a render stall into an IO storm.
+    if n == 1 {
+        append_autoload_debug(format_args!(
+            "boot-view: DRAW AFTER STOP at {now_ms}ms site={site} -- the cover composited a frame with BOOT_VIEW_STOPPED already set (stop_reason={} stop_ms={} epoch_seq={}); the 2026-08-22 \"our compositor did not draw it\" diagnosis does not hold",
+            BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
+            er_telemetry::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst),
+            BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
+        ));
+    }
+}
+
+/// Snapshot everything the post-release watch measures deltas against, at the instant the cover
+/// latches stopped. Called from BOTH stop sites (release fade and FPS bail) so the watch behaves
+/// the same whichever way the window ended.
+fn boot_view_stamp_stop_baselines(now_ms: usize) {
+    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(now_ms.max(1), Ordering::SeqCst);
+    // A new watch starts with a clean RUN. The watch only samples inside its window, so a run left
+    // part-way through when the previous window's watch expired would otherwise be continued by the
+    // next one -- and `_max_run` is exactly the number that tells a brief reappearance apart from a
+    // plate that never went down, so carrying a stale count into it corrupts the one reading it is
+    // for. The cumulative frame/first/last counters are session totals and deliberately survive.
+    er_telemetry::counters::COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(
+        LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(
+        LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+}
+
 /// Re-arm the cover DRAWING WINDOW: stop latch, window clock, handoff/fade/dark-gap state, draw cache.
 /// This is "start covering again", independent of whether the phase walk is also starting over.
 fn boot_view_reset_cover_window() {
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
+    // Post-stop draw detector + the post-release watch's baselines belong to ONE window.
+    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(0, Ordering::SeqCst);
+    er_telemetry::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(0, Ordering::SeqCst);
     BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
     BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
     BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
@@ -572,6 +823,16 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_FADE_HITS.store(0, Ordering::SeqCst);
     BOOT_VIEW_FADE_LAST_ALPHA.store(0, Ordering::SeqCst);
     BOOT_VIEW_FADE_FAILURES.store(0, Ordering::SeqCst);
+    // One-way-fade state. All per-window: the snapshot describes THIS window's fade start, and the
+    // pause accumulator must not carry a previous window's pause into the next fade's clock.
+    // The re-assert TALLIES (`BOOT_VIEW_FADE_HOLD_REASSERTS` / `_REFUSED` / `_HONORED` / `_FIRST_MS`)
+    // and `BOOT_VIEW_NONFADE_DRAW_DURING_FADE*` are deliberately NOT cleared here, for the reason
+    // given at `BOOT_VIEW_DRAW_AFTER_STOP_TOTAL`: a detector a rearm can silently empty is not a
+    // detector, and a run with several loads must still be able to report the first occurrence.
+    BOOT_VIEW_FADE_START_LS_UPDATE_HITS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_HELD_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_HOLD_TICK_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_HOLD_REASSERT_RUN.store(0, Ordering::SeqCst);
     BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.store(0, Ordering::SeqCst);
     BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
@@ -666,6 +927,20 @@ fn boot_view_rearm_for_first_load_request_if_needed() {
 pub(crate) fn boot_view_epoch_ms() -> u64 {
     let epoch = *BOOT_VIEW_EPOCH.get_or_init(std::time::Instant::now);
     epoch.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
+/// The same clock as [`boot_view_epoch_ms`], read WITHOUT starting it: `None` until boot-view code
+/// has anchored the epoch.
+///
+/// The distinction is not pedantry. `boot_view_epoch_ms` anchors on first call, so a caller outside
+/// the boot view that happens to run first would silently move the origin of the clock every
+/// telemetry `*_ms` field is measured against -- rewriting the meaning of the whole run's timeline
+/// to stamp one event. Callers that only want to READ the timeline (the in-game menu open stamp,
+/// the clock map) use this and simply decline to stamp while the clock does not exist yet.
+pub(crate) fn boot_view_epoch_ms_if_anchored() -> Option<u64> {
+    BOOT_VIEW_EPOCH
+        .get()
+        .map(|epoch| epoch.elapsed().as_millis().min(u64::MAX as u128) as u64)
 }
 
 /// Reopen the first-start custom loading bar for an own-menu character switch. The original boot view
@@ -2152,6 +2427,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
     if !unsafe { execute_and_wait(queue, list, fence) } {
         return false;
     }
+    boot_view_note_draw_after_stop("release-fade");
     BOOT_VIEW_FADE_HITS.fetch_add(1, Ordering::SeqCst);
     true
 }
@@ -2235,6 +2511,9 @@ fn boot_view_try_fps_bail_resume_on_publish() -> bool {
     );
     BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    // The window is drawing again, so the post-release watch must close with it -- otherwise a
+    // resumed cover would keep sampling against a stop that has been taken back.
+    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
     let n = BOOT_VIEW_FPS_BAIL_RESUMES.fetch_add(1, Ordering::SeqCst) + 1;
     append_autoload_debug(format_args!(
         "boot-view: FPS-bail RESUME #{n} on portrait publish (version {bail_version} -> {version}, update_recent={update_recent} fadeout_recent={fadeout_recent}) -- compositing the published head for the rest of the window; release fade owns the end"
@@ -2376,8 +2655,34 @@ unsafe fn composite_boot_progress_inner(
             let update_quiet_pending = loading_update_last != 0
                 && (now_ms as u64).saturating_sub(loading_update_last as u64)
                     < BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS;
-            let native_gfx_hold_pending = fadeout_pending || update_quiet_pending;
-            if native_gfx_hold_pending {
+            // ONE-WAY RELEASE FADE (2026-08-22). Ask the hold as the START GATE it was written to
+            // be. Once the fade has begun, the Scaleform half is disqualified -- it stamps on any
+            // movie's "fadeout" label, so an in-world menu opening refreshes it -- and only a
+            // `CS::LoadingScreen::Update` tick PAST the fade-start snapshot can still hold, because
+            // only the loading-screen detour writes that counter. See
+            // [`boot_view_note_fade_hold_reassert`] for the whole argument.
+            let start_gate_hold = fadeout_pending || update_quiet_pending;
+            let fade_started = BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) != 0;
+            let native_gfx_hold_pending = if fade_started {
+                let ls_ticked_since_fade_start = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst)
+                    > BOOT_VIEW_FADE_START_LS_UPDATE_HITS.load(Ordering::SeqCst);
+                let honored = ls_ticked_since_fade_start && update_quiet_pending;
+                if start_gate_hold {
+                    boot_view_note_fade_hold_reassert(
+                        now_ms,
+                        honored,
+                        fadeout_pending,
+                        update_quiet_pending,
+                        ls_ticked_since_fade_start,
+                    );
+                } else {
+                    BOOT_VIEW_FADE_HOLD_REASSERT_RUN.store(0, Ordering::SeqCst);
+                }
+                honored
+            } else {
+                start_gate_hold
+            };
+            if native_gfx_hold_pending && !fade_started {
                 let hold_hits =
                     BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS.fetch_add(1, Ordering::SeqCst) + 1;
                 if hold_hits <= 8 || hold_hits.is_power_of_two() {
@@ -2398,9 +2703,14 @@ unsafe fn composite_boot_progress_inner(
                 // Fall through to the normal full-clear + boot-bar path. The custom alpha fade is
                 // deliberately delayed until native loading has both started its authored fade and stopped
                 // updating long enough that the backbuffer behind our fade is gameplay, not loading art.
-            } else if BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS
-                .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
+                //
+                // Reachable only BEFORE the fade starts. A hold that arrives once the fade is
+                // running never comes here: it pauses the fade below instead, because falling
+                // through from mid-fade is what put the portrait back on screen at full alpha.
+            } else if !native_gfx_hold_pending
+                && BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS
+                    .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
             {
                 append_autoload_debug(format_args!(
                     "boot-view: native loading fade/quiet hold complete (hold_hits={}, fadeout_hits={}, first_fadeout_ms={}, last_fadeout_ms={}, update_last_ms={}, close_ms={})",
@@ -2412,7 +2722,9 @@ unsafe fn composite_boot_progress_inner(
                     loading_close_ms,
                 ));
             }
-            if !native_gfx_hold_pending {
+            // THE COMMITMENT. `fade_started` is enough on its own to enter: once the fade owns the
+            // window a hold can pause it but can never send it back to the opaque path above.
+            if !native_gfx_hold_pending || fade_started {
                 let fade_start = match BOOT_VIEW_FADE_START_MS.compare_exchange(
                     0,
                     now_ms,
@@ -2421,6 +2733,13 @@ unsafe fn composite_boot_progress_inner(
                 ) {
                     Ok(_) => {
                         BOOT_VIEW_STOP_NATIVE_HITS.store(native_hits, Ordering::SeqCst);
+                        // The baseline every later hold is tested against. Taken here, in the same
+                        // compare-exchange that decides which frame starts the fade, so exactly one
+                        // frame writes it and it can never describe a different window.
+                        BOOT_VIEW_FADE_START_LS_UPDATE_HITS.store(
+                            LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst),
+                            Ordering::SeqCst,
+                        );
                         append_autoload_debug(format_args!(
                             "boot-view: world/playable handoff -> start release fade (native_hits={native_hits} held_ms={held_ms} native_lit={native_lit} native_gfx_fadeout_start_ms={native_gfx_fadeout_start} forced_continue={forced_continue_handoff} draws={} permille={})",
                             BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
@@ -2430,10 +2749,19 @@ unsafe fn composite_boot_progress_inner(
                     }
                     Err(start) => start,
                 };
-                let fade_elapsed = (now_ms as u64).saturating_sub(fade_start as u64);
+                // A honored hold PAUSES rather than cancels: the elapsed clock stops, so the alpha
+                // freezes where it is and the full ramp still plays once the game's loading screen
+                // goes quiet again. Capped, because the fade is this window's only exit.
+                // Named apart from the outer `held_ms` (which is arm-to-now for the handoff log);
+                // these are different clocks and shadowing them would be a trap for the next reader.
+                let fade_held_ms = boot_view_fade_hold_tick(now_ms as u64, native_gfx_hold_pending);
+                let fade_elapsed = (now_ms as u64)
+                    .saturating_sub(fade_start as u64)
+                    .saturating_sub(fade_held_ms);
                 if fade_elapsed >= BOOT_VIEW_RELEASE_FADE_MS {
                     if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                         BOOT_VIEW_FADE_COMPLETE_MS.store(now_ms, Ordering::SeqCst);
+                        boot_view_stamp_stop_baselines(now_ms);
                         // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): stop reason
                         // (can-move world proof vs render-release) + arm->stop duration.
                         BOOT_VIEW_STOP_REASON.store(
@@ -2462,6 +2790,17 @@ unsafe fn composite_boot_progress_inner(
                 let alpha = ((remaining * 255 + BOOT_VIEW_RELEASE_FADE_MS / 2)
                     / BOOT_VIEW_RELEASE_FADE_MS)
                     .clamp(1, 255) as u8;
+                // MONOTONE. The pause above already keeps the ramp from brightening, so this is the
+                // invariant stated rather than a second mechanism: from the first fade frame to the
+                // last, the cover only ever gets more transparent. It is what makes "the portrait
+                // cannot come back" a property of the code and not of the clock arithmetic -- and it
+                // still holds on the frame the pause cap expires.
+                let ceiling = BOOT_VIEW_FADE_LAST_ALPHA.load(Ordering::SeqCst);
+                let alpha = if ceiling == 0 {
+                    alpha
+                } else {
+                    alpha.min(ceiling.min(255) as u8)
+                };
                 BOOT_VIEW_FADE_LAST_ALPHA.store(alpha as usize, Ordering::SeqCst);
                 if unsafe { composite_boot_release_fade_frame(swapchain_raw, alpha) } {
                     return true;
@@ -2509,6 +2848,7 @@ unsafe fn composite_boot_progress_inner(
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and
                 // slot-key snapshots the publish-triggered resume compares/restores against.
                 BOOT_VIEW_STOP_REASON.store(BOOT_VIEW_STOP_REASON_FPS_BAIL, Ordering::SeqCst);
+                boot_view_stamp_stop_baselines(now_ms as usize);
                 BOOT_VIEW_COVER_WINDOW_MS_LAST.store(
                     (now_ms as usize)
                         .saturating_sub(BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst)),
@@ -2616,6 +2956,8 @@ unsafe fn composite_boot_progress_inner(
         }
     }
 
+    boot_view_note_draw_after_stop("composite");
+    boot_view_note_nonfade_draw_during_fade();
     let hits = BOOT_VIEW_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 {
         append_autoload_debug(format_args!(

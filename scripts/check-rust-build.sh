@@ -106,6 +106,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-loading-bar-dll:er_loading_bar_dll
 		er-loading-portrait-dll:er_loading_portrait_dll
 		er-net-effects-dll:er_net_effects_dll
+		er-player-name-filter-dll:er_player_name_filter
 		er-quit-menu-dll:er_quit_menu_dll
 		er-reload-trace-dll:er_reload_trace_dll
 		er-save-disable-dll:er_save_disable

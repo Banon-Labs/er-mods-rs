@@ -16,6 +16,7 @@ members = [
   "crates/er-better-refills-dll",
   "crates/er-armament-icons",
   "crates/er-net-effects-dll",
+  "crates/er-player-name-filter-dll",
   "crates/er-save-disable-dll",
   "crates/er-save-suppress",
   "crates/mushroom-man-runtime",

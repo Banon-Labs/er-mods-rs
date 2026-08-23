@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -62,7 +63,22 @@ def place_window(monitor: str) -> None:
         pass
 
 
-def reap(run_id: str, monitor: str | None) -> int:
+def reap(
+    run_id: str,
+    monitor: str | None,
+    game_pids: Callable[[], list[int]] = find_game_pids,
+) -> int:
+    """Wait for `run_id`'s launcher (and the game behind it) to exit, then clean its profile.
+
+    `game_pids` is injected rather than called directly so this function can be exercised
+    without consulting the live machine. THE SELFTEST MUST PASS A STUB. With the real scan,
+    `reap` waits for ANY running `eldenring.exe` -- which is correct in production (me3 can
+    exit before the game, and deleting a profile still in use would break the live run) and
+    catastrophic in a gate: `scripts/check.sh` runs this selftest, so with a real game open
+    the whole quality gate blocked forever on a process that has nothing to do with it, with
+    no output to say why. Measured 2026-08-22: check.sh sat here for minutes against a live
+    session (me3 pid + eldenring.exe) and had to be killed by hand.
+    """
     state = RunState.load(er_run_lib.RUN_STATE_ROOT / run_id / "run.json")
     if state is None:
         return 1
@@ -71,7 +87,7 @@ def reap(run_id: str, monitor: str | None) -> int:
     slices = 0
     while True:
         if monitor and not placed and slices < PLACEMENT_SLICES:
-            if find_game_pids():
+            if game_pids():
                 place_window(monitor)
                 placed = True
 
@@ -82,7 +98,7 @@ def reap(run_id: str, monitor: str | None) -> int:
 
         # The launcher is gone. me3 normally outlives the game, but if it exited first the
         # game would still be up -- cleaning now would delete a profile still in use.
-        remaining = find_game_pids()
+        remaining = game_pids()
         if remaining:
             wait_for_exit(remaining[0], WAIT_SLICE_SECONDS)
             slices += 1
@@ -126,14 +142,29 @@ def selftest() -> int:
             )
             state.save()
 
-            code = reap("reaper-selftest", monitor=None)
+            # NO LIVE PROCESS SCAN. Every reap below is handed a stub that reports no game,
+            # so the selftest measures the reaper and not the machine it happens to run on.
+            # The real scan would make this block until the user's open Elden Ring exits.
+            no_game: Callable[[], list[int]] = list
+            code = reap("reaper-selftest", monitor=None, game_pids=no_game)
             check(code == 0, "reaping an already-exited run succeeds")
             check(not staged.exists(), "the staged profile is removed")
             check(
                 not (root / "reaper-selftest").exists(),
                 "the run-state directory is removed too, so GC has nothing left to find",
             )
-            check(reap("reaper-selftest", monitor=None) == 1, "reaping an unknown run is a no-op")
+            check(
+                reap("reaper-selftest", monitor=None, game_pids=no_game) == 1,
+                "reaping an unknown run is a no-op",
+            )
+            # The regression itself, stated as a case: a reap whose launcher is gone but whose
+            # game scan still reports a live process must NOT be what a gate depends on. Proven
+            # by construction -- the two reaps above returned at all, which they could not have
+            # done with the live scan while a game was up.
+            check(
+                "game_pids" in reap.__code__.co_varnames,
+                "reap takes an injectable game scan, so a gate never waits on a live game",
+            )
         finally:
             er_run_lib.RUN_STATE_ROOT = previous
 

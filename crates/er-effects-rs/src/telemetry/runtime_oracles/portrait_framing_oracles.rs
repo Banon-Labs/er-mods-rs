@@ -20,8 +20,14 @@ fn write_portrait_framing_oracles(body: &mut String) {
     //
     // Reading them: minx/miny start at `usize::MAX` and maxx/maxy at 0, so a run that never seeded
     // reports exactly that sentinel pair rather than a plausible-looking rect. `seed_frames` counts the
-    // frames offered to the envelope; once it reaches PORTRAIT_CROP_SEED_N the rect can no longer move,
-    // so a bad rect at that point is permanent for the rest of the loading screen. A rect covering
+    // frames FOLDED INTO the envelope and saturates at PORTRAIT_CROP_SEED_N (until 2026-08-22 it counted
+    // every composited frame and a live run read 324 against a window of 40, so it could not answer the one
+    // question it exists for); at the cap the rect can no longer move, so a bad rect at that point is
+    // permanent for the rest of the loading screen. `growth_events` is how many of those folds actually
+    // MOVED a bound -- i.e. how many visible size steps the settle took, since apparent head size is
+    // `dst_h / crop_h`. The per-event detail (which bound, by how much, resulting crop_h) is in the autoload
+    // debug log as `portrait-crop[sN/40]` lines; only the DLL can see it, because the seed window is under a
+    // second and this file is a point-in-time latch with no history. A rect covering
     // (near) the whole source is the signature of one fully-opaque, unkeyed frame having been folded in
     // -- which is what a measured cover_pct of 99 against a depth_key_bg_pct of 76 implies.
     push_json_usize(
@@ -48,6 +54,11 @@ fn write_portrait_framing_oracles(body: &mut String) {
         body,
         "oracle_portrait_crop_seed_frames",
         PORTRAIT_CROP_SEED_FRAMES.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_crop_growth_events",
+        PORTRAIT_CROP_GROWTH_EVENTS.load(Ordering::SeqCst),
     );
     // APPLIED ORBIT CAMERA (lookat_stage_camera.rs `apply_profile_camera_override`): the seven values
     // the last successful apply wrote into the renderer. The neighbouring `oracle_profile_cam_*`

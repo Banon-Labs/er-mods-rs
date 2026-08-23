@@ -30,6 +30,24 @@ pub(crate) fn is_keyboard_state(size: u32) -> bool {
     size as usize == KEYBOARD_STATE_BYTES
 }
 
+/// `DIMOUSESTATE` -- three `LONG` axes then `BYTE rgbButtons[4]`.
+pub(crate) const MOUSE_STATE_BYTES: usize = 16;
+
+/// `DIMOUSESTATE2` -- the same axes then `BYTE rgbButtons[8]`.
+pub(crate) const MOUSE_STATE2_BYTES: usize = 20;
+
+/// Offset of `rgbButtons[0]` (left button) in both mouse state structures: it follows the three
+/// 4-byte axes, which is the one field both layouts share.
+pub(crate) const MOUSE_BUTTON0_OFFSET: usize = 12;
+
+/// Is this state buffer a mouse read?
+///
+/// EXACT sizes again, for the same reason: a lower bound would let `DIJOYSTATE`'s axis bytes be
+/// rewritten as if they were mouse buttons.
+pub(crate) fn is_mouse_state(size: u32) -> bool {
+    matches!(size as usize, MOUSE_STATE_BYTES | MOUSE_STATE2_BYTES)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,6 +57,33 @@ mod tests {
     const DIMOUSESTATE2: u32 = 20;
     const DIJOYSTATE: u32 = 80;
     const DIJOYSTATE2: u32 = 272;
+
+    #[test]
+    fn both_mouse_layouts_are_mouse_state() {
+        assert!(is_mouse_state(DIMOUSESTATE));
+        assert!(is_mouse_state(DIMOUSESTATE2));
+        assert_eq!(MOUSE_STATE_BYTES as u32, DIMOUSESTATE);
+        assert_eq!(MOUSE_STATE2_BYTES as u32, DIMOUSESTATE2);
+    }
+
+    #[test]
+    fn keyboard_and_joystick_reads_are_not_mouse_state() {
+        assert!(!is_mouse_state(KEYBOARD_STATE_BYTES as u32));
+        assert!(
+            !is_mouse_state(DIJOYSTATE),
+            "DIJOYSTATE is 80 bytes of axes: blanking byte 12 there would corrupt a stick axis"
+        );
+        assert!(!is_mouse_state(DIJOYSTATE2));
+        assert!(!is_mouse_state(0));
+    }
+
+    #[test]
+    fn the_left_button_sits_after_the_three_axes() {
+        // Both layouts open with LONG lX, lY, lZ.
+        assert_eq!(MOUSE_BUTTON0_OFFSET, 3 * size_of::<i32>());
+        // The narrower of the two layouts still has room for the byte we blank.
+        const { assert!(MOUSE_BUTTON0_OFFSET < MOUSE_STATE_BYTES) };
+    }
 
     #[test]
     fn the_dik_table_is_keyboard_state() {

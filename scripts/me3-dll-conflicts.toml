@@ -86,6 +86,7 @@ other shell. Same class as mushroom-man-runtime: touches param rows, not hook pr
 "er-inventory-sort-dll" = "Applies equipment-menu sort defaults once per process; installs no detour."
 "er-invasion-warp-dll" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
 "er-net-effects-dll" = "Keyboard-selected network SpEffects; independent hotkey path."
+"er-player-name-filter-dll" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-effects-rs no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
 "er-quit-menu-dll" = "System>Quit harness; its detours route through the er-hook union rather than a private MinHook."
 "er-save-picker-dll" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes-dll" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \

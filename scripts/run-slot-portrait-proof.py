@@ -121,7 +121,14 @@ PORTRAIT_KEYS = [
     # characters means comparing these four numbers.
     "oracle_portrait_crop_minx", "oracle_portrait_crop_miny",
     "oracle_portrait_crop_maxx", "oracle_portrait_crop_maxy",
+    # seed_frames saturates at the 40-frame seed window (it used to count every composited frame and
+    # read 324, which said nothing about whether the rect was still moving), so == 40 means FROZEN.
+    # growth_events is how many of those folds actually MOVED a bound -- i.e. how many visible size
+    # steps the head took while settling, since apparent size is dst_h/crop_h. The per-event detail
+    # (which bound moved, by how much, resulting crop_h) is in the DLL's autoload debug log as
+    # `portrait-crop[sN/40]` lines; this file is a latch with no history and cannot carry it.
     "oracle_portrait_crop_seed_frames",
+    "oracle_portrait_crop_growth_events",
     "oracle_portrait_alpha_cover_pct",
     "oracle_depth_key_bg_pct",
     # Refusal counters for the mask gate. Recorded as EVIDENCE, deliberately not gated on == 0:
@@ -520,6 +527,7 @@ def main() -> int:
                 final.get("oracle_portrait_crop_maxx"), final.get("oracle_portrait_crop_maxy"),
             ]
             sw["crop_seed_frames"] = final.get("oracle_portrait_crop_seed_frames")
+            sw["crop_growth_events"] = final.get("oracle_portrait_crop_growth_events")
             # Evidence only, never a pass condition (er-effects-rs-k979): a working gate fires.
             sw["draw_refused_unmasked"] = (
                 final.get("oracle_portrait_draw_refused_unmasked") or 0

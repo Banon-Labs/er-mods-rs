@@ -328,6 +328,26 @@ pub unsafe extern "system" fn loading_screen_update_hook(this: usize, dt: f32, p
     }
 }
 
+/// Stamp one Scaleform fade-out observation. `source` names WHICH hook saw it -- `label-goto` (the
+/// timeline label detour) or `knowledge-method` (the loading screen's own GFx fade-out method) --
+/// and `this` is the movie instance the stamp came from.
+///
+/// POST-RELEASE STAMPS ARE LOGGED UNCONDITIONALLY (2026-08-22). The rate limit below is right for
+/// the normal case: a loading screen produces a burst and only the shape matters. But it made this
+/// trace blind exactly where it was needed. In run br-20260822-184123-fa3d the counter went 90->102
+/// across the window where the user reported the loading screen reappearing, and because every one
+/// of those 12 stamps fell between powers of two, the log recorded not a single line. Stamps
+/// landing while `BOOT_VIEW_STOPPED` is set are rare by construction -- our cover has already
+/// released, so the game should not be fading anything out -- so logging all of them cannot storm
+/// the IO path, and each one carries the source and movie pointer needed to tell them apart.
+///
+/// CAVEAT, and it is a real one: `scaleform_label_goto_hook` matches ANY timeline label merely
+/// CONTAINING "fadeout", on any movie. The same over-match is already documented at the release
+/// predicate in `boot_progress.rs` ("a burst of 64 such stamps lands during the return-to-title
+/// transition"), and it is why that predicate refuses to use this signal at all. So a `label-goto`
+/// stamp here is SUGGESTIVE, not proof, that the loading screen itself faded: it may be an
+/// unrelated menu's fadeout label. A `knowledge-method` stamp is the loading screen's own method
+/// and carries no such ambiguity. Read the `source=` field before drawing a conclusion.
 fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
     let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
     let hits = LOADING_SCREEN_GFX_FADEOUT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -341,10 +361,13 @@ fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
             Ordering::SeqCst,
         );
     }
-    if hits <= 8 || hits.is_power_of_two() {
+    let after_cover_stop = er_telemetry::counters::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0;
+    if after_cover_stop || hits <= 8 || hits.is_power_of_two() {
         append_autoload_debug(format_args!(
-            "loading-bar: observed Scaleform FadeOut label via {source} (hits={hits}, this=0x{this:x}, label=0x{label:x}, now_ms={now_ms}, close_hits={})",
+            "loading-bar: observed Scaleform FadeOut label via {source} (hits={hits}, this=0x{this:x}, label=0x{label:x}, now_ms={now_ms}, close_hits={}, after_cover_stop={}, cover_stop_ms={})",
             LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
+            after_cover_stop as u8,
+            er_telemetry::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst),
         ));
     }
 }

@@ -1791,7 +1791,16 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
         };
         let list = unsafe { safe_read_usize(job + 0x50) }.unwrap_or(0);
         let prev = match filename.as_str() {
-            "02_000_IngameTop" => SYSTEM_QUIT_INGAME_TOP_WINDOW.swap(owner, Ordering::SeqCst),
+            "02_000_IngameTop" => {
+                // ONE TICK PER PRESENTED FRAME OF THE IN-WORLD PAUSE/SYSTEM MENU. This branch is
+                // the only place in the process that knows, by the game's own resource name, that
+                // the menu Escape opens is up right now -- and it already runs here. The post-
+                // release cover watch reads the resulting stamp to say how long after the user's
+                // press a cover plate came back, instead of leaving that interval to be paired up
+                // by hand from the log (2026-08-22 report).
+                crate::telemetry::in_game_menu_note_run_tick(job, owner);
+                SYSTEM_QUIT_INGAME_TOP_WINDOW.swap(owner, Ordering::SeqCst)
+            }
             "02_040_OptionSetting" | "02_041_OptionSetting_Trial" => {
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.swap(owner, Ordering::SeqCst)
             }
