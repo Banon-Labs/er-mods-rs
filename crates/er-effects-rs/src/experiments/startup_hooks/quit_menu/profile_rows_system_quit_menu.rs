@@ -1778,14 +1778,21 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     if filename == save_picker_path_editor::TEXT_INPUT_RESOURCE_NAME {
         let owner =
             unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
-        if owner != 0 {
-            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
-                .unwrap_or_default();
-            if save_picker_note_path_editor_window_state(owner, state)
-                && let Ok(base) = game_module_base()
-            {
-                unsafe { apply_path_editor_window_position(base, owner) };
-            }
+        let state = if owner != 0 {
+            unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }.unwrap_or_default()
+        } else {
+            0
+        };
+        // The PICKER's field only. The link field no longer reaches this branch at all: it carries
+        // its own resource name since 2026-08-23, so the two windows are separated by the game's
+        // own filename rather than by asking which editor claims the owner. That also keeps the
+        // picker's stale-window watchdog from ever seeing the link field's window and concluding
+        // its own job went quiet.
+        if owner != 0
+            && save_picker_note_path_editor_window_state(owner, state)
+            && let Ok(base) = game_module_base()
+        {
+            unsafe { apply_path_editor_window_position(base, owner) };
         }
     }
     if filename == save_picker_path_editor::BUILD_URL_TEXT_INPUT_RESOURCE_NAME {
@@ -1798,6 +1805,15 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 && let Ok(base) = game_module_base()
             {
                 unsafe { apply_build_url_editor_window_position(base, owner) };
+                // A window is only worth touching while it is still RUNNING; a terminal result
+                // means its SceneObjProxy teardown has begun and a resolve would hand back
+                // released objects. The picker's own state note already applies that rule, so the
+                // link field applies the same one rather than inventing a second answer. This is
+                // the per-frame work the field needs beyond placement -- the end-caret, and the
+                // live clipboard mirror that lets a paste land in an already-open field.
+                if text_input_02_990_window_is_live(state) {
+                    unsafe { build_url_editor_window_run(base, owner) };
+                }
             }
         }
     }
