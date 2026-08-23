@@ -1,6 +1,7 @@
 use std::{env, fmt::Write as _, fs, path::PathBuf};
 
 use iced_x86::code_asm::*;
+use iced_x86::{Code, Instruction, Register};
 
 const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA: u64 = 0x1423f1bf0;
 const GET_PLAYER_CHR_NAME_VA: u64 = 0x14075f800;
@@ -10,10 +11,9 @@ const PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE_BYTES: [u8; 10] =
     [0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20];
 
 /// The bytes `scripts/disas-deobf.sh 0x14075f800` prints for the entry of
-/// `CS::GetPlayerChrName` in the 1.16.2 image. The assembler below must reproduce these
-/// exactly -- `mov rax, rsp` has two encodings (`48 8b c4` and `48 89 e0`) and only the
-/// first is what the game ships, so a silent encoding choice would build a prologue that
-/// never matches and a hook that always disarms itself.
+/// `CS::GetPlayerChrName` in the 1.16.2 image. The assembler below names every instruction and
+/// must reproduce these exactly; the assertion is what pins the assembler's encoding choices to
+/// the ones the game actually ships.
 const GET_PLAYER_CHR_NAME_PROLOGUE_BYTES: [u8; 7] = [0x48, 0x8b, 0xc4, 0x55, 0x57, 0x41, 0x56];
 
 macro_rules! session_manager_player_entry_base_copy_prologue {
@@ -34,10 +34,15 @@ fn assemble_session_manager_player_entry_base_copy_prologue() -> Result<Vec<u8>,
 
 macro_rules! get_player_chr_name_prologue {
     ($asm:ident) => {{
-        // `mov rax, rsp`, in the game's encoding. iced picks the other legal encoding for
-        // `$asm.mov(rax, rsp)` -- 48 89 e0 rather than the 48 8b c4 the game ships -- and a
-        // prologue that differs by one byte is a hook that disarms itself on every launch.
-        $asm.db(&[0x48, 0x8b, 0xc4])?;
+        // `mov rax, rsp` has two legal encodings and the game ships the rm64 one, 48 8b c4.
+        // `$asm.mov(rax, rsp)` would pick the other, 48 89 e0, and a prologue that differs by
+        // one byte is a hook that byte-checks itself off on every launch -- so name the exact
+        // opcode rather than letting the assembler choose.
+        $asm.add_instruction(Instruction::with2(
+            Code::Mov_r64_rm64,
+            Register::RAX,
+            Register::RSP,
+        )?)?;
         $asm.push(rbp)?;
         $asm.push(rdi)?;
         $asm.push(r14)?;
