@@ -41,36 +41,42 @@ const PATH_EDITOR_WINDOW_STALE_PROFILE_TICKS: usize = 3;
 /// Distinct Scaleform cache key for the path editor. The file-open hook redirects this miss to the
 /// canonical 02_990 bytes and derives an inline movie without mutating the game's shared native
 /// text-input resource.
-const TEXT_INPUT_RESOURCE: [u16; 28] = [
-    b'0' as u16,
-    b'2' as u16,
-    b'_' as u16,
-    b'9' as u16,
-    b'9' as u16,
-    b'0' as u16,
-    b'_' as u16,
-    b'T' as u16,
-    b'e' as u16,
-    b'x' as u16,
-    b't' as u16,
-    b'I' as u16,
-    b'n' as u16,
-    b'p' as u16,
-    b'u' as u16,
-    b't' as u16,
-    b'_' as u16,
-    b'P' as u16,
-    b'a' as u16,
-    b't' as u16,
-    b'h' as u16,
-    b'E' as u16,
-    b'd' as u16,
-    b'i' as u16,
-    b't' as u16,
-    b'o' as u16,
-    b'r' as u16,
-    0,
-];
+pub(crate) const TEXT_INPUT_RESOURCE_NAME: &str = "02_990_TextInput_PathEditor";
+
+/// ONE MOVIE, TWO CACHE KEYS, TWO DERIVATIONS.
+///
+/// The build-url field used to pass the path editor's key, which meant it also got the path
+/// editor's DERIVED movie -- and that derivation alpha-zeroes the movie's backing plate and both
+/// frame placements, because over ProfileSelect the picker's own `CurrentPath` button supplies the
+/// frame. Nothing on the Quit tab supplies one, so the link field rendered as a bare text run in
+/// the top-left corner of the screen (user report 2026-08-23). Scaleform caches by this string, so
+/// a second key is what buys the Quit tab its own bytes; the file-open hook redirects both keys to
+/// the same canonical 02_990 payload and derives from it separately.
+pub(crate) const BUILD_URL_TEXT_INPUT_RESOURCE_NAME: &str = "02_990_TextInput_BuildUrl";
+
+/// NUL-terminated UTF-16 copy of an ASCII resource name, for the native
+/// `CS::SoftwareKeyboardConfig`. Const-evaluated, so a name that would not fit its buffer is a
+/// compile error rather than a silently unterminated string handed to the engine.
+const fn utf16_resource<const N: usize>(name: &str) -> [u16; N] {
+    let bytes = name.as_bytes();
+    assert!(bytes.len() < N, "resource name needs room for its NUL");
+    let mut out = [0u16; N];
+    let mut index = 0;
+    while index < bytes.len() {
+        out[index] = bytes[index] as u16;
+        index += 1;
+    }
+    out
+}
+
+// `static`, not `const`: the native config stores this pointer and the engine reads through it long
+// after the call returns. A `const` array has no address of its own -- `.as_ptr()` borrows a
+// temporary and depends on rvalue promotion to give it `'static`, which raw pointers escape the
+// borrow checker on. A `static` has one fixed address for the life of the process, which is what the
+// engine is being handed.
+static TEXT_INPUT_RESOURCE: [u16; 28] = utf16_resource(TEXT_INPUT_RESOURCE_NAME);
+static BUILD_URL_TEXT_INPUT_RESOURCE: [u16; 26] =
+    utf16_resource(BUILD_URL_TEXT_INPUT_RESOURCE_NAME);
 
 #[repr(C)]
 struct SoftwareKeyboardConfig {
@@ -145,6 +151,28 @@ pub(crate) enum KeyboardPurpose {
 
 static BUILD_URL_EDITOR_ACTIVE_JOB: AtomicUsize = AtomicUsize::new(0);
 static BUILD_URL_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>>> = OnceLock::new();
+/// The link field's own live 02_990 MenuWindow, kept apart from the picker's for the same reason
+/// their movies are: the picker's stale-window watchdog would otherwise see this window, decide its
+/// own job had gone quiet, and cancel it.
+static BUILD_URL_EDITOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// Note the link field's 02_990 MenuWindow state. `true` while it is a live transform target -- the
+/// caller may position it; `false` once the window is terminal and its SceneObjProxy teardown has
+/// begun, after which writing a transform through that proxy is a use-after-free.
+pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
+    if path_editor_window_is_live(state) {
+        if BUILD_URL_EDITOR_WINDOW.swap(window, Ordering::SeqCst) == 0 {
+            // A fresh field. The window pointer is recycled across opens, so this 0 -> window
+            // transition is the only per-open signal there is.
+            reset_path_editor_caret_latch();
+        }
+        return true;
+    }
+    if BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) == window {
+        BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+    }
+    false
+}
 
 fn keyboard_active_job_slot(purpose: KeyboardPurpose) -> &'static AtomicUsize {
     match purpose {
@@ -176,6 +204,15 @@ fn keyboard_tag(purpose: KeyboardPurpose) -> &'static str {
     match purpose {
         KeyboardPurpose::SavePath => "save-picker-path",
         KeyboardPurpose::BuildUrl => "system-quit-build-url",
+    }
+}
+
+/// Scaleform cache key per purpose. Two keys, so each editor gets its own derived movie and its
+/// own placement -- see [`BUILD_URL_TEXT_INPUT_RESOURCE_NAME`].
+fn keyboard_resource(purpose: KeyboardPurpose) -> *const u16 {
+    match purpose {
+        KeyboardPurpose::SavePath => TEXT_INPUT_RESOURCE.as_ptr(),
+        KeyboardPurpose::BuildUrl => BUILD_URL_TEXT_INPUT_RESOURCE.as_ptr(),
     }
 }
 
@@ -577,6 +614,7 @@ pub(crate) fn take_build_url_keyboard_outcome() -> Option<BuildUrlKeyboardOutcom
 /// cannot resolve against a dead job.
 pub(crate) fn reset_build_url_keyboard_state() {
     keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+    BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
     *keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
@@ -722,7 +760,7 @@ unsafe fn submit_software_keyboard(
         max_units: SOFTWARE_KEYBOARD_MAX_PATH_UNITS as u32,
         mode: 1,
         padding: [0; 3],
-        resource: TEXT_INPUT_RESOURCE.as_ptr(),
+        resource: keyboard_resource(purpose),
     };
     let empty_callback = [0_usize; 8];
     let ctor: unsafe extern "system" fn(usize, usize, usize, usize, usize, u8, usize) -> usize =
@@ -908,6 +946,32 @@ mod tests {
             String::from_utf16(&TEXT_INPUT_RESOURCE[..TEXT_INPUT_RESOURCE.len() - 1]).unwrap(),
             "02_990_TextInput_PathEditor"
         );
+    }
+
+    /// THE TWO CACHE KEYS MUST NOT COLLIDE, AND EACH MUST BE NUL-TERMINATED.
+    ///
+    /// Sharing one key is what shipped the unstyled link field: Scaleform handed the Quit tab the
+    /// save picker's derived movie, whose chrome is deliberately hidden. If these two strings ever
+    /// become equal again the symptom returns silently -- the field still opens, it just has no box
+    /// around it.
+    #[test]
+    fn each_editor_asks_scaleform_for_its_own_movie() {
+        assert_ne!(TEXT_INPUT_RESOURCE_NAME, BUILD_URL_TEXT_INPUT_RESOURCE_NAME);
+        assert_ne!(
+            keyboard_resource(KeyboardPurpose::SavePath),
+            keyboard_resource(KeyboardPurpose::BuildUrl)
+        );
+        for (name, units) in [
+            (TEXT_INPUT_RESOURCE_NAME, &TEXT_INPUT_RESOURCE[..]),
+            (
+                BUILD_URL_TEXT_INPUT_RESOURCE_NAME,
+                &BUILD_URL_TEXT_INPUT_RESOURCE[..],
+            ),
+        ] {
+            assert_eq!(units.len(), name.len() + 1, "one trailing NUL, no padding");
+            assert_eq!(*units.last().unwrap(), 0, "the engine reads to the NUL");
+            assert_eq!(String::from_utf16(&units[..units.len() - 1]).unwrap(), name);
+        }
     }
 
     #[test]

@@ -1767,13 +1767,15 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
-    // BOTH link/path fields load this SAME resource -- the build-url editor reuses the path
-    // editor's derived 02_990 movie rather than deriving a second one. So the window state below
-    // must only be routed to the SAVE PICKER's editor: its stale-window watchdog would otherwise
-    // see the build-url field's window, decide the picker's own job had gone quiet, and cancel it;
-    // and `apply_path_editor_window_position` places the window against the ProfileSelect layout,
-    // which is not where the Quit tab's field belongs.
-    if filename == "02_990_TextInput_PathEditor" && !build_url_keyboard_active() {
+    // TWO FIELDS, TWO RESOURCE NAMES, TWO PLACEMENTS. The link field used to pass the path
+    // editor's cache key, so both windows arrived here under one name and had to be told apart by
+    // `build_url_keyboard_active()` -- with the Quit tab's field then getting NO placement at all,
+    // because the picker's helper positions against the ProfileSelect row layout. It now has its
+    // own key, its own derived movie (chrome kept, box centred) and its own placement, and the
+    // filename alone separates them. Routing stays split for the other reason too: the picker's
+    // stale-window watchdog must never see the link field's window and conclude its own job went
+    // quiet.
+    if filename == save_picker_path_editor::TEXT_INPUT_RESOURCE_NAME {
         let owner =
             unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
         if owner != 0 {
@@ -1783,6 +1785,19 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 && let Ok(base) = game_module_base()
             {
                 unsafe { apply_path_editor_window_position(base, owner) };
+            }
+        }
+    }
+    if filename == save_picker_path_editor::BUILD_URL_TEXT_INPUT_RESOURCE_NAME {
+        let owner =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        if owner != 0 {
+            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
+                .unwrap_or_default();
+            if build_url_note_editor_window_state(owner, state)
+                && let Ok(base) = game_module_base()
+            {
+                unsafe { apply_build_url_editor_window_position(base, owner) };
             }
         }
     }
