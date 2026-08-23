@@ -120,3 +120,19 @@ pub enum MsgBoxRva {
 }
 
 pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
+
+// ---- inventory functions shared by more than one DLL ----
+//
+// These moved here when a second crate needed them: `er-better-refills-dll` reads the player's
+// inventory to decide what to replenish, and `er-build-import-dll` reads it to confirm granted
+// items and to resolve the inventory INDEX that the equip path requires. Two literal copies of
+// one address is exactly the drift `scripts/check-rva-alias-drift.py` exists to stop.
+
+/// `CS::EquipGameData::GetEquipInventoryData(equipGameData) -> EquipInventoryData*`.
+pub const GET_EQUIP_INVENTORY_DATA_RVA: usize = 0x247b30;
+/// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId) -> int`.
+pub const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
+/// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId) -> int`.
+///
+/// Returns the index the equip path needs; negative means the item is not held.
+pub const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;

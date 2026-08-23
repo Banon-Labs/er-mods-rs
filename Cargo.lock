@@ -2762,6 +2762,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-build-import"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "er-build-import-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-build-import",
+ "er-game-base",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-crash-logging"
 version = "0.1.0"
 dependencies = [

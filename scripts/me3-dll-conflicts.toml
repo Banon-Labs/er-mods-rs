@@ -77,6 +77,13 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace_dll ent
 [compatible]
 "er-armament-icons" = "Own MinHook instance, but on TilePopulate -- a prologue the product does not hook."
 "er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
+"er-build-import-dll" = """Installs NO detours at all: the crate contains no MinHook instance, no \
+er-hook union entry and no VirtualProtect, so it shares no prologue with any shell. It does one \
+blocking WinHTTP GET on its own worker thread and otherwise runs a single CSTaskImp FrameBegin \
+task that CALLS existing native functions (AddInventoryEquipByItemId, SetEquipmentEntries, \
+EquipMagicInSlot, ApplyMainPlayerStats) exactly once, then latches itself off. It NEEDS \
+er_effects_rs.dll in the same profile rather than conflicting with it -- the import only runs \
+once a character is loaded in the world, and the product DLL is what autoloads one."""
 "er-crash-logging-dll" = "First-chance exception handler only. The product does not link er-crash-logging, so this is the sole crash logger in the process."
 "er-death-persist-dll" = """One-shot SpEffectParam / SpEffectVfxParam row patch driven from a \
 CSTaskImp task: it moves saveCategory 5 -> 3 on rows 19980/19981/19982 and sets flags on their \

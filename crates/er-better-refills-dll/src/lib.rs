@@ -42,13 +42,14 @@ const MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA: usize = 0xafc160;
 /// `CS::CSLuaEventScriptImitation::OnEvent_BonfireFirstLvUp(this, proxy)`: first grace activation.
 const BONFIRE_FIRST_LVUP_RVA: usize = 0x59c1e0;
 /// `CS::EquipGameData::GetEquipInventoryData(equipGameData)` -> main `EquipInventoryData*`.
-const GET_EQUIP_INVENTORY_DATA_RVA: usize = 0x247b30;
+/// Declared once in `er-game-base`; a second crate now needs the same address.
+use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
 /// `GetMainPlayerStorageBoxInventory()` -> storage-box `EquipInventoryData*`.
 const GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA: usize = 0x786810;
-/// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId)`.
-const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
 /// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId)`.
-const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;
+use er_game_base::rva::GET_ITEM_INVENTORY_IDX_RVA;
+/// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId)`.
+use er_game_base::rva::GET_QUANTITY_BY_ITEM_ID_RVA;
 /// `EquipInventoryData::ChangeAmountInBox(storageInventory, int *itemId, int requestedAmount)`.
 const CHANGE_AMOUNT_IN_BOX_RVA: usize = 0x24e3d0;
 /// `TransferItemBetweenInventoryDatas(itemIdx, source, destination, quantity, isWithdraw)`.
