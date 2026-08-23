@@ -33,7 +33,10 @@ pub mod name;
 pub mod plan;
 
 pub use catalog::{Catalog, Entry, Kind};
-pub use equip::{Capacity, EquipPlan, EquipRef};
+pub use equip::{
+    Capacity, EquipLedger, EquipPlan, EquipRef, LedgerCounts, PlannedPosition, PositionKind,
+    PositionResult,
+};
 pub use model::BuildDoc;
 pub use plan::{Grant, Plan, Unresolved};
 

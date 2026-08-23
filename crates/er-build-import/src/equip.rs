@@ -86,6 +86,15 @@ pub fn armament_planner_index(slot: i32) -> Option<u32> {
 pub const CHR_ASM_SLOT_PROTECTOR_HEAD: i32 = 12;
 /// `ChrAsmSlot::Accessory1`; the other three talisman slots follow consecutively.
 pub const CHR_ASM_SLOT_ACCESSORY_1: i32 = 17;
+/// `ChrAsmSlot` of quickbar position 0; the pouch continues at `+10`.
+///
+/// `ConvertChrAsmSlotToQuickItemOrPouchSlot` (`0x1402470b0`) maps `0x16..0x1F` to quickbar
+/// `0..9` and `0x20..0x25` to pouch `10..15`, so the native slot is the planner position plus
+/// `0x16`. Held here rather than in the runtime crate because the plan and the runtime must
+/// agree on it, and a second copy is a second thing to get wrong.
+pub const CHR_ASM_SLOT_QUICK_BASE: i32 = 0x16;
+/// `ChrAsmSlot::GreatRune`, one position past the pouch -- the same dispatcher's `index == 16`.
+pub const CHR_ASM_SLOT_GREAT_RUNE: i32 = 0x26;
 /// The planner's four armour keys, in `ChrAsmSlot` order from [`CHR_ASM_SLOT_PROTECTOR_HEAD`].
 /// `ProtectorIndexToChrAsmSlot` is literally `index + ProtectorHead`, in this order.
 pub const PROTECTOR_PARTS: [&str; 4] = ["head", "body", "arms", "legs"];
@@ -171,27 +180,372 @@ impl EquipPlan {
         self.rejected.is_empty()
     }
 
-    /// Total number of positions this plan will actually write.
+    /// Total number of equip positions this plan will actually write.
+    ///
+    /// Derived from [`EquipPlan::positions`] rather than counted independently, because two
+    /// counts of the same thing are two chances to disagree -- and when they disagreed, the
+    /// larger one was printed as the denominator of a score the smaller one had already passed.
+    /// Spells are NOT included: they are memorised by a different native and reported on their
+    /// own line with their own denominator.
     pub fn occupied(&self) -> usize {
-        let slots = [
-            &self.armaments,
-            &self.talismans,
-            &self.quickbar,
-            &self.pouch,
-            &self.physick,
-        ];
-        slots
-            .iter()
-            .map(|s| s.iter().filter(|e| e.is_some()).count())
-            .sum::<usize>()
-            + [&self.head, &self.body, &self.arms, &self.legs]
-                .iter()
-                .filter(|e| e.is_some())
-                .count()
-            + self.spells.len()
-            + usize::from(self.great_rune.is_some())
+        self.positions().len()
+    }
+
+    /// Every position this plan intends to fill, in the order they are written.
+    ///
+    /// THIS is the denominator. A position that never reaches a slot has to show up here and
+    /// then fail to be accounted for, which is what makes it visible; a pass that reports a
+    /// score against the subset it happened to attempt can print a perfect run while dropping
+    /// everything it never tried.
+    pub fn positions(&self) -> Vec<PlannedPosition> {
+        let mut out = Vec::new();
+
+        for (index, entry) in self.armaments.iter().enumerate() {
+            if let Some(item) = entry {
+                out.push(PlannedPosition {
+                    kind: PositionKind::Armament,
+                    slot: u32::try_from(index).ok().and_then(armament_slot),
+                    index,
+                    item: item.clone(),
+                });
+            }
+        }
+        for (offset, entry) in [&self.head, &self.body, &self.arms, &self.legs]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(item) = entry {
+                out.push(PlannedPosition {
+                    kind: PositionKind::Protector,
+                    slot: i32::try_from(offset)
+                        .ok()
+                        .map(|offset| CHR_ASM_SLOT_PROTECTOR_HEAD + offset),
+                    index: offset,
+                    item: item.clone(),
+                });
+            }
+        }
+        for (index, entry) in self.talismans.iter().enumerate() {
+            if let Some(item) = entry {
+                out.push(PlannedPosition {
+                    kind: PositionKind::Talisman,
+                    slot: i32::try_from(index)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_ACCESSORY_1 + index),
+                    index,
+                    item: item.clone(),
+                });
+            }
+        }
+        for (index, entry) in self.quickbar.iter().enumerate() {
+            if let Some(item) = entry {
+                out.push(PlannedPosition {
+                    kind: PositionKind::Quickbar,
+                    slot: i32::try_from(index)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_QUICK_BASE + index),
+                    index,
+                    item: item.clone(),
+                });
+            }
+        }
+        for (index, entry) in self.pouch.iter().enumerate() {
+            if let Some(item) = entry {
+                out.push(PlannedPosition {
+                    kind: PositionKind::Pouch,
+                    slot: i32::try_from(index + QUICKBAR_SLOTS)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_QUICK_BASE + index),
+                    index,
+                    item: item.clone(),
+                });
+            }
+        }
+        if let Some(item) = self.great_rune.as_ref() {
+            out.push(PlannedPosition {
+                kind: PositionKind::GreatRune,
+                slot: Some(CHR_ASM_SLOT_GREAT_RUNE),
+                index: 0,
+                item: item.clone(),
+            });
+        }
+        for (index, entry) in self.physick.iter().enumerate() {
+            if let Some(item) = entry {
+                out.push(PlannedPosition {
+                    kind: PositionKind::Physick,
+                    slot: None,
+                    index,
+                    item: item.clone(),
+                });
+            }
+        }
+
+        out
     }
 }
+
+/// What kind of equip position a plan entry targets.
+///
+/// The kinds are not cosmetic: they select which native writes the position and which read-back
+/// can prove it. Armaments, armour and talismans are `ChrAsm` equipment entries; quickbar, pouch
+/// and great rune go through a different dispatcher entirely; the physick is a plain field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionKind {
+    /// A hand slot.
+    Armament,
+    /// One of the four armour pieces.
+    Protector,
+    /// A talisman slot.
+    Talisman,
+    /// A quickbar position, `0..10`.
+    Quickbar,
+    /// A pouch position, `0..6`.
+    Pouch,
+    /// The equipped great rune.
+    GreatRune,
+    /// A Flask of Wondrous Physick tear slot.
+    Physick,
+}
+
+impl PositionKind {
+    /// Lower-case name for a log line.
+    pub fn label(self) -> &'static str {
+        match self {
+            PositionKind::Armament => "armament",
+            PositionKind::Protector => "armour",
+            PositionKind::Talisman => "talisman",
+            PositionKind::Quickbar => "quickbar",
+            PositionKind::Pouch => "pouch",
+            PositionKind::GreatRune => "great rune",
+            PositionKind::Physick => "physick",
+        }
+    }
+
+    /// Whether this kind is written by the quick/pouch/rune dispatcher rather than by the
+    /// `ChrAsm` equipment path.
+    pub fn is_quick_dispatch(self) -> bool {
+        matches!(
+            self,
+            PositionKind::Quickbar | PositionKind::Pouch | PositionKind::GreatRune
+        )
+    }
+}
+
+/// One position the plan intends to fill, and what should end up in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedPosition {
+    /// Which family of position this is.
+    pub kind: PositionKind,
+    /// Native `ChrAsmSlot`, where the position has one. The physick is a field, not a slot.
+    pub slot: Option<i32>,
+    /// Position within its own kind.
+    pub index: usize,
+    /// What belongs there.
+    pub item: EquipRef,
+}
+
+impl PlannedPosition {
+    /// A short identification for a log line, naming the item so a failure is actionable.
+    pub fn describe(&self) -> String {
+        match self.slot {
+            Some(slot) => format!(
+                "{} {} (slot {slot}) {:?}",
+                self.kind.label(),
+                self.index,
+                self.item.name
+            ),
+            None => format!("{} {} {:?}", self.kind.label(), self.index, self.item.name),
+        }
+    }
+}
+
+/// What happened to one planned position, decided by reading the game back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PositionResult {
+    /// The position holds the requested item, read back after writing.
+    Verified,
+    /// It already held it, so nothing was written. Equipping into the slot an item already
+    /// occupies toggles it off, so this is a success, not a skip.
+    Already,
+    /// The grant did not land, so there was nothing to equip.
+    NotInInventory,
+    /// Something was written and the position holds something else afterwards.
+    Mismatch {
+        /// The id that was asked for.
+        expected: i32,
+        /// The id actually found.
+        actual: i32,
+    },
+    /// Nothing was attempted, and why. Always a failure: an unattempted position is exactly the
+    /// thing that used to vanish out of the denominator.
+    NotAttempted(&'static str),
+}
+
+impl PositionResult {
+    /// Whether the position ended up holding what the build asked for.
+    pub fn is_success(&self) -> bool {
+        matches!(self, PositionResult::Verified | PositionResult::Already)
+    }
+
+    /// Plain-language reason, for the failure list.
+    pub fn reason(&self) -> String {
+        match self {
+            PositionResult::Verified => "verified".to_owned(),
+            PositionResult::Already => "already correct".to_owned(),
+            PositionResult::NotInInventory => "not in the inventory".to_owned(),
+            PositionResult::Mismatch { expected, actual } => {
+                format!("wanted {expected}, holds {actual}")
+            }
+            PositionResult::NotAttempted(why) => (*why).to_owned(),
+        }
+    }
+}
+
+/// Totals over a [`EquipLedger`], with the PLAN as the denominator.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerCounts {
+    /// Positions the plan asked for.
+    pub planned: usize,
+    /// Positions read back holding the requested item.
+    pub verified: usize,
+    /// Positions that already held it.
+    pub already: usize,
+    /// Positions that were attempted and did not end up right.
+    pub failed: usize,
+    /// Positions for which no result was ever recorded -- the pass simply never visited them.
+    pub unaccounted: usize,
+}
+
+impl LedgerCounts {
+    /// Whether every planned position is accounted for and correct.
+    pub fn reconciles(&self) -> bool {
+        self.failed == 0 && self.unaccounted == 0
+    }
+}
+
+/// Every planned position, and what became of it.
+///
+/// # Why this exists
+///
+/// The importer used to report equipping as `verified / attempted`. When a whole family of
+/// positions was never attempted, they left the denominator with them, and a run that dropped
+/// them printed `10/10 verified` -- a perfect score for a partial import. The ledger is
+/// constructed from [`EquipPlan::positions`] BEFORE anything is written, so a position that is
+/// never visited stays in the ledger as `unaccounted` and shows up in the headline.
+#[derive(Debug, Clone, Default)]
+pub struct EquipLedger {
+    planned: Vec<PlannedPosition>,
+    results: Vec<Option<PositionResult>>,
+}
+
+impl EquipLedger {
+    /// Open a ledger over everything `plan` intends to fill.
+    pub fn new(plan: &EquipPlan) -> Self {
+        let planned = plan.positions();
+        let results = vec![None; planned.len()];
+        Self { planned, results }
+    }
+
+    /// The positions, in write order.
+    pub fn planned(&self) -> &[PlannedPosition] {
+        &self.planned
+    }
+
+    /// Record what happened to the position at `index` in [`EquipLedger::planned`].
+    pub fn record(&mut self, index: usize, result: PositionResult) {
+        if let Some(slot) = self.results.get_mut(index) {
+            *slot = Some(result);
+        }
+    }
+
+    /// Record against the first position of `kind` at position `index` within that kind.
+    ///
+    /// Returns whether a planned position matched. A `false` is itself an accounting fault: it
+    /// means something was written that the plan never asked for.
+    pub fn record_kind(
+        &mut self,
+        kind: PositionKind,
+        index: usize,
+        result: PositionResult,
+    ) -> bool {
+        let found = self
+            .planned
+            .iter()
+            .position(|p| p.kind == kind && p.index == index);
+        match found {
+            Some(at) => {
+                self.results[at] = Some(result);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Totals against the plan.
+    pub fn counts(&self) -> LedgerCounts {
+        let mut counts = LedgerCounts {
+            planned: self.planned.len(),
+            ..LedgerCounts::default()
+        };
+        for result in &self.results {
+            match result {
+                None => counts.unaccounted += 1,
+                Some(PositionResult::Verified) => counts.verified += 1,
+                Some(PositionResult::Already) => counts.already += 1,
+                Some(_) => counts.failed += 1,
+            }
+        }
+        counts
+    }
+
+    /// Every position that did not end up holding what the build asked for, named.
+    pub fn failures(&self) -> Vec<String> {
+        self.planned
+            .iter()
+            .zip(&self.results)
+            .filter(|(_, result)| !result.as_ref().is_some_and(PositionResult::is_success))
+            .map(|(position, result)| {
+                let why = result
+                    .as_ref()
+                    .map_or_else(|| "never attempted".to_owned(), PositionResult::reason);
+                format!("{} [{why}]", position.describe())
+            })
+            .collect()
+    }
+
+    /// The one line. It reconciles against the plan, and when it does not, it says which
+    /// positions are missing by name on the same line.
+    pub fn headline(&self) -> String {
+        let counts = self.counts();
+        let head = format!(
+            "{} planned = {} verified + {} already correct + {} failed + {} unaccounted",
+            counts.planned, counts.verified, counts.already, counts.failed, counts.unaccounted
+        );
+        if counts.reconciles() {
+            return format!("{head} -- every planned position holds the build's item");
+        }
+        let failures = self.failures();
+        let shown = failures
+            .iter()
+            .take(FAILURES_ON_THE_HEADLINE)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        let more = failures.len().saturating_sub(FAILURES_ON_THE_HEADLINE);
+        let tail = if more == 0 {
+            String::new()
+        } else {
+            format!(" (+{more} more)")
+        };
+        format!(
+            "{head} -- {} POSITION(S) NOT EQUIPPED: {shown}{tail}",
+            failures.len()
+        )
+    }
+}
+
+/// How many failing positions the single headline line names before it truncates.
+const FAILURES_ON_THE_HEADLINE: usize = 6;
 
 /// Compute the target equipment state for `doc`.
 pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> EquipPlan {

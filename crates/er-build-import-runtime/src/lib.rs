@@ -46,7 +46,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_build_import::equip::{Capacity, equip_plan};
+use er_build_import::equip::{
+    CHR_ASM_SLOT_QUICK_BASE, Capacity, EquipLedger, PositionKind, PositionResult, equip_plan,
+};
 use er_build_import::{API_HOST, BuildDoc, build_path, model, plan::plan};
 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -388,12 +390,34 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     let planned = plan(doc, &catalog);
     let equips = equip_plan(doc, &catalog, Capacity::default());
     log_line(&format!(
-        "[build-import] planned: {} grants, {} unresolved, {} equip positions, {} rejected",
+        "[build-import] planned: {} grants, {} unresolved, {} equip positions, {} spells to \
+         memorise, {} rejected",
         planned.grants.len(),
         planned.unresolved.len(),
         equips.occupied(),
+        equips.spells.len(),
         equips.rejected.len()
     ));
+    for position in equips.positions() {
+        log_line(&format!("[build-import]   PLAN {}", position.describe()));
+    }
+    // The commonest confusion this importer produces is "why is the thing in my inventory not on
+    // my character": the answer is usually that the planner document never marked it equipped.
+    // Say so up front, with the count, so nobody has to read the payload to find out.
+    let carried = doc
+        .inventory
+        .slots
+        .iter()
+        .filter(|slot| slot.equip_index.is_none())
+        .count();
+    if carried > 0 {
+        log_line(&format!(
+            "[build-import] the build marks {} of {} armaments as equipped; the other {carried} \
+             are CARRIED ONLY and will be granted, not worn",
+            doc.inventory.slots.len() - carried,
+            doc.inventory.slots.len()
+        ));
+    }
     for missing in planned.unresolved.iter().take(12) {
         log_line(&format!(
             "[build-import]   UNRESOLVED {} {:?}",
@@ -424,34 +448,40 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     // Equip only what was actually granted: equipping an item the inventory does not hold cannot
     // work, and the outcome distinguishes those from real equip failures.
     if let Some(egd) = unsafe { grant::equip_game_data() } {
+        // OPEN THE LEDGER OVER THE PLAN, BEFORE ANYTHING IS WRITTEN. Every score below is
+        // measured against this, so a family of positions the pass never reaches cannot leave
+        // the denominator on its way out -- which is how a run that equipped ten of twelve
+        // planned positions printed "10/10 verified".
+        let mut ledger = EquipLedger::new(&equips);
+
         // Safety: game thread, character loaded, items granted above.
-        let worn = unsafe { equip_native::equip_all(module_base, egd, &equips) };
-        report.equipped = (worn.verified, worn.requested);
-        log_line(&format!(
-            "[build-import] EQUIPPED (read back from the slots): {}/{} verified, {} silently \
-             ignored, {} already correct, {} not in inventory",
-            worn.verified,
-            worn.requested,
-            worn.silent_noop,
-            worn.already,
-            worn.not_in_inventory.len()
-        ));
+        let worn = unsafe { equip_native::equip_all(module_base, egd, &mut ledger) };
+        if worn.no_inventory {
+            log_line(
+                "[build-import] EQUIP: the inventory pointer was null, so NOTHING was attempted",
+            );
+        }
         for (slot, permitted) in &worn.gate {
             log_line(&format!("[build-import]   gate(slot {slot}) = {permitted}"));
         }
         for (slot, expected, actual) in &worn.mismatches {
             log_line(&format!(
-                "[build-import]   SLOT {slot} expected param {expected} but holds {actual}"
+                "[build-import]   SLOT {slot} expected {expected} but holds {actual}"
             ));
         }
-        log_line(&format!(
-            "[build-import] QUICKBAR/POUCH/RUNE: {} positions written through the native dispatcher",
-            worn.quick_written
-        ));
-        for (slot, id, idx) in &worn.trace {
+        for (slot, id, idx, got) in &worn.dispatch {
+            // Both ids in the same base, because the whole point of this line is that a reader
+            // can adjudicate it without a calculator. `-1` is the position being empty.
             log_line(&format!(
-                "[build-import]   dispatch slot {slot} (index {}) item 0x{id:08X} invIdx {idx}",
-                slot - 0x16
+                "[build-import]   QUICK/POUCH/RUNE slot {slot} (index {}) item 0x{id:08X} \
+                 invIdx {idx} -> the position reads back {} ({})",
+                slot - CHR_ASM_SLOT_QUICK_BASE,
+                if *got < 0 {
+                    "EMPTY".to_owned()
+                } else {
+                    format!("0x{got:08X}")
+                },
+                if *got == *id as i32 { "OK" } else { "WRONG" }
             ));
         }
         for id in worn.not_in_inventory.iter().take(12) {
@@ -479,6 +509,25 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             before.map(|v| format!("0x{v:08X}")),
             after.map(|v| format!("0x{v:08X}"))
         ));
+        // The physick is the one planned position `equip_all` does not own, so it is recorded
+        // here from the same read-back the line above prints. If this loop ever stops running,
+        // the tears go back to being UNACCOUNTED rather than silently disappearing.
+        for (index, tear) in equips.physick.iter().enumerate() {
+            let Some(tear) = tear else { continue };
+            let expected = tear.item_id as i32;
+            let actual = after.get(index).copied().unwrap_or(-1);
+            let result = if actual == expected {
+                PositionResult::Verified
+            } else {
+                PositionResult::Mismatch { expected, actual }
+            };
+            if !ledger.record_kind(PositionKind::Physick, index, result) {
+                log_line(&format!(
+                    "[build-import] ACCOUNTING BUG: physick {index} was written but the plan \
+                     never listed it"
+                ));
+            }
+        }
 
         // Great rune: read the equipped rune back and light the rune arc.
         if let Some(rune) = equips.great_rune.as_ref() {
@@ -490,6 +539,19 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                  runeArcActive={active}",
                 rune.name
             ));
+        }
+
+        // THE ONE LINE. It reconciles against the plan, names every position that did not end up
+        // holding the build's item, and is the last word on this pass -- so a partial import
+        // cannot be read as a complete one no matter which family of positions went missing.
+        let counts = ledger.counts();
+        report.equipped = (counts.verified + counts.already, counts.planned);
+        log_line(&format!(
+            "[build-import] EQUIP LEDGER: {}",
+            ledger.headline()
+        ));
+        for failure in ledger.failures() {
+            log_line(&format!("[build-import]   NOT EQUIPPED: {failure}"));
         }
     }
 

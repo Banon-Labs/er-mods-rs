@@ -545,3 +545,154 @@ fn the_armour_slots_are_consecutive_from_protector_head() {
     assert_eq!(PROTECTOR_PARTS, ["head", "body", "arms", "legs"]);
     assert_eq!(CHR_ASM_SLOT_PROTECTOR_HEAD, 12);
 }
+
+// ------------------------------------------------- the plan is the denominator
+
+use er_build_import::equip::{EquipLedger, PositionKind, PositionResult};
+
+/// The synthetic build behind the accounting tests: two quickbar tools and two pouch tools on
+/// top of the fixture's gear, i.e. exactly the family that used to leave the denominator.
+fn with_tools() -> er_build_import::EquipPlan {
+    let doc = model::parse(
+        r#"{"items":{"tools":{"slots":[
+             {"name":"Fingerprint Nostrum","equipIndex":0},
+             {"name":"Fingerprint Nostrum","equipIndex":3},
+             {"name":"Fingerprint Nostrum","equipIndex":10},
+             {"name":"Fingerprint Nostrum","equipIndex":15}]},
+           "crystalTears":["Fingerprint Nostrum",null]}}"#,
+    )
+    .expect("synthetic doc parses");
+    equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default())
+}
+
+#[test]
+fn quickbar_and_pouch_positions_carry_their_native_slots() {
+    let plan = with_tools();
+    let quick: Vec<_> = plan
+        .positions()
+        .into_iter()
+        .filter(|p| p.kind.is_quick_dispatch())
+        .map(|p| (p.kind, p.index, p.slot))
+        .collect();
+    // ConvertChrAsmSlotToQuickItemOrPouchSlot: 0x16..0x1F is quickbar 0..9, 0x20..0x25 is pouch.
+    assert_eq!(
+        quick,
+        vec![
+            (PositionKind::Quickbar, 0, Some(0x16)),
+            (PositionKind::Quickbar, 3, Some(0x19)),
+            (PositionKind::Pouch, 0, Some(0x20)),
+            (PositionKind::Pouch, 5, Some(0x25)),
+        ]
+    );
+}
+
+#[test]
+fn occupied_is_exactly_the_position_count() {
+    // Two counts of the same thing are two chances to disagree; this pins them together.
+    let plan = with_tools();
+    assert_eq!(plan.occupied(), plan.positions().len());
+    assert_eq!(plan.occupied(), 5, "4 tools + 1 tear");
+}
+
+#[test]
+fn a_position_nobody_visits_is_unaccounted_not_absent() {
+    // THE REGRESSION. A pass that writes only the gear it attempted must not be able to print a
+    // perfect score: the four tools stay in the denominator with no result at all.
+    let plan = with_tools();
+    let mut ledger = EquipLedger::new(&plan);
+    ledger.record_kind(PositionKind::Physick, 0, PositionResult::Verified);
+
+    let counts = ledger.counts();
+    assert_eq!(counts.planned, 5);
+    assert_eq!(counts.verified, 1);
+    assert_eq!(counts.unaccounted, 4);
+    assert!(!counts.reconciles());
+
+    let headline = ledger.headline();
+    assert!(headline.contains("5 planned"), "{headline}");
+    assert!(headline.contains("4 unaccounted"), "{headline}");
+    assert!(headline.contains("NOT EQUIPPED"), "{headline}");
+    assert!(headline.contains("quickbar 0 (slot 22)"), "{headline}");
+    assert!(headline.contains("pouch 5 (slot 37)"), "{headline}");
+    assert!(headline.contains("never attempted"), "{headline}");
+}
+
+#[test]
+fn a_full_pass_reconciles_and_says_so_plainly() {
+    let plan = with_tools();
+    let mut ledger = EquipLedger::new(&plan);
+    for (index, _) in plan.positions().iter().enumerate() {
+        ledger.record(index, PositionResult::Verified);
+    }
+    let counts = ledger.counts();
+    assert!(counts.reconciles());
+    assert_eq!(counts.verified, 5);
+    assert!(ledger.failures().is_empty());
+    assert!(ledger.headline().contains("5 planned = 5 verified"));
+    assert!(!ledger.headline().contains("NOT EQUIPPED"));
+}
+
+#[test]
+fn a_written_position_that_reads_back_wrong_is_named_on_the_headline() {
+    let plan = with_tools();
+    let mut ledger = EquipLedger::new(&plan);
+    for (index, position) in plan.positions().iter().enumerate() {
+        let result = if position.kind == PositionKind::Quickbar && position.index == 3 {
+            PositionResult::Mismatch {
+                expected: 0x400008AE,
+                actual: -1,
+            }
+        } else {
+            PositionResult::Verified
+        };
+        ledger.record(index, result);
+    }
+    let counts = ledger.counts();
+    assert_eq!(counts.failed, 1);
+    assert_eq!(counts.unaccounted, 0);
+    assert!(!counts.reconciles());
+    let headline = ledger.headline();
+    assert!(
+        headline.contains("1 POSITION(S) NOT EQUIPPED"),
+        "{headline}"
+    );
+    assert!(headline.contains("quickbar 3 (slot 25)"), "{headline}");
+    assert!(headline.contains("holds -1"), "{headline}");
+}
+
+#[test]
+fn recording_a_position_the_plan_never_asked_for_is_refused() {
+    // The other direction of the same fault: a write nobody planned must not be able to pad the
+    // numerator.
+    let plan = with_tools();
+    let mut ledger = EquipLedger::new(&plan);
+    assert!(ledger.record_kind(PositionKind::Quickbar, 0, PositionResult::Verified));
+    assert!(!ledger.record_kind(PositionKind::Quickbar, 7, PositionResult::Verified));
+    assert_eq!(ledger.counts().verified, 1);
+}
+
+#[test]
+fn the_users_build_plans_twelve_positions_and_none_are_tools() {
+    // The report that started this: "none of the heavy iron balls got equipped, but are in my
+    // inventory". The planner document marks only two armaments equipped, and carries no tools
+    // at all, so the twelve planned positions are 2 armaments + 4 armour + 4 talismans + 2
+    // tears -- the two that used to fall out of the denominator were the PHYSICK, written by a
+    // different call, not a dropped quickbar.
+    let plan = equipped();
+    let doc = model::parse(BUILD).expect("fixture parses");
+    let carried = doc
+        .inventory
+        .slots
+        .iter()
+        .filter(|slot| slot.equip_index.is_none())
+        .count();
+    assert!(
+        carried > 0,
+        "the fixture must still carry unequipped armaments"
+    );
+    let kinds: Vec<_> = plan.positions().iter().map(|p| p.kind).collect();
+    assert!(
+        !kinds.iter().any(|k| k.is_quick_dispatch()),
+        "a build with no tools plans no quick positions"
+    );
+}
