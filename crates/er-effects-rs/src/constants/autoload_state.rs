@@ -287,10 +287,14 @@ pub(crate) const MENU_JOB_RESULT_STATE_NONE: i32 = 0;
 /// cancel/auto-close path (`FUN_1407ac890`, which emits `Failed`) -- which is why the
 /// save-flow observes it instead of guessing from dialog fields.
 pub(crate) const MENU_JOB_EMIT_RESULT_RVA: u32 = 0x746e80;
-/// Prologue of `MENU_JOB_EMIT_RESULT_RVA` (`mov %rdx,0x10(%rsp); push %rbx; sub $0x80,%rsp`),
-/// byte-verified against `eldenring-deobf.bin` 2026-07-28.
-pub(crate) const MENU_JOB_EMIT_RESULT_SIG: &[u8] =
-    &[0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00];
+// Every `*_SIG` prologue in this file is ASSEMBLED from named instructions by this crate's
+// `build.rs` and, when a copy of `eldenring-deobf.bin` is present, compared against the real
+// image at the same VA. Hand-typing them is what the generator exists to prevent: a prologue
+// that is one byte wrong fails its own install-time check and disarms the hook silently.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_autoload_state_prologues.rs"
+));
 pub(crate) static MENU_JOB_EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) const MENU_JOB_EMIT_RESULT_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_JOB_EMIT_RESULT_INSTALLED_YES: usize = 1;
@@ -622,18 +626,10 @@ pub(crate) const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67a520;
 /// is the end of a spin.
 pub(crate) const SAVE_REQUEST_RETRACT_B72_RVA: u32 = 0x678740;
 pub(crate) const SAVE_REQUEST_RETRACT_B73_RVA: u32 = 0x678710;
-/// Whole-body bytes of the two retractions, byte-verified in `eldenring-deobf.bin` at the
-/// same VA (1.16.2, shift 0). `48 8B 05 <disp32>` is the RIP-relative GameMan load whose
-/// target resolves to `0x143d69918`; `C6 80 <off32> 00` is the flag store, and the offset
-/// immediates (`0xb72` / `0xb73`) are visible in the signature itself. Verified before the
-/// call: if the bytes ever differ, the address means something else in that build and the
-/// retraction is skipped rather than fired blind at unknown code.
-pub(crate) const SAVE_REQUEST_RETRACT_B72_SIG: &[u8] = &[
-    0x48, 0x8B, 0x05, 0xD1, 0x11, 0x6F, 0x03, 0xC6, 0x80, 0x72, 0x0B, 0x00, 0x00, 0x00, 0xC3,
-];
-pub(crate) const SAVE_REQUEST_RETRACT_B73_SIG: &[u8] = &[
-    0x48, 0x8B, 0x05, 0x01, 0x12, 0x6F, 0x03, 0xC6, 0x80, 0x73, 0x0B, 0x00, 0x00, 0x00, 0xC3,
-];
+// `SAVE_REQUEST_RETRACT_B72_SIG` / `..._B73_SIG` are the WHOLE BODY of the two retractions --
+// RIP-relative GameMan load, flag store, return -- generated with the rest of this file's
+// prologues. Verified before the call: if the bytes ever differ, the address means something
+// else in that build and the retraction is skipped rather than fired blind at unknown code.
 // ---- SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28; reshaped 2026-07-31) ----
 // The Save Game row is CLOSE-THEN-FIRE: a commit is staged (stage 6), the proven close sequence
 // runs, and only with menus closed + RAM gates green does the tick arm the one-shot
@@ -789,33 +785,19 @@ pub(crate) const SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET: usize = 0x8;
 ///
 /// `ctor(rcx=builder, rdx=ctx, r8=prompt MenuString*, r9=&mode_i32, [rsp+0x28]=0u8)`
 pub(crate) const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA: u32 = 0x7af730;
-pub(crate) const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG: &[u8] =
-    &[0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00];
 /// `add_yes(rcx=builder, rdx=&SaveFlowYesButtonDesc) -> builder` (localized Yes label).
 pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_YES_RVA: u32 = 0x7b1c70;
-pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_YES_SIG: &[u8] =
-    &[0x4c, 0x8b, 0xdc, 0x57, 0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00];
 /// `add_no(rcx=builder) -> builder` (localized No/Cancel label; builds its own descriptor).
 pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_NO_RVA: u32 = 0x7b1900;
-pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_NO_SIG: &[u8] =
-    &[0x40, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00];
 /// `default_last(rcx=builder) -> builder`; whole body is
 /// `*(i32*)(builder+0x28) = *(i32*)(builder+0x10f0) - 1`, i.e. the default choice is the
 /// LAST button added. That is why add order encodes the default.
 pub(crate) const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA: u32 = 0x7b1b60;
-pub(crate) const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG: &[u8] = &[
-    0x8b, 0x81, 0xf0, 0x10, 0x00, 0x00, 0xff, 0xc8, 0x89, 0x41, 0x28, 0x48, 0x8b, 0xc1, 0xc3,
-];
 /// `finalize(rcx=builder, rdx=&job_slot, r8b=0) -> &job_slot`: writes the built MenuJob
 /// reference into the caller's slot.
 pub(crate) const SYSTEM_QUIT_MSGBOX_FINALIZE_RVA: u32 = 0x7b10f0;
-pub(crate) const SYSTEM_QUIT_MSGBOX_FINALIZE_SIG: &[u8] = &[
-    0x4c, 0x8b, 0xdc, 0x56, 0x57, 0x41, 0x56, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00, 0x00,
-];
 /// `dtor(rcx=builder)`: tears down the stack builder once the job is built.
 pub(crate) const SYSTEM_QUIT_MSGBOX_DTOR_RVA: u32 = 0x7b0140;
-pub(crate) const SYSTEM_QUIT_MSGBOX_DTOR_SIG: &[u8] =
-    &[0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30];
 /// Stack footprint of `CS::MessageBoxBuilder` (`sub $0x11b8,%rsp` frame in `FUN_1407b73d0`
 /// hands `lea 0x60(%rsp)` to the ctor and `finalize` reads up to `builder+0x1138`).
 pub(crate) const MSGBOX_BUILDER_SIZE: usize = 0x1140;

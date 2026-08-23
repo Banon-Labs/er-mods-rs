@@ -324,13 +324,16 @@ pub const WND_GET_SYSTEM_MENU_KEEP: i32 = false as i32;
 /// no save/crash risk. Verified (self-disasm, online-disable RE 2026-06-17): first byte 0x48.
 pub const ONLINE_DISABLE_RVA: usize = 0x67a030;
 
-/// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
-/// bytes followed by the next function, so a 3-byte stub is self-contained).
 /// First byte of the IsOnlineMode getter's prologue (`0x48`, a REX.W prefix). Validated before the
 /// stub is written so a drifted image aborts the patch instead of corrupting an unrelated function.
 /// Moved here from the product's `constants/autoload_state.rs` with the code-patch primitives (S5):
 /// this crate now calls `er_hook::apply_xor_ret_stub` directly and must supply the byte itself.
 pub const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
+// Not a prologue: these three stubs are the payload WRITTEN INTO the game, not bytes compared
+// against a function entry, so there is nothing at any address for a generator to check them
+// against. They are the only machine code in this tree that is authored rather than matched.
+/// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
+/// bytes followed by the next function, so a 3-byte stub is self-contained).
 pub const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
@@ -344,14 +347,16 @@ pub const SIGNIN_FORCE_RVA: usize = 0x24129b0;
 
 pub const SIGNIN_FORCE_EXPECTED_FIRST: u8 = 0x40;
 
-pub const SIGNIN_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3]; // mov al,1; ret
+// Not a prologue: `mov al,1; ret`, the payload written into the sign-in check.
+pub const SIGNIN_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3];
 
 /// User-index resolver (dump FUN_14240f480) -> return 0 (valid index, <= 3) instead of 0xffffffff.
 pub const USERINDEX_FORCE_RVA: usize = 0x240f490;
 
 pub const USERINDEX_FORCE_EXPECTED_FIRST: u8 = 0x4c;
 
-pub const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3]; // xor eax,eax; ret
+// Not a prologue: `xor eax,eax; ret`, the payload written into the user-index resolver.
+pub const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 
 /// Login-readiness predicate 0x140cab230 (`sub rsp,0x18; ...`, returns 1 only if all 3 session
 /// mgrs == 2). The boot/menu network-flow step calls it to decide ONLINE-attempt vs OFFLINE; a

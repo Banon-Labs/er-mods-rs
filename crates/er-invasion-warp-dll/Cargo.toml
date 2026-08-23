@@ -56,3 +56,12 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # comment beside it in `src/lib.rs`.
 [lints]
 workspace = true
+
+# Assembles every byte-checked prologue from NAMED instructions in `build.rs` -- for Elden Ring
+# and for Seamless Co-op's ersc.dll -- so no hand-typed byte can disarm a check.
+# See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }

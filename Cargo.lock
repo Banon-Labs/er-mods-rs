@@ -2893,6 +2893,7 @@ dependencies = [
  "er-hook",
  "er-invasion-warp",
  "fromsoftware-shared",
+ "iced-x86",
 ]
 
 [[package]]
@@ -3077,6 +3078,7 @@ version = "0.1.0"
 dependencies = [
  "er-game-base",
  "er-hook",
+ "iced-x86",
 ]
 
 [[package]]
@@ -3095,6 +3097,7 @@ version = "0.1.0"
 dependencies = [
  "er-game-base",
  "er-hook",
+ "iced-x86",
 ]
 
 [[package]]

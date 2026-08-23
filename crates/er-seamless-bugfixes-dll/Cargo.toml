@@ -17,6 +17,14 @@ crate-type = ["cdylib"]
 [dependencies]
 er-game-base = { path = "../er-game-base" }
 
+# Assembles the guarded functions' expected prologues from NAMED instructions in `build.rs`,
+# so a hand-typed byte can never disarm a guard. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
+
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
 
