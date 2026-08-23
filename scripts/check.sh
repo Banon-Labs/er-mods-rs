@@ -13,6 +13,13 @@ bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
 # so the gate is never trusted on its own say-so (er-effects-rs-56fx).
 python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
 python3 "$repo_root/scripts/check-oracle-writers.py"
+# The workspace uses `../fromsoftware-rs` PATH dependencies, and CI clones that sibling at ONE
+# pinned revision while a developer's is whatever they have checked out -- often a fork carrying
+# types upstream does not have. Everything below compiles against the developer's copy, so it
+# cannot see the divergence: PRs #322/#323 were green here and failed CI outright on
+# `unresolved import eldenring::cs::MsgRepositoryImp`. This is the cheap text check for that.
+python3 "$repo_root/scripts/check-fromsoftware-symbols.py" --selftest
+python3 "$repo_root/scripts/check-fromsoftware-symbols.py"
 python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
 python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
 python3 "$repo_root/scripts/test-runtime-probe-contract.py"

@@ -98,6 +98,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	me3_shells=(
 		er-armament-icons:er_armament_icons
 		er-better-refills-dll:er_better_refills
+		er-build-import-dll:er_build_import_dll
 		er-crash-logging-dll:er_crash_logging_dll
 		er-death-persist-dll:er_death_persist
 		er-input-harness-dll:er_input_harness_dll

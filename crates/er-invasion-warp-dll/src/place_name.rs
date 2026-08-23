@@ -31,9 +31,10 @@
 //! rather than passed through, because putting `?PlaceName?` on a banner is worse than the block id
 //! it replaced.
 
-/// `GLOBAL_MsgRepository` -- the `MsgRepositoryImp*` singleton slot, read from
-/// `MOV RCX, qword ptr [0x143d7d4f8]` inside `GetAndFormat`.
-pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d7_d4f8;
+/// `GLOBAL_MsgRepository` -- the `MsgRepositoryImp*` singleton slot. Declared once in
+/// `er-game-base::rva` now that the build importer reads the same global; re-exported here so this
+/// module's own callers and its address test keep the name they had.
+pub use er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA;
 
 /// `FUN_140d10b60(MsgRepositoryImp*, id) -> wchar_t*` -- the `PlaceName` getter.
 pub const PLACE_NAME_LOOKUP_RVA: usize = 0xd1_0b60;

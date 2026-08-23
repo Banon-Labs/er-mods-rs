@@ -120,3 +120,38 @@ pub enum MsgBoxRva {
 }
 
 pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
+
+// ---- inventory functions shared by more than one DLL ----
+//
+// These moved here when a second crate needed them: `er-better-refills-dll` reads the player's
+// inventory to decide what to replenish, and `er-build-import-dll` reads it to confirm granted
+// items and to resolve the inventory INDEX that the equip path requires. Two literal copies of
+// one address is exactly the drift `scripts/check-rva-alias-drift.py` exists to stop.
+
+/// `CS::EquipGameData::GetEquipInventoryData(equipGameData) -> EquipInventoryData*`.
+pub const GET_EQUIP_INVENTORY_DATA_RVA: usize = 0x247b30;
+/// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId) -> int`.
+pub const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
+// ---- the message repository singleton ----
+//
+// Moved here for the same reason as the inventory functions above: two crates now read it.
+// `er-invasion-warp-dll` resolves a `PlaceName`, and `er-build-import-dll` builds its whole
+// name -> item-id catalog out of the game's own strings.
+//
+// IT IS READ FROM THE GAME'S OWN GLOBAL, NOT from a typed upstream singleton. `fromsoftware-rs`
+// at the revision CI pins (`FROMSOFTWARE_RS_REV` in .github/workflows/check.yml) has no
+// `MsgRepositoryImp`; only a local fork does. Depending on that type builds on a developer's
+// machine and fails in CI with `unresolved import`, which is exactly what happened. Reading the
+// global keeps the address in this repo, where `scripts/check-rva-alias-drift.py` can see it.
+
+/// `GLOBAL_MsgRepository` -- the `CS::MsgRepositoryImp*` singleton slot, read from
+/// `MOV RCX, qword ptr [0x143d7d4f8]` inside `MsgRepository::GetAndFormat`.
+///
+/// The slot is null until the repository is constructed, so every caller must treat a zero as
+/// "not up yet" rather than dereferencing it -- the engine itself DLPanics on that path.
+pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d7_d4f8;
+
+/// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId) -> int`.
+///
+/// Returns the index the equip path needs; negative means the item is not held.
+pub const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;

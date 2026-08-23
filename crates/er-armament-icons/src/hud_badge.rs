@@ -161,16 +161,28 @@ const BADGE_PATH: &std::ffi::CStr = c"ItemIcon/ArtsIcon";
 ///   slot -4/-3 -> index = sel*2 + 7         -> 7, 9       (bolts)
 /// ```
 ///
-/// ChrAsm's weapon block interleaves the hands -- 0 = Right 1, 1 = Left 1, 2 = Right 2, 3 = Left
-/// 2, 4 = Right 3, 5 = Left 3 -- so EVEN is the right hand and ODD is the left. The ammo rows
-/// confirm the reading independently: `sel*2 + 6` lands on 6/8 (Arrow 1/2) and `sel*2 + 7` on
-/// 7/9 (Bolt 1/2), exactly the known layout.
+/// ChrAsm's weapon block interleaves the hands -- 0 = Left 1, 1 = Right 1, 2 = Left 2, 3 = Right
+/// 2, 4 = Left 3, 5 = Right 3 -- so EVEN is the LEFT hand and ODD is the right. The ammo rows
+/// confirm the index arithmetic independently: `sel*2 + 6` lands on 6/8 (Arrow 1/2) and
+/// `sel*2 + 7` on 7/9 (Bolt 1/2), exactly the known layout.
 ///
-/// So **-2 is RIGHT and -1 is LEFT**. These two constants were previously assigned the other way
-/// round, which would have drawn each hand's Ash of War on the opposite slot -- a swap that still
-/// produces two plausible-looking badges and is invisible unless the hands hold different ashes.
-const CHR_ASM_SLOT_RIGHT_ACTIVE: i32 = -2;
-const CHR_ASM_SLOT_LEFT_ACTIVE: i32 = -1;
+/// So **-2 is LEFT and -1 is RIGHT**, proven rather than assumed. `CS::ChrIns::
+/// GetEquipmentEntryByTwoHandState` (1.16.2 dump 0x1403eeec0) is a single line:
+///
+/// ```text
+///   GetEquipmentEntry(this, (hand != Left) - 2)
+/// ```
+///
+/// which yields `-2` for `Left` and `-1` for `Right`. `../fromsoftware-rs` agrees independently
+/// (`ChrAsmSlot::WeaponLeft1 = 0`, `WeaponRight1 = 1`), as does the dump's own enum, which
+/// `EquipItemToChrAsmSlot` uses as `if (chrAsmSlot < WeaponLeft1) return;`.
+///
+/// These constants held the opposite values until 2026-08-22 and so drew each hand's Ash of War
+/// on the other hand's badge. The table decode above was always right; only the hand labels
+/// attached to it were wrong, and an earlier edit "fixed" the swap by flipping it the wrong way.
+/// The defect is invisible whenever both hands carry the same ash, which is how it survived.
+const CHR_ASM_SLOT_LEFT_ACTIVE: i32 = -2;
+const CHR_ASM_SLOT_RIGHT_ACTIVE: i32 = -1;
 
 const PROXY_SIZE: usize = 0x60;
 const PROXY_SCALEFORM_VALUE_OFFSET: usize = 0x28;

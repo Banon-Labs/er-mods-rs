@@ -46,6 +46,10 @@ members = [
   # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
   # no product dependency: every guard is a null-container intercept on a vanilla function.
   "crates/er-seamless-bugfixes-dll",
+  # Import a build from an er-build-planner share link: pure host-side data
+  # transformation (planner JSON -> item grants), no game or network deps.
+  "crates/er-build-import",
+  "crates/er-build-import-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",
   "crates/er-tpf",
