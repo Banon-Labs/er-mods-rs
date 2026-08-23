@@ -175,8 +175,49 @@ pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> b
     }
     if BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) == window {
         BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        // THE WINDOW GOING TERMINAL IS THE ONLY RELIABLE "THE FIELD CLOSED" SIGNAL WE GET.
+        //
+        // The back action was supposed to arrive at the `0x81d3d0` result gate, which would record
+        // `Cancelled` and clear the active-job slot. It does not: a live session opened three link
+        // fields, the player closed each with B, and that detour fired ZERO times (runtime log
+        // `dll:8dca09bb`, 2026-08-23). Neither did the `0x81d220` terminal callback. Those two RVAs
+        // are on the `SoftwareKeyboardJob` path, and this field is served by the SCALEFORM 02_990
+        // fallback instead -- so a cancel there never reaches them, the job slot stays set forever,
+        // and the row refuses every future press with "editor already active". The row is dead for
+        // the rest of the session.
+        //
+        // The window is the participant that actually knows. It runs while the field is up and goes
+        // terminal when it closes -- the game's own verdict, read from the state it hands the run
+        // post-hook every frame, not a timeout and not an inference from silence. Releasing here
+        // covers the cancel AND any other close that skips those detours; an accept still reaches
+        // the terminal callback first and leaves nothing for this to do.
+        release_build_url_keyboard_on_window_close(window);
     }
     false
+}
+
+/// Release a link-field keyboard whose window has closed without either detour firing.
+///
+/// Deposits `Cancelled` only if no outcome is already waiting: an accept records its text from the
+/// terminal callback and its window goes terminal immediately afterwards, so overwriting here would
+/// turn every accepted link into a cancel.
+fn release_build_url_keyboard_on_window_close(window: usize) {
+    let job = keyboard_active_job_slot(KeyboardPurpose::BuildUrl).swap(0, Ordering::SeqCst);
+    if job == 0 {
+        return;
+    }
+    let mut slot = keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_none() {
+        *slot = Some(PathEditorOutcome::Cancelled);
+    }
+    drop(slot);
+    append_autoload_debug(format_args!(
+        "system-quit-build-url: link field window=0x{window:x} closed with job=0x{job:x} still \
+         latched -- neither the cancel gate nor the terminal callback fired; releasing it so the \
+         row is pressable again"
+    ));
 }
 
 fn keyboard_active_job_slot(purpose: KeyboardPurpose) -> &'static AtomicUsize {
@@ -1114,5 +1155,71 @@ mod tests {
             assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS > 16);
             assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS <= 1024);
         }
+    }
+    /// PRESSING B CLOSED THE FIELD AND KILLED THE ROW FOR THE REST OF THE SESSION.
+    ///
+    /// Live session `dll:8dca09bb`, 2026-08-23: three link fields opened, each closed with the back
+    /// action, and the `0x81d3d0` cancel gate fired zero times -- so the active-job slot stayed set
+    /// and every later press was refused with "editor already active". The window going terminal is
+    /// the signal that actually arrives, so it has to be the one that releases the latch.
+    #[test]
+    fn a_link_field_window_closing_releases_a_latch_no_detour_cleared() {
+        let job = 0x4242_0000;
+        let window = 0x8080_0000;
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(job, Ordering::SeqCst);
+        *keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        BUILD_URL_EDITOR_WINDOW.store(window, Ordering::SeqCst);
+
+        assert!(!build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_FAILED
+        ));
+
+        assert_eq!(
+            keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst),
+            0,
+            "the job slot must clear, or the row refuses every future press"
+        );
+        assert!(
+            matches!(
+                keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take(),
+                Some(PathEditorOutcome::Cancelled)
+            ),
+            "a close with nothing accepted is a cancel"
+        );
+    }
+
+    /// ...but an ACCEPT must survive it. The terminal callback records the text, and the window goes
+    /// terminal a frame or two later; overwriting that with `Cancelled` would drop every link the
+    /// player successfully entered.
+    #[test]
+    fn a_window_close_after_an_accept_does_not_clobber_the_accepted_text() {
+        let window = 0x9090_0000;
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0x1111_0000, Ordering::SeqCst);
+        *keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathEditorOutcome::Accepted(
+            "https://example/?b=abc".to_owned(),
+        ));
+        BUILD_URL_EDITOR_WINDOW.store(window, Ordering::SeqCst);
+
+        assert!(!build_url_note_editor_window_state(
+            window,
+            MENU_JOB_STATE_FAILED
+        ));
+
+        let outcome = keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        assert!(
+            matches!(outcome, Some(PathEditorOutcome::Accepted(text)) if text.contains("?b=abc")),
+            "the accepted text must outlive its window"
+        );
     }
 }
