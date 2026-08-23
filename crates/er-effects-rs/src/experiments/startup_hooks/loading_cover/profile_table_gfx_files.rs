@@ -776,11 +776,21 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
     true
 }
 
+/// UNION-SHAPED, not game-shaped (2026-08-23). This prologue is detoured by `er-armament-icons`
+/// too, and two MinHook instances on one prologue overwrite each other's trampolines -- measured:
+/// the product reported `installed = true` with ZERO hits for a whole session while every GFx swap
+/// it owns went silently vanilla. Both DLLs now chain through THIS DLL's single instance via the
+/// `er_effects_union_register` export, whose handler ABI is four `usize` args. The game passes
+/// three, so the fourth register is ignored; `flags` is narrowed straight back to the `u32` the
+/// game really passed, so neither the log nor the forwarded call sees a register whose high half
+/// is undefined.
 pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     loader: usize,
     url: usize,
-    flags: u32,
+    flags_reg: usize,
+    _unused: usize,
 ) -> usize {
+    let flags = flags_reg as u32;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let hit = TITLE_SCALEFORM_FILE_OPEN_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     let caller_rva = trace_first_game_caller_rva();
@@ -824,8 +834,11 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     let orig = TITLE_SCALEFORM_FILE_OPEN_ORIG.load(Ordering::SeqCst);
     let ret = if base != null {
         if orig != null && orig != HOOK_ORIGINAL_UNSET {
-            let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
-                unsafe { std::mem::transmute(orig) };
+            // Called through the UNION signature on purpose: under the chain this slot holds
+            // either the game trampoline (3 args, extra register harmlessly ignored) or the NEXT
+            // handler, which is 4-arg. Calling a chained handler with the game's narrower
+            // signature would leave its 4th register undefined.
+            let f: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };
             // A custom cache key forces a fresh Scaleform load. Redirect only that key's file-open
             // to the canonical native movie; the game's shared 02_990 cache entry stays untouched.
             let open_url = if is_path_editor_02_990 || is_build_url_02_990 {
@@ -833,7 +846,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             } else {
                 url
             };
-            let native = unsafe { f(loader, open_url, flags) };
+            let native = unsafe { f(loader, open_url, flags as usize, 0) };
             // Product-default runtime strip (er-effects-rs-h7x): derive the stripped title
             // movie from the native file's own vanilla payload and swap it in place. On any
             // failure the untouched native file is returned (vanilla title UI, fail-closed).
@@ -859,9 +872,8 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             null
         }
     } else if orig != null && orig != HOOK_ORIGINAL_UNSET {
-        let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
-            unsafe { std::mem::transmute(orig) };
-        unsafe { f(loader, url, flags) }
+        let f: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };
+        unsafe { f(loader, url, flags as usize, 0) }
     } else {
         null
     };

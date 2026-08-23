@@ -251,7 +251,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 
-# Knowing every shell exists is not knowing which of them can share a process. Five pairs
+# Knowing every shell exists is not knowing which of them can share a process. Several pairs
 # corrupt each other -- two MinHook instances on one prologue, two D3D12 Present compositors,
 # a harness that drives input every frame -- and that knowledge used to live only as prose in
 # a hand-written ~/Elden/*.me3. scripts/er-dll-closure.py now reads it as data to decide what a
@@ -259,6 +259,16 @@ python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 # classified is exactly the one a dependency-closure walk auto-includes.
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
+
+# ...and the table only helps if it still matches the CODE. This scans every cdylib for the hook
+# targets it claims and fails on any address two of them claim without a [[conflict]] or [[shared]]
+# row -- then proves each [[shared]] row's mechanism, so neither side can quietly revert to a
+# private MinHook instance. That reversion is the failure this pair of gates exists for: two
+# instances on one prologue overwrite each other's trampolines, the loser reports installed and
+# never runs, nothing crashes, and the feature merely looks unimplemented. It cost a full day on
+# 2026-08-23 before an A/B against a one-DLL profile named it.
+python3 "$repo_root/scripts/check-shared-hook-rvas.py" --selftest
+python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 
 # The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
 # selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with

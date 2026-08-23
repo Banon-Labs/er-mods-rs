@@ -265,7 +265,16 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
         table = tomllib.load(handle)
     kept, excluded, unresolvable = resolve_conflicts(candidates, table, pinned)
 
+    # PRODUCT FIRST, then the rest alphabetically. me3 loads natives in profile order, and the
+    # companions resolve the product's `er_effects_union_register` export to chain onto prologues it
+    # already owns (scripts/me3-launch-lib.sh says the same). A plain `sorted()` put
+    # `er-armament-icons` ahead of `er-effects-rs`, so the companion's install thread could run
+    # before the product image was even loaded -- it would then find no export, fall back to its own
+    # MinHook instance, and recreate the collision the [[shared]] entry exists to prevent. The
+    # companion still polls briefly, so this is belt-and-braces rather than the sole guarantee.
     selected = sorted(kept)
+    if PRODUCT_PACKAGE in kept:
+        selected = [PRODUCT_PACKAGE] + [p for p in selected if p != PRODUCT_PACKAGE]
     dirty = bool(git("status", "--porcelain").strip())
 
     return {

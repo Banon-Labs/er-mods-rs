@@ -57,21 +57,28 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             }
         }
     }
+    // THE ONE PROLOGUE THIS DLL SHARES WITH ANOTHER ME3 NATIVE (2026-08-23). `er-armament-icons`
+    // detours this same Scaleform file-open wrapper, and the bare `MhHook` that used to be here is
+    // exactly what let whichever DLL installed second overwrite the other's trampoline: measured,
+    // the product reported `file_open_observer_installed = true` with `file_open_hits = 0` for an
+    // entire session while every GFx swap it owns rendered vanilla, and nothing crashed or logged.
+    // Registering through the union makes install order irrelevant -- the first registrant creates
+    // the dispatcher and owns the real trampoline, every later one CHAINS -- and the companion
+    // reaches this same union from its own image through the `er_effects_union_register` export.
+    // The union enables its hook immediately rather than through MinHook's queue, so this
+    // deliberately sits outside the `MH_ApplyQueued` batch the other two observers share.
     if TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) == 0 {
         match unsafe {
-            MhHook::new(
-                file_open_addr as *mut c_void,
-                title_scaleform_file_open_observer_hook as *mut c_void,
+            crate::mh::register_union_hook(
+                file_open_addr,
+                title_scaleform_file_open_observer_hook,
+                &TITLE_SCALEFORM_FILE_OPEN_ORIG,
             )
         } {
-            Ok(hook) => {
-                TITLE_SCALEFORM_FILE_OPEN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
-                crate::mh::leak_installed_hook(hook);
-            }
+            Ok(()) => TITLE_SCALEFORM_FILE_OPEN_INSTALLED.store(1, Ordering::SeqCst),
             Err(status) => {
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: Scaleform file-open MhHook::new failed: {status:?}"
+                    "title-resource-observer: Scaleform file-open union register failed: {status:?}"
                 ));
                 ok = false;
             }
@@ -104,7 +111,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
             TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
-            TITLE_SCALEFORM_FILE_OPEN_INSTALLED.store(1, Ordering::SeqCst);
+            // file-open is NOT set here: the union already enabled and flagged it above.
             TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "title-resource-observer: hooked AcquireMenuResource 0x{addr:x}, Scaleform file-open 0x{file_open_addr:x}, resource-ctor 0x{resource_ctor_addr:x}; observe-only"

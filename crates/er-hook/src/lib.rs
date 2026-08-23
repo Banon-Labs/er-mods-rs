@@ -151,18 +151,179 @@ pub unsafe fn register_union_hook(
         )
     }
     .ok()?;
-    match unsafe { MH_EnableHook(target as *mut c_void) } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {}
-        s => return Err(s),
-    }
+    // ARM THE SLOT BEFORE ENABLING THE DETOUR. These two stores used to happen AFTER
+    // `MH_EnableHook`, leaving a window in which the dispatcher was live but its head was still 0
+    // -- and `union_dispatch` returns 0 for a null head WITHOUT calling the game. On a rarely-hit
+    // target that window is invisible; on a hot one like the Scaleform file-open wrapper (called
+    // throughout boot) a single unlucky call would hand the engine a NULL File* instead of the
+    // asset it asked for. The dispatcher is unreachable until the detour is enabled, so publishing
+    // the head first is free.
     UNION_HEADS[slot].store(handler_addr, Ordering::Release);
     orig_slot.store(trampoline as usize, Ordering::Release); // sole handler -> game orig
+    match unsafe { MH_EnableHook(target as *mut c_void) } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {}
+        s => {
+            // Nothing is patched, so leave no armed head behind for a later slot reuse to inherit.
+            UNION_HEADS[slot].store(0, Ordering::Release);
+            orig_slot.store(0, Ordering::Release);
+            return Err(s);
+        }
+    }
     unions.push(UnionEntry {
         target,
         trampoline: trampoline as usize,
         handlers: vec![(handler_addr, orig_slot)],
     });
     Ok(())
+}
+
+// ============================================================================
+// CROSS-DLL UNION -- THE COMPANION SIDE (2026-08-23).
+//
+// `register_union_hook` above unions handlers inside ONE DLL, and cannot do more than that:
+// its registry, its dispatcher pool and its MinHook instance are all statics, and a statically
+// linked crate's statics are PER DLL. Two cdylibs that both link this crate therefore own two
+// INDEPENDENT MinHook instances. If both detour one prologue, the second `MH_CreateHook` gets
+// `MH_ERROR_ALREADY_CREATED`: the loser reports installed, never runs, and every feature behind
+// it looks unimplemented -- nothing crashes and nothing logs an error.
+//
+// That is measured, not hypothetical. `er-effects-rs` and `er-armament-icons` both detour
+// `TITLE_SCALEFORM_FILE_OPEN_RVA` (0x11ced80); in an eleven-native profile the product reported
+// `file_open_observer_installed = true` with `file_open_hits = 0` for an entire session and every
+// GFx swap it owns went silently vanilla, while the same build loaded ALONE reported 113 hits
+// (bd armament-icons-and-product-share-scaleform-fileopen-rva-2026-08-23).
+//
+// The product DLL publishes its union as the `er_effects_union_register` C export, so the fix is
+// for every OTHER DLL to register through that export instead of its own instance -- one MinHook
+// instance owns the prologue and both handlers CHAIN. [`register_shared_hook`] is that call: it
+// uses the product's union when the product is in the process and this DLL's own union when it is
+// not, so a standalone run of the companion behaves exactly as before.
+// ============================================================================
+
+/// C-ABI shape of the product DLL's `er_effects_union_register` export
+/// (`crates/er-effects-rs/src/mh.rs`): `(target, handler, *mut orig_slot) -> 0 ok | -1 null slot |
+/// positive `MH_STATUS` on MinHook failure`.
+pub type UnionRegisterFn = unsafe extern "system" fn(usize, UnionFn, *mut usize) -> i32;
+
+/// Which MinHook instance a [`register_shared_hook`] call ended up on. Worth logging: it is the
+/// difference between "chained onto the product's detour" and "installed a second instance that
+/// may be about to lose a trampoline race".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookRoute {
+    /// Chained into `er_effects_rs.dll`'s single union -- the product is co-loaded.
+    ProductUnion,
+    /// This DLL's own union -- the product is absent, or this IS the product.
+    LocalUnion,
+}
+
+/// The product DLL as me3 loads it, matched by base name rather than by path.
+#[cfg(windows)]
+const PRODUCT_DLL_NAME: &[u8] = b"er_effects_rs.dll\0";
+#[cfg(windows)]
+const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
+
+/// Default poll budget for [`register_shared_hook`]: ~1s at 25ms.
+///
+/// A budget is needed rather than a single probe because me3 loads natives in PROFILE ORDER and
+/// nothing guarantees the product comes first -- `er-dll-closure.py` emits the product first for
+/// exactly this reason, but a hand-written profile need not. A companion whose install thread runs
+/// before the product's `LoadLibrary` would see no module at all, take the local union, and
+/// recreate the collision this API exists to remove. Both natives are loaded within a few
+/// milliseconds of each other, so this budget is orders of magnitude past the real race; the
+/// fallback is correct behaviour, not a failure, so overshooting costs nothing but a late arm.
+#[cfg(windows)]
+const PRODUCT_RESOLVE_TRIES: u32 = 40;
+#[cfg(windows)]
+const PRODUCT_RESOLVE_SLEEP_MS: u32 = 25;
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetModuleHandleA(name: *const u8) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    fn Sleep(ms: u32);
+}
+
+/// Resolve the product DLL's `er_effects_union_register` export, polling `tries` times at
+/// `sleep_ms` intervals. `None` means the product is not in this process (a standalone companion
+/// run) or this DLL *is* the product -- in both cases the caller owns the address itself.
+///
+/// Pass `tries = 1, sleep_ms = 0` for a non-blocking probe.
+#[cfg(windows)]
+pub fn resolve_product_union_register(tries: u32, sleep_ms: u32) -> Option<UnionRegisterFn> {
+    for attempt in 0..tries.max(1) {
+        let hmod = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
+        // Resolving our OWN export would route right back into the local union through a C-ABI
+        // round trip. Same outcome, so this is a clarity guard rather than a correctness one --
+        // but it also means the product can call `register_shared_hook` without special-casing.
+        if !hmod.is_null() && hmod as usize != dll_base() {
+            let proc = unsafe { GetProcAddress(hmod, UNION_REGISTER_EXPORT.as_ptr()) };
+            if !proc.is_null() {
+                // SAFETY: the export's C-ABI shape is fixed by the product DLL, and both images
+                // stay mapped for the process lifetime, so the pointer stays valid.
+                return Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) });
+            }
+        }
+        if attempt + 1 < tries.max(1) && sleep_ms > 0 {
+            unsafe { Sleep(sleep_ms) };
+        }
+    }
+    None
+}
+
+/// Register `handler` on `target` through whichever union owns the process's MinHook instance for
+/// it: the product DLL's when the product is co-loaded, this DLL's own otherwise.
+///
+/// Use this -- never a bare [`MhHook`] -- for any prologue a SECOND ME3 DLL might also detour.
+/// `scripts/check-shared-hook-rvas.py` is the gate that finds those addresses;
+/// `scripts/me3-dll-conflicts.toml` records each one.
+///
+/// # Safety
+/// `handler` must be a valid [`UnionFn`] matching `target`'s ABI (<=4 integer/pointer args), and
+/// `orig_slot` must be the `'static` cell that handler reads to call its original. Note that the
+/// value stored there may be the NEXT handler in the chain rather than the game trampoline, so the
+/// handler must call it through the 4-argument [`UnionFn`] signature, not the game's narrower one.
+#[cfg(windows)]
+pub unsafe fn register_shared_hook(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<HookRoute, MH_STATUS> {
+    if let Some(register) =
+        resolve_product_union_register(PRODUCT_RESOLVE_TRIES, PRODUCT_RESOLVE_SLEEP_MS)
+    {
+        // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
+        // own static is sound; our image outlives every dispatch.
+        let slot_ptr = orig_slot.as_ptr();
+        return match unsafe { register(target, handler, slot_ptr) } {
+            0 => Ok(HookRoute::ProductUnion),
+            // -1 is the export's null-slot rejection, which cannot happen here (the pointer comes
+            // from a live static) -- reported as UNKNOWN rather than silently mapped to a status.
+            code if code < 0 => Err(MH_STATUS::MH_UNKNOWN),
+            code => Err(mh_status_from_i32(code)),
+        };
+    }
+    unsafe { register_union_hook(target, handler, orig_slot) }.map(|()| HookRoute::LocalUnion)
+}
+
+/// Reconstruct an [`MH_STATUS`] from the `i32` the cross-DLL export returns.
+fn mh_status_from_i32(code: i32) -> MH_STATUS {
+    match code {
+        0 => MH_STATUS::MH_OK,
+        1 => MH_STATUS::MH_ERROR_ALREADY_INITIALIZED,
+        2 => MH_STATUS::MH_ERROR_NOT_INITIALIZED,
+        3 => MH_STATUS::MH_ERROR_ALREADY_CREATED,
+        4 => MH_STATUS::MH_ERROR_NOT_CREATED,
+        5 => MH_STATUS::MH_ERROR_ENABLED,
+        6 => MH_STATUS::MH_ERROR_DISABLED,
+        7 => MH_STATUS::MH_ERROR_NOT_EXECUTABLE,
+        8 => MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION,
+        9 => MH_STATUS::MH_ERROR_MEMORY_ALLOC,
+        10 => MH_STATUS::MH_ERROR_MEMORY_PROTECT,
+        11 => MH_STATUS::MH_ERROR_MODULE_NOT_FOUND,
+        12 => MH_STATUS::MH_ERROR_FUNCTION_NOT_FOUND,
+        _ => MH_STATUS::MH_UNKNOWN,
+    }
 }
 
 /// Central hook registry (2026-07-16). Every MinHook detour creation records its TARGET game address
