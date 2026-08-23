@@ -401,6 +401,15 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             missing.name
         ));
     }
+    // A build can name two items for one position -- the planner leaves the old row flagged when a
+    // slot is re-assigned. The winner is chosen the way the planner renders it, but a dropped
+    // armament is not allowed to be invisible in the log, which is where this is diagnosed from.
+    for contest in equips.contested.iter().take(12) {
+        log_line(&format!(
+            "[build-import]   CONTESTED {} -> {:?}, dropping {:?}",
+            contest.position, contest.winner, contest.losers
+        ));
+    }
 
     let mut report = Report {
         build_name: doc.name.clone(),

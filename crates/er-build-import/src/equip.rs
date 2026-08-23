@@ -10,10 +10,10 @@
 //!
 //! | target | source | encoding |
 //! |---|---|---|
-//! | armaments | `inventory.slots[].equipIndex` | 0..6, right hand then left |
-//! | armour | `protectors.<part>.slots[].equipIndex` | present = this is the worn one |
-//! | talismans | `talismans.slots[].equipIndex` | 0..4 |
-//! | spells | `spells.slots[].order` | memorisation order; there is no `equipIndex` |
+//! | armaments | `inventory.slots[].equipSet` | 0..6, right hand then left |
+//! | armour | `protectors.<part>.slots[].equipSet` | non-null = this is the worn one |
+//! | talismans | `talismans.slots[].equipSet` | 0..4 |
+//! | spells | `spells.slots[].order` | memorisation order; there is no equip position |
 //! | quickbar | `items.tools.slots[].equipIndex` | `< 10` -> quickbar position |
 //! | pouch | `items.tools.slots[].equipIndex` | `10..16` -> up, right, left, down, 1, 2 |
 //! | physick | `items.crystalTears` | two entries, `null` when empty |
@@ -23,10 +23,53 @@
 //! The quickbar/pouch split is not guesswork: the planner renders a tool's badge
 //! with `equipIndex < QUICKBAR(10)` -> quickbar `equipIndex + 1`, and otherwise
 //! `equipIndex - 10` selecting up/right/left/down/1/2 out of `POUCH(16)` total
-//! positions.
+//! positions. Tools carry no `equipSet` -- the planner never passes a category
+//! for them -- so `equipIndex` is the whole story there.
+//!
+//! # Loadout sets, and why `equipIndex` alone is not enough
+//!
+//! A build carries several named loadouts per category (`sets.weapons`,
+//! `sets.talismans`, `sets.protectors`), one of them flagged `active`. Every
+//! equippable row then carries `equipSet`, an array **indexed by set** whose
+//! value is the equip position that item holds in that set:
+//!
+//! ```text
+//! {"name": "Nagakiba", "equipSet": [null, null, null, 0]}   // set 3, position 0
+//! ```
+//!
+//! `equipIndex` is a *cache* of `equipSet[active]`, nothing more. The planner
+//! writes both together (`setSlotEquipIndex` assigns `equipIndex` and then
+//! `equipSet[activeIndex]`), rewrites `equipIndex` from `equipSet` whenever the
+//! author switches set, and `splice`s `equipSet` when a set is deleted -- which
+//! is what proves the array is positional by set rather than a list of set ids.
+//! A row with no `equipSet` at all predates sets; the planner's own migration
+//! turns it into `[equipIndex]`, i.e. set 0.
+//!
+//! Reading `equipSet` at the active index therefore selects the *same* rows that
+//! `equipIndex` did. It is not a bug fix on its own -- it is what makes the
+//! selection derived rather than inherited, so a build whose active set is not
+//! set 0 cannot quietly import the wrong loadout.
+//!
+//! # Contested positions
+//!
+//! Real payloads do contradict themselves: several rows can claim one position
+//! *within the active set*, because the planner never clears the position off the
+//! row that used to hold it. Build `82086df03c4b8e` has three rows on armament
+//! position 0 and two on position 4. That is not recoverable from the data, so
+//! the tie is broken the way the planner's own equip-slot components break it,
+//! and every loser is reported:
+//!
+//! * armaments, talismans, quickbar and pouch **fold last-wins** --
+//!   `slots.filter(equipIndex != null).reduce((acc, s) => (acc[s.equipIndex] = s, acc))`
+//!   overwrites, so the row latest in the list is the one the author sees;
+//! * armour takes the **first** -- `slots.find(s => s.equipIndex != null)`.
+//!
+//! Losers land in [`EquipPlan::rejected`] as well as [`EquipPlan::contested`], so
+//! a caller that only counts rejections still cannot miss a collision.
 
 use crate::catalog::{Catalog, Kind};
 use crate::model::BuildDoc;
+use std::collections::BTreeMap;
 
 /// Armament slots: three right hand, three left.
 pub const ARMAMENT_SLOTS: usize = 6;
@@ -110,6 +153,22 @@ pub struct Rejected {
     pub reason: String,
 }
 
+/// A position claimed by more than one row of the active set.
+///
+/// Not an error in the importer: the payload itself says two things at once, and
+/// this records which one was believed. The winner is chosen by the same rule the
+/// planner's own equip-slot components use, so the import matches what the build's
+/// author sees on screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contested {
+    /// Which position, e.g. `armament slot 0`.
+    pub position: String,
+    /// The item that was placed there.
+    pub winner: String,
+    /// The other claimants, in payload order.
+    pub losers: Vec<String>,
+}
+
 /// How much the character can actually hold.
 ///
 /// Defaults describe a character that has received the setup items an import
@@ -163,6 +222,8 @@ pub struct EquipPlan {
     pub two_handing: bool,
     /// Everything that could not be placed, with a reason.
     pub rejected: Vec<Rejected>,
+    /// Positions that more than one row of the active set claimed.
+    pub contested: Vec<Contested>,
 }
 
 impl EquipPlan {
@@ -194,6 +255,10 @@ impl EquipPlan {
 }
 
 /// Compute the target equipment state for `doc`.
+///
+/// Only the active set of each category is equipped, and a position two rows of
+/// that set both claim is resolved -- never silently -- into
+/// [`EquipPlan::contested`] as well as [`EquipPlan::rejected`].
 pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> EquipPlan {
     let mut out = EquipPlan {
         armaments: vec![None; ARMAMENT_SLOTS],
@@ -205,8 +270,10 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         ..EquipPlan::default()
     };
 
+    let active_weapons = doc.sets.active_weapons();
+    let mut armaments = Vec::new();
     for slot in &doc.inventory.slots {
-        let Some(index) = slot.equip_index else {
+        let Some(index) = slot.equip_index_in_set(active_weapons) else {
             continue;
         };
         let Some(found) = catalog.lookup(Kind::Weapon, &slot.name) else {
@@ -217,23 +284,33 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             continue;
         };
         let offset = crate::plan::infusion_offset(slot.infusion.as_deref()).unwrap_or(0);
-        let item = EquipRef {
-            item_id: found.full_item_id + offset,
-            param_id: found.param_id() + offset,
-            name: slot.name.clone(),
-        };
-        place(
-            &mut out.armaments,
-            index as usize,
-            item,
-            "armament slot",
-            &mut out.rejected,
-        );
+        armaments.push(Claim {
+            order: slot.order,
+            index: index as usize,
+            item: EquipRef {
+                item_id: found.full_item_id + offset,
+                param_id: found.param_id() + offset,
+                name: slot.name.clone(),
+            },
+        });
     }
+    settle(
+        &mut out.armaments,
+        armaments,
+        |index| format!("armament slot {index}"),
+        Contest::LastWins,
+        &mut out.rejected,
+        &mut out.contested,
+    );
 
+    // Armour carries a set membership, not a position: the planner writes a
+    // constant `1` for every worn piece and resolves the part by which list the
+    // row lives in, so the value is deliberately not read here.
+    let active_protectors = doc.sets.active_protectors();
     for (part, list) in &doc.protectors {
+        let mut claims = Vec::new();
         for slot in &list.slots {
-            if slot.equip_index.is_none() {
+            if slot.equip_index_in_set(active_protectors).is_none() {
                 continue;
             }
             let Some(found) = catalog.lookup(Kind::Protector, &slot.name) else {
@@ -243,37 +320,45 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
                 });
                 continue;
             };
-            let item = EquipRef {
-                item_id: found.full_item_id,
-                param_id: found.param_id(),
-                name: slot.name.clone(),
-            };
-            let target = match part.as_str() {
-                "head" => &mut out.head,
-                "body" => &mut out.body,
-                "arms" => &mut out.arms,
-                "legs" => &mut out.legs,
-                other => {
+            claims.push(Claim {
+                order: slot.order,
+                index: 0,
+                item: EquipRef {
+                    item_id: found.full_item_id,
+                    param_id: found.param_id(),
+                    name: slot.name.clone(),
+                },
+            });
+        }
+        let target = match part.as_str() {
+            "head" => &mut out.head,
+            "body" => &mut out.body,
+            "arms" => &mut out.arms,
+            "legs" => &mut out.legs,
+            other => {
+                for claim in claims {
                     out.rejected.push(Rejected {
-                        name: slot.name.clone(),
+                        name: claim.item.name,
                         reason: format!("unknown armour part {other:?}"),
                     });
-                    continue;
                 }
-            };
-            if target.is_some() {
-                out.rejected.push(Rejected {
-                    name: slot.name.clone(),
-                    reason: format!("{part} already has an equipped piece"),
-                });
                 continue;
             }
-            *target = Some(item);
-        }
+        };
+        settle(
+            std::slice::from_mut(target),
+            claims,
+            |_| format!("{part} armour"),
+            Contest::FirstWins,
+            &mut out.rejected,
+            &mut out.contested,
+        );
     }
 
+    let active_talismans = doc.sets.active_talismans();
+    let mut talismans = Vec::new();
     for slot in &doc.talismans.slots {
-        let Some(index) = slot.equip_index else {
+        let Some(index) = slot.equip_index_in_set(active_talismans) else {
             continue;
         };
         let Some(found) = catalog.lookup(Kind::Talisman, &slot.name) else {
@@ -283,22 +368,27 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             });
             continue;
         };
-        let item = EquipRef {
-            item_id: found.full_item_id,
-            param_id: found.param_id(),
-            name: slot.name.clone(),
-        };
-        place(
-            &mut out.talismans,
-            index as usize,
-            item,
-            "talisman slot",
-            &mut out.rejected,
-        );
+        talismans.push(Claim {
+            order: slot.order,
+            index: index as usize,
+            item: EquipRef {
+                item_id: found.full_item_id,
+                param_id: found.param_id(),
+                name: slot.name.clone(),
+            },
+        });
     }
+    settle(
+        &mut out.talismans,
+        talismans,
+        |index| format!("talisman slot {index}"),
+        Contest::LastWins,
+        &mut out.rejected,
+        &mut out.contested,
+    );
 
-    // Spells carry no equipIndex; memorisation follows `order`, and the memory
-    // slot count -- not the build -- decides how many actually fit.
+    // Spells carry no equip position; memorisation follows `order`, and the
+    // memory slot count -- not the build -- decides how many actually fit.
     let mut spells: Vec<_> = doc.spells.slots.iter().collect();
     spells.sort_by_key(|slot| slot.order);
     for slot in spells {
@@ -323,6 +413,8 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         });
     }
 
+    let mut quickbar = Vec::new();
+    let mut pouch = Vec::new();
     for slot in &doc.items.tools.slots {
         let Some(index) = slot.equip_index else {
             continue;
@@ -340,25 +432,34 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             name: slot.name.clone(),
         };
         let index = index as usize;
-        if index < QUICKBAR_SLOTS {
-            place(
-                &mut out.quickbar,
-                index,
-                item,
-                "quickbar position",
-                &mut out.rejected,
-            );
-        } else {
-            place(
-                &mut out.pouch,
-                index - QUICKBAR_SLOTS,
-                item,
-                "pouch position",
-                &mut out.rejected,
-            );
-        }
+        let (target, index) = match index.checked_sub(QUICKBAR_SLOTS) {
+            None => (&mut quickbar, index),
+            Some(in_pouch) => (&mut pouch, in_pouch),
+        };
+        target.push(Claim {
+            order: slot.order,
+            index,
+            item,
+        });
     }
+    settle(
+        &mut out.quickbar,
+        quickbar,
+        |index| format!("quickbar position {index}"),
+        Contest::LastWins,
+        &mut out.rejected,
+        &mut out.contested,
+    );
+    settle(
+        &mut out.pouch,
+        pouch,
+        |index| format!("pouch position {index}"),
+        Contest::LastWins,
+        &mut out.rejected,
+        &mut out.contested,
+    );
 
+    let mut physick = Vec::new();
     for (index, tear) in doc.items.crystal_tears.iter().enumerate() {
         let Some(tear) = tear else { continue };
         let Some(found) = catalog.lookup(Kind::Tool, tear) else {
@@ -368,19 +469,24 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             });
             continue;
         };
-        let item = EquipRef {
-            item_id: found.full_item_id,
-            param_id: found.param_id(),
-            name: tear.clone(),
-        };
-        place(
-            &mut out.physick,
+        physick.push(Claim {
+            order: index as i64,
             index,
-            item,
-            "physick slot",
-            &mut out.rejected,
-        );
+            item: EquipRef {
+                item_id: found.full_item_id,
+                param_id: found.param_id(),
+                name: tear.clone(),
+            },
+        });
     }
+    settle(
+        &mut out.physick,
+        physick,
+        |index| format!("physick slot {index}"),
+        Contest::LastWins,
+        &mut out.rejected,
+        &mut out.contested,
+    );
 
     if let Some(rune) = doc.great_rune.as_deref() {
         match catalog.lookup(Kind::GreatRune, rune) {
@@ -401,23 +507,77 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
     out
 }
 
-/// Put `item` at `index`, rejecting rather than overwriting or growing.
-fn place(
-    slots: &mut [Option<EquipRef>],
+/// One row of the active set asking for one position.
+struct Claim {
+    /// The row's position in its category list, which is the order the planner
+    /// folds them in.
+    order: i64,
+    /// The position asked for.
     index: usize,
+    /// What to put there.
     item: EquipRef,
-    what: &str,
+}
+
+/// Which claimant a contested position goes to.
+///
+/// Both values are copied from the planner's own components rather than chosen:
+/// see the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Contest {
+    /// The row latest in the list, as a `reduce` that overwrites produces.
+    LastWins,
+    /// The row earliest in the list, as `find` produces.
+    FirstWins,
+}
+
+/// Place every claim, resolving collisions and reporting them.
+///
+/// Claims are folded in `order`, so the outcome depends on the payload's own
+/// numbering rather than on however the slot list happened to be serialised.
+fn settle(
+    slots: &mut [Option<EquipRef>],
+    mut claims: Vec<Claim>,
+    label: impl Fn(usize) -> String,
+    contest: Contest,
     rejected: &mut Vec<Rejected>,
+    contested: &mut Vec<Contested>,
 ) {
-    match slots.get_mut(index) {
-        None => rejected.push(Rejected {
-            name: item.name,
-            reason: format!("{what} {index} is out of range ({} available)", slots.len()),
-        }),
-        Some(existing) if existing.is_some() => rejected.push(Rejected {
-            name: item.name,
-            reason: format!("{what} {index} already taken"),
-        }),
-        Some(empty) => *empty = Some(item),
+    claims.sort_by_key(|claim| claim.order);
+
+    let mut by_position: BTreeMap<usize, Vec<EquipRef>> = BTreeMap::new();
+    for claim in claims {
+        by_position.entry(claim.index).or_default().push(claim.item);
+    }
+
+    for (index, mut claimants) in by_position {
+        let position = label(index);
+        if index >= slots.len() {
+            for item in claimants {
+                rejected.push(Rejected {
+                    name: item.name,
+                    reason: format!("{position} is out of range ({} available)", slots.len()),
+                });
+            }
+            continue;
+        }
+        let winner = match contest {
+            Contest::LastWins => claimants.pop(),
+            Contest::FirstWins => (!claimants.is_empty()).then(|| claimants.remove(0)),
+        };
+        let Some(winner) = winner else { continue };
+        if !claimants.is_empty() {
+            for loser in &claimants {
+                rejected.push(Rejected {
+                    name: loser.name.clone(),
+                    reason: format!("{position} already claimed by {:?}", winner.name),
+                });
+            }
+            contested.push(Contested {
+                position,
+                winner: winner.name.clone(),
+                losers: claimants.into_iter().map(|item| item.name).collect(),
+            });
+        }
+        slots[index] = Some(winner);
     }
 }
