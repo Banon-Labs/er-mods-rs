@@ -79,10 +79,22 @@ const CHR_NAME_CALL_LOG_LIMIT: u64 = 24;
 const COPY_CHR_NAME_REPLACEMENT_LOG_LIMIT: u64 = 16;
 const LOG_FILE_NAME: &str = "er-player-name-filter.log";
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct NameFilterRuntimeConfig {
     path: PathBuf,
+    /// The master switch. Absent means on, so an existing config keeps working unchanged.
+    enabled: bool,
     groups: Vec<NameFilterGroupConfig>,
+}
+
+impl Default for NameFilterRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::new(),
+            enabled: true,
+            groups: Vec::new(),
+        }
+    }
 }
 
 impl NameFilterRuntimeConfig {
@@ -280,10 +292,6 @@ impl CompiledNameFilter {
         }
         None
     }
-
-    fn is_empty(&self) -> bool {
-        self.groups.is_empty()
-    }
 }
 
 fn config_path_for_module(module_path: &std::path::Path) -> Result<PathBuf, String> {
@@ -298,6 +306,15 @@ fn config_path_for_module(module_path: &std::path::Path) -> Result<PathBuf, Stri
 
 fn boilerplate_config() -> &'static str {
     "# er-player-name-filter runtime config.\n\
+#\n\
+# THIS FILE IS RE-READ WHILE THE GAME RUNS. Save it and the new rules apply within a\n\
+# couple of seconds -- no restart. A name already written into a player's slot stays as it\n\
+# is until the game rewrites it, so leave and rejoin the session to see a rule change take\n\
+# effect on players who are already on screen. A file that fails to parse is REJECTED and\n\
+# the previous rules stay live, so a typo can never silently unmask anyone.\n\
+#\n\
+# enabled = false        # the master switch; turns every replacement off, keeps the rules\n\
+#\n\
 # Uncomment and edit any number of groups. First matching group wins; filtered players\n\
 # get a stable per-group suffix assigned by Steam ID, e.g. 'I am a bigot 1'.\n\
 #\n\
@@ -320,6 +337,10 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<NameFilterRunti
         let Some((key, value)) = line.split_once('=') else {
             return Err(format!("invalid TOML assignment on line {}", line_no + 1));
         };
+        if let Some(enabled) = parse_master_switch(key.trim(), value.trim(), line_no + 1)? {
+            config.enabled = enabled;
+            continue;
+        }
         let parsed = parse_player_name_filter_assignment(
             &mut config,
             key.trim(),
@@ -335,6 +356,25 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<NameFilterRunti
         }
     }
     Ok(config)
+}
+
+/// The master switch, as a top-level key rather than a group field: `enabled = false` turns
+/// every replacement off without deleting the rules that describe them.
+fn parse_master_switch(key: &str, value: &str, line_no: usize) -> Result<Option<bool>, String> {
+    let recognised = matches!(
+        key,
+        "enabled" | "enable" | "player_name_filter.enabled" | "name_filter.enabled"
+    );
+    if !recognised {
+        return Ok(None);
+    }
+    match value {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        other => Err(format!(
+            "invalid '{key}' on line {line_no}: expected true or false, got '{other}'"
+        )),
+    }
 }
 
 fn parse_player_name_filter_assignment(
@@ -647,11 +687,13 @@ mod windows_runtime {
         collections::HashMap,
         ffi::c_void,
         fmt,
+        os::windows::ffi::OsStrExt,
         path::{Path, PathBuf},
         sync::{
-            Mutex, Once, OnceLock,
+            Arc, Mutex, Once, OnceLock, RwLock,
             atomic::{AtomicU64, AtomicUsize, Ordering},
         },
+        time::SystemTime,
     };
 
     use er_game_base::{
@@ -675,6 +717,31 @@ mod windows_runtime {
         read_menu_string, release_dl_string, write_inline_steam_name,
     };
 
+    /// Hard safety cap on the change-notification wait, so a lost or never-signalled handle
+    /// degrades into a slow re-check rather than a thread parked forever. It is a backstop, not
+    /// the mechanism: a save signals the event and the reload happens immediately.
+    const CONFIG_WAIT_CAP_MILLIS: u32 = 30_000;
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    const INVALID_HANDLE_VALUE: isize = -1;
+    /// `FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_FILE_NAME`.
+    /// The last one matters: an editor that writes a temp file and renames it over the target
+    /// never touches the original's write time.
+    const CONFIG_NOTIFY_FILTER: u32 = 0x0000_0010 | 0x0000_0008 | 0x0000_0001;
+
+    /// The rules as the hooks see them: what to replace, and whether to replace at all.
+    struct ActiveFilter {
+        enabled: bool,
+        filter: CompiledNameFilter,
+    }
+
+    /// The live rules. `None` only before the first config load.
+    fn active_filter() -> Option<Arc<ActiveFilter>> {
+        let lock = PLAYER_NAME_FILTER.get()?;
+        let guard = lock.read().unwrap_or_else(|poison| poison.into_inner());
+        Some(Arc::clone(&guard))
+    }
+
     const DLL_PROCESS_ATTACH: u32 = 1;
     const ORIGINAL_UNSET: usize = 0;
     /// Big enough for the longest prologue this DLL byte-checks.
@@ -697,11 +764,22 @@ mod windows_runtime {
     static PLAYER_GAME_DATA_COPY_CHR_NAME_ORIG: AtomicUsize = AtomicUsize::new(ORIGINAL_UNSET);
     static MASK_WIDE_STRINGS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
     static ISSUED_MASKS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
-    static PLAYER_NAME_FILTER: OnceLock<CompiledNameFilter> = OnceLock::new();
+    /// The live rules, swapped wholesale when the config file changes. Read on the game thread
+    /// once per hooked call, so it is an `Arc` clone under a short read lock rather than a lock
+    /// held across any game call.
+    static PLAYER_NAME_FILTER: OnceLock<RwLock<Arc<ActiveFilter>>> = OnceLock::new();
     static PLAYER_NAME_GROUP_NUMBERS: OnceLock<Mutex<GroupNumberAssignments>> = OnceLock::new();
 
     unsafe extern "system" {
         fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
+        fn FindFirstChangeNotificationW(
+            path: *const u16,
+            watch_subtree: i32,
+            notify_filter: u32,
+        ) -> isize;
+        fn FindNextChangeNotification(handle: isize) -> i32;
+        fn FindCloseChangeNotification(handle: isize) -> i32;
+        fn WaitForSingleObject(handle: isize, milliseconds: u32) -> u32;
     }
 
     pub(super) unsafe extern "system" fn dll_main(
@@ -738,19 +816,11 @@ mod windows_runtime {
                 return;
             }
         };
-        let compiled = CompiledNameFilter::from_config(&config.groups);
-        for diagnostic in compiled.diagnostics {
-            log_message(format_args!("config: {diagnostic}"));
-        }
-        if compiled.filter.is_empty() {
-            log_message(format_args!(
-                "config: '{}' has no valid groups; hook not installed",
-                config.path.display()
-            ));
-            return;
-        }
-        let group_count = compiled.filter.groups.len();
-        let _ = PLAYER_NAME_FILTER.set(compiled.filter);
+        let config_path = config.path.clone();
+        let group_count = publish_config(config);
+        // The hooks go in even with no rules and even with the master switch off, because the
+        // config is re-read while the game runs: a DLL that declined to hook could never be
+        // switched back on without a restart, which is the whole point of the reload.
 
         let mut attempts = 0_u64;
         loop {
@@ -758,6 +828,7 @@ mod windows_runtime {
                 Ok(base) => {
                     GAME_BASE.store(base, Ordering::SeqCst);
                     install_hook(base, group_count);
+                    spawn_config_watcher(config_path);
                     break;
                 }
                 Err(err) => {
@@ -769,6 +840,138 @@ mod windows_runtime {
                 }
             }
         }
+    }
+
+    /// Compile a parsed config and make it live. Returns the number of usable groups.
+    fn publish_config(config: NameFilterRuntimeConfig) -> usize {
+        let compiled = CompiledNameFilter::from_config(&config.groups);
+        for diagnostic in compiled.diagnostics {
+            log_message(format_args!("config: {diagnostic}"));
+        }
+        let group_count = compiled.filter.groups.len();
+        let active = Arc::new(ActiveFilter {
+            enabled: config.enabled,
+            filter: compiled.filter,
+        });
+        let lock = PLAYER_NAME_FILTER.get_or_init(|| RwLock::new(Arc::clone(&active)));
+        {
+            let mut guard = lock.write().unwrap_or_else(|poison| poison.into_inner());
+            *guard = active;
+        }
+        let state = if config.enabled { "on" } else { "OFF" };
+        log_message(format_args!(
+            "config: live with {group_count} group(s), master switch {state}"
+        ));
+        group_count
+    }
+
+    /// Re-read the config file whenever it changes on disk.
+    ///
+    /// What deliberately SURVIVES a reload, because live game state depends on it:
+    ///
+    /// - the per-player ordinal assignments, so a player already displayed as "Dongerino 5"
+    ///   keeps that number instead of being renumbered by the new rules;
+    /// - the set of masks already issued, so a name this DLL already wrote into a player slot
+    ///   is still recognised as ours and is not masked a second time;
+    /// - every cached replacement string, including the `DLString`s built through the game's
+    ///   own menu allocator. The game copies from those and the mask buffers are read during
+    ///   the call, but they are never freed, so nothing the game holds can be left dangling by
+    ///   a reload.
+    ///
+    /// What a reload CANNOT do is restore a real name that has already been written into
+    /// `PlayerGameData::characterName`: the original is not kept anywhere the game can be
+    /// pointed back at, so turning the switch off stops NEW masking and leaves players already
+    /// on screen as they are until the session ends and the game rewrites them.
+    fn spawn_config_watcher(config_path: PathBuf) {
+        let _ = std::thread::Builder::new()
+            .name("er-player-name-filter-config".to_owned())
+            .spawn(move || {
+                let Some(directory) = config_path.parent().map(Path::to_path_buf) else {
+                    log_message(format_args!(
+                        "config: '{}' has no parent directory; reload disabled",
+                        config_path.display()
+                    ));
+                    return;
+                };
+                let Some(handle) = watch_directory(&directory) else {
+                    log_message(format_args!(
+                        "config: cannot watch '{}'; reload disabled",
+                        directory.display()
+                    ));
+                    return;
+                };
+                log_message(format_args!(
+                    "config: watching '{}' for changes; edits apply without a restart",
+                    config_path.display()
+                ));
+                let mut last = config_stamp(&config_path);
+                loop {
+                    if !wait_for_directory_change(handle) {
+                        log_message(format_args!("config: watch failed; reload disabled"));
+                        unsafe { FindCloseChangeNotification(handle) };
+                        return;
+                    }
+                    let stamp = config_stamp(&config_path);
+                    if stamp == last {
+                        continue;
+                    }
+                    last = stamp;
+                    match std::fs::read_to_string(&config_path) {
+                        Ok(contents) => {
+                            match parse_runtime_config(config_path.clone(), &contents) {
+                                Ok(config) => {
+                                    log_message(format_args!(
+                                        "config: reloading '{}'",
+                                        config_path.display()
+                                    ));
+                                    publish_config(config);
+                                }
+                                // A typo must never unmask anyone, so the previous rules stay
+                                // live rather than falling back to no filtering at all.
+                                Err(err) => log_message(format_args!(
+                                    "config: reload REJECTED, keeping the previous rules: {err}"
+                                )),
+                            }
+                        }
+                        Err(err) => log_message(format_args!(
+                            "config: reload could not read '{}', keeping the previous rules: {err}",
+                            config_path.display()
+                        )),
+                    }
+                }
+            });
+    }
+
+    /// A handle that the OS signals when something in `directory` changes.
+    fn watch_directory(directory: &Path) -> Option<isize> {
+        let mut wide: Vec<u16> = directory.as_os_str().encode_wide().collect();
+        wide.push(0);
+        let handle =
+            unsafe { FindFirstChangeNotificationW(wide.as_ptr(), 0, CONFIG_NOTIFY_FILTER) };
+        if handle == INVALID_HANDLE_VALUE || handle == 0 {
+            return None;
+        }
+        Some(handle)
+    }
+
+    /// Block until the watched directory changes, or until the safety cap expires. Returns false
+    /// only when the watch itself broke; a timeout is a normal return that re-checks the file.
+    fn wait_for_directory_change(handle: isize) -> bool {
+        let status = unsafe { WaitForSingleObject(handle, CONFIG_WAIT_CAP_MILLIS) };
+        if status == WAIT_TIMEOUT {
+            return true;
+        }
+        if status != WAIT_OBJECT_0 {
+            return false;
+        }
+        unsafe { FindNextChangeNotification(handle) != 0 }
+    }
+
+    /// Cheap change detector: modification time and size. An editor that writes in place and an
+    /// editor that renames a temp file over the target both move at least one of the two.
+    fn config_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some((metadata.modified().ok()?, metadata.len()))
     }
 
     fn load_config(module_path: &Path) -> Result<NameFilterRuntimeConfig, String> {
@@ -897,9 +1100,13 @@ mod windows_runtime {
     }
 
     fn apply_name_filter(entry: &mut RawSessionManagerPlayerEntryBase) {
-        let Some(filter) = PLAYER_NAME_FILTER.get() else {
+        let Some(active) = active_filter() else {
             return;
         };
+        if !active.enabled {
+            return;
+        }
+        let filter = &active.filter;
         let Some(name) = read_inline_steam_name(&entry.steam_name) else {
             return;
         };
@@ -975,9 +1182,13 @@ mod windows_runtime {
                 return;
             }};
         }
-        let Some(filter) = PLAYER_NAME_FILTER.get() else {
+        let Some(active) = active_filter() else {
             bail!("filter not built yet");
         };
+        if !active.enabled {
+            bail!("master switch is off");
+        }
+        let filter = &active.filter;
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base == 0 {
             bail!("game base unknown");
@@ -1111,7 +1322,11 @@ mod windows_runtime {
 
     /// The replacement string to hand `CopyChrName`, or `None` to let the real name through.
     fn masked_character_name(player_game_data: usize, name: usize) -> Option<usize> {
-        let filter = PLAYER_NAME_FILTER.get()?;
+        let active = active_filter()?;
+        if !active.enabled {
+            return None;
+        }
+        let filter = &active.filter;
         if player_game_data == 0 || name == 0 {
             return None;
         }
@@ -1390,6 +1605,41 @@ player_name_filter.valid.names = ['x']
                 && err.contains("line 1")
                 && err.contains("save_file"),
             "the error must name the bad key and line: {err}"
+        );
+    }
+
+    #[test]
+    fn master_switch_defaults_on_and_parses_both_ways() {
+        let on = parse_runtime_config(
+            PathBuf::from("C:\\Game\\er_player_name_filter.toml"),
+            "player_name_filter.everyone.replacement = 'Masked'\n",
+        )
+        .expect("a config without the switch parses");
+        assert!(on.enabled, "an absent switch leaves filtering on");
+
+        let off = parse_runtime_config(
+            PathBuf::from("C:\\Game\\er_player_name_filter.toml"),
+            "enabled = false\nplayer_name_filter.everyone.replacement = 'Masked'\n",
+        )
+        .expect("the switch parses");
+        assert!(!off.enabled);
+        assert_eq!(
+            off.groups.len(),
+            1,
+            "switching off keeps the rules, it does not delete them"
+        );
+    }
+
+    #[test]
+    fn master_switch_rejects_a_non_boolean() {
+        let err = parse_runtime_config(
+            PathBuf::from("C:\\Game\\er_player_name_filter.toml"),
+            "enabled = 'yes'\n",
+        )
+        .expect_err("only true and false are accepted");
+        assert!(
+            err.contains("line 1") && err.contains("expected true or false"),
+            "the error names the line and what was wanted: {err}"
         );
     }
 
