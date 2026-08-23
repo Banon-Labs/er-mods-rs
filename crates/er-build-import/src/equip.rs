@@ -39,6 +39,57 @@ pub const POUCH_SLOTS: usize = 6;
 /// Physick tear slots.
 pub const PHYSICK_SLOTS: usize = 2;
 
+// THE ARMAMENT SLOT MAP, OWNED HERE BECAUSE TWO DIRECTIONS NOW USE IT.
+//
+// The planner blocks its six armament indices three-per-hand (`equipIndex >= 3 ? row 1 : row 0`),
+// while `ChrAsmSlot` INTERLEAVES them (`0 = WeaponLeft1, 1 = WeaponRight1, 2 = WeaponLeft2`, ...).
+// The importer needs planner -> slot; the exporter needs slot -> planner. Keeping one table and
+// deriving both means the pair cannot drift into a hand swap that only shows up in a round trip.
+//
+// INFERRED, and the one mapping in the importer not proven from the binary: the planner's first
+// block is taken to be the RIGHT hand, because the game's own Status screen lists `R Armament 1..3`
+// before `L Armament 1..3` and the planner mirrors that layout. If imported builds come out
+// hand-swapped, THIS TABLE is the single line to flip -- and flipping it moves both directions at
+// once, which is the whole reason it is here.
+
+/// `ChrAsmSlot` of each planner armament index, in planner order.
+pub const ARMAMENT_CHR_ASM_SLOTS: [i32; 6] = [1, 3, 5, 0, 2, 4];
+
+/// Map a planner armament index (0..6) to its `ChrAsmSlot`.
+///
+/// ```
+/// assert_eq!(er_build_import::equip::armament_slot(0), Some(1)); // right hand, first
+/// assert_eq!(er_build_import::equip::armament_slot(3), Some(0)); // left hand, first
+/// assert_eq!(er_build_import::equip::armament_slot(6), None);
+/// ```
+pub fn armament_slot(planner_index: u32) -> Option<i32> {
+    ARMAMENT_CHR_ASM_SLOTS
+        .get(usize::try_from(planner_index).ok()?)
+        .copied()
+}
+
+/// Map a `ChrAsmSlot` back to the planner armament index that owns it.
+///
+/// ```
+/// assert_eq!(er_build_import::equip::armament_planner_index(1), Some(0));
+/// assert_eq!(er_build_import::equip::armament_planner_index(0), Some(3));
+/// assert_eq!(er_build_import::equip::armament_planner_index(9), None);
+/// ```
+pub fn armament_planner_index(slot: i32) -> Option<u32> {
+    ARMAMENT_CHR_ASM_SLOTS
+        .iter()
+        .position(|candidate| *candidate == slot)
+        .and_then(|index| u32::try_from(index).ok())
+}
+
+/// `ChrAsmSlot::ProtectorHead`; chest, hands and legs follow consecutively.
+pub const CHR_ASM_SLOT_PROTECTOR_HEAD: i32 = 12;
+/// `ChrAsmSlot::Accessory1`; the other three talisman slots follow consecutively.
+pub const CHR_ASM_SLOT_ACCESSORY_1: i32 = 17;
+/// The planner's four armour keys, in `ChrAsmSlot` order from [`CHR_ASM_SLOT_PROTECTOR_HEAD`].
+/// `ProtectorIndexToChrAsmSlot` is literally `index + ProtectorHead`, in this order.
+pub const PROTECTOR_PARTS: [&str; 4] = ["head", "body", "arms", "legs"];
+
 /// An item selected for a specific equip position.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EquipRef {

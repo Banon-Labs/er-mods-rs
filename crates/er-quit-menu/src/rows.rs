@@ -59,15 +59,15 @@
 //
 // There is no separate focus field. So once the two rows this DLL adds are real grid cells, the
 // cursor identifies the row for mouse, keyboard and pad alike -- see `er_gfx::options_02_040` for the
-// movie-side half (the cells are named `Item_1_0`/`Item_1_1`/`Item_2_0` so the grid measures 2x3,
-// which is what makes them hit-testable AND puts the vertical axis in play).
+// movie-side half (the added cells are named `Item_1_0`/`Item_1_1`/`Item_2_0`/`Item_2_1` so the grid
+// measures a FULL 2x3, which is what makes them hit-testable AND puts the vertical axis in play).
 //
 // The cursor's two halves are cross-checked and must agree: the captured build-time row TABLE
 // (index -> row) and the LIVE label read at that index. A mismatch, an unreadable label, an
 // out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row NEVER quits and
 // never runs anything.
 
-/// The five rows of the patched System -> Quit dialog, in property-list order.
+/// The six rows of the patched System -> Quit dialog, in property-list order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRow {
     /// Native first row, relabelled "Save Game" by the `MsgRepository::GetAndFormat` hook.
@@ -85,6 +85,13 @@ pub enum QuitRow {
     /// neither returns to the title nor touches the save container -- it grants, equips and
     /// re-stats the LIVE character in place.
     LoadBuildFromUrl,
+    /// Cloned row, labelled "Generate Build Link": the EXACT INVERSE of the row above. It reads the
+    /// character already in the world -- equipped loadout, memorised spells, stats -- encodes it
+    /// into a self-contained `er-build-planner` `?i=` share link, puts that link on the clipboard
+    /// and opens it in the player's browser. It writes nothing to the character and nothing to the
+    /// planner's servers: the `?i=` form carries the whole build in the URL, so no account is
+    /// minted and no row is written into someone else's free hobby service.
+    GenerateBuildLink,
 }
 
 impl QuitRow {
@@ -96,6 +103,7 @@ impl QuitRow {
             QuitRow::LoadProfile => 3,
             QuitRow::LoadSaveProfiles => 4,
             QuitRow::LoadBuildFromUrl => 5,
+            QuitRow::GenerateBuildLink => 6,
         }
     }
 
@@ -110,17 +118,19 @@ impl QuitRow {
             QuitRow::LoadProfile => "Load Character",
             QuitRow::LoadSaveProfiles => "Load Character from File",
             QuitRow::LoadBuildFromUrl => "Load Build from URL",
+            QuitRow::GenerateBuildLink => "Generate Build Link",
         }
     }
 }
 
-/// The five rows of the patched Quit dialog, in the captured table's stable order.
-pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 5] = [
+/// The six rows of the patched Quit dialog, in the captured table's stable order.
+pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 6] = [
     QuitRow::SaveGame,
     QuitRow::ReturnToDesktop,
     QuitRow::LoadProfile,
     QuitRow::LoadSaveProfiles,
     QuitRow::LoadBuildFromUrl,
+    QuitRow::GenerateBuildLink,
 ];
 
 /// The `std::function` storage inside a controller that the action thunks receive as their `this`.
@@ -152,6 +162,7 @@ pub struct QuitRowTable {
     pub load_profile_index: i32,
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
+    pub generate_build_link_index: i32,
 }
 
 impl QuitRowTable {
@@ -162,6 +173,7 @@ impl QuitRowTable {
             QuitRow::LoadProfile => self.load_profile_index,
             QuitRow::LoadSaveProfiles => self.load_save_profiles_index,
             QuitRow::LoadBuildFromUrl => self.load_build_from_url_index,
+            QuitRow::GenerateBuildLink => self.generate_build_link_index,
         }
     }
 
@@ -331,6 +343,7 @@ pub struct QuitRowFacts {
     pub load_profile_index: i32,
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
+    pub generate_build_link_index: i32,
     /// The dialog the table above was captured from, and the dialog this activation belongs to.
     pub table_dialog: usize,
     pub activation_dialog: usize,
@@ -362,6 +375,7 @@ impl QuitRowFacts {
             load_profile_index: table.load_profile_index,
             load_save_profiles_index: table.load_save_profiles_index,
             load_build_from_url_index: table.load_build_from_url_index,
+            generate_build_link_index: table.generate_build_link_index,
             table_dialog,
             activation_dialog,
             cursor,
@@ -378,6 +392,7 @@ impl QuitRowFacts {
             load_profile_index: self.load_profile_index,
             load_save_profiles_index: self.load_save_profiles_index,
             load_build_from_url_index: self.load_build_from_url_index,
+            generate_build_link_index: self.generate_build_link_index,
         }
         .index(row)
     }
@@ -389,6 +404,7 @@ impl QuitRowFacts {
             self.load_profile_index,
             self.load_save_profiles_index,
             self.load_build_from_url_index,
+            self.generate_build_link_index,
         ];
         if idx.iter().any(|i| *i < 0 || *i >= self.row_count) {
             return false;
@@ -464,13 +480,14 @@ pub fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
 /// index, and what the label read live at the cursor actually is.
 pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
     format!(
-        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{}] live_label={:?} input_kind={:?}",
+        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{} generate_build_link=#{}] live_label={:?} input_kind={:?}",
         facts.cursor,
         facts.save_game_index,
         facts.return_desktop_index,
         facts.load_profile_index,
         facts.load_save_profiles_index,
         facts.load_build_from_url_index,
+        facts.generate_build_link_index,
         facts.cursor_row_label,
         facts.input_kind,
     )
@@ -505,7 +522,8 @@ mod system_quit_row_identity_tests {
 
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
     /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1,
-    /// plus row 4 (Load Build from URL), which the same cloner appends in the same pass.
+    /// plus rows 4 and 5 (Load Build from URL, Generate Build Link), which the same cloner appends
+    /// in the same pass.
     fn facts() -> QuitRowFacts {
         QuitRowFacts {
             save_game_index: 0,
@@ -513,6 +531,7 @@ mod system_quit_row_identity_tests {
             load_profile_index: 2,
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
+            generate_build_link_index: 5,
             table_dialog: 0x175842080,
             activation_dialog: 0x175842080,
             cursor: 1,
@@ -765,6 +784,7 @@ mod system_quit_row_identity_tests {
             load_profile_index: 2,
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
+            generate_build_link_index: 5,
         };
         assert_eq!(table.row_count(), QUIT_ROW_TABLE_ROWS.len() as i32);
         // Every row in the stable table order must round-trip through `index`, so a row added to

@@ -111,6 +111,11 @@ windows = { version = "0.62", features = [
   # MenuWindow fallback). The conclusion held; the reason given for it was wrong, and wrong reasons
   # get re-checked at the cost of a session.
   "Win32_System_DataExchange",
+  # `ShellExecuteW` opens the generated build link in the player's browser. Under Proton that goes
+  # through `winebrowser.exe` -> `xdg-open` -> the host default browser, measured to pass the URL
+  # through complete and untruncated at 5043 characters -- the classic 2083-char
+  # INTERNET_MAX_URL_LENGTH does not apply here, which matters because a share link is ~3 KB.
+  "Win32_UI_Shell",
   "Win32_System_Ole",
   # Hidden dummy window for the D3D12 Present-overlay swapchain: CreateSwapChainForComposition is
   # "Not implemented" under vkd3d/Wine, so we need a real HWND via CreateSwapChainForHwnd, which pulls

@@ -124,6 +124,47 @@ pub fn infusion_offset(infusion: Option<&str>) -> Option<u32> {
         .map(|(_, offset)| *offset)
 }
 
+/// Split an armament param id back into its base row and affinity name -- the inverse of
+/// [`infusion_offset`], and the arithmetic the EXPORTER runs on every equipped weapon.
+///
+/// The affinity is an offset folded INTO the id (`Occult = +1200`), and the base is always a
+/// multiple of [`ARMAMENT_ID_BLOCK`], which is what makes the split unambiguous. The reinforce
+/// level is deliberately absent from both directions: it is a separate field, never part of the id.
+///
+/// `Standard` comes back as `None` rather than as the string, because that is how the planner
+/// spells it -- a slot with no `infusion` key. Emitting the word would import identically and diff
+/// against every hand-authored build.
+///
+/// ```
+/// use er_build_import::plan::{infusion_offset, split_armament_id};
+/// // Misericorde + Occult, the pair the importer builds as 1_070_000 + 1200.
+/// assert_eq!(split_armament_id(1_071_200), (1_070_000, Some("Occult")));
+/// assert_eq!(split_armament_id(1_070_000), (1_070_000, None));
+/// assert_eq!(infusion_offset(Some("Occult")), Some(1200));
+/// ```
+pub fn split_armament_id(param_id: u32) -> (u32, Option<&'static str>) {
+    let index = (param_id % ARMAMENT_ID_BLOCK / INFUSION_STEP) as usize;
+    match INFUSIONS.get(index) {
+        // Index 0 IS Standard, which the planner writes as an absent field.
+        Some(_) if index == 0 => (param_id, None),
+        Some((name, offset)) => (param_id - offset, Some(name)),
+        // An offset past the table is not an affinity at all, so the id is taken whole rather than
+        // having an invented amount subtracted from it.
+        None => (param_id, None),
+    }
+}
+
+/// The block an armament id's affinity offset occupies; the base row is always a multiple of it.
+pub const ARMAMENT_ID_BLOCK: u32 = 10_000;
+/// Step between consecutive affinities inside that block.
+pub const INFUSION_STEP: u32 = 100;
+
+/// Every affinity name the planner uses, in offset order. Exposed so the exporter can prove it
+/// knows exactly the set the importer accepts, rather than keeping a second copy that can drift.
+pub fn infusion_names() -> impl Iterator<Item = &'static str> {
+    INFUSIONS.iter().map(|(name, _)| *name)
+}
+
 /// Remap a requested upgrade level for a somber armament.
 pub fn somber_remap(level: u16) -> Option<u16> {
     SOMBER_REMAP.get(usize::from(level)).copied()

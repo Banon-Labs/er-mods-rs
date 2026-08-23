@@ -457,3 +457,91 @@ fn acceptance_agrees_with_the_share_id_the_fetch_will_use() {
         assert_eq!(share_id_from_url(url), None, "{url:?}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// THE EXPORT DIRECTION. Every helper below is used by the Generate Build Link row to turn the LIVE
+// character back into a planner document, and every one of them is the inverse of something the
+// importer does. An inverse that is subtly wrong does not fail loudly -- it produces a build that
+// looks right and comes back a different weapon, or hand-swapped. So the pairs are tested as pairs.
+
+#[test]
+fn every_affinity_the_importer_adds_the_exporter_can_subtract() {
+    use er_build_import::plan::{
+        INFUSION_STEP, infusion_names, infusion_offset, split_armament_id,
+    };
+
+    // Misericorde, the worked example in the crate docs.
+    const BASE: u32 = 1_070_000;
+    for (index, name) in infusion_names().enumerate() {
+        let offset = infusion_offset(Some(name))
+            .unwrap_or_else(|| panic!("the importer must know the affinity {name:?}"));
+        assert_eq!(offset, index as u32 * INFUSION_STEP, "{name} offset");
+
+        let (base, read_back) = split_armament_id(BASE + offset);
+        assert_eq!(base, BASE, "{name} base row");
+        // Standard is index 0 and is spelled as an ABSENT field, never as the word.
+        let expected = (index != 0).then_some(name);
+        assert_eq!(read_back, expected, "{name} round trip");
+    }
+}
+
+#[test]
+fn an_id_carrying_no_recognisable_affinity_is_taken_whole() {
+    use er_build_import::plan::split_armament_id;
+
+    // Offset 1300 is past the last affinity (Occult, 1200). Subtracting an invented amount would
+    // silently rename the weapon, so the id is left alone and reported as having no affinity.
+    assert_eq!(split_armament_id(1_071_300), (1_071_300, None));
+}
+
+#[test]
+fn the_armament_hand_map_is_a_bijection_in_both_directions() {
+    use er_build_import::equip::{ARMAMENT_CHR_ASM_SLOTS, armament_planner_index, armament_slot};
+
+    // Six planner indices onto six distinct ChrAsm slots, and back again.
+    let mut seen = ARMAMENT_CHR_ASM_SLOTS;
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        [0, 1, 2, 3, 4, 5],
+        "the six hand slots, each used once"
+    );
+
+    for planner_index in 0..6u32 {
+        let slot = armament_slot(planner_index).expect("every planner index maps to a slot");
+        assert_eq!(
+            armament_planner_index(slot),
+            Some(planner_index),
+            "slot {slot} must map back to planner index {planner_index}"
+        );
+    }
+    // Out of range in both directions is None, not a wrapped index.
+    assert_eq!(armament_slot(6), None);
+    assert_eq!(armament_planner_index(6), None);
+    assert_eq!(armament_planner_index(-1), None);
+
+    // The hand convention itself: planner 0..2 is the RIGHT hand (odd slots), 3..5 the LEFT.
+    // If imported builds ever come out hand-swapped, this assertion is the one to invert, together
+    // with `ARMAMENT_CHR_ASM_SLOTS` -- and inverting the table alone will fail here first.
+    assert!(
+        ARMAMENT_CHR_ASM_SLOTS[0..3]
+            .iter()
+            .all(|slot| slot % 2 == 1)
+    );
+    assert!(
+        ARMAMENT_CHR_ASM_SLOTS[3..6]
+            .iter()
+            .all(|slot| slot % 2 == 0)
+    );
+}
+
+#[test]
+fn the_armour_slots_are_consecutive_from_protector_head() {
+    use er_build_import::equip::{CHR_ASM_SLOT_PROTECTOR_HEAD, PROTECTOR_PARTS};
+
+    // `ProtectorIndexToChrAsmSlot` is literally `index + ProtectorHead`, so the four planner keys
+    // must be in that order -- the exporter walks them by offset and would mislabel armour if the
+    // order drifted.
+    assert_eq!(PROTECTOR_PARTS, ["head", "body", "arms", "legs"]);
+    assert_eq!(CHR_ASM_SLOT_PROTECTOR_HEAD, 12);
+}

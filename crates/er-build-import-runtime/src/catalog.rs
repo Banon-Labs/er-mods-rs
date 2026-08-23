@@ -189,6 +189,37 @@ unsafe fn name_of(getter: usize, msg: usize, row_id: u32) -> Option<String> {
     unsafe { read_wide(getter(msg, row_id)) }
 }
 
+/// The name getter for one category, or `None` for a category the game does not name this way.
+fn getter_rva_for(kind: Kind) -> Option<usize> {
+    SOURCES
+        .iter()
+        .find(|source| source.kind == kind)
+        .map(|source| source.getter_rva)
+}
+
+/// Ask the game what ONE row is called -- the export direction.
+///
+/// # Why this exists next to [`build_from_game`] rather than inverting it
+///
+/// The importer needs name -> id, which the game cannot answer, so it enumerates every row and
+/// inverts. The EXPORTER needs id -> name, which is the direction the game answers natively: one
+/// call, no table. Building the whole catalog to read it backwards would be a few thousand calls
+/// to answer a question the getter answers directly -- and it would also be WRONG in one case,
+/// because the inverted map is keyed by folded name and two rows can fold together.
+///
+/// `Kind` still matters: the same row id means different items in different tables, so the caller
+/// must say which table the id came from.
+///
+/// # Safety
+///
+/// `msg` must be a live `MsgRepositoryImp*` and `module_base` the loaded image base.
+pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) -> Option<String> {
+    let getter = module_base + getter_rva_for(kind)?;
+    // Safety: `getter` is a verified RVA within the loaded module and `msg` is the caller's live
+    // repository pointer.
+    unsafe { name_of(getter, msg, row_id) }
+}
+
 /// Insert one resolved row.
 fn insert(catalog: &mut MapCatalog, source: &Source, row_id: u32, name: &str) {
     catalog.insert(

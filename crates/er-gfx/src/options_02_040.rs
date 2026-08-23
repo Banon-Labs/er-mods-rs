@@ -1,14 +1,13 @@
-//! Runtime-derived 5-button Quit Game layout transform for `data0:/menu/win/02_040_optionsetting.gfx`.
+//! Runtime-derived 6-button Quit Game layout transform for `data0:/menu/win/02_040_optionsetting.gfx`.
 //!
 //! This does **not** ship a game-derived GFx file. The DLL reads the game's own
 //! Scaleform MemoryFile, applies these content-addressed tag edits in memory, and
 //! serves the derived movie for that process. The edit extends the native
-//! `MENU_FL_QuitGame` sprite (id 138) from two button instances to five while
+//! `MENU_FL_QuitGame` sprite (id 138) from two button instances to six while
 //! preserving the native GameEnd/portrait component and avoiding the multi-slot
 //! component-index swap that poisons the shared OptionSetting GFx list.
 //!
-//! # The three added cells are named `Item_1_0` / `Item_1_1` / `Item_2_0`, and that
-//! # is the whole navigation model
+//! # The four added cells fill a 2x3 grid, and that is the whole navigation model
 //!
 //! `CS::GridControl` (the list widget embedded at `GenericListSelectDialog + 0xa38`)
 //! does not take its geometry from the property list -- it MEASURES it from the movie.
@@ -26,44 +25,38 @@
 //!
 //! The native pair sits side by side -- `Item_0_0` at `tx = -3979` twips, `Item_0_1` at
 //! `tx = +4780`, both `ty = 4500` -- so vanilla measures `cols = 2, rows = 1`: one
-//! horizontal row, no vertical axis. Naming the two added cells `Item_0_2`/`Item_0_3`
+//! horizontal row, no vertical axis. Naming the added cells `Item_0_2`/`Item_0_3`
 //! (a previous form of this edit) measured `cols = 4, rows = 1`: all four cells were
 //! hoverable, but up/down was disabled outright and left/right had to walk the whole
-//! strip. Naming them `Item_1_0` (bottom-left, `tx = -3979, ty = 5600`) and `Item_1_1`
-//! (bottom-right, `tx = +4780, ty = 5600`) measures `cols = 2, rows = 2`: both axes are
-//! live, all four cells are inside the hit test, and `row * cols + col` maps them onto
-//! property indices 0..3 in the order the rows are appended. `Item_2_0`
-//! (`tx = -3979, ty = 6700`, one more 55px step down the left column) takes that to
-//! `cols = 2, rows = 3` and property index `2 * 2 + 0 = 4` -- Save Game, Return to
-//! Desktop, Load Character, Load Character from File, Load Build from URL. The native
-//! placement matrices are untouched, so nothing that was already on screen moves.
+//! strip. Naming them by ROW instead fills a rectangle: `Item_1_0`/`Item_1_1` at
+//! `ty = 5600` and `Item_2_0`/`Item_2_1` at `ty = 6700`, each reusing one of the two
+//! native columns (`tx = -3979` and `tx = +4780`) and each row one 1100-twip (55px) step
+//! below the last. That measures `cols = 2, rows = 3`: both axes live, every cell inside
+//! the hit test, and `row * cols + col` mapping them onto property indices 0..5 in the
+//! order the rows are appended -- Save Game, Return to Desktop, Load Character, Load
+//! Character from File, Load Build from URL, Generate Build Link. The native placement
+//! matrices are untouched, so nothing that was already on screen moves.
 //!
-//! # A FIVE-item grid measures 2x3, so cell index 5 (`Item_2_1`) does not exist -- and
-//! # that is safe, proven statically rather than assumed
+//! # SIX items fill the 2x3 grid exactly, which is why this is the easy case
 //!
-//! Five is prime, so no rectangular grid holds it: the bottom row has one cell and the
-//! native code probes for a sixth that is not there. Both places it does are bounded:
+//! `cols * rows == 6` and `GridControl::SetItemCount` is given 6, so the two numbers
+//! agree and every cell the engine probes for exists. There is no cell that can be
+//! hovered but not selected, and none that can be selected but not hovered.
 //!
-//! * the mouse hit test walks `cols * rows = 6` cells and calls `FUN_14074b0d0` on each.
-//!   That function's FIRST test is `(*(u32 *)(value + 0x20) & 0x8f) == 10` -- the same
-//!   `CSScaleformValue.dataType` byte the engine's own validity predicate
-//!   (`FUN_140733150`, `dataType & 0x8f != 0`) reads. A component that does not exist
-//!   comes back with `dataType == 0`, so the hit test returns `false` on its first
-//!   branch without dereferencing anything. It cannot be hovered and it cannot fault.
-//! * the measure loop itself (`FUN_140737c60`) already probes a name that is not there
-//!   on EVERY dialog including vanilla -- that absent probe is how the loop terminates --
-//!   and destructs the invalid value it gets back.
+//! This SIMPLIFIED the movie rather than complicating it. At five items the bottom row
+//! was ragged, and three separate pieces of native behaviour had to be proven harmless:
+//! the mouse hit test walked a sixth cell that was not there (safe only because
+//! `FUN_14074b0d0` tests `(*(u32 *)(value + 0x20) & 0x8f) == 10` first and an absent
+//! component answers `dataType == 0`); `SetItemCount` was given 5 while `cols * rows` was
+//! 6, so the cursor was bounded by the smaller of two disagreeing numbers; and reaching
+//! the bottom row by pad depended on `FUN_14073bae0` answering `2` for an out-of-range
+//! index and `FUN_14073b0c0` walking BACK along the row a column at a time. All of that
+//! reasoning was correct, and all of it is now moot. Nothing here relies on it.
 //!
-//! The cursor cannot land there either: `GridControl::SetItemCount` is given 5, and both
-//! the hit test (`-1 < index && index < *(int *)(this + 0xd0)`) and the cursor setter
-//! `FUN_14073bc10` bound the item index by that count, not by `cols * rows`.
-//!
-//! And the bottom row is still REACHABLE by pad and keyboard, without a clamp of our own.
-//! `FUN_14073bae0` answers `2` -- not `1` -- for an index past the item count, and
-//! `FUN_14073b0c0`'s vertical branch reads anything but `1` as keep-looking: it walks BACK
-//! along the target row a column at a time (`while (iVar4 = iVar4 - 1, -1 < iVar4)`). So
-//! pressing Down from `Item_1_1` (index 3) tries index 5, is refused, steps to column 0 and
-//! lands on index 4. The engine already handles a ragged last row; nothing here has to.
+//! The measure loop still terminates the same way it always did -- by probing row 3
+//! column 0, finding nothing, and destructing the invalid value it gets back. That absent
+//! probe happens on EVERY dialog including vanilla; it is the loop's exit condition, not a
+//! thing this edit introduces.
 //!
 //! # The label field is 400px, and the labels were measured against it
 //!
@@ -73,26 +66,28 @@
 //! so a label wider than the field CLIPS rather than wrapping, losing its tail silently.
 //! `scripts/gfx_text_width.py --height-px 24 --box-px 400` sums that font's own advance
 //! table: "Save Game" 103.1px, "Return to Desktop" 172.8px, "Load Character" 144.5px,
-//! "Load Character from File" 234.6px, "Load Build from URL" 203.7px. Any future relabel
-//! goes through that tool before it goes in; widening the field or moving a matrix is not
-//! the answer, because these placements are what makes the 2x3 measure work.
+//! "Load Character from File" 234.6px, "Load Build from URL" 203.7px, "Generate Build
+//! Link" 189.9px. Any future relabel goes through that tool before it goes in; widening
+//! the field or moving a matrix is not the answer, because these placements are what
+//! makes the 2x3 measure work.
 
 use crate::edit::{EditError, EditOp, TagEdit, apply_edits};
 use crate::{GfxError, Movie};
 use er_game_base::fnv1a::fnv1a64;
 
-include!("options_02_040_quit5_edits.rs");
+include!("options_02_040_quit6_edits.rs");
 
 pub const VANILLA_WIN_LEN: usize = 44007;
 pub const VANILLA_WIN_FNV1A64: u64 = 0x570d_8549_2c03_72a0;
-pub const QUIT5_WIN_LEN: usize = 44082;
-pub const QUIT5_WIN_FNV1A64: u64 = 0xf972_69e5_f987_e9b6;
+pub const QUIT6_WIN_LEN: usize = 44107;
+pub const QUIT6_WIN_FNV1A64: u64 = 0x4c54_7513_773a_fd59;
 
-/// The five grid cell names the derived movie must expose in sprite 138, in item-index order
+/// The six grid cell names the derived movie must expose in sprite 138, in item-index order
 /// (`row * cols + col` with the measured `cols = 2`). Asserted by the er-gfx integration test: the
-/// whole navigation/hover model of the patched Quit tab is these five strings.
-pub const QUIT5_GRID_CELL_NAMES: [&str; 5] =
-    ["Item_0_0", "Item_0_1", "Item_1_0", "Item_1_1", "Item_2_0"];
+/// whole navigation/hover model of the patched Quit tab is these six strings.
+pub const QUIT6_GRID_CELL_NAMES: [&str; 6] = [
+    "Item_0_0", "Item_0_1", "Item_1_0", "Item_1_1", "Item_2_0", "Item_2_1",
+];
 
 pub fn is_known_vanilla_win(bytes: &[u8]) -> bool {
     bytes.len() == VANILLA_WIN_LEN && fnv1a64(bytes) == VANILLA_WIN_FNV1A64
@@ -150,40 +145,40 @@ pub fn grid_horizontal_axis_enabled(cols: u32, rows: u32) -> bool {
 }
 
 #[derive(Clone, Debug)]
-pub enum Quit5Error {
+pub enum Quit6Error {
     Parse(GfxError),
     Edit(EditError),
     Write(GfxError),
     KnownInputBadOutput { out_len: usize, out_fnv1a64: u64 },
 }
 
-impl core::fmt::Display for Quit5Error {
+impl core::fmt::Display for Quit6Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Quit5Error::Parse(e) => write!(f, "parse: {e}"),
-            Quit5Error::Edit(e) => write!(f, "edit: {e}"),
-            Quit5Error::Write(e) => write!(f, "write: {e}"),
-            Quit5Error::KnownInputBadOutput {
+            Quit6Error::Parse(e) => write!(f, "parse: {e}"),
+            Quit6Error::Edit(e) => write!(f, "edit: {e}"),
+            Quit6Error::Write(e) => write!(f, "write: {e}"),
+            Quit6Error::KnownInputBadOutput {
                 out_len,
                 out_fnv1a64,
             } => write!(
                 f,
-                "known vanilla input but output len={out_len} fnv=0x{out_fnv1a64:016x} != expected len={QUIT5_WIN_LEN} fnv=0x{QUIT5_WIN_FNV1A64:016x}"
+                "known vanilla input but output len={out_len} fnv=0x{out_fnv1a64:016x} != expected len={QUIT6_WIN_LEN} fnv=0x{QUIT6_WIN_FNV1A64:016x}"
             ),
         }
     }
 }
 
-impl std::error::Error for Quit5Error {}
+impl std::error::Error for Quit6Error {}
 
-pub fn quit5(vanilla: &[u8]) -> Result<Vec<u8>, Quit5Error> {
-    let mut movie = Movie::parse(vanilla).map_err(Quit5Error::Parse)?;
-    apply_edits(&mut movie, OPTIONS_02_040_QUIT5_EDITS).map_err(Quit5Error::Edit)?;
-    let out = movie.write().map_err(Quit5Error::Write)?;
+pub fn quit6(vanilla: &[u8]) -> Result<Vec<u8>, Quit6Error> {
+    let mut movie = Movie::parse(vanilla).map_err(Quit6Error::Parse)?;
+    apply_edits(&mut movie, OPTIONS_02_040_QUIT6_EDITS).map_err(Quit6Error::Edit)?;
+    let out = movie.write().map_err(Quit6Error::Write)?;
     if is_known_vanilla_win(vanilla)
-        && (out.len() != QUIT5_WIN_LEN || fnv1a64(&out) != QUIT5_WIN_FNV1A64)
+        && (out.len() != QUIT6_WIN_LEN || fnv1a64(&out) != QUIT6_WIN_FNV1A64)
     {
-        return Err(Quit5Error::KnownInputBadOutput {
+        return Err(Quit6Error::KnownInputBadOutput {
             out_len: out.len(),
             out_fnv1a64: fnv1a64(&out),
         });
