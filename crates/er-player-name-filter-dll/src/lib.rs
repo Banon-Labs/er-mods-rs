@@ -7,11 +7,12 @@
 //!
 //! Configuration lives beside the loaded DLL as `er_player_name_filter.toml` when the artifact is
 //! `er_player_name_filter.dll`. Groups use `player_name_filter.<group>.<field>` keys; each group has
-//! a replacement label plus any number of exact names and/or regexes. First matching group wins.
+//! a replacement label plus any number of exact names and/or regexes. First matching group wins;
+//! filtered players get a stable per-group numeric suffix.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use regex::{Regex, RegexBuilder};
 
@@ -91,6 +92,60 @@ struct CompiledNameFilterGroup {
     regexes: Vec<Regex>,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum PlayerNameIdentity {
+    SteamId(u64),
+    EntryAddress(usize),
+}
+
+impl PlayerNameIdentity {
+    fn for_entry(steam_id: u64, entry_address: usize) -> Self {
+        if steam_id == 0 {
+            Self::EntryAddress(entry_address)
+        } else {
+            Self::SteamId(steam_id)
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PlayerGroupNumber {
+    group_id: String,
+    ordinal: u32,
+}
+
+#[derive(Debug, Default)]
+struct GroupNumberAssignments {
+    next_by_group: HashMap<String, u32>,
+    player_by_identity: HashMap<PlayerNameIdentity, PlayerGroupNumber>,
+}
+
+impl GroupNumberAssignments {
+    fn ordinal_for(&mut self, identity: PlayerNameIdentity, group_id: &str) -> u32 {
+        if let Some(existing) = self.player_by_identity.get(&identity)
+            && existing.group_id == group_id
+        {
+            return existing.ordinal;
+        }
+
+        let next = self.next_by_group.entry(group_id.to_owned()).or_insert(1);
+        let ordinal = *next;
+        *next = next.saturating_add(1);
+        self.player_by_identity.insert(
+            identity,
+            PlayerGroupNumber {
+                group_id: group_id.to_owned(),
+                ordinal,
+            },
+        );
+        ordinal
+    }
+}
+
+fn numbered_replacement(replacement: &str, ordinal: u32) -> String {
+    format!("{replacement} {ordinal}")
+}
+
 struct CompiledFilterResult {
     filter: CompiledNameFilter,
     diagnostics: Vec<String>,
@@ -134,10 +189,11 @@ impl CompiledNameFilter {
                 ));
                 continue;
             }
-            let replacement_units = replacement.encode_utf16().count();
-            if replacement_units > STEAM_NAME_UTF16_MAX_TEXT_UNITS {
+            let minimum_numbered_replacement_units =
+                numbered_replacement(&replacement, 1).encode_utf16().count();
+            if minimum_numbered_replacement_units > STEAM_NAME_UTF16_MAX_TEXT_UNITS {
                 diagnostics.push(format!(
-                    "replacement label for group '{}' is {replacement_units} UTF-16 units; runtime write will truncate to {STEAM_NAME_UTF16_MAX_TEXT_UNITS}",
+                    "replacement label plus numeric suffix for group '{}' is at least {minimum_numbered_replacement_units} UTF-16 units; runtime write will truncate to {STEAM_NAME_UTF16_MAX_TEXT_UNITS}",
                     group.id
                 ));
             }
@@ -183,7 +239,8 @@ fn config_path_for_module(module_path: &std::path::Path) -> Result<PathBuf, Stri
 
 fn boilerplate_config() -> &'static str {
     "# er-player-name-filter runtime config.\n\
-# Uncomment and edit any number of groups. First matching group wins.\n\
+# Uncomment and edit any number of groups. First matching group wins; filtered players\n\
+# get a stable per-group suffix assigned by Steam ID, e.g. 'I am a bigot 1'.\n\
 #\n\
 # player_name_filter.bigot.replacement = 'I am a bigot'\n\
 # player_name_filter.bigot.names = ['Exact Steam name']\n\
@@ -406,7 +463,7 @@ mod windows_runtime {
         fmt,
         path::{Path, PathBuf},
         sync::{
-            Once, OnceLock,
+            Mutex, Once, OnceLock,
             atomic::{AtomicU64, AtomicUsize, Ordering},
         },
     };
@@ -418,10 +475,11 @@ mod windows_runtime {
     use er_hook::UnionFn;
 
     use super::{
-        CompiledNameFilter, FILTER_REPLACEMENT_LOG_LIMIT, LOG_FILE_NAME, NameFilterRuntimeConfig,
-        RawSessionManagerPlayerEntryBase, SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
-        SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA, config_path_for_module, parse_runtime_config,
-        read_inline_steam_name, write_inline_steam_name,
+        CompiledNameFilter, FILTER_REPLACEMENT_LOG_LIMIT, GroupNumberAssignments, LOG_FILE_NAME,
+        NameFilterRuntimeConfig, PlayerNameIdentity, RawSessionManagerPlayerEntryBase,
+        SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
+        SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA, config_path_for_module, numbered_replacement,
+        parse_runtime_config, read_inline_steam_name, write_inline_steam_name,
     };
 
     const DLL_PROCESS_ATTACH: u32 = 1;
@@ -433,6 +491,7 @@ mod windows_runtime {
         AtomicUsize::new(ORIGINAL_UNSET);
     static PLAYER_NAME_FILTER_REPLACEMENTS: AtomicU64 = AtomicU64::new(0);
     static PLAYER_NAME_FILTER: OnceLock<CompiledNameFilter> = OnceLock::new();
+    static PLAYER_NAME_GROUP_NUMBERS: OnceLock<Mutex<GroupNumberAssignments>> = OnceLock::new();
 
     unsafe extern "system" {
         fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
@@ -552,7 +611,7 @@ mod windows_runtime {
             )
         } {
             Ok(()) => log_message(format_args!(
-                "install: hooked SessionManagerPlayerEntryBase::Copy @0x{target:x} (rva 0x{SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA:x}); {group_count} configured group(s), first match wins"
+                "install: hooked SessionManagerPlayerEntryBase::Copy @0x{target:x} (rva 0x{SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA:x}); {group_count} configured group(s), first match wins, per-group numbering enabled"
             )),
             Err(status) => log_message(format_args!(
                 "install: register_union_hook SessionManagerPlayerEntryBase::Copy @0x{target:x} failed: {status:?}"
@@ -611,12 +670,21 @@ mod windows_runtime {
         let Some((group_id, replacement)) = filter.replacement_for(&name) else {
             return;
         };
-        write_inline_steam_name(&mut entry.steam_name, replacement);
+        let identity = PlayerNameIdentity::for_entry(entry.steam_id, entry as *const _ as usize);
+        let ordinal = {
+            let assignments = PLAYER_NAME_GROUP_NUMBERS.get_or_init(Mutex::default);
+            let mut assignments = assignments
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            assignments.ordinal_for(identity, group_id)
+        };
+        let numbered = numbered_replacement(replacement, ordinal);
+        write_inline_steam_name(&mut entry.steam_name, &numbered);
         let n = PLAYER_NAME_FILTER_REPLACEMENTS.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= FILTER_REPLACEMENT_LOG_LIMIT {
             log_message(format_args!(
-                "replaced steam_id={} group='{}' original='{}' replacement='{}' count={n}",
-                entry.steam_id, group_id, name, replacement
+                "replaced steam_id={} group='{}' ordinal={} original='{}' replacement='{}' count={n}",
+                entry.steam_id, group_id, ordinal, name, numbered
             ));
         }
     }
@@ -721,6 +789,25 @@ player_name_filter.second.regexes = ['^Same.*']
         assert_eq!(
             compiled.filter.replacement_for("samename"),
             Some(("first", "first"))
+        );
+    }
+
+    #[test]
+    fn matched_players_receive_stable_per_group_numbers() {
+        let mut assignments = GroupNumberAssignments::default();
+        let first = PlayerNameIdentity::SteamId(111);
+        let second = PlayerNameIdentity::SteamId(222);
+        let third = PlayerNameIdentity::SteamId(333);
+
+        assert_eq!(assignments.ordinal_for(first, "bigot"), 1);
+        assert_eq!(numbered_replacement("I'm a bigot", 1), "I'm a bigot 1");
+        assert_eq!(assignments.ordinal_for(second, "bigot"), 2);
+        assert_eq!(assignments.ordinal_for(first, "bigot"), 1);
+        assert_eq!(assignments.ordinal_for(third, "racist"), 1);
+        assert_eq!(numbered_replacement("I'm a racist", 1), "I'm a racist 1");
+        assert_eq!(
+            PlayerNameIdentity::for_entry(0, 0xfeed_beef),
+            PlayerNameIdentity::EntryAddress(0xfeed_beef)
         );
     }
 
