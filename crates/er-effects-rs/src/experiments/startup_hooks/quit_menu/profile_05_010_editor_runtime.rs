@@ -1031,6 +1031,50 @@ pub(crate) unsafe fn apply_path_editor_window_position(base: usize, menu_window:
     unsafe { apply_path_editor_caret_to_end(base, menu_window) };
 }
 
+static BUILD_URL_WINDOW_POSITION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+static BUILD_URL_WINDOW_POSITION_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
+
+/// Centre the System>Quit link field's own 02_990 MenuWindow on the stage.
+///
+/// Separate from [`apply_path_editor_window_position`] because the two fields answer to different
+/// geometry: the save picker's editor is placed OVER a ProfileSelect row (list centre plus that
+/// row's offsets, which the live layout schema can move), while the link field is a modal over the
+/// Quit tab and belongs in the middle of the screen. Sharing the picker's helper would have put the
+/// link field where a ProfileSelect row is -- which is why the Quit tab shipped with no placement
+/// at all, and the field stayed at the movie's authored top-left origin.
+///
+/// The target comes from [`er_gfx::build_url_02_990::build_url_window_position`], which derives it
+/// from the movie's own authored geometry rather than from a tuned constant.
+pub(crate) unsafe fn apply_build_url_editor_window_position(base: usize, menu_window: usize) {
+    if menu_window == 0 || menu_window == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let attempt = BUILD_URL_WINDOW_POSITION_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let (x, y) = er_gfx::build_url_02_990::build_url_window_position();
+    let transform = er_gfx::profile_05_010_layout::TransformLayout {
+        x,
+        y,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        opacity: 1.0,
+        editable: false,
+        source: "native 02_990 MenuWindow root centres the link field on the stage".to_owned(),
+    };
+    let proxy = menu_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
+    let (applied, unsupported, detail) = unsafe {
+        apply_profile_editor_transform_to_proxy(base, proxy, &transform, "02_990 build-url window")
+    };
+    if applied > 0 {
+        BUILD_URL_WINDOW_POSITION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+    }
+    if attempt <= 8 || (unsupported > 0 && attempt.is_power_of_two()) {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: positioned 02_990 MenuWindow attempt={attempt} window=0x{menu_window:x} proxy=0x{proxy:x} target=({x:.1},{y:.1}) applied={applied} unsupported={unsupported} detail={detail}"
+        ));
+    }
+    unsafe { apply_path_editor_caret_to_end(base, menu_window) };
+}
+
 /// Applications of the end-caret per editor open. The field is not guaranteed to be focused on the
 /// frame the window first runs, and taking focus is what would reset a caret we set too early, so the
 /// request is repeated over the same short window the positioning pass uses. It stays far shorter
