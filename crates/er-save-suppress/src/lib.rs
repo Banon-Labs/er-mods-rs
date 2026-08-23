@@ -201,36 +201,21 @@ const SL_STATUS_SUCCESS: u32 = 0;
 #[cfg(windows)]
 const SL_STATUS_IN_FLIGHT: u32 = 1;
 
-/// Opening bytes of each target as they appear in the 1.16.2 image. Verified identical
-/// in the Ghidra 1.16.2 runtime dump and in `eldenring-deobf.bin` at the same VA
-/// (shift 0). Checked at install time: if the bytes do not match, the address means
-/// something else in this build and the hook is refused rather than crash-installed.
-///
-/// Note the two-byte `40 53` / `40 57` pushes -- a redundant REX prefix MSVC emits
-/// here. Both prologues decode to whole instructions well past MinHook's 5-byte
-/// relocation window and contain no relative branches, so they are safe to patch.
-const SL_ENQUEUE_SAVE_JOB_SIG: &[u8] = &[
-    0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x48, 0xC7, 0x44, 0x24, 0x30, 0xFE, 0xFF, 0xFF,
-    0xFF, 0x8B, 0xF2, 0x48, 0x8B, 0xD9,
-];
-const SL_POLL_SAVE_STATUS_SIG: &[u8] = &[
-    0x40, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x44, 0x24, 0x28, 0xFE, 0xFF, 0xFF, 0xFF, 0x48,
-    0x89, 0x9C, 0x24, 0x88, 0x00, 0x00, 0x00,
-];
 /// `FUN_14067a980` -- the ONLY code that moves `GameMan+0xbc4` from 2 to 3, i.e. the
 /// moment the quit-to-title wait job is released. Its whole body is
 /// `if (bc4 == 2) bc4 = 3;`.
 #[cfg(windows)]
 const QUIT_PHASE_SETTLE_RVA: usize = 0x67a980;
-/// `mov rax,[rip+..]; cmp dword [rax+0xbc4],2; jne`.
-const QUIT_PHASE_SETTLE_SIG: &[u8] = &[
-    0x48, 0x8B, 0x05, 0x91, 0xEF, 0x6E, 0x03, 0x83, 0xB8, 0xC4, 0x0B, 0x00, 0x00, 0x02, 0x75, 0x0A,
-];
 
-const SL_RELEASE_REQUEST_SIG: &[u8] = &[
-    0x48, 0x89, 0x6C, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x33,
-    0xED, 0x48, 0x8B, 0xF9, 0x48, 0x39, 0x69, 0x28,
-];
+// Opening bytes of every hooked target as they appear in the 1.16.2 image, checked at install
+// time: if the bytes do not match, the address means something else in this build and the hook
+// is refused rather than crash-installed. Every one is ASSEMBLED from named instructions by this
+// crate's `build.rs` -- which also compares them against `eldenring-deobf.bin` when a copy is
+// present -- because a hand-typed prologue that is one byte wrong disarms its own hook silently.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_save_suppress_prologues.rs"
+));
 
 // ============================================================================
 // THE SL REQUEST SLOT. The one set of numbers that decides whether a save that never
@@ -826,22 +811,8 @@ const SAVE_SERIALIZE_CHAR_RVA: usize = 0x67dc00;
 #[cfg(windows)]
 const SAVE_SERIALIZE_BYTES_RVA: usize = 0x3d69920;
 
-const SAVE_DISPATCH_COMBINED_SIG: &[u8] = &[
-    0x48, 0x8B, 0xC4, 0x44, 0x88, 0x40, 0x18, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
-    0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00,
-];
-const SAVE_DISPATCH_CHAR_SIG: &[u8] = &[
-    0x48, 0x89, 0x5C, 0x24, 0x20, 0x57, 0x41, 0x54, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x45, 0x0F,
-    0xB6, 0xF8, 0x44, 0x0F, 0xB6, 0xE2, 0x8B, 0xF9,
-];
-const SAVE_DISPATCH_SYSTEM_SIG: &[u8] = &[
-    0x48, 0x8B, 0xC4, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00, 0x48, 0xC7, 0x44, 0x24, 0x20,
-    0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89, 0x58, 0x08,
-];
-const SAVE_SERIALIZE_CHAR_SIG: &[u8] = &[
-    0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xA8, 0x48, 0x81, 0xEC, 0x58, 0x01, 0x00,
-    0x00, 0x48, 0xC7, 0x45, 0xA0, 0xFE, 0xFF, 0xFF,
-];
+// The four dispatch/serializer signatures are generated alongside the hook prologues above; see
+// the `include!` near `QUIT_PHASE_SETTLE_RVA`.
 /// Lane codes for [`dispatch_last_lane`]. Not an enum: it crosses an atomic and lands in
 /// telemetry JSON as a number.
 pub const SAVE_LANE_NONE: usize = 0;
@@ -2705,14 +2676,15 @@ mod tests {
 
     #[test]
     fn write_branch_observer_signatures_are_the_verified_1162_prologues() {
-        // Read out of `eldenring-deobf.bin` at 0x142413860 / 0x1424142e0 (file offset == RVA)
-        // and cross-checked against the 1.16.2 Ghidra dump at the same VAs (shift 0). Both
-        // open with the same seven-instruction multi-push prologue.
-        const SHARED_PUSHES: &[u8] = &[
-            0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
-        ];
-        assert_eq!(&SAVE_WRITE_FULL_REBUILD_SIG[..12], SHARED_PUSHES);
-        assert_eq!(&SAVE_WRITE_IN_PLACE_SIG[..12], SHARED_PUSHES);
+        // Both open with the same seven-instruction multi-push prologue -- asserted against
+        // each other rather than against a transcription, because `build.rs` already pins the
+        // bytes themselves and checks them against `eldenring-deobf.bin` at 0x142413860 /
+        // 0x1424142e0 (file offset == RVA) when a copy is present.
+        const SHARED_PUSH_BYTES: usize = 12;
+        assert_eq!(
+            &SAVE_WRITE_FULL_REBUILD_SIG[..SHARED_PUSH_BYTES],
+            &SAVE_WRITE_IN_PLACE_SIG[..SHARED_PUSH_BYTES]
+        );
         // ...and diverge at byte 14, where the frame pointer is set up: the rebuild takes
         // `lea rbp,[rsp-0x60]` (8d 6c 24 a0) and the patcher `lea rbp,[rsp-0xd0]`
         // (8d ac 24 30 ff ff ff). A signature that lost this would match both functions.

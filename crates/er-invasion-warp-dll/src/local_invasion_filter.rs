@@ -79,23 +79,20 @@ use er_invasion_warp::param_row::PinAppearance;
 /// byte-checked against the loaded module before it is hooked or called, so a Seamless update that
 /// moves them disarms the filter instead of jumping into the middle of an instruction.
 mod ersc {
+    // Every `*_PROLOGUE` below is assembled from NAMED `iced-x86` instructions by this crate's
+    // `build.rs`, which additionally checks them against the installed `ersc.dll` when one is
+    // found. Hand-typing them is what the generator exists to prevent: one wrong byte and every
+    // check here silently fails closed, which looks exactly like "Seamless is not loaded".
+    include!(concat!(env!("OUT_DIR"), "/generated_ersc_prologues.rs"));
+
     /// `show(void* OSM, int groupId)` -- the option-menu builder. The one entry point without an
     /// `endbr64` prologue, which makes it a cheap "is this the ersc.dll we measured" discriminator.
     /// Read, never hooked.
     pub const SHOW_RVA: usize = 0x2_2d30;
-    pub const SHOW_PROLOGUE: &[u8] = &[
-        0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53,
-    ];
     /// The "Invade world" option action -- `S+0x110 = 0xd`. Reads `rcx` only.
     pub const INVADE_ACTION_RVA: usize = 0x2_43e0;
-    pub const INVADE_PROLOGUE: &[u8] = &[
-        0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x79, 0x58,
-    ];
     /// The "Cancel search" option action -- `S+0x110 = 0x22`. Reads `rcx` only.
     pub const CANCEL_ACTION_RVA: usize = 0x2_4460;
-    pub const CANCEL_PROLOGUE: &[u8] = &[
-        0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x79, 0x58,
-    ];
     /// `BuildLobbyKey(ctx, std::string* out)` -- produces the `lobby_key` string.
     ///
     /// # Why this one matters more than it looks
@@ -126,10 +123,6 @@ mod ersc {
     /// `std::string`. Observed, never altered: publishing a key of our own would change what every
     /// other Seamless client matches, which is not ours to do.
     pub const BUILD_LOBBY_KEY_RVA: usize = 0xa_bc20;
-    pub const BUILD_LOBBY_KEY_PROLOGUE: &[u8] = &[
-        0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xec,
-        0x48, 0x01, 0x00, 0x00,
-    ];
     /// MSVC `std::string`: `{ union { char buf[16]; char* ptr; }; size_t size; size_t capacity; }`.
     /// A capacity of 16 or more means the bytes are on the heap and the first field is a pointer --
     /// which is always the case here, because the value is exactly 16 characters and the inline

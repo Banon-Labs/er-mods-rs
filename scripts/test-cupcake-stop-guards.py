@@ -15,9 +15,18 @@ and the rule never fires. So the signal passed, the policy passed, the interpret
 thing that actually runs at turn-end returned `{}` -- a clean ALLOW -- every single time.
 
 This test closes that hole by driving the WHOLE path exactly as Claude Code does: the real
-transcript on disk, the real signal scripts, the real `cupcake eval` command read out of
-.claude/settings.json, and an assertion on the halt that comes back. Both directions are asserted --
-a guard that cannot halt is useless, and a guard that halts on a clean turn wedges every session.
+transcript on disk, the real signal scripts, the real `cupcake eval` commands read out of
+.claude/settings.json, and an assertion on the verdict that comes back. Both directions are asserted
+-- a guard that cannot halt is useless, and a guard that halts on a clean turn wedges every session.
+
+IT ALSO DRIVES UserPromptSubmit (2026-08-22), because one guard deliberately does NOT halt. Claude
+Code renders every Stop verdict into the user's transcript ("Stop hook error: <reason>") and Stop
+fires only after the assistant's text has already been streamed, so a Stop halt on ANSWER LENGTH
+makes the user read the long version, the scolding and the rewrite -- three times the reading, from
+a rule whose whole purpose is less of it. wall_of_text therefore lives on UserPromptSubmit, whose
+`additionalContext` is a hidden attachment and lands before the next answer is written. Two things
+have to hold and both are asserted here: it must NOT halt at Stop, and its correction must actually
+come back on the invisible channel.
 
 Fixtures live in .cupcake/tests/fixtures/*.jsonl and are ordinary Claude Code transcripts.
 """
@@ -65,8 +74,14 @@ CASES = [
     ),
     Case(
         "wall_of_text.jsonl",
-        "paragraphs of prose",
-        "turn is four paragraphs; the user reads one and skims the rest",
+        None,
+        "four paragraphs -- must NOT halt: a Stop verdict is printed to the user and the text is "
+        "already on screen, so halting costs a third reading instead of saving one (see UPS_CASES)",
+    ),
+    Case(
+        "narration_between_tools.jsonl",
+        None,
+        "six one-line preambles between six tool calls -- ordinary work, not a wall of text",
     ),
     Case(
         "stall_on_friction.jsonl",
@@ -81,21 +96,58 @@ CASES = [
 ]
 
 
-def stop_hook_command() -> list[str]:
-    """The Stop hook command Claude Code actually runs, read from settings.json so this test
+@dataclass(frozen=True)
+class ContextCase:
+    """A UserPromptSubmit case: the correction must arrive on the INVISIBLE additionalContext
+    channel, or not arrive at all."""
+
+    fixture: str
+    # Distinctive substring the injected context must contain, or None when it must be absent.
+    expect_context: str | None
+    why: str
+
+
+UPS_CASES = [
+    ContextCase(
+        "wall_of_text.jsonl",
+        "MEASURED: your PREVIOUS answer ran to 4 paragraphs",
+        "the previous answer was four paragraphs -- the next turn is told so, before it writes",
+    ),
+    ContextCase(
+        "narration_between_tools.jsonl",
+        None,
+        "one-line preambles between tool calls are not a wall of text and must not be corrected",
+    ),
+    ContextCase(
+        "clean.jsonl",
+        None,
+        "a clean previous turn gets the standing rule only, never a correction",
+    ),
+]
+
+# The standing one-paragraph rule is unconditional, so its absence means the policy is not routed at
+# all -- exactly the silent-inert failure this whole file exists to catch.
+STANDING_RULE = "ONE PARAGRAPH."
+
+
+def hook_command(event: str) -> list[str]:
+    """The hook command Claude Code actually runs for `event`, read from settings.json so this test
     follows the real configuration instead of a copy that can drift away from it."""
     settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    for group in settings.get("hooks", {}).get("Stop", []):
+    for group in settings.get("hooks", {}).get(event, []):
         for hook in group.get("hooks", []):
             cmd = hook.get("command", "")
             if "cupcake" in cmd:
                 return cmd.replace("$CLAUDE_PROJECT_DIR", str(REPO_ROOT)).split()
-    raise SystemExit("test-cupcake-stop-guards: no cupcake Stop hook found in .claude/settings.json")
+    raise SystemExit(
+        f"test-cupcake-stop-guards: no cupcake {event} hook found in .claude/settings.json"
+    )
 
 
-def run_case(case: Case, argv: list[str]) -> str | None:
-    """Returns None on pass, or a failure message."""
-    fixture = FIXTURES / case.fixture
+def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict, str] | str:
+    """Drive one fixture through a real cupcake hook invocation. Returns (decision, raw stdout), or
+    a failure message string."""
+    fixture = FIXTURES / fixture_name
     if not fixture.is_file():
         return f"missing fixture {fixture}"
 
@@ -109,24 +161,33 @@ def run_case(case: Case, argv: list[str]) -> str | None:
         shutil.copy(fixture, tdir / "session.jsonl")
 
         env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
-        event = json.dumps(
-            {
-                "session_id": f"stop-guard-{case.fixture}",
-                "transcript_path": str(tdir / "session.jsonl"),
-                "cwd": str(REPO_ROOT),
-                "hook_event_name": "Stop",
-                "stop_hook_active": False,
-            }
-        )
+        payload = {
+            "session_id": f"stop-guard-{fixture_name}",
+            "transcript_path": str(tdir / "session.jsonl"),
+            "cwd": str(REPO_ROOT),
+            "hook_event_name": event_name,
+        }
+        if event_name == "Stop":
+            payload["stop_hook_active"] = False
+        else:
+            payload["prompt"] = "next question"
         proc = subprocess.run(
-            argv, input=event, capture_output=True, text=True, env=env, timeout=25
+            argv, input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=25
         )
 
     raw = proc.stdout.strip()
     try:
-        decision = json.loads(raw) if raw else {}
+        return (json.loads(raw) if raw else {}), raw
     except ValueError:
         return f"unparseable cupcake output: {raw[:200]!r}"
+
+
+def run_case(case: Case, argv: list[str]) -> str | None:
+    """Returns None on pass, or a failure message."""
+    outcome = run_hook(case.fixture, "Stop", argv)
+    if isinstance(outcome, str):
+        return outcome
+    decision, raw = outcome
 
     reason = decision.get("reason", "")
     blocked = decision.get("decision") == "block"
@@ -148,15 +209,50 @@ def run_case(case: Case, argv: list[str]) -> str | None:
     return None
 
 
+def run_context_case(case: ContextCase, argv: list[str]) -> str | None:
+    """Returns None on pass, or a failure message.
+
+    Asserts on `hookSpecificOutput.additionalContext` -- the channel Claude Code turns into a
+    `hook_additional_context` attachment, which the REPL filters out of the rendered message list.
+    That invisibility is the point: the correction has to reach the model without the user reading
+    it. A correction that came back as a `reason` instead would be printed to the user, so the shape
+    of the output is as load-bearing as its content.
+    """
+    outcome = run_hook(case.fixture, "UserPromptSubmit", argv)
+    if isinstance(outcome, str):
+        return outcome
+    decision, raw = outcome
+
+    if decision.get("decision") == "block":
+        return f"UserPromptSubmit must never block on answer length, but cupcake blocked: {raw[:200]!r}"
+
+    context = decision.get("hookSpecificOutput", {}).get("additionalContext", "")
+    if STANDING_RULE not in context:
+        return (
+            f"the standing one-paragraph rule is missing from additionalContext -- the policy is not\n"
+            f"      routed or is inert. Got: {context[:200]!r}"
+        )
+
+    if case.expect_context is None:
+        if "MEASURED:" in context:
+            return f"expected NO correction but one was injected: {context[context.index('MEASURED:'):][:200]!r}"
+        return None
+
+    if case.expect_context not in context:
+        return f"correction missing {case.expect_context!r} from additionalContext: {context[:400]!r}"
+    return None
+
+
 def main() -> int:
     if shutil.which("cupcake") is None:
         print("test-cupcake-stop-guards: SKIP (cupcake not installed)")
         return 0
 
-    argv = stop_hook_command()
+    stop_argv = hook_command("Stop")
+    ups_argv = hook_command("UserPromptSubmit")
     failures = 0
     for case in CASES:
-        err = run_case(case, argv)
+        err = run_case(case, stop_argv)
         verdict = "halt" if case.expect_halt_text else "allow"
         if err:
             failures += 1
@@ -164,10 +260,22 @@ def main() -> int:
         else:
             print(f"ok   [{verdict}] {case.fixture}: {case.why}")
 
+    for ctx_case in UPS_CASES:
+        err = run_context_case(ctx_case, ups_argv)
+        verdict = "correct" if ctx_case.expect_context else "quiet"
+        if err:
+            failures += 1
+            print(f"FAIL [{verdict}] {ctx_case.fixture}: {ctx_case.why}\n      {err}", file=sys.stderr)
+        else:
+            print(f"ok   [{verdict}] {ctx_case.fixture}: {ctx_case.why}")
+
     if failures:
         print(f"\ntest-cupcake-stop-guards: {failures} failure(s)", file=sys.stderr)
         return 1
-    print(f"test-cupcake-stop-guards: OK ({len(CASES)} cases through the real Stop hook)")
+    print(
+        f"test-cupcake-stop-guards: OK ({len(CASES)} Stop cases, {len(UPS_CASES)} UserPromptSubmit "
+        f"cases, through the real hook commands)"
+    )
     return 0
 
 

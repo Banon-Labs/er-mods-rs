@@ -138,3 +138,12 @@ windows = { version = "0.62", features = [
 # `too_many_arguments` on pass-throughs that mirror `er_loading_bar`'s own signatures.
 [lints]
 workspace = true
+
+# Assembles every byte-checked prologue from NAMED instructions in `build.rs`, so a hand-typed
+# byte can never disarm a hook. `code_asm` is the encoder side and is build-time only; the
+# runtime dependency above stays decoder-only. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }

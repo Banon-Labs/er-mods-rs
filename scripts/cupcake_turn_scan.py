@@ -16,6 +16,8 @@ What lives here (and NOWHERE else):
   * live background work         -- `live_background_work`: a backgrounded Bash or an async Agent
                                     launch that has not reported back yet, and whether the current
                                     turn is the one that started it
+  * where a paragraph starts     -- `prose_paragraphs`, and `Turn.text_runs`, the contiguous prose
+                                    runs a length rule must measure instead of the whole turn
 
 Signal-SPECIFIC prose classification (which phrases are banned, how long is too long) stays in the
 individual signal: that is the part each guard genuinely owns.
@@ -172,6 +174,30 @@ class Turn:
         return any(b[0] == "tool" and block_is_substantive(b[1]) for b in self.blocks)
 
     @property
+    def text_runs(self) -> list[str]:
+        """The turn's prose split into CONTIGUOUS runs -- consecutive text blocks with no tool call
+        between them.
+
+        This is the unit a length rule has to measure, and measuring the whole turn instead is what
+        made the old wall-of-text guard fire on work it should never have touched. A tool-heavy turn
+        emits a one-line preamble before each call ("Now the disassembly.", "Reading the policy.");
+        eleven of those are eleven runs of ONE line, not an eleven-paragraph wall, and the user reads
+        them one at a time interleaved with tool activity. Summing them scored that turn identical to
+        an eleven-paragraph essay.
+        """
+        runs: list[str] = []
+        current: list[str] = []
+        for kind, value in self.blocks:
+            if kind == "text":
+                current.append(value)
+            elif current:
+                runs.append("\n\n".join(current))
+                current = []
+        if current:
+            runs.append("\n\n".join(current))
+        return runs
+
+    @property
     def last_text_index(self) -> int:
         for i in range(len(self.blocks) - 1, -1, -1):
             if self.blocks[i][0] == "text":
@@ -214,6 +240,75 @@ def last_text_turn(turns: list[Turn]) -> Turn | None:
         if turn.texts:
             return turn
     return None
+
+
+# --- prose segmentation -----------------------------------------------------------------------
+
+# WHY THIS LIVES HERE AND NOT IN THE SIGNAL. The module docstring says prose CLASSIFICATION stays in
+# the individual signal, and it does: "how many paragraphs is too many" is still the wall_of_text
+# signal's own call. What lives here is the mechanical part -- where a paragraph starts and stops --
+# because three consumers need the identical answer (the signal, its regression test, and the
+# false-positive audit) and the previous arrangement had all three carrying private copies. They
+# drifted: scripts/test-wall-of-text-classifier.py asserted a classifier that no longer had to match
+# the one the signal ran, so the test could pass while production counted differently.
+
+_FENCED_RE = re.compile(r"```.*?```", re.DOTALL)
+# A fence opened and never closed (a truncated/interrupted turn). Without this the whole remaining
+# message counts as prose, and an interrupted code dump reads as a dozen paragraphs.
+_OPEN_FENCE_RE = re.compile(r"```.*\Z", re.DOTALL)
+
+_TABLE_ROW_RE = re.compile(r"^\|")
+_LIST_ITEM_RE = re.compile(r"^([-*+]|\d+[.)])\s")
+_HEADING_RE = re.compile(r"^#{1,6}\s")
+_RULE_RE = re.compile(r"^([-*_])\1{2,}\s*$")
+# A caption introduces the structure under it ("Findings:", "**Root cause:**") -- a label, not a
+# paragraph to read. Only counted as a caption when structure actually follows it in the same block.
+_CAPTION_RE = re.compile(r":\**\s*$")
+
+
+def _is_structure_line(line: str) -> bool:
+    """True for a line that is scannable STRUCTURE rather than prose to read."""
+    if line != line.lstrip() and len(line) - len(line.lstrip()) >= 2:
+        return True  # indented: list continuation or an indented code block
+    stripped = line.strip()
+    if not stripped:
+        return True
+    return bool(
+        _TABLE_ROW_RE.match(stripped)
+        or _LIST_ITEM_RE.match(stripped)
+        or _HEADING_RE.match(stripped)
+        or _RULE_RE.match(stripped)
+    )
+
+
+def prose_paragraphs(text: str) -> list[str]:
+    """The blank-line-delimited blocks of the text that are PROSE the user has to READ.
+
+    Structure is not prose and never counts: fenced code (closed or left open), tables, list items
+    and their indented continuations, headings, horizontal rules, and a caption line that introduces
+    structure in the same block. The objection this serves is to READING, and those are scanned.
+
+    Classification is PER LINE, not per block, which is the fix for the shape that used to inflate
+    the count most: the old rule exempted a block only when EVERY line was a table row (or every line
+    a list item), so the ordinary "Findings:\n| a | b |" -- a caption with its table -- was scored as
+    a prose paragraph, and three tables with three captions read as three paragraphs of prose.
+    """
+    text = _FENCED_RE.sub("\n", text)
+    text = _OPEN_FENCE_RE.sub("\n", text)
+    out: list[str] = []
+    for block in re.split(r"\n\s*\n", text):
+        if not block.strip():
+            continue
+        lines = [l for l in block.splitlines() if l.strip()]
+        if not lines:
+            continue
+        prose = [l for l in lines if not _is_structure_line(l)]
+        if not prose:
+            continue
+        if len(prose) == 1 and len(lines) > 1 and prose[0] == lines[0] and _CAPTION_RE.search(prose[0]):
+            continue  # a caption introducing the structure beneath it
+        out.append(block.strip())
+    return out
 
 
 # --- blocked on the user ----------------------------------------------------------------------

@@ -319,8 +319,8 @@ def main() -> int:
     # (15) REGRESSION -- a long PROSE ANSWER is not a pause. Nothing is running, the message announces
     # no hold, the user simply asked a question that prose answers. Before 2026-08-22 this fired
     # VERBOSEPAUSE, which halted three consecutive real answers -- twice on the corrective rewrite the
-    # wall_of_text guard had just demanded, a turn that has no tool_use BY CONSTRUCTION. Length alone
-    # is wall_of_text's jurisdiction, not this rule's.
+    # wall_of_text guard demanded back when it still halted at Stop, a turn that has no tool_use BY
+    # CONSTRUCTION. Length alone is wall_of_text's jurisdiction, not this rule's.
     # >450 chars on purpose: at 411 the length heuristic would not fire and case (15) would pass
     # trivially, testing nothing. This is a plain ANSWER -- no idle phrasing, no pending-work
     # phrasing, nothing running in the transcript.

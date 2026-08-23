@@ -3,34 +3,23 @@ use super::*;
 const SOFTWARE_KEYBOARD_JOB_SIZE: usize = 0x1a8;
 const SOFTWARE_KEYBOARD_VALIDATOR_SIZE: usize = 0x70;
 const SOFTWARE_KEYBOARD_JOB_CTOR_RVA: u32 = 0x81be30;
-const SOFTWARE_KEYBOARD_JOB_CTOR_SIG: &[u8] = &[
-    0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xec, 0x30,
-];
 const SOFTWARE_KEYBOARD_RESULT_GATE_RVA: u32 = 0x81d3d0;
-const SOFTWARE_KEYBOARD_RESULT_GATE_SIG: &[u8] = &[
-    0x4c, 0x89, 0x44, 0x24, 0x18, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40,
-];
 const SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_RVA: u32 = 0x81d220;
-const SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_SIG: &[u8] = &[
-    0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
-];
 const FD4_TIME_VTABLE_RVA: usize = 0x29c8e58;
 const FD4_TIME_FLOAT_VTABLE_RVA: usize = 0x29c8e48;
 const SOFTWARE_KEYBOARD_VALIDATOR_INIT_RVA: u32 = 0xe70920;
-const SOFTWARE_KEYBOARD_VALIDATOR_INIT_SIG: &[u8] =
-    &[0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x48, 0x83, 0xec, 0x30];
 const SOFTWARE_KEYBOARD_VALIDATOR_DTOR_RVA: u32 = 0xe70960;
-const SOFTWARE_KEYBOARD_VALIDATOR_DTOR_SIG: &[u8] =
-    &[0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x48, 0x83, 0xec, 0x30];
 const SOFTWARE_KEYBOARD_ENTER_NAME_RVA: u32 = 0xe70c00;
-const SOFTWARE_KEYBOARD_ENTER_NAME_SIG: &[u8] = &[0x40, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec];
 const SOFTWARE_KEYBOARD_SET_INITIAL_RVA: u32 = 0xe709f0;
-const SOFTWARE_KEYBOARD_SET_INITIAL_SIG: &[u8] =
-    &[0x40, 0x55, 0x56, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xb9];
 const SOFTWARE_KEYBOARD_SET_MAX_RVA: u32 = 0x2416ee0;
-const SOFTWARE_KEYBOARD_SET_MAX_SIG: &[u8] =
-    &[0xb8, 0x01, 0x00, 0x00, 0x00, 0x3b, 0xd0, 0x0f, 0x4d, 0xc2];
-const GAME_HEAP_ALLOC_SIG: &[u8] = &[0x49, 0x8b, 0x00, 0x4d, 0x8b, 0xc8, 0x4c, 0x8b, 0xc2];
+
+// The `*_SIG` prologue for each RVA above -- plus `GAME_HEAP_ALLOC_SIG` for the allocator thunk
+// at `GAME_HEAP_ALLOC_RVA` -- is ASSEMBLED from named instructions by this crate's `build.rs`,
+// which also compares them against `eldenring-deobf.bin` when a copy is present.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_save_picker_path_editor_prologues.rs"
+));
 const GLOBAL_MENU_HEAP_ALLOCATOR_RVA: usize = er_game_base::rva::GLOBAL_MENU_HEAP_ALLOCATOR_RVA;
 
 const SOFTWARE_KEYBOARD_JOB_CONTROLLER_D8_OFFSET: usize = 0xd8;

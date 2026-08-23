@@ -1,50 +1,92 @@
 # METADATA
 # scope: package
-# title: One paragraph of prose per turn, hard limit
+# title: One paragraph of prose per turn, injected before the answer instead of scolded after it
 # authors: ["er-effects-rs agents"]
 # custom:
-#   severity: HIGH
+#   severity: LOW
 #   id: ER-EFFECTS-WALL-OF-TEXT
 #   description: >-
 #     User directive 2026-08-21, stated absolutely: "I'll never. Repeat: NEVER read more than a
 #     single paragraph of response text from you. Everything else is a skim."
 #     Every word past the first paragraph is not merely unwanted, it is UNREAD. That makes long
-#     prose actively worse than short prose: the agent believes it has communicated when it has
-#     not, and any caveat, blocker or correction buried past paragraph one has effectively been
-#     withheld from the person who needed it. Advisory reminders did not fix this -- the agent
-#     wrote multi-paragraph answers for an entire session while notes telling it not to were in
-#     context -- so it halts turn-end instead.
-#     Structure is NOT prose: fenced code blocks, tables and list blocks are exempt in the signal,
-#     because the objection is to READING, and those are scanned. One paragraph plus a table is
-#     fine; two paragraphs are not.
+#     prose actively worse than short prose: the agent believes it has communicated when it has not,
+#     and any caveat, blocker or correction buried past paragraph one has effectively been withheld
+#     from the person who needed it.
+#     Structure is NOT prose: fenced code, tables, lists, headings and captions are exempt in the
+#     signal, because the objection is to READING, and those are scanned. One paragraph plus a table
+#     is fine; two paragraphs are not.
+#
+#     THIS WAS A Stop HALT UNTIL 2026-08-22 AND THE HALT WAS THE WRONG SHAPE. The user, in their
+#     words: "That stop hook is not working if 1) I see it and 2) it doesn't prevent you from spewing
+#     information." Both halves are structural facts about the harness, verified against Claude Code
+#     2.1.240, not tuning problems:
+#
+#       (1) NO Stop VERDICT CAN BE HIDDEN. A blocking `reason` is pushed into the
+#           `stop_hook_summary` system message as `hookErrors` and rendered verbatim as
+#           "Stop hook error: <reason>"; `hookSpecificOutput.additionalContext` on Stop is rendered
+#           the same way as "Stop hook feedback: <text>"; `systemMessage` is documented as
+#           user-facing. `suppressOutput` gates only a hook's plain stdout, never the summary. So the
+#           user reads the scolding, always.
+#       (2) Stop FIRES AFTER THE TEXT IS ALREADY ON SCREEN. The assistant message is streamed to the
+#           terminal and only then does the Stop event run -- its input even carries
+#           `last_assistant_message`. A halt cannot unsend the wall of text; it can only append a
+#           rewrite. Net effect of the old guard: the user read the long version, then the scolding,
+#           then the short version. Three times the reading, from a rule that exists to reduce it.
+#
+#     SO THE CORRECTION MOVED TO UserPromptSubmit, which has neither problem: its
+#     `additionalContext` becomes a `hook_additional_context` attachment, which the REPL filters out
+#     of the rendered message list (it sits in the hidden-attachment set alongside `todo_reminder`
+#     and `output_style`), and it lands in context BEFORE the next answer is written. Invisible, and
+#     preventative for the turn about to start rather than punitive about the turn already read.
+#
+#     WHAT THIS BUYS AND WHAT IT COSTS, said plainly: an injected reminder is weaker than a halt --
+#     it cannot refuse anything. The trade is deliberate, because the halt's enforcement was paid for
+#     entirely out of the user's reading budget, which is the one resource this rule protects. The
+#     available escalation, if the reminder proves too weak, is the same `additionalContext` on
+#     PreToolUse (also invisible, also already wired with matcher "*"), re-asserted mid-turn so the
+#     rule is the last thing in context before the closing message. It is not taken here because it
+#     costs a transcript scan on every tool call.
 #   routing:
-#     required_events: ["Stop"]
+#     required_events: ["UserPromptSubmit"]
 #     required_signals: ["last_assistant_wall_of_text"]
 package cupcake.policies.claude.wall_of_text
 
 import rego.v1
 
-halt contains decision if {
-	input.hook_event_name == "Stop"
-	some msg in [violation]
-	decision := {
-		"rule_id": "ER-EFFECTS-WALL-OF-TEXT",
-		"reason": msg,
-		"severity": "HIGH",
-	}
+# (1) Standing every-turn rule, so the constraint is in context before the answer is composed.
+add_context contains context if {
+	input.hook_event_name == "UserPromptSubmit"
+	context := "ONE PARAGRAPH. The user reads the first paragraph of your answer and skims the rest, so anything you put after it -- a caveat, a blocker, the thing that actually mattered -- was not read. Lead with the answer. If it will not fit in one paragraph, that is the signal to CUT content, not to add a paragraph: drop the reasoning nobody asked for, and put what remains in a table, a list or a code block, which are scanned rather than read and do not count. Mid-turn one-line narration between tool calls is fine and is not measured; this is about the message you close on."
 }
 
-signal := s if {
+# (2) Measured correction: the turn that just ended ran long, so name the number and the opener.
+# Specific beats generic -- a standing note in the system prompt is exactly what failed before.
+add_context contains context if {
+	input.hook_event_name == "UserPromptSubmit"
+	some h in [hit]
+	context := correction_for(h)
+}
+
+correction_for(h) := msg if {
+	msg := concat("", ["MEASURED: your PREVIOUS answer ran to ", h.count, " paragraphs of prose in one unbroken run, beginning '", h.opener, "'. The user read the first one and skimmed the rest, so paragraphs 2..", h.count, " were not delivered -- if anything load-bearing was in them, it did not reach them. Do not re-send it and do not apologise for it. Answer THIS prompt in a single paragraph, and if something from the unread part still matters, that is what belongs in the one paragraph you get."])
+}
+
+# Parse the tagged signal into {count, opener}. Untagged-but-non-empty is treated as clean: unlike a
+# banned phrase, a raw value here carries no measurement to quote, and a guessed number in the
+# correction would be a fabricated fact. Empty -> hit undefined -> standing rule only.
+hit := h if {
+	startswith(raw, "WALLOFTEXT:")
+	parts := split(raw, ":")
+	count(parts) >= 3
+	h := {"count": parts[1], "opener": concat(":", array.slice(parts, 2, count(parts)))}
+}
+
+raw := trim(matched, " \t\r\n")
+
+# Signal value tolerates both the bare-string and {output: ...} shapes cupcake may hand back.
+matched := s if {
 	s := input.signals.last_assistant_wall_of_text
 	is_string(s)
 } else := s if {
 	s := input.signals.last_assistant_wall_of_text.output
-}
-
-violation := msg if {
-	raw := trim_space(signal)
-	startswith(raw, "WALLOFTEXT:")
-	parts := split(raw, ":")
-	count(parts) >= 3
-	msg := concat("", ["You wrote ", parts[1], " paragraphs of prose. The user reads ONE and skims the rest, so everything after the first paragraph was NOT read -- including anything important you put there. Rewrite the answer as a SINGLE paragraph. If it will not fit, that is the signal to cut content, not to add a paragraph: lead with the answer, drop the reasoning the user did not ask for, and put any remaining structure in a table or code block (those are exempt). First paragraph began: ", concat(":", array.slice(parts, 2, count(parts)))])
-}
+} else := ""

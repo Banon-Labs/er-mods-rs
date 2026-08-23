@@ -63,19 +63,33 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 # trusted on its own say-so.
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py" --selftest
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
-# Second gate: drive real transcripts through the real Stop hook command out of .claude/settings.json
+# Second gate: drive real transcripts through the real hook commands out of .claude/settings.json
 # and assert the halt actually comes back -- plus a clean turn that must still be allowed, because a
-# guard that halts everything wedges every session just as badly as one that halts nothing.
+# guard that halts everything wedges every session just as badly as one that halts nothing. It also
+# drives UserPromptSubmit, where wall_of_text now lives: that rule must NOT halt (a Stop verdict is
+# printed to the user, and it fires after the answer is already on screen, so halting buys a third
+# reading instead of saving one) and its correction must come back on the invisible
+# additionalContext channel.
 python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
 python3 "$repo_root/scripts/test-unexecuted-promise-signal.py"
 python3 "$repo_root/scripts/test-native-ownership-vocab-signal.py"
 python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
-command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego"
+python3 "$repo_root/scripts/test-wall-of-text-signal.py"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# A detour's expected prologue must be GENERATED from named iced-x86 instructions in a build.rs,
+# never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
+# left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
+# on every launch while looking perfectly built. Selftest first, so the gate is never trusted on
+# its own say-so. The shared generator + what verifies it live in build-support/prologue_build.rs;
+# rustfmt cannot see that file through `include!`, so it is checked explicitly here.
+python3 "$repo_root/scripts/check-prologue-bytes.py" --selftest
+python3 "$repo_root/scripts/check-prologue-bytes.py"
+rustfmt --edition 2024 --check "$repo_root/build-support/prologue_build.rs"
 # LINT PARITY WITH ../fromsoftware-rs. Standing user requirement (2026-08-21): this code must
 # be AT LEAST as strict as the parent project. Cargo cannot inherit that -- `[lints] workspace =
 # true` resolves only against THIS workspace root and lint levels never propagate from a path

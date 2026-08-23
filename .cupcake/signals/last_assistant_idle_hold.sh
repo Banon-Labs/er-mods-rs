@@ -158,11 +158,14 @@ phrase = find_idle_phrase(scrubbed)
 # A PROSE-ONLY ANSWER IS NOT A PAUSE. VERBOSEPAUSE is about a turn that stops WITH SOMETHING
 # PENDING: either live background work still running at turn-end, or a message that announces an
 # idle/hold itself. A turn that simply answers the user's question in prose waits on nothing, and
-# neither does the corrective rewrite the wall_of_text guard forces -- that one has no tool_use BY
-# CONSTRUCTION, since its whole job is to restate an answer. Without this gate the rule degenerates
+# neither did the corrective rewrite the wall_of_text guard used to force -- that one has no tool_use
+# BY CONSTRUCTION, since its whole job is to restate an answer. Without this gate the rule degenerates
 # into "no prose answer may exceed 450 chars", which is the wall_of_text guard's job and not this
 # one's. Measured 2026-08-22: it halted three consecutive prose answers with no background task
-# running at all, twice on rewrites the wall_of_text halt had just demanded.
+# running at all, twice on rewrites the wall_of_text halt had just demanded. (That halt was removed
+# later the same day -- it fired after the text was already on screen and its verdict was printed to
+# the user, so it cost a third reading; the rule now injects an invisible one-paragraph correction on
+# UserPromptSubmit instead. The gate below still matters: prose answers remain out of scope here.)
 # Three ways a turn can BE a pause. Events alone are not enough: a turn can narrate work in flight
 # that the transcript cannot see (a subagent compiling, a gate running elsewhere), and that turn does
 # owe a terse blocked-note. What none of these match is a plain ANSWER.
