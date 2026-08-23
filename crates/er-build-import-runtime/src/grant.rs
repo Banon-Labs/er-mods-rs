@@ -126,6 +126,27 @@ pub struct ArmamentOutcome {
     pub level: i32,
     /// Inventory index the game filed it under; `-1` when the insert was refused.
     pub inventory_index: i32,
+    /// The `GaItemHandle` this armament was minted as, or `0` when nothing usable was minted.
+    ///
+    /// THE ONLY NAME THAT DISTINGUISHES THIS COPY FROM ITS TWINS. An ash lives on the gaitem
+    /// instance, not in the item id, so several copies of one armament carrying different ashes
+    /// all share an item id -- and `EquipInventoryData::GetItemInventoryIdx` (0x14024c560) keys
+    /// purely on that id: its body is `if (*itemId != -1) GetItemIndex(itemsData, itemId)`, and
+    /// `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST index for a repeated id.
+    /// One id, one answer, forever the same copy. Carrying the handle forward is what lets the
+    /// equip ask `GetItemIndexByGaitemHandle` (0x14024c460) instead, which scans the entries for
+    /// the one whose handle matches and therefore CAN separate them.
+    ///
+    /// # Why the number outlives our own reference
+    ///
+    /// [`grant_armament`] destructs its local handle before returning, as every native caller
+    /// does. That is a refcount decrement, not an invalidation: `AddInventoryEquip` took the
+    /// inventory's own reference first, so the entry stays live for exactly as long as the item
+    /// stays in the inventory -- which is longer than the equip pass. When the insert is REFUSED
+    /// the inventory took no reference and our release frees the table entry, so this is left
+    /// zero rather than left dangling; `RemoveCSGaitemIns` bumps the handle's generation bits on
+    /// free, so even a stale handle fails the lookup closed rather than naming a later item.
+    pub handle: u32,
 }
 
 impl ArmamentOutcome {
@@ -227,13 +248,23 @@ fn is_armament(grant: &Grant) -> bool {
 /// [`NO_SKILL`] nor a gem-tagged id is a value this code does not understand, and mounting the
 /// low bits of it anyway is how a wrong-table id gets silently mounted as a gem.
 fn gem_row(grant: &Grant) -> Option<u32> {
-    if grant.weapon_skill == NO_SKILL {
+    gem_row_of(grant.weapon_skill)
+}
+
+/// The `EquipParamGem` row a `weapon_skill` field names, or `None` for "no ash".
+///
+/// Public because the equip side asks the same question of the same encoding when it decides
+/// WHICH minted copy belongs in a slot -- and two copies of that rule would be two chances for
+/// the grant and the equip to disagree about what an armament is, which is precisely the
+/// ambiguity the handle threading exists to remove.
+pub fn gem_row_of(weapon_skill: u32) -> Option<u32> {
+    if weapon_skill == NO_SKILL {
         return None;
     }
-    if grant.weapon_skill & ITEM_CATEGORY_MASK != er_build_import::plan::GEM_ITEM_CATEGORY {
+    if weapon_skill & ITEM_CATEGORY_MASK != er_build_import::plan::GEM_ITEM_CATEGORY {
         return None;
     }
-    Some(grant.weapon_skill & ITEM_ROW_MASK)
+    Some(weapon_skill & ITEM_ROW_MASK)
 }
 
 /// Give the player every item in `grants`, then read the inventory back to confirm.
@@ -364,10 +395,17 @@ unsafe fn grant_armament(
     // Safety: same context; a pure read through the instance's own gem slot.
     let arts_id = unsafe { read_arts_id(module_base, &handle) };
 
+    // The handle is kept ONLY when the inventory actually took its own reference. A negative
+    // return means `EquipInventoryData::InsertItem` refused (`AddInventoryEquip` sets
+    // `lastItemAddResult = 4` and returns -1), so the release below is the last reference and
+    // the table entry goes back on the free queue -- a number that no longer names this item.
+    let owned_handle = if inventory_index < 0 { 0 } else { handle[0] };
+
     // Safety: releases exactly the reference the mint took, exactly as every native caller does.
     unsafe { release(handle.as_mut_ptr()) };
 
     Some(ArmamentOutcome {
+        handle: owned_handle,
         label: grant.label.clone(),
         item_id: grant.item_id,
         wanted_gem,

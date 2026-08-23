@@ -9,15 +9,35 @@
 //!
 //! # Two traps it hides
 //!
-//! * It takes an **inventory index**, not a param id. The index comes from
-//!   `EquipInventoryData::GetItemInventoryIdx`, and is only valid after the item is granted.
+//! * It takes an **inventory index**, not a param id. The index is only valid after the item is
+//!   granted, and WHICH index it is is the subject of the section below.
 //! * Equipping an item into the slot it **already occupies toggles it off**. So every equip
 //!   is preceded by `GetSlotIndexByItemIndex`, and skipped when the item is already there.
 //!   Without that check a re-run strips the gear it just put on.
+//!
+//! # An item id cannot name one copy, so the equip does not ask by item id
+//!
+//! An ash of war lives on the **gaitem instance**, not in the item id. A build carrying four
+//! Miséricordes that differ only by their ash gives three of them the identical item id
+//! `0x000FB9C8`, and there is no id-shaped question whose answer is "the third one".
+//! `EquipInventoryData::GetItemInventoryIdx` (`0x14024c560`) is exactly such a question -- its
+//! whole body is `if (*itemId != -1) GetItemIndex(&inv->itemsData, itemId)` plus a null-handle
+//! rejection -- and `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST index for a
+//! repeated id. So it returns the same copy for all four positions, and `GetParamIdInSlot`, which
+//! compares only the param id, then reports every one of them as verified.
+//!
+//! `plan.rs` grants the worn copy first to make that one answer the right one. That mitigates
+//! exactly one position per id and cannot do more, which is why it is a mitigation and this is
+//! the fix: the grant now hands each minted armament's `GaItemHandle` forward and the equip
+//! resolves the inventory index from THAT, through
+//! [`GET_ITEM_INDEX_BY_GAITEM_HANDLE`]. Where no handle is available the id lookup is still used
+//! -- and [`EquipOutcome::by_item_id`] records that it was, because an unannounced fall back to
+//! the ambiguous question is how this bug stayed invisible.
 
 use er_build_import::equip::{
     CHR_ASM_SLOT_QUICK_BASE, EquipLedger, EquipRef, PlannedPosition, PositionKind, PositionResult,
 };
+use er_build_import::plan::ArmamentSkill;
 
 /// `EquipItemToChrAsmSlot(ChrAsmSlot slot, MenuGaitem *item)`.
 const EQUIP_ITEM_TO_CHR_ASM_SLOT: usize = 0x787c30;
@@ -38,6 +58,25 @@ const GET_SLOT_INDEX_BY_ITEM_INDEX: usize = 0x248440;
 const EQUIP_PERMISSION_GATE: usize = 0x788a90;
 /// `CS::EquipInventoryData::GetGaItemHandleByIndex(inv, uint *out, uint itemIdx) -> uint*`.
 const GET_GAITEM_HANDLE_BY_INDEX: usize = 0x24c7b0;
+/// `CS::EquipInventoryData::GetItemIndexByGaitemHandle(EquipInventoryData*, uint *gaitemHandle)
+/// -> int` -- the inventory question that can tell two copies of one armament apart.
+///
+/// Verified against the 1.16.2 dump and byte-checked in `eldenring-deobf.bin` (shift zero;
+/// `41 56 48 83 EC 40 48 C7 44 24 20 FE FF FF FF`). It resolves the handle into a
+/// `GaitemLookupResult`, reads the instance's item id, and then splits:
+///
+/// * **stackable** ids -- consumables, which have no per-instance identity -- fall back to the
+///   same `GetItemIndex` the id lookup uses, because there is nothing to distinguish;
+/// * **everything else**, armaments included, is answered by walking `0..=itemEntriesCount` and
+///   returning the index of the entry whose own `InventoryItemEntry::GetGaitemHandle` EQUALS the
+///   handle asked about. That is the exact-instance answer, and `-1` when the handle names
+///   nothing in this inventory.
+///
+/// The engine uses it the same way: `FUN_140248670`, the ash-mounting path, feeds its result
+/// straight to `EquipInventoryData::RemoveItem`. The first argument is
+/// `&egd->equipInventoryData`, which is literally what `GetEquipInventoryData` returns, so it is
+/// the pointer this module already holds.
+const GET_ITEM_INDEX_BY_GAITEM_HANDLE: usize = 0x24c460;
 /// `CS::EquipGameData::SetEquipmentEntries(egd, slot, uint *gaitemHandle, int itemIdx,
 /// bool, bool, bool isArrowOrBolt)` -- the actual equipment writer.
 const SET_EQUIPMENT_ENTRIES: usize = 0x249160;
@@ -86,6 +125,9 @@ const MENU_GAITEM_ITEM_ID: usize = 0x4c;
 type EquipFn = unsafe extern "system" fn(i32, *const u8);
 type GetInventoryFn = unsafe extern "system" fn(usize) -> usize;
 type GetItemIdxFn = unsafe extern "system" fn(usize, *const i32) -> i32;
+/// `GetItemIndexByGaitemHandle(EquipInventoryData*, uint *gaitemHandle) -> int`. The handle is
+/// read THROUGH the pointer and never written, so it is `*const`.
+type GetItemIdxByHandleFn = unsafe extern "system" fn(usize, *const u32) -> i32;
 type GetSlotFn = unsafe extern "system" fn(usize, i32) -> i32;
 type GetParamIdInSlotFn = unsafe extern "system" fn(usize, i32) -> i32;
 type GateFn = unsafe extern "system" fn(i32) -> u8;
@@ -103,6 +145,111 @@ type GetQuickIdFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
 /// `*out = egd->physicTears[slot]`. Calling it as `(egd, slot)` puts the slot index in RDX and
 /// the function writes through it -- a store to address 0, which took the game down once.
 type GetTearFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
+
+/// Which minted armament instance belongs in which `ChrAsmSlot`.
+///
+/// # The join, and why it is on (item id, ash) rather than on order
+///
+/// The grant produces one [`ArmamentOutcome`] per armament, in plan order; the equip walks
+/// positions in `ChrAsmSlot` order. Neither order is the other's, and matching them by position
+/// would be an assumption about two lists built from different traversals of the build document.
+///
+/// So the join is on the pair that actually *identifies* an armament to a player: its item id and
+/// the ash mounted on it. That pair is complete -- two copies agreeing on both are genuinely
+/// interchangeable instances, so it does not matter which of them a position takes -- and it is
+/// the smallest thing that is. An entry is consumed once claimed, so two positions asking for the
+/// same armament with the same ash get two DIFFERENT copies rather than the same one twice.
+///
+/// The ash side of the pair comes from [`er_build_import::plan::equipped_armament_skills`], the
+/// same table the post-import read-back is adjudicated against, and the gem encoding is decoded
+/// by the grant's own [`crate::grant::gem_row_of`] rather than re-implemented here.
+pub struct WornInstances {
+    /// Every armament the grant minted a usable handle for.
+    minted: Vec<Minted>,
+    /// `ChrAsmSlot` -> the gem row the build wants worn there. An absent slot is a position that
+    /// is not an armament at all, which is a different answer from an armament with no ash.
+    wanted: std::collections::BTreeMap<i32, Option<u32>>,
+}
+
+/// One minted armament, and whether a position has already claimed it.
+struct Minted {
+    /// Category-tagged armament id, affinity included.
+    item_id: u32,
+    /// `EquipParamGem` row the plan asked to mount, or `None` for "no ash".
+    gem: Option<u32>,
+    /// The `GaItemHandle` the mint produced. Never zero: unusable ones are not kept.
+    handle: u32,
+    /// Claimed by a position already, so no second position may take it.
+    taken: bool,
+}
+
+/// How a position's inventory index is going to be found.
+enum Resolved {
+    /// The handle of the exact instance minted for this position.
+    Handle(u32),
+    /// No handle; fall back to the ambiguous item-id lookup, for this stated reason.
+    ById(&'static str),
+}
+
+impl WornInstances {
+    /// Build the join from what the grant minted and what each armament slot should wear.
+    ///
+    /// # When this can pick the wrong ash, and why that is safe
+    ///
+    /// `wants` may name one slot more than once, because a planner payload can have several rows
+    /// claiming one position. The last entry wins here, which is payload order;
+    /// `equip::settle` breaks the same tie by the rows' `order` field, and
+    /// `equipped_armament_skills` selects rows by the bare `equipIndex` while `equip_plan` selects
+    /// them by the ACTIVE SET. Those agree on an ordinary payload and can disagree on a
+    /// self-contradicting one -- which the import already reports as `CONTESTED`.
+    ///
+    /// When they do disagree this looks up an ash the plan did not place, finds no minted copy
+    /// carrying it, and returns [`Resolved::ById`] with a reason. So the disagreement degrades to
+    /// the old id lookup WITH A LOG LINE saying so, never to a confidently-wrong handle.
+    pub fn new(armaments: &[crate::grant::ArmamentOutcome], wants: &[ArmamentSkill]) -> Self {
+        Self {
+            minted: armaments
+                .iter()
+                .filter(|arm| arm.handle != 0)
+                .map(|arm| Minted {
+                    item_id: arm.item_id,
+                    gem: arm.wanted_gem,
+                    handle: arm.handle,
+                    taken: false,
+                })
+                .collect(),
+            wanted: wants
+                .iter()
+                .map(|want| (want.slot, crate::grant::gem_row_of(want.weapon_skill)))
+                .collect(),
+        }
+    }
+
+    /// How many minted armaments are available to be claimed.
+    pub fn available(&self) -> usize {
+        self.minted.len()
+    }
+
+    /// Claim the instance that belongs in `slot`, or say why there is none.
+    fn claim(&mut self, slot: i32, item_id: u32) -> Resolved {
+        let Some(gem) = self.wanted.get(&slot).copied() else {
+            return Resolved::ById(
+                "this position is not an armament, so the grant minted no instance for it",
+            );
+        };
+        let Some(found) = self
+            .minted
+            .iter_mut()
+            .find(|arm| !arm.taken && arm.item_id == item_id && arm.gem == gem)
+        else {
+            return Resolved::ById(
+                "no unclaimed minted armament matches this position's item id and ash",
+            );
+        };
+        found.taken = true;
+        Resolved::Handle(found.handle)
+    }
+}
 
 /// What the equip pass observed while filling the plan.
 ///
@@ -123,6 +270,16 @@ pub struct EquipOutcome {
     pub dispatch: Vec<(i32, u32, i32, i32)>,
     /// Item ids the inventory could not locate, i.e. the grant did not land.
     pub not_in_inventory: Vec<u32>,
+    /// Positions whose inventory index came from the exact instance the grant minted.
+    pub by_handle: usize,
+    /// `(kind, slot, item id, why)` for every position that fell back to the item-id lookup.
+    ///
+    /// Kept in full rather than counted, and carrying its KIND, because the two cases are not
+    /// equally serious. A talisman or a quickbar consumable has no per-instance identity to lose,
+    /// so the id lookup is the right question for it and the entry is bookkeeping. An ARMAMENT
+    /// falling back is the importer admitting it may have equipped an arbitrary twin, and that
+    /// admission is worthless if the log buries it among the harmless ones.
+    pub by_item_id: Vec<(PositionKind, i32, u32, &'static str)>,
     /// `(slot, expected, actual)` for the first few positions that read back wrong.
     pub mismatches: Vec<(i32, i32, i32)>,
     /// The equip game data pointer was unusable, so nothing at all was attempted.
@@ -174,10 +331,19 @@ unsafe fn read_quick_position(
 
 /// Equip everything the ledger's plan asks for, recording each position's read-back into it.
 ///
+/// `instances` carries the gaitem handles the grant minted; each armament position claims its own
+/// so that copies of one armament differing only by ash reach the right hands. It is consumed as
+/// the pass walks, which is why it is taken by mutable reference.
+///
 /// # Safety
 ///
 /// Game thread, character in the world, items already granted.
-pub unsafe fn equip_all(module_base: usize, egd: usize, ledger: &mut EquipLedger) -> EquipOutcome {
+pub unsafe fn equip_all(
+    module_base: usize,
+    egd: usize,
+    ledger: &mut EquipLedger,
+    instances: &mut WornInstances,
+) -> EquipOutcome {
     let mut outcome = EquipOutcome::default();
     // Cloned so the ledger stays writable while the pass walks it. The list is at most ~20
     // entries, and holding a borrow of the thing being recorded into is not worth the saving.
@@ -189,6 +355,8 @@ pub unsafe fn equip_all(module_base: usize, egd: usize, ledger: &mut EquipLedger
         unsafe { core::mem::transmute(module_base + GET_EQUIP_INVENTORY_DATA) };
     let get_item_idx: GetItemIdxFn =
         unsafe { core::mem::transmute(module_base + GET_ITEM_INVENTORY_IDX) };
+    let get_item_idx_by_handle: GetItemIdxByHandleFn =
+        unsafe { core::mem::transmute(module_base + GET_ITEM_INDEX_BY_GAITEM_HANDLE) };
     let get_slot: GetSlotFn =
         unsafe { core::mem::transmute(module_base + GET_SLOT_INDEX_BY_ITEM_INDEX) };
     let param_in_slot: GetParamIdInSlotFn =
@@ -249,8 +417,42 @@ pub unsafe fn equip_all(module_base: usize, egd: usize, ledger: &mut EquipLedger
         };
 
         let id = position.item.item_id as i32;
-        // Safety: `id` outlives the call; the inventory pointer is live.
-        let item_idx = unsafe { get_item_idx(inventory, &raw const id) };
+
+        // WHICH COPY. Asking by item id cannot answer that -- see the module header -- so the
+        // handle the grant minted for this exact position is tried first, and the fall back to
+        // the ambiguous question is recorded rather than taken quietly.
+        let mut fell_back_to_id = None;
+        let mut item_idx = match instances.claim(slot, position.item.item_id) {
+            Resolved::Handle(handle) => {
+                // Safety: the handle outlives the call and the inventory pointer is live; the
+                // native reads the handle through the pointer and never writes it.
+                let found = unsafe { get_item_idx_by_handle(inventory, &raw const handle) };
+                if found < 0 {
+                    // The instance was minted but this inventory does not hold it. That is a real
+                    // finding, not a reason to silently equip a twin -- but the id lookup is
+                    // still the better of the two remaining answers, so it is used and said.
+                    fell_back_to_id =
+                        Some("the minted handle names no entry in this inventory any more");
+                }
+                found
+            }
+            Resolved::ById(why) => {
+                fell_back_to_id = Some(why);
+                -1
+            }
+        };
+        if item_idx < 0 {
+            // Safety: `id` outlives the call; the inventory pointer is live.
+            item_idx = unsafe { get_item_idx(inventory, &raw const id) };
+        } else {
+            outcome.by_handle += 1;
+        }
+        if let Some(why) = fell_back_to_id {
+            outcome
+                .by_item_id
+                .push((position.kind, slot, position.item.item_id, why));
+        }
+
         if item_idx < 0 {
             outcome.not_in_inventory.push(position.item.item_id);
             ledger.record(at, PositionResult::NotInInventory);

@@ -496,6 +496,13 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         ));
     }
 
+    // WHAT EACH ARMAMENT SLOT SHOULD BE HOLDING, computed BEFORE the equip rather than after it,
+    // because it is now needed twice: it tells the equip which minted copy belongs in which hand
+    // (an ash lives on the instance, so the item id alone cannot say), and it is what the
+    // post-import read-back adjudicates the worn armament against. One table, both jobs -- the
+    // alternative is a second opinion about what the build asked for.
+    let wants = er_build_import::plan::equipped_armament_skills(doc, &catalog);
+
     // Equip only what was actually granted: equipping an item the inventory does not hold cannot
     // work, and the outcome distinguishes those from real equip failures.
     if let Some(egd) = unsafe { grant::equip_game_data() } {
@@ -505,8 +512,41 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         // planned positions printed "10/10 verified".
         let mut ledger = EquipLedger::new(&equips);
 
+        // The gaitem handles the grant minted, joined to the slots that should wear them.
+        let mut instances = equip_native::WornInstances::new(&outcome.armaments, &wants);
+        let mintable = instances.available();
+
         // Safety: game thread, character loaded, items granted above.
-        let worn = unsafe { equip_native::equip_all(module_base, egd, &mut ledger) };
+        let worn =
+            unsafe { equip_native::equip_all(module_base, egd, &mut ledger, &mut instances) };
+
+        // HOW EACH POSITION WAS RESOLVED, not just whether it was. An index found from the minted
+        // handle names one specific instance; an index found from the item id names whichever
+        // copy the inventory filed lowest, which for several armaments differing only by ash is
+        // an arbitrary one of them. A line that does not say which question was asked cannot be
+        // used to diagnose a weapon that came out with somebody else's skill on it.
+        //
+        // Armament fallbacks are listed one by one and everything else is counted, because only
+        // an armament can have two copies the item id cannot tell apart -- a talisman or a
+        // quickbar consumable has no per-instance identity to take the wrong one of.
+        let armament_fallbacks = worn
+            .by_item_id
+            .iter()
+            .filter(|(kind, ..)| *kind == PositionKind::Armament);
+        log_line(&format!(
+            "[build-import] EQUIP RESOLUTION: {} position(s) found by minted gaitem handle, \
+             {} by item id ({} of them armaments, where the id cannot tell copies apart); \
+             {mintable} armament handle(s) were available",
+            worn.by_handle,
+            worn.by_item_id.len(),
+            armament_fallbacks.clone().count()
+        ));
+        for (_, slot, item_id, why) in armament_fallbacks.take(12) {
+            log_line(&format!(
+                "[build-import]   ARMAMENT BY ITEM ID slot {slot} item 0x{item_id:08X} -- {why}; \
+                 this position may hold a copy carrying another ash"
+            ));
+        }
         if worn.no_inventory {
             log_line(
                 "[build-import] EQUIP: the inventory pointer was null, so NOTHING was attempted",
@@ -529,7 +569,6 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         // armament differing only by ash, so the id is not a unique name for a weapon. This walks
         // the worn armament itself -- slot -> gaitem handle -> instance -> equipped gem -> arts
         // row -- and says what is actually in the player's hands.
-        let wants = er_build_import::plan::equipped_armament_skills(doc, &catalog);
         let mut correct = 0usize;
         let mut asked = 0usize;
         for want in &wants {
@@ -554,6 +593,16 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                     )
                 }
             });
+            // WHICH ARMAMENT THE PLAN PUT HERE, so the two ways of being wrong can be told apart
+            // BY THE LOG rather than by a reader cross-referencing two sections of it. A slot
+            // holding a different item id holds another armament entirely; a slot holding the
+            // RIGHT id with the wrong arts row holds a different COPY of the right armament,
+            // which is the exact failure the gaitem-handle threading exists to prevent and the
+            // only one an id-keyed equip could ever produce.
+            let planned_item = er_build_import::equip::armament_planner_index(want.slot)
+                .and_then(|index| equips.armaments.get(index as usize))
+                .and_then(|entry| entry.as_ref())
+                .map(|item| item.item_id);
             let verdict = match (wanted_arts, held) {
                 (Some(wanted), Some(got)) if wanted == got => {
                     correct += 1;
@@ -561,12 +610,14 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 }
                 (_, None) if worn_arm.is_none() => "EMPTY -- no armament is worn in this slot",
                 (_, None) => "NOT MOUNTED -- the worn armament reports no sword-arts row",
-                // Two causes, and the worn item id below is what tells them apart: a DIFFERENT id
-                // means the slot holds another armament entirely, while the SAME id means it holds
-                // another copy of this one (copies differing only by ash share an item id) or an
-                // armament that does not accept ashes -- `EquipParamWeapon::canGemBeChanged` gates
-                // the read, so a gem mounted on such a weapon is stored and then ignored.
-                _ => "MISMATCH -- compare the worn item id with the ARMAMENT lines above",
+                _ if worn_arm.map(|arm| arm.item_id) != planned_item => {
+                    "WRONG ARMAMENT -- the worn item id is not the one the plan placed in this slot"
+                }
+                // Same item id, wrong arts row. Either the equip took another copy of this
+                // armament (copies differing only by ash share an item id), or the armament does
+                // not accept ashes at all -- `EquipParamWeapon::canGemBeChanged` gates the read,
+                // so a gem mounted on such a weapon is stored and then ignored.
+                _ => "WRONG COPY OR NO GEM SLOT -- the right armament, carrying the wrong ash",
             };
             let worn_item =
                 worn_arm.map_or_else(|| "none".to_owned(), |arm| format!("0x{:08X}", arm.item_id));
