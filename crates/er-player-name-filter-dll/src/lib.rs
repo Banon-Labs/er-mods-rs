@@ -5,6 +5,16 @@
 //! overhead-name mode. The DLL rewrites the copied inline Steam display-name string when it matches
 //! a configured group.
 //!
+//! One hook is not enough, because the overhead tag is not always built from that string.
+//! `CS::CSFeManImp::UpdateEnemyTags` builds each overhead nameplate through
+//! `CS::GetPlayerChrName`, which branches on `CS::GameSettings::ShowPlayerNames`: with Steam
+//! names switched OFF it takes the name out of `PlayerGameData` (the CHARACTER name, which is
+//! also the string Seamless Co-op syncs), and only with them switched ON does it read the
+//! `steamName` the copy hook above rewrites. Measured live on 2026-08-22 with three remote
+//! players: both flags read 0, so every tag came from the character-name branch and the
+//! rewritten Steam names were never displayed. So this DLL hooks `GetPlayerChrName` as well and
+//! rewrites the produced `MenuString`, which covers both settings with one detour.
+//!
 //! Configuration lives beside the loaded DLL as `er_player_name_filter.toml` when the artifact is
 //! `er_player_name_filter.dll`. Groups use `player_name_filter.<group>.<field>` keys; each group has
 //! a replacement label plus any number of exact names and/or regexes. First matching group wins;
@@ -18,10 +28,40 @@ use regex::{Regex, RegexBuilder};
 
 const DLL_MAIN_SUCCESS: i32 = 1;
 const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA: usize = 0x023f1bf0;
+/// `CS::GetPlayerChrName(MenuString *out, PlayerIns *player, char decorate)` -- the single
+/// producer of a player's displayed name, reached from `CSFeManImp::UpdateEnemyTags` via
+/// `GetChrName`. NPCs leave through `MenuString::NpcName` before either name branch.
+const GET_PLAYER_CHR_NAME_RVA: usize = 0x0075f800;
+/// `CS::PlayerIns::GetSessionManagerPlayerEntry` @0x140657b20 is `mov rax, [rcx+0x6b8]; ret`,
+/// so the entry is read inline rather than called.
+const PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET: usize = 0x6b8;
+/// `DLTX::DLString<wchar_t>::FromU16Array(DLString *out, const wchar_t *text, DLAllocator *)`.
+const DL_STRING_FROM_U16_ARRAY_RVA: usize = 0x0011a360;
+/// `DLTX::DLString<wchar_t>::Copy(DLString *dst, const DLString *src)`, used by
+/// `GetPlayerChrName` itself to fill its out-parameter.
+const DL_STRING_COPY_RVA: usize = 0x00117910;
+/// The `GLOBAL_MenuHeapAllocator` pointer `GetPlayerChrName` passes to `FromU16Array`.
+const MENU_HEAP_ALLOCATOR_POINTER_RVA: usize = er_game_base::rva::GLOBAL_MENU_HEAP_ALLOCATOR_RVA;
+/// `DLAllocator::Deallocate` slot, from the `call *0x68(%rax)` the game emits when releasing a
+/// heap-backed `DLString`.
+const DL_ALLOCATOR_DEALLOCATE_VTABLE_OFFSET: usize = 0x68;
+/// A `DLString<wchar_t>` stores up to this many text units inline; above it the union holds a
+/// heap pointer the allocator owns.
+const DL_STRING_IN_PLACE_CAPACITY: usize = 7;
+/// A displayed name longer than this is treated as a garbage read rather than a name.
+const DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS: usize = 512;
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 const STEAM_NAME_UTF16_CAPACITY: usize = 64;
 const STEAM_NAME_UTF16_MAX_TEXT_UNITS: usize = STEAM_NAME_UTF16_CAPACITY - 1;
 const FILTER_REPLACEMENT_LOG_LIMIT: u64 = 16;
+/// The chr-name hook gets its own budget. Sharing one counter with the Copy hook made a live run
+/// unreadable on 2026-08-22: Copy spent all 16 lines before a single tag rendered, so "the hook
+/// never fired" and "the hook fired but logging was capped" produced an identical empty log.
+const CHR_NAME_REPLACEMENT_LOG_LIMIT: u64 = 16;
+/// The first calls into the chr-name hook are logged with their OUTCOME, including the ones that
+/// change nothing. Without this a run cannot distinguish "this function is not on the path for
+/// these players" from "it is on the path and declined to match".
+const CHR_NAME_CALL_LOG_LIMIT: u64 = 24;
 const LOG_FILE_NAME: &str = "er-player-name-filter.log";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -456,9 +496,136 @@ fn write_inline_steam_name(name: &mut RawDlInplaceUtf16String64, replacement: &s
     name.base.flags = 0;
 }
 
+/// `DLTX::DLString<wchar_t>`: 48 bytes, the union holding either eight inline text units or a
+/// pointer to an allocator-owned buffer. Which one is live is decided by `capacity`, exactly as
+/// the game decides it -- `7 < capacity` means heap.
+#[repr(C)]
+struct RawDlStringWide {
+    allocator: *mut RawDlAllocator,
+    string: RawDlStringWideUnion,
+    length: usize,
+    capacity: usize,
+    encoding_type: u8,
+    _pad: [u8; 7],
+}
+
+#[repr(C)]
+union RawDlStringWideUnion {
+    in_place: [u16; 8],
+    pointer: *mut u16,
+}
+
+/// `CS::MenuString`: a shortcut `rawString` consulted first by some consumers, and the owned
+/// `DLString` every other consumer reads. `GetPlayerChrName` always leaves `rawString` null and
+/// puts the name in the `DLString`, so a rewrite must do the same.
+#[repr(C)]
+struct RawMenuString {
+    raw_string: *mut u16,
+    dl_string: RawDlStringWide,
+}
+
+#[repr(C)]
+struct RawDlAllocator {
+    vftable: *const usize,
+}
+
+type DlStringFromU16ArrayFn =
+    unsafe extern "system" fn(*mut RawDlStringWide, *const u16, *mut RawDlAllocator);
+type DlStringCopyFn = unsafe extern "system" fn(*mut RawDlStringWide, *const RawDlStringWide);
+type DlAllocatorDeallocateFn =
+    unsafe extern "system" fn(*mut RawDlAllocator, *mut core::ffi::c_void);
+
+/// Where a `DLString`'s text units actually live, or `None` when the header does not describe a
+/// string this code is willing to touch.
+///
+/// # Safety
+///
+/// `string` must point at a live `DLString<wchar_t>`.
+unsafe fn dl_string_text_units(string: &RawDlStringWide) -> Option<*const u16> {
+    if string.length > string.capacity || string.length > DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS {
+        return None;
+    }
+    let pointer = if string.capacity > DL_STRING_IN_PLACE_CAPACITY {
+        unsafe { string.string.pointer.cast_const() }
+    } else {
+        unsafe { string.string.in_place.as_ptr() }
+    };
+    if pointer.is_null() {
+        return None;
+    }
+    Some(pointer)
+}
+
+/// # Safety
+///
+/// `menu_string` must point at a live `CS::MenuString`.
+unsafe fn read_menu_string(menu_string: &RawMenuString) -> Option<String> {
+    if !menu_string.raw_string.is_null() {
+        let mut units = Vec::new();
+        for index in 0..DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS {
+            let unit = unsafe { *menu_string.raw_string.add(index) };
+            if unit == 0 {
+                return String::from_utf16(&units).ok();
+            }
+            units.push(unit);
+        }
+        return None;
+    }
+    let pointer = unsafe { dl_string_text_units(&menu_string.dl_string) }?;
+    let units = unsafe { std::slice::from_raw_parts(pointer, menu_string.dl_string.length) };
+    String::from_utf16(units).ok()
+}
+
+/// Overwrite a `DLString`'s existing buffer when the replacement fits in the capacity the game
+/// already paid for. Returns false when it does not fit and the caller must go through the
+/// allocator instead.
+///
+/// # Safety
+///
+/// `string` must point at a live `DLString<wchar_t>` and `units` must be NUL-terminated.
+unsafe fn overwrite_dl_string_in_place(string: &mut RawDlStringWide, units: &[u16]) -> bool {
+    let text_units = units.len().saturating_sub(1);
+    if text_units > string.capacity {
+        return false;
+    }
+    let destination = if string.capacity > DL_STRING_IN_PLACE_CAPACITY {
+        unsafe { string.string.pointer }
+    } else {
+        unsafe { string.string.in_place.as_mut_ptr() }
+    };
+    if destination.is_null() {
+        return false;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(units.as_ptr(), destination, units.len()) };
+    string.length = text_units;
+    true
+}
+
+/// Release whatever buffer a `DLString` owns and leave it empty, the same teardown the game
+/// emits before it reuses one (`7 < capacity` -> `Deallocate`, then reset to the inline form).
+///
+/// # Safety
+///
+/// `string` must point at a live `DLString<wchar_t>` whose allocator is still valid.
+unsafe fn release_dl_string(string: &mut RawDlStringWide) {
+    if string.capacity > DL_STRING_IN_PLACE_CAPACITY && !string.allocator.is_null() {
+        let vftable = unsafe { (*string.allocator).vftable };
+        if !vftable.is_null() {
+            let slot = unsafe { vftable.byte_add(DL_ALLOCATOR_DEALLOCATE_VTABLE_OFFSET) };
+            let deallocate: DlAllocatorDeallocateFn = unsafe { std::mem::transmute(*slot) };
+            let buffer = unsafe { string.string.pointer };
+            unsafe { deallocate(string.allocator, buffer.cast()) };
+        }
+    }
+    string.string = RawDlStringWideUnion { in_place: [0; 8] };
+    string.length = 0;
+    string.capacity = DL_STRING_IN_PLACE_CAPACITY;
+}
+
 #[cfg(windows)]
 mod windows_runtime {
     use std::{
+        collections::HashMap,
         ffi::c_void,
         fmt,
         path::{Path, PathBuf},
@@ -475,21 +642,36 @@ mod windows_runtime {
     use er_hook::UnionFn;
 
     use super::{
-        CompiledNameFilter, FILTER_REPLACEMENT_LOG_LIMIT, GroupNumberAssignments, LOG_FILE_NAME,
-        NameFilterRuntimeConfig, PlayerNameIdentity, RawSessionManagerPlayerEntryBase,
+        CHR_NAME_CALL_LOG_LIMIT, CHR_NAME_REPLACEMENT_LOG_LIMIT, CompiledNameFilter,
+        DL_STRING_COPY_RVA, DL_STRING_FROM_U16_ARRAY_RVA, FILTER_REPLACEMENT_LOG_LIMIT,
+        GET_PLAYER_CHR_NAME_PROLOGUE, GET_PLAYER_CHR_NAME_RVA, GroupNumberAssignments,
+        LOG_FILE_NAME, MENU_HEAP_ALLOCATOR_POINTER_RVA, NameFilterRuntimeConfig,
+        PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET, PlayerNameIdentity, RawDlAllocator,
+        RawDlStringWide, RawMenuString, RawSessionManagerPlayerEntryBase,
         SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
         SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA, config_path_for_module, numbered_replacement,
-        parse_runtime_config, read_inline_steam_name, write_inline_steam_name,
+        overwrite_dl_string_in_place, parse_runtime_config, read_inline_steam_name,
+        read_menu_string, release_dl_string, write_inline_steam_name,
     };
 
     const DLL_PROCESS_ATTACH: u32 = 1;
     const ORIGINAL_UNSET: usize = 0;
+    /// Big enough for the longest prologue this DLL byte-checks.
+    const MAX_PROLOGUE_BYTES: usize = 16;
 
     static START: Once = Once::new();
     static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
     static SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_ORIG: AtomicUsize =
         AtomicUsize::new(ORIGINAL_UNSET);
+    static GET_PLAYER_CHR_NAME_ORIG: AtomicUsize = AtomicUsize::new(ORIGINAL_UNSET);
+    /// Replacement labels built once through the game's own allocator and then kept for the
+    /// life of the process. `UpdateEnemyTags` runs every frame, so allocating and freeing a
+    /// fresh source string per tag per frame would be pure churn; there is one entry per
+    /// distinct label, which is bounded by the configured groups and the players in session.
+    static REPLACEMENT_DL_STRINGS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
     static PLAYER_NAME_FILTER_REPLACEMENTS: AtomicU64 = AtomicU64::new(0);
+    static CHR_NAME_REPLACEMENTS: AtomicU64 = AtomicU64::new(0);
+    static CHR_NAME_CALLS: AtomicU64 = AtomicU64::new(0);
     static PLAYER_NAME_FILTER: OnceLock<CompiledNameFilter> = OnceLock::new();
     static PLAYER_NAME_GROUP_NUMBERS: OnceLock<Mutex<GroupNumberAssignments>> = OnceLock::new();
 
@@ -598,39 +780,60 @@ mod windows_runtime {
     }
 
     fn install_hook(base: usize, group_count: usize) {
-        let target = base + SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA;
-        if !prologue_matches(target) {
+        log_message(format_args!(
+            "install: {group_count} configured group(s), first match wins, per-group numbering enabled"
+        ));
+        install_one(
+            "SessionManagerPlayerEntryBase::Copy",
+            base + SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
+            SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
+            &SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
+            session_manager_player_entry_base_copy_hook as UnionFn,
+            &SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_ORIG,
+        );
+        install_one(
+            "GetPlayerChrName",
+            base + GET_PLAYER_CHR_NAME_RVA,
+            GET_PLAYER_CHR_NAME_RVA,
+            &GET_PLAYER_CHR_NAME_PROLOGUE,
+            get_player_chr_name_hook as UnionFn,
+            &GET_PLAYER_CHR_NAME_ORIG,
+        );
+    }
+
+    fn install_one(
+        label: &str,
+        target: usize,
+        rva: usize,
+        prologue: &[u8],
+        handler: UnionFn,
+        original: &'static AtomicUsize,
+    ) {
+        if !prologue_matches(label, target, prologue) {
             return;
         }
-        let handler = session_manager_player_entry_base_copy_hook as UnionFn;
-        match unsafe {
-            er_hook::register_union_hook(
-                target,
-                handler,
-                &SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_ORIG,
-            )
-        } {
+        match unsafe { er_hook::register_union_hook(target, handler, original) } {
             Ok(()) => log_message(format_args!(
-                "install: hooked SessionManagerPlayerEntryBase::Copy @0x{target:x} (rva 0x{SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA:x}); {group_count} configured group(s), first match wins, per-group numbering enabled"
+                "install: hooked {label} @0x{target:x} (rva 0x{rva:x})"
             )),
             Err(status) => log_message(format_args!(
-                "install: register_union_hook SessionManagerPlayerEntryBase::Copy @0x{target:x} failed: {status:?}"
+                "install: register_union_hook {label} @0x{target:x} failed: {status:?}"
             )),
         }
     }
 
-    fn prologue_matches(target: usize) -> bool {
-        let mut actual = [0_u8; SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE.len()];
-        if !unsafe { read_bytes(target, &mut actual) } {
+    fn prologue_matches(label: &str, target: usize, prologue: &[u8]) -> bool {
+        let mut actual = [0_u8; MAX_PROLOGUE_BYTES];
+        let actual = &mut actual[..prologue.len()];
+        if !unsafe { read_bytes(target, actual) } {
             log_message(format_args!(
-                "DISARMED SessionManagerPlayerEntryBase::Copy @0x{target:x}: prologue unreadable"
+                "DISARMED {label} @0x{target:x}: prologue unreadable"
             ));
             return false;
         }
-        if actual != SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE {
+        if actual != prologue {
             log_message(format_args!(
-                "DISARMED SessionManagerPlayerEntryBase::Copy @0x{target:x}: prologue mismatch (got {actual:02x?}, want {:02x?}) -- either this is not Elden Ring 1.16.2 or the entry is already detoured",
-                SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
+                "DISARMED {label} @0x{target:x}: prologue mismatch (got {actual:02x?}, want {prologue:02x?}) -- either this is not Elden Ring 1.16.2 or the entry is already detoured"
             ));
             return false;
         }
@@ -687,6 +890,151 @@ mod windows_runtime {
                 entry.steam_id, group_id, ordinal, name, numbered
             ));
         }
+    }
+
+    /// `CS::GetPlayerChrName(MenuString *out, PlayerIns *player, char decorate)`.
+    ///
+    /// The original runs first and produces the name the game would have drawn -- character
+    /// name or Steam name, whichever the player's settings select -- and the match then runs
+    /// against that produced string, so one detour covers both branches.
+    unsafe extern "system" fn get_player_chr_name_hook(
+        out: usize,
+        player: usize,
+        decorate: usize,
+        unused_d: usize,
+    ) -> usize {
+        let original = GET_PLAYER_CHR_NAME_ORIG.load(Ordering::Acquire);
+        let result = if original == ORIGINAL_UNSET {
+            out
+        } else {
+            let original_fn: UnionFn = unsafe { std::mem::transmute(original) };
+            unsafe { original_fn(out, player, decorate, unused_d) }
+        };
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if result != 0 && player != 0 {
+                unsafe { apply_chr_name_filter(&mut *(result as *mut RawMenuString), player) };
+            }
+        }));
+        result
+    }
+
+    /// # Safety
+    ///
+    /// `menu_string` must be the `MenuString` `GetPlayerChrName` just filled, and `player` the
+    /// `PlayerIns` it was asked about.
+    unsafe fn apply_chr_name_filter(menu_string: &mut RawMenuString, player: usize) {
+        let call = CHR_NAME_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+        let trace = call <= CHR_NAME_CALL_LOG_LIMIT;
+        macro_rules! bail {
+            ($($reason:tt)*) => {{
+                if trace {
+                    log_message(format_args!(
+                        "chr-name call={call} skipped: {}",
+                        format_args!($($reason)*)
+                    ));
+                }
+                return;
+            }};
+        }
+        let Some(filter) = PLAYER_NAME_FILTER.get() else {
+            bail!("filter not built yet");
+        };
+        let base = GAME_BASE.load(Ordering::SeqCst);
+        if base == 0 {
+            bail!("game base unknown");
+        }
+        let entry =
+            unsafe { *((player + PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET) as *const usize) };
+        if entry == 0 {
+            bail!("PlayerIns 0x{player:x} has no session-manager entry");
+        }
+        // An NPC reaches this function too, but leaves through MenuString::NpcName without a
+        // session entry carrying a Steam ID, so this is also the NPC guard.
+        let steam_id = unsafe { (*(entry as *const RawSessionManagerPlayerEntryBase)).steam_id };
+        if steam_id == 0 {
+            bail!("entry 0x{entry:x} has steam_id=0");
+        }
+        let Some(name) = (unsafe { read_menu_string(menu_string) }) else {
+            bail!("steam_id={steam_id} produced an unreadable MenuString");
+        };
+        let Some((group_id, replacement)) = filter.replacement_for(&name) else {
+            bail!("steam_id={steam_id} name '{name}' matched no group");
+        };
+        let identity = PlayerNameIdentity::for_entry(steam_id, entry);
+        let ordinal = {
+            let assignments = PLAYER_NAME_GROUP_NUMBERS.get_or_init(Mutex::default);
+            let mut assignments = assignments
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            assignments.ordinal_for(identity, group_id)
+        };
+        let numbered = numbered_replacement(replacement, ordinal);
+        if name == numbered {
+            // Already ours -- the Copy hook renamed the Steam name this tag was built from.
+            bail!("steam_id={steam_id} already reads '{numbered}'");
+        }
+        if !unsafe { write_menu_string(menu_string, &numbered, base) } {
+            bail!("steam_id={steam_id} MenuString write failed for '{numbered}'");
+        }
+        let n = CHR_NAME_REPLACEMENTS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= CHR_NAME_REPLACEMENT_LOG_LIMIT {
+            log_message(format_args!(
+                "replaced-chr-name steam_id={steam_id} group='{group_id}' ordinal={ordinal} original='{name}' replacement='{numbered}' count={n}"
+            ));
+        }
+    }
+
+    /// Put `text` into a `MenuString`, leaving it in the shape `GetPlayerChrName` itself leaves:
+    /// `rawString` null, the text owned by the `DLString`.
+    ///
+    /// # Safety
+    ///
+    /// `menu_string` must point at a live `CS::MenuString` and `base` at the game module.
+    unsafe fn write_menu_string(menu_string: &mut RawMenuString, text: &str, base: usize) -> bool {
+        let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        if unsafe { overwrite_dl_string_in_place(&mut menu_string.dl_string, &units) } {
+            menu_string.raw_string = std::ptr::null_mut();
+            return true;
+        }
+        let Some(source) = (unsafe { replacement_dl_string(text, &units, base) }) else {
+            return false;
+        };
+        unsafe { release_dl_string(&mut menu_string.dl_string) };
+        let copy: super::DlStringCopyFn = unsafe { std::mem::transmute(base + DL_STRING_COPY_RVA) };
+        unsafe { copy(&mut menu_string.dl_string, source) };
+        menu_string.raw_string = std::ptr::null_mut();
+        true
+    }
+
+    /// A `DLString` holding `text`, built once through `GLOBAL_MenuHeapAllocator` and then kept.
+    ///
+    /// # Safety
+    ///
+    /// `base` must point at the loaded game module.
+    unsafe fn replacement_dl_string(
+        text: &str,
+        units: &[u16],
+        base: usize,
+    ) -> Option<*const RawDlStringWide> {
+        let cache = REPLACEMENT_DL_STRINGS.get_or_init(Mutex::default);
+        let mut cache = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Some(&address) = cache.get(text) {
+            return Some(address as *const RawDlStringWide);
+        }
+        let allocator = unsafe { *((base + MENU_HEAP_ALLOCATOR_POINTER_RVA) as *const usize) }
+            as *mut RawDlAllocator;
+        if allocator.is_null() {
+            log_message(format_args!(
+                "chr-name: GLOBAL_MenuHeapAllocator is null; cannot build a replacement string"
+            ));
+            return None;
+        }
+        let built: *mut RawDlStringWide = Box::into_raw(Box::new(unsafe { std::mem::zeroed() }));
+        let from_u16_array: super::DlStringFromU16ArrayFn =
+            unsafe { std::mem::transmute(base + DL_STRING_FROM_U16_ARRAY_RVA) };
+        unsafe { from_u16_array(built, units.as_ptr(), allocator) };
+        cache.insert(text.to_owned(), built as usize);
+        Some(built)
     }
 
     fn module_path(module: *mut c_void) -> Result<PathBuf, String> {

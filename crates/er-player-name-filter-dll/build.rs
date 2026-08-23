@@ -3,6 +3,14 @@ use std::{env, fmt::Write as _, fs, path::PathBuf};
 use iced_x86::code_asm::*;
 
 const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA: u64 = 0x1423f1bf0;
+const GET_PLAYER_CHR_NAME_VA: u64 = 0x14075f800;
+
+/// The bytes `scripts/disas-deobf.sh 0x14075f800` prints for the entry of
+/// `CS::GetPlayerChrName` in the 1.16.2 image. The assembler below must reproduce these
+/// exactly -- `mov rax, rsp` has two encodings (`48 8b c4` and `48 89 e0`) and only the
+/// first is what the game ships, so a silent encoding choice would build a prologue that
+/// never matches and a hook that always disarms itself.
+const GET_PLAYER_CHR_NAME_PROLOGUE_BYTES: [u8; 7] = [0x48, 0x8b, 0xc4, 0x55, 0x57, 0x41, 0x56];
 
 macro_rules! session_manager_player_entry_base_copy_prologue {
     ($asm:ident) => {{
@@ -18,6 +26,25 @@ fn assemble_session_manager_player_entry_base_copy_prologue() -> Result<Vec<u8>,
     let mut asm = CodeAssembler::new(64)?;
     session_manager_player_entry_base_copy_prologue!(asm)?;
     asm.assemble(SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA)
+}
+
+macro_rules! get_player_chr_name_prologue {
+    ($asm:ident) => {{
+        // `mov rax, rsp`, in the game's encoding. iced picks the other legal encoding for
+        // `$asm.mov(rax, rsp)` -- 48 89 e0 rather than the 48 8b c4 the game ships -- and a
+        // prologue that differs by one byte is a hook that disarms itself on every launch.
+        $asm.db(&[0x48, 0x8b, 0xc4])?;
+        $asm.push(rbp)?;
+        $asm.push(rdi)?;
+        $asm.push(r14)?;
+        Ok::<(), iced_x86::IcedError>(())
+    }};
+}
+
+fn assemble_get_player_chr_name_prologue() -> Result<Vec<u8>, iced_x86::IcedError> {
+    let mut asm = CodeAssembler::new(64)?;
+    get_player_chr_name_prologue!(asm)?;
+    asm.assemble(GET_PLAYER_CHR_NAME_VA)
 }
 
 fn generated_prologue_const(name: &str, bytes: &[u8]) -> String {
@@ -47,6 +74,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = assemble_session_manager_player_entry_base_copy_prologue()?;
     let generated =
         generated_prologue_const("SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE", &bytes);
+    let chr_name_bytes = assemble_get_player_chr_name_prologue()?;
+    assert_eq!(
+        chr_name_bytes.as_slice(),
+        GET_PLAYER_CHR_NAME_PROLOGUE_BYTES.as_slice(),
+        "iced assembled a different encoding than the one the game ships at 0x{GET_PLAYER_CHR_NAME_VA:x}"
+    );
+    let generated = format!(
+        "{generated}{}",
+        generated_prologue_const("GET_PLAYER_CHR_NAME_PROLOGUE", &chr_name_bytes)
+    );
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR for build.rs"));
     fs::write(out_dir.join("generated_prologues.rs"), generated)?;
     Ok(())
