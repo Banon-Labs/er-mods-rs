@@ -266,6 +266,9 @@ fn release_build_url_keyboard_on_window_close(window: usize) {
     if job == 0 {
         return;
     }
+    // The LATCH is released; OWNERSHIP is not. This job still carries the empty `std::function` we
+    // handed the engine, so the detours must keep claiming it until it actually finishes.
+    remember_released_keyboard_job(job, KeyboardPurpose::BuildUrl);
     let mut slot = keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -300,9 +303,67 @@ fn keyboard_owner_of(job: usize) -> Option<KeyboardPurpose> {
     if job == 0 {
         return None;
     }
-    [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl]
+    if let Some(purpose) = [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl]
         .into_iter()
         .find(|purpose| keyboard_active_job_slot(*purpose).load(Ordering::SeqCst) == job)
+    {
+        return Some(purpose);
+    }
+    // A job whose LATCH we already released is still OURS, and the detours must still claim it.
+    //
+    // This is what crashed the game (`dll:a71aa552`, 2026-08-23, `0xe06d7363` ->
+    // `ThrowBadFunctionCallException` from inside `FUN_14081d220+0xf8`, then
+    // `NtTerminateProcess(0xc0000005)`). The job is constructed with an INTENTIONALLY EMPTY
+    // `std::function` as its completion callback, which is only safe because the `0x81d220` detour
+    // recognises the job and never lets the native side invoke it. The abandoned-latch watchdog
+    // cleared the active-job slot while the job was still alive, so when that job later terminated
+    // `keyboard_owner_of` no longer recognised it, the detour forwarded to the original, and the
+    // engine called an empty `std::function` -- `std::bad_function_call`, straight through the
+    // game's stack.
+    //
+    // Ownership therefore outlives the latch: releasing the latch is about the ROW being pressable
+    // again, and says nothing about who is responsible for the job. Only the job actually finishing
+    // ends that responsibility.
+    RELEASED_KEYBOARD_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find_map(|(released, purpose)| (*released == job).then_some(*purpose))
+}
+
+/// Jobs whose latch was released early but which are still alive, and still ours to intercept.
+///
+/// Bounded: a released job is dropped as soon as its detour fires, and the list is cleared whenever
+/// an editor resets. The cap is a backstop so a pathological session cannot grow it without limit --
+/// dropping the OLDEST is right, because the newest released job is the one most likely still alive.
+static RELEASED_KEYBOARD_JOBS: Mutex<Vec<(usize, KeyboardPurpose)>> = Mutex::new(Vec::new());
+
+/// Most recently released jobs kept claimable at once.
+const RELEASED_KEYBOARD_JOB_LIMIT: usize = 8;
+
+/// Remember a job whose latch was released while the job itself may still be running.
+fn remember_released_keyboard_job(job: usize, purpose: KeyboardPurpose) {
+    if job == 0 {
+        return;
+    }
+    let mut jobs = RELEASED_KEYBOARD_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if jobs.iter().any(|(known, _)| *known == job) {
+        return;
+    }
+    if jobs.len() >= RELEASED_KEYBOARD_JOB_LIMIT {
+        jobs.remove(0);
+    }
+    jobs.push((job, purpose));
+}
+
+/// Forget a released job once its detour has fired and the native side is done with it.
+fn forget_released_keyboard_job(job: usize) {
+    RELEASED_KEYBOARD_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retain(|(known, _)| *known != job);
 }
 
 /// Log tag per purpose, so one debug log distinguishes the two editors.
@@ -604,6 +665,7 @@ unsafe extern "system" fn software_keyboard_result_gate_hook(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathEditorOutcome::Cancelled);
         keyboard_active_job_slot(purpose).store(0, Ordering::SeqCst);
+        forget_released_keyboard_job(job);
         append_autoload_debug(format_args!(
             "{}: native SoftwareKeyboard cancelled job=0x{job:x}; nothing is applied",
             keyboard_tag(purpose)
@@ -653,6 +715,9 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(outcome);
     keyboard_active_job_slot(purpose).store(0, Ordering::SeqCst);
+    // The job is finished, so our responsibility for its empty callback ends here and the pointer
+    // must not linger in the released list, where a recycled address would be claimed by mistake.
+    forget_released_keyboard_job(job);
 
     // Exact native d220 tail after callback return: SetResult(Success, 0), then restore FD4Time's
     // two vtables in order. This skips only the null job+0x1a0 callback invocation.
@@ -1351,6 +1416,65 @@ mod tests {
         assert!(
             build_url_menu_pump_tick() > after,
             "and keep advancing, or an abandoned latch is never noticed"
+        );
+    }
+    /// RELEASING THE LATCH MUST NOT DISOWN THE JOB -- THAT CRASHED THE GAME.
+    ///
+    /// `dll:a71aa552`, 2026-08-23: `0xe06d7363` -> `ThrowBadFunctionCallException` inside
+    /// `FUN_14081d220+0xf8`, then `NtTerminateProcess(0xc0000005)`. The job carries an
+    /// INTENTIONALLY EMPTY `std::function`, safe only because our detour claims the job and never
+    /// lets the engine invoke it. The abandoned-latch watchdog cleared the active-job slot while
+    /// the job was still alive, `keyboard_owner_of` stopped recognising it, the detour forwarded,
+    /// and the engine called an empty function.
+    #[test]
+    fn a_released_job_is_still_ours_to_intercept() {
+        let job = 0x5150_0000;
+        RELEASED_KEYBOARD_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+        assert!(
+            keyboard_owner_of(job).is_none(),
+            "a job nobody created is not ours"
+        );
+
+        remember_released_keyboard_job(job, KeyboardPurpose::BuildUrl);
+        assert_eq!(
+            keyboard_owner_of(job),
+            Some(KeyboardPurpose::BuildUrl),
+            "the detour MUST still claim it, or the engine reaches the empty std::function"
+        );
+
+        forget_released_keyboard_job(job);
+        assert!(
+            keyboard_owner_of(job).is_none(),
+            "once the job has finished, a recycled address must not be claimed by mistake"
+        );
+    }
+
+    /// The released list is a safety net, not a leak: it cannot grow without bound, and it keeps
+    /// the NEWEST entries, which are the ones most likely still alive.
+    #[test]
+    fn the_released_job_list_is_bounded_and_keeps_the_newest() {
+        RELEASED_KEYBOARD_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        for index in 1..=(RELEASED_KEYBOARD_JOB_LIMIT + 4) {
+            remember_released_keyboard_job(0x1000 * index, KeyboardPurpose::BuildUrl);
+        }
+        let jobs = RELEASED_KEYBOARD_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(jobs.len(), RELEASED_KEYBOARD_JOB_LIMIT);
+        assert_eq!(
+            jobs.last().map(|(job, _)| *job),
+            Some(0x1000 * (RELEASED_KEYBOARD_JOB_LIMIT + 4))
+        );
+        assert!(
+            !jobs.iter().any(|(job, _)| *job == 0x1000),
+            "the oldest entry is the one dropped"
         );
     }
 }

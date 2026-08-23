@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 52,446 |
+| all `experiments/**` | 80 | 52,570 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -158,7 +158,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 1,227 | System>Quit destination commit family | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,894 | native picker, destination, and row-builder families | R17-R19 |
-| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,356 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
+| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,480 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,226 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,649 | System>Quit dialog implementation and picker adapter | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 681 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
