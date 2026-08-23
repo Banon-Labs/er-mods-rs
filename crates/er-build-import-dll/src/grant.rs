@@ -6,7 +6,7 @@
 //! found by signature scan. The game already exports the operation:
 //! `CS::EquipGameData::AddInventoryEquipByItemId` is what the engine itself uses, it resolves
 //! the gaitem handle through `CSGaitemImp`, and it takes the same category-tagged item id the
-//! catalogue produces. Calling it means the engine owns the mutation, not us.
+//! catalog produces. Calling it means the engine owns the mutation, not us.
 //!
 //! # Why this runs on the game thread
 //!

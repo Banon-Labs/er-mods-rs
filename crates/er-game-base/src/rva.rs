@@ -132,6 +132,25 @@ pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
 pub const GET_EQUIP_INVENTORY_DATA_RVA: usize = 0x247b30;
 /// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId) -> int`.
 pub const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
+// ---- the message repository singleton ----
+//
+// Moved here for the same reason as the inventory functions above: two crates now read it.
+// `er-invasion-warp-dll` resolves a `PlaceName`, and `er-build-import-dll` builds its whole
+// name -> item-id catalog out of the game's own strings.
+//
+// IT IS READ FROM THE GAME'S OWN GLOBAL, NOT from a typed upstream singleton. `fromsoftware-rs`
+// at the revision CI pins (`FROMSOFTWARE_RS_REV` in .github/workflows/check.yml) has no
+// `MsgRepositoryImp`; only a local fork does. Depending on that type builds on a developer's
+// machine and fails in CI with `unresolved import`, which is exactly what happened. Reading the
+// global keeps the address in this repo, where `scripts/check-rva-alias-drift.py` can see it.
+
+/// `GLOBAL_MsgRepository` -- the `CS::MsgRepositoryImp*` singleton slot, read from
+/// `MOV RCX, qword ptr [0x143d7d4f8]` inside `MsgRepository::GetAndFormat`.
+///
+/// The slot is null until the repository is constructed, so every caller must treat a zero as
+/// "not up yet" rather than dereferencing it -- the engine itself DLPanics on that path.
+pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d7_d4f8;
+
 /// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId) -> int`.
 ///
 /// Returns the index the equip path needs; negative means the item is not held.

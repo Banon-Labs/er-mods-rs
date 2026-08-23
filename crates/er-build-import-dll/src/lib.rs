@@ -6,7 +6,7 @@
 //!
 //! * a **fetch worker** does the blocking HTTPS GET and parses the payload. It touches no
 //!   game state at all, which is why it may block.
-//! * a **`CSTaskImp` FrameBegin task** does everything else. Building the catalogue reads the
+//! * a **`CSTaskImp` FrameBegin task** does everything else. Building the catalog reads the
 //!   param tables and the message repository; granting mutates the inventory and the
 //!   `CSGaitemImp` singleton. Both belong on the game thread.
 //!
@@ -21,7 +21,7 @@
 
 #![cfg(windows)]
 
-pub mod catalogue;
+pub mod catalog;
 pub mod character;
 pub mod equip_native;
 pub mod grant;
@@ -183,7 +183,7 @@ unsafe fn import_tick() {
     if IMPORTED.load(Ordering::Relaxed) {
         return;
     }
-    if !catalogue::params_ready() {
+    if !catalog::params_ready() {
         return;
     }
     // Safety: game thread; the helper is fault-checked and returns None at the title screen.
@@ -197,15 +197,15 @@ unsafe fn import_tick() {
     IMPORTED.store(true, Ordering::Relaxed);
 
     let module_base = module_base();
-    let Some(msg) = catalogue::msg_repository() else {
-        log_line("[build-import] message repository unavailable -- no catalogue");
+    let Some(msg) = catalog::msg_repository() else {
+        log_line("[build-import] message repository unavailable -- no catalog");
         return;
     };
 
     // Safety: params_ready() proved the tables are streamed and `msg` came from the singleton.
-    let (catalog, stats) = unsafe { catalogue::build_from_game(msg, module_base) };
+    let (catalog, stats) = unsafe { catalog::build_from_game(msg, module_base) };
     log_line(&format!(
-        "[build-import] catalogue: {} named, {} unnamed, {} goods rows are spells",
+        "[build-import] catalog: {} named, {} unnamed, {} goods rows are spells",
         stats.named, stats.unnamed, stats.spell_rows
     ));
 

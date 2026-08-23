@@ -1,4 +1,4 @@
-//! Building the item catalogue from the running game.
+//! Building the item catalog from the running game.
 //!
 //! The planner payload names items and gives no ids, so importing a build needs a
 //! name -> id map. The obvious source is the planner's own bundled database, but the
@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 use er_build_import::catalog::{Entry, Kind, MapCatalog};
 
 /// `MsgRepositoryImp::LookupEntry` returns a placeholder like `?GoodsName?` for a row that
-/// has no name. Those are misses, not items, and a catalogue that accepted them would
+/// has no name. Those are misses, not items, and a catalog that accepted them would
 /// happily resolve `"?GoodsName?"` to whichever row asked last.
 const PLACEHOLDER_PREFIX: char = '?';
 
@@ -83,7 +83,7 @@ struct Source {
 /// Every category the importer resolves.
 ///
 /// Ashes of war come from `SwordArtsParam`, NOT `EquipParamGem`. The distinction is the
-/// whole reason the first catalogue left ten of them unresolved: a gem is the *item* you
+/// whole reason the first catalog left ten of them unresolved: a gem is the *item* you
 /// pick up ("Ash of War: Bloodhound's Step"), while a build's `weaponArt` names the
 /// *skill* ("Bloodhound's Step"), and the two live in different tables under different
 /// name bundles. The planner agrees -- its ash ids are 80100, 401000, 505000, which are
@@ -134,11 +134,11 @@ const SOURCES: &[Source] = &[
 ///
 /// `GetGreatruneEnumByGoodsId` (0x140d39ab0) switches on exactly `0xbf..=0xc4` -- Godrick,
 /// Radahn, Morgott, Rykard, Mohg, Malenia -- and returns "none" for everything else. The goods
-/// table holds other rows with the same display names, so restricting the catalogue to this
+/// table holds other rows with the same display names, so restricting the catalog to this
 /// range is what makes the name lookup land on a rune the engine will actually equip.
 const GREAT_RUNE_ROWS: core::ops::RangeInclusive<u32> = 191..=196;
 
-/// What a catalogue build found, for the log.
+/// What a catalog build found, for the log.
 #[derive(Debug, Default)]
 pub struct BuildStats {
     /// Rows that produced a usable name.
@@ -257,7 +257,7 @@ fn spell_row_ids() -> BTreeSet<u32> {
     repo.rows::<Magic>().map(|(id, _)| id).collect()
 }
 
-/// Build the catalogue from the running game.
+/// Build the catalog from the running game.
 ///
 /// # Safety
 ///
@@ -293,7 +293,7 @@ pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, Bu
 ///
 /// `rows()` cannot answer this: `SoloParamRepository::get_param_file` does
 /// `holder.get_res_cap(0).expect(...)`, so asking a not-yet-loaded table for its rows
-/// PANICS rather than yielding nothing. That is what killed the first two catalogue runs.
+/// PANICS rather than yielding nothing. That is what killed the first two catalog runs.
 /// The res cap itself is an `Option`, so checking it is the non-destructive question.
 fn holder_ready<P: eldenring::cs::SoloParam>(repo: &eldenring::cs::SoloParamRepository) -> bool {
     repo.solo_param_holders
@@ -302,7 +302,7 @@ fn holder_ready<P: eldenring::cs::SoloParam>(repo: &eldenring::cs::SoloParamRepo
         .is_some()
 }
 
-/// Whether every table the catalogue reads is loaded.
+/// Whether every table the catalog reads is loaded.
 ///
 /// All of them, not just one: a partially-streamed repository would let the first category
 /// through and then panic on a later one, which is the same failure with a longer fuse.
@@ -325,13 +325,20 @@ pub fn params_ready() -> bool {
         && holder_ready::<Magic>(repo)
 }
 
-/// The live `MsgRepositoryImp*`, or `None` before it exists.
+/// The live `CS::MsgRepositoryImp*`, or `None` before it exists.
+///
+/// Read out of the game's own global rather than through a typed upstream singleton. There IS a
+/// `MsgRepositoryImp` in `fromsoftware-rs` -- but only in a local fork, not at the revision CI
+/// pins, so importing it compiles on one machine and fails everywhere else. The address lives in
+/// `er-game-base::rva` beside the other cross-crate ones.
+///
+/// A zero is "not constructed yet", not an error: the whole point of this being an `Option` is
+/// that the caller re-asks next frame instead of dereferencing a null the engine would DLPanic on.
 pub fn msg_repository() -> Option<usize> {
-    use eldenring::cs::MsgRepositoryImp;
-    use fromsoftware_shared::FromStatic;
-
-    MsgRepositoryImp::instance_ptr()
-        .ok()
-        .map(|ptr| ptr as usize)
-        .filter(|ptr| *ptr != 0)
+    let base = er_game_base::mem::game_module_base().ok()?;
+    // Safety: a fault-checked read of one pointer-sized slot in the loaded image.
+    let repository = unsafe {
+        er_game_base::mem::safe_read_usize(base + er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA)
+    }?;
+    (repository != 0).then_some(repository)
 }
