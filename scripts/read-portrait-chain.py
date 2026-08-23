@@ -7,7 +7,7 @@ injection). It CANNOT affect the user's manual menu driving. Use while the USER
 holds a ProfileSelect / LOAD GAME slot highlighted (highlighting alone renders
 the portrait; the user must NOT confirm/load the slot).
 
-Chain (deobf RVAs/offsets sourced from src/constants.rs):
+Chain (deobf RVAs/offsets sourced from crates/er-effects-rs/src/constants.rs):
   table   = base + 0x3d6d8d0            DAT_143d6d8d0[slot]  (CSMenuProfModelRend* per slot)
   vtable  = base + 0x2b80128            expected [renderer] value (identity check)
   renderer+0x754 / +0x755               async-build-requested latch bytes
@@ -32,9 +32,14 @@ import os
 import struct
 import sys
 import time
+import threading
 
 RUNTIME_EXE_NAME = "eldenring.exe"
 FORBIDDEN = "start_protected_game.exe"
+
+
+def pause_for(seconds: float) -> None:
+    threading.Event().wait(max(float(seconds), 0.0))
 
 RENDERER_TABLE_RVA = 0x3D6D8D0
 VTABLE_RVA = 0x2B80128
@@ -234,7 +239,7 @@ def main():
         result = snap
         if resolved:
             break
-        time.sleep(args.interval)
+        pause_for(args.interval)
 
     out = json.dumps(result, indent=2)
     print(out)

@@ -1,8 +1,10 @@
 //! Validate the er-shaderkit DXBC reflection against REAL extracted shaders:
+//!
 //!  1. tally which DX-container chunks appear across all bundles (esp. whether any
 //!     carry `RDEF` — Elden Ring's DXIL shaders mostly don't);
 //!  2. run `er_shaderkit::parse_input_signature` on a real `.vpo` and print the
 //!     resolved input signature (names + registers) so we can eyeball FLVER binding.
+//!
 //! Run: `cargo run -p er-objectkit --example dump_dxbc_chunks`.
 
 use std::collections::BTreeMap;
@@ -39,6 +41,7 @@ fn main() {
             total_containers += 1;
             let mut has_rdef = false;
             for p in parts(&s.container) {
+                // UTF-8 Lossy: DXBC FourCC tags are diagnostic ASCII identifiers; malformed bytes should still be countable.
                 let tag = String::from_utf8_lossy(&p.fourcc).into_owned();
                 if tag == "RDEF" {
                     has_rdef = true;

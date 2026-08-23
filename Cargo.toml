@@ -1,81 +1,93 @@
 [workspace]
 members = [
-    ".",
-    "crates/effects-data",
-    "crates/er-gfx",
-    "crates/er-safe-input",
-    "crates/er-save-loader",
-    "crates/er-tpf",
-    "crates/erpx-rs",
-    "crates/soulsformats",
-    # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
-    # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
-    # package) never cross-compiles them into the game DLL; built only when
-    # targeted explicitly (`cargo check -p er-shaderkit ...`).
-    "crates/er-shaderkit",
-    "crates/er-flver",
-    "crates/er-objectkit",
-    "tools/er-param-inspect",
-    "tools/bevy-shader-lab",
-    "tools/er-shaderlab",
-    "tools/er-shader-viewer",
+  "crates/er-effects-rs",
+  "crates/er-hook",
+  "crates/er-game-base",
+  "crates/er-boot-profiler",
+  "crates/er-telemetry",
+  "crates/er-title-flow",
+  "crates/er-telemetry-dll",
+  "crates/er-crash-logging",
+  "crates/er-crash-logging-dll",
+  "crates/er-reload-trace-dll",
+  "crates/er-input-harness-dll",
+  "crates/er-ags-stub",
+  "crates/er-inventory-sort-dll",
+  "crates/er-better-refills-dll",
+  "crates/er-armament-icons",
+  "crates/er-net-effects-dll",
+  "crates/er-player-name-filter-dll",
+  "crates/er-save-disable-dll",
+  "crates/er-save-suppress",
+  "crates/mushroom-man-runtime",
+  "crates/er-death-persist-dll",
+  "crates/effects-data",
+  "crates/er-gfx",
+  "crates/er-scaleform-hooks",
+  "crates/er-loading-bar",
+  "crates/er-d3d12-compositor",
+  "crates/er-loading-bar-dll",
+  "crates/er-loading-portrait",
+  "crates/er-loading-portrait-dll",
+  # Save-picker crate extraction (docs/plans/save-picker-crate-extraction.md).
+  # (A) the DLL-drawn boot picker + the shared row model + the OS-native dialog surface;
+  # (B) the customized System>Quit menu, which depends on (A) one way. The product links
+  # er-quit-menu into er_effects_rs.dll; er-quit-menu-dll is an optional harness only.
+  "crates/er-save-picker",
+  "crates/er-save-picker-dll",
+  "crates/er-save-redirect",
+  "crates/er-quit-menu",
+  "crates/er-quit-menu-dll",
+  # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
+  # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
+  # split as er-loading-portrait / er-loading-portrait-dll.
+  "crates/er-invasion-warp",
+  "crates/er-invasion-warp-dll",
+  # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
+  # no product dependency: every guard is a null-container intercept on a vanilla function.
+  "crates/er-seamless-bugfixes-dll",
+  "crates/er-safe-input",
+  "crates/er-save-loader",
+  "crates/er-tpf",
+  "crates/erpx-rs",
+  "crates/soulsformats",
+  # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
+  # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
+  # package) never cross-compiles them into the game DLL; built only when
+  # targeted explicitly (`cargo check -p er-shaderkit ...`).
+  "crates/er-shaderkit",
+  "crates/er-flver",
+  "crates/er-objectkit",
+  "tools/er-param-inspect",
+  "tools/bevy-shader-lab",
+  "tools/er-shaderlab",
+  "tools/er-shader-viewer",
 ]
 resolver = "2"
+default-members = ["crates/er-effects-rs"]
 
-[package]
-name = "er-effects-rs"
-version = "0.1.0"
-edition = "2024"
-publish = false
+# LINT PARITY WITH `../fromsoftware-rs` (2026-08-21).
+#
+# The user's requirement is that this workspace be AT LEAST as strict as the parent project.
+# Upstream has no `clippy.toml`, no `[lints]` table, and exactly one `#![allow]` in its whole
+# tree -- its entire strictness is `RUSTFLAGS=-Dwarnings` + `RUSTDOCFLAGS=-Dwarnings` around
+# `cargo clippy --all-targets --no-deps` in `.github/workflows/rust.yml`. So parity is "stock
+# lint set, denied", and this table is the declarative equivalent of those env vars.
+#
+# WHY BOTH ENTRIES, when `rust.warnings` already covers clippy lints under clippy:
+# a blanket `-Awarnings` in `.cargo/config.toml` DEFEATS `rust.warnings = "deny"` (same lint
+# group, and the config's flag is applied later) but does NOT defeat `clippy.all = "deny"`
+# (a named group beats the blanket allow). Measured 2026-08-21 across four configurations
+# with forced rebuilds. Keeping both means that if `-Awarnings` is ever reintroduced -- or
+# cargo-xwin re-propagates it, which it does -- the clippy half degrades gracefully instead
+# of silently switching every lint in the workspace off.
+#
+# `priority = -1` makes these groups apply BEFORE any single-lint entry, so a crate that is
+# not yet at parity can allow specific lints in its own `[lints]` table without abandoning
+# the deny. Every such allow must carry a `# DEBT:` comment and is enforced by
+# `scripts/check-lint-parity.py`.
+[workspace.lints.rust]
+warnings = { level = "deny", priority = -1 }
 
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-eldenring = { path = "../fromsoftware-rs/crates/eldenring" }
-er-effects-data = { path = "crates/effects-data" }
-er-save-loader = { path = "crates/er-save-loader" }
-er-safe-input = { path = "crates/er-safe-input" }
-# In-memory texture-payload builder: portrait pixels -> uncompressed R8G8B8A8 DDS -> TPF003 blob,
-# fed to the game's in-memory TPF factory to replace the now-loading background. Pure-Rust, std-only.
-er-tpf = { path = "crates/er-tpf" }
-# ERPX portrait-dump container (encode side): single source of truth for the debug RGBA dump format
-# the look-at proof writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
-erpx-rs = { path = "crates/erpx-rs", default-features = false }
-fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
-bitflags = "2"
-# In-process x86-64 decoding (instruction lengths, prologue/pattern validation).
-# Pure-Rust decoder used directly so the hand-rolled single-step/prologue logic in lib.rs
-# can decode instead of hard-coding byte lengths. Lean feature set: decoder only, no
-# formatters/encoder.
-iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder"] }
-# Boot profiler, Win32 process/window helpers, and MinHook target resolution.
-windows = { version = "0.62", features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-    "Win32_System_WindowsProgramming",
-    "Win32_System_Kernel",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_SystemInformation",
-    "Win32_Devices_HumanInterfaceDevice",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
-    "Win32_System_SystemServices",
-    # Hidden dummy window for the D3D12 Present-overlay swapchain: CreateSwapChainForComposition is
-    # "Not implemented" under vkd3d/Wine, so we need a real HWND via CreateSwapChainForHwnd, which pulls
-    # in WNDCLASSW's GDI handle types.
-    "Win32_Graphics_Gdi",
-    "Win32_UI_WindowsAndMessaging",
-    # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
-    "Win32_Security",
-    # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
-    # forge can display the real rendered character head instead of the placeholder checker.
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Direct3D",
-] }
-
-[build-dependencies]
-cc = "1.0"
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }

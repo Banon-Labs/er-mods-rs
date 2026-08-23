@@ -50,11 +50,13 @@ TARGET_AUTOLOAD_REQUEST = "autoload-request"
 TARGET_REQUEST_CONSUMPTION = "request-consumption"
 TARGET_PLAYER_LOAD = "player-load"
 TARGET_WORLD_STABLE = "world-stable"
+TARGET_LOADING_PORTRAIT_STOP = "loading-portrait-stop"
 READY_REASON = "game_man_telemetry_ready"
 COLD_CHAR_MOUNT_COMPLETE = "cold_char_mount_complete"
 COLD_CHAR_MOUNT_PHASE_DONE = 5  # cold_char_mount_drive MOUNT_PHASE PHASE_DONE, published as phase+1
 MODULE_BASE_READY = "runtime_module_base_observed"
 WORLD_STABLE = "world_stable"
+LOADING_PORTRAIT_STOPPED = "loading_portrait_stopped"
 RUNTIME_EXE_NAME = "eldenring.exe"
 WINDOW_WITHOUT_BOOTSTRAP = "window_without_bootstrap_marker"
 WINDOW_WITHOUT_TASK = "window_without_game_task_ready"
@@ -133,10 +135,16 @@ LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
 NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 NATIVE_CORRUPTED_SAVE_DETECTED = "native_corrupted_save_detected"
+NATIVE_LOAD_SAVE_DATA_CORRUPTED_DETECTED = "native_load_save_data_corrupted_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
+PORTRAIT_PUBLISH_FAILURE = "portrait_window_publish_failure"
 SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
 TITLE_NATIVE_VISUAL_UNSUPPRESSED = "native_title_visual_render_unsuppressed"
+STARTUP_SOUND_EVENT_DETECTED = "startup_sound_event_detected"
 TITLE_PROFILE_RENDER_REFRESH_MISSING = "title_profile_render_refresh_missing"
+BOOT_VIEW_DARK_GAP_FAILURE = "boot_view_dark_gap_failure"
+BOOT_VIEW_PRESENT_COVER_FAILURE = "boot_view_present_cover_failure"
+BOOT_VIEW_PRE_WORLD_STOP_FAILURE = "boot_view_pre_world_stop_failure"
 PLACEHOLDER_CHARACTER_DETECTED = "placeholder_character_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
@@ -675,44 +683,29 @@ _LOGO_FIRST_COMMIT_MONOTONIC: float | None = None
 def telemetry_loading_screen_portrait_capture_ready(telemetry: dict[str, Any] | None) -> bool:
     """True when the loading-screen portrait moment is worth visually capturing.
 
-    The product surface is the now-loading screen (full-screen background art), not the title logo.
-    Capture while the CSFakeLoadingScreen is CURRENTLY on-screen (oracle_fake_loading_visible is an
-    int 0/1, not a bool) AND our now-loading background forge has committed a replacement texture
-    (oracle_loading_bg_portrait_redirect_commits > 0) -- that is the frame where the forged portrait
-    should be the loading background. Stop/continue decisions still come from the RAM oracles, not
-    this image; it is the visual confirmation that the injected texture actually displays.
+    The product surface is the loading cover our DLL composites over the now-loading screen
+    (portrait + stats + bar), so capture while that cover is actually drawing the portrait.
+    Stop/continue decisions still come from the RAM oracles, not this image; it is the visual
+    confirmation that the composed cover actually displays.
     """
     if telemetry is None:
         return False
-    # The forge commits during the title->load transition (the now-loading helper requests its image a
-    # couple seconds before the art "Now Loading" screen actually renders during world streaming).
-    # Capturing at the first commit catches the title PRESS-ANY-BUTTON screen, so wait a short delay
-    # after the first commit so the screenshot lands while the art screen (our forged bg) is on-screen.
-    # The now-loading background binds BEFORE our post-Continue own-renderer exists, so the forge commit
-    # alone catches the checker/title transition. The frame worth capturing is when our OWN built renderer
-    # is up (oracle_loadscreen_table_builds > 0) AND we have re-bound its live offscreen RT into the
-    # displayed now-loading container (oracle_loading_bg_live_gx_rebinds > 0). Wait a short settle so the
-    # model has rendered a few frames into the bound RT before the screenshot.
+    # Path-B CPU cover (the only portrait path since the path-A forge/Present-composite deletion,
+    # bd er-effects-rs-f9mq): the portrait is composited into the shared boot/loading frame by
+    # portrait_onto, counted by oracle_portrait_onto_draw_hits. The frame worth capturing is when that
+    # composite is actually drawing AND there is a real portrait behind it -- EITHER our own
+    # post-Continue renderer table was built (oracle_loadscreen_table_builds > 0) OR the menu's
+    # still-live table yielded a non-black captured portrait (oracle_loading_bg_portrait_gx_nonblack);
+    # the immediate-build-kick path captures via the menu table without our builder ever running
+    # (builds stays 0), so requiring builds>0 alone misses the exact frame worth seeing.
     global _LOGO_FIRST_COMMIT_MONOTONIC
-    commits = as_int(telemetry.get("oracle_loading_bg_portrait_redirect_commits"), 0)
+    portrait_hits = as_int(telemetry.get("oracle_portrait_onto_draw_hits"), 0)
     builds = as_int(telemetry.get("oracle_loadscreen_table_builds"), 0)
-    # Fire once the forge has committed a now-loading background AND we have a real portrait to show.
-    # "Something real to show" is EITHER our own post-Continue renderer table was built
-    # (oracle_loadscreen_table_builds > 0) OR the menu's still-live table yielded a non-black captured
-    # portrait (oracle_loading_bg_portrait_gx_nonblack) -- the immediate-build-kick path captures via the
-    # menu table without our builder ever running (builds stays 0), so requiring builds>0 alone misses the
-    # exact frame worth seeing. (The live-RT re-bind oracle is NOT required -- the force-checker isolation
-    # path intentionally skips it.)
     gx_nonblack = bool(telemetry.get("oracle_loading_bg_portrait_gx_nonblack"))
-    # FORGE cover path: the native now-loading background was replaced (commits>0) and we have a portrait.
-    forge_ready = commits > 0 and (builds > 0 or gx_nonblack)
-    # OVERLAY-ONLY path (portrait-lookat): the native forge is disabled, so the live present-overlay is the
-    # display surface. Capture once it is actually compositing (overlay_draw_hits>0) on the loading screen
-    # (our post-Continue renderer table was built). Without this the screenshot never fires in overlay mode.
-    overlay_hits = as_int(telemetry.get("oracle_overlay_draw_hits"), 0)
-    overlay_ready = overlay_hits > 0 and builds > 0
-    if not (forge_ready or overlay_ready):
+    if not (portrait_hits > 0 and (builds > 0 or gx_nonblack)):
         return False
+    # Wait a short settle after the first ready frame so the screenshot lands while the cover (portrait +
+    # stats + bar) is fully composed on-screen rather than on its first frame.
     now = time.monotonic()
     if _LOGO_FIRST_COMMIT_MONOTONIC is None:
         _LOGO_FIRST_COMMIT_MONOTONIC = now
@@ -746,7 +739,7 @@ def maybe_capture_loading_screen_portrait(artifact_dir: Path, telemetry: dict[st
                 [sys.executable, str(analyzer), str(out), str(analysis_path)],
                 text=True,
                 capture_output=True,
-                timeout=35,
+                timeout=30,
             )
         except Exception as exc:
             analysis_path.write_text(
@@ -1204,19 +1197,64 @@ def telemetry_placeholder_character_detected(
 def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
-    return bool(
-        telemetry.get("oracle_msgbox_any_seen") is True
-        or as_int(telemetry.get("oracle_msgbox_total_builds"), 0) > 0
-        or telemetry.get("oracle_blocking_modal_present") is True
-        or telemetry.get("oracle_postload_modal_seen") is True
-        or as_int(telemetry.get("oracle_msgbox_postload_builds"), 0) > 0
+    return telemetry.get("oracle_blocking_modal_present") is True
+
+
+def telemetry_portrait_publish_failure_detected(telemetry: dict[str, Any] | None) -> bool:
+    """User directive 2026-07-06: the loading-portrait publish gates (torn/unkeyed/badiou/lowmask)
+    must not silently degrade the product. A window that drove the model but published no portrait
+    trips `oracle_portrait_window_publish_failures`; treat any occurrence as a hard run failure so the
+    root render gets fixed rather than papered over. `oracle_portrait_window_publish_fail_cause` names
+    the dominant cause (1=torn 2=unkeyed 3=badiou 4=lowmask)."""
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_portrait_window_publish_failures"), 0) > 0
+
+
+def telemetry_boot_view_dark_gap_failure_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return (
+        as_int(telemetry.get("oracle_boot_view_dark_gap_failures"), 0) > 0
+        or as_int(telemetry.get("oracle_boot_view_missed_handoff_failures"), 0) > 0
     )
+
+
+def telemetry_boot_view_present_cover_failure_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_boot_view_present_cover_failures"), 0) > 0
+
+
+def telemetry_boot_view_pre_world_stop_failure_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_boot_view_pre_world_stop_failures"), 0) > 0
+
+
+def telemetry_native_load_save_data_corrupted_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_corrupted_save_load_failed_seen_id"), 0) == 401721
 
 
 def telemetry_native_corrupted_save_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
     return as_int(telemetry.get("oracle_corrupted_save_seen_id"), 0) > 0
+
+
+def telemetry_startup_sound_event_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    # The DLL is allowed to *see* startup/title Wwise events now, but they must be muted at the hook.
+    # Fail only if a pre-world event was forwarded to Wwise and could be heard.
+    if as_int(telemetry.get("oracle_sound_post_event_forwarded_hits"), 0) <= 0:
+        return False
+    return not (
+        telemetry.get("oracle_player_present") is True
+        or telemetry.get("player_available") is True
+    )
 
 
 def native_legal_text_id(value: Any) -> int | None:
@@ -1229,16 +1267,18 @@ def native_legal_text_id(value: Any) -> int | None:
 def telemetry_native_legal_popup_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
-    # CS::MessageBoxDialog path: legal/privacy FMG IDs captured from native builder args.
-    args = telemetry.get("oracle_msgbox_builder_args")
-    msgbox_legal = isinstance(args, list) and any(native_legal_text_id(arg) is not None for arg in args)
     # TosTitle path: the Privacy/ToS policy surface is not a MessageBoxDialog; constructor hits are
     # native/asset-backed evidence that the policy UI was built from the ToS_win64-backed layout.
-    policy_window = (
+    return (
         telemetry.get("oracle_policy_window_any_seen") is True
         or as_int(telemetry.get("oracle_policy_window_total_builds"), 0) > 0
     )
-    return msgbox_legal or policy_window
+
+
+def telemetry_sq_repro_complete(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("sq_repro_state"), -1) == 6
 
 
 def telemetry_cold_char_mount_complete(telemetry: dict[str, Any] | None) -> bool:
@@ -1249,6 +1289,19 @@ def telemetry_cold_char_mount_complete(telemetry: dict[str, Any] | None) -> bool
     if not isinstance(telemetry, dict):
         return False
     return as_int(telemetry.get("oracle_cold_char_mount_phase"), 0) >= COLD_CHAR_MOUNT_PHASE_DONE
+
+
+def telemetry_loading_portrait_stopped(telemetry: dict[str, Any] | None) -> bool:
+    """True once the loading portrait feature hit its product stop.
+
+    The native LoadingScreen close/result handoff (close_sent_hits > 0) is the product stop for the
+    loading cover. (The old path-A overlay stop-reason oracle died with the path-A deletion,
+    bd er-effects-rs-f9mq.) Feature-specific probes should tear down here instead of waiting for
+    world-stable.
+    """
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_loading_screen_close_sent_hits"), 0) > 0
 
 
 def telemetry_server_status_semaphore_detected(telemetry: dict[str, Any] | None) -> bool:
@@ -1555,8 +1608,6 @@ def oracle_summary(
         "saved_map_c30": telemetry.get("oracle_saved_map_c30"),
         "save_slot": telemetry.get("game_save_slot"),
         "animation_id": telemetry.get("current_animation_id"),
-        "postload_popup_seen": telemetry.get("oracle_postload_modal_seen"),
-        "postload_popup_builds": telemetry.get("oracle_msgbox_postload_builds"),
         "blocking_modal_present": telemetry.get("oracle_blocking_modal_present"),
         "simulated_button_presses_total": telemetry.get("simulated_button_presses_total"),
         "policy_window_backing_flag_ptr": telemetry.get("oracle_policy_window_backing_flag_ptr"),
@@ -2070,7 +2121,12 @@ def classify_snapshot(
             return ReadinessResult(True, READY_REASON, pid, bootstrap, telemetry, windows, polls)
         if target == TARGET_WORLD_STABLE:
             return None
-        if telemetry.get("autoload_slot") is None:
+        slotless_default_save_player_load = (
+            target == TARGET_PLAYER_LOAD
+            and telemetry.get("oracle_save_redirect_mode") == "default_user_save"
+            and telemetry.get("autoload_method") == "direct_menu_load"
+        )
+        if telemetry.get("autoload_slot") is None and not slotless_default_save_player_load:
             return ReadinessResult(False, AUTOLOAD_SLOT_MISSING, pid, bootstrap, telemetry, windows, polls)
         player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
         player_playable = player_seen and (
@@ -2353,6 +2409,38 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
+        if args.target == TARGET_LOADING_PORTRAIT_STOP and telemetry_loading_portrait_stopped(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    True,
+                    LOADING_PORTRAIT_STOPPED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_native_load_save_data_corrupted_detected(telemetry) and not (
+            telemetry is not None and telemetry.get("oracle_native_profile_capture_enabled") is True
+        ):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    NATIVE_LOAD_SAVE_DATA_CORRUPTED_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if telemetry_native_corrupted_save_detected(telemetry) and not (
             telemetry is not None and telemetry.get("oracle_native_profile_capture_enabled") is True
         ):
@@ -2375,6 +2463,85 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                 ReadinessResult(
                     False,
                     MESSAGEBOX_DIALOG_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_startup_sound_event_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    STARTUP_SOUND_EVENT_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_boot_view_dark_gap_failure_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    BOOT_VIEW_DARK_GAP_FAILURE,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_boot_view_present_cover_failure_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    BOOT_VIEW_PRESENT_COVER_FAILURE,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_boot_view_pre_world_stop_failure_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    BOOT_VIEW_PRE_WORLD_STOP_FAILURE,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if (
+            args.fail_on_portrait_publish_failure
+            and args.target != TARGET_LOADING_PORTRAIT_STOP
+            and telemetry_portrait_publish_failure_detected(telemetry)
+        ):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    PORTRAIT_PUBLISH_FAILURE,
                     pid,
                     bootstrap,
                     telemetry,
@@ -2623,6 +2790,9 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                         world_stable_since = None
                         os.sched_yield()
                         continue
+                    if args.wait_for_sq_repro_complete and not telemetry_sq_repro_complete(telemetry):
+                        os.sched_yield()
+                        continue
                     return with_runtime_module_info(
                         ReadinessResult(
                             True,
@@ -2720,12 +2890,18 @@ def parse_args() -> argparse.Namespace:
             TARGET_REQUEST_CONSUMPTION,
             TARGET_PLAYER_LOAD,
             TARGET_WORLD_STABLE,
+            TARGET_LOADING_PORTRAIT_STOP,
         ],
         default=TARGET_GAME_MAN,
     )
     parser.add_argument("--autoload-attempt-budget", type=int, default=DEFAULT_AUTOLOAD_ATTEMPT_BUDGET)
     parser.add_argument("--post-request-tick-budget", type=int, default=DEFAULT_POST_REQUEST_TICK_BUDGET)
     parser.add_argument("--world-stable-samples", type=int, default=1)
+    parser.add_argument(
+        "--wait-for-sq-repro-complete",
+        action="store_true",
+        help="For System->Quit self-drive probes, do not accept world-stable until sq_repro_state == DONE (6).",
+    )
     parser.add_argument("--world-stable-dwell-seconds", type=float, default=DEFAULT_WORLD_STABLE_DWELL_SECONDS)
     parser.add_argument(
         "--world-stream-stall-seconds",
@@ -2823,6 +2999,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Fail immediately if in-process telemetry sees a MessageBoxDialog builder arg matching packed ToS_win64.fmg EULA/privacy text IDs.",
+    )
+    parser.add_argument(
+        "--fail-on-portrait-publish-failure",
+        action="store_true",
+        default=True,
+        help="Fail when a loading window drove the portrait model but published no head (oracle_portrait_window_publish_failures>0). The publish gates (torn/unkeyed) must not silently degrade the product; drive the failures to 0 by fixing the root render (user directive 2026-07-06).",
     )
     parser.add_argument(
         "--fail-on-server-status-semaphore",

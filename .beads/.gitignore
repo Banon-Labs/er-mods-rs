@@ -27,6 +27,11 @@ push-state.json
 # Local version tracking (prevents upgrade notification spam after git ops)
 .local_version
 
+# Bounded `bd prime` override, regenerated per-machine by scripts/beads-prime.sh
+# (titles-only memory index). Local-only; every clone regenerates its own.
+PRIME.md
+PRIME.md.tmp
+
 # Worktree redirect file (contains relative path to main repo's .beads/)
 # Must not be committed as paths would be wrong in other clones
 redirect
@@ -67,6 +72,13 @@ backup/
 *.db-shm
 db.sqlite
 bd.db
+# Issue export (derived). The Dolt database is the source of truth -- `no-db: false` in
+# config.yaml -- and it has its own versioned remote
+# (`bd dolt remote list` -> doltremoteapi.dolthub.com/chozandrias/er-effects-rs).
+# Tracking the export made git three-way-merge a row store line-wise, so every branch that
+# touched an issue conflicted here. Regenerate any time with `bd export -o .beads/issues.jsonl`.
+issues.jsonl
+
 # NOTE: Do NOT add negation patterns here.
 # They would override fork protection in .git/info/exclude.
 # Config files (metadata.json, config.yaml) are tracked by git by default

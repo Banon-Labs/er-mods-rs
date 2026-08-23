@@ -1,0 +1,20 @@
+[package]
+name = "er-reload-trace-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_reload_trace_dll"
+crate-type = ["cdylib"]
+
+# Shared MinHook FFI (compiles the vendored MinHook C once; this crate uses only the raw MH_* externs
+# for its standalone-fallback instance and otherwise routes through the product's union export).
+[dependencies]
+er-hook = { path = "../er-hook" }
+# Tier A only (default features = zero external deps): the shared singleton RVA table,
+# so 0x3d69918 / 0x3d5df38 / 0x3d6b7b0 are not hand-copied here. See er-game-base/src/rva.rs.
+er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

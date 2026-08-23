@@ -1,106 +1,61 @@
-# Autoresearch: clean title-cover masquerade for zero-input gold autoload
+# Autoresearch: execute PR #193 crate-extraction DAG through R58
 
 ## Objective
-Masquerade the irreducible boot-init/resident-UI load behind the **loaded character portrait** while the zero-input native Continue/load chain proceeds behind it. The target visual is not "some cover" and not a generic text/rectangle scaffold: it is the character/profile portrait derived from the selected SL2/profile pipeline, visible during boot init and held until the game's native map-loading screen takes over.
+Translate every approved work package in `docs/plans/crate-extraction-execution-roadmap.md` into a small, single-concern pull request, preserving dependency-local stacks and using the maximum safe number of disjoint worktree lanes. Continue through R58. A documented, evidence-backed rejection at a Phase F decision gate is valid completion for the optional extraction it rejects; merely opening a Beads issue is not plan-to-PR completion.
 
-There is **no ms target**: success is portrait coverage plus the hard product constraints. Split the work into two independently validatable parts:
+## Primary metric
+- `plans_translated_to_prs` (higher is better): distinct `pr193-roadmap` Beads plan IDs linked one-to-one to a real GitHub PR that is OPEN or MERGED.
 
-- **Part A -- disable native title visual:** suppress the BeginTitle `05_000_Title` MenuWindowJob build/render (`FUN_14081f9f0 -> FUN_1407acbf0`) while leaving TitleStep, FixOrderJobSequence, native Continue logic, profile/portrait renderers, and world-load chain intact. Do **not** touch STEP_Wait or `CSMenuMan+0x21`.
-- **Part B -- render portrait cover:** render the loaded character portrait in a title-safe surface, preferably through the profile-model-render / `SYSTEX_Menu_ProfileNN` texture pipeline, or via a small custom Scaleform/overlay target that consumes the same RAM-backed portrait source. A generic text/rectangle overlay is diagnostic scaffolding only and must not be scored as final success.
+## Secondary metrics
+- `planned_nodes_total`: current roadmap plan-node count, including expanded child nodes.
+- `completion_pct`: translated plans / total plans.
+- `open_prs`, `merged_prs`, `draft_prs`.
+- `ready_untranslated_plans`: dependency-ready roadmap issues without a qualifying PR.
+- `false_positives`: malformed mappings, missing PRs, closed-unmerged PRs, duplicate plan/PR mappings, or plan labels not present in the roadmap/expanded DAG. Keep decisions require `false_positives == 0`.
 
-The desired product chain remains:
+## Operating model
 
-`loaded character portrait cover visible during boot init -> native Continue/load proceeds behind it -> portrait remains until native map-loading screen takes over -> continue_load_67b750 -> native load-complete evidence (b80_deserialize_67b290 OR explicitly disabled modal-confirm wait after loaded-slot proof) -> native continue_confirm / SetState5 -> world-stable oracle`
+### Three separate kinds of work
 
-A score of `autoload_re_score=1600` means the native title visual is suppressed, the RAM-backed character portrait cover path exists and is observable, the native Continue/load chain remains intact, there is no synthetic input or direct-load bypass, and bounded runtime proof satisfies the hard constraints.
+1. **Translation work** implements one dependency-ready roadmap node, completes its stated proof gate, opens its one-to-one PR, and records the resulting mapping.
+2. **Proof/unblock work** performs bounded static RE, offline validation, or feature-specific runtime diagnosis needed to make a future node eligible. It is not a PR-translation benchmark iteration.
+3. **Measurement** verifies the mapping ledger after a real PR transition. It is not work by itself.
 
-## Current strategic anchor (do not lose across long autoresearch)
-- `main` at `ca5b2df` is the known-good baseline for the pre-title-cover product path. A no-teardown on-screen run from `/home/banon/projects/er-effects-rs-main-watch` launched 2026-06-25 went through Press Any Button and Continue/load as expected.
-- Therefore **Path B is a preservation/regression problem, not an unknown RE problem**. Do not re-derive Continue from scratch or keep experimenting with synthetic Continue/docall/result fallbacks unless a branch-specific diff first proves `main`'s path cannot be reused.
-- The current branch should restore/preserve `main`'s PAB + native Continue/load behavior, then make title-cover changes visual-only around it. If a runtime probe fails before load, first test/inspect whether a title-cover hook or branch-only runtime/guard change diverged from `main`.
-- Screenshots/visual state are not stop/product oracles, but the current loading-screen-portrait proof-of-concept requires agent visual review of the event screenshot until a correct native/pixel memory semaphore exists. Capture/read the loading-screen-portrait moment (`loading-screen-portrait-screenshot.jpg`), not teardown; do not delay capture to a later/friendlier frame because the exact failing view is the evidence; then convert any visual finding into RAM/native/pixel telemetry. The current lean diagnostic also writes `loading-screen-portrait-screenshot-analysis.json`; the known-bad dark LOAD GAME/ProfileSelect panel has too little pure-black surround (`black32_ratio` about 0.46-0.47), while the expected portrait-on-black cover should have a substantially larger pure-black ratio around the portrait. Seeing `LOAD GAME`/ProfileSelect while unfinished is expected cover behavior, not a stop oracle.
+Never collapse these categories. A successful build, commit, static finding, runtime probe, Beads comment, or branch push is evidence for translation work; none changes the primary metric without a qualifying PR.
 
-## Current title-cover / portrait-cover metric contract
-- The next autoresearch target is **not** higher than 1600 under the old rubric. The old 1600 ceiling proved native zero-input load and generic cover scaffolding; it did not prove the desired character portrait cover. Treat old 1600 runs as baseline regression proof, not as the product finish line.
-- `05_010_ProfileSelect` cover telemetry (`oracle_title_custom_cover_profile_select_builds`, `oracle_title_custom_cover_run_calls`, `oracle_title_scaleform_bind_observer_profile00_bound`, and related SYSTEX/dummy-profile bind counters) is **native plumbing evidence**, not by itself product portrait-cover acceptance.
-- 2026-06-26 user-visible no-teardown correction: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive. Artifact `product-continue-direct-20260626-183818` reported loaded-character portrait booleans, SYSTEX hits, transform flags, Banon/player, and render-loading semaphores, but the actual screen was a blank/cursed ProfileSelect panel stuck at `Select profile to load`. Do not score or retry that path as product proof. A future pass needs a real visible-pixel/surface oracle (`oracle_title_portrait_pixels_visible=true` or equivalent) tied to the displayed loaded-character portrait.
-- `oracle_title_profile_cover_bound_to_logo_surface=true` is not required as the only possible future product route, because `05_001_Title_Logo` lacks dummy-profile/SYSTEX symbols; however, replacing it requires a new RAM-backed visible-cover oracle that ties the character portrait source to an active rendered title-safe surface after native title/PAB suppression.
-- Title-overlay cover routes are deleted/off-limits for this objective. Do not revive FaceData foreground draw-list cover diagnostics, fullscreen overlays, texture bridge scoring, or generic overlay scaffolding as a product path. User correction 2026-06-27: "a big black screen" is unacceptable; the product must have visual beauty through a native title-safe surface or an equivalently real loaded-character portrait surface.
-- Do not score a ProfileSelect build/run/bind-only artifact, a generic overlay, or a big black/blank screen as final product success. Final success still requires zero simulated input, zero messagebox/legal/server/save popups, native Continue/load/confirm edges, expected save identity, portrait cover held until native map-loading takeover, and world-loaded proof.
+### When `run_experiment` and `log_experiment` are allowed
 
-## Metrics
-- **Primary**: `autoload_re_score` (points, higher is better, max 1600) -- composite visual-cover/RE/product-proof score from `.auto/measure.sh`.
-- **Regression/failure metrics**: `title_cover_failures`, `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `runtime_mode_failures`, `eula_popup_failures`, `save_data_popup_failures`, `messagebox_dialog_failures`, `false_positives`.
-- **Legacy secondary metrics**: `target_constants_remaining`, `helpers_missing`, `fixed_wait_predicates`, `autoload_static_failures`.
+Call `bash .auto/measure.sh` through `run_experiment` only after an actual, reviewable PR transition: a qualifying PR was opened, merged, or became invalid/closed and the ledger must be remeasured. Call `log_experiment` only for that measurement and cite the exact PR number, roadmap ID, and proof artifact.
 
-Score rubric:
-- **Asset provenance / resource chain (200 pts)**: Data archive source is explicit; FMG/menu resource IDs are mapped; native consumers/xrefs are tied to those IDs; extraction is reproducible from local tools/artifacts.
-- **Native Continue action identity (300 pts)**: real selected Continue row/object is identified; receiver/vtable/docall/result/submit ABI are proven; selected/default Continue is not confused with Down navigation; `result+0x58` is logged only as unknown/diagnostic, not used as readiness.
-- **DLL product patch path (300 pts)**: implemented inside the chainload DLL; no `eldenring.exe` patching, loose asset edits, or product direct-load/direct-confirm/deser dispatcher shortcuts; advances through native accept/submit semantics after Continue exists.
-- **Safety/runtime oracle (300 pts)**: input remains blocked/suppressed; `simulated_button_presses_total=0`; save backup/restore and char-fingerprint/mount guards remain; bounded runtime proof reaches native load, loaded-slot completion (`b80_deserialize` or disabled modal-confirm with loaded evidence), native confirm/SetState5, and world-stable edges. The gold oracle must derive expected character identity from the vanilla `ER0000.sl2` save slot (not `.co2` except Seamless-specific tests), expose the character name in the oracle summary, require observed telemetry to match that derived save identity, treat `"_"`, `""`, and all-whitespace names as empty-like/non-real, require the expected player animation ID, and require no native post-load popup/modal builds after Continue/load finalizes.
-- **Static regression guards (300 pts)**: fixed waits remain fail-safe only; checker/measure fail closed for direct shortcuts, input probes, stale `mode=0` gating, and asset-chain regressions; build/checks pass.
-- **Title-cover visual masquerade (200 pts)**: Part A hooks/suppresses only the native `05_000_Title` BeginTitle visual wrapper and exposes telemetry; Part B exposes an observable **character portrait** render path (`SYSTEX_Menu_ProfileNN`/dummy texture, custom Scaleform, or portrait-backed overlay) without weakening the load chain. Generic text/rectangle covers are false positives.
+Do **not** run the measurement or log a `discard` when no qualifying PR transition occurred. In particular, do not turn failed runtime probes, static investigation, unchanged repository state, or repeated measurement into benchmark discards. Record those outcomes in the owning Beads issue with the artifact path, exact failed/passed oracle, and the next falsifiable hypothesis.
 
-## How to Run
-`./.auto/measure.sh` -- emits `METRIC name=value` lines and explanatory `DETAIL ...` lines.
+A runtime-gated node may open its PR only after its feature-specific live oracle passes. Never create a placeholder PR merely to move the metric. If a Phase F optional extraction is rejected, record the evidence-backed decision in its owning roadmap issue; do not fabricate a PR mapping.
 
-Pi `run_experiment` is guarded to run only `.auto/measure.sh` when this file exists. Do not pass custom chained build/probe commands to `run_experiment`; instead, use the trigger files/env paths that `.auto/measure.sh` already recognizes (for example `.auto/run_runtime_probe_once`) and then run exactly `./.auto/measure.sh`.
+### Translation loop
 
-If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, direction `higher`, baseline from the current branch, and keep `timeout_seconds <= 45` / `checks_timeout_seconds <= 45`. Runtime probes must finish the runtime portion within the cap read from `.auto/runtime_timeout_cap_seconds`.
+1. Select a dependency-ready, unmapped roadmap node and name its owning Beads issue before editing.
+2. Read the node's proof gate and choose the smallest implementation or proof change that can falsify the next hypothesis.
+3. Keep proof/unblock work in its own non-main worktree. Preserve committed evidence; do not let benchmark bookkeeping reset unrelated worktree changes.
+4. For runtime work, use static RE first. Run one bounded, feature-specific probe only after the needed oracle is present. A failed probe is evidence for the next static diagnosis, not a reason to repeat it.
+5. Once the node satisfies its proof gate, create and push a non-main branch, open the single-node PR, and attach the evidence. Then run `measure.sh` and log the observed ledger transition.
+6. If no node is eligible for a PR transition, continue proof/unblock work. Do not measure merely because an iteration was requested.
 
-## Files in Scope
-- `src/lib.rs` -- constants/layouts/statics for title/menu/profile-load/autoload and hook wiring.
-- `src/experiments.rs` -- asset/native Continue tracing, autoload state machine, product submit path, native/static readiness predicates, runtime diagnostics.
-- `scripts/check-autoload-happy-path.py` and `scripts/test-autoload-happy-path.py` -- static product-path gate checks.
-- `.auto/measure.sh` -- benchmark/static oracle for this autoresearch session.
-- `.auto/ideas.md` -- deferred ideas backlog.
-- `docs/file-extraction-tooling.md` and focused docs/recon notes -- only for provenance; do not replace executable checks with prose.
-
-## Off Limits
-- Do not add host input, DInput/keystate/pointer synthesis, XInput injection, or Down/Confirm probes to the product path.
-- Do not use Down navigation as a Continue diagnostic. Continue is already the selected/default title option.
-- Do not treat user/manual input as product proof. Manual probes are last-resort diagnostics only after static RE and zero-input hooks cannot answer the question.
-- Do not gate product behavior on `result+0x58 == mode`. That field is currently unknown/diagnostic, not a proven readiness predicate or row index.
-- Do not call `continue_load_67b750`, raw `b80_deserialize`, or dispatcher-drive shortcuts from the product success path. A guarded native `continue_confirm` / SetState5 is allowed only after native Continue has already loaded the requested slot and the modal-confirm wait is explicitly disabled with self-validated loaded evidence (`ac0==slot`, real `c30`, real character fingerprint, no simulated input); do not wait for or synthesize confirm input.
-- Do not patch `eldenring.exe`, do not leave loose files in the live Game dir, and do not edit packed assets as the product path unless the user explicitly changes the requirement. DLL is vastly preferred.
-- Do not weaken save safety. Preserve backup/restore behavior, mount/char-fingerprint guards, and SetState5/continue_confirm gates.
-- Do not leave Elden Ring running after any runtime probe.
-- Do not file upstream issues/PRs/reports.
+## Scope
+- `docs/plans/crate-extraction-execution-roadmap.md`
+- Beads issues labeled `pr193-roadmap` and `roadmap-<normalized-plan-id>`
+- dependency-local feature branches/worktrees and their pull requests
+- source/tests/docs directly required by those roadmap nodes
 
 ## Constraints
-- Before every research spike/iteration, search Beads persistent memories first (`/home/banon/.local/bin/bd memories <terms> --json` and `bd recall <key>`) using terms from the current hypothesis (for example `Continue`, `continue_load`, `SetSaveSlot`, `TitleTopDialog`, `ProfileLoadDialog`, `LoadJobContext`, `MenuJobResult`, `saveSlot`). Incorporate high-signal memories before doing new static/runtime work so prior findings and dead ends are not re-derived.
-- At the end of each research spike/iteration, upsert durable new findings into Beads memories with `/home/banon/.local/bin/bd remember --key <key> <finding>`. If the new finding makes an existing Beads memory stale or inaccurate, first upsert the replacement/correction, then remove the stale memory with `/home/banon/.local/bin/bd forget <stale-key>` (or update it as retracted if preserving the historical warning is safer than deletion).
-- Static RE first. Runtime probes only after the hypothesis, exact hook/edge, stop condition, and teardown are explicit.
-- Frame/call counts may remain only as outer fail-safe timeouts, never as success predicates.
-- Polling semantic predicates once per game tick is allowed; requiring N ticks before success is not.
-- Debug logs should say exactly which field/vtable/state opened or blocked a gate, not "waited N frames".
-- Runtime proof must be self-validating: target window confirmed by exact class while a live `eldenring.exe` process exists (no title fallback / no screenshotting unrelated apps), input blocking/suppression confirmed where relevant, exact process matching, save/game-file restore, teardown, expected `ER0000.sl2` slot identity match (including non-empty-like character name; `"_"`, `""`, and whitespace-only are empty), expected player animation ID, and zero native `CS::MessageBoxDialog` builds. Any `CS::MessageBoxDialog` before, during, or immediately after load (including "failed to load save data") is a hard product failure and an investigation trigger: the ideal count is 0, telemetry must expose `oracle_msgbox_total_builds` / `oracle_msgbox_any_seen`, the watcher must fail immediately with `native_messagebox_dialog_detected`, and `messagebox_dialog_failures` must reduce the score. Do not auto-accept or preserve the box; the existing OK-handler/auto-accept path is deprecated old fake-input-era behavior and is not valid product proof. Identify the native side effect/gate it would perform, decide whether that side effect is irrelevant/offline-only or required, and skip/satisfy that semantic side effect directly without UI/input. EULA/terms/license/first-boot legal popups are also a hard product failure at any point: the DLL must not auto-accept them, and fallback/menu success is invalid while such a popup is visible. Legal-popup detection must prefer non-OCR native/asset evidence from the packed `ToS_win64.fmg` text IDs and in-process dialog/state telemetry; target-window OCR is only supplemental and cannot be the sole legal-popup oracle. `eula_popup_failures` and `save_data_popup_failures` must come from real runtime evidence captured into the artifact, must cause the watcher to fail immediately when detected, and must reduce the autoresearch score.
-- The product proof chain must include downstream native evidence (`continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle), not just a title screenshot.
+- Do not overfit or falsify the metric. A branch, commit, draft note, or Beads ticket without a real qualifying GitHub PR does not count.
+- One roadmap plan ID per PR and one PR per plan ID unless the roadmap explicitly records an evidence-backed rejection.
+- Preserve the single shipped `er_effects_rs.dll` product contract.
+- Parallel writers require disjoint worktrees. Beads writes are parent-owned and serialized.
+- Follow every node's static/runtime proof gates. Runtime-affecting nodes are not complete without their required live oracle.
+- Create new Beads tickets only for roadmap child expansion or newly discovered in-scope blockers.
+- Never push directly to `main`; push feature/dependency-stack branches.
+- A `discard` is valid only for a real PR-transition measurement that reveals an invalid mapping or a lost qualifying PR. It must name that PR and the corrected ledger state.
+- Continue autonomously until interrupted.
 
-## Static/runtime evidence already gathered
-- `TitleTopDialog::open_menu` `0x1409b24e0` opens the title menu and registers rows/actions.
-- Continue-related native wrapper/action addresses include `0x14082bac0`, `0x14067b750`, `0x140afb967`, `0x140764b80`, `0x1407ac890`, result vtable `0x142aa0080`, and result vtable slot `+0x60=0x140746e80`.
-- FMG/UI text paths such as `msg/engus/menu.msgbnd.dcx` are virtual entries inside `Game/Data*.bhd` + `Game/Data*.bdt`, extracted by Nuxe and unpacked by WitchyBND. They are not loose Steam depot files and not `regulation.bin`.
-- Visual proof exists that the native title menu reaches `Continue` highlighted, but that is not load proof.
-- First-title-item wrapper fallback was falsified: calling `menu_continue_wrapper(this=first MenuWindowJob)` produced `slot=-1` and process exit.
-- A row-result candidate exists with expected vtable/docall, but previous code over-gated on `result+0x58` (`mode=0`). Static RE of `0x1407ac890` shows native submit constructs an event and calls vtable `+0x60`; `result+0x58` must not be treated as the product readiness gate.
-- Part B asset blocker resolved: `/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_001_title_logo.gfx` contains only static title-logo texture symbols (`MENU_Title_GR`, `MENU_Title_EldenRing`, `MENU_DS3_LOGO`, `MENU_Title_EldenRing_01`) and no `MENU_DummyProfileFace` / `SYSTEX_Menu_Profile`; use a custom Scaleform target or another surface with dummy-profile symbols. See `docs/recon/title-cover-asset-decision-2026-06-25.md`.
-- Existing cover target found but not product-safe as a direct title-job replacement: `/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_010_profileselect.gfx` contains `MENU_DummyProfileFace_01..10`; native wrapper `05_010_ProfileSelect` at dump `0x14081f7e0` maps to deobf `0x14081f6f0`. Runtime spike `product-continue-direct-20260624-184915` proved replacing the `05_000_Title` out-job with this ProfileSelect job suppresses/builds cover telemetry (`suppressed=1`, `cover_builds=1`, zero input, zero MessageBox) but leaves title owner parked at state 10 and never loads Banon before timeout. Do not return the ProfileSelect job in the BeginTitle out slot; Part B needs a non-blocking/custom surface.
-
-## What to Try Next
-1. Build the missing RAM-backed **portrait-cover** oracle; do **not** relax scoring back to generic cover success. Current ProfileSelect semaphores are invalid false positives, and generic overlay paths are forbidden for this objective. The next keepable improvement should connect these proofs:
-   - **portrait source**: active-screen slot/profile renderer -> `CSMenuProfModelRend` vtable (`base+0x2b80128`) -> `renderer+0xa8` `CSEzOffscreenRend` -> `offscreen+0x10` runtime texture resource cap, with `renderer+0x754/+0x755 == 0` and `renderer+0x9a8 == slot*2`;
-   - **display destination**: either `TitleTopDialog+0xaa8` -> `TitleBackViewParts`, `+0x8` embedded `MenuResource("05_001_Title_Logo")`, `+0x70` `SceneObjProxy`, `+0x88` GFx/ScaleformValue handle, OR a custom native title-safe Scaleform/D3D12/game-render-layer surface whose draw code consumes the RAM-backed portrait source;
-   - **linkage/visibility**: a telemetry oracle that proves the loaded character portrait, not a placeholder rectangle/text, is rendered on the live cover surface while native Continue/load proceeds;
-   - **lifetime**: the portrait cover remains visible from the boot-init/title gap until the native map-loading screen/helper takes over (`oracle_title_now_loading_helper_*` or a stronger in-process loading-screen takeover semaphore).
-2. The immediate code-facing seed is the existing profile-render refresh telemetry (`oracle_title_logo_profile_summary_ready`, `oracle_title_profile_render_refresh_gate_ready`, `oracle_title_custom_cover_profile_render_refresh_calls`, and related SYSTEX/profile renderer evidence). Use these only as source proof; add destination/visibility/lifetime classification before any product predicate flips true.
-3. Best next static/runtime-instrumentation candidate: hook/read `FUN_140749290` (dump `0x140749290`, re-ground live RVA with `scripts/dump-deobf-shift.py` before adding a constant) to capture `param_1` MenuResource owner, `param_2` SceneObjProxy out, `param_1+0x60`, `param_1+0x48` name, and whether `param_2 == TitleBackViewParts+0x70` / `param_1 == TitleBackViewParts+0x8`. If that path cannot re-bind live assets, pivot to a custom overlay/Scaleform surface that reads the same portrait source instead of fighting `05_001_Title_Logo`.
-4. Secondary candidate: extend `title_scaleform_bind_observer_hook` to classify its `owner` against known active title/resource/window objects before setting any new oracle. `MENU_DummyProfileFace_01 -> SYSTEX_Menu_Profile00` currently ties to ProfileSelect only; do not infer title-logo coverage from the pair text.
-5. Use the recent Hyprland placement fix only as smoke-test infrastructure: on-screen runs now stay visible via `scripts/place-er-window-hyprland.py`. For the loading-screen-portrait proof of concept, read the event screenshot yourself to judge whether the replacement works visually; then replace that visual judgment with a correct RAM/native/pixel semaphore. Product stop/proof remains in-process telemetry for portrait source, visible cover surface, takeover by native loading screen, and the zero-input native load chain.
-6. After portrait-cover oracle work, return to product ordering: preserve manual/native Banon load proof and zero-input/no-popup gates. Any title accept/menu-open/save-data `ShowProgress` issue is a blocker to solve without weakening the portrait or native-load requirements.
-
-## What's Been Tried / Dead Ends
-- Fixed timing gates were removed/reduced as success predicates; do not retune wait numbers.
-- Direct diagnostic paths (`CONTINUE_LOAD_RVA`, raw deserialize, direct confirm, dispatcher drive) are not product proof.
-- Down + accept/input-probe was a wrong diversion for Continue: Continue is already selected, input is blocked, and synthetic input is disallowed.
-- `result+0x58 == 0` is not the visual Continue row index and is not a proven unarmed state.
+## Current state
+The PR #193 roadmap has 104 plan nodes and 17 valid one-to-one PR mappings. Current runtime-gated R33 proof is blocked after title-menu open: the former `0x140764b80` probe was corrected to the idle `01_900_Black` job, not Continue. The next R33 proof/unblock step is a passive oracle for the actual `FUN_1409abc30` CommandList Continue-label (`0x61f95`) branch, followed by a bounded product run only if that oracle is installed. This is proof/unblock work, not a metric iteration.

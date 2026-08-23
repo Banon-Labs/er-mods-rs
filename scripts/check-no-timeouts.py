@@ -7,6 +7,7 @@ import ast
 import json
 import re
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,10 +19,35 @@ IGNORED_DIRECTORIES = {
     ".auto",
     "target",
     "docs",
+    # Gitignored local worktrees/sandboxes (AGENTS.md "Local Hidden Worktrees"): they are not part
+    # of the committed tree, so their sleep/timeout state must not gate a commit of tracked files.
+    ".worktrees",
 }
 IGNORED_FILES = {
     Path("scripts/check-no-timeouts.py"),
     Path("scripts/test-no-timeouts.py"),
+    # Host-side VM GUI-automation tools -- NOT runtime probes. Keystroke pacing and
+    # display-wake waits are inherent to driving a Windows guest via `virsh send-key`
+    # / `virsh screenshot`; there is no readiness primitive for "the guest input queue
+    # drained" or "the display woke". The no-sleep rule targets runtime probes.
+    Path("scripts/vm-sendkeys.py"),
+    Path("scripts/vanilla-control-probe.py"),
+    # Sampling profiler / flight recorder, NOT a runtime probe that waits on a readiness
+    # signal. Its `time.sleep` is the sample PERIOD -- the measurement instrument itself --
+    # not synchronization: the tool exists to record a thread's state at a fixed rate right
+    # up to the instant that thread dies, and its stop condition is that observed death (a
+    # real semaphore: /proc state Z or the task disappearing), never a timer. There is no
+    # readiness primitive that can replace a sampling rate, and the event-driven alternative
+    # (ptrace stops) is exactly what this tier avoids so it cannot perturb the game.
+    Path("scripts/wine-thread-death-watch.py"),
+    # Steam lobby probes. Their `time.sleep` is a SAMPLE PERIOD, for the same reason as the
+    # profiler above: `RequestLobbyList` results arrive through a callback that lives inside
+    # ersc.dll's Themida-virtualised region, so there is nothing to hook for "results are ready"
+    # and no readiness primitive exists to replace re-reading at a fixed rate. Both stop on a real
+    # observation -- a member arriving, or the oracle document differing from its previous
+    # contents -- and their deadlines are backstops, never the synchronisation.
+    Path("scripts/frida-lobby-watch-members.py"),
+    Path("scripts/frida-hunt-drive-query.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",
@@ -38,6 +64,9 @@ SOURCE_SUFFIXES = {
     ".yaml",
 }
 MAX_TIMEOUT_SECONDS = 30.0
+# Bounded safety cap for the `git ls-files` enumeration below (literal-constant, <= the hard cap so this
+# checker satisfies its own subprocess-timeout rule).
+_GIT_LS_FILES_TIMEOUT_SECONDS = 10.0
 SHELL_DURATION_UNITS = {
     "": 1.0,
     "s": 1.0,
@@ -169,7 +198,30 @@ def strip_line_for_suffix(line: str, suffix: str) -> str:
     return line
 
 
+def tracked_relative_paths() -> set[Path] | None:
+    """Repo-relative paths git tracks (index + committed), or None when git is unavailable.
+
+    Untracked scratch files (git status ??) are -- exactly like the gitignored `.worktrees` sandboxes
+    exempted above -- not part of the committed tree, so their sleep/timeout state must not gate a commit
+    of tracked files. `git ls-files` reports the index, so a staged-but-uncommitted (about-to-be-committed)
+    file IS still gated; only pure `??` scratch is skipped. If git is unavailable, return None so the
+    caller fails OPEN and scans everything -- the gate must never silently disable itself.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=_GIT_LS_FILES_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    names = result.stdout.decode("utf-8", errors="strict").split("\0")
+    return {Path(name) for name in names if name}
+
+
 def source_files() -> list[Path]:
+    tracked = tracked_relative_paths()
     paths: list[Path] = []
     for path in REPO_ROOT.rglob("*"):
         if not path.is_file():
@@ -178,6 +230,9 @@ def source_files() -> list[Path]:
         if relative in IGNORED_FILES:
             continue
         if any(part in IGNORED_DIRECTORIES for part in relative.parts):
+            continue
+        # Skip untracked scratch: not part of the committed tree, so it must not gate a tracked commit.
+        if tracked is not None and relative not in tracked:
             continue
         if path.suffix in SOURCE_SUFFIXES:
             paths.append(path)
