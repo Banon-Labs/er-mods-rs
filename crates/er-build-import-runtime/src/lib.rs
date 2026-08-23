@@ -38,6 +38,7 @@ pub mod character;
 pub mod equip_native;
 pub mod export;
 pub mod export_doc;
+pub mod gaitem;
 pub mod grant;
 pub mod http;
 pub mod read_character;
@@ -540,7 +541,8 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             asked += 1;
             let wanted_arts = catalog::arts_row_for_gem(gem);
             // Safety: game thread, character in the world -- the caller's own preconditions.
-            let held = unsafe { read_character::equipped_weapon_arts_id(module_base, want.slot) };
+            let worn_arm = unsafe { read_character::worn_armament(module_base, want.slot) };
+            let held = worn_arm.and_then(|arm| arm.arts_id);
             let held_name = held.and_then(|arts| {
                 // Safety: `msg` is the live repository this import already read from.
                 unsafe {
@@ -557,20 +559,26 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                     correct += 1;
                     "OK"
                 }
+                (_, None) if worn_arm.is_none() => "EMPTY -- no armament is worn in this slot",
                 (_, None) => "NOT MOUNTED -- the worn armament reports no sword-arts row",
-                // Two causes, and this line does not pretend to know which: the slot may hold a
-                // different copy of the same armament (copies share an item id), or the armament
-                // may not accept ashes at all -- `EquipParamWeapon::canGemBeChanged` gates the
-                // READ, so a gem mounted on such a weapon is stored and then ignored.
-                _ => "MISMATCH -- another copy of this armament, or one that does not take ashes",
+                // Two causes, and the worn item id below is what tells them apart: a DIFFERENT id
+                // means the slot holds another armament entirely, while the SAME id means it holds
+                // another copy of this one (copies differing only by ash share an item id) or an
+                // armament that does not accept ashes -- `EquipParamWeapon::canGemBeChanged` gates
+                // the read, so a gem mounted on such a weapon is stored and then ignored.
+                _ => "MISMATCH -- compare the worn item id with the ARMAMENT lines above",
             };
+            let worn_item =
+                worn_arm.map_or_else(|| "none".to_owned(), |arm| format!("0x{:08X}", arm.item_id));
             log_line(&format!(
-                "[build-import]   ASH slot {} {:?} wants {:?} (gem {gem} -> arts {:?}); worn                  armament holds arts {:?} {:?} -- {verdict}",
+                "[build-import]   ASH slot {} {:?} wants {:?} (gem {gem} -> arts {:?}); \
+                 worn item {worn_item} holds arts {:?} {:?} -- {verdict}",
                 want.slot, want.weapon, want.art, wanted_arts, held, held_name
             ));
         }
         log_line(&format!(
-            "[build-import] EQUIPPED ASHES (read back from the worn armament): {correct}/{asked}              correct"
+            "[build-import] EQUIPPED ASHES (read back from the worn armament): \
+             {correct}/{asked} correct"
         ));
         for (slot, id, idx, got) in &worn.dispatch {
             // Both ids in the same base, because the whole point of this line is that a reader
