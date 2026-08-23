@@ -220,6 +220,22 @@ unsafe fn read_slot(
 ///
 /// Game thread; `module_base` the loaded image base and `msg` a live `MsgRepositoryImp*`.
 unsafe fn read_weapon_art(module_base: usize, msg: usize, slot: i32) -> Option<String> {
+    // Safety: the caller's contract.
+    let arts_id = unsafe { equipped_weapon_arts_id(module_base, slot) }?;
+    // Safety: as above.
+    unsafe { name_for(Kind::AshOfWar, msg, module_base, arts_id) }
+}
+
+/// The `SwordArtsParam` row the armament in `slot` is ACTUALLY holding, by way of its equipped gem.
+///
+/// Split out of [`read_weapon_art`] because the importer needs the id rather than the name: it
+/// compares what a slot holds against the gem the build asked for, and a name comparison would
+/// turn a wrong-row bug into a string-matching bug.
+///
+/// # Safety
+///
+/// Game thread; `module_base` the loaded image base.
+pub unsafe fn equipped_weapon_arts_id(module_base: usize, slot: i32) -> Option<u32> {
     let player = {
         // Safety: a fault-checked read of the singleton slot and one offset inside it.
         let world =
@@ -262,8 +278,7 @@ unsafe fn read_weapon_art(module_base: usize, msg: usize, slot: i32) -> Option<S
     if arts_id == 0 || arts_id == u32::MAX {
         return None;
     }
-    // Safety: the caller's contract.
-    unsafe { name_for(Kind::AshOfWar, msg, module_base, arts_id) }
+    Some(arts_id)
 }
 
 /// Read the whole character.

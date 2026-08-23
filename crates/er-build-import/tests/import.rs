@@ -7,8 +7,8 @@
 
 mod fixture_catalog;
 
-use er_build_import::catalog::Kind;
-use er_build_import::plan::{NO_SKILL, plan};
+use er_build_import::catalog::{Catalog, Kind};
+use er_build_import::plan::{GEM_ITEM_CATEGORY, NO_SKILL, equipped_armament_skills, plan};
 use er_build_import::{model, share_id_from_url};
 
 const BUILD: &str = include_str!("fixtures/build-af97a9da874151.json");
@@ -695,4 +695,101 @@ fn the_users_build_plans_twelve_positions_and_none_are_tools() {
         !kinds.iter().any(|k| k.is_quick_dispatch()),
         "a build with no tools plans no quick positions"
     );
+}
+
+#[test]
+fn an_ash_of_war_is_encoded_as_a_gem_item_id() {
+    // The bug this pins: `weaponSkill` must carry an `EquipParamGem` row under the GAME's gem
+    // category nibble (8). The planner's own database tags ashes with nibble 2, and a runtime
+    // catalog that resolved the ash name to its `SwordArtsParam` row instead produced a
+    // well-formed value naming a row that does not exist -- every ash "resolved" and no weapon
+    // came out carrying one.
+    let (_, result) = planned();
+    let catalog = fixture_catalog::catalog();
+    let ash = catalog
+        .lookup(Kind::AshOfWar, "Bloodhound's Step")
+        .expect("fixture catalog has the ash");
+    assert_eq!(
+        ash.full_item_id & 0xF000_0000,
+        0x2000_0000,
+        "the planner tags ashes with nibble 2, which is not the game's gem category"
+    );
+    // Bloodhound's Step is EquipParamGem row 80100.
+    assert_eq!(ash.full_item_id & 0x0FFF_FFFF, 80_100);
+
+    let armament = result
+        .grants
+        .iter()
+        .find(|grant| grant.label == "Miséricorde")
+        .expect("the fixture's Miséricorde is granted");
+    assert_eq!(armament.weapon_skill, GEM_ITEM_CATEGORY | 80_100);
+    assert_eq!(armament.weapon_skill & 0xF000_0000, GEM_ITEM_CATEGORY);
+    assert_eq!(
+        armament.weapon_skill & 0x0FFF_FFFF,
+        ash.full_item_id & 0x0FFF_FFFF
+    );
+}
+
+#[test]
+fn the_worn_copy_of_a_duplicated_armament_is_granted_first() {
+    // Several copies of one armament differing only by ash are ordinary in a build, and they all
+    // share an item id because the ash lives on the gaitem instance. The equip step asks the
+    // inventory for an item id, and the game answers with the LOWEST index holding it, so the
+    // worn copy has to be granted first or the character wears a twin with somebody else's ash.
+    let mut doc = model::BuildDoc {
+        weapon_upgrade: 25,
+        ..model::BuildDoc::default()
+    };
+    doc.inventory.slots = vec![
+        model::Slot {
+            name: "Miséricorde".into(),
+            order: 0,
+            infusion: Some("Magic".into()),
+            weapon_art: Some("Carian Retaliation".into()),
+            ..model::Slot::default()
+        },
+        model::Slot {
+            name: "Miséricorde".into(),
+            order: 1,
+            infusion: Some("Magic".into()),
+            weapon_art: Some("Bloodhound's Step".into()),
+            equip_index: Some(0),
+            ..model::Slot::default()
+        },
+    ];
+    let result = plan(&doc, &fixture_catalog::catalog());
+    assert_eq!(result.grants.len(), 2);
+    assert_eq!(
+        result.grants[0].item_id, result.grants[1].item_id,
+        "the twins are indistinguishable by item id, which is the whole problem"
+    );
+    assert_eq!(
+        result.grants[0].weapon_skill,
+        GEM_ITEM_CATEGORY | 80_100,
+        "the WORN copy (Bloodhound's Step) must be granted first"
+    );
+}
+
+#[test]
+fn the_read_back_target_names_the_slot_and_the_gem() {
+    // What the post-import read-back compares against: the fixture wears Miséricorde in planner
+    // armament index 2, which is `ChrAsmSlot` 5.
+    let (doc, _) = planned();
+    let wants = equipped_armament_skills(&doc, &fixture_catalog::catalog());
+    let worn = wants
+        .iter()
+        .find(|want| want.weapon == "Miséricorde")
+        .expect("the fixture wears it");
+    assert_eq!(worn.slot, 5);
+    assert_eq!(worn.art.as_deref(), Some("Bloodhound's Step"));
+    assert_eq!(worn.weapon_skill, GEM_ITEM_CATEGORY | 80_100);
+
+    // A slot the build leaves without a skill is still listed, with the sentinel, so the
+    // read-back reports it instead of skipping it.
+    let bare = wants
+        .iter()
+        .find(|want| want.weapon == "Poisoned Hand")
+        .expect("the fixture wears it");
+    assert_eq!(bare.art, None);
+    assert_eq!(bare.weapon_skill, NO_SKILL);
 }
