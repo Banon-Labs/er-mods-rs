@@ -38,14 +38,13 @@ use crate::character::player_game_data;
 use er_game_base::rva::{
     GET_EQUIP_MAGIC_ID_RVA as GET_EQUIP_MAGIC_ID,
     GET_EQUIPPED_GREATRUNE_RVA as GET_EQUIPPED_GREATRUNE,
-    GET_GAITEM_INS_BY_HANDLE_RVA as GET_GAITEM_INS_BY_HANDLE,
     GET_MAGIC_SLOTS_COUNT_RVA as GET_MAGIC_SLOTS_COUNT,
     GET_PARAM_ID_IN_SLOT_RVA as GET_PARAM_ID_IN_SLOT,
-    GET_PHYSIC_TEAR_BY_SLOT_RVA as GET_PHYSIC_TEAR_BY_SLOT,
-    GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA as GET_SWORD_ARTS_PARAM_FOR_WEAPON,
-    GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA as GET_WEAPON_GAITEM_HANDLE_BY_SLOT,
-    WORLD_CHR_MAN_GLOBAL_RVA, WORLD_CHR_MAN_PLAYER_INS_OFFSET,
+    GET_PHYSIC_TEAR_BY_SLOT_RVA as GET_PHYSIC_TEAR_BY_SLOT, WORLD_CHR_MAN_GLOBAL_RVA,
+    WORLD_CHR_MAN_PLAYER_INS_OFFSET,
 };
+
+use crate::gaitem::{GaitemLookupResult, worn_weapon_handle};
 
 /// `CS::EquipMagicData` pointer inside `EquipGameData`. Declared beside its only two readers
 /// rather than centrally: it is a field offset of one struct, not a cross-cutting singleton.
@@ -161,9 +160,6 @@ type ParamInSlotFn = unsafe extern "system" fn(usize, i32) -> i32;
 type OutParamGetterFn = unsafe extern "system" fn(usize, *mut i32, i32) -> *mut i32;
 type MagicIdFn = unsafe extern "system" fn(usize, i32) -> i32;
 type SlotsCountFn = unsafe extern "system" fn(usize, usize) -> u32;
-type GaitemHandleBySlotFn = unsafe extern "system" fn(usize, *mut u32, i32) -> *mut u32;
-type GaitemInsByHandleFn = unsafe extern "system" fn(*mut u32, *mut u32) -> *mut u32;
-type SwordArtsForWeaponFn = unsafe extern "system" fn(*mut u32, *mut u32) -> *mut u32;
 
 /// Read one equipment slot and name it, or `None` when the slot is empty or unnameable.
 ///
@@ -209,12 +205,7 @@ unsafe fn read_slot(
     })
 }
 
-/// The ash of war on the armament in `slot`, by way of its ACTUAL equipped gem.
-///
-/// Three native hops, none of them skippable: the slot names a gaitem handle, the handle names a
-/// gaitem instance, and only the instance knows which gem is in the weapon. Deriving the arts id
-/// from the weapon id instead (the menu path's `arts_id * 100` heuristic) misses every weapon whose
-/// gem id is not derived that way.
+/// The ash of war on the armament in `slot`, named -- see [`worn_armament`] for how it is read.
 ///
 /// # Safety
 ///
@@ -226,16 +217,37 @@ unsafe fn read_weapon_art(module_base: usize, msg: usize, slot: i32) -> Option<S
     unsafe { name_for(Kind::AshOfWar, msg, module_base, arts_id) }
 }
 
-/// The `SwordArtsParam` row the armament in `slot` is ACTUALLY holding, by way of its equipped gem.
+/// What the armament worn in `slot` ACTUALLY is: the instance's own item id, and the
+/// `SwordArtsParam` row it carries.
 ///
-/// Split out of [`read_weapon_art`] because the importer needs the id rather than the name: it
-/// compares what a slot holds against the gem the build asked for, and a name comparison would
-/// turn a wrong-row bug into a string-matching bug.
+/// Both halves matter, and reporting only the second is what made the last failure unreadable.
+/// A slot that holds the right ITEM but the wrong ash and a slot that holds a different armament
+/// entirely produce the same "wrong arts row" -- and several copies of one armament, differing
+/// only by the ash mounted on them, share one item id, so even the id alone cannot pick a copy.
+/// With both in hand the log line adjudicates itself instead of listing what it might have been.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WornArmament {
+    /// Category-tagged item id of the instance in the slot.
+    pub item_id: u32,
+    /// The `SwordArtsParam` row it carries, or `None` when it reports none.
+    pub arts_id: Option<u32>,
+}
+
+/// Read the armament worn in `slot`, or `None` when the slot is empty.
+///
+/// Three native hops, none of them skippable: the slot names a gaitem handle, the handle names a
+/// gaitem instance, and only the instance knows which gem is in the weapon. Deriving the arts id
+/// from the weapon id instead (the menu path's `arts_id * 100` heuristic) misses every weapon whose
+/// gem id is not derived that way.
+///
+/// `slot` is a `ChrAsmSlot` in exactly the numbering [`ARMAMENT_CHR_ASM_SLOTS`] and
+/// `GetParamIdInSlot` use -- the handle getter bottoms out in a single
+/// `chrAsm->equipmentGaItemHandles[slot]`, so the two read-backs are asking about the same slot.
 ///
 /// # Safety
 ///
 /// Game thread; `module_base` the loaded image base.
-pub unsafe fn equipped_weapon_arts_id(module_base: usize, slot: i32) -> Option<u32> {
+pub unsafe fn worn_armament(module_base: usize, slot: i32) -> Option<WornArmament> {
     let player = {
         // Safety: a fault-checked read of the singleton slot and one offset inside it.
         let world =
@@ -251,34 +263,27 @@ pub unsafe fn equipped_weapon_arts_id(module_base: usize, slot: i32) -> Option<u
         }
         player
     };
-    // Safety: verified RVAs within the loaded module.
-    let handle_by_slot: GaitemHandleBySlotFn =
-        unsafe { core::mem::transmute(module_base + GET_WEAPON_GAITEM_HANDLE_BY_SLOT) };
-    let ins_by_handle: GaitemInsByHandleFn =
-        unsafe { core::mem::transmute(module_base + GET_GAITEM_INS_BY_HANDLE) };
-    let arts_for_weapon: SwordArtsForWeaponFn =
-        unsafe { core::mem::transmute(module_base + GET_SWORD_ARTS_PARAM_FOR_WEAPON) };
+    // Safety: the caller's contract; the slot came from the caller's fixed table.
+    let handle = unsafe { worn_weapon_handle(module_base, player, slot) }?;
+    // Safety: as above. The record is the engine's own, at the engine's own length -- see
+    // `crate::gaitem` for what a short one costs.
+    let mut lookup = unsafe { GaitemLookupResult::from_handle(module_base, handle) }?;
+    // Safety: as above.
+    let arts_id = unsafe { lookup.sword_arts_id(module_base) };
+    Some(WornArmament {
+        item_id: lookup.item_id,
+        arts_id,
+    })
+}
 
-    // `GaitemLookupResult` is written through as an out-parameter; four words is the shape the
-    // native callers reserve, and it is ours, so nothing else can be scribbled on.
-    let mut lookup = [0u32; 4];
-    // Safety: our own buffer, and the slot came from the caller's fixed table.
-    unsafe { handle_by_slot(player, lookup.as_mut_ptr(), slot) };
-    if lookup[0] == 0 || lookup[0] == u32::MAX {
-        return None;
-    }
-    // BOTH arguments are the same pointer. Every native caller does this, and passing two
-    // different buffers reads a handle that was never written into the second one.
-    // Safety: one buffer, passed as the engine passes it.
-    unsafe { ins_by_handle(lookup.as_mut_ptr(), lookup.as_mut_ptr()) };
-    let mut arts = [0u32; 4];
-    // Safety: our own buffers; the callee writes the result through the second.
-    unsafe { arts_for_weapon(lookup.as_mut_ptr(), arts.as_mut_ptr()) };
-    let arts_id = arts[0];
-    if arts_id == 0 || arts_id == u32::MAX {
-        return None;
-    }
-    Some(arts_id)
+/// The `SwordArtsParam` row the armament in `slot` is ACTUALLY holding, by way of its equipped gem.
+///
+/// # Safety
+///
+/// Game thread; `module_base` the loaded image base.
+pub unsafe fn equipped_weapon_arts_id(module_base: usize, slot: i32) -> Option<u32> {
+    // Safety: the caller's contract.
+    unsafe { worn_armament(module_base, slot) }?.arts_id
 }
 
 /// Read the whole character.

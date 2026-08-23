@@ -76,10 +76,10 @@ const GET_REINFORCEMENT: usize = 0x672740;
 // same values from there.
 use er_game_base::rva::{
     GET_EQUIP_INVENTORY_DATA_RVA as GET_EQUIP_INVENTORY_DATA,
-    GET_GAITEM_INS_BY_HANDLE_RVA as GET_GAITEM_INS_BY_HANDLE,
-    GET_QUANTITY_BY_ITEM_ID_RVA as GET_QUANTITY_BY_ITEM_ID,
-    GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA as GET_SWORD_ARTS_PARAM_FOR_WEAPON, GLOBAL_CSGAITEM_RVA,
+    GET_QUANTITY_BY_ITEM_ID_RVA as GET_QUANTITY_BY_ITEM_ID, GLOBAL_CSGAITEM_RVA,
 };
+
+use crate::gaitem::GaitemLookupResult;
 
 /// `GameDataMan::main_player_game_data`, read as a raw pointer.
 ///
@@ -102,10 +102,8 @@ type MintWeaponFn = unsafe extern "system" fn(usize, *mut u32, i32, i32) -> *mut
 type HandleDtorFn = unsafe extern "system" fn(*mut u32);
 type GetInventoryFn = unsafe extern "system" fn(usize) -> usize;
 type GetQuantityFn = unsafe extern "system" fn(usize, *const i32) -> i32;
-type GaitemInsByHandleFn = unsafe extern "system" fn(*mut u32, *mut u32) -> *mut u32;
-type SwordArtsForWeaponFn = unsafe extern "system" fn(*mut u32, *mut u32) -> *mut u32;
-type SetReinforcementFn = unsafe extern "system" fn(*mut u32, i32);
-type GetReinforcementFn = unsafe extern "system" fn(*mut u32) -> i32;
+type SetReinforcementFn = unsafe extern "system" fn(*mut GaitemLookupResult, i32);
+type GetReinforcementFn = unsafe extern "system" fn(*mut GaitemLookupResult) -> i32;
 
 /// What one armament actually came out as, read off the instance the grant minted.
 ///
@@ -380,46 +378,24 @@ unsafe fn grant_armament(
     })
 }
 
-/// Fill a `GaitemLookupResult` from a handle.
-///
-/// The record is BOTH input and output and the engine passes the SAME pointer as both arguments;
-/// handing `GetGaitemInsByHandle` two different buffers makes it read a handle nobody wrote and
-/// return having done nothing, silently.
-///
-/// # Safety
-///
-/// Game thread; `module_base` the loaded image base.
-unsafe fn lookup_from_handle(module_base: usize, handle: &[u32; 4]) -> Option<[u32; 8]> {
-    // Safety: verified RVA inside the loaded image.
-    let ins_by_handle: GaitemInsByHandleFn =
-        unsafe { core::mem::transmute(module_base + GET_GAITEM_INS_BY_HANDLE) };
-    // Eight words for a twenty-byte record: ours, so nothing else can be scribbled on.
-    let mut lookup = [0u32; 8];
-    lookup[0] = handle[0];
-    // Safety: one buffer, passed as the engine passes it.
-    unsafe { ins_by_handle(lookup.as_mut_ptr(), lookup.as_mut_ptr()) };
-    // `+0x08` is the resolved `CSGaitemIns*`; zero means the handle named nothing.
-    let ins = u64::from(lookup[2]) | (u64::from(lookup[3]) << 32);
-    (ins != 0).then_some(lookup)
-}
-
 /// Set an armament instance's upgrade level and read it back. Returns the level the game reports.
 ///
 /// # Safety
 ///
 /// Game thread; `handle` must name a live weapon gaitem.
 unsafe fn apply_reinforcement(module_base: usize, handle: &[u32; 4], level: u16) -> i32 {
-    // Safety: delegated.
-    let Some(mut lookup) = (unsafe { lookup_from_handle(module_base, handle) }) else {
+    // Safety: delegated; the shared record is the length the engine writes.
+    let Some(mut lookup) = (unsafe { GaitemLookupResult::from_handle(module_base, handle[0]) })
+    else {
         return -1;
     };
     // Safety: verified RVAs; both are one-line forwarders to the instance's own virtual.
     let set: SetReinforcementFn = unsafe { core::mem::transmute(module_base + SET_REINFORCEMENT) };
     let get: GetReinforcementFn = unsafe { core::mem::transmute(module_base + GET_REINFORCEMENT) };
     // Safety: the lookup resolved a live instance, which is what both forwarders dereference.
-    unsafe { set(lookup.as_mut_ptr(), i32::from(level)) };
+    unsafe { set(&raw mut lookup, i32::from(level)) };
     // Safety: as above.
-    unsafe { get(lookup.as_mut_ptr()) }
+    unsafe { get(&raw mut lookup) }
 }
 
 /// The `SwordArtsParam` row an armament instance actually holds, through its own equipped gem.
@@ -428,14 +404,8 @@ unsafe fn apply_reinforcement(module_base: usize, handle: &[u32; 4], level: u16)
 ///
 /// Game thread; `handle` must name a live weapon gaitem.
 unsafe fn read_arts_id(module_base: usize, handle: &[u32; 4]) -> Option<u32> {
-    // Safety: delegated.
-    let mut lookup = unsafe { lookup_from_handle(module_base, handle) }?;
-    // Safety: verified RVA inside the loaded image.
-    let arts_for_weapon: SwordArtsForWeaponFn =
-        unsafe { core::mem::transmute(module_base + GET_SWORD_ARTS_PARAM_FOR_WEAPON) };
-    let mut arts = [0u32; 4];
-    // Safety: our own buffers; the callee writes the result through the second.
-    unsafe { arts_for_weapon(lookup.as_mut_ptr(), arts.as_mut_ptr()) };
-    let arts_id = arts[0];
-    (arts_id != 0 && arts_id != u32::MAX).then_some(arts_id)
+    // Safety: delegated to the shared record, which owns both hops.
+    let mut lookup = unsafe { GaitemLookupResult::from_handle(module_base, handle[0]) }?;
+    // Safety: as above.
+    unsafe { lookup.sword_arts_id(module_base) }
 }
