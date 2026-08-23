@@ -352,13 +352,54 @@ unsafe fn software_keyboard_result_state(job: usize) -> Option<i32> {
     unsafe { safe_read_i32(controller + SOFTWARE_KEYBOARD_CONTROLLER_RESULT_78_OFFSET) }
 }
 
-const NATIVE_PATH_EDITOR_BACKSLASH_SENTINEL: char = '\u{3254}';
+// THE 02_990 CONTROLLER SUBSTITUTES SOME PUNCTUATION ON THE WAY OUT, AND THE PLACEHOLDERS ARE
+// CIRCLED NUMBERS.
+//
+// What comes back from `controller + 0x80` is not always what was typed. The backslash case was
+// found first (a `Z:\...` path returned with U+3254 where each `\` had been) and decoded as a
+// one-off. The second case cost a user-visible bug: a build link pasted into the System>Quit field
+// came back with U+2473 where its `?` had been, so `validate_build_url` said "that link has no ?b=
+// build id" and the field refused a link that was correct (runtime-captured 2026-08-23,
+// `dll:6808d66f`, on `https://er-build-planner.nyasu.business/?b=bc2a932db14675`).
+//
+// The two placeholders name themselves once looked up: U+2473 is CIRCLED NUMBER TWENTY and U+3254
+// is CIRCLED NUMBER TWENTY-FOUR. The controller is emitting an INDEX into some table of substituted
+// characters, drawn as a circled numeral -- `?` is #20 and `\` is #24. Two points do not give the
+// rest of that table, and it is not a contiguous u16 array anywhere in the image (both constants
+// were searched for; their only co-location is inside high-entropy data).
+//
+// So this table holds what has been MEASURED, and anything else non-ASCII is reported rather than
+// guessed at -- see `native_field_text_sentinel_report`. The next unknown placeholder arrives in the
+// log as its own code point and becomes a one-line addition here with evidence behind it, instead
+// of another silent "that link is invalid".
+const NATIVE_FIELD_SENTINELS: [(char, char); 2] = [('\u{2473}', '?'), ('\u{3254}', '\\')];
 
-/// The native 02_990 controller rewrites every Windows backslash in its accepted DLString to U+3254
-/// (runtime-captured on unchanged `Z:\\...` paths). Decode that transport sentinel before validating
-/// the path; otherwise an untouched valid absolute path is rejected as relative.
-fn normalize_native_path_editor_text(text: String) -> String {
-    text.replace(NATIVE_PATH_EDITOR_BACKSLASH_SENTINEL, "\\")
+/// Decode every measured transport placeholder back to the character the player actually typed.
+///
+/// Applied to BOTH editors now. Scoping it to paths was the mistake that shipped the bug: a URL has
+/// no backslashes, so the build-url field skipped the decode entirely -- and then lost its `?`.
+fn decode_native_field_text(text: String) -> String {
+    let mut out = text;
+    for (sentinel, decoded) in NATIVE_FIELD_SENTINELS {
+        if out.contains(sentinel) {
+            out = out.replace(sentinel, decoded.encode_utf8(&mut [0_u8; 4]));
+        }
+    }
+    out
+}
+
+/// Any non-ASCII left after decoding, as `U+XXXX` codes, or `None` when the text is clean.
+///
+/// A planner link and a Windows path are both pure ASCII, so anything left here is a placeholder
+/// this DLL has not learned yet. Naming the code point turns the next occurrence into a fix rather
+/// than an investigation.
+fn native_field_text_sentinel_report(text: &str) -> Option<String> {
+    let unknown: Vec<String> = text
+        .chars()
+        .filter(|c| !c.is_ascii())
+        .map(|c| format!("U+{:04X}", c as u32))
+        .collect();
+    (!unknown.is_empty()).then(|| unknown.join(" "))
 }
 
 unsafe fn software_keyboard_text(job: usize) -> Option<String> {
@@ -442,13 +483,17 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
 
     let outcome = match unsafe { software_keyboard_text(job) } {
         Some(raw_text) => {
-            // The backslash sentinel is a PATH transport quirk of the 02_990 controller, so only
-            // the path editor decodes it. A URL has no backslashes to restore, and running the
-            // substitution on one would silently rewrite a character the player typed.
-            let text = match purpose {
-                KeyboardPurpose::SavePath => normalize_native_path_editor_text(raw_text.clone()),
-                KeyboardPurpose::BuildUrl => raw_text.clone(),
-            };
+            // BOTH purposes decode. The first version only decoded for paths, on the reasoning
+            // that "a URL has no backslashes" -- true, and beside the point: the controller also
+            // substitutes `?`, so the build-url field silently lost the one character that makes a
+            // link importable.
+            let text = decode_native_field_text(raw_text.clone());
+            if let Some(unknown) = native_field_text_sentinel_report(&text) {
+                append_autoload_debug(format_args!(
+                    "{}: the field returned placeholder(s) this DLL cannot decode: {unknown}. They are circled numerals standing in for punctuation; add them to NATIVE_FIELD_SENTINELS.",
+                    keyboard_tag(purpose)
+                ));
+            }
             append_autoload_debug(format_args!(
                 "{}: native editor accepted raw={raw_text:?} text={text:?} utf16_units={}",
                 keyboard_tag(purpose),
@@ -868,9 +913,57 @@ mod tests {
     #[test]
     fn native_keyboard_separator_sentinel_decodes_to_a_windows_backslash() {
         assert_eq!(
-            normalize_native_path_editor_text("Z:㉔home㉔banon㉔saves".to_owned()),
+            decode_native_field_text("Z:㉔home㉔banon㉔saves".to_owned()),
             r"Z:\home\banon\saves"
         );
+    }
+
+    /// THE EXACT BUG, AS THE GAME PRODUCED IT. Captured 2026-08-23 from `dll:6808d66f`: a correct
+    /// build link was typed into the System>Quit field and came back with U+2473 where its `?` had
+    /// been, so the gate reported "that link has no ?b= build id" and refused it eight times.
+    ///
+    /// The decode must restore the `?` AND the restored text must satisfy the same validator the
+    /// field runs -- decoding it into something the gate still rejects would fix nothing.
+    #[test]
+    fn the_question_mark_sentinel_decodes_and_the_link_then_validates() {
+        let from_the_field = "https://er-build-planner.nyasu.business/\u{2473}b=bc2a932db14675";
+        let decoded = decode_native_field_text(from_the_field.to_owned());
+        assert_eq!(
+            decoded,
+            "https://er-build-planner.nyasu.business/?b=bc2a932db14675"
+        );
+        assert_eq!(
+            er_build_import::validate_build_url(&decoded),
+            Ok("bc2a932db14675"),
+            "decoding must produce a link the gate accepts"
+        );
+        assert!(er_build_import::validate_build_url(from_the_field).is_err());
+    }
+
+    /// Both placeholders in one string, ASCII left alone. A link and a path never legitimately
+    /// contain non-ASCII, which is what makes "anything else non-ASCII" a reliable signal.
+    #[test]
+    fn decoding_is_confined_to_the_measured_placeholders() {
+        assert_eq!(
+            decode_native_field_text("a\u{2473}b\u{3254}c".to_owned()),
+            "a?b\\c"
+        );
+        let clean = "https://p/?b=abc123";
+        assert_eq!(decode_native_field_text(clean.to_owned()), clean);
+        assert_eq!(native_field_text_sentinel_report(clean), None);
+    }
+
+    /// An UNKNOWN placeholder must be NAMED, not swallowed. That is what makes the next one cost a
+    /// line of code instead of an investigation.
+    #[test]
+    fn an_undecoded_placeholder_is_reported_by_code_point() {
+        let decoded = decode_native_field_text("https://p/?b=abc\u{2460}123".to_owned());
+        assert_eq!(
+            native_field_text_sentinel_report(&decoded).as_deref(),
+            Some("U+2460")
+        );
+        let decoded = decode_native_field_text("x\u{2473}y\u{3254}z".to_owned());
+        assert_eq!(native_field_text_sentinel_report(&decoded), None);
     }
 
     /// The detour pair is shared by two editors and by the game itself, so the ONE thing that must
