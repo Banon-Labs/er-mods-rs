@@ -26,6 +26,40 @@
 //! (a queue that never becomes ready, a recipe that stops resolving) from re-arming forever. The
 //! save picker learned this the expensive way: an OS dialog that reopened ~57 ms after every cancel,
 //! with no way out of the flow (bd `er-effects-rs-rsxi`).
+//!
+//! # Why the clipboard is read while the field is OPEN and not only when it opens
+//!
+//! Ctrl+V inside the field does nothing -- the field has no paste, and the one native clipboard
+//! reader in the image is unreachable from it (`build_url_clipboard`'s module docs carry the
+//! evidence). For a while the answer was "read the clipboard once, when the field opens", and the
+//! user's own session shows exactly how that fails, from `er-effects-autoload-debug.log`
+//! (`dll:41638ed8`, 2026-08-23):
+//!
+//! ```text
+//! [+47142ms]  submitted native SoftwareKeyboardJob  initial_units=43   <- the bare prefix
+//!             ... the player pastes, and waits 36 seconds ...
+//! [+83008ms]  native editor accepted text="https://er-build-planner.nyasu.business/?b="  43 units
+//! [+83009ms]  REFUSED (nothing was typed after the prefix)
+//! [+155745ms] prefilling the editor from the clipboard (57 chars)
+//! [+155747ms] submitted native SoftwareKeyboardJob  initial_units=57
+//! [+158095ms] native editor accepted ...?b=bc2a932db14675  -> ACCEPTED, import applied
+//! ```
+//!
+//! Two things are proven there. The round trip is sound: 36 seconds in the field returned EXACTLY
+//! the 43 units that were put in it, so nothing is stale, dangling or misread. And the link only
+//! appeared on a LATER open because that is the only moment this DLL looked at the clipboard. The
+//! player experiences that as a one-entry lag -- paste, see nothing, accept, back out, re-enter,
+//! and there it is.
+//!
+//! So the mirror runs every frame the field is up: [`clipboard_sequence`] is a lock-free counter
+//! that says whether anything was copied at all, and only a change justifies a real read. A read
+//! that yields an importable link REPLACES the field through the game's own SetText. An unrelated
+//! copy cannot pass [`clipboard_build_url`]'s validation, so it cannot overwrite what the player is
+//! typing.
+//!
+//! The first few frames also re-read unconditionally, because under Wine the X11-to-Win32 clipboard
+//! bridge is asynchronous: a link copied moments before the row press can land after it, with the
+//! sequence number already bumped before we first looked.
 
 use super::*;
 
@@ -56,6 +90,58 @@ static REOPENS: AtomicUsize = AtomicUsize::new(0);
 /// The text the next submit should open with. Carries the player's rejected input back into the
 /// re-opened field, so a typo is corrected rather than retyped.
 static NEXT_TEXT: Mutex<Option<String>> = Mutex::new(None);
+
+/// The last link this DLL put into the live field, so the mirror re-pushes only on a real change.
+/// Cleared with the rest of the editor state, because a stale value here would make the first paste
+/// of the NEXT open look like a repeat and be skipped.
+static MIRRORED_TEXT: Mutex<Option<String>> = Mutex::new(None);
+
+/// The clipboard write-count last acted on. A frame whose [`clipboard_sequence`] still equals this
+/// costs one lock-free read and nothing else.
+static MIRRORED_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+/// Frames of the open field over which the clipboard is re-read even when its sequence number has
+/// not moved.
+///
+/// Wine's clipboard bridge is asynchronous: a link copied just before the row press can be visible
+/// to `GetClipboardSequenceNumber` before its DATA can be fetched, so the open-time read misses it
+/// and no later change ever arrives to re-trigger the mirror. A short unconditional window closes
+/// that hole. It is short enough that a player cannot type inside it, and the validation gate means
+/// even a re-read inside it cannot overwrite anything with non-link text.
+const MIRROR_UNCONDITIONAL_FRAMES: usize = 30;
+
+/// How far apart those unconditional re-reads are spaced.
+///
+/// A real read takes the process-wide clipboard lock, and under Wine that is a round trip to the
+/// X11 selection owner. Doing it on every frame of the window would be three dozen of them in half
+/// a second, for a bridge whose whole problem is that it is slow. Spacing them gives the same
+/// coverage for a handful of reads.
+const MIRROR_UNCONDITIONAL_STRIDE: usize = 10;
+
+/// Frames the open field has run. Reset per open.
+static MIRROR_FRAMES: AtomicUsize = AtomicUsize::new(0);
+
+/// The 02_990 MenuWindow this editor has been driving.
+///
+/// Both fields load the SAME movie, so the run post-hook has to decide which editor a given window
+/// belongs to, and "is the build-url keyboard up right now" alone is one frame too narrow: the
+/// keyboard's job slot clears the instant the terminal callback fires, while its window still runs
+/// for a frame or two afterwards. Those frames would be handed to the save picker's editor state,
+/// which is exactly what the routing exists to prevent. Remembering the pointer closes that gap.
+static EDITOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
+
+/// Mirror outcomes logged this open. A per-frame path that logged every attempt would bury the rest
+/// of the trace, and one that logged only the first would hide a success that followed a failure.
+static MIRROR_LOGS: AtomicUsize = AtomicUsize::new(0);
+
+/// Cap on those log lines per open.
+const MIRROR_LOG_LIMIT: usize = 4;
+
+/// Frames of the open field over which the end-caret is re-applied. Matches the path editor's own
+/// window: the field may not be focused on the frame it first runs, and taking focus is what resets
+/// a caret set too early. Each application resolves and destroys two SceneObjProxies, so it is kept
+/// as short as it can be while still outlasting focus.
+const CARET_APPLY_FRAMES: usize = 8;
 
 fn phase() -> EditorPhase {
     match PHASE.load(Ordering::SeqCst) {
@@ -112,7 +198,120 @@ pub(crate) fn reset_build_url_editor_state() {
     *NEXT_TEXT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    reset_build_url_mirror();
     reset_build_url_keyboard_state();
+}
+
+/// Forget what the mirror has pushed. Called on every open and close: a value carried across opens
+/// would make the next open's first paste look like a repeat and be skipped.
+fn reset_build_url_mirror() {
+    *MIRRORED_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    MIRRORED_SEQUENCE.store(0, Ordering::SeqCst);
+    MIRROR_FRAMES.store(0, Ordering::SeqCst);
+    MIRROR_LOGS.store(0, Ordering::SeqCst);
+    EDITOR_WINDOW.store(0, Ordering::SeqCst);
+}
+
+/// Does the link field own this 02_990 MenuWindow?
+///
+/// The keyboard being up settles it outright. Past that, only a window this editor was already
+/// driving counts, and only while the save picker has no editor of its own running -- so a recycled
+/// window address can never make the picker's field answer to the link field's state.
+pub(crate) fn build_url_editor_owns_window(window: usize) -> bool {
+    if build_url_keyboard_active() {
+        return true;
+    }
+    window != 0
+        && EDITOR_WINDOW.load(Ordering::SeqCst) == window
+        && !save_picker_path_editor_active()
+}
+
+/// Should this frame read the clipboard for real, rather than trusting its sequence number?
+///
+/// `reopens` is how many times this press has already been refused, and it is what keeps the
+/// unconditional window off a RE-open. On a first open the field holds whatever the clipboard said
+/// at press time, so re-reading can only improve it. On a re-open the field holds text the PLAYER
+/// edited into being wrong, and re-reading the same unchanged clipboard would throw their edit away
+/// and hand back the link they were in the middle of correcting. Past that, a genuine clipboard
+/// CHANGE still lands either way -- copying a new link is a deliberate act.
+///
+/// Split out so the rule is testable without a live field.
+fn mirror_rereads_unconditionally(frame: usize, reopens: usize) -> bool {
+    reopens == 0
+        && frame < MIRROR_UNCONDITIONAL_FRAMES
+        && frame.is_multiple_of(MIRROR_UNCONDITIONAL_STRIDE)
+}
+
+/// Per-frame work for the live link field's own `02_990` MenuWindow.
+///
+/// Called from `system_quit_menu_window_run_post` when the window that just ran is the 02_990 movie
+/// AND the build-url keyboard owns it -- the same context the save picker's editor uses for its
+/// caret, and the only context in which the field's SceneObjProxies are safe to resolve.
+///
+/// Two jobs, in order: put the caret at the end of the prefilled link so typing appends, and mirror
+/// a newly copied link into the field. Both are no-ops once satisfied.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, `menu_window` live.
+pub(crate) unsafe fn build_url_editor_window_run(base: usize, menu_window: usize) {
+    EDITOR_WINDOW.store(menu_window, Ordering::SeqCst);
+    let frame = MIRROR_FRAMES.fetch_add(1, Ordering::SeqCst);
+    if frame < CARET_APPLY_FRAMES {
+        // The field is not necessarily focused on the frame its window first runs, and taking focus
+        // is what resets a caret set too early -- so this repeats over the same short window the
+        // path editor's caret pass uses. Without it the link field opens with its caret at index 0
+        // and a player's first keystroke lands in FRONT of the prefilled link.
+        let _ = unsafe { place_text_input_02_990_caret_at_end(base, menu_window) };
+    }
+    unsafe { mirror_clipboard_into_field(base, menu_window, frame) };
+}
+
+/// Push a newly copied link into the open field, if there is one.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, `menu_window` live.
+unsafe fn mirror_clipboard_into_field(base: usize, menu_window: usize, frame: usize) {
+    let sequence = clipboard_sequence() as usize;
+    if sequence == MIRRORED_SEQUENCE.load(Ordering::SeqCst)
+        && !mirror_rereads_unconditionally(frame, REOPENS.load(Ordering::SeqCst))
+    {
+        return;
+    }
+    MIRRORED_SEQUENCE.store(sequence, Ordering::SeqCst);
+    let Some(link) = clipboard_build_url() else {
+        return;
+    };
+    {
+        let mut mirrored = MIRRORED_TEXT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if mirrored.as_deref() == Some(link.as_str()) {
+            return;
+        }
+        // Claim it BEFORE the native call. A push that the engine refuses is not retried on the
+        // next frame -- retrying a refused push every frame is how a per-frame path turns one
+        // failure into a permanent stall -- and the sequence number still moves on the next copy.
+        *mirrored = Some(link.clone());
+    }
+    let outcome = {
+        let utf16: Vec<u16> = link.encode_utf16().chain(core::iter::once(0)).collect();
+        unsafe { set_text_input_02_990_text(base, menu_window, &utf16) }
+    };
+    if MIRROR_LOGS.fetch_add(1, Ordering::SeqCst) < MIRROR_LOG_LIMIT {
+        match outcome {
+            Ok(detail) => append_autoload_debug(format_args!(
+                "system-quit-build-url: mirrored the copied link into the open field ({} chars, clipboard seq={sequence}) {detail}",
+                link.chars().count()
+            )),
+            Err(error) => append_autoload_debug(format_args!(
+                "system-quit-build-url: could NOT mirror the copied link into the open field window=0x{menu_window:x}; {error}"
+            )),
+        }
+    }
 }
 
 /// Menu-pump step: submit a queued field, and consume the answer to one that closed.
@@ -160,18 +359,29 @@ pub(crate) unsafe fn build_url_editor_menu_pump() {
         set_phase(EditorPhase::Idle);
         return;
     }
-    let initial: Vec<u16> = {
+    let text = {
         let guard = NEXT_TEXT
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let text = guard
+        guard
             .as_deref()
-            .unwrap_or(er_build_import::BUILD_URL_PREFIX);
-        text.encode_utf16().chain(core::iter::once(0)).collect()
+            .unwrap_or(er_build_import::BUILD_URL_PREFIX)
+            .to_owned()
     };
+    let initial: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
     // Safety: menu-pump context, live Quit dialog.
     if unsafe { submit_build_url_keyboard(dialog, &initial) } {
         set_phase(EditorPhase::Open);
+        // The field now holds this, so the mirror's first frames -- which will read the very
+        // clipboard this text came from -- see no change and leave it alone. Baselining the
+        // SEQUENCE here as well is what makes a re-open quiet: it means "nothing has been copied
+        // since this field went up", so only a deliberate new copy can move the text under a
+        // player who is mid-correction.
+        reset_build_url_mirror();
+        MIRRORED_SEQUENCE.store(clipboard_sequence() as usize, Ordering::SeqCst);
+        *MIRRORED_TEXT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(text);
     }
     // A submit that did not take leaves the phase Pending, so the next pump retries. The usual
     // cause is the dialog's queue still owning the previous job, which clears itself.
@@ -213,14 +423,145 @@ unsafe fn on_accepted(text: String) {
             // Carry the rejected text back into the field so it can be corrected in place. This IS
             // the "did not accept" the player sees: the field they just accepted is in front of
             // them again, unchanged, with the reason on the row behind it.
+            //
+            // EXCEPT when there is nothing to correct. The live log caught this: a player cleared
+            // the field, accepted, and the refusal re-opened with `initial_units=0` -- an empty box
+            // with no prefix to build on and no way back to one short of backing out entirely.
+            // Empty is not a typo, so an empty accept restarts from the clipboard-or-prefix the
+            // first open would have used.
             *NEXT_TEXT
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(text.clone());
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(reopen_text_after_rejection(&text));
             set_phase(EditorPhase::Pending);
             append_autoload_debug(format_args!(
                 "system-quit-build-url: REFUSED {text:?} ({}); re-opening the field ({reopens}/{MAX_REJECTED_REOPENS})",
                 rejection.indicator()
             ));
+        }
+    }
+}
+
+/// What a refused accept should put back into the field.
+///
+/// Split out from [`on_accepted`] so the rule is testable on the host: the native re-open path it
+/// feeds is not.
+fn reopen_text_after_rejection(rejected: &str) -> String {
+    if rejected.trim().is_empty() {
+        build_url_initial_text()
+    } else {
+        rejected.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE `initial_units=0` STEP FROM THE LIVE LOG. A player cleared the field and accepted; the
+    /// refusal carried the empty string back and re-opened an empty box. An empty accept is not a
+    /// typo to correct in place, so it must restart from something usable.
+    ///
+    /// `build_url_initial_text` reads the clipboard, which a host test has no control over, so the
+    /// assertion is the property that matters either way: what comes back is never empty, and it is
+    /// either the bare prefix or an importable link.
+    #[test]
+    fn an_empty_accept_reopens_with_something_to_build_on() {
+        for cleared in ["", "   ", "\t\n"] {
+            let reopened = reopen_text_after_rejection(cleared);
+            assert!(
+                !reopened.trim().is_empty(),
+                "an empty accept must not re-open an empty field, got {reopened:?}"
+            );
+            assert!(
+                reopened == er_build_import::BUILD_URL_PREFIX
+                    || er_build_import::validate_build_url(&reopened).is_ok(),
+                "the re-open text must be the prefix or an importable link, got {reopened:?}"
+            );
+        }
+    }
+
+    /// A REAL typo is still carried back verbatim -- that is the whole point of the re-open, and
+    /// replacing it with the prefix would throw away what the player typed.
+    #[test]
+    fn a_typo_is_carried_back_verbatim_for_correction() {
+        for typo in [
+            "https://er-build-planner.nyasu.business/?b=",
+            "https://er-build-planner.nyasu.business/?b=NOT HEX",
+            "nonsense",
+        ] {
+            assert_eq!(reopen_text_after_rejection(typo), typo);
+        }
+    }
+
+    /// The mirror must not fire on the text it just put in. Seeding [`MIRRORED_TEXT`] at submit is
+    /// what stops the open-time prefill from being re-pushed on frame one -- a push into a field
+    /// the player may already be typing in.
+    #[test]
+    fn the_mirror_treats_the_submitted_text_as_already_shown() {
+        reset_build_url_mirror();
+        let prefilled = "https://er-build-planner.nyasu.business/?b=bc2a932db14675";
+        *MIRRORED_TEXT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(prefilled.to_owned());
+        let mirrored = MIRRORED_TEXT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(mirrored.as_deref(), Some(prefilled));
+        drop(mirrored);
+        reset_build_url_mirror();
+        assert!(
+            MIRRORED_TEXT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none(),
+            "a value carried across opens would make the next open's first paste look like a repeat"
+        );
+    }
+
+    /// The unconditional window exists for Wine's asynchronous clipboard bridge, and it must cost a
+    /// HANDFUL of clipboard locks, not one per frame. Reading on every frame of the window would be
+    /// three dozen round trips to the X11 selection owner in half a second.
+    #[test]
+    fn the_unconditional_rereads_are_spaced_and_bounded() {
+        let reread: Vec<usize> = (0..120)
+            .filter(|f| mirror_rereads_unconditionally(*f, 0))
+            .collect();
+        assert_eq!(
+            reread,
+            vec![0, 10, 20],
+            "the window must open with a read and then space them"
+        );
+        assert!(
+            !mirror_rereads_unconditionally(MIRROR_UNCONDITIONAL_FRAMES, 0),
+            "past the window, only a clipboard CHANGE may cost a read"
+        );
+    }
+
+    /// A RE-open holds text the player edited into being wrong, and re-reading an unchanged
+    /// clipboard there would replace their correction-in-progress with the very link they were
+    /// editing away from. Only a deliberate new copy -- which moves the sequence number, not this
+    /// rule -- may touch a re-opened field.
+    #[test]
+    fn a_reopen_never_rereads_an_unchanged_clipboard() {
+        for reopens in 1..=MAX_REJECTED_REOPENS {
+            for frame in 0..MIRROR_UNCONDITIONAL_FRAMES + 5 {
+                assert!(
+                    !mirror_rereads_unconditionally(frame, reopens),
+                    "frame {frame} of re-open {reopens} must not overwrite the player's text"
+                );
+            }
+        }
+    }
+
+    /// Both per-frame windows resolve and destroy two SceneObjProxies per application, so neither
+    /// may be open-ended. A field can be up for minutes.
+    #[test]
+    fn the_per_frame_windows_are_bounded() {
+        const {
+            assert!(CARET_APPLY_FRAMES > 0 && CARET_APPLY_FRAMES <= 16);
+            assert!(MIRROR_UNCONDITIONAL_FRAMES > 0 && MIRROR_UNCONDITIONAL_FRAMES <= 60);
+            assert!(MIRROR_UNCONDITIONAL_STRIDE > 1);
         }
     }
 }

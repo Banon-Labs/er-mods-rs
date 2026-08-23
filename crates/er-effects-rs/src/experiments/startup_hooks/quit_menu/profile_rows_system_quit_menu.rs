@@ -1768,22 +1768,40 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
     // BOTH link/path fields load this SAME resource -- the build-url editor reuses the path
-    // editor's derived 02_990 movie rather than deriving a second one. So the window state below
-    // must only be routed to the SAVE PICKER's editor: its stale-window watchdog would otherwise
-    // see the build-url field's window, decide the picker's own job had gone quiet, and cancel it;
-    // and `apply_path_editor_window_position` places the window against the ProfileSelect layout,
-    // which is not where the Quit tab's field belongs.
-    if filename == "02_990_TextInput_PathEditor" && !build_url_keyboard_active() {
+    // editor's derived 02_990 movie rather than deriving a second one -- so this is the one place
+    // that decides which of the two a running window belongs to, and gives each its own per-frame
+    // work. Getting that wrong in either direction is expensive: routing the link field's window
+    // into the picker's editor state lets the picker's stale-window watchdog cancel the picker's
+    // own job and places the window against the ProfileSelect layout, and routing the picker's
+    // window to the link field would drive a clipboard mirror into a folder path.
+    if filename == "02_990_TextInput_PathEditor" {
         let owner =
             unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
-        if owner != 0 {
-            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
-                .unwrap_or_default();
-            if save_picker_note_path_editor_window_state(owner, state)
-                && let Ok(base) = game_module_base()
-            {
-                unsafe { apply_path_editor_window_position(base, owner) };
+        let state = if owner != 0 {
+            unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }.unwrap_or_default()
+        } else {
+            0
+        };
+        // A window is only worth touching while it is still RUNNING; a terminal result means its
+        // SceneObjProxy teardown has begun and a resolve would hand back released objects. The
+        // save picker's own state note already applies that rule, so the build-url branch applies
+        // the same one rather than inventing a second answer.
+        let live = text_input_02_990_window_is_live(state);
+        if owner != 0 && build_url_editor_owns_window(owner) {
+            // The LINK field. It shares this movie with the path editor, so it must NOT be routed
+            // into the save picker's editor state: that would let the picker's stale-window
+            // watchdog cancel the picker's own job, and would place the window against the
+            // ProfileSelect layout, which is not where the Quit tab's field belongs. What it DOES
+            // want is the parts of the path editor's per-frame work that are window-generic -- the
+            // end-caret, and now the live clipboard mirror.
+            if live && let Ok(base) = game_module_base() {
+                unsafe { build_url_editor_window_run(base, owner) };
             }
+        } else if owner != 0
+            && save_picker_note_path_editor_window_state(owner, state)
+            && let Ok(base) = game_module_base()
+        {
+            unsafe { apply_path_editor_window_position(base, owner) };
         }
     }
     if matches!(

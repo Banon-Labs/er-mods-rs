@@ -41,7 +41,18 @@ const PATH_EDITOR_WINDOW_STALE_PROFILE_TICKS: usize = 3;
 /// Distinct Scaleform cache key for the path editor. The file-open hook redirects this miss to the
 /// canonical 02_990 bytes and derives an inline movie without mutating the game's shared native
 /// text-input resource.
-const TEXT_INPUT_RESOURCE: [u16; 28] = [
+///
+/// `static`, NOT `const`, and that distinction is load-bearing. The job constructor copies the
+/// [`SoftwareKeyboardConfig`] struct BY VALUE into the job (`MOVUPS XMM0,[RSI]; MOVUPS
+/// [R14+0x150],XMM0` at `0x14081bec2`) -- pointer included -- and the movie is not loaded then. It
+/// is loaded later, from the job's own first step: `FUN_14081cd70` reads the copied config back out
+/// of `job+0x150` and takes `config.resource` as the `CSScaleformLoadInfo::filename` it hands to
+/// `FUN_1407fb050`. That dereference happens long after [`submit_software_keyboard`] has returned,
+/// so the bytes must outlive it. A `const` is inlined as a temporary at each use site, and
+/// `TEXT_INPUT_RESOURCE.as_ptr()` on one has no lifetime past its statement unless the compiler
+/// happens to promote it -- a guarantee this must not depend on when the failure mode is the
+/// keyboard trying to load a movie named out of reused stack.
+static TEXT_INPUT_RESOURCE: [u16; 28] = [
     b'0' as u16,
     b'2' as u16,
     b'_' as u16,
@@ -186,7 +197,10 @@ pub(crate) fn save_picker_path_editor_active() -> bool {
 
 /// Called only from the owned 02_990 MenuWindowJob::Run post-hook. A terminal MenuWindow result
 /// means its SceneObjProxy teardown has begun: never write another transform through that proxy.
-fn path_editor_window_is_live(state: i32) -> bool {
+///
+/// Shared with the build-url field, which loads the SAME movie and needs the same answer -- one
+/// rule, so the two editors cannot drift into disagreeing about when a window is safe to touch.
+pub(crate) fn text_input_02_990_window_is_live(state: i32) -> bool {
     // A newly-created MenuWindow begins at zero before its first controller update. Continue is 1;
     // only Success/Failed are terminal. Treating zero as terminal cancelled every editor during its
     // construction frame and queued a ProfileSelect rebuild against half-bound child components.
@@ -194,7 +208,7 @@ fn path_editor_window_is_live(state: i32) -> bool {
 }
 
 pub(crate) fn save_picker_note_path_editor_window_state(window: usize, state: i32) -> bool {
-    if path_editor_window_is_live(state) {
+    if text_input_02_990_window_is_live(state) {
         let previous_window = SAVE_PICKER_PATH_EDITOR_WINDOW.swap(window, Ordering::SeqCst);
         SAVE_PICKER_PATH_EDITOR_WINDOW_LAST_PROFILE_TICK.store(
             er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
@@ -628,6 +642,31 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
 /// allocation/ctor/submit sequence to keep in step with the native one -- and, worse, a second pair
 /// of detours on the same two prologues.
 ///
+/// # WHICH ARGUMENTS THE NATIVE SIDE KEEPS, AND FOR HOW LONG
+///
+/// Every pointer below is handed to code that outlives this call, so "does it copy?" is settled
+/// here from the 1.16.2 dump rather than re-litigated each time the field misbehaves. It has been
+/// blamed for a stale field twice, and it was not the cause either time.
+///
+/// * `initial` is COPIED THREE TIMES over, and none of the copies keeps the pointer.
+///   `enter_name` (`0xe70c00`) and `set_initial` (`0xe709f0`) both run it through
+///   `DLTX::DLString::CopyFromU16Array` into a stack `DLString` and then assign that into the
+///   validator with `0x142416ef0` (a `DLString::substr(dst, src, 0, -1)`). The ctor takes it a third
+///   time as its 5th argument and calls `DLTX::DLString<wchar_t>::FromU16Array(job+0xe8, initial,
+///   GetMenuHeapAllocator())` -- which measures the string, allocates on the menu heap and copies.
+///   The live log is the independent confirmation: a field left open for 36 seconds returned
+///   EXACTLY the 43 code units it was opened with.
+/// * `validator` is DEEP-COPIED into `job+0x60` by `0x1407f3eb0`, which runs `DLString::Copy` over
+///   both of its strings. That is why destroying the stack validator immediately after the ctor is
+///   correct and not a use-after-free.
+/// * `config` is copied BY VALUE into `job+0x150` (16 bytes, one `MOVUPS` pair). The struct's
+///   `resource` POINTER is copied with it and dereferenced much later -- see
+///   [`TEXT_INPUT_RESOURCE`], which is a `static` for exactly that reason.
+/// * `empty_callback` is consumed during the ctor: it reads slot 7 (the MSVC `std::function`
+///   pointer), and ours is zeroed, so nothing is cloned and `job+0x1a0` stays null. That null is
+///   what the terminal-callback detour exists to stand in for -- the native leaf would
+///   `ThrowBadFunctionCallException` on it.
+///
 /// # Safety
 ///
 /// Menu-pump context, with `dialog` a live `PropertyEditDialog`/`GenericListSelectDialog`. Calls
@@ -1005,10 +1044,10 @@ mod tests {
 
     #[test]
     fn terminal_window_states_are_never_transform_targets() {
-        assert!(path_editor_window_is_live(0));
-        assert!(path_editor_window_is_live(MENU_JOB_STATE_CONTINUE));
-        assert!(!path_editor_window_is_live(MENU_JOB_STATE_SUCCESS));
-        assert!(!path_editor_window_is_live(MENU_JOB_STATE_FAILED));
+        assert!(text_input_02_990_window_is_live(0));
+        assert!(text_input_02_990_window_is_live(MENU_JOB_STATE_CONTINUE));
+        assert!(!text_input_02_990_window_is_live(MENU_JOB_STATE_SUCCESS));
+        assert!(!text_input_02_990_window_is_live(MENU_JOB_STATE_FAILED));
     }
 
     #[test]

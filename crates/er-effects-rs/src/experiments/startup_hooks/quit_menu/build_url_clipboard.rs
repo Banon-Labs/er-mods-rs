@@ -1,28 +1,38 @@
-//! Reading the Windows clipboard, so the build-url editor can open pre-filled with a copied link.
+//! Reading the Windows clipboard, so the build-url editor can be filled with a copied link.
 //!
 //! # Why this exists at all
 //!
-//! The obvious design is "open a text field and let the player paste". That does not work: Elden
-//! Ring's native `CS::SoftwareKeyboard` cannot paste. The game's import table links
-//! `OpenClipboard`, `GetClipboardData` and `SetClipboardData`, but a byte scan of the whole 98 MB
-//! image for `call`/`jmp`/`mov` against all three IAT slots (`0x1429af920`, `0x1429af930`,
-//! `0x1429af940`) finds ZERO references -- they are linked by the CRT and never called. Ctrl+V in
-//! that field does nothing, and no amount of work on our side changes that.
+//! The obvious design is "open a text field and let the player paste". That does not work: the
+//! field the row opens has no paste. Ctrl+V inside it is inert, and the reason is structural
+//! rather than a missing binding -- see [`build_url_editor`] for the full path, but in short the
+//! visible field is a Scaleform `DefineEditText` inside `02_990`, driven by the game's own
+//! keyboard-event handling, and nothing in that handling consults a clipboard.
 //!
-//! So the paste happens on OUR side of the boundary, before the field opens: this DLL reads the
-//! clipboard and hands the text to the keyboard as its initial value. The player copies a link in
-//! their browser, presses the row, and the link is already there.
+//! The image DOES contain a working `CF_UNICODETEXT` reader -- `FUN_1426760c0`, which opens the
+//! clipboard on an HWND held at `this+0x8b0` and copies the wide string into a `DLString`. It is
+//! not reachable from here: it occupies slot `+0x100` of exactly one vtable (`0x143296bb8`, the
+//! only vtable in the whole image that holds it), whose siblings measure text through
+//! `GLOBAL_FD4FontManager`, and no call site for that slot exists. The software keyboard's own
+//! stack is a different object graph entirely -- `SoftwareKeyboard::detail::
+//! SoftwareKeyboardManagerImpl` (Steam gamepad text input) with a Scaleform `02_990` MenuWindow
+//! fallback -- and neither half touches that vtable.
+//!
+//! So the paste happens on OUR side of the boundary: this DLL reads the clipboard and puts the
+//! text into the field. Once when the field opens, and again whenever the clipboard CHANGES while
+//! it is open -- the second half is what makes a player's Ctrl+V appear to work, because by the
+//! time they press it they have already copied the link.
 //!
 //! Under Wine the Windows clipboard is bridged to the host X11/Wayland selection, so a link copied
-//! in a Linux browser arrives here. That bridge is the one part of this that cannot be proven
-//! statically; a failure to read simply falls back to the bare prefix, which is the same experience
-//! as not having a link copied.
+//! in a Linux browser arrives here. That bridge is asynchronous, which is the other reason the
+//! open-time read alone was not enough: a link copied moments before the row press can arrive
+//! after it. A failure to read simply leaves the field as it was.
 
 use super::*;
 
 use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
+    OpenClipboard,
 };
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 
@@ -90,22 +100,42 @@ unsafe fn read_open_clipboard() -> Option<String> {
     String::from_utf16(&units).ok()
 }
 
+/// A monotonically increasing count of clipboard writes, process-wide.
+///
+/// This is the cheap half of the live mirror: it needs no clipboard lock, cannot fail, and cannot
+/// block another process, so the open field can ask it every frame. Only a CHANGE justifies the
+/// real read below. Zero is returned when the caller has no clipboard access at all, which the
+/// mirror treats as "no news" rather than as a change.
+pub(crate) fn clipboard_sequence() -> u32 {
+    // Safety: a pure read of a process-wide counter; it takes no handle and locks nothing.
+    unsafe { GetClipboardSequenceNumber() }
+}
+
+/// The clipboard's contents when they are an importable build link, trimmed. `None` for anything
+/// else, including an unreadable clipboard.
+///
+/// The clipboard is only used when it VALIDATES. Filling the field with arbitrary clipboard
+/// contents would mean a player who last copied a paragraph gets a paragraph -- and has to clear it
+/// before they can type -- strictly worse than leaving the field alone. It is also what makes the
+/// live mirror safe to run while the field is open: an unrelated copy cannot overwrite what the
+/// player is typing, because it cannot pass this gate.
+pub(crate) fn clipboard_build_url() -> Option<String> {
+    let text = clipboard_text()?;
+    er_build_import::validate_build_url(&text).ok()?;
+    Some(text.trim().to_owned())
+}
+
 /// The text the editor should open with: the clipboard when it holds an importable link, else the
 /// bare prefix for the player to complete.
-///
-/// The clipboard is only used when it VALIDATES. Prefilling with arbitrary clipboard contents would
-/// mean a player who last copied a paragraph opens the field holding a paragraph, and has to clear
-/// it before they can type -- strictly worse than the prefix.
 pub(crate) fn build_url_initial_text() -> String {
-    match clipboard_text() {
-        Some(text) if er_build_import::validate_build_url(&text).is_ok() => {
-            let trimmed = text.trim().to_owned();
+    match clipboard_build_url() {
+        Some(link) => {
             append_autoload_debug(format_args!(
                 "system-quit-build-url: prefilling the editor from the clipboard ({} chars)",
-                trimmed.chars().count()
+                link.chars().count()
             ));
-            trimmed
+            link
         }
-        _ => er_build_import::BUILD_URL_PREFIX.to_owned(),
+        None => er_build_import::BUILD_URL_PREFIX.to_owned(),
     }
 }
