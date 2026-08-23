@@ -376,6 +376,7 @@ pub(crate) unsafe fn build_url_editor_menu_pump() {
     //    field the player closed with the back action. Absence is the only signal it emits, and
     //    this is where it is acted on: the row must never stay dead for the rest of the session
     //    because a close went unreported (user report + `dll:9caf1a27`, 2026-08-23).
+    build_url_menu_pump_tick();
     if build_url_keyboard_latch_is_abandoned() {
         release_abandoned_build_url_keyboard();
     }

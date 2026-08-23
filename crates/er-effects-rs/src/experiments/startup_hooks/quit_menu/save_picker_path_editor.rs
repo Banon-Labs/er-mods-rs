@@ -156,14 +156,28 @@ pub(crate) enum KeyboardPurpose {
 
 static BUILD_URL_EDITOR_ACTIVE_JOB: AtomicUsize = AtomicUsize::new(0);
 
-/// The `PROFILE_SELECT_WINDOW_RUN_TICKS` value when the link field's window was last seen RUNNING.
+/// Menu-pump passes since the DLL loaded, counted by [`build_url_menu_pump_tick`].
+///
+/// NOT `PROFILE_SELECT_WINDOW_RUN_TICKS`, which the first version of this watchdog used and which
+/// made it inert: that counter is incremented only by the `05_010_ProfileSelect` branch of the run
+/// post-hook, so on the System>Quit tab -- where the link field actually lives -- it never advances
+/// at all. `now - last` stayed 0 forever and no latch was ever judged abandoned (measured
+/// `dll:f9d11870`, 2026-08-23: four opens, zero releases). A watchdog is only as good as the clock
+/// it reads, and this one now reads a clock that ticks where the field is.
+static BUILD_URL_MENU_PUMP_TICKS: AtomicUsize = AtomicUsize::new(0);
+
+/// The [`BUILD_URL_MENU_PUMP_TICKS`] value when the link field's window was last seen RUNNING.
 ///
 /// A closed 02_990 window is not reported terminal to us -- it simply stops being run, so the
-/// live->terminal transition the first fix watched for never arrives (measured `dll:9caf1a27`,
-/// 2026-08-23: zero releases across four opens closed with B). Absence is the only signal the
-/// closed field emits, and this stamp is what makes absence measurable. The save picker's own
-/// editor has carried the same stamp since long before this.
+/// live->terminal transition an earlier fix watched for never arrives. Absence is the only signal
+/// the closed field emits, and this stamp is what makes absence measurable.
 static BUILD_URL_EDITOR_WINDOW_LAST_TICK: AtomicUsize = AtomicUsize::new(0);
+
+/// Advance the link field's clock. Called once per menu-pump pass, unconditionally, because the
+/// pump is the one thing that runs whether or not the field's own window still does.
+pub(crate) fn build_url_menu_pump_tick() -> usize {
+    BUILD_URL_MENU_PUMP_TICKS.fetch_add(1, Ordering::SeqCst) + 1
+}
 static BUILD_URL_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>>> = OnceLock::new();
 /// The link field's own live 02_990 MenuWindow, kept apart from the picker's for the same reason
 /// their movies are: the picker's stale-window watchdog would otherwise see this window, decide its
@@ -176,7 +190,7 @@ static BUILD_URL_EDITOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
     if text_input_02_990_window_is_live(state) {
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(
-            er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+            BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
         if BUILD_URL_EDITOR_WINDOW.swap(window, Ordering::SeqCst) == 0 {
@@ -214,12 +228,12 @@ pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> b
 /// Deposits `Cancelled` only if no outcome is already waiting: an accept records its text from the
 /// terminal callback and its window goes terminal immediately afterwards, so overwriting here would
 /// turn every accepted link into a cancel.
-/// How many window-run ticks the link field may go unseen before its latch is treated as debris.
+/// How many menu-pump passes the link field may go unseen before its latch is treated as debris.
 ///
-/// The counter advances once per 02_990 MenuWindow run, so this is the game's own cadence rather
-/// than wall-clock: a field that is genuinely up stamps it every pass and can never reach the
-/// threshold, while a closed one stops stamping immediately. Small enough that the row is pressable
-/// again well inside the time it takes a player to move the cursor back to it.
+/// The pump runs once per menu frame, so this is the game's own cadence rather than wall-clock: a
+/// field that is genuinely up is seen on every pass and can never reach the threshold, while a
+/// closed one stops being seen immediately. Small enough that the row is pressable again well
+/// inside the time it takes a player to move the cursor back to it.
 const BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT: usize = 8;
 
 /// Has the link field's window stopped being run while its keyboard is still latched?
@@ -236,7 +250,7 @@ pub(crate) fn build_url_keyboard_latch_is_abandoned() -> bool {
     if last == 0 {
         return false;
     }
-    let now = er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst);
+    let now = BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst);
     now.saturating_sub(last) > BUILD_URL_WINDOW_UNSEEN_TICK_LIMIT
 }
 
@@ -1276,13 +1290,12 @@ mod tests {
     /// going UNSEEN, measured in the game's own window-run ticks.
     #[test]
     fn a_link_field_window_that_stops_running_abandons_its_latch() {
-        use er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS;
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0x7777_0000, Ordering::SeqCst);
         // The counter starts at 0 off the game thread, and every case here reasons about ticks
         // BEFORE `now`; give it a base so those subtractions describe a real elapsed window instead
         // of underflowing.
         let now = 1_000;
-        PROFILE_SELECT_WINDOW_RUN_TICKS.store(now, Ordering::SeqCst);
+        BUILD_URL_MENU_PUMP_TICKS.store(now, Ordering::SeqCst);
 
         // Seen this very tick: a field that is genuinely up must NEVER be judged abandoned.
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(now, Ordering::SeqCst);
@@ -1318,5 +1331,26 @@ mod tests {
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(1, Ordering::SeqCst);
         assert!(!build_url_keyboard_latch_is_abandoned());
+    }
+    /// THE WATCHDOG IS ONLY AS GOOD AS THE CLOCK IT READS.
+    ///
+    /// Its first version read `PROFILE_SELECT_WINDOW_RUN_TICKS`, which is incremented ONLY by the
+    /// `05_010_ProfileSelect` branch of the run post-hook. The link field lives on the System>Quit
+    /// tab, where that window never runs, so the counter was frozen, `now - last` was always 0, and
+    /// no latch could ever be judged abandoned -- an inert watchdog that shipped and tested green
+    /// (`dll:f9d11870`, 2026-08-23: four opens, zero releases). This pins the clock to the pump.
+    #[test]
+    fn the_abandon_clock_advances_on_the_pump_not_on_profile_select() {
+        let before = BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst);
+        let after = build_url_menu_pump_tick();
+        assert_eq!(
+            after,
+            before + 1,
+            "each pump pass must advance the clock the watchdog reads"
+        );
+        assert!(
+            build_url_menu_pump_tick() > after,
+            "and keep advancing, or an abandoned latch is never noticed"
+        );
     }
 }
