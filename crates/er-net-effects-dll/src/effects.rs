@@ -1382,9 +1382,9 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
     let stack_adds = EFFECT_HOTKEY_PENDING_STACK_ADD.swap(0, Ordering::SeqCst);
     let stack_removes = EFFECT_HOTKEY_PENDING_STACK_REMOVE.swap(0, Ordering::SeqCst);
     let arrow_total = ups + downs + lefts + rights;
-    // Second reading of the same gate the hooks use, from the game thread's own state. Nothing
-    // selector-driving should reach this queue while closed, so a nonzero `ignored` below means a
-    // key slipped in between a poll and this tick -- it is dropped here rather than acted on.
+    // Second reading of the same gate the hooks use, from the game thread's own state. The
+    // cursor keys should not reach this queue while closed at all, so a nonzero `ignored` below
+    // means one slipped in between a poll and this tick -- dropped here rather than acted on.
     let open = selector_open(state);
     let arrows_allowed = selector_gate::should_handle_key(open, SelectorKey::Arrow);
     // The stack keys ride with the arrows: they act on what the selector is highlighting, so

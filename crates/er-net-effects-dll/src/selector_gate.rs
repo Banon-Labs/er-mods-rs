@@ -21,12 +21,30 @@
 //!
 //! Open means the selector is genuinely on screen and able to act: the player has not hidden the
 //! bar, the bar is not minimized to its button, and the DLL's own runtime gate says there is a
-//! live player. Anything short of that and the selector is deaf -- it neither acts on a key nor
-//! takes it from the game.
+//! live player.
 //!
-//! The single exception is [`SelectorKey::ShowHide`]. It is the only way back to a hidden bar, so
-//! gating it on "open" would make the feature unrecoverable by keyboard. It is never taken from
-//! the game either: it needs Alt, and Elden Ring binds nothing to Alt+0.
+//! TAKING and ACTING are separate questions, and conflating them is what made the first version of
+//! this gate wrong in the other direction.
+//!
+//! **Taking** is the narrow one: only the four arrows, only while open. A key taken from the game
+//! is a key the player pressed and the game never saw, so nothing else is ever taken -- every
+//! other key the selector reads is passed straight through.
+//!
+//! **Acting** splits by what the key does:
+//!
+//! - Keys that drive the ON-SCREEN CURSOR -- [`SelectorKey::Arrow`] and [`SelectorKey::StackEdit`]
+//!   -- require open. A cursor nobody can see is not a thing to drive, and numpad `+` on an
+//!   invisible highlight would stack an effect the player never chose and rewrite
+//!   `er-net-effects.toml` to match.
+//! - Deliberate chords and player-chosen bindings stay live whether the bar is open or not:
+//!   [`SelectorKey::ShowHide`] (the only way back to a hidden bar),
+//!   [`SelectorKey::EffectToggle`], and [`SelectorKey::Other`] -- which is where the hotkeys from
+//!   `.er-net-effects-hotkeys.json` land. Firing an effect while the bar is minimized IS this
+//!   DLL's primary use; the bar ships minimized precisely so it can be played that way. Gating
+//!   those on open would make the DLL useless for the thing it is for.
+//!
+//! None of the three can be taken from the game in the first place: two need Alt, and Elden Ring
+//! binds nothing to Alt+0 or Alt+'.
 
 // Windows-only in practice; kept portable so `cargo test` proves the decision table on the host
 // instead of it being reasoned about in a review.
@@ -107,15 +125,18 @@ impl SelectorInputState {
     }
 }
 
-/// May the selector ACT on this key -- move its cursor, edit its stack, toggle its effect?
+/// May the selector ACT on this key?
 pub(crate) fn should_handle_key(open: bool, key: SelectorKey) -> bool {
     match key {
-        // Always live: without it a hidden bar can never be brought back from the keyboard.
+        // Without it a hidden bar can never be brought back from the keyboard.
         SelectorKey::ShowHide => true,
-        SelectorKey::Arrow
-        | SelectorKey::StackEdit
-        | SelectorKey::EffectToggle
-        | SelectorKey::Other => open,
+        // Alt+' is a deliberate chord on the effect the player already chose, and the trigger
+        // hotkeys are the player's own bindings. Both are meant to be pressed WHILE PLAYING --
+        // which is exactly when the bar is minimized -- so neither waits for the bar.
+        SelectorKey::EffectToggle | SelectorKey::Other => true,
+        // These two drive the visible cursor. Off screen there is nothing to drive, and numpad +
+        // would stack an effect the player cannot see and write it back to the config file.
+        SelectorKey::Arrow | SelectorKey::StackEdit => open,
     }
 }
 
@@ -184,19 +205,52 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_selector_acts_on_no_key_but_the_one_that_reopens_it() {
-        for key in [
-            SelectorKey::Arrow,
-            SelectorKey::StackEdit,
-            SelectorKey::EffectToggle,
-            SelectorKey::Other,
-        ] {
+    fn a_closed_selector_ignores_only_the_keys_that_drive_its_cursor() {
+        for key in [SelectorKey::Arrow, SelectorKey::StackEdit] {
             assert!(
                 !should_handle_key(false, key),
-                "a closed selector must ignore {key:?}"
+                "a closed selector has no visible cursor for {key:?} to move"
             );
         }
         assert!(should_handle_key(false, SelectorKey::ShowHide));
+    }
+
+    /// THE REGRESSION THIS NAMES. The first cut of this gate made EVERY key wait for an open bar.
+    /// The bar ships minimized, so that silently killed the effect-trigger hotkeys from
+    /// `.er-net-effects-hotkeys.json` -- bindings whose entire purpose is to fire an effect while
+    /// you are playing, which is precisely when the bar is minimized. It made the DLL useless for
+    /// the one thing it is for, in the name of fixing a complaint that was only ever about arrow
+    /// keys. Pinned here beside
+    /// [`the_shipped_default_neither_acts_on_nor_takes_an_arrow_key`] so the two halves of the
+    /// rule cannot drift apart: arrows strict, player bindings live.
+    #[test]
+    fn a_closed_selector_still_fires_effect_trigger_hotkeys() {
+        let open = SHIPPED_DEFAULT.is_open();
+        assert!(
+            !open,
+            "the shipped default is closed -- that is the premise"
+        );
+
+        // `numpad_multiply`, the key in the DEFAULT hotkey file, plus a plain function key.
+        for vk in [0x6a, 0x74] {
+            let key = key_for_vk(vk, false);
+            assert_eq!(key, SelectorKey::Other);
+            assert!(
+                should_handle_key(open, key),
+                "a hotkey bound in .er-net-effects-hotkeys.json must fire while playing"
+            );
+            assert!(
+                !should_consume_key(open, key),
+                "...and must still reach the game, because it was never the selector's to take"
+            );
+        }
+
+        // Alt+' toggles the effect already chosen; it worked with the bar down before this gate
+        // existed and must keep working.
+        let toggle = key_for_vk(VK_OEM_7, true);
+        assert_eq!(toggle, SelectorKey::EffectToggle);
+        assert!(should_handle_key(open, toggle));
+        assert!(!should_consume_key(open, toggle));
     }
 
     #[test]

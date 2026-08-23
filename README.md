@@ -313,26 +313,32 @@ inactive by default.
 
 In-game controls:
 
-Every one of these needs the selector bar **open**, which means all three of:
-the bar is shown (`overlay_visible_on_start`, or toggled back with Alt+Numpad0),
-the bar is **expanded** rather than minimized to its `[+]` button, and a
-character is loaded. Closed on any of those counts, the DLL acts on no key and
-takes no key from the game -- including at the title screen and on every loading
-screen, where the arrow keys are how you navigate. Click the bar's `[+]` button
-to expand it; the bar ships minimized.
+The selector bar is **open** when all three hold: the bar is shown
+(`overlay_visible_on_start`, or toggled back with Alt+Numpad0), it is
+**expanded** rather than minimized to its `[+]` button, and a character is
+loaded. The bar ships minimized -- click its `[+]` button to expand it.
+
+Keys that move the on-screen cursor need the bar open:
 
 - Left/Right: switch the active effect catalog.
 - Up/Down: step through the selected catalog's validated IDs and apply the selected effect.
 - Numpad +/-: add or remove the highlighted effect from the always-on stack.
-- Alt+': toggle the currently selected effect off/on.
-- Alt+Numpad0 (also Alt+0, Alt+Insert): show/hide the selector bar. This one pair of keys works whether the bar is open or not -- it is the way back to a hidden bar -- and is never taken from the game.
 
-Only the four arrow keys are ever taken from the game, and only while the bar is
-open: they are blanked out of the DirectInput keyboard state and swallowed by the
-low-level keyboard hook so a cursor move is not also a quick-item switch. Every
-other key the selector reads is passed straight through. `er-net-effects-telemetry.json`
-reports `effect_selector_open` (the gate itself, which is NOT
-`effect_selector_visible`), `effect_keys_ignored_while_closed`, and
+Keys that are deliberate chords or your own bindings work whether the bar is
+open or not, because firing an effect while you play is what the DLL is for:
+
+- Alt+': toggle the currently selected effect off/on.
+- Alt+Numpad0 (also Alt+0, Alt+Insert): show/hide the selector bar -- the way back to a hidden one.
+- Anything you bind in `.er-net-effects-hotkeys.json`.
+
+Only the four arrow keys are ever **taken** from the game, and only while the bar
+is open: they are blanked out of the DirectInput keyboard state and swallowed by
+the low-level keyboard hook so a cursor move is not also a quick-item switch.
+Every other key the selector reads is passed straight through, and with the bar
+closed nothing is taken at all -- including at the title screen and on every
+loading screen, where the arrow keys are how you navigate.
+`er-net-effects-telemetry.json` reports `effect_selector_open` (the gate itself,
+which is NOT `effect_selector_visible`), `effect_keys_ignored_while_closed`, and
 `effect_input_suppressed_arrow_keys`.
 
 Runtime SpEffect application is gated to the loaded character state: the local player must exist before the DLL calls `apply_speffect`, but standing idle is allowed. Selector/file changes before the player exists may arm the selected effect; once the player is live, direct trigger hotkeys and selected effects apply immediately.

@@ -21,7 +21,10 @@ network_sync = true
 # SHOWN IS NOT OPEN. The bar starts MINIMIZED to its [+] button; click that
 # button to expand it. The DLL takes the arrow keys away from the game ONLY
 # while the bar is expanded AND a character is loaded, so with the bar
-# minimized -- or at the title screen -- every key is the game's.
+# minimized -- or at the title screen -- every key is the game's. The keys that
+# move the selector cursor (arrows, numpad +/-) likewise wait for the expanded
+# bar; Alt+' and your own hotkeys from the hotkeys file keep firing regardless,
+# which is how this DLL is meant to be played.
 overlay_visible_on_start = true
 hotkeys_file = ".er-net-effects-hotkeys.json"
 selected_effect_file = ".er-net-effects-setting.txt"
