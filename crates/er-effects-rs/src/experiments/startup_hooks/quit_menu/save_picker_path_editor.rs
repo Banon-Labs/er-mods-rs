@@ -1136,6 +1136,24 @@ pub(crate) unsafe fn save_picker_menu_pump_path_editor() {
 mod tests {
     use super::*;
 
+    /// SHARED PROCESS STATICS, RACED BY PARALLEL TEST THREADS.
+    ///
+    /// The BuildUrl/SavePath keyboard-purpose slots below (`keyboard_active_job_slot`,
+    /// `keyboard_outcome_slot`, `BUILD_URL_EDITOR_WINDOW`, `BUILD_URL_EDITOR_WINDOW_LAST_TICK`,
+    /// `BUILD_URL_MENU_PUMP_TICKS`, `RELEASED_KEYBOARD_JOBS`) are process-wide `static`s with no
+    /// synchronization of their own, and `cargo test` runs every test in this module on its own
+    /// thread by default. Left unguarded, one test's setup races another's assertion on the SAME
+    /// static: measured by running the full suite repeatedly (`cargo xwin test --lib`) on the base
+    /// commit -- the failure always has the shape "112 passed; 1 failed", but WHICH of the tests
+    /// below fails changes from run to run
+    /// (`a_window_close_after_an_accept_does_not_clobber_the_accepted_text` one run,
+    /// `a_link_field_window_closing_releases_a_latch_no_detour_cleared` the next), always landing on
+    /// a test that touches this state. The production code is not at fault -- the named failing test
+    /// passes deterministically when run alone. Every test that touches this shared state takes this
+    /// lock first, so their setup/act/assert runs atomically with respect to one another; tests that
+    /// do not touch it are unaffected and keep running in parallel.
+    static KEYBOARD_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn native_keyboard_config_matches_the_static_constructor_copy() {
         assert_eq!(core::mem::size_of::<SoftwareKeyboardConfig>(), 0x10);
@@ -1234,6 +1252,9 @@ mod tests {
     /// A job owned by neither is the game's own keyboard (character naming) and must stay untouched.
     #[test]
     fn terminal_capture_is_scoped_to_the_owning_purpose() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for purpose in [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl] {
             keyboard_active_job_slot(purpose).store(0, Ordering::SeqCst);
         }
@@ -1289,6 +1310,9 @@ mod tests {
     /// the signal that actually arrives, so it has to be the one that releases the latch.
     #[test]
     fn a_link_field_window_closing_releases_a_latch_no_detour_cleared() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let job = 0x4242_0000;
         let window = 0x8080_0000;
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(job, Ordering::SeqCst);
@@ -1324,6 +1348,9 @@ mod tests {
     /// player successfully entered.
     #[test]
     fn a_window_close_after_an_accept_does_not_clobber_the_accepted_text() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let window = 0x9090_0000;
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0x1111_0000, Ordering::SeqCst);
         *keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
@@ -1355,6 +1382,9 @@ mod tests {
     /// going UNSEEN, measured in the game's own window-run ticks.
     #[test]
     fn a_link_field_window_that_stops_running_abandons_its_latch() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0x7777_0000, Ordering::SeqCst);
         // The counter starts at 0 off the game thread, and every case here reasons about ticks
         // BEFORE `now`; give it a base so those subtractions describe a real elapsed window instead
@@ -1393,6 +1423,9 @@ mod tests {
     /// than firing every frame the menu is open.
     #[test]
     fn an_idle_link_field_is_never_abandoned() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(1, Ordering::SeqCst);
         assert!(!build_url_keyboard_latch_is_abandoned());
@@ -1406,6 +1439,9 @@ mod tests {
     /// (`dll:f9d11870`, 2026-08-23: four opens, zero releases). This pins the clock to the pump.
     #[test]
     fn the_abandon_clock_advances_on_the_pump_not_on_profile_select() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let before = BUILD_URL_MENU_PUMP_TICKS.load(Ordering::SeqCst);
         let after = build_url_menu_pump_tick();
         assert_eq!(
@@ -1428,6 +1464,9 @@ mod tests {
     /// and the engine called an empty function.
     #[test]
     fn a_released_job_is_still_ours_to_intercept() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let job = 0x5150_0000;
         RELEASED_KEYBOARD_JOBS
             .lock()
@@ -1457,6 +1496,9 @@ mod tests {
     /// the NEWEST entries, which are the ones most likely still alive.
     #[test]
     fn the_released_job_list_is_bounded_and_keeps_the_newest() {
+        let _guard = KEYBOARD_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         RELEASED_KEYBOARD_JOBS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
