@@ -11,7 +11,7 @@
 // and calling the native per-item release RemoveCSGaitemIns (which frees the ins AND returns its
 // index to the free-queue) -- the exact primitive the native teardown would use, no hand-rebuilt
 // queue. See bd system-quit-postswitch-crash-gaitem-freequeue-exhaustion-2026-07-02.
-pub(crate) const GLOBAL_CSGAITEM_SINGLETON_RVA: usize = 0x3d69890;
+pub(crate) const GLOBAL_CSGAITEM_SINGLETON_RVA: usize = er_game_base::rva::GLOBAL_CSGAITEM_RVA;
 /// `CS::GaItemImp::RemoveCSGaitemIns(CSGaitemImp*, uint* gaItemHandle)` -- dump 0x140672650 ->
 /// live/deobf 0x672560 (shift -0xf0, content-unique, ground-truthed via dump-deobf-shift.py). Given
 /// a handle it destructs+deallocates gaitemInsTable[index], resets the entry, and pushes index back

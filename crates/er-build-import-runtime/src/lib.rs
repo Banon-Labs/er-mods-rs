@@ -421,6 +421,47 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         log_line(&format!("[build-import]   MISSING item id 0x{id:08X}"));
     }
 
+    // ARMAMENTS, READ BACK OFF THE INSTANCE THAT WAS JUST MINTED.
+    //
+    // Quantity cannot see an ash or an upgrade level: both live on the gaitem, not in the item
+    // id, so "71/71 present" was true and meaningless while every weapon came out bare. Each
+    // line below is measured -- the arts id is what `GetSwordArtsParamForWeapon` says that
+    // instance holds, not what the plan asked for.
+    let wanted_ashes = planned
+        .grants
+        .iter()
+        .filter(|grant| grant.weapon_skill != er_build_import::plan::NO_SKILL)
+        .count();
+    let ashes_mounted = outcome
+        .armaments
+        .iter()
+        .filter(|arm| arm.wanted_gem.is_some() && arm.has_ash())
+        .count();
+    log_line(&format!(
+        "[build-import] ARMAMENTS (read back off the minted gaitem): {ashes_mounted}/{wanted_ashes}          ashes mounted, {} armaments granted",
+        outcome.armaments.len()
+    ));
+    for arm in &outcome.armaments {
+        log_line(&format!(
+            "[build-import]   ARMAMENT {:?} item 0x{:08X} invIdx {} gem {} -> arts {} | +{} -> +{}",
+            arm.label,
+            arm.item_id,
+            arm.inventory_index,
+            arm.wanted_gem
+                .map_or_else(|| "none".to_owned(), |row| row.to_string()),
+            arm.arts_id
+                .map_or_else(|| "NONE".to_owned(), |id| id.to_string()),
+            arm.wanted_level,
+            arm.level,
+        ));
+    }
+    for arm in outcome.armaments_missing_their_ash() {
+        log_line(&format!(
+            "[build-import]   ASH NOT MOUNTED on {:?}: asked for gem {:?}, the instance reports no              sword-arts row",
+            arm.label, arm.wanted_gem
+        ));
+    }
+
     // Equip only what was actually granted: equipping an item the inventory does not hold cannot
     // work, and the outcome distinguishes those from real equip failures.
     if let Some(egd) = unsafe { grant::equip_game_data() } {
@@ -444,6 +485,59 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 "[build-import]   SLOT {slot} expected param {expected} but holds {actual}"
             ));
         }
+
+        // THE ONE READ-BACK THAT ANSWERS THE PLAYER'S QUESTION.
+        //
+        // Grants and equips can both be green while the character holds a bare weapon: the grant
+        // proves an instance exists, the equip proves a slot holds that ITEM ID, and neither can
+        // see which INSTANCE the slot took. A build routinely carries several copies of one
+        // armament differing only by ash, so the id is not a unique name for a weapon. This walks
+        // the worn armament itself -- slot -> gaitem handle -> instance -> equipped gem -> arts
+        // row -- and says what is actually in the player's hands.
+        let wants = er_build_import::plan::equipped_armament_skills(doc, &catalog);
+        let mut correct = 0usize;
+        let mut asked = 0usize;
+        for want in &wants {
+            let Some(gem) = (want.weapon_skill != er_build_import::plan::NO_SKILL)
+                .then_some(want.weapon_skill & !er_build_import::plan::GEM_ITEM_CATEGORY)
+            else {
+                continue;
+            };
+            asked += 1;
+            let wanted_arts = catalog::arts_row_for_gem(gem);
+            // Safety: game thread, character in the world -- the caller's own preconditions.
+            let held = unsafe { read_character::equipped_weapon_arts_id(module_base, want.slot) };
+            let held_name = held.and_then(|arts| {
+                // Safety: `msg` is the live repository this import already read from.
+                unsafe {
+                    catalog::name_for(
+                        er_build_import::catalog::Kind::AshOfWar,
+                        msg,
+                        module_base,
+                        arts,
+                    )
+                }
+            });
+            let verdict = match (wanted_arts, held) {
+                (Some(wanted), Some(got)) if wanted == got => {
+                    correct += 1;
+                    "OK"
+                }
+                (_, None) => "NOT MOUNTED -- the worn armament reports no sword-arts row",
+                // Two causes, and this line does not pretend to know which: the slot may hold a
+                // different copy of the same armament (copies share an item id), or the armament
+                // may not accept ashes at all -- `EquipParamWeapon::canGemBeChanged` gates the
+                // READ, so a gem mounted on such a weapon is stored and then ignored.
+                _ => "MISMATCH -- another copy of this armament, or one that does not take ashes",
+            };
+            log_line(&format!(
+                "[build-import]   ASH slot {} {:?} wants {:?} (gem {gem} -> arts {:?}); worn                  armament holds arts {:?} {:?} -- {verdict}",
+                want.slot, want.weapon, want.art, wanted_arts, held, held_name
+            ));
+        }
+        log_line(&format!(
+            "[build-import] EQUIPPED ASHES (read back from the worn armament): {correct}/{asked}              correct"
+        ));
         log_line(&format!(
             "[build-import] QUICKBAR/POUCH/RUNE: {} positions written through the native dispatcher",
             worn.quick_written

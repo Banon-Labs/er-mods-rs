@@ -222,6 +222,13 @@ pub const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x672e40;
 /// (Igon's Drake Hunt: arts 4210 -> gem 548000).
 pub const GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA: usize = 0x673f30;
 
+/// `GLOBAL_CSGaitem`, the process-lifetime `CSGaitemImp` singleton pointer.
+///
+/// Constructed once at boot and never rebuilt per world-load. Every gaitem primitive in the game
+/// reads it and `DLPanic`s on null, so a caller that mints or releases a handle must read it from
+/// here rather than keep its own copy.
+pub const GLOBAL_CSGAITEM_RVA: usize = 0x3d69890;
+
 /// `WorldChrMan` singleton global; `+0x1e508` is the local `PlayerIns`.
 ///
 /// Both dereferences are null-checked in the game's own code, so both must be null-checked here.
