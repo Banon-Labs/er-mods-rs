@@ -240,6 +240,20 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import
 # target too.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 
+# HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
+# in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game
+# bindings always resolve -- so a `use windows::...` / `use eldenring::...` written WITHOUT a
+# `#[cfg(windows)]` gate is invisible to every gate here while breaking a plain host
+# `cargo test`. er-title-flow shipped exactly that: 31 unresolved-import errors on the host
+# (measured 2026-08-23), and the cost was misdirection -- an agent or human reaching for a host
+# `cargo test` saw a wall of errors that looked like their own change.
+#
+# `-p er-effects-rs --lib` is the reproducer itself: the crate's host build is a single stub fn,
+# so this compiles nothing but the dependency graph, which is the surface that rots.
+# `-p er-title-flow --lib` additionally RUNS boot_hold's predicates -- the crate's only
+# host-portable logic, and untestable at all until the gates landed.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-effects-rs -p er-title-flow --lib
+
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.
