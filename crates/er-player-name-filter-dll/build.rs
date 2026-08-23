@@ -4,6 +4,10 @@ use iced_x86::code_asm::*;
 
 const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA: u64 = 0x1423f1bf0;
 const GET_PLAYER_CHR_NAME_VA: u64 = 0x14075f800;
+const PLAYER_GAME_DATA_COPY_CHR_NAME_VA: u64 = 0x1402610c0;
+/// The bytes `scripts/disas-deobf.sh 0x1402610c0` prints for `CS::PlayerGameData::CopyChrName`.
+const PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE_BYTES: [u8; 10] =
+    [0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20];
 
 /// The bytes `scripts/disas-deobf.sh 0x14075f800` prints for the entry of
 /// `CS::GetPlayerChrName` in the 1.16.2 image. The assembler below must reproduce these
@@ -47,6 +51,21 @@ fn assemble_get_player_chr_name_prologue() -> Result<Vec<u8>, iced_x86::IcedErro
     asm.assemble(GET_PLAYER_CHR_NAME_VA)
 }
 
+macro_rules! player_game_data_copy_chr_name_prologue {
+    ($asm:ident) => {{
+        $asm.mov(qword_ptr(rsp + 0x08), rbx)?;
+        $asm.push(rdi)?;
+        $asm.sub(rsp, 0x20)?;
+        Ok::<(), iced_x86::IcedError>(())
+    }};
+}
+
+fn assemble_player_game_data_copy_chr_name_prologue() -> Result<Vec<u8>, iced_x86::IcedError> {
+    let mut asm = CodeAssembler::new(64)?;
+    player_game_data_copy_chr_name_prologue!(asm)?;
+    asm.assemble(PLAYER_GAME_DATA_COPY_CHR_NAME_VA)
+}
+
 fn generated_prologue_const(name: &str, bytes: &[u8]) -> String {
     let mut out = String::new();
     writeln!(
@@ -83,6 +102,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let generated = format!(
         "{generated}{}",
         generated_prologue_const("GET_PLAYER_CHR_NAME_PROLOGUE", &chr_name_bytes)
+    );
+    let copy_chr_name_bytes = assemble_player_game_data_copy_chr_name_prologue()?;
+    assert_eq!(
+        copy_chr_name_bytes.as_slice(),
+        PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE_BYTES.as_slice(),
+        "iced assembled a different encoding than the one the game ships at 0x{PLAYER_GAME_DATA_COPY_CHR_NAME_VA:x}"
+    );
+    let generated = format!(
+        "{generated}{}",
+        generated_prologue_const(
+            "PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE",
+            &copy_chr_name_bytes
+        )
     );
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR for build.rs"));
     fs::write(out_dir.join("generated_prologues.rs"), generated)?;

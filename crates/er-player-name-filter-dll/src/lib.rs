@@ -50,6 +50,20 @@ const DL_ALLOCATOR_DEALLOCATE_VTABLE_OFFSET: usize = 0x68;
 const DL_STRING_IN_PLACE_CAPACITY: usize = 7;
 /// A displayed name longer than this is treated as a garbage read rather than a name.
 const DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS: usize = 512;
+/// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)` -- the SOLE writer
+/// of `PlayerGameData::characterName`, reached for a remote player from the network receive path
+/// `TryDequeuePacket8@0x140ca3030`. Masking the name here masks it before anything can read it,
+/// including third-party overlays that read the field straight out of game memory rather than
+/// calling a game function (ERGG does exactly that), and it costs those overlays nothing and
+/// needs no knowledge of them.
+const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x002610c0;
+/// `PlayerGameData::isMainPlayer`. The local player's own name is never rewritten: it is their
+/// save's name and the name they send to everyone else.
+const PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET: usize = 0x8f0;
+/// `PlayerGameData::characterName` is `wchar_t[17]`, and CopyChrName copies only when
+/// `len < 0x11`. A longer replacement is SILENTLY DROPPED and the real name survives, so the
+/// replacement is clamped to this many text units rather than trusted to fit.
+const CHARACTER_NAME_MAX_TEXT_UNITS: usize = 16;
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 const STEAM_NAME_UTF16_CAPACITY: usize = 64;
 const STEAM_NAME_UTF16_MAX_TEXT_UNITS: usize = STEAM_NAME_UTF16_CAPACITY - 1;
@@ -62,6 +76,7 @@ const CHR_NAME_REPLACEMENT_LOG_LIMIT: u64 = 16;
 /// change nothing. Without this a run cannot distinguish "this function is not on the path for
 /// these players" from "it is on the path and declined to match".
 const CHR_NAME_CALL_LOG_LIMIT: u64 = 24;
+const COPY_CHR_NAME_REPLACEMENT_LOG_LIMIT: u64 = 16;
 const LOG_FILE_NAME: &str = "er-player-name-filter.log";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -132,10 +147,14 @@ struct CompiledNameFilterGroup {
     regexes: Vec<Regex>,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 enum PlayerNameIdentity {
     SteamId(u64),
     EntryAddress(usize),
+    /// `CopyChrName` is handed a `PlayerGameData` and a string and nothing that reaches a Steam
+    /// ID, so a name masked there is numbered by the name it replaced. The mask it issues is
+    /// then recognised downstream and left alone, so a player still ends up with one number.
+    CharacterName(String),
 }
 
 impl PlayerNameIdentity {
@@ -161,8 +180,8 @@ struct GroupNumberAssignments {
 }
 
 impl GroupNumberAssignments {
-    fn ordinal_for(&mut self, identity: PlayerNameIdentity, group_id: &str) -> u32 {
-        if let Some(existing) = self.player_by_identity.get(&identity)
+    fn ordinal_for(&mut self, identity: &PlayerNameIdentity, group_id: &str) -> u32 {
+        if let Some(existing) = self.player_by_identity.get(identity)
             && existing.group_id == group_id
         {
             return existing.ordinal;
@@ -172,7 +191,7 @@ impl GroupNumberAssignments {
         let ordinal = *next;
         *next = next.saturating_add(1);
         self.player_by_identity.insert(
-            identity,
+            identity.clone(),
             PlayerGroupNumber {
                 group_id: group_id.to_owned(),
                 ordinal,
@@ -642,13 +661,15 @@ mod windows_runtime {
     use er_hook::UnionFn;
 
     use super::{
-        CHR_NAME_CALL_LOG_LIMIT, CHR_NAME_REPLACEMENT_LOG_LIMIT, CompiledNameFilter,
-        DL_STRING_COPY_RVA, DL_STRING_FROM_U16_ARRAY_RVA, FILTER_REPLACEMENT_LOG_LIMIT,
-        GET_PLAYER_CHR_NAME_PROLOGUE, GET_PLAYER_CHR_NAME_RVA, GroupNumberAssignments,
-        LOG_FILE_NAME, MENU_HEAP_ALLOCATOR_POINTER_RVA, NameFilterRuntimeConfig,
-        PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET, PlayerNameIdentity, RawDlAllocator,
-        RawDlStringWide, RawMenuString, RawSessionManagerPlayerEntryBase,
-        SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
+        CHARACTER_NAME_MAX_TEXT_UNITS, CHR_NAME_CALL_LOG_LIMIT, CHR_NAME_REPLACEMENT_LOG_LIMIT,
+        COPY_CHR_NAME_REPLACEMENT_LOG_LIMIT, CompiledNameFilter, DL_STRING_COPY_RVA,
+        DL_STRING_FROM_U16_ARRAY_RVA, FILTER_REPLACEMENT_LOG_LIMIT, GET_PLAYER_CHR_NAME_PROLOGUE,
+        GET_PLAYER_CHR_NAME_RVA, GroupNumberAssignments, LOG_FILE_NAME,
+        MENU_HEAP_ALLOCATOR_POINTER_RVA, NameFilterRuntimeConfig,
+        PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE, PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
+        PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET, PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET,
+        PlayerNameIdentity, RawDlAllocator, RawDlStringWide, RawMenuString,
+        RawSessionManagerPlayerEntryBase, SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
         SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA, config_path_for_module, numbered_replacement,
         overwrite_dl_string_in_place, parse_runtime_config, read_inline_steam_name,
         read_menu_string, release_dl_string, write_inline_steam_name,
@@ -672,6 +693,10 @@ mod windows_runtime {
     static PLAYER_NAME_FILTER_REPLACEMENTS: AtomicU64 = AtomicU64::new(0);
     static CHR_NAME_REPLACEMENTS: AtomicU64 = AtomicU64::new(0);
     static CHR_NAME_CALLS: AtomicU64 = AtomicU64::new(0);
+    static COPY_CHR_NAME_REPLACEMENTS: AtomicU64 = AtomicU64::new(0);
+    static PLAYER_GAME_DATA_COPY_CHR_NAME_ORIG: AtomicUsize = AtomicUsize::new(ORIGINAL_UNSET);
+    static MASK_WIDE_STRINGS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    static ISSUED_MASKS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
     static PLAYER_NAME_FILTER: OnceLock<CompiledNameFilter> = OnceLock::new();
     static PLAYER_NAME_GROUP_NUMBERS: OnceLock<Mutex<GroupNumberAssignments>> = OnceLock::new();
 
@@ -792,6 +817,14 @@ mod windows_runtime {
             &SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_ORIG,
         );
         install_one(
+            "PlayerGameData::CopyChrName",
+            base + PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
+            PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
+            &PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE,
+            player_game_data_copy_chr_name_hook as UnionFn,
+            &PLAYER_GAME_DATA_COPY_CHR_NAME_ORIG,
+        );
+        install_one(
             "GetPlayerChrName",
             base + GET_PLAYER_CHR_NAME_RVA,
             GET_PLAYER_CHR_NAME_RVA,
@@ -879,7 +912,7 @@ mod windows_runtime {
             let mut assignments = assignments
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            assignments.ordinal_for(identity, group_id)
+            assignments.ordinal_for(&identity, group_id)
         };
         let numbered = numbered_replacement(replacement, ordinal);
         write_inline_steam_name(&mut entry.steam_name, &numbered);
@@ -912,7 +945,9 @@ mod windows_runtime {
         };
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if result != 0 && player != 0 {
-                unsafe { apply_chr_name_filter(&mut *(result as *mut RawMenuString), player) };
+                unsafe {
+                    apply_chr_name_filter(&mut *(result as *mut RawMenuString), player, decorate)
+                };
             }
         }));
         result
@@ -920,9 +955,13 @@ mod windows_runtime {
 
     /// # Safety
     ///
-    /// `menu_string` must be the `MenuString` `GetPlayerChrName` just filled, and `player` the
-    /// `PlayerIns` it was asked about.
-    unsafe fn apply_chr_name_filter(menu_string: &mut RawMenuString, player: usize) {
+    /// `menu_string` must be the `MenuString` `GetPlayerChrName` just filled, `player` the
+    /// `PlayerIns` it was asked about, and `decorate` the flag it was called with.
+    unsafe fn apply_chr_name_filter(
+        menu_string: &mut RawMenuString,
+        player: usize,
+        decorate: usize,
+    ) {
         let call = CHR_NAME_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
         let trace = call <= CHR_NAME_CALL_LOG_LIMIT;
         macro_rules! bail {
@@ -957,6 +996,9 @@ mod windows_runtime {
         let Some(name) = (unsafe { read_menu_string(menu_string) }) else {
             bail!("steam_id={steam_id} produced an unreadable MenuString");
         };
+        if is_issued_mask(&name) {
+            bail!("steam_id={steam_id} already masked upstream as '{name}'");
+        }
         let Some((group_id, replacement)) = filter.replacement_for(&name) else {
             bail!("steam_id={steam_id} name '{name}' matched no group");
         };
@@ -966,7 +1008,7 @@ mod windows_runtime {
             let mut assignments = assignments
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            assignments.ordinal_for(identity, group_id)
+            assignments.ordinal_for(&identity, group_id)
         };
         let numbered = numbered_replacement(replacement, ordinal);
         if name == numbered {
@@ -976,10 +1018,15 @@ mod windows_runtime {
         if !unsafe { write_menu_string(menu_string, &numbered, base) } {
             bail!("steam_id={steam_id} MenuString write failed for '{numbered}'");
         }
+        // `decorate` is how the two surfaces are told apart: the overhead nameplate producers
+        // pass false, and the multiplayer system announcements ("<name> has invaded", summon and
+        // death messages) pass true so the name comes back wrapped in menu-text 0xbcc/0xbcd.
+        let surface = if decorate == 0 { "tag" } else { "announce" };
+        register_issued_mask(&numbered);
         let n = CHR_NAME_REPLACEMENTS.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= CHR_NAME_REPLACEMENT_LOG_LIMIT {
             log_message(format_args!(
-                "replaced-chr-name steam_id={steam_id} group='{group_id}' ordinal={ordinal} original='{name}' replacement='{numbered}' count={n}"
+                "replaced-chr-name surface={surface} steam_id={steam_id} group='{group_id}' ordinal={ordinal} original='{name}' replacement='{numbered}' count={n}"
             ));
         }
     }
@@ -1035,6 +1082,139 @@ mod windows_runtime {
         unsafe { from_u16_array(built, units.as_ptr(), allocator) };
         cache.insert(text.to_owned(), built as usize);
         Some(built)
+    }
+
+    /// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)`.
+    ///
+    /// Unlike the other two hooks this one rewrites the INPUT: it hands the original a different
+    /// string, so the masked name is what the game stores in `characterName`. Everything
+    /// downstream -- the word-checked copy at `+0x8E8`, the nameplate, and any overlay reading
+    /// `+0x9C` out of process memory -- then sees the mask without knowing anything happened.
+    unsafe extern "system" fn player_game_data_copy_chr_name_hook(
+        player_game_data: usize,
+        name: usize,
+        unused_c: usize,
+        unused_d: usize,
+    ) -> usize {
+        let substitute = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            masked_character_name(player_game_data, name)
+        }))
+        .unwrap_or(None);
+        let name = substitute.unwrap_or(name);
+        let original = PLAYER_GAME_DATA_COPY_CHR_NAME_ORIG.load(Ordering::Acquire);
+        if original == ORIGINAL_UNSET {
+            return 0;
+        }
+        let original_fn: UnionFn = unsafe { std::mem::transmute(original) };
+        unsafe { original_fn(player_game_data, name, unused_c, unused_d) }
+    }
+
+    /// The replacement string to hand `CopyChrName`, or `None` to let the real name through.
+    fn masked_character_name(player_game_data: usize, name: usize) -> Option<usize> {
+        let filter = PLAYER_NAME_FILTER.get()?;
+        if player_game_data == 0 || name == 0 {
+            return None;
+        }
+        let is_main_player =
+            unsafe { *((player_game_data + PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET) as *const u8) };
+        if is_main_player != 0 {
+            return None;
+        }
+        let original_name = unsafe { read_wide_c_string(name, CHARACTER_NAME_MAX_TEXT_UNITS + 1) }?;
+        // An EMPTY name is not a player. CopyChrName is called with "" while a remote
+        // PlayerGameData is still being constructed and before the name packet arrives, and a
+        // wildcard pattern matches the empty string, so without this guard every one of those
+        // writes is masked -- observed live stamping 'Dongerino 1' thirteen times over on
+        // nobody, and burning ordinal 1 so the first real player got numbered 2.
+        if original_name.is_empty() {
+            return None;
+        }
+        if is_issued_mask(&original_name) {
+            return None;
+        }
+        let (group_id, replacement) = filter.replacement_for(&original_name)?;
+        let identity = PlayerNameIdentity::CharacterName(original_name.clone());
+        let ordinal = {
+            let assignments = PLAYER_NAME_GROUP_NUMBERS.get_or_init(Mutex::default);
+            let mut assignments = assignments
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            assignments.ordinal_for(&identity, group_id)
+        };
+        let numbered = numbered_replacement(replacement, ordinal);
+        let clamped: String = numbered
+            .chars()
+            .take(CHARACTER_NAME_MAX_TEXT_UNITS)
+            .collect();
+        if clamped.encode_utf16().count() > CHARACTER_NAME_MAX_TEXT_UNITS {
+            log_message(format_args!(
+                "copy-chr-name: '{numbered}' exceeds the {CHARACTER_NAME_MAX_TEXT_UNITS}-unit characterName field even clamped; leaving '{original_name}' alone"
+            ));
+            return None;
+        }
+        let pointer = cached_wide_string(&clamped)?;
+        register_issued_mask(&clamped);
+        let n = COPY_CHR_NAME_REPLACEMENTS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= COPY_CHR_NAME_REPLACEMENT_LOG_LIMIT {
+            log_message(format_args!(
+                "replaced-character-name group='{group_id}' ordinal={ordinal} original='{original_name}' replacement='{clamped}' count={n}"
+            ));
+        }
+        Some(pointer)
+    }
+
+    /// A NUL-terminated UTF-16 buffer for `text`, allocated once and kept for the life of the
+    /// process. `CopyChrName` only reads it during the call, but the set of distinct masks is
+    /// small and bounded, so keeping them is cheaper than churning an allocation per packet.
+    fn cached_wide_string(text: &str) -> Option<usize> {
+        let cache = MASK_WIDE_STRINGS.get_or_init(Mutex::default);
+        let mut cache = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Some(&address) = cache.get(text) {
+            return Some(address);
+        }
+        let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let leaked = Box::leak(units.into_boxed_slice());
+        let address = leaked.as_ptr() as usize;
+        cache.insert(text.to_owned(), address);
+        Some(address)
+    }
+
+    fn register_issued_mask(text: &str) {
+        let issued = ISSUED_MASKS.get_or_init(Mutex::default);
+        let mut issued = issued.lock().unwrap_or_else(|poison| poison.into_inner());
+        issued.insert(text.to_owned());
+    }
+
+    /// Whether this string is a mask this DLL already issued.
+    ///
+    /// The comparison ignores surrounding whitespace, because `GetPlayerChrName` called with
+    /// `decorate = true` -- the multiplayer announcement banners -- returns the name wrapped in
+    /// menu-text 0xbcc/0xbcd, which in English is a pair of spaces. Comparing the decorated
+    /// string verbatim made `' Dongerino 5 '` look like a fresh name, so the banner re-matched
+    /// and issued a SECOND number: the tag and the overlay said "Dongerino 5" while the banner
+    /// for the same player said "Dongerino 2".
+    fn is_issued_mask(text: &str) -> bool {
+        let Some(issued) = ISSUED_MASKS.get() else {
+            return false;
+        };
+        let issued = issued.lock().unwrap_or_else(|poison| poison.into_inner());
+        issued.contains(text.trim())
+    }
+
+    /// # Safety
+    ///
+    /// `pointer` must point at a NUL-terminated UTF-16 string of at most `max_units` units.
+    unsafe fn read_wide_c_string(pointer: usize, max_units: usize) -> Option<String> {
+        let pointer = pointer as *const u16;
+        let mut units = Vec::new();
+        for index in 0..max_units {
+            let unit = unsafe { *pointer.add(index) };
+            if unit == 0 {
+                return String::from_utf16(&units).ok();
+            }
+            units.push(unit);
+        }
+        None
     }
 
     fn module_path(module: *mut c_void) -> Result<PathBuf, String> {
@@ -1147,11 +1327,11 @@ player_name_filter.second.regexes = ['^Same.*']
         let second = PlayerNameIdentity::SteamId(222);
         let third = PlayerNameIdentity::SteamId(333);
 
-        assert_eq!(assignments.ordinal_for(first, "bigot"), 1);
+        assert_eq!(assignments.ordinal_for(&first, "bigot"), 1);
         assert_eq!(numbered_replacement("I'm a bigot", 1), "I'm a bigot 1");
-        assert_eq!(assignments.ordinal_for(second, "bigot"), 2);
-        assert_eq!(assignments.ordinal_for(first, "bigot"), 1);
-        assert_eq!(assignments.ordinal_for(third, "racist"), 1);
+        assert_eq!(assignments.ordinal_for(&second, "bigot"), 2);
+        assert_eq!(assignments.ordinal_for(&first, "bigot"), 1);
+        assert_eq!(assignments.ordinal_for(&third, "racist"), 1);
         assert_eq!(numbered_replacement("I'm a racist", 1), "I'm a racist 1");
         assert_eq!(
             PlayerNameIdentity::for_entry(0, 0xfeed_beef),
