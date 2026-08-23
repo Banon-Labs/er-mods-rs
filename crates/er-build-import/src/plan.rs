@@ -209,15 +209,16 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
     // question with the EARLIEST-granted copy, and the only way to make that the right copy is to
     // grant the worn one first. Otherwise the character reliably ends up holding a twin with
     // somebody else's ash on it, with every counter in the log still green.
-    for slot in doc.inventory.slots.iter().filter(|slot| slot.is_equipped()) {
+    // "Worn" means worn IN THE ACTIVE SET, asked the same way `equip.rs` asks it. `Slot::is_equipped`
+    // used to answer this from the bare `equipIndex`, and was removed precisely so there is no
+    // second, set-blind way to ask -- a row equipped only in an inactive set is carried, not worn,
+    // and must not win the grant-order race against the copy the player will actually hold.
+    let worn_set = doc.sets.active_weapons();
+    let worn = |slot: &&Slot| slot.equip_index_in_set(worn_set).is_some();
+    for slot in doc.inventory.slots.iter().filter(worn) {
         plan_weapon(doc, catalog, slot, &mut out);
     }
-    for slot in doc
-        .inventory
-        .slots
-        .iter()
-        .filter(|slot| !slot.is_equipped())
-    {
+    for slot in doc.inventory.slots.iter().filter(|slot| !worn(slot)) {
         plan_weapon(doc, catalog, slot, &mut out);
     }
     for slot in &doc.talismans.slots {

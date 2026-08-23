@@ -27,6 +27,10 @@ pub struct BuildDoc {
     /// Requested level and attributes (`rl`, `vig`, `str`, ...).
     #[serde(default)]
     pub stats: BTreeMap<String, i64>,
+    /// The named loadout sets, one list per equip category. Absent on builds
+    /// authored before the planner grew sets.
+    #[serde(default)]
+    pub sets: Sets,
     /// Armaments. Named `inventory` upstream.
     #[serde(default)]
     pub inventory: SlotList,
@@ -76,16 +80,101 @@ pub struct Slot {
     /// Ash of war on this armament, if any.
     #[serde(default, rename = "weaponArt")]
     pub weapon_art: Option<String>,
-    /// Present when the slot is actually equipped, giving the equip position.
+    /// The equip position this slot holds **in the active set**.
+    ///
+    /// A cache of `equipSet[active]`, not an independent fact -- see
+    /// [`Slot::equip_index_in_set`], which is what the importer reads.
     #[serde(default, rename = "equipIndex")]
     pub equip_index: Option<u32>,
+    /// The equip position this slot holds in *each* set, indexed by set.
+    ///
+    /// Holes are sets the item is not equipped in, and the array is only as long
+    /// as the highest set that uses the item. Absent on pre-sets builds.
+    #[serde(default, rename = "equipSet")]
+    pub equip_set: Option<Vec<Option<u32>>>,
 }
 
 impl Slot {
-    /// Whether this slot is equipped rather than merely carried.
-    pub fn is_equipped(&self) -> bool {
-        self.equip_index.is_some()
+    /// The equip position this slot holds in set `set_index`, if any.
+    ///
+    /// `equipSet` is authoritative when present; [`Slot::equip_index`] is only
+    /// its active-set entry, kept in step by the planner. When `equipSet` is
+    /// absent the build predates sets, which is the same thing as being equipped
+    /// in set 0 and nowhere else -- exactly what the planner's own migration
+    /// (`equipSet = [equipIndex]`) makes of such a row the moment sets appear.
+    ///
+    /// ```
+    /// use er_build_import::model;
+    /// let doc = model::parse(
+    ///     r#"{"inventory":{"slots":[{"name":"Shamshir","equipSet":[null,2]}]}}"#,
+    /// )
+    /// .expect("parses");
+    /// let slot = &doc.inventory.slots[0];
+    /// assert_eq!(slot.equip_index_in_set(0), None);
+    /// assert_eq!(slot.equip_index_in_set(1), Some(2));
+    /// ```
+    pub fn equip_index_in_set(&self, set_index: usize) -> Option<u32> {
+        match self.equip_set.as_ref() {
+            Some(sets) => sets.get(set_index).copied().flatten(),
+            None if set_index == 0 => self.equip_index,
+            None => None,
+        }
     }
+}
+
+/// The loadout sets a build carries, one independent list per equip category.
+///
+/// The planner lets an author keep several loadouts side by side -- a bow set, a
+/// two-handing set -- and exactly one per category is active. Each category
+/// switches independently, so there is no single "active set" for a build.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Sets {
+    /// Armament sets.
+    #[serde(default)]
+    pub weapons: Vec<EquipSet>,
+    /// Talisman sets.
+    #[serde(default)]
+    pub talismans: Vec<EquipSet>,
+    /// Armour sets, shared by all four body parts.
+    #[serde(default)]
+    pub protectors: Vec<EquipSet>,
+}
+
+impl Sets {
+    /// The active armament set.
+    pub fn active_weapons(&self) -> usize {
+        active_index(&self.weapons)
+    }
+
+    /// The active talisman set.
+    pub fn active_talismans(&self) -> usize {
+        active_index(&self.talismans)
+    }
+
+    /// The active armour set.
+    pub fn active_protectors(&self) -> usize {
+        active_index(&self.protectors)
+    }
+}
+
+/// One named loadout set.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EquipSet {
+    /// The author's label for it, e.g. `Bows`.
+    #[serde(default)]
+    pub name: String,
+    /// Whether this is the set the planner is currently showing.
+    #[serde(default)]
+    pub active: bool,
+}
+
+/// Which set of `list` is active, defaulting to the first.
+///
+/// A build with no `sets` key at all, or one where nothing carries `active`,
+/// still has to import *something*; set 0 is what the planner renders in both
+/// cases, and it is the set a pre-sets `equipIndex` belongs to.
+fn active_index(list: &[EquipSet]) -> usize {
+    list.iter().position(|set| set.active).unwrap_or(0)
 }
 
 /// Consumables and flasks.

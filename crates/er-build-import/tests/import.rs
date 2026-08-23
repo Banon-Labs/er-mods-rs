@@ -793,3 +793,402 @@ fn the_read_back_target_names_the_slot_and_the_gem() {
     assert_eq!(bare.art, None);
     assert_eq!(bare.weapon_skill, NO_SKILL);
 }
+
+// ------------------------------------------------------------------ loadout sets
+
+/// The 22634-byte body of `GET /inventories/82086df03c4b8e`, a build carrying six
+/// armament sets, six talisman sets and three armour sets. Kept whole rather than
+/// trimmed: the collisions this exercises live in rows that a "tidy" fixture would
+/// have deleted as noise.
+const SETS_BUILD: &str = include_str!("fixtures/build-82086df03c4b8e.json");
+
+fn sets_build() -> model::BuildDoc {
+    model::parse(SETS_BUILD).expect("sets fixture parses")
+}
+
+fn armament_names(plan: &er_build_import::EquipPlan) -> Vec<Option<&str>> {
+    plan.armaments
+        .iter()
+        .map(|slot| slot.as_ref().map(|item| item.name.as_str()))
+        .collect()
+}
+
+#[test]
+fn the_payload_carries_named_sets_with_one_active_per_category() {
+    let doc = sets_build();
+    let names: Vec<_> = doc.sets.weapons.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["Default", "PSGKAT", "2H", "PS Katana", "Urumi", "Bows"]
+    );
+    // Three categories, each with its own switch -- not one build-wide index.
+    assert_eq!(doc.sets.active_weapons(), 0);
+    assert_eq!(doc.sets.active_talismans(), 0);
+    assert_eq!(doc.sets.active_protectors(), 0);
+    assert_eq!(doc.sets.talismans.len(), 6);
+    assert_eq!(doc.sets.protectors.len(), 3);
+}
+
+#[test]
+fn equip_index_is_only_a_cache_of_the_active_sets_entry() {
+    // The invariant `setSlotEquipIndex` maintains, checked against every row of a
+    // real six-set build: `equipIndex == equipSet[active]`, always. That is why
+    // reading `equipSet` selects the same rows -- and why it is safe to stop
+    // trusting `equipIndex` and derive the selection instead.
+    let doc = sets_build();
+    let lists = [&doc.inventory, &doc.talismans];
+    let mut checked = 0;
+    for list in lists.into_iter().chain(doc.protectors.values()) {
+        for slot in &list.slots {
+            if slot.equip_set.is_none() && slot.equip_index.is_none() {
+                continue;
+            }
+            assert_eq!(
+                slot.equip_index,
+                slot.equip_index_in_set(0),
+                "{} disagrees with its own equipSet",
+                slot.name
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(
+        checked, 43,
+        "19 armament rows, 14 talismans and 10 armour pieces carry a set assignment"
+    );
+}
+
+#[test]
+fn only_the_active_armament_set_is_equipped() {
+    let plan = equip_plan(
+        &sets_build(),
+        &fixture_catalog::catalog(),
+        Capacity::default(),
+    );
+    assert_eq!(
+        armament_names(&plan),
+        vec![
+            Some("Shamshir"),
+            Some("Mis\u{e9}ricorde"),
+            None,
+            Some("Mis\u{e9}ricorde"),
+            Some("Frenzied Flame Seal"),
+            Some("Twinbird Kite Shield"),
+        ]
+    );
+    // Rows that belong to PSGKAT / 2H / PS Katana / Urumi / Bows must not appear
+    // anywhere -- not placed, and not rejected either, because they were never
+    // candidates for this loadout.
+    for name in [
+        "Nagakiba",
+        "Guardian's Swordspear",
+        "Rakshasa's Great Katana",
+    ] {
+        assert!(
+            !plan.armaments.iter().flatten().any(|i| i.name == name),
+            "{name} belongs to another set"
+        );
+        assert!(
+            !plan.rejected.iter().any(|r| r.name == name),
+            "{name} should not even be considered"
+        );
+    }
+}
+
+#[test]
+fn the_contested_armament_positions_go_the_way_the_planner_shows_them() {
+    // Three rows claim armament position 0 and three claim position 4, all inside
+    // the ACTIVE set. The planner's own `WeaponEquipSlots` folds them with a
+    // `reduce` that overwrites, so the last row in the list is what its author
+    // sees, and that is what gets equipped.
+    let plan = equip_plan(
+        &sets_build(),
+        &fixture_catalog::catalog(),
+        Capacity::default(),
+    );
+    let contested: Vec<_> = plan
+        .contested
+        .iter()
+        .map(|c| {
+            (
+                c.position.as_str(),
+                c.winner.as_str(),
+                c.losers.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        contested,
+        vec![
+            (
+                "armament slot 0",
+                "Shamshir",
+                vec!["Mis\u{e9}ricorde", "Shamshir"]
+            ),
+            (
+                "armament slot 1",
+                "Mis\u{e9}ricorde",
+                vec!["Mis\u{e9}ricorde"]
+            ),
+            (
+                "armament slot 4",
+                "Frenzied Flame Seal",
+                vec!["Mis\u{e9}ricorde", "Frenzied Flame Seal"]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_losing_claimant_is_rejected_so_no_caller_can_miss_the_collision() {
+    // The whole point: a plan that quietly drops five armaments is
+    // indistinguishable from a plan that placed them. `rejected` is what the
+    // runtime already logs, so the losers go there too rather than only into the
+    // structured list.
+    let plan = equip_plan(
+        &sets_build(),
+        &fixture_catalog::catalog(),
+        Capacity::default(),
+    );
+    assert!(
+        !plan.is_complete(),
+        "a contested build is not a clean import"
+    );
+    let losses: Vec<_> = plan
+        .rejected
+        .iter()
+        .map(|r| (r.name.as_str(), r.reason.as_str()))
+        .collect();
+    assert_eq!(
+        losses,
+        vec![
+            (
+                "Mis\u{e9}ricorde",
+                "armament slot 0 already claimed by \"Shamshir\""
+            ),
+            (
+                "Shamshir",
+                "armament slot 0 already claimed by \"Shamshir\""
+            ),
+            (
+                "Mis\u{e9}ricorde",
+                "armament slot 1 already claimed by \"Mis\u{e9}ricorde\""
+            ),
+            (
+                "Mis\u{e9}ricorde",
+                "armament slot 4 already claimed by \"Frenzied Flame Seal\""
+            ),
+            (
+                "Frenzied Flame Seal",
+                "armament slot 4 already claimed by \"Frenzied Flame Seal\""
+            ),
+        ]
+    );
+    assert_eq!(
+        plan.contested.len(),
+        3,
+        "five losses across three positions"
+    );
+}
+
+#[test]
+fn the_contest_winner_keeps_its_own_affinity() {
+    // Position 1 is claimed by two Miséricordes that differ ONLY by affinity:
+    // a Keen one earlier in the list and a Lightning one later. Asserting on the
+    // name alone would pass either way, so pin the id: last-wins must bring the
+    // Lightning row's `+600`, not the Keen row's `+200`.
+    let plan = equip_plan(
+        &sets_build(),
+        &fixture_catalog::catalog(),
+        Capacity::default(),
+    );
+    const MISERICORDE: u32 = 0x000F_B770;
+    let slot = plan.armaments[1].as_ref().expect("position 1 is filled");
+    assert_eq!(slot.item_id, MISERICORDE + 600, "Lightning, not Keen");
+    let slot = plan.armaments[0].as_ref().expect("position 0 is filled");
+    assert_eq!(slot.item_id, 0x006B_44F0 + 200, "the Keen Shamshir");
+}
+
+#[test]
+fn talismans_and_armour_resolve_against_their_own_sets() {
+    let plan = equip_plan(
+        &sets_build(),
+        &fixture_catalog::catalog(),
+        Capacity::default(),
+    );
+    let talismans: Vec<_> = plan
+        .talismans
+        .iter()
+        .map(|s| s.as_ref().map(|i| i.name.as_str()))
+        .collect();
+    assert_eq!(
+        talismans,
+        vec![
+            Some("Blue-Feathered Branchsword"),
+            Some("Crimson Amber Medallion +3"),
+            Some("Erdtree's Favor +2"),
+            Some("Bull-Goat's Talisman"),
+        ]
+    );
+    assert_eq!(
+        plan.head.as_ref().map(|i| i.name.as_str()),
+        Some("Divine Beast Helm")
+    );
+    assert_eq!(
+        plan.body.as_ref().map(|i| i.name.as_str()),
+        Some("Armor of Solitude")
+    );
+    assert_eq!(
+        plan.arms.as_ref().map(|i| i.name.as_str()),
+        Some("Gauntlets of Solitude")
+    );
+    assert_eq!(
+        plan.legs.as_ref().map(|i| i.name.as_str()),
+        Some("Greaves of Solitude")
+    );
+    // Rakshasa is the armour set 2 wears; set 0 must not pick any of it up.
+    for worn in [&plan.head, &plan.body, &plan.arms, &plan.legs] {
+        let name = worn.as_ref().map(|i| i.name.as_str()).unwrap_or_default();
+        assert!(!name.starts_with("Rakshasa"), "{name} is set 2's armour");
+    }
+}
+
+#[test]
+fn switching_the_active_armament_set_switches_only_the_armaments() {
+    // `sets` is per category, so activating the "PS Katana" armament set must not
+    // disturb the talismans or armour -- which is exactly the mistake a single
+    // build-wide active index would make.
+    let mut doc = sets_build();
+    doc.sets.weapons[0].active = false;
+    doc.sets.weapons[3].active = true;
+    assert_eq!(doc.sets.weapons[3].name, "PS Katana");
+    assert_eq!(doc.sets.active_weapons(), 3);
+
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert_eq!(
+        armament_names(&plan),
+        vec![
+            Some("Nagakiba"),
+            None,
+            None,
+            Some("Nagakiba"),
+            Some("Frenzied Flame Seal"),
+            None,
+        ]
+    );
+    // Not one Miséricorde survives: every one of them is a set-0 row.
+    assert!(
+        !plan
+            .armaments
+            .iter()
+            .flatten()
+            .any(|i| i.name.contains('\u{e9}')),
+        "set 3 has no daggers"
+    );
+    assert_eq!(
+        plan.talismans[0].as_ref().map(|i| i.name.as_str()),
+        Some("Blue-Feathered Branchsword"),
+        "the talisman set did not move"
+    );
+    assert_eq!(
+        plan.head.as_ref().map(|i| i.name.as_str()),
+        Some("Divine Beast Helm"),
+        "the armour set did not move"
+    );
+}
+
+#[test]
+fn a_row_carrying_only_equip_index_still_equips() {
+    // Builds authored before the planner grew sets have no `sets` key and no
+    // `equipSet`. The planner migrates such a row to `equipSet = [equipIndex]`,
+    // i.e. set 0, and so must the importer -- otherwise every older share link
+    // imports a naked character.
+    let doc = model::parse(
+        r#"{"inventory":{"slots":[{"name":"Shamshir","order":0,"equipIndex":2}]},
+            "talismans":{"slots":[{"name":"Radagon Icon","order":0,"equipIndex":1}]}}"#,
+    )
+    .expect("legacy doc parses");
+    assert!(doc.sets.weapons.is_empty());
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert!(plan.is_complete(), "rejected: {:?}", plan.rejected);
+    assert_eq!(armament_names(&plan)[2], Some("Shamshir"));
+    assert_eq!(
+        plan.talismans[1].as_ref().map(|i| i.name.as_str()),
+        Some("Radagon Icon")
+    );
+}
+
+#[test]
+fn a_row_equipped_only_in_an_inactive_set_is_left_carried() {
+    // The `null` holes are the whole encoding: this row is position 0 of set 1,
+    // and nothing at all in the active set 0.
+    let doc = model::parse(
+        r#"{"sets":{"weapons":[{"name":"Default","active":true},{"name":"Bows"}]},
+            "inventory":{"slots":[{"name":"Shamshir","order":0,"equipSet":[null,0]}]}}"#,
+    )
+    .expect("doc parses");
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert!(plan.armaments.iter().all(Option::is_none));
+    assert!(plan.rejected.is_empty(), "not equipped is not a failure");
+    assert!(plan.contested.is_empty());
+}
+
+#[test]
+fn armour_takes_the_first_claimant_the_way_the_planner_does() {
+    // `ProtectorEquipSlots` resolves with `find`, not a fold, so armour breaks a
+    // tie the opposite way to armaments. And the VALUE is meaningless: the planner
+    // writes a constant `1` for every worn piece, so it is membership that counts.
+    let doc = model::parse(
+        r#"{"sets":{"protectors":[{"name":"Default","active":true}]},
+            "protectors":{"head":{"slots":[
+                {"name":"Divine Beast Helm","order":0,"equipSet":[1],"equipIndex":1},
+                {"name":"Mushroom Crown","order":1,"equipSet":[1],"equipIndex":1}]}}}"#,
+    )
+    .expect("doc parses");
+    let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
+    assert_eq!(
+        plan.head.as_ref().map(|i| i.name.as_str()),
+        Some("Divine Beast Helm")
+    );
+    assert_eq!(plan.contested.len(), 1);
+    assert_eq!(plan.contested[0].position, "head armour");
+    assert_eq!(plan.contested[0].losers, vec!["Mushroom Crown"]);
+}
+
+#[test]
+fn the_rest_of_the_real_build_still_imports_whole() {
+    // Everything the sets machinery does NOT touch: tools carry no `equipSet` at
+    // all, and spells, tears and the great rune are set-free too.
+    let plan = equip_plan(
+        &sets_build(),
+        &fixture_catalog::catalog(),
+        Capacity::default(),
+    );
+    assert_eq!(
+        plan.quickbar[5].as_ref().map(|i| i.name.as_str()),
+        Some("Clarifying Boluses")
+    );
+    assert_eq!(
+        plan.quickbar[7].as_ref().map(|i| i.name.as_str()),
+        Some("Neutralizing Boluses")
+    );
+    assert_eq!(
+        plan.pouch[0].as_ref().map(|i| i.name.as_str()),
+        Some("Blessing of Marika")
+    );
+    assert_eq!(
+        plan.pouch[2].as_ref().map(|i| i.name.as_str()),
+        Some("Flask of Cerulean Tears")
+    );
+    assert_eq!(
+        plan.physick[0].as_ref().map(|i| i.name.as_str()),
+        Some("Crimsonwhorl Bubbletear")
+    );
+    assert_eq!(plan.spells.len(), 1);
+    assert_eq!(plan.spells[0].name, "Bestial Vitality");
+    assert_eq!(
+        plan.great_rune.as_ref().map(|i| i.name.as_str()),
+        Some("Mohg's Great Rune")
+    );
+    assert!(plan.two_handing);
+}
