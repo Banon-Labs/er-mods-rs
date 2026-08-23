@@ -38,10 +38,14 @@ pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d7_d4f8;
 /// `FUN_140d10b60(MsgRepositoryImp*, id) -> wchar_t*` -- the `PlaceName` getter.
 pub const PLACE_NAME_LOOKUP_RVA: usize = 0xd1_0b60;
 
-/// Opening bytes of the getter, byte-checked against `eldenring-deobf.bin` at shift 0, so a game
-/// update that moves it fails closed instead of calling into the middle of something else.
-pub const PLACE_NAME_LOOKUP_PROLOGUE: &[u8] =
-    &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20];
+// `PLACE_NAME_LOOKUP_PROLOGUE`: the getter's opening bytes, so a game update that moves it fails
+// closed instead of calling into the middle of something else. Assembled from named `iced-x86`
+// instructions by this crate's `build.rs`, which checks them against `eldenring-deobf.bin` at
+// shift 0 when a copy is present.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_place_name_prologues.rs"
+));
 
 /// What the getter returns when every `PlaceName` FMG missed. Not a name.
 pub const PLACE_NAME_MISSING_SENTINEL: &str = "?PlaceName?";

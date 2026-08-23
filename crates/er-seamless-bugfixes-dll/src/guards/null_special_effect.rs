@@ -95,24 +95,24 @@ use super::{Guard, null_arg1_guard};
 
 /// `bool CS::SpecialEffect::HasSpecialEffectId(SpecialEffect *container, uint spEffectId)`.
 ///
-/// 1.16.2 prologue, byte-verified against `eldenring-deobf.bin` (file offset == RVA, base
-/// `0x140000000`): `48 8b 49 08 48 85 c9 74 15` -- `MOV RCX,[RCX+8]; TEST RCX,RCX; JZ +0x15`.
+/// Its expected prologue is assembled from named instructions by this crate's `build.rs` and
+/// arrives as `HAS_SPECIAL_EFFECT_ID_PROLOGUE` through the `include!` below.
 pub(crate) const HAS_SPECIAL_EFFECT_ID_RVA: usize = 0x4f9940;
-pub(crate) const HAS_SPECIAL_EFFECT_ID_PROLOGUE: &[u8] =
-    &[0x48, 0x8b, 0x49, 0x08, 0x48, 0x85, 0xc9, 0x74, 0x15];
 
 /// `int CS::SpecialEffect::Apply(SpecialEffect *container, int spEffectId, ChrIns *, ChrIns *,
 /// FloatVector4 *, byte, bool, byte)`.
-///
-/// 1.16.2 prologue, byte-verified the same way: `48 89 6c 24 10 48 89 74 24 18` --
-/// `MOV [RSP+0x10],RBP; MOV [RSP+0x18],RSI`.
 ///
 /// Four of its eight arguments arrive on the stack and at least one slot is typed inconsistently
 /// between call sites, which is exactly why the detour tail-jumps instead of re-marshalling
 /// arguments.
 pub(crate) const APPLY_RVA: usize = 0x4fa8e0;
-pub(crate) const APPLY_PROLOGUE: &[u8] =
-    &[0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18];
+
+// Both expected prologues, assembled from named `iced-x86` instructions by `build.rs` and
+// verified there against `eldenring-deobf.bin` when a copy is present.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_null_special_effect_prologues.rs"
+));
 
 null_arg1_guard! {
     /// Null container -> `false`, matching the original's own empty-list return.
@@ -158,20 +158,15 @@ pub(crate) const APPLY_GUARD: Guard = Guard {
 mod tests {
     use super::*;
 
-    /// These RVAs and bytes are the whole safety argument for the hook: if either drifts, the
-    /// install-time prologue check is comparing against the wrong thing.
+    /// These RVAs are the whole safety argument for the hook: if one drifts, the install-time
+    /// prologue check is comparing against the wrong thing. The BYTES are pinned where they are
+    /// produced -- `build.rs` asserts the assembled sequence against the pin and, when a copy of
+    /// `eldenring-deobf.bin` is present, against the real image at the same VA -- so repeating
+    /// them here would only be a third transcription to keep in step.
     #[test]
-    fn rvas_and_prologues_match_er_1162_static_re() {
+    fn rvas_match_er_1162_static_re() {
         assert_eq!(HAS_SPECIAL_EFFECT_ID_RVA, 0x4f9940);
         assert_eq!(APPLY_RVA, 0x4fa8e0);
-        assert_eq!(
-            HAS_SPECIAL_EFFECT_ID_PROLOGUE,
-            &[0x48, 0x8b, 0x49, 0x08, 0x48, 0x85, 0xc9, 0x74, 0x15]
-        );
-        assert_eq!(
-            APPLY_PROLOGUE,
-            &[0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18]
-        );
     }
 
     /// MinHook relocates the first five bytes of the entry. Both prologues must therefore start

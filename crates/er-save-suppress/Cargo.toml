@@ -24,3 +24,11 @@ er-hook = { path = "../er-hook" }
 
 [lints]
 workspace = true
+
+# Assembles every byte-checked prologue from NAMED instructions in `build.rs`, so a hand-typed
+# byte can never disarm a hook. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }

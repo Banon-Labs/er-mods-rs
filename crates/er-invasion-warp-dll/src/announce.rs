@@ -76,8 +76,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// only by walking `CSMenuMan`'s window list.
 pub const UPDATE_RVA: usize = 0x8c_47c0;
 
-/// Opening bytes, so a game update that moves this fails closed instead of jumping mid-instruction.
-pub const UPDATE_PROLOGUE: &[u8] = &[0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x0f, 0x29];
+// `UPDATE_PROLOGUE`: the opening bytes, so a game update that moves this fails closed instead of
+// jumping mid-instruction. Assembled from named `iced-x86` instructions by this crate's
+// `build.rs`, which also checks them against `eldenring-deobf.bin` when a copy is present.
+include!(concat!(env!("OUT_DIR"), "/generated_announce_prologues.rs"));
 
 /// Offsets into `FeSystemAnnounceView`, from the 1.16.2 dump's own struct definition.
 pub const MSG_OFFSET: usize = 0x0b10;

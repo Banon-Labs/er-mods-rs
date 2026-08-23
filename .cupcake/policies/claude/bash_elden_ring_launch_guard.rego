@@ -20,7 +20,7 @@ lower_tool_name := lower(tool_name)
 # Include non-command tool fields so context-mode/run_experiment/batch payloads
 # are policy-covered too. `sprintf` keeps arrays/objects searchable enough for
 # commands embedded in ctx_batch_execute-style lists.
-other_text := concat("\n", [sprintf("%v", [value]) |
+other_text := concat("\n", [json.marshal(value) |
 	some key, value in input.tool_input
 	key != "command"
 	key != "code"

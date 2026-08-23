@@ -104,7 +104,13 @@ is_script_path(path) if {
 }
 
 tmp_script_path_from_command := path if {
-	parts := regex.find_n(`/tmp/[^\s"'\\;&|<>]+`, command, -1)
+	# NOT regex.find_n: Cupcake's WASM runtime has no host implementation for it, so the call
+	# returned undefined and this entire Bash-authoring branch silently never fired (2026-08-22).
+	# regex.find_all_string_submatch_n is compiled into the WASM module itself; with no capture
+	# groups each submatch is [whole_match], so m[0] is the equivalent of find_n's element.
+	parts := [m[0] |
+		some m in regex.find_all_string_submatch_n(`/tmp/[^\s"'\\;&|<>]+`, command, -1)
+	]
 	some path in parts
 	not in_current_repo(path)
 	is_script_path(path)
