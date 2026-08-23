@@ -226,14 +226,34 @@ struct SwordArtsLookupResult {
 ///
 /// `+0x10` is not incidental: `GetSwordArtsParamIdForWeapon` reads exactly that field
 /// (`mov edx, dword ptr [rdi + 0x10]` at `0x140673fb6`).
+///
+/// THE FIELD AT `+0x10` IS THE ITEM ID, AND ITS EMPTY VALUE IS `-1`, NOT `0` (1.16.2 `getStructure`
+/// puts `itemId` last in a 20-byte record; the engine's own constructor `GaitemLookupResult(out,
+/// handle)` @0x1406726c0 writes `gaItemIns = nullptr; itemId = -1`). Zero is not "nothing" here:
+/// `GetSwordArtsParamIdForWeapon` rejects an id only when `(itemId & 0xF0000000) != 0` or it equals
+/// `0x0FFFFFFF`, and **zero passes both**, naming `EquipParamWeapon` row 0 -- unarmed -- whose
+/// `canGemBeChanged` refuses, so the gem override never runs and the function returns row 0's own
+/// default skill. That is why a badge built on a zero-initialised record shows "Kick" (arts 503) on
+/// every weapon instead of showing nothing. Starting at `-1` fails closed instead.
 #[repr(C)]
-#[derive(Default)]
 struct GaitemLookupResult {
     handle: u32,
     _pad0: u32,
     ins: usize,
-    kind: u32,
+    item_id: u32,
     _pad1: u32,
+}
+
+impl Default for GaitemLookupResult {
+    fn default() -> Self {
+        Self {
+            handle: 0,
+            _pad0: 0,
+            ins: 0,
+            item_id: u32::MAX,
+            _pad1: 0,
+        }
+    }
 }
 
 static ORIG_SCENE_UPDATE: AtomicUsize = AtomicUsize::new(0);
