@@ -346,6 +346,14 @@ constant names, so read them as synonyms rather than as a second feature:
 | Load Profile | **Load Character** | a character from the save container already loaded |
 | Load Save Profiles | **Load Character from File** | a save file off the disk |
 
+A THIRD cloned row, **Load Build from URL**, was added later and has never had another name.
+It is the odd one out on the tab: it neither returns to the title nor touches a save container,
+but rebuilds the character you are already playing from the `build_url` set in the game-directory
+`er-effects.toml` (items granted, gear worn, spells memorised, level and attributes matched). The
+importer behind it is `er-build-import-runtime`, shared with the standalone `er-build-import-dll`
+shell -- which must therefore never be loaded in the same me3 profile as the product DLL. Its label
+bytes live in `SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W`, beside the two above.
+
 The label bytes live in `SYSTEM_QUIT_LOAD_PROFILE_LABEL_W` and
 `SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W` (`system_quit_dialog_handlers.rs`) -- the symbols
 kept the old names while their contents changed, which is exactly the trap this table

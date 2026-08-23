@@ -665,13 +665,32 @@ pub static SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0
 pub static SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// Recorded cloned action object and `PropertyNewButtonController` for the "Load Build from URL"
+/// row. Same shape as the two rows above: recorded so a run can prove the row was BUILT, never used
+/// as the row identity (which is the list cursor, and only the list cursor).
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// Row presses, and the subset of them actually handed to `er-build-import-runtime`.
+/// `REQUEST_COUNT < ACTION_COUNT` means presses were refused -- no `build_url` configured, an
+/// import already in flight, or a link with no `?b=<id>` -- and REFUSED_COUNT says how many.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Presses the runtime refused OUTRIGHT -- no `build_url` configured, an import already in flight,
+/// or a link with no `?b=<id>`. Synchronous: the press itself came back with this.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Accepted requests that then FAILED asynchronously (fetch error, unparseable payload, a build
+/// whose level and attributes disagree). Counted separately from the refusals above because these
+/// are the ones a press reported as started, so the two must never be added together.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Imports that reached the character and were read back.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT: AtomicUsize = AtomicUsize::new(0);
 // ---- System->Quit ROW IDENTITY table + resolution oracles ----------------------------------
-// The four rows of the patched Quit tab share only TWO dispatchable `PropertyNewButtonController`
+// The rows of the patched Quit tab share only TWO dispatchable `PropertyNewButtonController`
 // objects, and each row's "action object" is nothing but `controller + 0x70` (that controller's own
 // inline std::function storage). So neither pointer is a row identity. These record the row TABLE
 // captured at build time and, per activation, which evidence actually resolved the row -- so a run
@@ -689,6 +708,7 @@ pub static SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1: AtomicUsize = AtomicUsize::new
 pub static SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_RESOLVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Resolutions that came from the dialog's own list cursor -- the ONLY row identity, shared by mouse,
 /// keyboard and pad. Equal to `RESOLVE_COUNT - AMBIGUOUS_COUNT` by construction; a divergence would
@@ -2250,8 +2270,8 @@ pub static TESTNET_FF_FIRED_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static OPTIONSETTING_ROW_LAST_LOG_KEY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static OPTIONSETTING_LAST_ACTIVE_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static SEAMLESS_TOS_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static OPTIONS_02_040_QUIT4_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
-pub static OPTIONS_02_040_QUIT4_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub static OPTIONS_02_040_QUIT5_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
+pub static OPTIONS_02_040_QUIT5_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static STATS_TEXT_SCREEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static STATS_TEXT_BUILT: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_OFFSCREEN_SETTLE_COUNT: AtomicUsize = AtomicUsize::new(0);

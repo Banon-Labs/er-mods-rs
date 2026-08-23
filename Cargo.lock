@@ -2774,6 +2774,16 @@ name = "er-build-import-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-build-import-runtime",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-build-import-runtime"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
  "er-build-import",
  "er-game-base",
  "fromsoftware-shared",
@@ -2827,6 +2837,7 @@ dependencies = [
  "bitflags 2.13.1",
  "eldenring",
  "er-boot-profiler",
+ "er-build-import-runtime",
  "er-d3d12-compositor",
  "er-game-base",
  "er-gfx",

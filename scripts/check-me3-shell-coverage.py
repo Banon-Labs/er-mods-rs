@@ -74,24 +74,36 @@ def parse_me3_shells(script_text: str) -> list[tuple[str, str]]:
 
 
 def cdylib_crates(crates_dir: Path) -> dict[str, str]:
-    """Map package name -> the artifact stem Cargo will emit, for every cdylib crate."""
+    """Map package name -> the artifact stem Cargo will emit, for every cdylib crate.
+
+    The crate-type is read out of the `[lib]` section's `crate-type` key, NOT by looking for the
+    word "cdylib" anywhere in the manifest. That whole-file substring test was inverted by its own
+    subject matter: `er-build-import-runtime` is a plain library whose manifest COMMENT explains
+    that a cdylib cannot be linked into another cdylib, and the comment alone made this gate demand
+    a `DllMain` from it. A manifest that merely talks about cdylibs is not one.
+    """
     found: dict[str, str] = {}
     for manifest in sorted(crates_dir.glob("*/Cargo.toml")):
         text = manifest.read_text(encoding="utf-8", errors="replace")
-        if "cdylib" not in text:
-            continue
         package_match = re.search(r"^name\s*=\s*\"([^\"]+)\"", text, re.M)
         if not package_match:
             continue
         package = package_match.group(1)
+        # Everything that decides the artifact lives in `[lib]`: no section means no cdylib, since
+        # Cargo's default crate-type is `lib`.
+        lib_match = re.search(r"\[lib\](.*?)(?:\n\[|\Z)", text, re.S)
+        if not lib_match:
+            continue
+        lib_section = lib_match.group(1)
+        crate_type = re.search(r"^\s*crate-type\s*=\s*\[([^\]]*)\]", lib_section, re.M)
+        if not crate_type or "cdylib" not in crate_type.group(1):
+            continue
         # A `[lib] name` override decides the artifact; otherwise Cargo derives it from the
         # package name with dashes turned into underscores.
-        lib_match = re.search(r"\[lib\](.*?)(?:\n\[|\Z)", text, re.S)
         artifact = package.replace("-", "_")
-        if lib_match:
-            lib_name = re.search(r"^\s*name\s*=\s*\"([^\"]+)\"", lib_match.group(1), re.M)
-            if lib_name:
-                artifact = lib_name.group(1)
+        lib_name = re.search(r"^\s*name\s*=\s*\"([^\"]+)\"", lib_section, re.M)
+        if lib_name:
+            artifact = lib_name.group(1)
         found[package] = artifact
     return found
 
@@ -231,10 +243,36 @@ def selftest() -> int:
             any("ghost-dll" in p and "not a cdylib crate" in p for p in problems),
         )
 
+        # A plain library whose manifest only TALKS about cdylibs. The whole-file substring test
+        # this replaced classified it as a shell and demanded a `DllMain` it must never have.
+        (root / "talks-about-cdylibs" / "src").mkdir(parents=True)
+        (root / "talks-about-cdylibs" / "Cargo.toml").write_text(
+            "# A cdylib cannot be linked into another cdylib, which is why this is a library.\n"
+            '[package]\nname = "talks-about-cdylibs"\n'
+        )
+        (root / "talks-about-cdylibs" / "src" / "lib.rs").write_text("pub fn f() {}\n")
+        problems = check(root, "me3_shells=(\n\trenamed-dll:renamed_artifact\n)")
+        case(
+            "a library that merely mentions cdylib is not a shell",
+            not any("talks-about-cdylibs" in p for p in problems),
+        )
+
+        # And a `[lib]` section that declares an rlib is still not a shell.
+        (root / "rlib-only" / "src").mkdir(parents=True)
+        (root / "rlib-only" / "Cargo.toml").write_text(
+            '[package]\nname = "rlib-only"\n[lib]\ncrate-type = ["rlib"]\n'
+        )
+        (root / "rlib-only" / "src" / "lib.rs").write_text("pub fn f() {}\n")
+        problems = check(root, "me3_shells=(\n\trenamed-dll:renamed_artifact\n)")
+        case(
+            "an rlib crate-type is not a shell",
+            not any("rlib-only" in p for p in problems),
+        )
+
     if failures:
         print(f"selftest: {failures} case(s) failed", file=sys.stderr)
         return 1
-    print("[check-me3-shell-coverage] selftest ok (7 cases)")
+    print("[check-me3-shell-coverage] selftest ok (9 cases)")
     return 0
 
 

@@ -25,7 +25,7 @@ pub(crate) static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::n
 /// `02_040_optionsetting` file-open from the native MemoryFile's vanilla payload, then reused
 /// for later opens. This keeps the DLL self-contained: no shipped GFx, only in-memory edits
 /// against the game's own loaded bytes.
-pub(crate) static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+pub(crate) static OPTIONS_02_040_QUIT5_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 
 /// Arm the product-default runtime 05_000_title strip. The old env-driven memory-GFX overrides
 /// (`load_memory_gfx_from_env` and the `TITLE_SCALEFORM_MEMORY_GFX` /

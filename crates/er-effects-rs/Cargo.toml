@@ -33,6 +33,11 @@ er-save-redirect = { path = "../er-save-redirect" }
 er-save-picker = { path = "../er-save-picker", default-features = false, features = ["boot-flow", "os-dialog"] }
 # Customized System>Quit decision core. Hooked surfaces stay in this crate until S8.
 er-quit-menu = { path = "../er-quit-menu" }
+# Game-side build importer, shared with the standalone er-build-import-dll shell. The System>Quit
+# "Load Build from URL" row calls `request` on a press and `tick` from the FrameBegin task.
+# NEVER load er_build_import.dll alongside this DLL in one me3 profile: each would drive its own
+# copy of the runtime against the same character.
+er-build-import-runtime = { path = "../er-build-import-runtime" }
 # Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
 # WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
 # bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.

@@ -37,6 +37,9 @@ pub(crate) use profile_05_010_editor_runtime::*;
 pub(crate) mod profile_rows_system_quit_menu;
 pub(crate) use profile_rows_system_quit_menu::*;
 
+pub(crate) mod build_url_row;
+pub(crate) use build_url_row::*;
+
 pub(crate) mod system_quit_row_identity;
 pub(crate) use system_quit_row_identity::*;
 

@@ -2,7 +2,7 @@
 //!
 //! The fixture is the exact 6871-byte body returned by
 //! `GET https://er-inventory-api.nyasu.business/inventories/af97a9da874151`,
-//! captured unauthenticated. Its catalogue rows come from the planner's public
+//! captured unauthenticated. Its catalog rows come from the planner's public
 //! item database.
 
 mod fixture_catalog;
@@ -48,7 +48,7 @@ fn every_referenced_item_resolves() {
 
 #[test]
 fn the_accented_weapon_resolves() {
-    // The build spells it `Miséricorde`; the catalogue key is `Misericorde`.
+    // The build spells it `Miséricorde`; the catalog key is `Misericorde`.
     let (doc, result) = planned();
     assert!(
         doc.inventory
@@ -295,4 +295,82 @@ fn an_out_of_range_position_is_reported_rather_than_silently_clamped() {
     let plan = equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default());
     assert!(!plan.is_complete());
     assert!(plan.rejected[0].reason.contains("out of range"));
+}
+
+// ------------------------------------------------------------------ er-effects.toml `build_url`
+
+/// The exact block `er-effects-rs`'s `boilerplate_config` writes into a fresh `er-effects.toml`,
+/// minus the picker block. This is the file a player actually edits, so the scanner is held to it
+/// rather than to a convenient shape: the commented example must NOT be read as a value, and the
+/// key must survive being surrounded by the other keys' comments.
+const PRODUCT_BOILERPLATE: &str = "\
+# er-effects-rs runtime config (auto-created next to the game executable).
+# All keys are optional; uncomment and edit as needed.
+#
+# save_file = 'C:\\path\\to\\ER0000.sl2'  # explicit read-only source
+# slot = 0                               # character slot the autoload selects
+# os_native_save_picker = false          # false=in-game browser, true=OS file dialog
+# save_suppression_enabled = false
+# build_url = 'https://er-build-planner.example/?b=af97a9da874151'
+# The er-build-planner share link the System>Quit \"Load Build from URL\" row imports onto the
+# character you are playing.
+";
+
+#[test]
+fn the_untouched_product_config_configures_no_build() {
+    // Every `build_url` in the shipped file is commented out, so a player who never edited it must
+    // get "nothing to import" -- not the example link, which is not their build.
+    assert_eq!(
+        er_build_import::build_url_from_config(PRODUCT_BOILERPLATE),
+        None
+    );
+}
+
+#[test]
+fn a_configured_build_url_is_read_in_every_spelling_the_file_allows() {
+    for (line, expected) in [
+        ("build_url = 'https://p/?b=abc123'", "https://p/?b=abc123"),
+        ("build_url = \"https://p/?b=abc123\"", "https://p/?b=abc123"),
+        ("build_url=https://p/?b=abc123", "https://p/?b=abc123"),
+        (
+            "   build_url   =   'https://p/?b=abc123'   ",
+            "https://p/?b=abc123",
+        ),
+    ] {
+        let contents = format!("{PRODUCT_BOILERPLATE}{line}\n");
+        assert_eq!(
+            er_build_import::build_url_from_config(&contents),
+            Some(expected),
+            "{line:?}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_or_absent_value_imports_nothing_rather_than_an_empty_build() {
+    for contents in [
+        "build_url =\n",
+        "build_url = ''\n",
+        "build_url = \"\"\n",
+        "",
+    ] {
+        assert_eq!(
+            er_build_import::build_url_from_config(contents),
+            None,
+            "{contents:?}"
+        );
+    }
+}
+
+/// The two halves have to agree: a value the scanner accepts still has to carry a share id, and the
+/// self-contained `?i=` form -- which needs no network at all -- must be refused rather than fetched.
+#[test]
+fn the_configured_url_feeds_the_share_id_extractor() {
+    let contents = "build_url = 'https://er-build-planner.example/?b=af97a9da874151'\n";
+    let url = er_build_import::build_url_from_config(contents).expect("configured");
+    assert_eq!(share_id_from_url(url), Some("af97a9da874151"));
+
+    let self_contained = "build_url = 'https://er-build-planner.example/?i=eyJ2IjoxfQ'\n";
+    let url = er_build_import::build_url_from_config(self_contained).expect("configured");
+    assert_eq!(share_id_from_url(url), None);
 }

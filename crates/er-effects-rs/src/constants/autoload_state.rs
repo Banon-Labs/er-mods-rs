@@ -964,6 +964,14 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJ
 /// Recorded `PropertyNewButtonController` for the save-folder row. This is the authoritative click
 /// dispatch identity when the GFx/native bridge bypasses the action-object thunk.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT;
+/// Recorded cloned action object / `PropertyNewButtonController` for the "Load Build from URL" row,
+/// plus its press / request / refusal / async-failure / import counters.
+pub(crate) use er_telemetry::counters::{
+    SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_LAST_OBJECT,
+    SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT,
+    SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT,
+    SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT,
+};
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
@@ -971,6 +979,7 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1;

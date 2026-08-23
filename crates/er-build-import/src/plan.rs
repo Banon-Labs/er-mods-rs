@@ -84,14 +84,14 @@ impl Grant {
     }
 }
 
-/// An item the catalogue could not resolve.
+/// An item the catalog could not resolve.
 ///
 /// Surfaced rather than dropped: a silently missing weapon is indistinguishable
 /// from a broken importer, and this is exactly how the `Miséricorde` accent bug
 /// was found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unresolved {
-    /// Which catalogue was searched.
+    /// Which catalog was searched.
     pub kind: Kind,
     /// The name as the build spelled it.
     pub name: String,

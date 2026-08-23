@@ -1,4 +1,4 @@
-//! The item catalogue: name -> item id, scoped by category.
+//! The item catalog: name -> item id, scoped by category.
 //!
 //! # Why lookup MUST be category-scoped
 //!
@@ -67,12 +67,12 @@ impl Kind {
     }
 }
 
-/// One catalogue row.
+/// One catalog row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry {
     /// The category-tagged item id: `(category_nibble << 28) | param_id`.
     ///
-    /// Verified across all 2063 catalogue entries: the low 28 bits are exactly the
+    /// Verified across all 2063 catalog entries: the low 28 bits are exactly the
     /// param row id, and the nibble is 0 for weapons/ammo, 1 for protectors,
     /// 2 for talismans and ashes of war, 4 for goods (spells and tools).
     pub full_item_id: u32,
@@ -93,14 +93,14 @@ pub trait Catalog {
     fn lookup(&self, kind: Kind, name: &str) -> Option<Entry>;
 }
 
-/// An in-memory catalogue keyed by `(kind, folded name)`.
+/// An in-memory catalog keyed by `(kind, folded name)`.
 #[derive(Debug, Clone, Default)]
 pub struct MapCatalog {
     entries: HashMap<(Kind, String), Entry>,
 }
 
 impl MapCatalog {
-    /// An empty catalogue.
+    /// An empty catalog.
     pub fn new() -> Self {
         Self::default()
     }
@@ -121,7 +121,7 @@ impl MapCatalog {
         self.entries.len()
     }
 
-    /// Whether the catalogue holds no rows.
+    /// Whether the catalog holds no rows.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

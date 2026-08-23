@@ -49,6 +49,20 @@ evidence = "crates/er-loading-bar-dll/src/lib.rs:102"
 
 [[conflict]]
 a = "er-effects-rs"
+b = "er-build-import-dll"
+kind = "duplicate-owner"
+reason = """Both link `er-build-import-runtime`, and a statically linked crate's statics are \
+PER DLL: two copies of the phase machine, two fetch workers, two CSTaskImp FrameBegin tasks, all \
+mutating one character's inventory, equipment slots and PlayerGameData. The shell imports the \
+configured `build_url` unprompted at character load while the product's System>Quit "Load Build \
+from URL" row imports on demand, so the two interleave grants and stat writes with no shared \
+lock -- and the shell's import can land on a character the player never asked to rebuild. \
+Neither installs a detour, so this is not a hook collision: it is two owners of one mutation. \
+The product DLL is the one to keep; the shell exists for profiles that do not load it."""
+evidence = "crates/er-build-import-dll/src/lib.rs:23; crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/build_url_row.rs"
+
+[[conflict]]
+a = "er-effects-rs"
 b = "er-input-harness-dll"
 kind = "drives-input"
 reason = """DEFAULT-ON by mere presence: it writes the game's input memory every frame, so the \
@@ -77,13 +91,6 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace_dll ent
 [compatible]
 "er-armament-icons" = "Own MinHook instance, but on TilePopulate -- a prologue the product does not hook."
 "er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
-"er-build-import-dll" = """Installs NO detours at all: the crate contains no MinHook instance, no \
-er-hook union entry and no VirtualProtect, so it shares no prologue with any shell. It does one \
-blocking WinHTTP GET on its own worker thread and otherwise runs a single CSTaskImp FrameBegin \
-task that CALLS existing native functions (AddInventoryEquipByItemId, SetEquipmentEntries, \
-EquipMagicInSlot, ApplyMainPlayerStats) exactly once, then latches itself off. It NEEDS \
-er_effects_rs.dll in the same profile rather than conflicting with it -- the import only runs \
-once a character is loaded in the world, and the product DLL is what autoloads one."""
 "er-crash-logging-dll" = "First-chance exception handler only. The product does not link er-crash-logging, so this is the sole crash logger in the process."
 "er-death-persist-dll" = """One-shot SpEffectParam / SpEffectVfxParam row patch driven from a \
 CSTaskImp task: it moves saveCategory 5 -> 3 on rows 19980/19981/19982 and sets flags on their \

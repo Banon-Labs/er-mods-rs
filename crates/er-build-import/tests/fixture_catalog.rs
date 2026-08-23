@@ -1,4 +1,4 @@
-//! Catalogue rows for the items in the fixture build.
+//! Catalog rows for the items in the fixture build.
 //!
 //! Generated from the planner's public item database; only the ~70 rows this
 //! test needs are reproduced, so the repository does not carry a copy of the
@@ -6,7 +6,7 @@
 
 use er_build_import::catalog::{Entry, Kind, MapCatalog};
 
-/// Build the fixture catalogue.
+/// Build the fixture catalog.
 pub fn catalog() -> MapCatalog {
     let mut c = MapCatalog::new();
     c.insert(

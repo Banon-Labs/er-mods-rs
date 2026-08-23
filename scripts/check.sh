@@ -224,6 +224,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-invasion-warp -p er-invasion-warp-dll
 
+# The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
+# grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
+# it had 23 tests, so the whole mapping could regress silently -- the game-side crates
+# (er-build-import-runtime, er-build-import-dll) are windows-only and prove none of it. There is
+# nothing to run here for those two: `check-rust-build.sh` keeps them building for the shipping
+# target, and the DLL half is proven in game.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import
+
 # er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count

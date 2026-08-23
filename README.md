@@ -164,13 +164,39 @@ Common quick-load files/config:
 | `er-effects-native-continue.txt` | Enables the supported native Continue path. |
 | `er-effects-pab-advance.txt` | Enables zero-input press-any-button/menu-open advance. |
 | `er-effects-splash-skip.txt` | Enables built-in splash skip when not already implied by quick load. |
-| `er-effects.toml` | Game-directory config file; can provide `save_file`, `boot_background_image`, and `persist_boot_background_to_loading_screen`. |
+| `er-effects.toml` | Game-directory config file; can provide `save_file`, `build_url`, `boot_background_image`, and `persist_boot_background_to_loading_screen`. |
 | `er-effects-boot-background.rgba` | Game-directory developer/power-user predecoded screenshot override; not required for production local Steam screenshot discovery. |
 
 Important experimental/probe files exist too (`er-effects-force-profile-render.txt`,
 `er-effects-portrait-render-drive.txt`, etc.). Those are for controlled runtime probes
 and are not the minimal quick-load release surface. Cursor/head tracking for the
 loading portrait is intentionally not a supported feature.
+
+## Importing a build from a planner link
+
+The System > Quit tab's **Load Build from URL** row rebuilds the character you are
+currently playing from an [`er-build-planner`](https://er-build-planner.pages.dev/)
+share link: items granted, gear worn, spells memorised within the real memory-slot
+count, quickbar/pouch/physick filled, level and attributes matched, class and great
+rune set. It runs where you stand -- it does not return to the title and does not
+touch your save container -- and you can press it as often as you like.
+
+The link comes from `build_url` in the game-directory `er-effects.toml`:
+
+<!-- md-test: parse-toml -->
+```toml
+build_url = 'https://er-build-planner.pages.dev/?b=af97a9da874151'
+```
+
+Only the `?b=<id>` form works. The self-contained `?i=` form carries the whole build
+in the URL and is not fetched. With no `build_url` set, the row does nothing and says
+so in `er-effects-autoload-debug.log`.
+
+Every change the import makes is confirmed by reading game memory back afterwards,
+never by a call having returned, and the counts it reports are those read-backs. The
+detail lands in `er-build-import.log` beside the game executable; the row's own
+outcome, including a fetch that failed after the press, lands in
+`er-effects-autoload-debug.log`.
 
 ## Save-source behavior
 
