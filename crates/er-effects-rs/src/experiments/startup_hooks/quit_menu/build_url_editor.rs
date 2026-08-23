@@ -161,6 +161,45 @@ pub(crate) fn build_url_editor_active() -> bool {
     phase() != EditorPhase::Idle || build_url_keyboard_active()
 }
 
+/// WHAT, EXACTLY, IS CLAIMING TO BE ACTIVE.
+///
+/// [`build_url_editor_active`] answers yes/no, and a yes that turns out to be wrong is
+/// indistinguishable from a yes that is right -- which is how three consecutive presses of the row
+/// were swallowed with nothing but "editor already active" to show for it (runtime log
+/// `dll:e9e66c62`, +106002/+107447/+108703ms, 2026-08-23). Naming the latch costs one format and
+/// means the next occurrence explains itself instead of needing the log archaeology that one did.
+fn active_latch_state() -> String {
+    format!(
+        "phase={:?} keyboard_active={} latched_dialog=0x{:x} editor_window=0x{:x}",
+        phase(),
+        build_url_keyboard_active(),
+        DIALOG.load(Ordering::SeqCst),
+        EDITOR_WINDOW.load(Ordering::SeqCst),
+    )
+}
+
+/// Is an "active" latch actually backed by a live field, or is it debris?
+///
+/// A latch is only meaningful for the dialog it was taken against. The Quit tab destroys and
+/// rebuilds its dialog freely -- tab away and back, and every pointer from the previous one is
+/// dead. `system_quit_row_table_reset` clears this editor for exactly that reason, but it fires on
+/// the tab's own rebuild path, and any route that strands the latch without going through it leaves
+/// the row permanently dead: every future press sees "already active" and refuses, forever, because
+/// nothing will ever arrive to clear a latch whose field no longer exists.
+///
+/// So the press does not trust the latch. A latch taken against a DIFFERENT dialog than the one now
+/// pressing cannot be a live field on this one, and a non-Idle phase with no keyboard job and no
+/// window behind it is a request that died before it ever opened. Either is debris, and the press
+/// that found it is entitled to clear it and proceed -- a stale flag must never outrank a player
+/// pressing the button.
+fn active_latch_is_stale(dialog: usize) -> bool {
+    let latched = DIALOG.load(Ordering::SeqCst);
+    if latched != 0 && latched != dialog {
+        return true;
+    }
+    !build_url_keyboard_active() && EDITOR_WINDOW.load(Ordering::SeqCst) == 0
+}
+
 /// Ask for the link field. Called from the row press, on whatever thread dispatched the activation;
 /// it only latches, because building and submitting a `MenuJob` is menu-pump work.
 pub(crate) fn request_build_url_editor(dialog: usize) -> bool {
@@ -168,10 +207,20 @@ pub(crate) fn request_build_url_editor(dialog: usize) -> bool {
         return false;
     }
     if build_url_editor_active() {
-        append_autoload_debug(format_args!(
-            "system-quit-build-url: editor already active; ignoring the repeat press"
-        ));
-        return false;
+        if active_latch_is_stale(dialog) {
+            append_autoload_debug(format_args!(
+                "system-quit-build-url: STALE active latch on a press for dialog=0x{dialog:x} ({}); \
+                 clearing it and opening the field -- a dead latch must not outrank the player",
+                active_latch_state()
+            ));
+            reset_build_url_editor_state();
+        } else {
+            append_autoload_debug(format_args!(
+                "system-quit-build-url: editor already active; ignoring the repeat press ({})",
+                active_latch_state()
+            ));
+            return false;
+        }
     }
     // Read the clipboard HERE rather than at submit time: this is the instant the player pressed
     // the row, so it is their clipboard as it was when they asked, not as it is some frames later.
@@ -558,6 +607,84 @@ mod tests {
             assert!(CARET_APPLY_FRAMES > 0 && CARET_APPLY_FRAMES <= 16);
             assert!(MIRROR_UNCONDITIONAL_FRAMES > 0 && MIRROR_UNCONDITIONAL_FRAMES <= 60);
             assert!(MIRROR_UNCONDITIONAL_STRIDE > 1);
+        }
+    }
+
+    /// These cases drive PROCESS-GLOBAL statics, and cargo runs tests on many threads, so without a
+    /// lock they corrupt each other's setup and fail in whichever order the scheduler picks. The
+    /// lock is deliberately poison-tolerant: one panicking case must not turn the rest into
+    /// spurious failures that hide it.
+    fn latch_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LATCH_TESTS: Mutex<()> = Mutex::new(());
+        LATCH_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// THE ROW WENT DEAD FOR THREE PRESSES, AND THE ONLY REASON IT CAME BACK WAS A DIALOG REBUILD.
+    ///
+    /// Live log `dll:e9e66c62`, 2026-08-23: presses at +106002/+107447/+108703ms were all refused
+    /// with "editor already active" against controller `0x1ad3a180`; the press that finally opened
+    /// the field at +110546ms was on controller `0x10854580`. A different dialog, i.e. the latch was
+    /// held against one that no longer existed. Nothing was ever going to clear it on the dead
+    /// dialog, so without this the row is dead until the player happens to rebuild the tab.
+    #[test]
+    fn a_latch_taken_against_another_dialog_is_stale() {
+        let _guard = latch_test_guard();
+        reset_build_url_editor_state();
+        DIALOG.store(0x1ad3_a180, Ordering::SeqCst);
+        assert!(
+            active_latch_is_stale(0x1085_4580),
+            "a latch on a different dialog cannot be a live field on this one"
+        );
+    }
+
+    /// The other way a latch strands: a request that never reached the pump. No keyboard job was
+    /// ever created and no window ever ran, so there is nothing left to fire and clear the phase.
+    #[test]
+    fn a_phase_with_no_field_behind_it_is_stale() {
+        let _guard = latch_test_guard();
+        reset_build_url_editor_state();
+        DIALOG.store(0xdead_beef, Ordering::SeqCst);
+        set_phase(EditorPhase::Pending);
+        assert_eq!(EDITOR_WINDOW.load(Ordering::SeqCst), 0);
+        assert!(
+            active_latch_is_stale(0xdead_beef),
+            "Pending with no keyboard job and no window is a request that died"
+        );
+    }
+
+    /// The guard must NOT eat a genuine double-press. A field really running on THIS dialog, with a
+    /// window behind it, is the case the latch exists for -- clearing that would stack a second
+    /// field on the first, which is the bug the whole guard was written to prevent.
+    #[test]
+    fn a_live_field_on_this_dialog_is_not_stale() {
+        let _guard = latch_test_guard();
+        reset_build_url_editor_state();
+        DIALOG.store(0xabc_1000, Ordering::SeqCst);
+        set_phase(EditorPhase::Open);
+        EDITOR_WINDOW.store(0x4444_0000, Ordering::SeqCst);
+        assert!(
+            !active_latch_is_stale(0xabc_1000),
+            "a running field on the pressing dialog is exactly what the latch protects"
+        );
+        reset_build_url_editor_state();
+    }
+
+    /// The diagnostic names every latch, so the next stranding explains itself in one line instead
+    /// of costing a log excavation.
+    #[test]
+    fn the_latch_state_names_all_four_sources() {
+        let _guard = latch_test_guard();
+        reset_build_url_editor_state();
+        let state = active_latch_state();
+        for field in [
+            "phase=",
+            "keyboard_active=",
+            "latched_dialog=",
+            "editor_window=",
+        ] {
+            assert!(state.contains(field), "{field} missing from {state:?}");
         }
     }
 }
