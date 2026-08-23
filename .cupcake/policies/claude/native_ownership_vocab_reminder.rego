@@ -28,7 +28,7 @@ add_context contains context if {
 	is_user_prompt_submit
 	marker := native_vocab_marker
 	marker != ""
-	context := sprintf("NATIVE OWNERSHIP VOCABULARY CAUTION (advisory, non-blocking): your previous assistant turn used risky implementation vocabulary/signals: %s. You are obligated to read this caution, but do not stop or reply solely to it. Treat those words as warning signs, not evidence: do not assume pulse/pump/poke/manual field writes/direct address steering are valid product fixes. For this objective, re-ground the next technical step in the game-owned native job/queue/slot/state-machine owner and an in-process semaphore proving that native owner advanced. Any manual field write must remain diagnostic only and be converted to native ownership integration or removed.", [marker])
+	context := concat("", ["NATIVE OWNERSHIP VOCABULARY CAUTION (advisory, non-blocking): your previous assistant turn used risky implementation vocabulary/signals: ", marker, ". You are obligated to read this caution, but do not stop or reply solely to it. Treat those words as warning signs, not evidence: do not assume pulse/pump/poke/manual field writes/direct address steering are valid product fixes. For this objective, re-ground the next technical step in the game-owned native job/queue/slot/state-machine owner and an in-process semaphore proving that native owner advanced. Any manual field write must remain diagnostic only and be converted to native ownership integration or removed."])
 }
 
 is_user_prompt_submit if {
