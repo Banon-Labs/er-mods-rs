@@ -975,6 +975,19 @@ pub(crate) use er_telemetry::counters::{
     SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT,
     SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT,
 };
+/// The "Generate Build Link" row: its cloned action/controller pair, and one counter for each stage
+/// that can independently fail -- press, claim, refusal, stale-latch recovery, encode, clipboard,
+/// browser, async failure.
+pub(crate) use er_telemetry::counters::{
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_COUNT,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_CLIPBOARD_COUNT,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_ENCODED_COUNT, SYSTEM_QUIT_GENERATE_BUILD_LINK_FAILED_COUNT,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_LAST_URL_LEN, SYSTEM_QUIT_GENERATE_BUILD_LINK_OPENED_COUNT,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_REFUSED_COUNT, SYSTEM_QUIT_GENERATE_BUILD_LINK_REQUEST_COUNT,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_STALE_LATCH_COUNT,
+};
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
@@ -982,6 +995,7 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1;

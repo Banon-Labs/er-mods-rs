@@ -15,7 +15,7 @@
 //!   is preceded by `GetSlotIndexByItemIndex`, and skipped when the item is already there.
 //!   Without that check a re-run strips the gear it just put on.
 
-use er_build_import::equip::{EquipPlan, EquipRef};
+use er_build_import::equip::{EquipPlan, EquipRef, armament_slot};
 
 /// `EquipItemToChrAsmSlot(ChrAsmSlot slot, MenuGaitem *item)`.
 const EQUIP_ITEM_TO_CHR_ASM_SLOT: usize = 0x787c30;
@@ -23,7 +23,10 @@ const EQUIP_ITEM_TO_CHR_ASM_SLOT: usize = 0x787c30;
 // reads them from.
 use er_game_base::rva::{
     GET_EQUIP_INVENTORY_DATA_RVA as GET_EQUIP_INVENTORY_DATA,
+    GET_EQUIPPED_GREATRUNE_RVA as GET_EQUIPPED_GREATRUNE,
     GET_ITEM_INVENTORY_IDX_RVA as GET_ITEM_INVENTORY_IDX,
+    GET_PARAM_ID_IN_SLOT_RVA as GET_PARAM_ID_IN_SLOT,
+    GET_PHYSIC_TEAR_BY_SLOT_RVA as GET_PHYSIC_TEAR_BY_SLOT,
 };
 /// `CS::EquipGameData::GetSlotIndexByItemIndex(egd, itemIdx) -> ChrAsmSlot`.
 const GET_SLOT_INDEX_BY_ITEM_INDEX: usize = 0x248440;
@@ -47,7 +50,6 @@ const BROADCAST_EQUIPMENT_CHANGE: usize = 0x658c90;
 /// `ChrAsmSlot - 0x16`, which is what `ConvertChrAsmSlotToQuickItemOrPouchSlot` computes.
 const SET_QUICK_OR_POUCH_OR_RUNE: usize = 0x249a50;
 /// `CS::EquipGameData::GetPhysicTearBySlot(egd, slot) -> int` -- the physick read-back.
-const GET_PHYSIC_TEAR_BY_SLOT: usize = 0x247a20;
 /// `EquipGameData::physicTears`, `int[3]` (empty == `-1`). Confirmed by the getter's own
 /// addressing, `MOV ECX,dword ptr [RCX + RAX*0x4 + 0x3e4]`. Recorded, not written: see
 /// [`read_physick`] for why writing it directly produced error icons in the flask.
@@ -59,14 +61,6 @@ const CHR_ASM_SLOT_GREAT_RUNE: i32 = 0x26;
 
 /// `WorldChrMan::mainPlayerIns`.
 const WORLD_CHR_MAN_MAIN_PLAYER_INS: usize = 0x1e508;
-
-/// `CS::EquipGameData::GetParamIdInSlot(egd, ChrAsmSlot) -> int`.
-///
-/// The read-back oracle. Counting equip CALLS proved worthless: a first version reported
-/// "10/10 positions" while the character wore nothing, because `EquipItemToChrAsmSlot`
-/// returns void and silently no-ops when its own gate declines. Only the slot's contents
-/// afterwards are evidence.
-const GET_PARAM_ID_IN_SLOT: usize = 0x2470e0;
 
 /// `MenuGaitem` is 128 bytes; the equip path reads only two of its fields.
 const MENU_GAITEM_SIZE: usize = 128;
@@ -122,24 +116,6 @@ pub struct EquipOutcome {
     /// Every request, as `(slot, item id, inventory index)`, so a missing one is visible
     /// instead of having to be inferred from a total that does not add up.
     pub trace: Vec<(i32, u32, i32)>,
-}
-
-/// Map a planner armament index (0..6) to its `ChrAsmSlot`.
-///
-/// The planner blocks its indices -- `equipIndex >= 3 ? row 1 : row 0`, three per row -- while
-/// `ChrAsmSlot` interleaves the hands (`0 = WeaponLeft1, 1 = WeaponRight1, 2 = WeaponLeft2`...).
-///
-/// INFERRED, and the one mapping here not proven from the binary: the planner's first block is
-/// taken to be the RIGHT hand, because the game's own Status screen lists `R Armament 1..3`
-/// before `L Armament 1..3` and the planner mirrors that layout. If imported builds come out
-/// hand-swapped, this is the line to flip -- nothing else depends on the choice.
-fn armament_slot(planner_index: u32) -> Option<i32> {
-    let position = i32::try_from(planner_index % 3).ok()?;
-    match planner_index {
-        0..=2 => Some(1 + 2 * position), // right hand: 1, 3, 5
-        3..=5 => Some(2 * position),     // left hand:  0, 2, 4
-        _ => None,
-    }
 }
 
 /// One equip request: the target native slot and the item to put in it.
@@ -405,9 +381,6 @@ pub unsafe fn read_physick(module_base: usize, egd: usize) -> [i32; 2] {
     }
     out
 }
-
-/// `CS::EquipGameData::GetEquippedGreatrune(egd) -> int` -- which great rune is equipped.
-const GET_EQUIPPED_GREATRUNE: usize = 0x247900;
 
 /// Read back the equipped great rune. `-1` means none.
 ///

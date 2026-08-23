@@ -1466,6 +1466,11 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
     } else {
         0
     };
+    let generate_link_controller = if table_live {
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
     let native_save_controller = if table_live {
         SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
     } else {
@@ -1498,7 +1503,8 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
         if controller != 0
             && (controller == quickload_controller
                 || controller == open_profiles_controller
-                || controller == build_url_controller)
+                || controller == build_url_controller
+                || controller == generate_link_controller)
         {
             cloned_mask |= 1usize << row_idx;
         }

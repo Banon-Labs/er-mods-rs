@@ -53,6 +53,10 @@ members = [
   # standalone shell below and the product DLL's System>Quit "Load Build from URL" row.
   "crates/er-build-import-runtime",
   "crates/er-build-import-dll",
+  # The other direction: WRITE an er-build-planner `?i=` share link from a character
+  # document. Self-contained links carry the whole build, so producing one needs no account
+  # and no network -- pure host-side data transformation, same as er-build-import.
+  "crates/er-build-export",
   "crates/er-safe-input",
   "crates/er-save-loader",
   "crates/er-tpf",

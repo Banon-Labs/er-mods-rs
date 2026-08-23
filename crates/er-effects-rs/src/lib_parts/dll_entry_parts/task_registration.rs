@@ -595,6 +595,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             },
             CSTaskGroupIndex::FrameBegin,
         );
+        // BUILD EXPORT (System>Quit "Generate Build Link"). Same thread and the same reason, from
+        // the other direction: this one READS `PlayerGameData`, the equipment slots and the message
+        // repository, none of which may be touched off the game thread. Also inert until pressed --
+        // and it deliberately ticks even when idle, because its tick counter is the witness the
+        // stale-latch check measures against (see `er_build_import_runtime::export`).
+        cs_task.run_recurring(
+            move |_task_data: &FD4TaskData| {
+                // Safety: FrameBegin runs on the game task thread; every step inside is
+                // precondition-checked (params streamed, character present).
+                unsafe { system_quit_build_export_tick() };
+            },
+            CSTaskGroupIndex::FrameBegin,
+        );
         // BUILD-OWN LIVE-RENDER DRIVER (gated, FrameBegin = GAME thread, ticks EVERY frame incl. the
         // loading screen). force_profile_render_tick's only other call sites are menu-phase-only (they
         // `return` before Continue), so maybe_build_profile_table_for_loading + the mark/refresh feed never

@@ -43,6 +43,9 @@ pub(crate) use build_url_row::*;
 pub(crate) mod build_url_clipboard;
 pub(crate) use build_url_clipboard::*;
 
+pub(crate) mod generate_build_link_row;
+pub(crate) use generate_build_link_row::*;
+
 pub(crate) mod build_url_editor;
 pub(crate) use build_url_editor::*;
 

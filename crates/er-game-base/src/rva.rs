@@ -155,3 +155,77 @@ pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d7_d4f8;
 ///
 /// Returns the index the equip path needs; negative means the item is not held.
 pub const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;
+
+// ---- the equipped loadout: read by the importer, the exporter and the HUD badge ----
+//
+// These moved here when the Generate Build Link row arrived and gave every one of them a THIRD
+// declaration. Each address was already written out twice -- once in `er-build-import-runtime`
+// where the importer verifies its own writes, once in `er-armament-icons` where the HUD badge
+// resolves the equipped gem -- and an exporter that reads the same slots would have made three.
+//
+// `check-rva-alias-drift.py` puts the reason better than a comment can: divergent names for one
+// address are divergent CLAIMS about what that address IS, and at least one of them is then a
+// wrong reverse-engineering fact shipping in the DLL. Declaring the value once and deriving the
+// aliases keeps the names -- which are useful, they say what the caller wants -- while leaving
+// exactly one place a 1.16.x address correction has to land.
+
+/// `CS::EquipGameData::GetParamIdInSlot(egd, ChrAsmSlot) -> int`.
+///
+/// The read-back oracle for equipment, in both directions. The importer needs it because
+/// `EquipItemToChrAsmSlot` returns void and declines silently, so only the slot's contents
+/// afterwards are evidence; the exporter needs it because those contents ARE the build.
+pub const GET_PARAM_ID_IN_SLOT_RVA: usize = 0x2470e0;
+
+/// `CS::EquipGameData::GetEquippedGreatrune(egd, int *out, int slot) -> int*`.
+///
+/// THREE arguments. The outer wrapper at `0x140247900` is only
+/// `ADD RCX,0x288 / MOV RBX,RDX / CALL 0x14024f390 / MOV RAX,RBX` -- it never writes R8, so the
+/// slot argument passes straight through to the inner function, whose body begins
+/// `*out = -1; if (slot == 0 && ...)`. Calling it with two arguments leaves R8 holding whatever
+/// the call site happened to have, the `slot == 0` test fails, and it reports -1 no matter what is
+/// equipped. That produced three runs of "the rune will not equip" when the rune was fine.
+pub const GET_EQUIPPED_GREATRUNE_RVA: usize = 0x247900;
+
+/// `CS::EquipGameData::GetPhysicTearBySlot(egd, int *out, uint slot) -> int*`.
+///
+/// Another OUT-PARAMETER getter, like the great rune above: the second argument is a pointer the
+/// callee writes through, not a scalar. Treating it as a scalar getter stores through whatever the
+/// caller passed, which took the game down once.
+pub const GET_PHYSIC_TEAR_BY_SLOT_RVA: usize = 0x247a20;
+
+/// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*) -> uint`.
+///
+/// A null `SpecialEffect` means "derive it from the player", which accounts for Memory Stones and
+/// talismans; the engine clamps the result to 14.
+pub const GET_MAGIC_SLOTS_COUNT_RVA: usize = 0x250580;
+
+/// `CS::EquipMagicData::GetEquipMagicId(emd, slot) -> int` -- the memorised spell in a slot.
+pub const GET_EQUIP_MAGIC_ID_RVA: usize = 0x2506d0;
+
+/// `GetWeaponGaitemHandleBySlot(PlayerIns*, u32 *out, ChrAsmSlot) -> u32*`.
+///
+/// First hop of the ash-of-war read: a `ChrAsmSlot` names a gaitem handle.
+pub const GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA: usize = 0x656920;
+
+/// `GetGaitemInsByHandle(GaitemLookupResult *inout, GaitemLookupResult *handleSource)`.
+///
+/// Second hop. BOTH arguments are the SAME pointer in every native caller; passing two different
+/// buffers reads a handle that was never written into the second one, and the failure is a silent
+/// nothing rather than a fault.
+pub const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x672e40;
+
+/// `GetSwordArtsParamForWeapon(GaitemLookupResult*, SwordArtsParamLookupResult *out)`.
+///
+/// Third hop, and the reason the chain is worth walking: it resolves through
+/// `GetGemGaitemHandleFromWeapon` -> `GetGaitemInsGem`, i.e. the ACTUAL equipped gem. The menu
+/// path's `arts_id * 100` heuristic misses every weapon whose gem id is not derived that way
+/// (Igon's Drake Hunt: arts 4210 -> gem 548000).
+pub const GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA: usize = 0x673f30;
+
+/// `WorldChrMan` singleton global; `+0x1e508` is the local `PlayerIns`.
+///
+/// Both dereferences are null-checked in the game's own code, so both must be null-checked here.
+pub const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d65f88;
+
+/// `WorldChrMan::mainPlayerIns`, the local player inside the singleton above.
+pub const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;

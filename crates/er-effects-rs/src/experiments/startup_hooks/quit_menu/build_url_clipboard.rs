@@ -31,10 +31,20 @@ use super::*;
 
 use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
-    OpenClipboard,
+    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
+    IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
 };
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+
+// `GlobalFree` is not in `windows` 0.62's `Win32_System_Memory` binding, though its three
+// siblings are. Declared by hand rather than worked around, in the same style as the WinHTTP
+// imports in `er-build-import-runtime::http`: the exact ABI is then visible at the call site and
+// cannot drift with a crate upgrade. It is needed on exactly one path -- the allocation that
+// `SetClipboardData` REFUSED, which this process still owns and must not leak.
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GlobalFree(hmem: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+}
 
 /// `CF_UNICODETEXT`. The only format asked for: the field is UTF-16 and a link is text.
 const CF_UNICODETEXT: u32 = 13;
@@ -137,5 +147,65 @@ pub(crate) fn build_url_initial_text() -> String {
             link
         }
         None => er_build_import::BUILD_URL_PREFIX.to_owned(),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// WRITING. The read above exists because the game's own field has no paste; this exists because the
+// Generate Build Link row produces something the player will want to send to someone, and a link
+// that only ever appeared inside a browser tab they then closed is a link they cannot get back.
+//
+// Under Wine the Windows clipboard is bridged to the host X11/Wayland selection in BOTH directions,
+// so a link copied here can be pasted into a Linux application. That bridge is asynchronous going
+// out as well as coming in -- ownership is handed over when the host asks for it -- which is why
+// this reports only that the clipboard ACCEPTED the data, never that a paste elsewhere will work.
+
+/// Put `text` on the clipboard as `CF_UNICODETEXT`.
+///
+/// Returns whether the clipboard took it. Every failure is a `false` rather than an error for the
+/// same reason the read returns `None`: the caller's response to all of them is identical, and the
+/// row reports the outcome in one word either way.
+///
+/// The clipboard takes ownership of the global on success, so it is freed ONLY on the paths where
+/// `SetClipboardData` did not take it -- freeing it afterwards would hand every later paste a
+/// dangling block.
+pub(crate) fn set_clipboard_text(text: &str) -> bool {
+    let mut units: Vec<u16> = text.encode_utf16().collect();
+    units.push(0);
+    let bytes = core::mem::size_of_val(units.as_slice());
+
+    // Safety: the clipboard API is process-wide; the handle is opened, filled and closed on every
+    // path below, and ownership of the allocation is transferred exactly once.
+    unsafe {
+        if OpenClipboard(Some(HWND::default())).is_err() {
+            return false;
+        }
+        // `EmptyClipboard` is not optional: it is what makes this process the clipboard OWNER, and
+        // `SetClipboardData` fails without that ownership.
+        if EmptyClipboard().is_err() {
+            let _ = CloseClipboard();
+            return false;
+        }
+        let Ok(block) = GlobalAlloc(GMEM_MOVEABLE, bytes) else {
+            let _ = CloseClipboard();
+            return false;
+        };
+        let locked = GlobalLock(block);
+        if locked.is_null() {
+            GlobalFree(block.0);
+            let _ = CloseClipboard();
+            return false;
+        }
+        core::ptr::copy_nonoverlapping(units.as_ptr().cast::<u8>(), locked.cast::<u8>(), bytes);
+        let _ = GlobalUnlock(block);
+
+        let taken = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(block.0))).is_ok();
+        if !taken {
+            // Only here: on success the clipboard owns the block and freeing it would leave every
+            // later paste reading freed memory.
+            GlobalFree(block.0);
+        }
+        let _ = CloseClipboard();
+        taken
     }
 }

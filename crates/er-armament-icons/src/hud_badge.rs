@@ -91,6 +91,15 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::safe_read_usize;
+// The gem chain and the player singleton are declared ONCE in `er-game-base::rva` and derived
+// here. `er-build-import-runtime` walks the same three hops to read the ash of war off an equipped
+// armament for the Generate Build Link row, and one address written out in two crates is one
+// address that a 1.16.x correction can be applied to in only one of them.
+use er_game_base::rva::{
+    GET_GAITEM_INS_BY_HANDLE_RVA, GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA,
+    GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA, WORLD_CHR_MAN_GLOBAL_RVA,
+    WORLD_CHR_MAN_PLAYER_INS_OFFSET,
+};
 
 use crate::log_message;
 
@@ -121,21 +130,6 @@ const HUD_WEAPON_SLOT_UPDATE_RVA: usize = 0x8d2110;
 /// the update hook -- `Arts`, the four `ItemPanel2` items -- fails both tests and never draws.
 const HUD_SLOT_LEFT_WEP_OFFSET: usize = 0x2040;
 const HUD_SLOT_RIGHT_WEP_OFFSET: usize = 0x2848;
-
-/// `GetWeaponGaitemHandleBySlot(PlayerIns*, u32* out, ChrAsmSlot)`.
-const GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA: usize = 0x656920;
-/// `GetGaitemInsByHandle(GaitemLookupResult* inout, GaitemLookupResult* handleSource)`.
-///
-/// Both arguments are the SAME pointer in every caller -- see [`GaitemLookupResult`] for why,
-/// and for the silent-nothing failure mode of getting it wrong.
-const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x672e40;
-/// `GetSwordArtsParamForWeapon(GaitemLookupResult*, SwordArtsParamLookupResult* out)`.
-const GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA: usize = 0x673f30;
-
-/// `WorldChrMan` singleton global; `+0x1e508` is the local `PlayerIns`. Both dereferences are
-/// null-checked in the game's own code, so both are null-checked here.
-const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d65f88;
-const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;
 
 /// `SwordArtsParam.iconId`.
 const SWORD_ARTS_PARAM_ICON_ID_OFFSET: usize = 0x1a;

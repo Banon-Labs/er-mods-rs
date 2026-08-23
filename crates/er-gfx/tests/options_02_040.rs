@@ -9,9 +9,9 @@ mod common;
 
 use er_game_base::fnv1a::fnv1a64;
 use er_gfx::options_02_040::{
-    QUIT5_GRID_CELL_NAMES, QUIT5_WIN_FNV1A64, QUIT5_WIN_LEN, Quit5Error, VANILLA_WIN_FNV1A64,
+    QUIT6_GRID_CELL_NAMES, QUIT6_WIN_FNV1A64, QUIT6_WIN_LEN, Quit6Error, VANILLA_WIN_FNV1A64,
     VANILLA_WIN_LEN, grid_horizontal_axis_enabled, grid_item_index, grid_vertical_axis_enabled,
-    is_known_vanilla_win, measure_grid, quit5,
+    is_known_vanilla_win, measure_grid, quit6,
 };
 use er_gfx::{Movie, Tag};
 
@@ -51,23 +51,23 @@ fn read_vanilla_or_skip() -> Option<Vec<u8>> {
 }
 
 #[test]
-fn quit5_of_vanilla_matches_validated_fingerprint() {
+fn quit6_of_vanilla_matches_validated_fingerprint() {
     let Some(vanilla) = read_vanilla_or_skip() else {
         return;
     };
-    let out = quit5(&vanilla).expect("quit5 edit must apply cleanly to the known vanilla movie");
-    assert_eq!(out.len(), QUIT5_WIN_LEN);
-    assert_eq!(fnv1a64(&out), QUIT5_WIN_FNV1A64);
+    let out = quit6(&vanilla).expect("quit6 edit must apply cleanly to the known vanilla movie");
+    assert_eq!(out.len(), QUIT6_WIN_LEN);
+    assert_eq!(fnv1a64(&out), QUIT6_WIN_FNV1A64);
 }
 
 #[test]
-fn quit5_of_already_edited_movie_fails_closed() {
+fn quit6_of_already_edited_movie_fails_closed() {
     let Some(vanilla) = read_vanilla_or_skip() else {
         return;
     };
-    let edited = quit5(&vanilla).expect("quit5 edit must apply cleanly to the known vanilla movie");
-    match quit5(&edited) {
-        Err(Quit5Error::Edit(_)) => {}
+    let edited = quit6(&vanilla).expect("quit6 edit must apply cleanly to the known vanilla movie");
+    match quit6(&edited) {
+        Err(Quit6Error::Edit(_)) => {}
         other => panic!("expected Edit error on already-edited input, got {other:?}"),
     }
 }
@@ -94,10 +94,10 @@ fn the_derived_movie_measures_a_two_by_three_grid() {
         "vanilla measures one horizontal row, which is why up/down does nothing there"
     );
 
-    let out = quit5(&vanilla).expect("quit5 edit must apply cleanly to the known vanilla movie");
+    let out = quit6(&vanilla).expect("quit6 edit must apply cleanly to the known vanilla movie");
     let derived = Movie::parse(&out).expect("derived movie parses");
     let names = placed_names(&derived, QUIT_GAME_SPRITE_ID);
-    for cell in QUIT5_GRID_CELL_NAMES {
+    for cell in QUIT6_GRID_CELL_NAMES {
         assert!(
             names.iter().any(|n| n == cell),
             "missing cell {cell} in {names:?}"
@@ -119,21 +119,29 @@ fn the_derived_movie_measures_a_two_by_three_grid() {
         grid_horizontal_axis_enabled(cols, rows),
         "left/right must walk columns"
     );
-    // FIVE items in a 2x3 grid: the sixth cell is deliberately absent, and the native hit test can
-    // neither fault on it (`FUN_14074b0d0` returns false unless `dataType & 0x8f == 10`, and an
-    // absent component's `dataType` is 0) nor select it (both the hit test and the cursor setter
-    // `FUN_14073bc10` bound the item index by `GridControl::SetItemCount`, which the DLL gives 5).
+    // SIX items in a 2x3 grid: the grid is FULL. This assertion was the exact inverse until the
+    // Generate Build Link row arrived -- it used to demand that `Item_2_1` be absent, because there
+    // was no sixth row to put in it, and a whole paragraph of native reasoning existed to prove the
+    // ragged bottom row was harmless. Filling the corner retired that reasoning instead of adding
+    // to it: `cols * rows` and `GridControl::SetItemCount` are now the SAME number, so there is no
+    // cell the engine probes for that does not exist, and no index the hit test and the cursor
+    // setter can disagree about.
     assert_eq!(cols * rows, 6);
+    assert_eq!(
+        QUIT6_GRID_CELL_NAMES.len() as u32,
+        cols * rows,
+        "the grid must be exactly full: one cell per row, one row per cell"
+    );
     assert!(
-        !names.iter().any(|n| n == "Item_2_1"),
-        "the sixth cell must NOT exist: there is no sixth row to put in it"
+        names.iter().any(|n| n == "Item_2_1"),
+        "the sixth cell must exist: Generate Build Link sits in it"
     );
     // Item index order must match the order the DLL appends the property rows:
     // 0 Save Game, 1 Return to Desktop, 2 Load Character, 3 Load Character from File,
-    // 4 Load Build from URL.
+    // 4 Load Build from URL, 5 Generate Build Link.
     // (Rows 2 and 3 were "Load Profile" / "Load Save Profiles" before 2026-07-31; the ORDER is
     // what this test pins, and the relabel did not move anything.)
-    for (index, cell) in QUIT5_GRID_CELL_NAMES.iter().enumerate() {
+    for (index, cell) in QUIT6_GRID_CELL_NAMES.iter().enumerate() {
         let (row, col) = (index as u32 / cols, index as u32 % cols);
         assert_eq!(grid_item_index(row, col, cols), index as u32);
         assert_eq!(&format!("Item_{row}_{col}"), cell);
@@ -158,8 +166,10 @@ fn measure_grid_matches_the_native_loop() {
         measure_grid(|row, col| (row == 0 || row == 2) && col < 2),
         (2, 1)
     );
-    // The patched Quit tab's own shape: two full rows plus a bottom row holding only column 0.
-    // `cols` stays 2 because the short row raises only `rows`.
+    // The patched Quit tab's own shape: three full rows of two.
+    assert_eq!(measure_grid(|row, col| row < 3 && col < 2), (2, 3));
+    // The shape it had at five rows, kept because the measure loop still has to behave this way:
+    // a bottom row holding only column 0 raises `rows` without raising `cols`.
     assert_eq!(
         measure_grid(|row, col| (row < 2 && col < 2) || (row == 2 && col == 0)),
         (2, 3)
@@ -169,10 +179,10 @@ fn measure_grid_matches_the_native_loop() {
 }
 
 #[test]
-fn quit5_of_garbage_fails_closed() {
+fn quit6_of_garbage_fails_closed() {
     assert!(matches!(
-        quit5(b"not a gfx movie"),
-        Err(Quit5Error::Parse(_))
+        quit6(b"not a gfx movie"),
+        Err(Quit6Error::Parse(_))
     ));
-    assert!(matches!(quit5(&[]), Err(Quit5Error::Parse(_))));
+    assert!(matches!(quit6(&[]), Err(Quit6Error::Parse(_))));
 }
