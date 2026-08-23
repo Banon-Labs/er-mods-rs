@@ -313,10 +313,27 @@ inactive by default.
 
 In-game controls:
 
-- Left/Right: switch the active effect catalog when the debug HUD is visible.
-- Up/Down: step through the selected catalog's validated IDs and apply the selected effect when the debug HUD is visible.
+Every one of these needs the selector bar **open**, which means all three of:
+the bar is shown (`overlay_visible_on_start`, or toggled back with Alt+Numpad0),
+the bar is **expanded** rather than minimized to its `[+]` button, and a
+character is loaded. Closed on any of those counts, the DLL acts on no key and
+takes no key from the game -- including at the title screen and on every loading
+screen, where the arrow keys are how you navigate. Click the bar's `[+]` button
+to expand it; the bar ships minimized.
+
+- Left/Right: switch the active effect catalog.
+- Up/Down: step through the selected catalog's validated IDs and apply the selected effect.
+- Numpad +/-: add or remove the highlighted effect from the always-on stack.
 - Alt+': toggle the currently selected effect off/on.
-- Alt+Numpad0: toggle the effect selector debug HUD. The HUD is hidden by default; while hidden, arrow keys are ignored by the selector and by any arrow-key entries in `.effect-hotkeys.json`. While the HUD is visible, arrow keys are consumed by the selector and suppressed before the game receives them.
+- Alt+Numpad0 (also Alt+0, Alt+Insert): show/hide the selector bar. This one pair of keys works whether the bar is open or not -- it is the way back to a hidden bar -- and is never taken from the game.
+
+Only the four arrow keys are ever taken from the game, and only while the bar is
+open: they are blanked out of the DirectInput keyboard state and swallowed by the
+low-level keyboard hook so a cursor move is not also a quick-item switch. Every
+other key the selector reads is passed straight through. `er-net-effects-telemetry.json`
+reports `effect_selector_open` (the gate itself, which is NOT
+`effect_selector_visible`), `effect_keys_ignored_while_closed`, and
+`effect_input_suppressed_arrow_keys`.
 
 Runtime SpEffect application is gated to the loaded character state: the local player must exist before the DLL calls `apply_speffect`, but standing idle is allowed. Selector/file changes before the player exists may arm the selected effect; once the player is live, direct trigger hotkeys and selected effects apply immediately.
 

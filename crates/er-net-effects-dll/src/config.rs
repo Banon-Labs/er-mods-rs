@@ -15,8 +15,13 @@ const DEFAULT_CONFIG_TOML: &str = r#"# er-net-effects standalone DLL configurati
 # The DLL is optional; include er_net_effects_dll.dll as its own ME3 native when
 # you want keyboard-controlled network-synced SpEffect application.
 network_sync = true
-# Start with the visible selector overlay shown. Press Alt+Numpad0,
-# Alt+0, or Alt+Insert to hide/show it while in-game.
+# Start with the selector overlay bar shown. Press Alt+Numpad0, Alt+0, or
+# Alt+Insert to hide/show it while in-game.
+#
+# SHOWN IS NOT OPEN. The bar starts MINIMIZED to its [+] button; click that
+# button to expand it. The DLL takes the arrow keys away from the game ONLY
+# while the bar is expanded AND a character is loaded, so with the bar
+# minimized -- or at the title screen -- every key is the game's.
 overlay_visible_on_start = true
 hotkeys_file = ".er-net-effects-hotkeys.json"
 selected_effect_file = ".er-net-effects-setting.txt"

@@ -25,6 +25,8 @@ mod log;
 mod overlay_layout;
 #[cfg(windows)]
 mod present_overlay;
+// Ungated on purpose: pure keyboard-gate rules, so its tests run on the host.
+mod selector_gate;
 // Ungated on purpose: pure config-list editing, so its tests run on the host.
 mod stacked_config;
 #[cfg(windows)]
