@@ -2837,6 +2837,7 @@ dependencies = [
  "bitflags 2.13.1",
  "eldenring",
  "er-boot-profiler",
+ "er-build-import",
  "er-build-import-runtime",
  "er-d3d12-compositor",
  "er-game-base",

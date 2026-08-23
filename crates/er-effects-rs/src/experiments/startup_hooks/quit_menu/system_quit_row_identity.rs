@@ -22,6 +22,11 @@ pub(crate) use er_quit_menu::rows::{
 /// Forget the captured row table. Called when the Quit tab starts building a dialog so a rebuilt
 /// pane can never be resolved against another dialog's indices.
 pub(crate) fn system_quit_row_table_reset(dialog: usize) {
+    // The Quit tab is building a FRESH dialog, so any link field latched against the previous one
+    // is pointing at a dead `MenuJobQueue`. This is the only moment that is reliably true, which is
+    // why the editor's reset hangs off the row table's rather than having a lifecycle of its own.
+    reset_build_url_editor_state();
+    set_build_url_row_help(er_build_import::BUILD_URL_ROW_HELP);
     SYSTEM_QUIT_ROW_TABLE_DIALOG.store(dialog, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1.store(0, Ordering::SeqCst);

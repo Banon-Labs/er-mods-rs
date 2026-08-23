@@ -684,6 +684,21 @@ pub static SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT: AtomicUsize = AtomicUsize::
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Imports that reached the character and were read back.
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+// ---- the in-game link field -----------------------------------------------------------------
+// The four outcomes of a row press are counted separately because they are four different stories:
+// the field never opened, the player backed out, the player accepted something the gate refused, or
+// the player accepted something that imported. Summing any of them would hide which.
+/// Link fields opened (one per row press, not per re-open).
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_EDITOR_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The back action: the field closed and nothing was applied.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Accepts whose link validated and became an import request.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Accepts the gate REFUSED. Each one re-opened the field rather than applying anything, so this
+/// rising while IMPORTED does not is the feature working, not failing.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `UrlRejection::code()` of the most recent refusal (`0` = none yet).
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_LAST_REJECTION: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);

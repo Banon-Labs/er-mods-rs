@@ -17,12 +17,10 @@
 //!
 //! # Where the URL comes from
 //!
-//! `build_url` in the game-directory `er-effects.toml` -- the same key the autoload/boot import
-//! reads, which is exactly what makes this row "the same thing, whenever you like". There is no
-//! in-game text entry yet; the native `CS::SoftwareKeyboard` surface that
-//! `save_picker_path_editor` drives for save paths is the way to add one, and it is a second
-//! subsystem on a delicate proven surface -- tracked as bd `er-effects-rs-2yj9` rather than
-//! smuggled in here.
+//! The row opens a link field ([`build_url_editor`]) pre-filled from the clipboard, and imports
+//! what the player accepts. `build_url` in the game-directory `er-effects.toml` is still read -- it
+//! seeds nothing here, but the boot importer uses it, and an accepted link is written back to it so
+//! the next session starts from the last build that worked.
 
 use super::*;
 
@@ -31,10 +29,10 @@ use super::*;
 /// changes.
 #[derive(Clone, Debug)]
 pub(crate) enum BuildUrlPress {
+    /// The link field was requested; nothing is imported until the player accepts a valid link.
+    EditorOpening,
     /// A fetch was started for this URL.
     Started(String),
-    /// No `build_url` key in `er-effects.toml`.
-    NotConfigured,
     /// The runtime refused: an import is already in flight, or the link carries no `?b=<id>`.
     Refused(String),
 }
@@ -42,42 +40,92 @@ pub(crate) enum BuildUrlPress {
 impl BuildUrlPress {
     fn label(&self) -> String {
         match self {
+            BuildUrlPress::EditorOpening => "OPENING the link field".to_owned(),
             BuildUrlPress::Started(url) => format!("STARTED url={url:?}"),
-            BuildUrlPress::NotConfigured => format!(
-                "NOT-CONFIGURED (no `{}` in {})",
-                er_build_import_runtime::BUILD_URL_KEY,
-                er_build_import_runtime::CONFIG_FILE_NAME
-            ),
             BuildUrlPress::Refused(reason) => format!("REFUSED ({reason})"),
         }
     }
 }
 
-/// Handle a confirmed press of the Load Build from URL row.
+/// Handle a confirmed press of the Load Build from URL row: open the link field.
 ///
-/// Thread-agnostic on purpose: it reads a config file and spawns a worker, and touches no game
-/// state, so it is safe from a menu action thunk, a controller activation, or anywhere else the
-/// row's confirm is observed.
-pub(crate) fn system_quit_start_build_import() -> BuildUrlPress {
+/// The press itself imports nothing. It latches a request for the field, which the menu pump
+/// submits and the player then accepts or backs out of; only an accepted, VALIDATED link becomes an
+/// import. That is the whole point of the row -- pressing it must never apply a build the player
+/// has not just looked at and confirmed.
+pub(crate) fn system_quit_start_build_import(dialog: usize) -> BuildUrlPress {
     SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
     // Drain first, because `request` clears the runtime's error slot as it claims the machine. The
     // per-frame drain in `system_quit_build_import_tick` has almost certainly already taken it, but
     // "almost certainly" is how a failure the player asked about goes missing -- and draining here
     // also guarantees the line lands ABOVE this press in the log, attributed to the right request.
     drain_build_import_failure();
-    let Some(url) = er_build_import_runtime::configured_build_url() else {
+    set_build_url_row_help(er_build_import::BUILD_URL_ROW_HELP);
+    if request_build_url_editor(dialog) {
+        BuildUrlPress::EditorOpening
+    } else {
         SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT.fetch_add(1, Ordering::SeqCst);
-        return BuildUrlPress::NotConfigured;
-    };
-    match er_build_import_runtime::request(&url) {
+        BuildUrlPress::Refused("the link field could not be opened".to_owned())
+    }
+}
+
+/// Hand a VALIDATED link to the importer. Called only by the link field, after
+/// `er_build_import::validate_build_url` has accepted it.
+pub(crate) fn system_quit_start_build_import_url(url: &str) -> BuildUrlPress {
+    match er_build_import_runtime::request(url) {
         Ok(()) => {
             SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
-            BuildUrlPress::Started(url)
+            BuildUrlPress::Started(url.to_owned())
         }
         Err(err) => {
             SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT.fetch_add(1, Ordering::SeqCst);
             BuildUrlPress::Refused(err.to_string())
         }
+    }
+}
+
+/// Write an accepted link back to the game-directory `er-effects.toml`.
+///
+/// Best effort, and deliberately quiet on failure: the import has already been requested by the
+/// time this runs, so a read-only game directory must not turn a working import into an error the
+/// player sees. Only links that VALIDATED reach here, so the file never gains a key the boot
+/// importer would then refuse.
+pub(crate) fn persist_build_url(url: &str) {
+    let Some(path) = er_game_base::log::game_directory_path()
+        .map(|dir| dir.join(er_build_import_runtime::CONFIG_FILE_NAME))
+    else {
+        return;
+    };
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let key = er_build_import::BUILD_URL_KEY;
+    let assignment = format!("{key} = '{url}'");
+    let mut lines: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for line in existing.lines() {
+        let is_key = line
+            .split_once('=')
+            .is_some_and(|(name, _)| name.trim() == key && !line.trim_start().starts_with('#'));
+        if is_key && !replaced {
+            lines.push(assignment.clone());
+            replaced = true;
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    if !replaced {
+        lines.push(assignment.clone());
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    match std::fs::write(&path, out) {
+        Ok(()) => append_autoload_debug(format_args!(
+            "system-quit-build-url: remembered {url:?} as `{key}` in {}",
+            path.display()
+        )),
+        Err(err) => append_autoload_debug(format_args!(
+            "system-quit-build-url: could not remember the link in {}: {err}; the import still ran",
+            path.display()
+        )),
     }
 }
 

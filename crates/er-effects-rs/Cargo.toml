@@ -38,6 +38,10 @@ er-quit-menu = { path = "../er-quit-menu" }
 # NEVER load er_build_import.dll alongside this DLL in one me3 profile: each would drive its own
 # copy of the runtime against the same character.
 er-build-import-runtime = { path = "../er-build-import-runtime" }
+# The importer's PURE half. Linked directly (not only through the runtime) because the System>Quit
+# link field validates what the player typed with the same `validate_build_url` the host tests pin,
+# rather than a second copy of the rule that could drift from it.
+er-build-import = { path = "../er-build-import" }
 # Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
 # WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
 # bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.
@@ -94,6 +98,13 @@ windows = { version = "0.62", features = [
   # Read HKCU\Software\Valve\Steam\SteamPath so the boot-background feature can find the Windows Steam
   # userdata (screenshots) -- the install dir is not an ancestor of a game in a separate library.
   "Win32_System_Registry",
+  # OpenClipboard/GetClipboardData for the System>Quit build-url editor's prefill. The GAME cannot
+  # do this: its own import table links the clipboard APIs but nothing in the 98MB image references
+  # them (byte-scanned for call/jmp/mov against all three IAT slots, zero hits), so Ctrl+V inside
+  # the native software keyboard does nothing. Reading the clipboard OURSELVES and prefilling the
+  # field with it is what makes "paste the link I copied" work at all.
+  "Win32_System_DataExchange",
+  "Win32_System_Ole",
   # Hidden dummy window for the D3D12 Present-overlay swapchain: CreateSwapChainForComposition is
   # "Not implemented" under vkd3d/Wine, so we need a real HWND via CreateSwapChainForHwnd, which pulls
   # in WNDCLASSW's GDI handle types.

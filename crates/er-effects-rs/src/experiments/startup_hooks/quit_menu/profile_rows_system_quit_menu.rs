@@ -1767,7 +1767,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
-    if filename == "02_990_TextInput_PathEditor" {
+    // BOTH link/path fields load this SAME resource -- the build-url editor reuses the path
+    // editor's derived 02_990 movie rather than deriving a second one. So the window state below
+    // must only be routed to the SAVE PICKER's editor: its stale-window watchdog would otherwise
+    // see the build-url field's window, decide the picker's own job had gone quiet, and cancel it;
+    // and `apply_path_editor_window_position` places the window against the ProfileSelect layout,
+    // which is not where the Quit tab's field belongs.
+    if filename == "02_990_TextInput_PathEditor" && !build_url_keyboard_active() {
         let owner =
             unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
         if owner != 0 {
@@ -1935,6 +1941,9 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
     // navigation/pick close (same submit-context rule as the return-title chain below).
     unsafe { save_picker_menu_pump_path_editor() };
+    // MENU-PUMP-OWNED build-url link field. Same context and same reason as the path editor above:
+    // it builds and submits a native SoftwareKeyboardJob, which must not happen on the game task.
+    unsafe { build_url_editor_menu_pump() };
     unsafe { save_picker_menu_pump_drive_strip_mouse() };
     unsafe { save_picker_menu_pump_native_scrollbar() };
     unsafe { save_picker_menu_pump_edge_scroll() };

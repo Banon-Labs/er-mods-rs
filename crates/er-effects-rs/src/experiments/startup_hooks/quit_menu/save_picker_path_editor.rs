@@ -120,6 +120,65 @@ static SAVE_PICKER_PATH_EDITOR_WINDOW_LAST_PROFILE_TICK: AtomicUsize = AtomicUsi
 static SAVE_PICKER_PATH_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>>> =
     OnceLock::new();
 
+// ---------------------------------------------------------------------------------------------
+// TWO EDITORS, ONE PAIR OF DETOURS.
+//
+// The Quit tab's "Load Build from URL" row needs the same native `CS::SoftwareKeyboard` this file
+// already drives for save paths. It must NOT install its own hooks on 0x81d3d0 / 0x81d220: two
+// MinHook detours on one prologue overwrite each other's trampolines, which is the exact corruption
+// `scripts/me3-dll-conflicts.toml` exists to keep out of a profile -- and it would be worse here,
+// inside one DLL, where no profile check could see it.
+//
+// So the detours stay single and gain an OWNER. Each purpose has its own active-job slot and its
+// own outcome mailbox; a dispatched job belongs to whichever slot holds it, and a job in neither is
+// forwarded untouched (the game opens this keyboard for character names too).
+// ---------------------------------------------------------------------------------------------
+
+/// Which editor a live `SoftwareKeyboardJob` belongs to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum KeyboardPurpose {
+    /// The save picker's folder path field.
+    SavePath,
+    /// The System>Quit "Load Build from URL" row's link field.
+    BuildUrl,
+}
+
+static BUILD_URL_EDITOR_ACTIVE_JOB: AtomicUsize = AtomicUsize::new(0);
+static BUILD_URL_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>>> = OnceLock::new();
+
+fn keyboard_active_job_slot(purpose: KeyboardPurpose) -> &'static AtomicUsize {
+    match purpose {
+        KeyboardPurpose::SavePath => &SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB,
+        KeyboardPurpose::BuildUrl => &BUILD_URL_EDITOR_ACTIVE_JOB,
+    }
+}
+
+fn keyboard_outcome_slot(purpose: KeyboardPurpose) -> &'static Mutex<Option<PathEditorOutcome>> {
+    match purpose {
+        KeyboardPurpose::SavePath => path_editor_outcome(),
+        KeyboardPurpose::BuildUrl => BUILD_URL_EDITOR_OUTCOME.get_or_init(|| Mutex::new(None)),
+    }
+}
+
+/// Which purpose owns this dispatched job, if any. A job owned by neither is the game's own use of
+/// the keyboard and must be forwarded untouched.
+fn keyboard_owner_of(job: usize) -> Option<KeyboardPurpose> {
+    if job == 0 {
+        return None;
+    }
+    [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl]
+        .into_iter()
+        .find(|purpose| keyboard_active_job_slot(*purpose).load(Ordering::SeqCst) == job)
+}
+
+/// Log tag per purpose, so one debug log distinguishes the two editors.
+fn keyboard_tag(purpose: KeyboardPurpose) -> &'static str {
+    match purpose {
+        KeyboardPurpose::SavePath => "save-picker-path",
+        KeyboardPurpose::BuildUrl => "system-quit-build-url",
+    }
+}
+
 pub(crate) fn save_picker_path_editor_active() -> bool {
     SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst) != 0
         || SAVE_PICKER_PATH_EDITOR_PENDING_DIALOG.load(Ordering::SeqCst) != 0
@@ -339,9 +398,9 @@ unsafe extern "system" fn software_keyboard_result_gate_hook(
     }
     let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(original_addr) };
-    if SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst) != job {
+    let Some(purpose) = keyboard_owner_of(job) else {
         return unsafe { original(job, result, time) };
-    }
+    };
 
     // Preserve the native accepted-state and intermediate cleanup chain. The owned terminal d220
     // detour below replaces only the callback leaf that our intentionally-empty std::function cannot
@@ -349,19 +408,21 @@ unsafe extern "system" fn software_keyboard_result_gate_hook(
     let ret = unsafe { original(job, result, time) };
     let result_state = unsafe { safe_read_i32(result) }.unwrap_or(0);
     if result_state == MENU_JOB_STATE_FAILED {
-        *path_editor_outcome()
+        // THE BACK ACTION LANDS HERE. `FUN_14081d3d0` reads the controller's result code
+        // (`+0x78`) once the keyboard has closed and reports Failed for anything but 2, so a
+        // cancel is a native verdict rather than something inferred from absence. Recording it as
+        // `Cancelled` is what lets the build-url editor tell "the player backed out" apart from
+        // "the player accepted something invalid" -- only the second re-opens.
+        *keyboard_outcome_slot(purpose)
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathEditorOutcome::Cancelled);
-        SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.store(0, Ordering::SeqCst);
+        keyboard_active_job_slot(purpose).store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-picker-path: native SoftwareKeyboard cancelled job=0x{job:x}; model remains unchanged"
+            "{}: native SoftwareKeyboard cancelled job=0x{job:x}; nothing is applied",
+            keyboard_tag(purpose)
         ));
     }
     ret
-}
-
-fn path_editor_owns_terminal_job(active_job: usize, job: usize) -> bool {
-    active_job != 0 && active_job == job
 }
 
 unsafe extern "system" fn software_keyboard_terminal_callback_hook(
@@ -373,28 +434,34 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
     if original_addr == HOOK_ORIGINAL_UNSET {
         return result;
     }
-    let active_job = SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst);
-    if !path_editor_owns_terminal_job(active_job, job) {
+    let Some(purpose) = keyboard_owner_of(job) else {
         let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
             unsafe { std::mem::transmute(original_addr) };
         return unsafe { original(job, result, time) };
-    }
+    };
 
     let outcome = match unsafe { software_keyboard_text(job) } {
         Some(raw_text) => {
-            let text = normalize_native_path_editor_text(raw_text.clone());
+            // The backslash sentinel is a PATH transport quirk of the 02_990 controller, so only
+            // the path editor decodes it. A URL has no backslashes to restore, and running the
+            // substitution on one would silently rewrite a character the player typed.
+            let text = match purpose {
+                KeyboardPurpose::SavePath => normalize_native_path_editor_text(raw_text.clone()),
+                KeyboardPurpose::BuildUrl => raw_text.clone(),
+            };
             append_autoload_debug(format_args!(
-                "save-picker-path: native editor accepted raw={raw_text:?} normalized={text:?} utf16_units={}",
+                "{}: native editor accepted raw={raw_text:?} text={text:?} utf16_units={}",
+                keyboard_tag(purpose),
                 text.encode_utf16().count()
             ));
             PathEditorOutcome::Accepted(text)
         }
         None => PathEditorOutcome::TextUnreadable,
     };
-    *path_editor_outcome()
+    *keyboard_outcome_slot(purpose)
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(outcome);
-    SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.store(0, Ordering::SeqCst);
+    keyboard_active_job_slot(purpose).store(0, Ordering::SeqCst);
 
     // Exact native d220 tail after callback return: SetResult(Success, 0), then restore FD4Time's
     // two vtables in order. This skips only the null job+0x1a0 callback invocation.
@@ -414,9 +481,60 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
         }
     }
     append_autoload_debug(format_args!(
-        "save-picker-path: native SoftwareKeyboard terminal accepted job=0x{job:x}; captured exact UTF-16 path and skipped empty callback"
+        "{}: native SoftwareKeyboard terminal accepted job=0x{job:x}; captured the exact UTF-16 text and skipped the empty callback",
+        keyboard_tag(purpose)
     ));
     result
+}
+
+/// Submit the build-url editor's keyboard. Called only from the build-url editor's own pump, which
+/// runs in the same menu-pump context the path editor's does.
+///
+/// # Safety
+///
+/// Menu-pump context, `dialog` a live System>Quit `PropertyEditDialog`.
+pub(crate) unsafe fn submit_build_url_keyboard(dialog: usize, initial: &[u16]) -> bool {
+    matches!(
+        unsafe { submit_software_keyboard(KeyboardPurpose::BuildUrl, dialog, initial) },
+        PathEditorSubmit::Submitted
+    )
+}
+
+/// Is the build-url keyboard up right now?
+pub(crate) fn build_url_keyboard_active() -> bool {
+    keyboard_active_job_slot(KeyboardPurpose::BuildUrl).load(Ordering::SeqCst) != 0
+}
+
+/// What the player did with the build-url keyboard, taken exactly once.
+pub(crate) enum BuildUrlKeyboardOutcome {
+    /// Accept, with the exact text the field held.
+    Accepted(String),
+    /// The back action. Nothing is applied.
+    Cancelled,
+    /// Accept, but the text could not be read out of the controller.
+    TextUnreadable,
+}
+
+/// Take the build-url editor's pending outcome, if the native job has produced one.
+pub(crate) fn take_build_url_keyboard_outcome() -> Option<BuildUrlKeyboardOutcome> {
+    let taken = keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()?;
+    Some(match taken {
+        PathEditorOutcome::Accepted(text) => BuildUrlKeyboardOutcome::Accepted(text),
+        PathEditorOutcome::Cancelled => BuildUrlKeyboardOutcome::Cancelled,
+        PathEditorOutcome::TextUnreadable => BuildUrlKeyboardOutcome::TextUnreadable,
+    })
+}
+
+/// Forget every build-url keyboard pointer. Called when the Quit dialog goes away, so a later press
+/// cannot resolve against a dead job.
+pub(crate) fn reset_build_url_keyboard_state() {
+    keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0, Ordering::SeqCst);
+    *keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
 
 pub(crate) fn save_picker_request_path_editor(dialog: usize) {
@@ -432,7 +550,60 @@ pub(crate) fn save_picker_request_path_editor(dialog: usize) {
 }
 
 unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
-    if SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst) != 0 {
+    let initial = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_ref() else {
+            return PathEditorSubmit::Rejected;
+        };
+        let Some(path) = model.current_dir().to_str() else {
+            return PathEditorSubmit::Rejected;
+        };
+        path.encode_utf16()
+            .chain(core::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let submitted =
+        unsafe { submit_software_keyboard(KeyboardPurpose::SavePath, dialog, &initial) };
+    if submitted == PathEditorSubmit::Submitted {
+        SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.store(dialog, Ordering::SeqCst);
+        SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        SAVE_PICKER_PATH_EDITOR_WINDOW_LAST_PROFILE_TICK.store(
+            er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+    }
+    submitted
+}
+
+/// Build and submit ONE native `CS::SoftwareKeyboardJob` on `dialog`'s own MenuJobQueue, prefilled
+/// with `initial` (NUL-terminated UTF-16).
+///
+/// Owner-agnostic on purpose: the save picker and the System>Quit build-url row differ only in what
+/// they prefill and what they do with the answer, and duplicating this would mean a second
+/// allocation/ctor/submit sequence to keep in step with the native one -- and, worse, a second pair
+/// of detours on the same two prologues.
+///
+/// # Safety
+///
+/// Menu-pump context, with `dialog` a live `PropertyEditDialog`/`GenericListSelectDialog`. Calls
+/// byte-verified native functions and allocates from the game's own menu heap.
+unsafe fn submit_software_keyboard(
+    purpose: KeyboardPurpose,
+    dialog: usize,
+    initial: &[u16],
+) -> PathEditorSubmit {
+    if keyboard_active_job_slot(purpose).load(Ordering::SeqCst) != 0 {
+        return PathEditorSubmit::RetryWhenQueueReady;
+    }
+    // One keyboard at a time across BOTH purposes. The queue is per dialog, but the native
+    // keyboard is a single on-screen surface driven by one controller, so a second job submitted
+    // while the first is up would leave two owners waiting on one answer.
+    let other_editor_busy = [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl]
+        .into_iter()
+        .any(|other| {
+            other != purpose && keyboard_active_job_slot(other).load(Ordering::SeqCst) != 0
+        });
+    if other_editor_busy {
         return PathEditorSubmit::RetryWhenQueueReady;
     }
     let Some(recipe) = software_keyboard_recipe() else {
@@ -454,19 +625,6 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
     if unsafe { queue_ready(queue) } == 0 {
         return PathEditorSubmit::RetryWhenQueueReady;
     }
-    let initial = {
-        let guard = crate::experiments::save_picker::active_save_picker_lock();
-        let Some(model) = guard.as_ref() else {
-            return PathEditorSubmit::Rejected;
-        };
-        let Some(path) = model.current_dir().to_str() else {
-            return PathEditorSubmit::Rejected;
-        };
-        path.encode_utf16()
-            .chain(core::iter::once(0))
-            .collect::<Vec<_>>()
-    };
-
     let mut validator = [0_u64; SOFTWARE_KEYBOARD_VALIDATOR_SIZE / 8];
     let validator_ptr = validator.as_mut_ptr() as usize;
     let validator_init: unsafe extern "system" fn(usize) -> usize =
@@ -544,14 +702,8 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
         let refcount = (job + MENU_JOB_REFCOUNT_08_OFFSET) as *mut std::sync::atomic::AtomicI32;
         (*refcount).fetch_add(1, Ordering::SeqCst);
     }
-    SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.store(dialog, Ordering::SeqCst);
-    SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
-    SAVE_PICKER_PATH_EDITOR_WINDOW_LAST_PROFILE_TICK.store(
-        er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
-        Ordering::SeqCst,
-    );
-    SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.store(job, Ordering::SeqCst);
-    *path_editor_outcome()
+    keyboard_active_job_slot(purpose).store(job, Ordering::SeqCst);
+    *keyboard_outcome_slot(purpose)
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     let mut job_slot = job;
@@ -559,7 +711,8 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
         unsafe { std::mem::transmute(recipe.submit) };
     unsafe { submit(queue, (&raw mut job_slot) as usize) };
     append_autoload_debug(format_args!(
-        "save-picker-path: submitted native SoftwareKeyboardJob=0x{job:x} dialog=0x{dialog:x} queue=0x{queue:x} initial_units={} max_units={SOFTWARE_KEYBOARD_MAX_PATH_UNITS}",
+        "{}: submitted native SoftwareKeyboardJob=0x{job:x} dialog=0x{dialog:x} queue=0x{queue:x} initial_units={} max_units={SOFTWARE_KEYBOARD_MAX_PATH_UNITS}",
+        keyboard_tag(purpose),
         initial.len().saturating_sub(1)
     ));
     PathEditorSubmit::Submitted
@@ -720,11 +873,37 @@ mod tests {
         );
     }
 
+    /// The detour pair is shared by two editors and by the game itself, so the ONE thing that must
+    /// never break is that a dispatched job is attributed to exactly the purpose that submitted it.
+    /// A job owned by neither is the game's own keyboard (character naming) and must stay untouched.
     #[test]
-    fn terminal_capture_is_scoped_to_the_owned_software_keyboard_job() {
-        assert!(path_editor_owns_terminal_job(0x1234, 0x1234));
-        assert!(!path_editor_owns_terminal_job(0, 0));
-        assert!(!path_editor_owns_terminal_job(0x1234, 0x5678));
+    fn terminal_capture_is_scoped_to_the_owning_purpose() {
+        for purpose in [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl] {
+            keyboard_active_job_slot(purpose).store(0, Ordering::SeqCst);
+        }
+        assert_eq!(keyboard_owner_of(0x1234), None, "no owner claims it yet");
+        assert_eq!(keyboard_owner_of(0), None, "job 0 is never owned");
+
+        keyboard_active_job_slot(KeyboardPurpose::SavePath).store(0x1234, Ordering::SeqCst);
+        assert_eq!(keyboard_owner_of(0x1234), Some(KeyboardPurpose::SavePath));
+        assert_eq!(keyboard_owner_of(0x5678), None, "a foreign job is unowned");
+
+        keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0x5678, Ordering::SeqCst);
+        assert_eq!(keyboard_owner_of(0x5678), Some(KeyboardPurpose::BuildUrl));
+        assert_eq!(
+            keyboard_owner_of(0x1234),
+            Some(KeyboardPurpose::SavePath),
+            "the two purposes must not shadow each other"
+        );
+        // Separate mailboxes: one editor's outcome can never be read by the other.
+        assert!(!std::ptr::eq(
+            keyboard_outcome_slot(KeyboardPurpose::SavePath),
+            keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
+        ));
+
+        for purpose in [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl] {
+            keyboard_active_job_slot(purpose).store(0, Ordering::SeqCst);
+        }
         assert_eq!(SOFTWARE_KEYBOARD_JOB_CONTROLLER_D8_OFFSET, 0xd8);
         assert_eq!(SOFTWARE_KEYBOARD_CONTROLLER_TEXT_80_OFFSET, 0x80);
         assert_eq!(FD4_TIME_VTABLE_RVA, 0x29c8e58);

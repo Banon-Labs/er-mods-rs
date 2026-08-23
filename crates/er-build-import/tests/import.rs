@@ -374,3 +374,86 @@ fn the_configured_url_feeds_the_share_id_extractor() {
     let url = er_build_import::build_url_from_config(self_contained).expect("configured");
     assert_eq!(share_id_from_url(url), None);
 }
+
+// ------------------------------------------------------------------ in-game URL entry
+
+use er_build_import::{BUILD_URL_PREFIX, UrlRejection, validate_build_url};
+
+/// The editor opens pre-filled with the prefix, so the untouched field must REFUSE. If it did not,
+/// pressing Accept without typing would start a fetch for a build id that is the empty string.
+#[test]
+fn the_untouched_prefill_is_refused() {
+    assert_eq!(
+        validate_build_url(BUILD_URL_PREFIX),
+        Err(UrlRejection::Empty)
+    );
+    assert_eq!(validate_build_url(""), Err(UrlRejection::Empty));
+    assert_eq!(validate_build_url("   "), Err(UrlRejection::Empty));
+}
+
+/// Completing the prefill -- the exact thing a player does -- must be accepted.
+#[test]
+fn typing_an_id_onto_the_prefix_is_accepted() {
+    let typed = format!("{BUILD_URL_PREFIX}af97a9da874151");
+    assert_eq!(validate_build_url(&typed), Ok("af97a9da874151"));
+    // ...and a pasted-in link from any host, since the planner has moved domain before.
+    assert_eq!(
+        validate_build_url("https://somewhere.else/x?b=bc2a932db14675"),
+        Ok("bc2a932db14675")
+    );
+}
+
+/// A controller-typed field picks up stray whitespace; a trailing space is a slip, not a link.
+#[test]
+fn surrounding_whitespace_does_not_change_the_link() {
+    let padded = format!("  {BUILD_URL_PREFIX}af97a9da874151\t");
+    assert_eq!(validate_build_url(&padded), Ok("af97a9da874151"));
+}
+
+/// Every refusal names itself, and no two share a code -- the codes are the telemetry wire format.
+#[test]
+fn every_rejection_has_a_distinct_code_and_a_sentence() {
+    let cases = [
+        ("", UrlRejection::Empty),
+        ("https://p/?i=eyJ2IjoxfQ", UrlRejection::SelfContained),
+        ("https://p/?other=1", UrlRejection::NoShareId),
+        ("https://p/no-query-at-all", UrlRejection::NoShareId),
+        ("https://p/?b=", UrlRejection::MalformedShareId),
+        ("https://p/?b=not an id", UrlRejection::MalformedShareId),
+        ("https://p/?b=../../etc", UrlRejection::MalformedShareId),
+    ];
+    let mut codes = Vec::new();
+    for (url, want) in cases {
+        assert_eq!(validate_build_url(url), Err(want), "{url:?}");
+        assert!(!want.indicator().is_empty(), "{want:?} has no sentence");
+        assert_ne!(want.code(), 0, "0 is reserved for accepted");
+        codes.push(want.code());
+    }
+    codes.sort_unstable();
+    codes.dedup();
+    assert_eq!(codes.len(), 4, "rejection codes must be distinct");
+}
+
+/// The gate and the fetcher must never disagree: anything this accepts has to yield the SAME id to
+/// `share_id_from_url`, which is what actually builds the request path. A link that validates but
+/// does not resolve would be refused by nothing and then fetch nothing.
+#[test]
+fn acceptance_agrees_with_the_share_id_the_fetch_will_use() {
+    for url in [
+        "https://er-build-planner.nyasu.business/?b=af97a9da874151",
+        "https://p/?x=1&b=abc123&y=2",
+        "https://p/?b=abc123#fragment",
+    ] {
+        let accepted = validate_build_url(url).expect("valid");
+        assert_eq!(Some(accepted), share_id_from_url(url), "{url:?}");
+    }
+    // ...and the converse: nothing this refuses may still resolve.
+    for url in [
+        "https://p/?b=",
+        "https://p/?i=payload",
+        "https://p/?b=bad id",
+    ] {
+        assert!(validate_build_url(url).is_err(), "{url:?}");
+        assert_eq!(share_id_from_url(url), None, "{url:?}");
+    }
+}
