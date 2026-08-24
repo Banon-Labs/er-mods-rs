@@ -237,10 +237,18 @@ impl WornInstances {
                 "this position is not an armament, so the grant minted no instance for it",
             );
         };
+        // MATCHED WITHOUT THE UPGRADE LEVEL, which is the last two digits of an armament's item
+        // id. The grant mints at the level the build asked for (`60500125`) while the equip plan
+        // names the armament (`60500100`) -- it has no business deciding a level, and could not
+        // anyway, since the clamp against this armament's real `ReinforceParamWeapon` rows is a
+        // runtime question. Comparing the raw ids made every armament fall to the id lookup, and
+        // then miss THERE too because the unlevelled id names nothing in the inventory: measured
+        // 2026-08-23 as `0 position(s) found by minted gaitem handle` and 10/10 gear -> 8/10.
+        let identity = armament_identity(item_id);
         let Some(found) = self
             .minted
             .iter_mut()
-            .find(|arm| !arm.taken && arm.item_id == item_id && arm.gem == gem)
+            .find(|arm| !arm.taken && armament_identity(arm.item_id) == identity && arm.gem == gem)
         else {
             return Resolved::ById(
                 "no unclaimed minted armament matches this position's item id and ash",
@@ -249,6 +257,27 @@ impl WornInstances {
         found.taken = true;
         Resolved::Handle(found.handle)
     }
+
+    /// The levelled item id the grant actually minted for `slot`, if it minted one.
+    ///
+    /// The fall-back id lookup needs this: the plan's own id is unlevelled, so asking the
+    /// inventory about it reports the armament missing when it is right there at +25.
+    pub fn minted_id_for(&self, slot: i32, item_id: u32) -> Option<u32> {
+        let gem = self.wanted.get(&slot).copied()?;
+        let identity = armament_identity(item_id);
+        self.minted
+            .iter()
+            .find(|arm| armament_identity(arm.item_id) == identity && arm.gem == gem)
+            .map(|arm| arm.item_id)
+    }
+}
+
+/// An armament's identity without its upgrade level: base row plus affinity.
+///
+/// The game's own normalisation -- `EquipParamWeapon::GetEntry` looks up `(paramId / 100) * 100`
+/// precisely because the last two digits are the level.
+fn armament_identity(item_id: u32) -> u32 {
+    item_id / 100 * 100
 }
 
 /// What the equip pass observed while filling the plan.
@@ -437,7 +466,13 @@ pub unsafe fn equip_all(
             continue;
         };
 
-        let id = position.item.item_id as i32;
+        // THE ID TO ASK THE INVENTORY ABOUT, which for an armament is not the one the plan names:
+        // the plan names the armament, the grant minted it at a level, and the level is part of
+        // the id. Asking about the unlevelled id reports a +25 weapon as not in the inventory.
+        let lookup_id = instances
+            .minted_id_for(slot, position.item.item_id)
+            .unwrap_or(position.item.item_id);
+        let id = lookup_id as i32;
 
         // WHICH COPY. Asking by item id cannot answer that -- see the module header -- so the
         // handle the grant minted for this exact position is tried first, and the fall back to
@@ -471,11 +506,11 @@ pub unsafe fn equip_all(
         if let Some(why) = fell_back_to_id {
             outcome
                 .by_item_id
-                .push((position.kind, slot, position.item.item_id, why));
+                .push((position.kind, slot, lookup_id, why));
         }
 
         if item_idx < 0 {
-            outcome.not_in_inventory.push(position.item.item_id);
+            outcome.not_in_inventory.push(lookup_id);
             ledger.record(at, PositionResult::NotInInventory);
             continue;
         }

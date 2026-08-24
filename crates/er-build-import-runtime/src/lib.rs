@@ -384,8 +384,9 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     // Safety: params_ready() proved the tables are streamed and `msg` came from the singleton.
     let (catalog, stats) = unsafe { catalog::build_from_game(msg, module_base) };
     log_line(&format!(
-        "[build-import] catalog: {} named, {} unnamed, {} goods rows are spells",
-        stats.named, stats.unnamed, stats.spell_rows
+        "[build-import] catalog: {} named, {} unnamed, {} goods rows are spells, \
+         {} ashes have no gem that draws an icon (their badge renders the `ICON` placeholder)",
+        stats.named, stats.unnamed, stats.spell_rows, stats.iconless_ashes
     ));
 
     let planned = plan(doc, &catalog);
@@ -652,7 +653,13 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 }
                 (_, None) if worn_arm.is_none() => "EMPTY -- no armament is worn in this slot",
                 (_, None) => "NOT MOUNTED -- the worn armament reports no sword-arts row",
-                _ if worn_arm.map(|arm| arm.item_id) != planned_item => {
+                // Compared WITHOUT the upgrade level, which lives in the id's last two digits:
+                // the plan names an armament, the level is a separate dimension of it, and a
+                // worn +25 would otherwise read as a different weapon from the +25 that was
+                // placed here.
+                _ if worn_arm.map(read_character::WornArmament::armament_identity)
+                    != planned_item.map(|id| id / 100 * 100) =>
+                {
                     "WRONG ARMAMENT -- the worn item id is not the one the plan placed in this slot"
                 }
                 // Same item id, wrong arts row. Either the equip took another copy of this
@@ -661,8 +668,13 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 // so a gem mounted on such a weapon is stored and then ignored.
                 _ => "WRONG COPY OR NO GEM SLOT -- the right armament, carrying the wrong ash",
             };
-            let worn_item =
-                worn_arm.map_or_else(|| "none".to_owned(), |arm| format!("0x{:08X}", arm.item_id));
+            // THE UPGRADE LEVEL, READ OFF THE WORN INSTANCE. Printed here because it is the
+            // number the player is looking at when they say a build imported at +0, and because
+            // `GetReinforcement` is not it: that field read 25 for a whole session of +0 weapons.
+            let worn_item = worn_arm.map_or_else(
+                || "none".to_owned(),
+                |arm| format!("0x{:08X} (+{})", arm.item_id, arm.level()),
+            );
             log_line(&format!(
                 "[build-import]   ASH slot {} {:?} wants {:?} (gem {gem} -> arts {:?}); \
                  worn item {worn_item} holds arts {:?} {:?} -- {verdict}",

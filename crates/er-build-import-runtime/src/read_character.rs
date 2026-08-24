@@ -233,6 +233,29 @@ pub struct WornArmament {
     pub arts_id: Option<u32>,
 }
 
+impl WornArmament {
+    /// The upgrade level the player SEES on this armament, read off the id's last two digits.
+    ///
+    /// This is the oracle for "+25 or +0", and it is deliberately not
+    /// `GaitemLookupResult::GetReinforcement`: that field can read 25 on a weapon the player sees
+    /// as +0, which is exactly the failure it hid once. The id is what the menu renders from --
+    /// the character's own weapons come back as `12531125`, base `12530000` + Blood `1100` + `25`.
+    #[must_use]
+    pub fn level(self) -> u16 {
+        (self.item_id % 100) as u16
+    }
+
+    /// The armament's identity WITHOUT its upgrade level: base row plus affinity.
+    ///
+    /// The game's own normalisation (`EquipParamWeapon::GetEntry` looks up `(paramId / 100) * 100`)
+    /// and the only sound way to ask "is this the armament the plan placed here", since the plan
+    /// names an armament and the level is a separate dimension of it.
+    #[must_use]
+    pub fn armament_identity(self) -> u32 {
+        self.item_id / 100 * 100
+    }
+}
+
 /// Read the armament worn in `slot`, or `None` when the slot is empty.
 ///
 /// Three native hops, none of them skippable: the slot names a gaitem handle, the handle names a

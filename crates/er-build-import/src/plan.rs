@@ -12,10 +12,13 @@
 //!
 //! 1. The affinity is an **offset added into the item id** (`Occult` = +1200),
 //!    not an index and not a separate field.
-//! 2. The upgrade level is a **separate 16-bit field**, never folded into the id.
-//!    `EquipParamWeapon::GetEntry` looks up `(paramId / 100) * 100`, so the game
-//!    THROWS AWAY anything a caller adds on top of the affinity row -- the level
-//!    can only reach the game as `CSWepGaitemIns::reinforcement`.
+//! 2. The upgrade level goes in **both** places, exactly as the record above spells
+//!    it: folded into the id (`<id+upgrade>`) AND passed as the separate 16-bit
+//!    `reinforceLv`. The id is the half that is actually read back -- see
+//!    [`armament_item_id`] for the measurement. `EquipParamWeapon::GetEntry`
+//!    normalises to `(paramId / 100) * 100` because the last two digits are the
+//!    LEVEL, not because they are noise; setting only `CSWepGaitemIns::reinforcement`
+//!    yields a `+0` weapon whose `GetReinforcement` still answers 25.
 //! 3. `weaponSkill` is the ash of war's **`EquipParamGem` row**, re-tagged with
 //!    the game's gem category (see [`GEM_ITEM_CATEGORY`]). The planner's own
 //!    database tags ashes with nibble 2, which is the planner's convention and
@@ -180,6 +183,42 @@ pub const INFUSION_STEP: u32 = 100;
 /// knows exactly the set the importer accepts, rather than keeping a second copy that can drift.
 pub fn infusion_names() -> impl Iterator<Item = &'static str> {
     INFUSIONS.iter().map(|(name, _)| *name)
+}
+
+/// The item id an armament instance must carry to READ AS `+level` in the player's hands.
+///
+/// The upgrade level is part of the id, in its last two digits: the character's own weapons come
+/// back from `GaitemInsLookupResult::GetItemId` as `12531125` (base `12530000` + Blood `1100` +
+/// `25`), and `CSGaitemImp::GetGaItemHandleWeapon` stores whatever id it is handed verbatim
+/// through `CSGaitemIns::SetItemIdWithWeaponCategory`. A weapon minted from a bare
+/// `base + affinity` id is therefore a `+0` weapon, whatever is written to its `reinforcement`
+/// field afterwards.
+///
+/// THE MISREADING THIS EXISTS TO CORRECT. `EquipParamWeapon::GetEntry` normalises its argument to
+/// `(paramId / 100) * 100`, and this module used to conclude from that "the game throws the level
+/// away, so it can only reach the game as `CSWepGaitemIns::reinforcement`". The normalisation is
+/// there for the opposite reason: the last two digits are the LEVEL, so the stat row is found by
+/// stripping them, and the level is read back off the same id by a different consumer. Dropping it
+/// shipped 30 armaments at +0 with `GetReinforcement` cheerfully reporting 25 -- the field was set,
+/// nothing read it. The reference exporter this module is ported from sets BOTH halves, and its
+/// record layout says so in the first line of the module doc: `dd <id+upgrade> ... <reinforceLv>`.
+///
+/// `level` must already be clamped to a level this armament HAS (see the runtime's
+/// `ReinforceLevels::clamp`); a somber armament asked for +25 would otherwise name a row that does
+/// not exist.
+///
+/// ```
+/// use er_build_import::plan::armament_item_id;
+/// // Great Stars + Blood, +25.
+/// assert_eq!(armament_item_id(12181200, 25), 12181225);
+/// // A somber armament, clamped to +10 by the caller.
+/// assert_eq!(armament_item_id(11500000, 10), 11500010);
+/// // +0 leaves the id exactly as the affinity left it.
+/// assert_eq!(armament_item_id(2020100, 0), 2020100);
+/// ```
+#[must_use]
+pub fn armament_item_id(base_with_affinity: u32, level: u16) -> u32 {
+    base_with_affinity + u32::from(level)
 }
 
 /// Remap a requested upgrade level for a somber armament.

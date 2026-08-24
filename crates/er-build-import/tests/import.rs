@@ -8,7 +8,9 @@
 mod fixture_catalog;
 
 use er_build_import::catalog::{Catalog, Kind};
-use er_build_import::plan::{GEM_ITEM_CATEGORY, NO_SKILL, equipped_armament_skills, plan};
+use er_build_import::plan::{
+    GEM_ITEM_CATEGORY, NO_SKILL, armament_item_id, equipped_armament_skills, plan,
+};
 use er_build_import::{model, share_id_from_url};
 
 const BUILD: &str = include_str!("fixtures/build-af97a9da874151.json");
@@ -1203,4 +1205,50 @@ fn the_rest_of_the_real_build_still_imports_whole() {
         Some("Mohg's Great Rune")
     );
     assert!(plan.two_handing);
+}
+
+/// THE +0 BUG, 2026-08-23. A merged import handed the player thirty armaments at +0 while its own
+/// read-back reported `+25 -> +25`, because the level was written ONLY to
+/// `CSWepGaitemIns::reinforcement` and never folded into the item id.
+///
+/// The id is the half the player sees. `CSGaitemImp::GetGaItemHandleWeapon` stores whatever id it
+/// is handed verbatim (`CSGaitemIns::SetItemIdWithWeaponCategory`), and the character's own
+/// weapons come back from the same getter carrying their level: `12531125`, `30190825`. A weapon
+/// minted from a bare `base + affinity` id is a +0 weapon no matter what the instance field says.
+#[test]
+fn the_upgrade_level_rides_in_the_item_id() {
+    // base + affinity, the id the plan names -- and the id that shipped, at +0.
+    let great_stars_blood = 12181200;
+    assert_eq!(armament_item_id(great_stars_blood, 25), 12181225);
+    assert_eq!(armament_item_id(great_stars_blood, 0), great_stars_blood);
+
+    // Somber armaments stop at +10; the caller clamps, this only carries the number.
+    assert_eq!(armament_item_id(11500000, 10), 11500010);
+
+    // The level never bleeds into the affinity digits: +25 on Standard must not become Heavy.
+    for level in 0u16..=25 {
+        let id = armament_item_id(2020100, level);
+        assert_eq!(id / 100 * 100, 2020100, "affinity moved at +{level}");
+        assert_eq!(u16::try_from(id % 100).unwrap(), level);
+    }
+}
+
+/// The shape the reference exporter emits, and the reason the id half was missed: the record
+/// carries the level TWICE, and porting only the `reinforceLv` field looks complete.
+#[test]
+fn a_planned_armament_keeps_its_level_in_the_separate_field_too() {
+    let (_doc, plan) = planned();
+    let armament = plan
+        .grants
+        .iter()
+        .find(|grant| grant.reinforce_lv > 0)
+        .expect("the fixture build upgrades at least one armament");
+    // The plan still names the unlevelled id; folding happens at the mint, where the clamp
+    // against the armament's real `ReinforceParamWeapon` rows is known.
+    assert_eq!(armament.item_id % 100, 0);
+    assert!(armament.reinforce_lv > 0);
+    assert_eq!(
+        armament_item_id(armament.item_id, armament.reinforce_lv) % 100,
+        u32::from(armament.reinforce_lv)
+    );
 }
