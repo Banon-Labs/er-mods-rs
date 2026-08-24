@@ -684,6 +684,55 @@ pub static SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT: AtomicUsize = AtomicUsize::
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Imports that reached the character and were read back.
 pub static SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+// ---- the in-game link field -----------------------------------------------------------------
+// The four outcomes of a row press are counted separately because they are four different stories:
+// the field never opened, the player backed out, the player accepted something the gate refused, or
+// the player accepted something that imported. Summing any of them would hide which.
+/// Link fields opened (one per row press, not per re-open).
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_EDITOR_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The back action: the field closed and nothing was applied.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Accepts whose link validated and became an import request.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Accepts the gate REFUSED. Each one re-opened the field rather than applying anything, so this
+/// rising while IMPORTED does not is the feature working, not failing.
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `UrlRejection::code()` of the most recent refusal (`0` = none yet).
+pub static SYSTEM_QUIT_LOAD_BUILD_URL_LAST_REJECTION: AtomicUsize = AtomicUsize::new(0);
+// ---- the Generate Build Link row: the INVERSE of everything above -----------------------------
+// That row takes a link and rewrites the character; this one takes the character and writes a link.
+// It touches no game state at all, so it has no "applied" counter -- what it has instead is a
+// separate count for each of the three things that can independently succeed or fail once the URL
+// exists: encoding it, putting it on the clipboard, and getting a browser to open it. A run where
+// the URL was built but no browser appeared is a DIFFERENT failure from one where the read came
+// back empty, and summing them would hide which.
+/// Recorded cloned action object and `PropertyNewButtonController` for the row. Telemetry only:
+/// the row identity is the list cursor, here as everywhere else on this tab.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT: AtomicUsize =
+    AtomicUsize::new(0);
+/// Row presses, and the subset that actually claimed the exporter.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Presses refused because an export was genuinely still running. A refusal that could NOT be
+/// proven live is not counted here -- it is counted below as a stale latch and the press proceeds.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_REFUSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Presses that found a busy flag with no worker behind it and cleared it. This rising is the
+/// safety valve working: a dead latch must never outrank the player. See
+/// `generate_build_link_row::export_latch_is_stale`.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_STALE_LATCH_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Characters successfully read and encoded into a share URL.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_ENCODED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Length in characters of the most recent URL produced (`0` = none yet). The cheapest proof that
+/// the encode produced something of the right ORDER of size rather than an empty string.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_LAST_URL_LEN: AtomicUsize = AtomicUsize::new(0);
+/// URLs put on the Windows clipboard.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_CLIPBOARD_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// URLs `ShellExecuteW` accepted (return value > 32), i.e. handed to winebrowser.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_OPENED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Exports that failed after being accepted -- no character in the world, an unreadable catalog, or
+/// a shell-execute the OS refused.
+pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -709,6 +758,7 @@ pub static SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1: AtomicUsize = AtomicUsize
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_RESOLVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Resolutions that came from the dialog's own list cursor -- the ONLY row identity, shared by mouse,
 /// keyboard and pad. Equal to `RESOLVE_COUNT - AMBIGUOUS_COUNT` by construction; a divergence would
@@ -2270,8 +2320,8 @@ pub static TESTNET_FF_FIRED_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static OPTIONSETTING_ROW_LAST_LOG_KEY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static OPTIONSETTING_LAST_ACTIVE_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static SEAMLESS_TOS_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static OPTIONS_02_040_QUIT5_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
-pub static OPTIONS_02_040_QUIT5_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub static OPTIONS_02_040_QUIT6_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
+pub static OPTIONS_02_040_QUIT6_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static STATS_TEXT_SCREEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static STATS_TEXT_BUILT: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_OFFSCREEN_SETTLE_COUNT: AtomicUsize = AtomicUsize::new(0);

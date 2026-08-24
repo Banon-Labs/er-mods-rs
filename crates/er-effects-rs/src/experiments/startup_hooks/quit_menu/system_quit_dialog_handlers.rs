@@ -234,10 +234,21 @@ pub(crate) unsafe fn system_quit_route_button_action_or_forward(
         // or mutates game state -- the press spawns a fetch worker and the FrameBegin task applies
         // the result -- so it is the same two lines from either routing hook.
         Some(QuitRow::LoadBuildFromUrl) => {
-            let press = system_quit_start_build_import();
+            let press = system_quit_start_build_import(dialog);
             system_quit_log_build_import_press(hook_name, &press);
             append_autoload_debug(format_args!(
                 "system-quit-build-url: action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text}; suppressing the native Quit Game row action behind this thunk"
+            ));
+            0
+        }
+        // The only row that reads the character instead of writing to it, and the only one with no
+        // dialog of any kind behind it: the press queues a read and returns, and the row's own help
+        // line becomes the report.
+        Some(QuitRow::GenerateBuildLink) => {
+            let press = system_quit_start_build_export();
+            system_quit_log_build_export_press(hook_name, &press);
+            append_autoload_debug(format_args!(
+                "system-quit-generate-link: action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text}; suppressing the native Quit Game row action behind this thunk"
             ));
             0
         }
@@ -433,10 +444,17 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             ));
         }
         Some(QuitRow::LoadBuildFromUrl) => {
-            let press = system_quit_start_build_import();
+            let press = system_quit_start_build_import(dialog);
             system_quit_log_build_import_press("build-url/controller", &press);
             append_autoload_debug(format_args!(
                 "system-quit-build-url: controller=0x{controller:x} {verdict_text} event_kind={event_kind}; suppressing native button activation"
+            ));
+        }
+        Some(QuitRow::GenerateBuildLink) => {
+            let press = system_quit_start_build_export();
+            system_quit_log_build_export_press("generate-link/controller", &press);
+            append_autoload_debug(format_args!(
+                "system-quit-generate-link: controller=0x{controller:x} {verdict_text} event_kind={event_kind}; suppressing native button activation"
             ));
         }
         Some(QuitRow::ReturnToDesktop) => {
@@ -783,10 +801,123 @@ pub(crate) const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W: [u16; SYSTEM_QUIT_RO
 pub(crate) const SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Load Build from URL");
 
-pub(crate) const SYSTEM_QUIT_LOAD_BUILD_URL_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
-    system_quit_row_text(
-        b"Import the er-build-planner link from er-effects.toml onto this character",
-    );
+// THE FOURTH CLONED ROW, AND THE ONLY ONE THAT READS RATHER THAN WRITES.
+//
+// "Generate Build Link" is the exact inverse of the row above it: that one takes a planner link and
+// rewrites this character, this one takes this character and writes a planner link. Naming it after
+// what it PRODUCES rather than what it takes is the one place this tab's convention has to bend --
+// every other row is named for its input because every other row consumes something the player
+// supplies, and this row consumes nothing at all.
+//
+// "Generate" rather than "Share" or "Copy": the link does not exist until the row is pressed, and
+// both other verbs imply it already does. The help line is where the two side effects are stated,
+// because a row that silently reaches for the clipboard and silently opens a browser is a row that
+// looks broken when either one is blocked.
+//
+// 189.9px at 24px MenuFont_01 against the cell's 400px non-wrapping field
+// (`scripts/gfx_text_width.py --height-px 24 --box-px 400`), the narrowest of the four cloned rows.
+pub(crate) const SYSTEM_QUIT_GENERATE_BUILD_LINK_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Generate Build Link");
+
+// THE ROW'S HELP LINE IS THE EDITOR'S INDICATOR, WHICH IS WHY IT IS WRITABLE.
+//
+// `CS::MenuString` stores the raw pointer it is handed and reads to the first NUL every time the
+// row is drawn, so a buffer this DLL can rewrite becomes a live readout: when the link field
+// refuses an accept, the reason is on the row sitting behind it before the field re-opens.
+//
+// It is `AtomicU16` rather than a `static mut` because the game's render thread reads these units
+// while the menu pump writes them. `AtomicU16` has the layout of `u16`, so the pointer handed to
+// `MenuString` is still an ordinary wide string; what the atomics buy is that the race is defined
+// rather than undefined. A torn read shows one stale character for one frame, which is a cosmetic
+// outcome the alternative (UB) does not offer.
+pub(crate) static SYSTEM_QUIT_LOAD_BUILD_URL_HELP_BUF: [AtomicU16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    [const { AtomicU16::new(0) }; SYSTEM_QUIT_ROW_TEXT_CAPACITY];
+
+/// Overwrite the Load Build from URL row's help line.
+///
+/// Truncated to the buffer, and always NUL-terminated: the native reader stops at the first NUL and
+/// has no length to bound it, so leaving one off would walk into whatever follows. Non-ASCII is
+/// dropped rather than encoded -- every string this is called with is ASCII, and a lone surrogate
+/// here would be a rendering bug in the menu rather than an error anyone sees.
+pub(crate) fn set_build_url_row_help(text: &str) {
+    let capacity = SYSTEM_QUIT_ROW_TEXT_CAPACITY - 1;
+    let mut written = 0;
+    for unit in text.chars().filter(char::is_ascii).map(|c| c as u16) {
+        if written >= capacity {
+            break;
+        }
+        SYSTEM_QUIT_LOAD_BUILD_URL_HELP_BUF[written].store(unit, Ordering::SeqCst);
+        written += 1;
+    }
+    for unit in SYSTEM_QUIT_LOAD_BUILD_URL_HELP_BUF.iter().skip(written) {
+        unit.store(0, Ordering::SeqCst);
+    }
+}
+
+/// The Generate Build Link row's help line, live for the same reason the row above it has one: the
+/// export happens with no field and no dialog in front of it, so this row's own help text is the
+/// ONLY surface that can report what happened. It reads "Create a shareable link..." at rest and
+/// becomes the outcome -- URL length, clipboard, browser -- once a press completes.
+pub(crate) static SYSTEM_QUIT_GENERATE_BUILD_LINK_HELP_BUF: [AtomicU16;
+    SYSTEM_QUIT_ROW_TEXT_CAPACITY] = [const { AtomicU16::new(0) }; SYSTEM_QUIT_ROW_TEXT_CAPACITY];
+
+/// What the row's help says when nothing has been pressed yet.
+pub(crate) const GENERATE_BUILD_LINK_ROW_HELP: &str =
+    "Create a shareable link to this character and open it in your browser";
+
+/// Overwrite the Generate Build Link row's help line. Same contract as
+/// [`set_build_url_row_help`]: truncated to the buffer, always NUL-terminated, ASCII only.
+pub(crate) fn set_generate_build_link_row_help(text: &str) {
+    let capacity = SYSTEM_QUIT_ROW_TEXT_CAPACITY - 1;
+    let mut written = 0;
+    for unit in text.chars().filter(char::is_ascii).map(|c| c as u16) {
+        if written >= capacity {
+            break;
+        }
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_HELP_BUF[written].store(unit, Ordering::SeqCst);
+        written += 1;
+    }
+    for unit in SYSTEM_QUIT_GENERATE_BUILD_LINK_HELP_BUF
+        .iter()
+        .skip(written)
+    {
+        unit.store(0, Ordering::SeqCst);
+    }
+}
+
+/// The Generate Build Link help buffer as the wide string `MenuString` will read.
+///
+/// # Safety
+///
+/// `AtomicU16` and `u16` share a layout, and the buffer has process lifetime, so the pointer stays
+/// valid for as long as the row does.
+pub(crate) fn generate_build_link_row_help_wide() -> &'static [u16] {
+    // Safety: layout-compatible reinterpretation of a process-lifetime buffer.
+    unsafe {
+        core::slice::from_raw_parts(
+            SYSTEM_QUIT_GENERATE_BUILD_LINK_HELP_BUF
+                .as_ptr()
+                .cast::<u16>(),
+            SYSTEM_QUIT_ROW_TEXT_CAPACITY,
+        )
+    }
+}
+
+/// The help buffer as the wide string `MenuString` will read.
+///
+/// # Safety
+///
+/// `AtomicU16` and `u16` share a layout, and the buffer has process lifetime, so the pointer stays
+/// valid for as long as the row does.
+pub(crate) fn build_url_row_help_wide() -> &'static [u16] {
+    // Safety: layout-compatible reinterpretation of a process-lifetime buffer.
+    unsafe {
+        core::slice::from_raw_parts(
+            SYSTEM_QUIT_LOAD_BUILD_URL_HELP_BUF.as_ptr().cast::<u16>(),
+            SYSTEM_QUIT_ROW_TEXT_CAPACITY,
+        )
+    }
+}
 
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Save Game");
@@ -1290,12 +1421,12 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         //
         // ORDER IS THE PRODUCT CONTRACT, not a detail: the property index a row lands at IS its
         // grid cell (`row * cols + col`), so this order is what puts Load Character at `Item_1_0`,
-        // Load Character from File at `Item_1_1` and Load Build from URL at `Item_2_0`. It must
-        // match `er_gfx::options_02_040::QUIT5_GRID_CELL_NAMES`.
+        // Load Character from File at `Item_1_1`, Load Build from URL at `Item_2_0` and Generate
+        // Build Link at `Item_2_1`. It must match `er_gfx::options_02_040::QUIT6_GRID_CELL_NAMES`.
         struct ClonedRow {
             row: QuitRow,
             label: &'static [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY],
-            help: &'static [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY],
+            help: &'static [u16],
             /// Where to record the row's action alias and its `PropertyNewButtonController`. Both
             /// are telemetry: the row IDENTITY is the list cursor, never these pointers.
             action_slot: &'static AtomicUsize,
@@ -1305,7 +1436,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             ClonedRow {
                 row: QuitRow::LoadProfile,
                 label: &SYSTEM_QUIT_LOAD_PROFILE_LABEL_W,
-                help: &SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
+                help: SYSTEM_QUIT_LOAD_PROFILE_HELP_W.as_slice(),
                 action_slot: &SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT,
                 controller_slot: &SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT,
             },
@@ -1315,9 +1446,9 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 // Mode-locked at row-build time so the row never advertises the save flavor the
                 // active mode ignores (user directive 2026-07-06).
                 help: if crate::telemetry::seamless_coop_loaded() {
-                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W
+                    SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W.as_slice()
                 } else {
-                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W
+                    SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W.as_slice()
                 },
                 action_slot: &SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT,
                 controller_slot: &SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT,
@@ -1325,9 +1456,20 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             ClonedRow {
                 row: QuitRow::LoadBuildFromUrl,
                 label: &SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W,
-                help: &SYSTEM_QUIT_LOAD_BUILD_URL_HELP_W,
+                // The LIVE buffer, not a constant: the link field rewrites it to say why an
+                // accept was refused, and the row behind the field shows that.
+                help: build_url_row_help_wide(),
                 action_slot: &SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_LAST_OBJECT,
                 controller_slot: &SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT,
+            },
+            ClonedRow {
+                row: QuitRow::GenerateBuildLink,
+                label: &SYSTEM_QUIT_GENERATE_BUILD_LINK_LABEL_W,
+                // Also a LIVE buffer, for a different reason: this row opens no field, so when its
+                // export finishes there is no other surface to report on. The row reports on itself.
+                help: generate_build_link_row_help_wide(),
+                action_slot: &SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT,
+                controller_slot: &SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT,
             },
         ];
 

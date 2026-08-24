@@ -33,7 +33,10 @@ pub mod name;
 pub mod plan;
 
 pub use catalog::{Catalog, Entry, Kind};
-pub use equip::{Capacity, EquipPlan, EquipRef};
+pub use equip::{
+    Capacity, EquipLedger, EquipPlan, EquipRef, LedgerCounts, PlannedPosition, PositionKind,
+    PositionResult,
+};
 pub use model::BuildDoc;
 pub use plan::{Grant, Plan, Unresolved};
 
@@ -90,6 +93,98 @@ pub fn build_url_from_config(contents: &str) -> Option<&str> {
         }
     }
     None
+}
+
+/// The URL prefix the in-game editor opens with, so a player only has to supply the id.
+///
+/// Not used for validation -- [`validate_build_url`] accepts any host, because the planner has
+/// moved domain before and refusing an unfamiliar one would reject a link that works.
+pub const BUILD_URL_PREFIX: &str = "https://er-build-planner.nyasu.business/?b=";
+
+/// The System>Quit row's help line when nothing has gone wrong. The row's help is a live buffer the
+/// link field rewrites to report a refusal, so this is what it is restored to.
+pub const BUILD_URL_ROW_HELP: &str =
+    "Paste or type an er-build-planner link to rebuild this character";
+
+/// Why a URL cannot be imported. Each variant carries the ONE sentence a player sees when the
+/// editor refuses their input, so the reason a thing was rejected lives with the rejection rather
+/// than being reconstructed at the call site.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UrlRejection {
+    /// Nothing was entered, or only the prefix the editor pre-filled.
+    Empty,
+    /// The self-contained `?i=` form. It carries the whole build in the URL and is never fetched,
+    /// so it is called out separately: telling a player "no ?b=" about a link that plainly has a
+    /// payload reads as a bug in us.
+    SelfContained,
+    /// No `b=` parameter at all.
+    NoShareId,
+    /// A `b=` that is present but not an id -- empty, or carrying something other than the
+    /// letters and digits every share id is made of.
+    MalformedShareId,
+}
+
+impl UrlRejection {
+    /// The line the editor shows. Kept short: it is rendered on a menu row's help field, and the
+    /// player is looking at their own text while reading it.
+    pub fn indicator(self) -> &'static str {
+        match self {
+            UrlRejection::Empty => "Enter a build link - nothing was typed after the prefix",
+            UrlRejection::SelfContained => {
+                "That is a ?i= link; only shared ?b= links can be loaded"
+            }
+            UrlRejection::NoShareId => "That link has no ?b= build id",
+            UrlRejection::MalformedShareId => "That build id is not valid",
+        }
+    }
+
+    /// Stable telemetry code (`0` means "accepted").
+    pub fn code(self) -> usize {
+        match self {
+            UrlRejection::Empty => 1,
+            UrlRejection::SelfContained => 2,
+            UrlRejection::NoShareId => 3,
+            UrlRejection::MalformedShareId => 4,
+        }
+    }
+}
+
+/// Decide whether a typed URL can be imported, and say why not when it cannot.
+///
+/// This is the gate the in-game editor runs on Accept. It is deliberately the ONLY place that
+/// decision is made -- the editor re-opens rather than closing when this returns `Err`, so a
+/// disagreement between this and [`share_id_from_url`] would let a link through that the fetch
+/// then cannot use.
+///
+/// Whitespace is trimmed first: the field is pre-filled and typed into on a controller, and a
+/// trailing space is a slip, not a different link.
+///
+/// ```
+/// use er_build_import::{validate_build_url, UrlRejection};
+/// assert_eq!(validate_build_url("https://p/?b=af97a9da874151"), Ok("af97a9da874151"));
+/// assert_eq!(validate_build_url("https://p/?i=eyJ2IjoxfQ"), Err(UrlRejection::SelfContained));
+/// assert_eq!(validate_build_url("https://p/?b="), Err(UrlRejection::MalformedShareId));
+/// ```
+pub fn validate_build_url(url: &str) -> Result<&str, UrlRejection> {
+    let url = url.trim();
+    if url.is_empty() || url == BUILD_URL_PREFIX || url.trim_end_matches('?').is_empty() {
+        return Err(UrlRejection::Empty);
+    }
+    let Some((_, query)) = url.split_once('?') else {
+        return Err(UrlRejection::NoShareId);
+    };
+    // An id typed straight into the prefix leaves `?b=<id>`; a bare `?b=` leaves nothing.
+    if let Some(value) = query.split('&').find_map(|pair| pair.strip_prefix("b=")) {
+        let id = value.split('#').next().unwrap_or(value);
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(UrlRejection::MalformedShareId);
+        }
+        return Ok(id);
+    }
+    if query.split('&').any(|pair| pair.starts_with("i=")) {
+        return Err(UrlRejection::SelfContained);
+    }
+    Err(UrlRejection::NoShareId)
 }
 
 /// Extract the `?b=` share id from a planner URL.

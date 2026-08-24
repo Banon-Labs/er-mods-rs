@@ -1031,6 +1031,50 @@ pub(crate) unsafe fn apply_path_editor_window_position(base: usize, menu_window:
     unsafe { apply_path_editor_caret_to_end(base, menu_window) };
 }
 
+static BUILD_URL_WINDOW_POSITION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+static BUILD_URL_WINDOW_POSITION_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
+
+/// Centre the System>Quit link field's own 02_990 MenuWindow on the stage.
+///
+/// Separate from [`apply_path_editor_window_position`] because the two fields answer to different
+/// geometry: the save picker's editor is placed OVER a ProfileSelect row (list centre plus that
+/// row's offsets, which the live layout schema can move), while the link field is a modal over the
+/// Quit tab and belongs in the middle of the screen. Sharing the picker's helper would have put the
+/// link field where a ProfileSelect row is -- which is why the Quit tab shipped with no placement
+/// at all, and the field stayed at the movie's authored top-left origin.
+///
+/// The target comes from [`er_gfx::build_url_02_990::build_url_window_position`], which derives it
+/// from the movie's own authored geometry rather than from a tuned constant.
+pub(crate) unsafe fn apply_build_url_editor_window_position(base: usize, menu_window: usize) {
+    if menu_window == 0 || menu_window == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let attempt = BUILD_URL_WINDOW_POSITION_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let (x, y) = er_gfx::build_url_02_990::build_url_window_position();
+    let transform = er_gfx::profile_05_010_layout::TransformLayout {
+        x,
+        y,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        opacity: 1.0,
+        editable: false,
+        source: "native 02_990 MenuWindow root centres the link field on the stage".to_owned(),
+    };
+    let proxy = menu_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
+    let (applied, unsupported, detail) = unsafe {
+        apply_profile_editor_transform_to_proxy(base, proxy, &transform, "02_990 build-url window")
+    };
+    if applied > 0 {
+        BUILD_URL_WINDOW_POSITION_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+    }
+    if attempt <= 8 || (unsupported > 0 && attempt.is_power_of_two()) {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: positioned 02_990 MenuWindow attempt={attempt} window=0x{menu_window:x} proxy=0x{proxy:x} target=({x:.1},{y:.1}) applied={applied} unsupported={unsupported} detail={detail}"
+        ));
+    }
+    unsafe { apply_path_editor_caret_to_end(base, menu_window) };
+}
+
 /// Applications of the end-caret per editor open. The field is not guaranteed to be focused on the
 /// frame the window first runs, and taking focus is what would reset a caret we set too early, so the
 /// request is repeated over the same short window the positioning pass uses. It stays far shorter
@@ -1060,7 +1104,7 @@ unsafe fn apply_path_editor_caret_to_end(base: usize, menu_window: usize) {
     if applies >= PATH_EDITOR_CARET_APPLY_FRAMES {
         return;
     }
-    let outcome = unsafe { place_path_editor_caret_at_end(base, menu_window) };
+    let outcome = unsafe { place_text_input_02_990_caret_at_end(base, menu_window) };
     // Log the first resolution either way, then stay quiet: this runs every frame of the open window
     // and a per-frame line would bury the rest of the editor's trace.
     if PATH_EDITOR_CARET_RESOLVED
@@ -1079,11 +1123,25 @@ unsafe fn apply_path_editor_caret_to_end(base: usize, menu_window: usize) {
 }
 
 /// Resolve the live editable field by its authored name (`root -> TextInput -> Text_0`) through the
-/// same native `assignComponentWithName` binder the stats push uses, then move its caret.
-unsafe fn place_path_editor_caret_at_end(
+/// same native `assignComponentWithName` binder the stats push uses, hand the resolved field proxy
+/// to `apply`, and destroy both proxies afterwards however `apply` went.
+///
+/// Every caller that wants to touch the open text field goes through here, so the resolve, the
+/// nesting and -- most of all -- the two `~CSScaleformValue` calls exist exactly once. The pair of
+/// proxies is what the er-effects-rs-7e7 crash was about: destroying the wrong offset stamps a
+/// vtable over the component-link node, and doing it on only one of the two leaks a GFx handle per
+/// frame in a per-frame caller like the live clipboard mirror.
+///
+/// # Safety
+///
+/// `menu_window` must be a live 02_990 `MenuWindow`, and the caller must be in its own
+/// `MenuWindowJob::Run` context -- the proxies resolved here are only valid while that window is
+/// running.
+pub(crate) unsafe fn with_text_input_02_990_field<T>(
     base: usize,
     menu_window: usize,
-) -> Result<String, String> {
+    apply: impl FnOnce(usize) -> Result<T, String>,
+) -> Result<T, String> {
     if menu_window == 0 || menu_window == TITLE_OWNER_SCAN_START_ADDRESS {
         return Err("02_990 MenuWindow not live".to_owned());
     }
@@ -1099,12 +1157,7 @@ unsafe fn place_path_editor_caret_at_end(
     };
     let result = match unsafe { resolve_row_child_proxy(base, sprite_proxy, field_name) } {
         Some((field_proxy, _field_slot)) => {
-            let outcome = unsafe {
-                set_text_field_caret_to_end(
-                    base,
-                    field_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET,
-                )
-            };
+            let outcome = apply(field_proxy);
             unsafe { destroy_resolved_row_child_proxy(base, field_proxy) };
             outcome
         }
@@ -1114,6 +1167,128 @@ unsafe fn place_path_editor_caret_at_end(
     };
     unsafe { destroy_resolved_row_child_proxy(base, sprite_proxy) };
     result
+}
+
+/// Replace the open field's text with `utf16` (NUL-terminated) through the game's own SetText, then
+/// leave the caret at the end of what was written.
+///
+/// # Why SetText and not a write into the field's buffer
+///
+/// The visible field is the SAME object the accept reads back. The Scaleform half of the software
+/// keyboard (`FUN_1407fb050`, the fallback the PC build actually uses once
+/// `SoftwareKeyboardManagerImpl` declines) hands the confirmed text to the job as a `wchar_t const*`
+/// taken from this field, which the job then copies into the controller's `DLString` at `+0x80` --
+/// the exact string [`software_keyboard_text`] reads. So writing the field through the engine's own
+/// setter changes what is DRAWN and what is ACCEPTED in one move, with no second source of truth to
+/// keep in step. A memcpy into the text buffer would change neither reliably: the field re-lays-out
+/// from its text document, and the editor kit's caret/selection indices would still point into the
+/// old length.
+///
+/// `PROFILE_SETTEXT_RVA` is the same wrapper the ProfileSelect stats push has been calling in
+/// product since 2026-07-04, with the same fail-closed guards: the resolved component must carry a
+/// live game-image vtable whose GetValue slot is not the pure-virtual trap, or the call is skipped
+/// rather than dispatched into a destroyed object.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, `menu_window` live. `utf16` must be NUL-terminated.
+pub(crate) unsafe fn set_text_input_02_990_text(
+    base: usize,
+    menu_window: usize,
+    utf16: &[u16],
+) -> Result<String, String> {
+    if utf16.last() != Some(&0) {
+        return Err("field text is not NUL-terminated".to_owned());
+    }
+    let apply = |field_proxy: usize| -> Result<String, String> {
+        unsafe { push_text_on_resolved_02_990_field(base, field_proxy, utf16) }?;
+        // Typing continues where the text ends, not in front of it. The same reason the prefilled
+        // path editor re-ends its caret: the field's own caret stays at 0 across a text change, so
+        // without this the next keystroke prepends to the link.
+        let caret = unsafe {
+            set_text_field_caret_to_end(base, field_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET)
+        };
+        Ok(match caret {
+            Ok(detail) => format!("units={} {detail}", utf16.len().saturating_sub(1)),
+            Err(error) => format!(
+                "units={} text set but caret stayed put: {error}",
+                utf16.len().saturating_sub(1)
+            ),
+        })
+    };
+    unsafe { with_text_input_02_990_field(base, menu_window, apply) }
+}
+
+/// The native SetText call itself, on an already-resolved field proxy.
+///
+/// # Safety
+///
+/// `field_proxy` must come from [`with_text_input_02_990_field`] and still be live.
+unsafe fn push_text_on_resolved_02_990_field(
+    base: usize,
+    field_proxy: usize,
+    utf16: &[u16],
+) -> Result<(), String> {
+    let component_slot = field_proxy + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
+    let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
+    if comp == 0 || comp == TITLE_OWNER_SCAN_START_ADDRESS {
+        return Err(format!("component pointer empty at 0x{component_slot:x}"));
+    }
+    let comp_vt = unsafe { safe_read_usize(comp) }.unwrap_or(0);
+    let slot_fn = if comp_vt != 0 {
+        unsafe { safe_read_usize(comp_vt + COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    // A named-child resolve that MISSED still hands back a proxy with a game-image vtable, so the
+    // datatype word is what says a field is really behind it.
+    let resolved = unsafe {
+        safe_read_i32(
+            field_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize)
+    .is_some_and(gfx_value_type_is_resolved);
+    if !resolved {
+        return Err(format!(
+            "field proxy 0x{field_proxy:x} carries no resolved GFx value"
+        ));
+    }
+    if !vtable_in_game_image(comp_vt, base) || !vtable_in_game_image(slot_fn, base) {
+        return Err(format!(
+            "component not live comp=0x{comp:x} vt=0x{comp_vt:x} slot_fn=0x{slot_fn:x}"
+        ));
+    }
+    if dispatch_target_is_purecall(slot_fn, base) {
+        return Err(format!(
+            "component 0x{comp:x} has been DESTROYED (GetValue slot is the pure-virtual trap 0x{slot_fn:x})"
+        ));
+    }
+    let settext: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+    unsafe { settext(component_slot, utf16.as_ptr() as usize) };
+    Ok(())
+}
+
+/// Put the caret at the end of whatever the open field currently holds.
+///
+/// Window-generic on purpose: both fields that load `02_990` want this, and only the PLACEMENT of
+/// the window differs between them. Scoping it to the save picker is why the build-url field opened
+/// with its caret at index 0 and typing prepended to the prefilled link.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, `menu_window` live.
+pub(crate) unsafe fn place_text_input_02_990_caret_at_end(
+    base: usize,
+    menu_window: usize,
+) -> Result<String, String> {
+    let apply = |field_proxy: usize| -> Result<String, String> {
+        unsafe {
+            set_text_field_caret_to_end(base, field_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET)
+        }
+    };
+    unsafe { with_text_input_02_990_field(base, menu_window, apply) }
 }
 
 /// Move a resolved field's caret to the end of its text.

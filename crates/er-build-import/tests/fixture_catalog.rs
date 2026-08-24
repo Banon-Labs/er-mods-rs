@@ -1,8 +1,8 @@
-//! Catalog rows for the items in the fixture build.
+//! Catalog rows for the items in the fixture builds.
 //!
-//! Generated from the planner's public item database; only the ~70 rows this
-//! test needs are reproduced, so the repository does not carry a copy of the
-//! whole third-party dataset.
+//! Generated from the planner's public item database; only the rows these tests
+//! need are reproduced, so the repository does not carry a copy of the whole
+//! third-party dataset.
 
 use er_build_import::catalog::{Entry, Kind, MapCatalog};
 
@@ -118,6 +118,15 @@ pub fn catalog() -> MapCatalog {
         },
     );
     c.insert(
+        Kind::GreatRune,
+        "Mohg's Great Rune",
+        Entry {
+            full_item_id: 0x400000C3,
+            max_stored: Some(1),
+            somber: false,
+        },
+    );
+    c.insert(
         Kind::Protector,
         "Armor of Solitude",
         Entry {
@@ -131,6 +140,15 @@ pub fn catalog() -> MapCatalog {
         "Armor of Solitude (Altered)",
         Entry {
             full_item_id: 0x104E4B5C,
+            max_stored: None,
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Protector,
+        "Divine Beast Helm",
+        Entry {
+            full_item_id: 0x105023A0,
             max_stored: None,
             somber: false,
         },
@@ -245,6 +263,15 @@ pub fn catalog() -> MapCatalog {
     );
     c.insert(
         Kind::Spell,
+        "Bestial Vitality",
+        Entry {
+            full_item_id: 0x40001AB8,
+            max_stored: Some(600),
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Spell,
         "Cherishing Fingers",
         Entry {
             full_item_id: 0x401EA17C,
@@ -317,6 +344,33 @@ pub fn catalog() -> MapCatalog {
     );
     c.insert(
         Kind::Talisman,
+        "Blue-Feathered Branchsword",
+        Entry {
+            full_item_id: 0x20000FF0,
+            max_stored: None,
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Talisman,
+        "Bull-Goat's Talisman",
+        Entry {
+            full_item_id: 0x200004BA,
+            max_stored: None,
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Talisman,
+        "Crimson Amber Medallion +3",
+        Entry {
+            full_item_id: 0x20001B58,
+            max_stored: None,
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Talisman,
         "Erdtree's Favor +2",
         Entry {
             full_item_id: 0x20000412,
@@ -353,10 +407,73 @@ pub fn catalog() -> MapCatalog {
     );
     c.insert(
         Kind::Tool,
+        "Blessing of Marika",
+        Entry {
+            full_item_id: 0x401E8804,
+            max_stored: Some(1),
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Tool,
+        "Clarifying Boluses",
+        Entry {
+            full_item_id: 0x400003C0,
+            max_stored: Some(99),
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Tool,
+        "Crimsonwhorl Bubbletear",
+        Entry {
+            full_item_id: 0x40002B0C,
+            max_stored: Some(1),
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Tool,
         "Fingerprint Nostrum",
         Entry {
             full_item_id: 0x401E88D6,
             max_stored: None,
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Tool,
+        "Flask of Cerulean Tears",
+        Entry {
+            full_item_id: 0x4000041B,
+            max_stored: Some(20),
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Tool,
+        "Neutralizing Boluses",
+        Entry {
+            full_item_id: 0x40000384,
+            max_stored: Some(99),
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Tool,
+        "Opaline Hardtear",
+        Entry {
+            full_item_id: 0x40002B03,
+            max_stored: Some(1),
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Tool,
+        "Opaline Pickled Liver",
+        Entry {
+            full_item_id: 0x401E8908,
+            max_stored: Some(5),
             somber: false,
         },
     );
@@ -506,6 +623,15 @@ pub fn catalog() -> MapCatalog {
     );
     c.insert(
         Kind::Weapon,
+        "Nagakiba",
+        Entry {
+            full_item_id: 0x00897B50,
+            max_stored: None,
+            somber: false,
+        },
+    );
+    c.insert(
+        Kind::Weapon,
         "Poisoned Hand",
         Entry {
             full_item_id: 0x01485E80,
@@ -592,6 +718,15 @@ pub fn catalog() -> MapCatalog {
             full_item_id: 0x00216AB0,
             max_stored: None,
             somber: true,
+        },
+    );
+    c.insert(
+        Kind::Weapon,
+        "Twinbird Kite Shield",
+        Entry {
+            full_item_id: 0x01DA6550,
+            max_stored: None,
+            somber: false,
         },
     );
     c

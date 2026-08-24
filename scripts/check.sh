@@ -240,6 +240,20 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import
 # target too.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 
+# HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
+# in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game
+# bindings always resolve -- so a `use windows::...` / `use eldenring::...` written WITHOUT a
+# `#[cfg(windows)]` gate is invisible to every gate here while breaking a plain host
+# `cargo test`. er-title-flow shipped exactly that: 31 unresolved-import errors on the host
+# (measured 2026-08-23), and the cost was misdirection -- an agent or human reaching for a host
+# `cargo test` saw a wall of errors that looked like their own change.
+#
+# `-p er-effects-rs --lib` is the reproducer itself: the crate's host build is a single stub fn,
+# so this compiles nothing but the dependency graph, which is the surface that rots.
+# `-p er-title-flow --lib` additionally RUNS boot_hold's predicates -- the crate's only
+# host-portable logic, and untestable at all until the gates landed.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-effects-rs -p er-title-flow --lib
+
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
 # any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.
@@ -251,7 +265,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 
-# Knowing every shell exists is not knowing which of them can share a process. Five pairs
+# Knowing every shell exists is not knowing which of them can share a process. Several pairs
 # corrupt each other -- two MinHook instances on one prologue, two D3D12 Present compositors,
 # a harness that drives input every frame -- and that knowledge used to live only as prose in
 # a hand-written ~/Elden/*.me3. scripts/er-dll-closure.py now reads it as data to decide what a
@@ -259,6 +273,16 @@ python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 # classified is exactly the one a dependency-closure walk auto-includes.
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
+
+# ...and the table only helps if it still matches the CODE. This scans every cdylib for the hook
+# targets it claims and fails on any address two of them claim without a [[conflict]] or [[shared]]
+# row -- then proves each [[shared]] row's mechanism, so neither side can quietly revert to a
+# private MinHook instance. That reversion is the failure this pair of gates exists for: two
+# instances on one prologue overwrite each other's trampolines, the loser reports installed and
+# never runs, nothing crashes, and the feature merely looks unimplemented. It cost a full day on
+# 2026-08-23 before an A/B against a one-DLL profile named it.
+python3 "$repo_root/scripts/check-shared-hook-rvas.py" --selftest
+python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 
 # The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
 # selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with

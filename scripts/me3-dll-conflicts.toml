@@ -16,8 +16,49 @@
 # in [compatible] with a reason. Silence is not an answer: an unanalyzed DLL is exactly
 # the one that gets auto-included by a dependency-closure walk.
 #
+# There is a THIRD state, [[shared]]: two DLLs that both detour one prologue but have been made
+# safe by routing through a single MinHook instance (the hook union). A [[shared]] pair is
+# co-loadable -- `er-dll-closure.py` reads [[conflict]] only -- and each of its members is still
+# classified by [compatible]. It exists so `check-shared-hook-rvas.py` can tell a DECLARED,
+# mechanism-backed sharing apart from an accidental one, and so reverting either side to a bare
+# hook fails a gate instead of silently disabling a feature.
+#
 # `kind` is the failure mode, not a severity. All conflicts are blocking -- the point of
 # generating a profile is that you learn what is wrong BEFORE the run, not after.
+
+[[shared]]
+a = "er-effects-rs"
+b = "er-armament-icons"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+# The two detours on that prologue, aligned with `a` and `b`. These are what the gate PROVES: each
+# must be handed to a union registrar and must never appear in an `MhHook::new(...)` call, so a
+# revert to a private MinHook instance fails a check instead of silently disabling a feature.
+handler_a = "title_scaleform_file_open_observer_hook"
+handler_b = "file_open_hook"
+reason = """RESOLVED 2026-08-23, was a `hook-collision`. Both DLLs detour the SAME Scaleform \
+LoaderImpl file-open prologue (0x11ced80), and each links `er-hook` statically -- so each owned a \
+SEPARATE MinHook instance and whichever installed second overwrote the other's trampoline. \
+RUNTIME-MEASURED: in an 11-native profile the product reported file_open_observer_installed = true \
+and file_open_hits = 0 for a whole session, and EVERY GFx swap it owns went silently inert -- the \
+System>Quit tab rendered vanilla, plus the title strip, the 05_010 stats panel and both 02_990 \
+text-input movies. Loaded ALONE the same build reported 113 hits. Nothing crashed and nothing \
+logged an error, so the loader bug wore a feature bug's clothes for a full day.
+
+THE FIX, both sides, so install ORDER cannot decide it: the product registers its observer through \
+`er_hook::register_union_hook` instead of a bare `MhHook`, and the companion registers through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that single instance (falling back to its own union when the product is absent, so \
+a standalone armament-icons run is unchanged). Whoever registers first creates the dispatcher and \
+owns the real trampoline; the other CHAINS. Both handlers are now UNION-SHAPED -- four `usize` \
+args, calling their `orig` slot through the same signature, because that slot may hold the next \
+handler rather than the game trampoline.
+
+This pair is therefore CO-LOADABLE and `er-dll-closure.py` may emit both; it reads `[[conflict]]` \
+only. It is recorded here so `check-shared-hook-rvas.py` can prove the sharing is DECLARED rather \
+than accidental, and so a future edit that reverts either side to a bare hook is a gate failure \
+rather than another silent day."""
+evidence = "crates/er-armament-icons/src/gfx_equip_hook.rs (register_shared_hook); crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs (register_union_hook); crates/er-hook/src/lib.rs (register_shared_hook)"
 
 [[conflict]]
 a = "er-effects-rs"
@@ -89,7 +130,12 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace_dll ent
 # listing it here would assert it is conflict-free, which is the opposite of true.
 # ---------------------------------------------------------------------------
 [compatible]
-"er-armament-icons" = "Own MinHook instance, but on TilePopulate -- a prologue the product does not hook."
+"er-armament-icons" = """Co-loadable with the product. Its TilePopulate, GFx-parse (AOB-scanned) \
+and FileOpener::OpenFile (vtable-resolved) detours are on prologues no other shell claims, so they \
+stay on its own MinHook instance. The ONE prologue it shares -- the Scaleform file-open wrapper -- \
+is registered through `er_hook::register_shared_hook`, which chains it into the product's single \
+union rather than installing a second instance; see the [[shared]] entry above for the measurement \
+that forced this."""
 "er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
 "er-crash-logging-dll" = "First-chance exception handler only. The product does not link er-crash-logging, so this is the sole crash logger in the process."
 "er-death-persist-dll" = """One-shot SpEffectParam / SpEffectVfxParam row patch driven from a \
@@ -101,7 +147,11 @@ other shell. Same class as mushroom-man-runtime: touches param rows, not hook pr
 "er-invasion-warp-dll" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
 "er-net-effects-dll" = "Keyboard-selected network SpEffects; independent hotkey path."
 "er-player-name-filter-dll" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-effects-rs no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
-"er-quit-menu-dll" = "System>Quit harness; its detours route through the er-hook union rather than a private MinHook."
+"er-quit-menu-dll" = """System>Quit harness. Its detours route through `er_hook::register_union_hook` \
+rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
+by another shell, which `check-shared-hook-rvas.py` re-proves on every run. Note that the union alone \
+would NOT be enough if one were: `register_union_hook` unions handlers within ONE DLL, because its \
+statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`."""
 "er-save-picker-dll" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes-dll" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
 (0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \
