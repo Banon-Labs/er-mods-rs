@@ -151,6 +151,16 @@ pub const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
 /// "not up yet" rather than dereferencing it -- the engine itself DLPanics on that path.
 pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d7_d4f8;
 
+/// `GLOBAL_SoloParamRepository` -- the `SoloParamRepositoryImp*` singleton slot, read as
+/// `MOV RCX, qword ptr [0x143d81ee8]` at the head of every param-row lookup.
+///
+/// Null on a quit teardown, and the lookups do not tolerate that: `FUN_140d3d5f0`
+/// (`LoadBalancerParam`) and `LookupMenuOffscrRendParam` both go straight to
+/// `DLPanic("...FD4Singleton.h", 0xb4, "<uninitialised singleton accessed>")`, which then dies
+/// writing through a null pointer. Treat a zero here as "already gone" rather than dereferencing
+/// it. Observed killing a tester's game twice in two days, 2026-08-22 and 2026-08-23.
+pub const SOLO_PARAM_REPOSITORY_GLOBAL_RVA: usize = 0x3d8_1ee8;
+
 /// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId) -> int`.
 ///
 /// Returns the index the equip path needs; negative means the item is not held.

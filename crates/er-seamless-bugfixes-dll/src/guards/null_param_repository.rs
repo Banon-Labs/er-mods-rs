@@ -58,12 +58,16 @@ use super::Guard;
 /// because the address is the thing most likely to change.
 pub(crate) const LOAD_BALANCER_PARAM_RVA: usize = 0xd3_d5f0;
 
-/// `GLOBAL_SoloParamRepository` -- the `SoloParamRepositoryImp*` singleton slot the function
-/// dereferences at `0x140d3d636` before it may touch any param. This is the pointer that was null.
+/// `GLOBAL_SoloParamRepository` -- the singleton slot this function dereferences at `0x140d3d636`
+/// before it may touch any param. This is the pointer that was null.
 ///
-/// The slot's ABSOLUTE address is resolved at install time into
-/// [`SOLO_PARAM_REPOSITORY_SLOT`], because a naked stub cannot compute the game's base.
-pub(crate) const SOLO_PARAM_REPOSITORY_GLOBAL_RVA: usize = 0x3d8_1ee8;
+/// Declared once in `er-game-base::rva`, because the product DLL guards the sibling
+/// `LookupMenuOffscrRendParam` against the same slot; re-exported here so this module's own stub
+/// and its address test keep the name they use.
+///
+/// The slot's ABSOLUTE address is resolved at install time into [`SOLO_PARAM_REPOSITORY_SLOT`],
+/// because a naked stub cannot compute the game's base.
+pub(crate) use er_game_base::rva::SOLO_PARAM_REPOSITORY_GLOBAL_RVA;
 
 /// Absolute address of the singleton slot, published by [`publish_repository_slot`] before the
 /// hook is enabled. Zero means unresolved, and the stub treats that as "assume the singleton is
