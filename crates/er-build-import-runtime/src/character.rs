@@ -6,6 +6,11 @@
 
 use er_build_import::BuildDoc;
 use er_build_import::equip::EquipRef;
+// Declared once in `er-game-base::rva`; the exporter reads the same two spell getters.
+use er_game_base::rva::{
+    GET_EQUIP_MAGIC_ID_RVA as GET_EQUIP_MAGIC_ID,
+    GET_MAGIC_SLOTS_COUNT_RVA as GET_MAGIC_SLOTS_COUNT,
+};
 
 /// `GetMainPlayerStats(int out[10])`.
 const GET_MAIN_PLAYER_STATS: usize = 0x788360;
@@ -17,12 +22,8 @@ const APPLY_MAIN_PLAYER_STATS: usize = 0x788cf0;
 
 /// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*)` -- pass null and it derives
 /// the effect itself. Clamps to 14. THE source of capacity; never hardcode a number.
-const GET_MAGIC_SLOTS_COUNT: usize = 0x250580;
 /// `EquipMagicInSlot(emd, ChrAsmSlot slot, uint magicParamId) -> bool`.
 const EQUIP_MAGIC_IN_SLOT: usize = 0x250490;
-/// `GetEquipMagicId(emd, slot) -> int` -- the read-back.
-const GET_EQUIP_MAGIC_ID: usize = 0x2506d0;
-
 /// `GameDataMan + 0x08 -> PlayerGameData*`.
 const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
 /// `EquipGameData::equipMagicData`, a pointer.

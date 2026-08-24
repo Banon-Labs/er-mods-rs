@@ -199,17 +199,36 @@ def find_conflicts(packages: set[str], table: dict) -> list[dict]:
 def resolve_conflicts(
     selected: set[str], table: dict, pinned: set[str]
 ) -> tuple[set[str], list[dict], list[dict]]:
-    """Drop the non-product side of each conflict.
+    """Drop opt-in-only DLLs, then the non-product side of each conflict.
 
     Returns (kept, excluded, unresolvable). `pinned` names packages the caller asked for
-    explicitly: excluding one of those would silently override a direct request, so it is
-    reported as unresolvable instead.
+    explicitly: excluding one of those would silently override a direct request, so a pinned
+    conflict loser is reported as unresolvable instead, and a pinned opt-in-only DLL is simply
+    kept -- naming it with `--with` IS the opt-in.
     """
     kept = set(selected)
     excluded: list[dict] = []
     unresolvable: list[dict] = []
 
-    for conflict in find_conflicts(selected, table):
+    # OPT-IN-ONLY DLLs come out FIRST, before any conflict ranking. They are co-loadable --
+    # nothing about them corrupts a run -- but they CHANGE THE GAME the user sees, and a
+    # dependency-closure walk is not consent. A gameplay mod nobody asked for arriving because
+    # it happens to depend on a crate this branch touched is how a run stops being the run the
+    # user wanted. `--with` is the consent, and it is the ONLY way in.
+    for name in sorted(set(table.get("opt_in_only", {})) & kept):
+        if name in pinned:
+            continue
+        kept.discard(name)
+        excluded.append(
+            {
+                "package": name,
+                "kind": "opt-in-only",
+                "because": " ".join((table["opt_in_only"][name] or "").split()),
+                "evidence": "scripts/me3-dll-conflicts.toml [opt_in_only]",
+            }
+        )
+
+    for conflict in find_conflicts(kept, table):
         a, b = conflict["a"], conflict["b"]
         if PRODUCT_PACKAGE not in (a, b):
             unresolvable.append({**conflict, "why": "neither side is the product; nothing ranks them"})
@@ -265,7 +284,16 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
         table = tomllib.load(handle)
     kept, excluded, unresolvable = resolve_conflicts(candidates, table, pinned)
 
+    # PRODUCT FIRST, then the rest alphabetically. me3 loads natives in profile order, and the
+    # companions resolve the product's `er_effects_union_register` export to chain onto prologues it
+    # already owns (scripts/me3-launch-lib.sh says the same). A plain `sorted()` put
+    # `er-armament-icons` ahead of `er-effects-rs`, so the companion's install thread could run
+    # before the product image was even loaded -- it would then find no export, fall back to its own
+    # MinHook instance, and recreate the collision the [[shared]] entry exists to prevent. The
+    # companion still polls briefly, so this is belt-and-braces rather than the sole guarantee.
     selected = sorted(kept)
+    if PRODUCT_PACKAGE in kept:
+        selected = [PRODUCT_PACKAGE] + [p for p in selected if p != PRODUCT_PACKAGE]
     dirty = bool(git("status", "--porcelain").strip())
 
     return {
@@ -423,6 +451,40 @@ def selftest() -> int:
     check(
         affected_packages({"er-game-base"}, live) & shipped >= {"er-effects-rs"},
         "a change to er-game-base reaches the product DLL",
+    )
+
+    # --- opt-in-only: co-loadable, but consent is required ------------------------------
+    opt_table = {"opt_in_only": {"mush": "wears a costume nobody asked for"}}
+    kept, excluded, unresolvable = resolve_conflicts({PRODUCT_PACKAGE, "mush"}, opt_table, set())
+    check(
+        "mush" not in kept and not unresolvable,
+        "an opt-in-only DLL is dropped from a closure that merely reached it",
+    )
+    check(
+        [e["package"] for e in excluded] == ["mush"]
+        and excluded[0]["kind"] == "opt-in-only"
+        and "costume" in excluded[0]["because"],
+        "the dropped opt-in-only DLL is REPORTED with its player-facing reason, not silently lost",
+    )
+    kept_pinned, excluded_pinned, _ = resolve_conflicts(
+        {PRODUCT_PACKAGE, "mush"}, opt_table, {"mush"}
+    )
+    check(
+        "mush" in kept_pinned and not excluded_pinned,
+        "--with is the opt-in: a pinned opt-in-only DLL is kept",
+    )
+    # The real table, against the real closure: the mushroom mod must never arrive unasked.
+    with CONFLICTS_TOML.open("rb") as handle:
+        live = tomllib.load(handle)
+    check(
+        "mushroom-man-runtime" in live.get("opt_in_only", {}),
+        "mushroom-man-runtime is declared opt-in-only in the shipped table",
+    )
+    every = {package for package, _ in shipped_pairs()}
+    kept_all, _, _ = resolve_conflicts(every, live, set())
+    check(
+        "mushroom-man-runtime" not in kept_all,
+        "even a closure that selects EVERY shell does not load the mushroom mod",
     )
 
     print("selftest:", "PASS" if ok else "FAIL")

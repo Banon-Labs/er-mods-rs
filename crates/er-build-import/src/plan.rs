@@ -13,9 +13,13 @@
 //! 1. The affinity is an **offset added into the item id** (`Occult` = +1200),
 //!    not an index and not a separate field.
 //! 2. The upgrade level is a **separate 16-bit field**, never folded into the id.
-//! 3. `weaponSkill` is built from the ash of war's **param id**, not its
-//!    category-tagged id -- ashes carry nibble 2, and including it corrupts the
-//!    value.
+//!    `EquipParamWeapon::GetEntry` looks up `(paramId / 100) * 100`, so the game
+//!    THROWS AWAY anything a caller adds on top of the affinity row -- the level
+//!    can only reach the game as `CSWepGaitemIns::reinforcement`.
+//! 3. `weaponSkill` is the ash of war's **`EquipParamGem` row**, re-tagged with
+//!    the game's gem category (see [`GEM_ITEM_CATEGORY`]). The planner's own
+//!    database tags ashes with nibble 2, which is the planner's convention and
+//!    not the game's, so the nibble is REPLACED rather than kept.
 
 use crate::catalog::{Catalog, Entry, Kind};
 use crate::model::{BuildDoc, Slot};
@@ -23,8 +27,20 @@ use crate::model::{BuildDoc, Slot};
 /// Sentinel meaning "leave this armament's default skill alone".
 pub const NO_SKILL: u32 = 0xFFFF_FFFF;
 
-/// High bit set on an ash-of-war param id to form a `weaponSkill` value.
-const SKILL_FLAG: u32 = 0x8000_0000;
+/// The game's item-category nibble for `EquipParamGem`, i.e. for an ash of war.
+///
+/// Not a "flag", and not a spare bit: it is the same category tag every other item kind carries
+/// (weapons 0, protectors 1, accessories 2, goods 4) and the engine dispatches on it.
+/// `CS::CSGaitemImp::GetGaitemHandleByItemId` switches on `itemId >> 28` and sends 8 to
+/// `GetGaItemHandleGem`; `CS::GaitemLookupResult::GetSwordArtsParamId` refuses any item id whose
+/// `& 0xF000_0000` is not `0x8000_0000`, then looks the low 28 bits up in `EquipParamGem`.
+///
+/// So the 28 bits under this nibble MUST be a gem row, never a `SwordArtsParam` row. The two id
+/// spaces are easy to swap -- most ashes sit at `gem = arts * 100` -- and swapping them is
+/// SILENT: the value still passes every shape check and simply names a row that does not exist.
+/// That swap is the bug that shipped: the runtime catalog resolved ash names to `SwordArtsParam`
+/// rows, every name resolved, and no weapon came out carrying its ash.
+pub const GEM_ITEM_CATEGORY: u32 = 0x8000_0000;
 
 /// Affinity name -> the offset it adds to an armament's item id.
 const INFUSIONS: &[(&str, u32)] = &[
@@ -65,7 +81,8 @@ pub struct Grant {
     pub quantity: u32,
     /// Upgrade level, as its own field.
     pub reinforce_lv: u16,
-    /// Ash of war (`SKILL_FLAG | param_id`) or [`NO_SKILL`].
+    /// Ash of war as a gem item id ([`GEM_ITEM_CATEGORY`] `| EquipParamGem row`), or
+    /// [`NO_SKILL`].
     pub weapon_skill: u32,
     /// What this grant is, for logs and for the user.
     pub label: String,
@@ -124,6 +141,47 @@ pub fn infusion_offset(infusion: Option<&str>) -> Option<u32> {
         .map(|(_, offset)| *offset)
 }
 
+/// Split an armament param id back into its base row and affinity name -- the inverse of
+/// [`infusion_offset`], and the arithmetic the EXPORTER runs on every equipped weapon.
+///
+/// The affinity is an offset folded INTO the id (`Occult = +1200`), and the base is always a
+/// multiple of [`ARMAMENT_ID_BLOCK`], which is what makes the split unambiguous. The reinforce
+/// level is deliberately absent from both directions: it is a separate field, never part of the id.
+///
+/// `Standard` comes back as `None` rather than as the string, because that is how the planner
+/// spells it -- a slot with no `infusion` key. Emitting the word would import identically and diff
+/// against every hand-authored build.
+///
+/// ```
+/// use er_build_import::plan::{infusion_offset, split_armament_id};
+/// // Misericorde + Occult, the pair the importer builds as 1_070_000 + 1200.
+/// assert_eq!(split_armament_id(1_071_200), (1_070_000, Some("Occult")));
+/// assert_eq!(split_armament_id(1_070_000), (1_070_000, None));
+/// assert_eq!(infusion_offset(Some("Occult")), Some(1200));
+/// ```
+pub fn split_armament_id(param_id: u32) -> (u32, Option<&'static str>) {
+    let index = (param_id % ARMAMENT_ID_BLOCK / INFUSION_STEP) as usize;
+    match INFUSIONS.get(index) {
+        // Index 0 IS Standard, which the planner writes as an absent field.
+        Some(_) if index == 0 => (param_id, None),
+        Some((name, offset)) => (param_id - offset, Some(name)),
+        // An offset past the table is not an affinity at all, so the id is taken whole rather than
+        // having an invented amount subtracted from it.
+        None => (param_id, None),
+    }
+}
+
+/// The block an armament id's affinity offset occupies; the base row is always a multiple of it.
+pub const ARMAMENT_ID_BLOCK: u32 = 10_000;
+/// Step between consecutive affinities inside that block.
+pub const INFUSION_STEP: u32 = 100;
+
+/// Every affinity name the planner uses, in offset order. Exposed so the exporter can prove it
+/// knows exactly the set the importer accepts, rather than keeping a second copy that can drift.
+pub fn infusion_names() -> impl Iterator<Item = &'static str> {
+    INFUSIONS.iter().map(|(name, _)| *name)
+}
+
 /// Remap a requested upgrade level for a somber armament.
 pub fn somber_remap(level: u16) -> Option<u16> {
     SOMBER_REMAP.get(usize::from(level)).copied()
@@ -140,6 +198,22 @@ impl Entry {
 pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
     let mut out = Plan::default();
 
+    // ARMAMENTS ARE GRANTED IN PAYLOAD ORDER -- the order the build lists them, which is the order
+    // the player sees in their inventory and the only order they can check against the planner page.
+    //
+    // This USED to be two passes, worn-in-the-active-set first and everything else after, and that
+    // reordering was load-bearing while the equip resolved a copy through
+    // `EquipInventoryData::GetItemInventoryIdx`: several copies of one armament differing only by
+    // ash share an item id (the ash lives on the gaitem instance), and
+    // `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST index for a repeated id, so the
+    // game always answered with the earliest-granted copy. Granting the worn one first was the only
+    // way to make that answer right.
+    //
+    // It is obsolete now: the equip carries each mint's `GaItemHandle` forward and asks
+    // `GetItemIndexByGaitemHandle` (0x14024c460), which names ONE instance and does not care where
+    // in the inventory it sits. The reorder bought nothing after that and cost the user the thing
+    // they can actually see -- reported 2026-08-23 against build 94252a868b4f2a, where the two worn
+    // armaments were granted at positions 1 and 2 while the payload puts them at `order` 2 and 8.
     for slot in &doc.inventory.slots {
         plan_weapon(doc, catalog, slot, &mut out);
     }
@@ -241,7 +315,7 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         && !art.eq_ignore_ascii_case("No Skill")
     {
         match catalog.lookup(Kind::AshOfWar, art) {
-            Some(ash) => weapon_skill = SKILL_FLAG | ash.param_id(),
+            Some(ash) => weapon_skill = GEM_ITEM_CATEGORY | ash.param_id(),
             None => {
                 out.unresolved.push(Unresolved {
                     kind: Kind::AshOfWar,
@@ -275,4 +349,52 @@ fn push_simple(catalog: &dyn Catalog, kind: Kind, slot: &Slot, quantity: u32, ou
             name: slot.name.clone(),
         }),
     }
+}
+
+/// The ash of war the build wants on one EQUIPPED armament slot.
+///
+/// Exists so the importer can check its own work. A grant that "succeeded" and an equip that
+/// "succeeded" still say nothing about whether the weapon in the player's hand carries the right
+/// skill -- there are three native hops between the two -- so the runtime reads the arts id back
+/// out of the equipped slot and needs to know what it should have found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArmamentSkill {
+    /// `ChrAsmSlot` the armament is worn in.
+    pub slot: i32,
+    /// The armament's display name.
+    pub weapon: String,
+    /// The ash's display name, or `None` when the build asked for no skill.
+    pub art: Option<String>,
+    /// What [`Grant::weapon_skill`] carries for this armament.
+    pub weapon_skill: u32,
+}
+
+/// What every equipped armament in `doc` should be holding, for the post-import read-back.
+///
+/// Slots the build leaves empty are absent; an armament whose ash the catalog could not resolve
+/// is still listed, with [`NO_SKILL`], so the read-back reports it rather than skipping it.
+pub fn equipped_armament_skills(doc: &BuildDoc, catalog: &dyn Catalog) -> Vec<ArmamentSkill> {
+    let mut out = Vec::new();
+    for slot in &doc.inventory.slots {
+        let Some(index) = slot.equip_index else {
+            continue;
+        };
+        let Some(chr_asm_slot) = crate::equip::armament_slot(index) else {
+            continue;
+        };
+        let art = slot
+            .weapon_art
+            .as_deref()
+            .filter(|art| !art.eq_ignore_ascii_case("No Skill"));
+        let weapon_skill = art
+            .and_then(|art| catalog.lookup(Kind::AshOfWar, art))
+            .map_or(NO_SKILL, |ash| GEM_ITEM_CATEGORY | ash.param_id());
+        out.push(ArmamentSkill {
+            slot: chr_asm_slot,
+            weapon: slot.name.clone(),
+            art: art.map(str::to_owned),
+            weapon_skill,
+        });
+    }
+    out
 }

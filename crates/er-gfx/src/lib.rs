@@ -48,6 +48,7 @@ use std::fmt;
 
 pub mod announce_notice;
 pub mod arts_badge;
+pub mod build_url_02_990;
 pub mod edit;
 pub mod options_02_040;
 pub mod profile_05_010_layout;

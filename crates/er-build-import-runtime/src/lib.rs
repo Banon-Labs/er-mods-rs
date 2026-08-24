@@ -36,14 +36,20 @@
 pub mod catalog;
 pub mod character;
 pub mod equip_native;
+pub mod export;
+pub mod export_doc;
+pub mod gaitem;
 pub mod grant;
 pub mod http;
+pub mod read_character;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_build_import::equip::{Capacity, equip_plan};
+use er_build_import::equip::{
+    CHR_ASM_SLOT_QUICK_BASE, Capacity, EquipLedger, PositionKind, PositionResult, equip_plan,
+};
 use er_build_import::{API_HOST, BuildDoc, build_path, model, plan::plan};
 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -385,17 +391,48 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     let planned = plan(doc, &catalog);
     let equips = equip_plan(doc, &catalog, Capacity::default());
     log_line(&format!(
-        "[build-import] planned: {} grants, {} unresolved, {} equip positions, {} rejected",
+        "[build-import] planned: {} grants, {} unresolved, {} equip positions, {} spells to \
+         memorise, {} rejected",
         planned.grants.len(),
         planned.unresolved.len(),
         equips.occupied(),
+        equips.spells.len(),
         equips.rejected.len()
     ));
+    for position in equips.positions() {
+        log_line(&format!("[build-import]   PLAN {}", position.describe()));
+    }
+    // The commonest confusion this importer produces is "why is the thing in my inventory not on
+    // my character": the answer is usually that the planner document never marked it equipped.
+    // Say so up front, with the count, so nobody has to read the payload to find out.
+    let carried = doc
+        .inventory
+        .slots
+        .iter()
+        .filter(|slot| slot.equip_index.is_none())
+        .count();
+    if carried > 0 {
+        log_line(&format!(
+            "[build-import] the build marks {} of {} armaments as equipped; the other {carried} \
+             are CARRIED ONLY and will be granted, not worn",
+            doc.inventory.slots.len() - carried,
+            doc.inventory.slots.len()
+        ));
+    }
     for missing in planned.unresolved.iter().take(12) {
         log_line(&format!(
             "[build-import]   UNRESOLVED {} {:?}",
             missing.kind.label(),
             missing.name
+        ));
+    }
+    // A build can name two items for one position -- the planner leaves the old row flagged when a
+    // slot is re-assigned. The winner is chosen the way the planner renders it, but a dropped
+    // armament is not allowed to be invisible in the log, which is where this is diagnosed from.
+    for contest in equips.contested.iter().take(12) {
+        log_line(&format!(
+            "[build-import]   CONTESTED {} -> {:?}, dropping {:?}",
+            contest.position, contest.winner, contest.losers
         ));
     }
 
@@ -418,37 +455,237 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         log_line(&format!("[build-import]   MISSING item id 0x{id:08X}"));
     }
 
+    // ARMAMENTS, READ BACK OFF THE INSTANCE THAT WAS JUST MINTED.
+    //
+    // Quantity cannot see an ash or an upgrade level: both live on the gaitem, not in the item
+    // id, so "71/71 present" was true and meaningless while every weapon came out bare. Each
+    // line below is measured -- the arts id is what `GetSwordArtsParamForWeapon` says that
+    // instance holds, not what the plan asked for.
+    let wanted_ashes = planned
+        .grants
+        .iter()
+        .filter(|grant| grant.weapon_skill != er_build_import::plan::NO_SKILL)
+        .count();
+    let ashes_mounted = outcome
+        .armaments
+        .iter()
+        .filter(|arm| arm.wanted_gem.is_some() && arm.has_ash())
+        .count();
+    log_line(&format!(
+        "[build-import] ARMAMENTS (read back off the minted gaitem): {ashes_mounted}/{wanted_ashes}          ashes mounted, {} armaments granted",
+        outcome.armaments.len()
+    ));
+    for arm in &outcome.armaments {
+        log_line(&format!(
+            "[build-import]   ARMAMENT {:?} item 0x{:08X} invIdx {} gem {} -> arts {} | +{} -> +{}",
+            arm.label,
+            arm.item_id,
+            arm.inventory_index,
+            arm.wanted_gem
+                .map_or_else(|| "none".to_owned(), |row| row.to_string()),
+            arm.arts_id
+                .map_or_else(|| "NONE".to_owned(), |id| id.to_string()),
+            arm.wanted_level,
+            arm.level,
+        ));
+    }
+    for arm in outcome.armaments_missing_their_ash() {
+        log_line(&format!(
+            "[build-import]   ASH NOT MOUNTED on {:?}: asked for gem {:?}, the instance reports no              sword-arts row",
+            arm.label, arm.wanted_gem
+        ));
+    }
+
+    // WHAT EACH ARMAMENT SLOT SHOULD BE HOLDING, computed BEFORE the equip rather than after it,
+    // because it is now needed twice: it tells the equip which minted copy belongs in which hand
+    // (an ash lives on the instance, so the item id alone cannot say), and it is what the
+    // post-import read-back adjudicates the worn armament against. One table, both jobs -- the
+    // alternative is a second opinion about what the build asked for.
+    let wants = er_build_import::plan::equipped_armament_skills(doc, &catalog);
+
     // Equip only what was actually granted: equipping an item the inventory does not hold cannot
     // work, and the outcome distinguishes those from real equip failures.
     if let Some(egd) = unsafe { grant::equip_game_data() } {
+        // OPEN THE LEDGER OVER THE PLAN, BEFORE ANYTHING IS WRITTEN. Every score below is
+        // measured against this, so a family of positions the pass never reaches cannot leave
+        // the denominator on its way out -- which is how a run that equipped ten of twelve
+        // planned positions printed "10/10 verified".
+        let mut ledger = EquipLedger::new(&equips);
+
+        // The gaitem handles the grant minted, joined to the slots that should wear them.
+        let mut instances = equip_native::WornInstances::new(&outcome.armaments, &wants);
+        let mintable = instances.available();
+
         // Safety: game thread, character loaded, items granted above.
-        let worn = unsafe { equip_native::equip_all(module_base, egd, &equips) };
-        report.equipped = (worn.verified, worn.requested);
+        let worn =
+            unsafe { equip_native::equip_all(module_base, egd, &mut ledger, &mut instances) };
+
+        // HOW EACH POSITION WAS RESOLVED, not just whether it was. An index found from the minted
+        // handle names one specific instance; an index found from the item id names whichever
+        // copy the inventory filed lowest, which for several armaments differing only by ash is
+        // an arbitrary one of them. A line that does not say which question was asked cannot be
+        // used to diagnose a weapon that came out with somebody else's skill on it.
+        //
+        // Armament fallbacks are listed one by one and everything else is counted, because only
+        // an armament can have two copies the item id cannot tell apart -- a talisman or a
+        // quickbar consumable has no per-instance identity to take the wrong one of.
+        let armament_fallbacks = worn
+            .by_item_id
+            .iter()
+            .filter(|(kind, ..)| *kind == PositionKind::Armament);
         log_line(&format!(
-            "[build-import] EQUIPPED (read back from the slots): {}/{} verified, {} silently \
-             ignored, {} already correct, {} not in inventory",
-            worn.verified,
-            worn.requested,
-            worn.silent_noop,
-            worn.already,
-            worn.not_in_inventory.len()
+            "[build-import] EQUIP RESOLUTION: {} position(s) found by minted gaitem handle, \
+             {} by item id ({} of them armaments, where the id cannot tell copies apart); \
+             {mintable} armament handle(s) were available",
+            worn.by_handle,
+            worn.by_item_id.len(),
+            armament_fallbacks.clone().count()
         ));
+        for (_, slot, item_id, why) in armament_fallbacks.take(12) {
+            log_line(&format!(
+                "[build-import]   ARMAMENT BY ITEM ID slot {slot} item 0x{item_id:08X} -- {why}; \
+                 this position may hold a copy carrying another ash"
+            ));
+        }
+        // ONE ENTRY, ONE SLOT -- refused collisions, named. A collision is not a near-miss: the
+        // equip that was refused would have STRIPPED the slot it collided with, so the log has to
+        // say which slot kept the item and which position went without.
+        if worn.index_collisions.is_empty() {
+            log_line(
+                "[build-import] EQUIP COLLISIONS: none -- every position named its own inventory entry",
+            );
+        } else {
+            log_line(&format!(
+                "[build-import] EQUIP COLLISIONS: {} position(s) REFUSED because an earlier slot \
+                 already wears that exact inventory entry; equipping it again would have stripped \
+                 the earlier slot",
+                worn.index_collisions.len()
+            ));
+            for (slot, item_id, item_idx, held_by) in worn.index_collisions.iter().take(12) {
+                log_line(&format!(
+                    "[build-import]   COLLISION slot {slot} item 0x{item_id:08X} invIdx {item_idx} \
+                     is already worn in slot {held_by}"
+                ));
+            }
+        }
+
+        // AFTER EVERYTHING. Each per-position read-back ran before the positions following it, so
+        // it can only prove its own write landed. This is the sweep that proves it survived.
+        if worn.final_mismatches.is_empty() {
+            log_line(
+                "[build-import] EQUIP FINAL SWEEP: every position still holds its item after the \
+                 whole pass",
+            );
+        } else {
+            log_line(&format!(
+                "[build-import] EQUIP FINAL SWEEP: {} position(s) NO LONGER hold what was written \
+                 -- something later in the pass took them back off",
+                worn.final_mismatches.len()
+            ));
+            for (slot, expected, actual) in worn.final_mismatches.iter().take(12) {
+                log_line(&format!(
+                    "[build-import]   STRIPPED slot {slot} expected {expected} but holds {actual}"
+                ));
+            }
+        }
+
+        if worn.no_inventory {
+            log_line(
+                "[build-import] EQUIP: the inventory pointer was null, so NOTHING was attempted",
+            );
+        }
         for (slot, permitted) in &worn.gate {
             log_line(&format!("[build-import]   gate(slot {slot}) = {permitted}"));
         }
         for (slot, expected, actual) in &worn.mismatches {
             log_line(&format!(
-                "[build-import]   SLOT {slot} expected param {expected} but holds {actual}"
+                "[build-import]   SLOT {slot} expected {expected} but holds {actual}"
+            ));
+        }
+
+        // THE ONE READ-BACK THAT ANSWERS THE PLAYER'S QUESTION.
+        //
+        // Grants and equips can both be green while the character holds a bare weapon: the grant
+        // proves an instance exists, the equip proves a slot holds that ITEM ID, and neither can
+        // see which INSTANCE the slot took. A build routinely carries several copies of one
+        // armament differing only by ash, so the id is not a unique name for a weapon. This walks
+        // the worn armament itself -- slot -> gaitem handle -> instance -> equipped gem -> arts
+        // row -- and says what is actually in the player's hands.
+        let mut correct = 0usize;
+        let mut asked = 0usize;
+        for want in &wants {
+            let Some(gem) = (want.weapon_skill != er_build_import::plan::NO_SKILL)
+                .then_some(want.weapon_skill & !er_build_import::plan::GEM_ITEM_CATEGORY)
+            else {
+                continue;
+            };
+            asked += 1;
+            let wanted_arts = catalog::arts_row_for_gem(gem);
+            // Safety: game thread, character in the world -- the caller's own preconditions.
+            let worn_arm = unsafe { read_character::worn_armament(module_base, want.slot) };
+            let held = worn_arm.and_then(|arm| arm.arts_id);
+            let held_name = held.and_then(|arts| {
+                // Safety: `msg` is the live repository this import already read from.
+                unsafe {
+                    catalog::name_for(
+                        er_build_import::catalog::Kind::AshOfWar,
+                        msg,
+                        module_base,
+                        arts,
+                    )
+                }
+            });
+            // WHICH ARMAMENT THE PLAN PUT HERE, so the two ways of being wrong can be told apart
+            // BY THE LOG rather than by a reader cross-referencing two sections of it. A slot
+            // holding a different item id holds another armament entirely; a slot holding the
+            // RIGHT id with the wrong arts row holds a different COPY of the right armament,
+            // which is the exact failure the gaitem-handle threading exists to prevent and the
+            // only one an id-keyed equip could ever produce.
+            let planned_item = er_build_import::equip::armament_planner_index(want.slot)
+                .and_then(|index| equips.armaments.get(index as usize))
+                .and_then(|entry| entry.as_ref())
+                .map(|item| item.item_id);
+            let verdict = match (wanted_arts, held) {
+                (Some(wanted), Some(got)) if wanted == got => {
+                    correct += 1;
+                    "OK"
+                }
+                (_, None) if worn_arm.is_none() => "EMPTY -- no armament is worn in this slot",
+                (_, None) => "NOT MOUNTED -- the worn armament reports no sword-arts row",
+                _ if worn_arm.map(|arm| arm.item_id) != planned_item => {
+                    "WRONG ARMAMENT -- the worn item id is not the one the plan placed in this slot"
+                }
+                // Same item id, wrong arts row. Either the equip took another copy of this
+                // armament (copies differing only by ash share an item id), or the armament does
+                // not accept ashes at all -- `EquipParamWeapon::canGemBeChanged` gates the read,
+                // so a gem mounted on such a weapon is stored and then ignored.
+                _ => "WRONG COPY OR NO GEM SLOT -- the right armament, carrying the wrong ash",
+            };
+            let worn_item =
+                worn_arm.map_or_else(|| "none".to_owned(), |arm| format!("0x{:08X}", arm.item_id));
+            log_line(&format!(
+                "[build-import]   ASH slot {} {:?} wants {:?} (gem {gem} -> arts {:?}); \
+                 worn item {worn_item} holds arts {:?} {:?} -- {verdict}",
+                want.slot, want.weapon, want.art, wanted_arts, held, held_name
             ));
         }
         log_line(&format!(
-            "[build-import] QUICKBAR/POUCH/RUNE: {} positions written through the native dispatcher",
-            worn.quick_written
+            "[build-import] EQUIPPED ASHES (read back from the worn armament): \
+             {correct}/{asked} correct"
         ));
-        for (slot, id, idx) in &worn.trace {
+        for (slot, id, idx, got) in &worn.dispatch {
+            // Both ids in the same base, because the whole point of this line is that a reader
+            // can adjudicate it without a calculator. `-1` is the position being empty.
             log_line(&format!(
-                "[build-import]   dispatch slot {slot} (index {}) item 0x{id:08X} invIdx {idx}",
-                slot - 0x16
+                "[build-import]   QUICK/POUCH/RUNE slot {slot} (index {}) item 0x{id:08X} \
+                 invIdx {idx} -> the position reads back {} ({})",
+                slot - CHR_ASM_SLOT_QUICK_BASE,
+                if *got < 0 {
+                    "EMPTY".to_owned()
+                } else {
+                    format!("0x{got:08X}")
+                },
+                if *got == *id as i32 { "OK" } else { "WRONG" }
             ));
         }
         for id in worn.not_in_inventory.iter().take(12) {
@@ -476,6 +713,25 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             before.map(|v| format!("0x{v:08X}")),
             after.map(|v| format!("0x{v:08X}"))
         ));
+        // The physick is the one planned position `equip_all` does not own, so it is recorded
+        // here from the same read-back the line above prints. If this loop ever stops running,
+        // the tears go back to being UNACCOUNTED rather than silently disappearing.
+        for (index, tear) in equips.physick.iter().enumerate() {
+            let Some(tear) = tear else { continue };
+            let expected = tear.item_id as i32;
+            let actual = after.get(index).copied().unwrap_or(-1);
+            let result = if actual == expected {
+                PositionResult::Verified
+            } else {
+                PositionResult::Mismatch { expected, actual }
+            };
+            if !ledger.record_kind(PositionKind::Physick, index, result) {
+                log_line(&format!(
+                    "[build-import] ACCOUNTING BUG: physick {index} was written but the plan \
+                     never listed it"
+                ));
+            }
+        }
 
         // Great rune: read the equipped rune back and light the rune arc.
         if let Some(rune) = equips.great_rune.as_ref() {
@@ -487,6 +743,19 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                  runeArcActive={active}",
                 rune.name
             ));
+        }
+
+        // THE ONE LINE. It reconciles against the plan, names every position that did not end up
+        // holding the build's item, and is the last word on this pass -- so a partial import
+        // cannot be read as a complete one no matter which family of positions went missing.
+        let counts = ledger.counts();
+        report.equipped = (counts.verified + counts.already, counts.planned);
+        log_line(&format!(
+            "[build-import] EQUIP LEDGER: {}",
+            ledger.headline()
+        ));
+        for failure in ledger.failures() {
+            log_line(&format!("[build-import]   NOT EQUIPPED: {failure}"));
         }
     }
 

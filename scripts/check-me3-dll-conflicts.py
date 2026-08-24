@@ -7,7 +7,7 @@ goes stale is not by being wrong -- it is by a new cdylib crate appearing and no
 classifying it. The closure walk in `er-dll-closure.py` would then happily include that new
 DLL next to the product with no idea whether the two can share a process.
 
-So this gate asserts four things:
+So this gate asserts five things:
 
 1. **Coverage.** Every package in the `me3_shells` array (the single source of truth for
    "which cdylibs does this workspace ship", parsed via `me3-dll-list.py`) is classified --
@@ -19,6 +19,12 @@ So this gate asserts four things:
    so a rename or a crate-type change cannot leave the table pointing at nothing.
 4. **No double classification.** A package in a `[[conflict]]` pair must not also claim to
    be `[compatible]`, which would let the closure walk read whichever it liked.
+5. **`[[shared]]` rows are checkable.** A `[[shared]]` pair is the one thing that licenses two
+   DLLs to detour ONE prologue and still share a profile, so it must carry the `target`, the
+   `mechanism`, and BOTH handler symbols -- those are what `check-shared-hook-rvas.py` uses to
+   prove each detour reaches a union registrar and never an `MhHook::new`. A pair may not be
+   declared shared and conflicting at once: the closure walk reads `[[conflict]]` only, and would
+   co-load a pair it had been told to keep apart.
 
 Usage:
     python3 scripts/check-me3-dll-conflicts.py
@@ -51,6 +57,15 @@ VALID_KINDS = {
     "duplicate-owner",
 }
 
+# How a [[shared]] pair was made safe on the address they both detour. One value today, and it is
+# spelled out rather than left free-text so a future "we looked at it and it seemed fine" cannot be
+# written into the field that licenses two DLLs to hook one prologue.
+VALID_MECHANISMS = {
+    # Both handlers register through ONE MinHook instance -- the product's union, reached from a
+    # companion image through the `er_effects_union_register` export -- and CHAIN.
+    "hook-union",
+}
+
 
 def shipped_packages() -> list[str]:
     """Every package in the `me3_shells` array, plus the product, via me3-dll-list.py."""
@@ -73,6 +88,7 @@ def audit(table: dict, packages: list[str]) -> list[str]:
 
     conflicts = table.get("conflict", [])
     compatible = table.get("compatible", {})
+    opt_in_only = table.get("opt_in_only", {})
 
     conflicted: set[str] = set()
     for index, entry in enumerate(conflicts):
@@ -101,6 +117,47 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             )
         conflicted.update(name for name in (a, b) if name)
 
+    # [[shared]]: two DLLs that DO detour one prologue but were made co-loadable by routing both
+    # handlers through a single MinHook instance (the hook union). It is a third answer alongside
+    # conflict/compatible, and the loosest one, so its fields are mandatory: without `target` and
+    # the two handler symbols, `check-shared-hook-rvas.py` cannot prove the mechanism and the row
+    # decays into an unverifiable promise that two DLLs are safe together.
+    for index, entry in enumerate(table.get("shared", [])):
+        where = f"[[shared]] #{index + 1}"
+        a, b = entry.get("a"), entry.get("b")
+        for side, name in (("a", a), ("b", b)):
+            if not name:
+                failures.append(f"{where}: missing `{side}`")
+            elif name not in shipped:
+                failures.append(
+                    f"{where}: `{side} = {name!r}` is not a shipped cdylib "
+                    f"(renamed or removed? update the table)"
+                )
+            if not str(entry.get(f"handler_{side}") or "").strip():
+                failures.append(
+                    f"{where}: empty `handler_{side}` -- name the detour symbol, or nothing can "
+                    f"prove it goes through the union rather than a private MinHook"
+                )
+        if a and b and a == b:
+            failures.append(f"{where}: a package cannot share an address with itself ({a!r})")
+        mechanism = entry.get("mechanism")
+        if mechanism not in VALID_MECHANISMS:
+            failures.append(
+                f"{where}: mechanism={mechanism!r} is not one of {sorted(VALID_MECHANISMS)}"
+            )
+        for field in ("target", "reason", "evidence"):
+            if not str(entry.get(field) or "").strip():
+                failures.append(f"{where}: empty `{field}`")
+        # Sharing an address safely is the opposite of conflicting on it, so a pair cannot claim
+        # both -- the closure walk reads [[conflict]] and would co-load a pair it was told not to.
+        if a and b and frozenset({a, b}) in {
+            frozenset({c.get("a"), c.get("b")}) for c in conflicts
+        }:
+            failures.append(
+                f"{where}: {a!r} and {b!r} are ALSO a [[conflict]] pair -- shared means co-loadable "
+                f"and conflict means never co-loaded; pick one"
+            )
+
     for name, reason in compatible.items():
         if name not in shipped:
             failures.append(
@@ -108,6 +165,16 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             )
         if not str(reason).strip():
             failures.append(f"[compatible]: {name!r} has an empty reason")
+
+    # [opt_in_only] is the third classification: co-loadable, but a dependency-closure walk must
+    # never select it, because it changes what the player sees and being reachable is not consent.
+    for name, reason in opt_in_only.items():
+        if name not in shipped:
+            failures.append(
+                f"[opt_in_only]: {name!r} is not a shipped cdylib (renamed or removed?)"
+            )
+        if not str(reason).strip():
+            failures.append(f"[opt_in_only]: {name!r} has an empty reason")
 
     # A package must not be classified twice: [compatible] asserts "no conflict at all",
     # which a [[conflict]] pair directly contradicts. No package is exempt -- including the
@@ -118,11 +185,20 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             f"[compatible] means no conflict at all, so these cannot both be true"
         )
 
-    unclassified = shipped - conflicted - set(compatible)
+    # ...and the same for the third bucket. [compatible] means "load it freely"; [opt_in_only]
+    # means "never load it unless asked". A package in both leaves the closure free to pick the
+    # reading it likes, which is precisely the ambiguity that let a mushroom mod into a user's run.
+    for name in sorted(set(opt_in_only) & set(compatible)):
+        failures.append(
+            f"{name!r} is in [compatible] AND [opt_in_only] -- [compatible] lets the closure "
+            f"load it freely, [opt_in_only] forbids that without --with; pick one"
+        )
+
+    unclassified = shipped - conflicted - set(compatible) - set(opt_in_only)
     for name in sorted(unclassified):
         failures.append(
             f"{name!r} ships as an ME3-loadable DLL but is not classified. Add a "
-            f"[[conflict]] pair, or list it in [compatible] with a reason."
+            f"[[conflict]] pair, or list it in [compatible] or [opt_in_only] with a reason."
         )
 
     return failures
@@ -206,6 +282,90 @@ def selftest() -> int:
         "a package conflicting with itself is caught",
     )
 
+    def shared(a: str, b: str, **overrides) -> dict:
+        entry = {
+            "a": a,
+            "b": b,
+            "mechanism": "hook-union",
+            "target": "rva::SOME_RVA",
+            "handler_a": "a_detour",
+            "handler_b": "b_detour",
+            "reason": "both chain through one MinHook instance",
+            "evidence": "src/lib.rs:1",
+        }
+        entry.update(overrides)
+        return entry
+
+    # A [[shared]] pair is co-loadable, so both members still need their own classification --
+    # here via [compatible], which is not contradicted by sharing an address safely.
+    shared_sound = {
+        "shared": [shared("prod", "bad")],
+        "compatible": {"prod": "axis", "safe": "y", "bad": "unioned"},
+    }
+    check(audit(shared_sound, packages) == [], "a sound [[shared]] row produces no failures")
+
+    for field in ("target", "reason", "evidence", "handler_a", "handler_b"):
+        table = {
+            "shared": [shared("prod", "bad", **{field: "  "})],
+            "compatible": {"prod": "axis", "safe": "y", "bad": "unioned"},
+        }
+        check(
+            any(f"`{field}`" in f for f in audit(table, packages)),
+            f"a [[shared]] row missing `{field}` is caught",
+        )
+
+    bad_mechanism = {
+        "shared": [shared("prod", "bad", mechanism="we checked")],
+        "compatible": {"prod": "axis", "safe": "y", "bad": "unioned"},
+    }
+    check(
+        any("we checked" in f and "not one of" in f for f in audit(bad_mechanism, packages)),
+        "an unknown [[shared]] mechanism is caught",
+    )
+
+    both_ways = {
+        "conflict": [pair("prod", "bad")],
+        "shared": [shared("prod", "bad")],
+        "compatible": {"safe": "y"},
+    }
+    check(
+        any("pick one" in f for f in audit(both_ways, packages)),
+        "a pair declared BOTH shared and conflicting is caught",
+    )
+
+    # --- [opt_in_only], the third classification -----------------------------------------
+    opt_sound = {
+        "conflict": [pair("prod", "bad")],
+        "opt_in_only": {"safe": "wears a costume the player did not ask for"},
+    }
+    check(audit(opt_sound, packages) == [], "[opt_in_only] alone classifies a shipped DLL")
+
+    opt_empty = {"conflict": [pair("prod", "bad")], "opt_in_only": {"safe": "   "}}
+    check(
+        any("[opt_in_only]" in f and "empty reason" in f for f in audit(opt_empty, packages)),
+        "an [opt_in_only] entry with no reason is caught",
+    )
+
+    opt_unknown = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "y"},
+        "opt_in_only": {"ghost": "renamed away"},
+    }
+    check(
+        any("[opt_in_only]" in f and "'ghost'" in f for f in audit(opt_unknown, packages)),
+        "an [opt_in_only] entry naming a package that no longer ships is caught",
+    )
+
+    opt_doubled = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "load me freely"},
+        "opt_in_only": {"safe": "never load me unasked"},
+    }
+    check(
+        any("[opt_in_only]" in f and "pick one" in f for f in audit(opt_doubled, packages)),
+        "a package in BOTH [compatible] and [opt_in_only] is caught",
+    )
+
     print("selftest:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -232,9 +392,12 @@ def main() -> int:
         return 1
 
     table = load_table()
+    shared_count = len(table.get("shared", []))
     print(
         f"me3-dll-conflicts.toml: {len(table.get('conflict', []))} conflict pairs, "
+        f"{shared_count} shared-address pair{'' if shared_count == 1 else 's'}, "
         f"{len(table.get('compatible', {}))} compatible entries, "
+        f"{len(table.get('opt_in_only', {}))} opt-in-only entries, "
         f"{len(shipped_packages())} shipped shells all classified"
     )
     return 0

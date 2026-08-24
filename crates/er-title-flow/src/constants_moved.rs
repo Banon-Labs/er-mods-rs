@@ -14,8 +14,13 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
+// The typed game bindings live behind `[target.'cfg(windows)'.dependencies]`, so every item
+// derived from them below carries `#[cfg(windows)]`. The rest of this table is plain data and
+// stays host-visible, which is what keeps `boot_hold`'s tests runnable by a host `cargo test`.
+#[cfg(windows)]
 use eldenring::cs::{GameDataMan, GameMan};
 use er_telemetry::counters::*;
+#[cfg(windows)]
 use fromsoftware_shared::F32Vector4;
 
 // ===== moved verbatim from crates/er-effects-rs/src/constants.rs =====
@@ -125,6 +130,7 @@ pub const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
 /// (er-loading-portrait names it correctly as SCALEFORM_LABEL_GOTO_RVA and this now derives
 /// from it, 2026-08-01). Its operands are frame LABELS, not StateDescs. The old name is kept
 /// for its call sites in title_load_step_hooks.rs.
+#[cfg(windows)]
 pub const TITLE_FD4_SETSTATE_RVA: usize = er_loading_portrait::SCALEFORM_LABEL_GOTO_RVA;
 
 /// One-shot latch: the zero-input FadeIn->Loop transition has fired.
@@ -136,6 +142,7 @@ pub const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend
 
 /// Profile renderer table initializer: live 0x1409af3a0 (dump 0x1409af4f0) allocates the ten
 /// CSMenuProfModelRend instances and writes DAT_143d6d8d0 before the refresh/feed pass below.
+#[cfg(windows)]
 pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize =
     er_loading_portrait::PROFILE_TABLE_BUILDER_RVA;
 
@@ -143,6 +150,7 @@ pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize =
 /// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
 /// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
 /// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
+#[cfg(windows)]
 pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize =
     er_loading_portrait::PROFILE_RENDERER_REFRESH_RVA;
 
@@ -219,18 +227,23 @@ pub static FULLREAD_PHASE: AtomicUsize = AtomicUsize::new(FULLREAD_PHASE_SUBMIT)
 /// it no longer latches a first-seen frame before starting the save-read phase machine.
 /// `save_requested`: bound to the upstream typed layout (compiler-verified equal to our prior
 /// hand-decoded offset).
+#[cfg(windows)]
 pub const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = core::mem::offset_of!(GameMan, save_requested);
 
+#[cfg(windows)]
 pub const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize =
     GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b73);
 
+#[cfg(windows)]
 pub const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize =
     GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b75);
 
 /// `requested_save_slot_load_index`: bound to upstream (compiler-verified equal to our offset).
+#[cfg(windows)]
 pub const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize =
     core::mem::offset_of!(GameMan, requested_save_slot_load_index);
 
+#[cfg(windows)]
 pub const GAME_MAN_FLAG_BC4_OFFSET: usize =
     core::mem::offset_of!(GameMan, is_in_online_mode) - core::mem::size_of::<u32>();
 
@@ -522,12 +535,16 @@ pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
 
 /// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
 /// and calls `CSDlcImp::AddVirtualFileRoots`.
+// Consumed only by dlc_roots_self_heal.rs, which is `#[cfg(windows)]`-gated in lib.rs.
+#[cfg(windows)]
 pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
 
 /// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
+#[cfg(windows)]
 pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
 
 /// The DLIO alias every failing `m28` read resolves through.
+#[cfg(windows)]
 pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
 
 /// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
@@ -585,6 +602,7 @@ pub const FD4_FILELOADPROCESSOR_SIZE_28_OFFSET: usize = 0x28;
 pub const FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET: usize = 0x30;
 
 /// GameMan `save_slot` (compiler-verified equal to the upstream typed field).
+#[cfg(windows)]
 pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
 
 /// Save-manager load-in-progress flag (GameMan/save-mgr singleton 0x143d69918):
@@ -594,9 +612,11 @@ pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(Game
 /// per-frame update `0x14067f5d0` performs it.
 /// Bound to upstream `GameMan::save_state` (compiler-verified equal to our offset); our research
 /// reads this same dword as the load-in-progress lane (set 1 on load begin, cleared on finish).
+#[cfg(windows)]
 pub const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
 
 /// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
+#[cfg(windows)]
 pub const SLOT_MANAGER_DATA_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
 
@@ -1331,6 +1351,7 @@ pub const TITLE_OWNER_JOB_OFFSET: usize = core::mem::offset_of!(TitleOwnerLayout
 
 pub const TITLE_JOB_OBSERVE_TICK_INTERVAL: u64 = 30;
 
+#[cfg(windows)]
 pub const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = er_save_loader::SET_SAVE_SLOT_RVA as usize;
 
 /// Corrected play-game submit recipe (play-game-submit-and-continue-load-recipe-2026):
@@ -1343,6 +1364,7 @@ pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 /// Private saved-map slot inside the GameMan block immediately after
 /// `stay_in_multiplay_area_saved_rotation`; derive it from the adjacent typed
 /// vector layout instead of retaining the raw absolute field offset.
+#[cfg(windows)]
 pub const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
     core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
         + core::mem::size_of::<F32Vector4>()
@@ -1430,6 +1452,7 @@ pub const ARM_PROBE_FIELD_ABSENT: i64 = -1;
 
 /// PlayGame load-pair target block, bound to upstream `GameMan::move_map_target`
 /// (audit-confirmed equal to the hand-decoded 0x14).
+#[cfg(windows)]
 pub const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize =
     core::mem::offset_of!(GameMan, move_map_target);
 

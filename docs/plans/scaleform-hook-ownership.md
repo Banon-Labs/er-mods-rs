@@ -57,7 +57,7 @@ Four packages directly consume `er-gfx` at this baseline:
 | package | target | current use |
 |---|---|---|
 | `er-effects-rs` | shipped `cdylib` | derives and serves the title, ProfileSelect, text-input, and System-Quit movies |
-| `er-armament-icons` | standalone `cdylib` | derives badge movies; owns a separate parse/file-open hook |
+| `er-armament-icons` | standalone `cdylib` | derives badge movies; owns a separate parse hook, and CHAINS on the file-open prologue the product also detours (`er_hook::register_shared_hook`, `[[shared]]` in `scripts/me3-dll-conflicts.toml`) |
 | `er-invasion-warp-dll` | standalone `cdylib` | derives map/notice movies; owns a separate parse hook |
 | `er-loading-portrait` | reusable library | parses/rasterizes the captured menu font in host-tested code |
 

@@ -18,11 +18,29 @@
 //                 (55 px) step down the column, the same step that separates row 0 (ty = 4500)
 //                 from row 1 (ty = 5600).
 //
+// Edit 4 -- the `Item_2_1` cell that makes the Quit tab SIX rows -- was authored the same way and
+// held to the same gate: the MATRIX encoder was re-derived and made to reproduce edits 2, 3 AND the
+// `Item_2_0` of edit 4-as-it-then-was byte-for-byte before it was allowed to emit a fourth cell.
+//
+//   flags 0x26  = HasCharacter | HasMatrix | HasName, exactly as the others
+//   depth 0x13  = 19, the next depth after Item_2_0 (18)
+//   char  0x81  = 129, the same Quit-tab cell component every other cell places
+//   matrix      = translate-only, 14 translate bits: tx = +4780 twips (identical to Item_1_1, so
+//                 the new cell is right-aligned under it), ty = 6700 twips (identical to Item_2_0,
+//                 so it shares that row) -- the corner the 2x3 grid was missing.
+//
+// SIX IS THE EASY CASE, AND IT REPLACED THE HARD ONE. Five items in a 2x3 grid left a RAGGED last
+// row: the native measure loop probed an `Item_2_1` that was not there, the mouse hit test walked a
+// sixth cell that could never be hovered, and reaching the bottom row by pad relied on
+// `FUN_14073b0c0` walking BACK along the row after index 5 was refused. All of that reasoning was
+// correct and is now moot -- the grid is full, `cols * rows == SetItemCount == 6`, and no cell the
+// engine probes for is absent.
+//
 // The correctness gate is NOT this comment: `apply_edits` refuses any `new_tag` that does not parse
 // as exactly one tag AND re-serialize to these exact bytes, and `crates/er-gfx/tests/options_02_040.rs`
-// asserts the derived movie's fingerprint, its five grid-cell names, and the geometry the native
+// asserts the derived movie's fingerprint, its six grid-cell names, and the geometry the native
 // measure loop reads off them.
-pub const OPTIONS_02_040_QUIT5_EDITS: &[TagEdit] = &[
+pub const OPTIONS_02_040_QUIT6_EDITS: &[TagEdit] = &[
     TagEdit {
         sprite_id: None,
         code: 22,
@@ -51,5 +69,12 @@ pub const OPTIONS_02_040_QUIT5_EDITS: &[TagEdit] = &[
         new_tag: Some(&[0xbf, 0x06, 0x13, 0x00, 0x00, 0x00, 0x26, 0x12, 0x00, 0x81, 0x00, 0x1d, 0x83, 0xab, 0x45, 0x80, 0x49, 0x74, 0x65, 0x6d, 0x5f, 0x32, 0x5f, 0x30, 0x00]),
         op: EditOp::InsertAfter,
     },
+    TagEdit {
+        sprite_id: Some(138),
+        code: 26,
+        old_tag: &[0xbf, 0x06, 0x14, 0x00, 0x00, 0x00, 0x26, 0x0f, 0x00, 0x89, 0x00, 0x16, 0x00, 0x27, 0x00, 0x50, 0x6c, 0x61, 0x79, 0x65, 0x72, 0x49, 0x6e, 0x66, 0x6f, 0x00],
+        new_tag: Some(&[0xbf, 0x06, 0x13, 0x00, 0x00, 0x00, 0x26, 0x13, 0x00, 0x81, 0x00, 0x1c, 0x95, 0x63, 0x45, 0x80, 0x49, 0x74, 0x65, 0x6d, 0x5f, 0x32, 0x5f, 0x31, 0x00]),
+        op: EditOp::InsertAfter,
+    },
 ];
-// 4 edits: 0 removals, 1 replacement, 3 insertions.
+// 5 edits: 0 removals, 1 replacement, 4 insertions.

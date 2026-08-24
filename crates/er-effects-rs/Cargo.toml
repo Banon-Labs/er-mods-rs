@@ -38,6 +38,10 @@ er-quit-menu = { path = "../er-quit-menu" }
 # NEVER load er_build_import.dll alongside this DLL in one me3 profile: each would drive its own
 # copy of the runtime against the same character.
 er-build-import-runtime = { path = "../er-build-import-runtime" }
+# The importer's PURE half. Linked directly (not only through the runtime) because the System>Quit
+# link field validates what the player typed with the same `validate_build_url` the host tests pin,
+# rather than a second copy of the rule that could drift from it.
+er-build-import = { path = "../er-build-import" }
 # Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
 # WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
 # bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.
@@ -94,6 +98,25 @@ windows = { version = "0.62", features = [
   # Read HKCU\Software\Valve\Steam\SteamPath so the boot-background feature can find the Windows Steam
   # userdata (screenshots) -- the install dir is not an ancestor of a game in a separate library.
   "Win32_System_Registry",
+  # OpenClipboard/GetClipboardData/GetClipboardSequenceNumber for the System>Quit build-url editor.
+  # Ctrl+V inside the game's software keyboard does nothing, so this DLL puts the clipboard into the
+  # field itself -- when it opens, and again whenever the clipboard changes while it is open.
+  #
+  # CORRECTED 2026-08-23: an earlier note here claimed the image references the clipboard APIs
+  # nowhere. It does -- `FUN_1426760c0` really opens the clipboard and copies CF_UNICODETEXT into a
+  # DLString. It is just not reachable from the keyboard: it sits in slot +0x100 of one vtable
+  # (0x143296bb8, the only one in the image holding it) with no call site, among siblings that
+  # measure text through GLOBAL_FD4FontManager, while the keyboard is a different object graph
+  # entirely (SoftwareKeyboard::detail::SoftwareKeyboardManagerImpl over a Scaleform 02_990
+  # MenuWindow fallback). The conclusion held; the reason given for it was wrong, and wrong reasons
+  # get re-checked at the cost of a session.
+  "Win32_System_DataExchange",
+  # `ShellExecuteW` opens the generated build link in the player's browser. Under Proton that goes
+  # through `winebrowser.exe` -> `xdg-open` -> the host default browser, measured to pass the URL
+  # through complete and untruncated at 5043 characters -- the classic 2083-char
+  # INTERNET_MAX_URL_LENGTH does not apply here, which matters because a share link is ~3 KB.
+  "Win32_UI_Shell",
+  "Win32_System_Ole",
   # Hidden dummy window for the D3D12 Present-overlay swapchain: CreateSwapChainForComposition is
   # "Not implemented" under vkd3d/Wine, so we need a real HWND via CreateSwapChainForHwnd, which pulls
   # in WNDCLASSW's GDI handle types.

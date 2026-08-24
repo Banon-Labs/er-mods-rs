@@ -91,6 +91,15 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::safe_read_usize;
+// The gem chain and the player singleton are declared ONCE in `er-game-base::rva` and derived
+// here. `er-build-import-runtime` walks the same three hops to read the ash of war off an equipped
+// armament for the Generate Build Link row, and one address written out in two crates is one
+// address that a 1.16.x correction can be applied to in only one of them.
+use er_game_base::rva::{
+    GET_GAITEM_INS_BY_HANDLE_RVA, GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA,
+    GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA, WORLD_CHR_MAN_GLOBAL_RVA,
+    WORLD_CHR_MAN_PLAYER_INS_OFFSET,
+};
 
 use crate::log_message;
 
@@ -121,21 +130,6 @@ const HUD_WEAPON_SLOT_UPDATE_RVA: usize = 0x8d2110;
 /// the update hook -- `Arts`, the four `ItemPanel2` items -- fails both tests and never draws.
 const HUD_SLOT_LEFT_WEP_OFFSET: usize = 0x2040;
 const HUD_SLOT_RIGHT_WEP_OFFSET: usize = 0x2848;
-
-/// `GetWeaponGaitemHandleBySlot(PlayerIns*, u32* out, ChrAsmSlot)`.
-const GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA: usize = 0x656920;
-/// `GetGaitemInsByHandle(GaitemLookupResult* inout, GaitemLookupResult* handleSource)`.
-///
-/// Both arguments are the SAME pointer in every caller -- see [`GaitemLookupResult`] for why,
-/// and for the silent-nothing failure mode of getting it wrong.
-const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x672e40;
-/// `GetSwordArtsParamForWeapon(GaitemLookupResult*, SwordArtsParamLookupResult* out)`.
-const GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA: usize = 0x673f30;
-
-/// `WorldChrMan` singleton global; `+0x1e508` is the local `PlayerIns`. Both dereferences are
-/// null-checked in the game's own code, so both are null-checked here.
-const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d65f88;
-const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;
 
 /// `SwordArtsParam.iconId`.
 const SWORD_ARTS_PARAM_ICON_ID_OFFSET: usize = 0x1a;
@@ -232,14 +226,34 @@ struct SwordArtsLookupResult {
 ///
 /// `+0x10` is not incidental: `GetSwordArtsParamIdForWeapon` reads exactly that field
 /// (`mov edx, dword ptr [rdi + 0x10]` at `0x140673fb6`).
+///
+/// THE FIELD AT `+0x10` IS THE ITEM ID, AND ITS EMPTY VALUE IS `-1`, NOT `0` (1.16.2 `getStructure`
+/// puts `itemId` last in a 20-byte record; the engine's own constructor `GaitemLookupResult(out,
+/// handle)` @0x1406726c0 writes `gaItemIns = nullptr; itemId = -1`). Zero is not "nothing" here:
+/// `GetSwordArtsParamIdForWeapon` rejects an id only when `(itemId & 0xF0000000) != 0` or it equals
+/// `0x0FFFFFFF`, and **zero passes both**, naming `EquipParamWeapon` row 0 -- unarmed -- whose
+/// `canGemBeChanged` refuses, so the gem override never runs and the function returns row 0's own
+/// default skill. That is why a badge built on a zero-initialised record shows "Kick" (arts 503) on
+/// every weapon instead of showing nothing. Starting at `-1` fails closed instead.
 #[repr(C)]
-#[derive(Default)]
 struct GaitemLookupResult {
     handle: u32,
     _pad0: u32,
     ins: usize,
-    kind: u32,
+    item_id: u32,
     _pad1: u32,
+}
+
+impl Default for GaitemLookupResult {
+    fn default() -> Self {
+        Self {
+            handle: 0,
+            _pad0: 0,
+            ins: 0,
+            item_id: u32::MAX,
+            _pad1: 0,
+        }
+    }
 }
 
 static ORIG_SCENE_UPDATE: AtomicUsize = AtomicUsize::new(0);

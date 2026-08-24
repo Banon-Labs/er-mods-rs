@@ -47,8 +47,9 @@ mod rva {
     /// `MsgRepositoryImp::GetGemName` -- base bundle `0x142`, DLC `0x1a6`.
     ///
     /// Names the *gem item* ("Ash of War: Lion's Claw"), which is NOT what a build's
-    /// `weaponArt` says. Kept for reference; the importer uses [`GET_ARTS_NAME`].
-    #[allow(dead_code)]
+    /// `weaponArt` says -- so it is not what the catalog keys on. It is used as the test for
+    /// whether a gem row is a real, obtainable ash rather than a development placeholder,
+    /// which is how the ash catalog picks between several gems carrying one skill.
     pub const GET_GEM_NAME: usize = 0xd103d0;
     /// `MsgRepositoryImp::GetArtsName` -- base bundle `0x14b`.
     ///
@@ -62,12 +63,21 @@ mod rva {
 /// Confirmed by the game's own code rather than inferred from the planner's data:
 /// `EquipGreatRune` rejects anything whose `id & 0xF0000000` is not `0x40000000` and takes
 /// the row id as `id & 0x0FFFFFFF`.
+/// `repr(u32)` because the gem category's discriminant sets bit 31, which does not fit a signed
+/// pointer-width discriminant on a 32-bit target -- and the tags ARE u32 item ids, not indices.
 #[derive(Clone, Copy)]
+#[repr(u32)]
 enum Tag {
     Weapon = 0x0000_0000,
     Protector = 0x1000_0000,
     Accessory = 0x2000_0000,
     Goods = 0x4000_0000,
+    /// `EquipParamGem`, i.e. an ash of war as an ITEM.
+    ///
+    /// Same evidence as the others, from the same switch: `GetGaitemHandleByItemId` sends
+    /// `itemId >> 28 == 8` to `GetGaItemHandleGem`, and `GaitemLookupResult::GetSwordArtsParamId`
+    /// takes an id apart as `0x8000_0000 | EquipParamGem row`.
+    Gem = 0x8000_0000,
 }
 
 /// `(MsgRepositoryImp*, row_id) -> wchar_t*`
@@ -82,12 +92,19 @@ struct Source {
 
 /// Every category the importer resolves.
 ///
-/// Ashes of war come from `SwordArtsParam`, NOT `EquipParamGem`. The distinction is the
-/// whole reason the first catalog left ten of them unresolved: a gem is the *item* you
-/// pick up ("Ash of War: Bloodhound's Step"), while a build's `weaponArt` names the
-/// *skill* ("Bloodhound's Step"), and the two live in different tables under different
-/// name bundles. The planner agrees -- its ash ids are 80100, 401000, 505000, which are
-/// `SwordArtsParam` rows -- and so does the game: `weaponSkill` is `0x80000000 | skillId`.
+/// ASHES OF WAR ARE THE ONE CATEGORY WHOSE NAME AND ID COME FROM DIFFERENT TABLES, which is
+/// why they are not in this list and are built by [`insert_ashes_of_war`] instead.
+///
+/// A build's `weaponArt` names the *skill* ("Bloodhound's Step"), which is a `SwordArtsParam`
+/// row and is named out of the arts bundle. But the thing the game can PUT ON A WEAPON is the
+/// *gem* ("Ash of War: Bloodhound's Step"), an `EquipParamGem` row -- `GetSwordArtsParamId`
+/// reads `0x8000_0000 | gem row`, and `GetGaItemHandleGem` mints from a gem row. So the catalog
+/// keys on the arts name and stores the GEM id.
+///
+/// Resolving to the `SwordArtsParam` row instead is the bug this replaces, and it was invisible:
+/// every ash in a build resolved, the importer reported `0 unresolved`, and not one weapon came
+/// out carrying its ash. The planner's own ids were the tell all along -- 80100, 401000, 505000
+/// are multiples of 100 in gem space (`gem = arts * 100` for most ashes), not arts rows.
 ///
 /// Spells and tools are BOTH `EquipParamGoods` rows sharing one name bundle -- a sorcery's
 /// item id really is `0x4 << 28 | goodsRowId`. They are separated by whether the same row
@@ -107,11 +124,6 @@ const SOURCES: &[Source] = &[
         kind: Kind::Talisman,
         tag: Tag::Accessory,
         getter_rva: rva::GET_ACCESSORY_NAME,
-    },
-    Source {
-        kind: Kind::AshOfWar,
-        tag: Tag::Accessory,
-        getter_rva: rva::GET_ARTS_NAME,
     },
     Source {
         kind: Kind::Spell,
@@ -189,7 +201,53 @@ unsafe fn name_of(getter: usize, msg: usize, row_id: u32) -> Option<String> {
     unsafe { read_wide(getter(msg, row_id)) }
 }
 
+/// The name getter for one category, or `None` for a category the game does not name this way.
+///
+/// [`Kind::AshOfWar`] is answered explicitly rather than out of [`SOURCES`]: it is not in that
+/// table (its rows come from the gem table, see [`insert_ashes_of_war`]), but it IS named by
+/// `GetArtsName` keyed on a `SwordArtsParam` row, which is exactly what the EXPORT direction has
+/// in hand when it asks.
+fn getter_rva_for(kind: Kind) -> Option<usize> {
+    if kind == Kind::AshOfWar {
+        return Some(rva::GET_ARTS_NAME);
+    }
+    SOURCES
+        .iter()
+        .find(|source| source.kind == kind)
+        .map(|source| source.getter_rva)
+}
+
+/// Ask the game what ONE row is called -- the export direction.
+///
+/// # Why this exists next to [`build_from_game`] rather than inverting it
+///
+/// The importer needs name -> id, which the game cannot answer, so it enumerates every row and
+/// inverts. The EXPORTER needs id -> name, which is the direction the game answers natively: one
+/// call, no table. Building the whole catalog to read it backwards would be a few thousand calls
+/// to answer a question the getter answers directly -- and it would also be WRONG in one case,
+/// because the inverted map is keyed by folded name and two rows can fold together.
+///
+/// `Kind` still matters: the same row id means different items in different tables, so the caller
+/// must say which table the id came from.
+///
+/// # Safety
+///
+/// `msg` must be a live `MsgRepositoryImp*` and `module_base` the loaded image base.
+pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) -> Option<String> {
+    let getter = module_base + getter_rva_for(kind)?;
+    // Safety: `getter` is a verified RVA within the loaded module and `msg` is the caller's live
+    // repository pointer.
+    unsafe { name_of(getter, msg, row_id) }
+}
+
 /// Insert one resolved row.
+///
+/// `somber` is left false ON PURPOSE, and setting it would be a regression rather than a fix.
+/// It only feeds [`er_build_import::plan::somber_remap`], a table this repository reproduces from
+/// the planner without knowing its intent, and the importer no longer needs to guess how far an
+/// armament upgrades: [`ReinforceLevels`] asks the game which `reinforceTypeId + level` rows
+/// exist and clamps to the highest one the build can have. Reviving the flag would put a guessed
+/// level back in front of a measured one.
 fn insert(catalog: &mut MapCatalog, source: &Source, row_id: u32, name: &str) {
     catalog.insert(
         source.kind,
@@ -209,7 +267,7 @@ fn insert(catalog: &mut MapCatalog, source: &Source, row_id: u32, name: &str) {
 fn row_ids(kind: Kind, spells: &BTreeSet<u32>) -> Vec<u32> {
     use eldenring::cs::{
         EquipParamAccessory, EquipParamGoods, EquipParamProtector, EquipParamWeapon,
-        SoloParamRepository, SwordArtsParam,
+        SoloParamRepository,
     };
     use fromsoftware_shared::FromStatic;
 
@@ -228,7 +286,8 @@ fn row_ids(kind: Kind, spells: &BTreeSet<u32>) -> Vec<u32> {
             .rows::<EquipParamAccessory>()
             .map(|(id, _)| id)
             .collect(),
-        Kind::AshOfWar => repo.rows::<SwordArtsParam>().map(|(id, _)| id).collect(),
+        // Built from the gem table by `insert_ashes_of_war`, which needs BOTH ids per row.
+        Kind::AshOfWar => Vec::new(),
         // The goods table carries both; membership in MAGIC_PARAM_ST decides which.
         Kind::Spell => repo
             .rows::<EquipParamGoods>()
@@ -286,7 +345,92 @@ pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, Bu
         }
     }
 
+    // Safety: the caller's contract carries through unchanged.
+    unsafe { insert_ashes_of_war(&mut catalog, &mut stats, msg, module_base) };
+
     (catalog, stats)
+}
+
+/// Add every ash of war, keyed by SKILL name and valued by GEM id.
+///
+/// # Why this is not just another [`Source`]
+///
+/// Every other category answers one question with one id: enumerate the rows of table T, ask T's
+/// name getter about each row, store that row. An ash needs two tables at once. The name the
+/// planner writes is the skill's (`GetArtsName`, keyed on a `SwordArtsParam` row), while the id
+/// the game can act on is the gem's (`EquipParamGem`, which is what `GetGaItemHandleGem` mints and
+/// what `GetSwordArtsParamId` decodes). `EquipParamGem.swordArtsParamId` is the join.
+///
+/// # Which gem, when several carry the same skill
+///
+/// The gem table holds development and placeholder rows alongside the real ashes, and more than
+/// one row can name the same skill. Rather than trust `arts * 100` -- a heuristic that lands on
+/// an UNRELATED row for some ashes (arts 309 "Thops's Barrier" -> gem 30900 is "No Skill";
+/// Igon's Drake Hunt is arts 4210 but gem 548000) -- this walks the whole table and keeps, per
+/// skill, the first of: a gem the game gives a display name to, else the lowest row id. Both
+/// tie-breaks are order-independent, so the catalog is the same on every run.
+///
+/// # Safety
+///
+/// `msg` must be a live `MsgRepositoryImp*` and `module_base` the loaded image base, with the
+/// param tables streamed (see [`params_ready`]).
+unsafe fn insert_ashes_of_war(
+    catalog: &mut MapCatalog,
+    stats: &mut BuildStats,
+    msg: usize,
+    module_base: usize,
+) {
+    use eldenring::cs::{EquipParamGem, SoloParamRepository};
+    use fromsoftware_shared::FromStatic;
+    use std::collections::BTreeMap;
+
+    // Safety: read-only enumeration behind the populated-singleton check.
+    let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+        return;
+    };
+    let arts_getter = module_base + rva::GET_ARTS_NAME;
+    let gem_getter = module_base + rva::GET_GEM_NAME;
+
+    // skill row -> (this gem has an item name, gem row).
+    let mut best: BTreeMap<u32, (bool, u32)> = BTreeMap::new();
+    for (gem_id, row) in repo.rows::<EquipParamGem>() {
+        let Ok(arts_id) = u32::try_from(row.sword_arts_param_id()) else {
+            continue;
+        };
+        if arts_id == 0 {
+            continue;
+        }
+        // Safety: a verified getter RVA and the caller's live repository pointer.
+        let named = unsafe { name_of(gem_getter, msg, gem_id) }.is_some();
+        let candidate = (named, gem_id);
+        best.entry(arts_id)
+            .and_modify(|held| {
+                // A named gem beats an unnamed one; among equals the lower row id wins.
+                if (named, core::cmp::Reverse(gem_id)) > (held.0, core::cmp::Reverse(held.1)) {
+                    *held = candidate;
+                }
+            })
+            .or_insert(candidate);
+    }
+
+    for (arts_id, (_, gem_id)) in best {
+        // Safety: as above.
+        match unsafe { name_of(arts_getter, msg, arts_id) } {
+            Some(name) => {
+                catalog.insert(
+                    Kind::AshOfWar,
+                    &name,
+                    Entry {
+                        full_item_id: (Tag::Gem as u32) | gem_id,
+                        max_stored: None,
+                        somber: false,
+                    },
+                );
+                stats.named += 1;
+            }
+            None => stats.unnamed += 1,
+        }
+    }
 }
 
 /// Whether a param table has been streamed in.
@@ -308,8 +452,8 @@ fn holder_ready<P: eldenring::cs::SoloParam>(repo: &eldenring::cs::SoloParamRepo
 /// through and then panic on a later one, which is the same failure with a longer fuse.
 pub fn params_ready() -> bool {
     use eldenring::cs::{
-        EquipParamAccessory, EquipParamGoods, EquipParamProtector, EquipParamWeapon, Magic,
-        SoloParamRepository, SwordArtsParam,
+        EquipParamAccessory, EquipParamGem, EquipParamGoods, EquipParamProtector, EquipParamWeapon,
+        Magic, ReinforceParamWeapon, SoloParamRepository, SwordArtsParam,
     };
     use fromsoftware_shared::FromStatic;
 
@@ -322,6 +466,11 @@ pub fn params_ready() -> bool {
         && holder_ready::<EquipParamAccessory>(repo)
         && holder_ready::<EquipParamGoods>(repo)
         && holder_ready::<SwordArtsParam>(repo)
+        // The ash catalog joins the gem table to the arts table; asking either one for rows
+        // before it is streamed PANICS rather than yielding nothing. `ReinforceLevels` reads the
+        // third table for the same reason, and has the same failure mode.
+        && holder_ready::<EquipParamGem>(repo)
+        && holder_ready::<ReinforceParamWeapon>(repo)
         && holder_ready::<Magic>(repo)
 }
 
@@ -341,4 +490,94 @@ pub fn msg_repository() -> Option<usize> {
         er_game_base::mem::safe_read_usize(base + er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA)
     }?;
     (repository != 0).then_some(repository)
+}
+
+/// The `SwordArtsParam` row an `EquipParamGem` row carries, straight off the live table.
+///
+/// The importer needs this to check its own work: the build names a gem, the worn weapon reports
+/// an arts row, and only `EquipParamGem.swordArtsParamId` says whether those are the same ash.
+/// Comparing display names instead would turn a wrong-row bug into a string-matching bug.
+pub fn arts_row_for_gem(gem_row: u32) -> Option<u32> {
+    use eldenring::cs::{EquipParamGem, SoloParamRepository};
+    use fromsoftware_shared::FromStatic;
+
+    // Safety: read-only row access behind the populated-singleton check.
+    let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+        return None;
+    };
+    repo.rows::<EquipParamGem>()
+        .find(|(id, _)| *id == gem_row)
+        .and_then(|(_, row)| u32::try_from(row.sword_arts_param_id()).ok())
+        .filter(|arts| *arts != 0)
+}
+
+/// Which upgrade levels the game actually has rows for, so a requested level cannot invent one.
+///
+/// # Why a level has to be clamped at all
+///
+/// `EquipParamWeapon::GetEntry(paramId)` splits its argument: the armament row is
+/// `(paramId / 100) * 100`, and the level is `paramId % 100`, which it turns into
+/// `ReinforceParamWeapon::GetEntry(row.reinforceTypeId + level)`. Somber armaments stop at +10,
+/// so a level of 25 asks for a reinforce row that does not exist and the lookup comes back with a
+/// NULL row for everything downstream to read.
+///
+/// The importer cannot tell somber from standard on its own: the build's `weaponUpgrade` is one
+/// number for the whole character, the per-slot override is usually absent, and the planner's
+/// somber remap is a table this repository reproduces without knowing its intent. So it does not
+/// guess -- it asks which `reinforceTypeId + level` rows exist and takes the highest one at or
+/// below what the build wanted.
+pub struct ReinforceLevels {
+    /// Every `ReinforceParamWeapon` row id present in the live table.
+    rows: std::collections::BTreeSet<u32>,
+}
+
+impl ReinforceLevels {
+    /// Read the table. Empty when the repository is not up, which clamps everything to +0 rather
+    /// than writing a level nothing can back.
+    pub fn read() -> Self {
+        use eldenring::cs::{ReinforceParamWeapon, SoloParamRepository};
+        use fromsoftware_shared::FromStatic;
+
+        // Safety: read-only enumeration behind the populated-singleton check.
+        let rows = match unsafe { SoloParamRepository::instance() } {
+            Ok(repo) => repo
+                .rows::<ReinforceParamWeapon>()
+                .map(|(id, _)| id)
+                .collect(),
+            Err(_) => std::collections::BTreeSet::new(),
+        };
+        Self { rows }
+    }
+
+    /// The highest level at or below `requested` that `weapon_param_id` actually has a row for.
+    ///
+    /// Returns 0 when the armament row cannot be read, which is the level the game would have
+    /// stored anyway before this code existed.
+    pub fn clamp(&self, weapon_param_id: u32, requested: u16) -> u16 {
+        use eldenring::cs::{EquipParamWeapon, SoloParamRepository};
+        use fromsoftware_shared::FromStatic;
+
+        if self.rows.is_empty() {
+            return 0;
+        }
+        // Safety: read-only row access behind the populated-singleton check.
+        let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+            return 0;
+        };
+        // The armament's own row is the +0 row of its affinity, which is what the plan builds.
+        let Some(reinforce_type) = repo
+            .rows::<EquipParamWeapon>()
+            .find(|(id, _)| *id == weapon_param_id)
+            .map(|(_, row)| i64::from(row.reinforce_type_id()))
+        else {
+            return 0;
+        };
+        (0..=requested)
+            .rev()
+            .find(|level| {
+                u32::try_from(reinforce_type + i64::from(*level))
+                    .is_ok_and(|id| self.rows.contains(&id))
+            })
+            .unwrap_or(0)
+    }
 }

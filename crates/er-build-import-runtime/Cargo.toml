@@ -19,6 +19,10 @@ publish = false
 
 [dependencies]
 er-build-import = { path = "../er-build-import" }
+# The EXPORT half's pure data transformation: the planner document and the `?i=` encoder. Host-
+# testable and game-free, for the same reason `er-build-import` is -- the encoder is provable by
+# `cargo test`, and nothing provable that way belongs in this crate.
+er-build-export = { path = "../er-build-export" }
 er-game-base = { path = "../er-game-base" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }

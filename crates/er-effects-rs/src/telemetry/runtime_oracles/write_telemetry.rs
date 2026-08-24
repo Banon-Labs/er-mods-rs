@@ -381,7 +381,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_allow_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_job_post_return_title_fired\": {},\n  \"system_quit_quickload_phase\": {},\n  \"system_quit_quickload_selected_slot\": {},\n  \"system_quit_quickload_return_title_request_count\": {},\n  \"system_quit_return_title_final_functor_call_count\": {},\n  \"system_quit_quickload_native_quit_action_count\": {},\n  \"system_quit_direct_return_title_chain_submit_count\": {},\n  \"system_quit_direct_return_title_chain_ready_block_count\": {},\n  \"system_quit_direct_return_title_chain_last_dialog\": {},\n  \"system_quit_direct_return_title_chain_last_queue_ready\": {},\n  \"system_quit_skip_restore_after_quickload_count\": {},\n  \"system_quit_quickload_title_owner_seen_count\": {},\n  \"system_quit_quickload_autoload_handoff_count\": {},\n  \"system_quit_quickload_last_title_owner\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n  \"system_quit_profileselect_native_close_count\": {},\n  \"system_quit_save_game_text_substitution_count\": {},\n  \"system_quit_save_game_action_count\": {},\n  \"system_quit_save_game_confirm_count\": {},\n  \"system_quit_save_game_close_count\": {},\n  \"system_quit_open_save_dir_action_count\": {},\n  \"system_quit_open_save_dir_success_count\": {},\n  \"system_quit_open_save_dir_failure_count\": {},\n  \"system_quit_load_build_url_action_count\": {},\n  \"system_quit_load_build_url_request_count\": {},\n  \"system_quit_load_build_url_refused_count\": {},\n  \"system_quit_load_build_url_failed_count\": {},\n  \"system_quit_load_build_url_imported_count\": {},\n  \"system_quit_save_game_armed_dialog\": {},\n  \"system_quit_request_load_slot_block_count\": {},\n  \"system_quit_request_load_slot_allow_count\": {},\n  \"system_quit_inworld_load_skip_count\": {},\n",
+        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_allow_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_job_post_return_title_fired\": {},\n  \"system_quit_quickload_phase\": {},\n  \"system_quit_quickload_selected_slot\": {},\n  \"system_quit_quickload_return_title_request_count\": {},\n  \"system_quit_return_title_final_functor_call_count\": {},\n  \"system_quit_quickload_native_quit_action_count\": {},\n  \"system_quit_direct_return_title_chain_submit_count\": {},\n  \"system_quit_direct_return_title_chain_ready_block_count\": {},\n  \"system_quit_direct_return_title_chain_last_dialog\": {},\n  \"system_quit_direct_return_title_chain_last_queue_ready\": {},\n  \"system_quit_skip_restore_after_quickload_count\": {},\n  \"system_quit_quickload_title_owner_seen_count\": {},\n  \"system_quit_quickload_autoload_handoff_count\": {},\n  \"system_quit_quickload_last_title_owner\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n  \"system_quit_profileselect_native_close_count\": {},\n  \"system_quit_save_game_text_substitution_count\": {},\n  \"system_quit_save_game_action_count\": {},\n  \"system_quit_save_game_confirm_count\": {},\n  \"system_quit_save_game_close_count\": {},\n  \"system_quit_open_save_dir_action_count\": {},\n  \"system_quit_open_save_dir_success_count\": {},\n  \"system_quit_open_save_dir_failure_count\": {},\n  \"system_quit_load_build_url_action_count\": {},\n  \"system_quit_load_build_url_request_count\": {},\n  \"system_quit_load_build_url_refused_count\": {},\n  \"system_quit_load_build_url_failed_count\": {},\n  \"system_quit_load_build_url_imported_count\": {},\n  \"system_quit_load_build_url_editor_open_count\": {},\n  \"system_quit_load_build_url_accepted_count\": {},\n  \"system_quit_load_build_url_rejected_count\": {},\n  \"system_quit_load_build_url_cancelled_count\": {},\n  \"system_quit_load_build_url_last_rejection\": {},\n  \"system_quit_generate_build_link_action_count\": {},\n  \"system_quit_generate_build_link_request_count\": {},\n  \"system_quit_generate_build_link_refused_count\": {},\n  \"system_quit_generate_build_link_stale_latch_count\": {},\n  \"system_quit_generate_build_link_encoded_count\": {},\n  \"system_quit_generate_build_link_last_url_len\": {},\n  \"system_quit_generate_build_link_clipboard_count\": {},\n  \"system_quit_generate_build_link_opened_count\": {},\n  \"system_quit_generate_build_link_failed_count\": {},\n  \"system_quit_save_game_armed_dialog\": {},\n  \"system_quit_request_load_slot_block_count\": {},\n  \"system_quit_request_load_slot_allow_count\": {},\n  \"system_quit_inworld_load_skip_count\": {},\n",
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
@@ -420,6 +420,24 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_EDITOR_OPEN_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_LAST_REJECTION.load(Ordering::SeqCst),
+        // Generate Build Link. `encoded` counts URLs BUILT, `clipboard`/`opened` count the two
+        // things that can independently fail afterwards, and `stale_latch` counts presses that
+        // recovered a latch nothing owned -- so "the row did nothing" always has a number
+        // distinguishing which of those it was.
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_REQUEST_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_REFUSED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_STALE_LATCH_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_ENCODED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_LAST_URL_LEN.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_CLIPBOARD_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_OPENED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_FAILED_COUNT.load(Ordering::SeqCst),
         format_scan_ptr(SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.load(Ordering::SeqCst)),
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.load(Ordering::SeqCst),
@@ -436,11 +454,14 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // not be named; `..._refused_disagreement_count` counts the subset where the captured row table
     // and the label read live at the cursor CONTRADICTED each other, so the row ran nothing.
     // `oracle_system_quit_grid_*` is the navigability evidence read live off the dialog's
-    // `CS::GridControl`: all four rows are reachable only when `navigable_cells >= 4` (the bound of
-    // the native mouse hit-test loop), `item_count == 4` (the cursor bound) and `rows >= 2` (what
-    // enables the up/down axis at all).
+    // `CS::GridControl`. The tab now has SIX rows in a 2x3 grid, and the three numbers must agree:
+    // `navigable_cells == 6` (the bound of the native mouse hit-test loop, i.e. `cols * rows`),
+    // `item_count == 6` (the cursor bound, set through `GridControl::SetItemCount`) and `rows >= 2`
+    // (what enables the up/down axis at all). `navigable_cells > item_count` used to be the NORMAL
+    // state -- five rows in a six-cell grid left a ragged corner -- so a run where they now differ
+    // means a row failed to build, not that the geometry is merely uneven.
     body.push_str(&format!(
-        "  \"oracle_system_quit_row_table_dialog\": {},\n  \"oracle_system_quit_row_index_save_game\": {},\n  \"oracle_system_quit_row_index_return_desktop\": {},\n  \"oracle_system_quit_row_index_load_profile\": {},\n  \"oracle_system_quit_row_index_load_save_profiles\": {},\n  \"oracle_system_quit_row_resolve_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_row_count\": {},\n  \"oracle_system_quit_row_ambiguous_count\": {},\n  \"oracle_system_quit_row_refused_disagreement_count\": {},\n  \"oracle_system_quit_grid_cols\": {},\n  \"oracle_system_quit_grid_rows\": {},\n  \"oracle_system_quit_grid_navigable_cells\": {},\n  \"oracle_system_quit_grid_item_count\": {},\n  \"oracle_system_quit_row_last_discriminator\": {},\n  \"oracle_system_quit_row_last_resolved_row\": {},\n  \"oracle_system_quit_row_last_ambiguity\": {},\n  \"oracle_system_quit_row_last_cursor\": {},\n  \"oracle_system_quit_row_last_cursor_label_kind\": {},\n  \"oracle_system_quit_row_last_input_kind\": {},\n  \"oracle_system_quit_quit_refused_ambiguous_row_count\": {},\n  \"oracle_system_quit_quit_authorized_count\": {},\n  \"oracle_system_quit_action_alias_false_quit_claims\": {},\n",
+        "  \"oracle_system_quit_row_table_dialog\": {},\n  \"oracle_system_quit_row_index_save_game\": {},\n  \"oracle_system_quit_row_index_return_desktop\": {},\n  \"oracle_system_quit_row_index_load_profile\": {},\n  \"oracle_system_quit_row_index_load_save_profiles\": {},\n  \"oracle_system_quit_row_index_load_build_url\": {},\n  \"oracle_system_quit_row_index_generate_build_link\": {},\n  \"oracle_system_quit_row_resolve_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_row_count\": {},\n  \"oracle_system_quit_row_ambiguous_count\": {},\n  \"oracle_system_quit_row_refused_disagreement_count\": {},\n  \"oracle_system_quit_grid_cols\": {},\n  \"oracle_system_quit_grid_rows\": {},\n  \"oracle_system_quit_grid_navigable_cells\": {},\n  \"oracle_system_quit_grid_item_count\": {},\n  \"oracle_system_quit_row_last_discriminator\": {},\n  \"oracle_system_quit_row_last_resolved_row\": {},\n  \"oracle_system_quit_row_last_ambiguity\": {},\n  \"oracle_system_quit_row_last_cursor\": {},\n  \"oracle_system_quit_row_last_cursor_label_kind\": {},\n  \"oracle_system_quit_row_last_input_kind\": {},\n  \"oracle_system_quit_quit_refused_ambiguous_row_count\": {},\n  \"oracle_system_quit_quit_authorized_count\": {},\n  \"oracle_system_quit_action_alias_false_quit_claims\": {},\n",
         format_scan_ptr(SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst)),
         SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1
             .load(Ordering::SeqCst)
@@ -452,6 +473,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             .load(Ordering::SeqCst)
             .wrapping_sub(1) as isize,
         SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1
             .load(Ordering::SeqCst)
             .wrapping_sub(1) as isize,
         SYSTEM_QUIT_ROW_RESOLVE_COUNT.load(Ordering::SeqCst),
