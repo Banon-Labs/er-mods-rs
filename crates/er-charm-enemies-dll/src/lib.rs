@@ -130,11 +130,12 @@ fn tick() {
             if ticks == 0 || ticks.saturating_sub(last) >= APPLY_LOG_MIN_TICKS {
                 LAST_APPLY_LOG_TICK.store(ticks, Ordering::Relaxed);
                 charm_log(format_args!(
-                    "charm: applied SpEffect {} to {} of {} loaded enemies ({} already charmed, {} refused, {} speffect rows held across them)",
+                    "charm: applied SpEffect {} to {} of {} loaded enemies ({} already charmed, {} charmable, {} refused, {} speffect rows held across them)",
                     config.effect_id,
                     counts.applied,
                     counts.enemies,
                     counts.already_charmed,
+                    counts.charm_eligible,
                     counts.apply_refused,
                     counts.existing_entries
                 ));
@@ -154,11 +155,12 @@ fn tick() {
         // anything without needing the feature turned on to find out.
         let counts = charm::sweep(config.effect_id, SweepMode::Count);
         charm_log(format_args!(
-            "status: enabled={} hook={} loaded_enemies={} charmed_now={} speffect_rows={} keyboard_reads={} non_keyboard_reads={} suppressed_trigger_reads={} applied_total={} removed_total={}",
+            "status: enabled={} hook={} loaded_enemies={} charmed_now={} charmable={} speffect_rows={} keyboard_reads={} non_keyboard_reads={} suppressed_trigger_reads={} applied_total={} removed_total={}",
             enabled,
             hotkey::hook_installed(),
             counts.enemies,
             counts.already_charmed,
+            counts.charm_eligible,
             counts.existing_entries,
             hotkey::keyboard_reads(),
             hotkey::non_keyboard_reads(),

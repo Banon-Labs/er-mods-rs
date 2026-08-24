@@ -21,8 +21,89 @@
 //! that container is a live crash this repo has already captured (`er-seamless-bugfixes-dll`'s
 //! `null_special_effect` guard) -- so this sweep makes the same check before touching a character.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use eldenring::cs::{ChrIns, ChrInsExt, ChrSet, ChrType, WorldChrMan};
 use fromsoftware_shared::{FromStatic, Subclass};
+
+use crate::log::charm_log;
+
+/// SpEffect 90200, `NPC: Enable Charm` -- its only non-default field is `enableCharm = 1`, with
+/// duration -1.
+///
+/// It is not decoration. `CS::ChrIns::GetTeamType` has no charm gate, but `SpecialEffect::Apply`
+/// does: measured 2026-08-24 on a live world, both `stateInfo` 132 rows were REFUSED on every one
+/// of 262 enemies AND on the main player, while 491 and 1400 were accepted on the same call in the
+/// same frame. So the charm state is rejected unless the character is marked charmable, and this
+/// is the row that marks it.
+pub(crate) const ENABLE_CHARM_EFFECT_ID: i32 = 90200;
+
+/// Byte of `SP_EFFECT_PARAM_ST` holding the `enableCharm` bit, and the bit itself.
+///
+/// From `FUN_1404fa080` (1.16.2), the whole of the game's charm-eligibility test:
+///
+/// ```text
+/// for entry in specialEffect.entries:
+///     if (entry.flags & 0x800c0003) == 0 && entry.paramRow != 0
+///        && ((paramRow[0x163] >> 6) & 1) != 0: return 1
+/// return 0
+/// ```
+///
+/// The resist module's `stateInfo` 132 branch calls exactly that and returns "resisted" when it
+/// is 0, so a charm row applied to a character with no `enableCharm` row is added and then taken
+/// straight back off by `SpecialEffect::RemoveByIndex`. Note the flag test: the marker entry has
+/// to be ACTIVE, which it is not on the frame it was applied -- so the charm row cannot go on in
+/// the same sweep that adds the marker, and this is read per character rather than assumed.
+const ENABLE_CHARM_ROW_BYTE: usize = 0x163;
+const ENABLE_CHARM_ROW_BIT: u8 = 1 << 6;
+
+/// Does this character hold an ACTIVE `enableCharm` row -- the game's own charm-eligibility test?
+fn charm_eligible(chr_ins: &ChrIns) -> bool {
+    chr_ins.special_effect.entries().any(|entry| {
+        entry.param_data.is_some_and(|row| {
+            let byte = unsafe { *row.as_ptr().cast::<u8>().add(ENABLE_CHARM_ROW_BYTE) };
+            byte & ENABLE_CHARM_ROW_BIT != 0
+        })
+    })
+}
+
+/// One-shot: the first apply sweep describes a real enemy and runs the main-player control.
+static PROBE_DONE: AtomicBool = AtomicBool::new(false);
+
+/// How many of an enemy's SpEffect ids to print. Enough to recognise the set, short enough to
+/// stay one log line.
+const PROBE_ID_LIMIT: usize = 24;
+
+/// Describe one real enemy, once, so the log says what the sweep is actually walking.
+///
+/// Read-only on purpose. An earlier version of this also applied control rows to the MAIN PLAYER
+/// to tell "the row will not go on" apart from "this DLL's apply never works" -- that answered the
+/// question (491, 1400, 90200 and 503320 were all ACCEPTED through the identical call in the same
+/// frame, both `stateInfo` 132 rows REFUSED) and was then removed: a feature that puts Rune Arc on
+/// your character the first time you press its hotkey is not a feature.
+fn probe_once(chr_ins: &ChrIns) {
+    if PROBE_DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let mut ids = String::new();
+    for (index, entry) in chr_ins.special_effect.entries().enumerate() {
+        if index >= PROBE_ID_LIMIT {
+            ids.push_str(" ...");
+            break;
+        }
+        ids.push_str(&format!(" {}", entry.param_id));
+    }
+    charm_log(format_args!(
+        "probe: enemy chr_type={:?} character_id={} npc_param={} team={} charmable={} speffects[{}]:{}",
+        chr_ins.chr_type,
+        chr_ins.character_id,
+        chr_ins.npc_param_id,
+        chr_ins.team_type,
+        charm_eligible(chr_ins),
+        chr_ins.special_effect.entries().count(),
+        ids
+    ));
+}
 
 /// What one sweep does to the enemies it finds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +135,8 @@ pub(crate) struct SweepCounts {
     /// SpEffect rows held across every enemy walked. Zero here while `enemies` is not zero means
     /// the READER is wrong, not the writer -- a different failure from an apply that is refused.
     pub(crate) existing_entries: usize,
+    /// Enemies the game currently considers charmable, by its own test.
+    pub(crate) charm_eligible: usize,
 }
 
 /// Walk every loaded enemy once, doing what `mode` says.
@@ -102,6 +185,9 @@ pub(crate) fn sweep(effect_id: i32, mode: SweepMode) -> SweepCounts {
                 continue;
             }
             counts.enemies += 1;
+            if charm_eligible(chr_ins) {
+                counts.charm_eligible += 1;
+            }
             let mut charmed = false;
             for entry in chr_ins.special_effect.entries() {
                 counts.existing_entries += 1;
@@ -126,6 +212,20 @@ pub(crate) fn sweep(effect_id: i32, mode: SweepMode) -> SweepCounts {
                     // 262, for both charm rows. With it false the call takes the branch that
                     // returns true for an ordinary local NPC, and the effect sticks.
                     const DONT_SYNC: bool = false;
+                    probe_once(chr_ins);
+                    // Mark the character charmable, then charm it -- but only once the marker is
+                    // ACTIVE, which is a later frame. Applying the charm row before then is not
+                    // merely wasted: it is added and immediately removed every single frame.
+                    if !chr_ins
+                        .special_effect
+                        .entries()
+                        .any(|entry| entry.param_id == ENABLE_CHARM_EFFECT_ID)
+                    {
+                        chr_ins.apply_speffect(ENABLE_CHARM_EFFECT_ID, DONT_SYNC);
+                    }
+                    if !charm_eligible(chr_ins) {
+                        continue;
+                    }
                     chr_ins.apply_speffect(effect_id, DONT_SYNC);
                     counts.applied += 1;
                     // The trait method drops the native `bool`, so re-read the container instead:
@@ -140,6 +240,9 @@ pub(crate) fn sweep(effect_id: i32, mode: SweepMode) -> SweepCounts {
                 }
                 SweepMode::Remove if charmed => {
                     chr_ins.remove_speffect(effect_id);
+                    // The charmable marker never expires on its own (duration -1), so the toggle
+                    // has to take it back off too or it outlives the feature being switched off.
+                    chr_ins.remove_speffect(ENABLE_CHARM_EFFECT_ID);
                     counts.removed += 1;
                 }
                 SweepMode::Apply | SweepMode::Remove | SweepMode::Count => {}
