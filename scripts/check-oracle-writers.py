@@ -12,7 +12,8 @@ writers at all; a further 13 with the same shape were found by audit (er-effects
 A `bd` note cannot prevent the next one. This can.
 
 WHAT COUNTS AS A WRITE. Any of `.store` `.fetch_add` `.fetch_sub` `.fetch_max` `.fetch_min`
-`.fetch_or` `.fetch_and` `.swap` `.compare_exchange[_weak]`, matched across newlines because
+`.fetch_or` `.fetch_and` `.fetch_xor` `.fetch_nand` `.fetch_update` `.swap`
+`.compare_exchange[_weak]`, matched across newlines because
 rustfmt wraps them (`NAME\n    .fetch_add(1, ...)`), and optionally through an index (`NAME[i]`)
 for counter arrays.
 
@@ -49,8 +50,12 @@ DEF_RE = re.compile(
     r"(?:pub(?:\([a-z()]+\))?\s+)?static ([A-Z0-9_]+)\s*:\s*(?:Atomic\w+|\[\s*Atomic\w+)",
     re.MULTILINE,
 )
+# `fetch_xor` / `fetch_nand` / `fetch_update` were missing until 2026-08-24 and cost a false
+# positive: a boolean toggled with `ENABLED.fetch_xor(true, ..)` -- the idiomatic atomic flip --
+# was reported as read-but-never-written. Every atomic RMW is a write; the list is the whole set.
 WRITE_OPS = (
-    "store|fetch_add|fetch_sub|fetch_max|fetch_min|fetch_or|fetch_and|swap"
+    "store|fetch_add|fetch_sub|fetch_max|fetch_min|fetch_or|fetch_and|fetch_xor"
+    "|fetch_nand|fetch_update|swap"
     "|compare_exchange_weak|compare_exchange"
 )
 
@@ -126,6 +131,7 @@ def selftest() -> int:
             "pub static WRITTEN_BY_REF: AtomicUsize = AtomicUsize::new(0);",
             "pub static WRITTEN_BY_REF_QUALIFIED: AtomicUsize = AtomicUsize::new(0);",
             "pub static WRITTEN_BY_RAW_REF: AtomicUsize = AtomicUsize::new(0);",
+            "pub static WRITTEN_BY_XOR: AtomicBool = AtomicBool::new(false);",
             "pub static WRITTEN_INDEXED: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];",
             "pub static DEAD_READ_ONCE: AtomicUsize = AtomicUsize::new(0);",
             "pub static NEVER_TOUCHED: AtomicUsize = AtomicUsize::new(0);",
@@ -146,6 +152,9 @@ def selftest() -> int:
             # identical, static still written by the installer, gate reported it as dead.
             "register_union_hook(a, h, &crate::map_confirm::WRITTEN_BY_REF_QUALIFIED);\n"
             "let e = crate::map_confirm::WRITTEN_BY_REF_QUALIFIED.load(Ordering::SeqCst);\n"
+            # every atomic read-modify-write is a write, `fetch_xor` (a boolean toggle) included
+            "let was = WRITTEN_BY_XOR.fetch_xor(true, Ordering::SeqCst);\n"
+            "let g = WRITTEN_BY_XOR.load(Ordering::SeqCst);\n"
             "let p = &raw const WRITTEN_BY_RAW_REF;\n"
             "let f = WRITTEN_BY_RAW_REF.load(Ordering::SeqCst);\n"
             "WRITTEN_INDEXED[idx].fetch_add(1, Ordering::SeqCst);\n"
@@ -162,6 +171,7 @@ def selftest() -> int:
         "WRITTEN_BY_REF",
         "WRITTEN_BY_REF_QUALIFIED",
         "WRITTEN_BY_RAW_REF",
+        "WRITTEN_BY_XOR",
         "WRITTEN_INDEXED",
     ):
         if name in got:
@@ -175,8 +185,8 @@ def selftest() -> int:
             print(f"[check-oracle-writers] SELFTEST FAIL: {f}")
         return 1
     print(
-        "[check-oracle-writers] selftest ok (8 cases: inline, wrapped, by-ref, by-ref-qualified, "
-        "by-raw-ref, indexed, dead, unread)"
+        "[check-oracle-writers] selftest ok (9 cases: inline, wrapped, by-ref, by-ref-qualified, "
+        "by-raw-ref, xor, indexed, dead, unread)"
     )
     return 0
 

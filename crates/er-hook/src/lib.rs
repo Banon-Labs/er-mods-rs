@@ -289,9 +289,36 @@ pub unsafe fn register_shared_hook(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<HookRoute, MH_STATUS> {
-    if let Some(register) =
-        resolve_product_union_register(PRODUCT_RESOLVE_TRIES, PRODUCT_RESOLVE_SLEEP_MS)
-    {
+    unsafe {
+        register_shared_hook_with_budget(
+            target,
+            handler,
+            orig_slot,
+            PRODUCT_RESOLVE_TRIES,
+            PRODUCT_RESOLVE_SLEEP_MS,
+        )
+    }
+}
+
+/// [`register_shared_hook`] with an explicit resolve budget.
+///
+/// Pass `tries = 1, sleep_ms = 0` when the caller is driven by a GAME FRAME rather than by its own
+/// install thread. The default budget exists because a companion's install thread can outrun me3's
+/// `LoadLibrary` of the product; a game task tick cannot -- every native in the profile is loaded
+/// long before `CSTaskImp` exists -- so one probe is already the right answer there, and the
+/// polling budget would only be a stall on the game thread when the product is genuinely absent.
+///
+/// # Safety
+/// Same contract as [`register_shared_hook`].
+#[cfg(windows)]
+pub unsafe fn register_shared_hook_with_budget(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+    tries: u32,
+    sleep_ms: u32,
+) -> Result<HookRoute, MH_STATUS> {
+    if let Some(register) = resolve_product_union_register(tries, sleep_ms) {
         // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
         // own static is sound; our image outlives every dispatch.
         let slot_ptr = orig_slot.as_ptr();

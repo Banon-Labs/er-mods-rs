@@ -3,6 +3,9 @@
 # build. Enforced by scripts/check-no-committed-build-artifacts.py.
 target/
 *.log
+# Rotated run logs. `er-game-base::log::begin_fresh_run` renames the previous run aside as
+# `<name>.log.prev`, and `*.log` does not match that -- one slipped into a commit twice.
+*.log.prev
 __pycache__/
 
 # Beads / Dolt files (added by bd init)

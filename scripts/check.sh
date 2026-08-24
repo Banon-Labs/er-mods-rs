@@ -77,6 +77,12 @@ python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
 # printed to the user, and it fires after the answer is already on screen, so halting buys a third
 # reading instead of saving one) and its correction must come back on the invisible
 # additionalContext channel.
+# Third gate: a permission mode cupcake does not recognise must not silently disable every guard.
+# cupcake 0.5.2 exits 1 on `permission_mode: "auto"`, which Claude Code now sends -- so on
+# 2026-08-24 every hook in this repo failed and every policy went inert for a whole session, with
+# this suite green throughout. scripts/cupcake-hook.sh normalises the mode and pins the log level;
+# this proves a denial still denies through it.
+python3 "$repo_root/scripts/test-cupcake-hook-shim.py"
 python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"

@@ -8,7 +8,7 @@
       {
         "hooks": [
           {
-            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/cupcake-hook.sh",
             "type": "command"
           },
           {
@@ -34,7 +34,7 @@
       {
         "hooks": [
           {
-            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/cupcake-hook.sh",
             "type": "command"
           }
         ],
@@ -54,7 +54,7 @@
       {
         "hooks": [
           {
-            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/cupcake-hook.sh",
             "type": "command"
           }
         ]
@@ -64,7 +64,7 @@
       {
         "hooks": [
           {
-            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/cupcake-hook.sh",
             "type": "command"
           }
         ]
@@ -74,7 +74,7 @@
       {
         "hooks": [
           {
-            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/cupcake-hook.sh",
             "type": "command"
           }
         ]
