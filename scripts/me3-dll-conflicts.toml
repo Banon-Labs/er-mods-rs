@@ -60,6 +60,102 @@ than accidental, and so a future edit that reverts either side to a bare hook is
 rather than another silent day."""
 evidence = "crates/er-armament-icons/src/gfx_equip_hook.rs (register_shared_hook); crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs (register_union_hook); crates/er-hook/src/lib.rs (register_shared_hook)"
 
+[[shared]]
+a = "er-effects-rs"
+b = "er-net-effects-dll"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "dinput_kb_get_state_hook"
+reason = """All three DLLs read the keyboard where Elden Ring reads it: the DirectInput \
+device's `GetDeviceState`, resolved at runtime as vtable slot 9 on a probe device created from \
+`DirectInput8Create`. It is not a game RVA, so `check-shared-hook-rvas.py`'s address scan cannot \
+see the overlap -- these rows are how it is recorded at all. Every DirectInput device of a class \
+shares one vtable, so all three resolve the same address.
+
+Each DLL used to install that detour with its own `MhHook`, in its own statically linked MinHook \
+instance. That is the exact configuration measured on 2026-08-23 for the Scaleform file-open \
+prologue (see the first [[shared]] row): the second `MH_CreateHook` on one prologue leaves the \
+loser reporting installed and never running, with nothing crashing and nothing logged.
+
+RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-effects-rs \
+registers through `er_hook::register_union_hook`, and both companions through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that one instance (falling back to its own union when the product is absent). \
+Both companions also moved the install off the FrameBegin tick onto their own thread, because \
+`register_shared_hook` polls for that export for up to a second."""
+evidence = """crates/er-effects-rs/src/input_blocker.rs:271 `register_union_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-net-effects-dll/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-charm-enemies-dll/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
+`with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
+
+[[shared]]
+a = "er-effects-rs"
+b = "er-charm-enemies-dll"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "get_device_state_union"
+reason = """All three DLLs read the keyboard where Elden Ring reads it: the DirectInput \
+device's `GetDeviceState`, resolved at runtime as vtable slot 9 on a probe device created from \
+`DirectInput8Create`. It is not a game RVA, so `check-shared-hook-rvas.py`'s address scan cannot \
+see the overlap -- these rows are how it is recorded at all. Every DirectInput device of a class \
+shares one vtable, so all three resolve the same address.
+
+Each DLL used to install that detour with its own `MhHook`, in its own statically linked MinHook \
+instance. That is the exact configuration measured on 2026-08-23 for the Scaleform file-open \
+prologue (see the first [[shared]] row): the second `MH_CreateHook` on one prologue leaves the \
+loser reporting installed and never running, with nothing crashing and nothing logged.
+
+RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-effects-rs \
+registers through `er_hook::register_union_hook`, and both companions through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that one instance (falling back to its own union when the product is absent). \
+Both companions also moved the install off the FrameBegin tick onto their own thread, because \
+`register_shared_hook` polls for that export for up to a second."""
+evidence = """crates/er-effects-rs/src/input_blocker.rs:271 `register_union_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-net-effects-dll/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-charm-enemies-dll/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
+`with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
+
+[[shared]]
+a = "er-net-effects-dll"
+b = "er-charm-enemies-dll"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "get_device_state_union"
+reason = """All three DLLs read the keyboard where Elden Ring reads it: the DirectInput \
+device's `GetDeviceState`, resolved at runtime as vtable slot 9 on a probe device created from \
+`DirectInput8Create`. It is not a game RVA, so `check-shared-hook-rvas.py`'s address scan cannot \
+see the overlap -- these rows are how it is recorded at all. Every DirectInput device of a class \
+shares one vtable, so all three resolve the same address.
+
+Each DLL used to install that detour with its own `MhHook`, in its own statically linked MinHook \
+instance. That is the exact configuration measured on 2026-08-23 for the Scaleform file-open \
+prologue (see the first [[shared]] row): the second `MH_CreateHook` on one prologue leaves the \
+loser reporting installed and never running, with nothing crashing and nothing logged.
+
+RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-effects-rs \
+registers through `er_hook::register_union_hook`, and both companions through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that one instance (falling back to its own union when the product is absent). \
+Both companions also moved the install off the FrameBegin tick onto their own thread, because \
+`register_shared_hook` polls for that export for up to a second."""
+evidence = """crates/er-effects-rs/src/input_blocker.rs:271 `register_union_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-net-effects-dll/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-charm-enemies-dll/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
+`with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
+
 [[conflict]]
 a = "er-effects-rs"
 b = "er-save-disable-dll"
@@ -157,6 +253,14 @@ is registered through `er_hook::register_shared_hook`, which chains it into the 
 union rather than installing a second instance; see the [[shared]] entry above for the measurement \
 that forced this."""
 "er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
+"er-charm-enemies-dll" = """Co-loadable with the product. It detours exactly one address -- \
+the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_shared_hook`, so the \
+product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \
+rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
+on a FrameBegin walk of WorldChrMan's ChrSets."""
+"er-net-effects-dll" = """Keyboard-selected network SpEffects. Its DirectInput keyboard and mouse \
+`GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
+above); nothing else it installs is claimed by another shell."""
 "er-crash-logging-dll" = "First-chance exception handler only. The product does not link er-crash-logging, so this is the sole crash logger in the process."
 "er-death-persist-dll" = """One-shot SpEffectParam / SpEffectVfxParam row patch driven from a \
 CSTaskImp task: it moves saveCategory 5 -> 3 on rows 19980/19981/19982 and sets flags on their \
@@ -165,7 +269,6 @@ MinHook instance, no er-hook union entry and no VirtualProtect, so it shares no 
 other shell. Same class as mushroom-man-runtime: touches param rows, not hook prologues."""
 "er-inventory-sort-dll" = "Applies equipment-menu sort defaults once per process; installs no detour."
 "er-invasion-warp-dll" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
-"er-net-effects-dll" = "Keyboard-selected network SpEffects; independent hotkey path."
 "er-player-name-filter-dll" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-effects-rs no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
 "er-quit-menu-dll" = """System>Quit harness. Its detours route through `er_hook::register_union_hook` \
 rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \

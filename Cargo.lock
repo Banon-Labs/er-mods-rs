@@ -2800,6 +2800,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-charm-enemies-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-crash-logging"
 version = "0.1.0"
 dependencies = [

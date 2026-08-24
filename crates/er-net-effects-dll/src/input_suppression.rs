@@ -1,5 +1,4 @@
 use std::{
-    ffi::c_void,
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -7,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use er_hook::{MH_STATUS, UnionFn, register_shared_hook_with_budget};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::{GUID, s};
 
@@ -35,6 +34,12 @@ static DINPUT_REPEATED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 /// phantom key release.
 static DINPUT_NON_KEYBOARD_READS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_REPEAT_STATE: OnceLock<Mutex<HoldRepeat>> = OnceLock::new();
+
+/// A single non-blocking probe for the product DLL's union export. The install is driven from the
+/// FrameBegin tick, and by the time a game frame runs every native in the profile is loaded, so
+/// there is nothing left to poll for -- and polling on the game thread would be a visible stall.
+const FRAME_DRIVEN_RESOLVE_TRIES: u32 = 1;
+const FRAME_DRIVEN_RESOLVE_SLEEP_MS: u32 = 0;
 
 const DIRECTINPUT_VERSION: u32 = 0x0800;
 const DIK_0: usize = 0x0b;
@@ -100,7 +105,6 @@ type DInput8CreateFn =
     unsafe extern "system" fn(usize, u32, *const GUID, *mut RawObj, usize) -> i32;
 type CreateDeviceFn = unsafe extern "system" fn(RawObj, *const GUID, *mut RawObj, usize) -> i32;
 type ReleaseFn = unsafe extern "system" fn(RawObj) -> u32;
-type GetDeviceStateFn = unsafe extern "system" fn(usize, u32, *mut u8) -> i32;
 
 #[derive(Clone, Copy)]
 struct RepeatKey {
@@ -130,6 +134,9 @@ const REPEAT_KEYS: [RepeatKey; 4] = [
 pub(crate) fn set_arrow_key_suppression(enabled: bool) {
     SUPPRESS_ARROW_KEYS.store(enabled, Ordering::Relaxed);
     if !HOOKS_INSTALLED.load(Ordering::Relaxed) {
+        // Retried from the caller's FrameBegin tick until `dinput8.dll` is loaded -- no sleep, and
+        // no install thread: a game frame is already proof that every native in the profile has
+        // been loaded, which is what the union resolve would otherwise be polling for.
         match unsafe { install_dinput_hooks() } {
             Ok(()) => net_effects_log(format_args!(
                 "input-suppression: DirectInput selector input hook installed"
@@ -217,14 +224,26 @@ unsafe fn with_probe_device(
     Ok(())
 }
 
-unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, data: *mut u8) -> i32 {
+/// The keyboard detour, in the hook union's four-`usize` shape.
+///
+/// `DINPUT_KB_GET_STATE_ORIG` may hold the NEXT handler in the chain rather than the game
+/// trampoline, so it is called through [`UnionFn`] and not through the narrower
+/// three-argument `GetDeviceState` signature. The `usize` return carries the `HRESULT` in its low 32 bits, which is
+/// where the caller reads it from, so it is passed straight back.
+unsafe extern "system" fn dinput_kb_get_state_hook(
+    device: usize,
+    size: usize,
+    data: usize,
+    unused: usize,
+) -> usize {
     DINPUT_KB_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
-    let original_addr = DINPUT_KB_GET_STATE_ORIG.load(Ordering::Relaxed);
-    if original_addr == 0 {
+    let next = DINPUT_KB_GET_STATE_ORIG.load(Ordering::Relaxed);
+    if next == 0 {
         return 0;
     }
-    let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
-    let hr = unsafe { original(device, size, data) };
+    let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
+    let raw = unsafe { call(device, size, data, unused) };
+    let (hr, size, data) = (raw as i32, size as u32, data as *mut u8);
     // ONLY a 256-byte DIK table is keyboard state. The mouse (and any other device sharing this
     // vtable entry) hands us a buffer with no key bytes in it, which reads as "every arrow
     // released" and re-arms the press on the very next keyboard poll -- see `dinput_state`.
@@ -237,23 +256,25 @@ unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, dat
         // the dedicated mouse hook below.
         blank_overlay_mouse_click(hr, size, data);
     }
-    hr
+    raw
 }
 
+/// The mouse detour, in the same union shape and for the same reason as the keyboard one above.
 unsafe extern "system" fn dinput_mouse_get_state_hook(
     device: usize,
-    size: u32,
-    data: *mut u8,
-) -> i32 {
+    size: usize,
+    data: usize,
+    unused: usize,
+) -> usize {
     DINPUT_MOUSE_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
-    let original_addr = DINPUT_MOUSE_GET_STATE_ORIG.load(Ordering::Relaxed);
-    if original_addr == 0 {
+    let next = DINPUT_MOUSE_GET_STATE_ORIG.load(Ordering::Relaxed);
+    if next == 0 {
         return 0;
     }
-    let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
-    let hr = unsafe { original(device, size, data) };
-    blank_overlay_mouse_click(hr, size, data);
-    hr
+    let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
+    let raw = unsafe { call(device, size, data, unused) };
+    blank_overlay_mouse_click(raw as i32, size as u32, data as *mut u8);
+    raw
 }
 
 /// Blank the left mouse button in a DirectInput mouse read while the pointer is over the
@@ -408,10 +429,6 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
     if HOOKS_INSTALLED.load(Ordering::Relaxed) {
         return Ok(());
     }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => return Err(status),
-    }
 
     let dinput8 = unsafe { GetModuleHandleA(s!("dinput8.dll")) }
         .map_err(|_| MH_STATUS::MH_ERROR_MODULE_NOT_FOUND)?;
@@ -436,32 +453,42 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         })?;
     }
 
-    let kb_hook = unsafe {
-        MhHook::new(
-            keyboard_addr as *mut c_void,
-            dinput_kb_get_state_hook as *mut c_void,
+    // THROUGH A UNION REGISTRAR, NEVER A BARE `MhHook`. `er-effects-rs` (its input blocker) and
+    // `er-charm-enemies-dll` (its hotkey) detour this same `GetDeviceState` slot, and two
+    // separately linked MinHook instances on one prologue overwrite each other's trampolines --
+    // the loser reports installed and never runs. See the [[shared]] row for this pair in
+    // scripts/me3-dll-conflicts.toml.
+    let kb_route = unsafe {
+        register_shared_hook_with_budget(
+            keyboard_addr,
+            dinput_kb_get_state_hook,
+            &DINPUT_KB_GET_STATE_ORIG,
+            FRAME_DRIVEN_RESOLVE_TRIES,
+            FRAME_DRIVEN_RESOLVE_SLEEP_MS,
         )?
     };
-    DINPUT_KB_GET_STATE_ORIG.store(kb_hook.trampoline() as usize, Ordering::Relaxed);
-    unsafe { kb_hook.queue_enable()? };
+    net_effects_log(format_args!(
+        "input-suppression: keyboard GetDeviceState detour at 0x{keyboard_addr:x} via {kb_route:?}"
+    ));
 
     if keyboard_addr == mouse_addr {
         DINPUT_KB_ALSO_MOUSE.store(true, Ordering::Relaxed);
     } else {
-        let mouse_hook = unsafe {
-            MhHook::new(
-                mouse_addr as *mut c_void,
-                dinput_mouse_get_state_hook as *mut c_void,
+        let mouse_route = unsafe {
+            register_shared_hook_with_budget(
+                mouse_addr,
+                dinput_mouse_get_state_hook,
+                &DINPUT_MOUSE_GET_STATE_ORIG,
+                FRAME_DRIVEN_RESOLVE_TRIES,
+                FRAME_DRIVEN_RESOLVE_SLEEP_MS,
             )?
         };
-        DINPUT_MOUSE_GET_STATE_ORIG.store(mouse_hook.trampoline() as usize, Ordering::Relaxed);
-        unsafe { mouse_hook.queue_enable()? };
-        // `MhHook` is not `Drop`: the hook stays installed for the life of the process once
-        // queued, and the handle is deliberately not kept for a later uninstall.
+        net_effects_log(format_args!(
+            "input-suppression: mouse GetDeviceState detour at 0x{mouse_addr:x} via {mouse_route:?}"
+        ));
     }
 
-    unsafe { MH_ApplyQueued() }.ok_context("DInput MH_ApplyQueued")?;
-    // Same as the mouse hook above: nothing uninstalls these, and `MhHook` has no `Drop`.
+    // The registrar owns both detours for the life of the process; nothing uninstalls them.
     HOOKS_INSTALLED.store(true, Ordering::Relaxed);
     Ok(())
 }
