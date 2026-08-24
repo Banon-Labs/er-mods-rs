@@ -57,6 +57,59 @@ pub(crate) const ENABLE_CHARM_EFFECT_ID: i32 = 90200;
 const ENABLE_CHARM_ROW_BYTE: usize = 0x163;
 const ENABLE_CHARM_ROW_BIT: u8 = 1 << 6;
 
+/// `FUN_1403fade0` -- the apply implementation that takes the SOURCE as a separate argument.
+///
+/// This is the whole reason the feature works. `ChrIns::ApplySpEffect` (what `apply_speffect`
+/// calls) hands the target in as its own source, and the charm row is an OPPOSE-target effect:
+/// `SpecialEffect::CheckApplyConditions` passes it only when the source is hostile to the target.
+/// Measured on one enemy in one frame, the two are exactly complementary:
+///
+/// ```text
+/// SpEffect 503350 (charm):    source=self -> false   source=player -> TRUE
+/// SpEffect 491 (Rune Arc):    source=self -> true    source=player -> false
+/// ```
+///
+/// So no flag on `apply_speffect` could ever have worked -- the source has to be the player. The
+/// two trailing pointers are a position vector and a damage-correction block that `ApplySpEffect`
+/// fills from defaults. For a `stateInfo` 132 row the correction block is never read (the resist
+/// module's charm branch is `return FUN_1404fa080(se) ? 0 : 1` and touches nothing else) and the
+/// vector is only stored on the entry, so zeroed buffers are sound here and avoid reconstructing
+/// two game globals.
+const APPLY_SPEFFECT_WITH_SOURCE_RVA: u32 = 0x3f_ade0;
+
+type ApplySpEffectWithSourceFn = unsafe extern "C" fn(
+    *mut ChrIns,
+    u32,
+    *mut ChrIns,
+    *const [f32; 4],
+    *const [u8; 0x60],
+    u8,
+    bool,
+    u8,
+) -> bool;
+
+/// Apply `effect_id` to `chr_ins` with the MAIN PLAYER as the source, the way the thrown item does.
+fn apply_from_player(effect_id: i32, chr_ins: &mut ChrIns, source: *mut ChrIns) -> bool {
+    let Ok(apply_va) = er_game_base::mem::game_rva(APPLY_SPEFFECT_WITH_SOURCE_RVA) else {
+        return false;
+    };
+    let apply: ApplySpEffectWithSourceFn = unsafe { std::mem::transmute(apply_va) };
+    let position = [0.0f32; 4];
+    let correction = [0u8; 0x60];
+    unsafe {
+        apply(
+            &raw mut *chr_ins,
+            effect_id as u32,
+            source,
+            &raw const position,
+            &raw const correction,
+            0,
+            false,
+            0,
+        )
+    }
+}
+
 /// Does this character hold an ACTIVE `enableCharm` row -- the game's own charm-eligibility test?
 fn charm_eligible(chr_ins: &ChrIns) -> bool {
     chr_ins.special_effect.entries().any(|entry| {
@@ -159,8 +212,13 @@ pub(crate) fn sweep(effect_id: i32, mode: SweepMode) -> SweepCounts {
         (&raw const world_chr_man.debug_chr_set) as usize,
     ];
     let mut protected: Vec<usize> = Vec::with_capacity(32);
-    if let Some(player) = world_chr_man.main_player.as_ref() {
-        protected.push(player.as_ptr() as usize);
+    // The charm has to be applied AS the player, so without one there is nothing to charm from.
+    let player_source = world_chr_man
+        .main_player
+        .as_ref()
+        .map(|player| player.as_ptr().cast::<ChrIns>());
+    if let Some(player) = player_source {
+        protected.push(player as usize);
     }
     collect_addresses(&world_chr_man.player_chr_set, &mut protected);
     collect_addresses(&world_chr_man.ghost_chr_set, &mut protected);
@@ -198,38 +256,26 @@ pub(crate) fn sweep(effect_id: i32, mode: SweepMode) -> SweepCounts {
             }
             match mode {
                 SweepMode::Apply if !charmed => {
-                    // `dont_sync` MUST be false. It is not a preference: with it true,
-                    // `CS::ChrIns::ApplySpEffect` (`0x1403e8be0` -> `0x1403e8c90`) refuses outright
-                    // for any target that is not the main player and not in the debug ChrSet --
-                    //
-                    //     else {                                   // shouldNotSync != 0
-                    //       if (chr->isChrEventIdLessThan9998()) return false;
-                    //       if (!IsMainPlayerIns(chr) && !IsChrInDebugChrSet(chr)) return false;
-                    //     }
-                    //
-                    // -- so every enemy is rejected and the sweep re-applies the same 262
-                    // characters every frame forever. Measured before the fix: `262 refused` out of
-                    // 262, for both charm rows. With it false the call takes the branch that
-                    // returns true for an ordinary local NPC, and the effect sticks.
-                    const DONT_SYNC: bool = false;
                     probe_once(chr_ins);
-                    // Mark the character charmable, then charm it -- but only once the marker is
-                    // ACTIVE, which is a later frame. Applying the charm row before then is not
-                    // merely wasted: it is added and immediately removed every single frame.
+                    // Mark the character charmable first. That marker is a SELF-target effect, so
+                    // the ordinary wrapper is the right call for it -- and it only takes effect on
+                    // a later frame, because the game's charm test requires an ACTIVE entry.
                     if !chr_ins
                         .special_effect
                         .entries()
                         .any(|entry| entry.param_id == ENABLE_CHARM_EFFECT_ID)
                     {
-                        chr_ins.apply_speffect(ENABLE_CHARM_EFFECT_ID, DONT_SYNC);
+                        chr_ins.apply_speffect(ENABLE_CHARM_EFFECT_ID, false);
                     }
                     if !charm_eligible(chr_ins) {
                         continue;
                     }
-                    chr_ins.apply_speffect(effect_id, DONT_SYNC);
+                    // The charm row itself is OPPOSE-target and must be applied AS the player.
+                    let Some(source) = player_source else {
+                        continue;
+                    };
+                    apply_from_player(effect_id, chr_ins, source);
                     counts.applied += 1;
-                    // The trait method drops the native `bool`, so re-read the container instead:
-                    // if the row is not there immediately after the call, the game refused it.
                     if !chr_ins
                         .special_effect
                         .entries()
@@ -240,10 +286,15 @@ pub(crate) fn sweep(effect_id: i32, mode: SweepMode) -> SweepCounts {
                 }
                 SweepMode::Remove if charmed => {
                     chr_ins.remove_speffect(effect_id);
-                    // The charmable marker never expires on its own (duration -1), so the toggle
-                    // has to take it back off too or it outlives the feature being switched off.
-                    chr_ins.remove_speffect(ENABLE_CHARM_EFFECT_ID);
                     counts.removed += 1;
+                    // The charmable marker is deliberately LEFT ON. Stripping it looks tidier and
+                    // is worse: 200 of the 262 enemies measured were already charmable from their
+                    // own setup, this sweep cannot tell those apart from the 62 it marked itself,
+                    // and removing it from the natives takes away something the game gave them --
+                    // they would stop responding to a real Bewitching Branch until they reload.
+                    // Leaving it is additive and matches what three quarters of them already were.
+                    // (Measured both ways: strip-always ended the sweep with `charmable=0`, below
+                    // the 200 it started from.)
                 }
                 SweepMode::Apply | SweepMode::Remove | SweepMode::Count => {}
             }
