@@ -49,6 +49,9 @@ members = [
   # Import a build from an er-build-planner share link: pure host-side data
   # transformation (planner JSON -> item grants), no game or network deps.
   "crates/er-build-import",
+  # Game-side half of the importer (catalogue/grant/equip/stats + the WinHTTP fetch), shared by the
+  # standalone shell below and the product DLL's System>Quit "Load Build from URL" row.
+  "crates/er-build-import-runtime",
   "crates/er-build-import-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",

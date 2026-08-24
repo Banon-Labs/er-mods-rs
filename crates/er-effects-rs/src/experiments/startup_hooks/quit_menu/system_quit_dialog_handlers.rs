@@ -229,6 +229,18 @@ pub(crate) unsafe fn system_quit_route_button_action_or_forward(
             ));
             0
         }
+        // The one row on this tab that neither returns to the title nor touches a save container:
+        // it queues a build import against the character already in the world. Nothing here blocks
+        // or mutates game state -- the press spawns a fetch worker and the FrameBegin task applies
+        // the result -- so it is the same two lines from either routing hook.
+        Some(QuitRow::LoadBuildFromUrl) => {
+            let press = system_quit_start_build_import();
+            system_quit_log_build_import_press(hook_name, &press);
+            append_autoload_debug(format_args!(
+                "system-quit-build-url: action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text}; suppressing the native Quit Game row action behind this thunk"
+            ));
+            0
+        }
         Some(QuitRow::SaveGame) => {
             if dialog < 0x10000 {
                 append_autoload_debug(format_args!(
@@ -418,6 +430,13 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             let opened = unsafe { system_quit_open_save_picker_menu(action_alias) };
             append_autoload_debug(format_args!(
                 "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened:?} (in-game save picker); suppressing native button activation"
+            ));
+        }
+        Some(QuitRow::LoadBuildFromUrl) => {
+            let press = system_quit_start_build_import();
+            system_quit_log_build_import_press("build-url/controller", &press);
+            append_autoload_debug(format_args!(
+                "system-quit-build-url: controller=0x{controller:x} {verdict_text} event_kind={event_kind}; suppressing native button activation"
             ));
         }
         Some(QuitRow::ReturnToDesktop) => {
@@ -751,6 +770,23 @@ pub(crate) const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; SYSTEM_QUIT_ROW_TE
 // 2026-07-06).
 pub(crate) const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Browse for another save file and load a character from it (ER0000.co2)");
+
+// THE THIRD CLONED ROW. Named after what it TAKES, like the two above it: a planner share link.
+//
+// "Build" rather than "Character" is the whole distinction the label has to carry -- the two rows
+// above it swap WHICH character you are playing, and this one changes the character you are already
+// playing. It is also the only row on the tab that neither returns to the title nor touches a save
+// container, which is why its help says the import happens where you stand.
+//
+// 203.7px at 24px MenuFont_01 against the cell's 400px non-wrapping field
+// (`scripts/gfx_text_width.py --height-px 24 --box-px 400`), so it clips no tail.
+pub(crate) const SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(b"Load Build from URL");
+
+pub(crate) const SYSTEM_QUIT_LOAD_BUILD_URL_HELP_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
+    system_quit_row_text(
+        b"Import the er-build-planner link from er-effects.toml onto this character",
+    );
 
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY] =
     system_quit_row_text(b"Save Game");
@@ -1238,7 +1274,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
     if second_row_call {
         let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
             append_autoload_debug(format_args!(
-                "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; cannot add Load Profile/Load Save Profiles rows"
+                "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; cannot add the cloned Quit rows"
             ));
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_native, Ordering::SeqCst);
@@ -1246,74 +1282,82 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         };
         let label_dtor: unsafe extern "system" fn(usize) =
             unsafe { std::mem::transmute(label_dtor_addr) };
-        let mut load_label_storage =
-            std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
-        let load_label = load_label_storage.as_mut_ptr() as usize;
-        let load_label_ok = unsafe {
-            system_quit_build_static_label_component(
-                load_label,
-                &SYSTEM_QUIT_LOAD_PROFILE_LABEL_W,
-                &SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
-            )
-        };
-        let (load_ret, load_row, load_controller, load_action) = if load_label_ok {
-            let r = unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
-            unsafe { label_dtor(load_label) };
-            after_final = unsafe {
-                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
-            }
-            .unwrap_or(after_native);
-            let row_index = after_final.saturating_sub(1);
-            let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
-            let controller =
-                unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
-            let action = if controller != 0 {
-                unsafe {
-                    safe_read_usize(
-                        controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
-                    )
-                }
-                .unwrap_or(0)
-            } else {
-                0
-            };
-            if action != 0 {
-                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(action, Ordering::SeqCst);
-            }
-            if controller != 0 {
-                SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.store(controller, Ordering::SeqCst);
-                system_quit_row_table_record_index(QuitRow::LoadProfile, row_index);
-            }
-            (r, row, controller, action)
-        } else {
-            (0, 0, 0, 0)
-        };
-
-        let mut open_label_storage =
-            std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
-        let open_label = open_label_storage.as_mut_ptr() as usize;
-        let open_label_ok = unsafe {
-            system_quit_build_static_label_component(
-                open_label,
-                &SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
-                if crate::telemetry::seamless_coop_loaded() {
+        // THE CLONED ROWS, AS DATA. Each is the same five steps -- build a `MenuHelpLabelComponent`
+        // over this DLL's own process-lifetime label/help arrays, call the native AddCancelButton
+        // with it, destruct the component, read back the row the call appended, and record that
+        // row's controller + property index. They were two hand-expanded copies of those steps
+        // until the third row arrived; a table walked once is what stops the copies drifting.
+        //
+        // ORDER IS THE PRODUCT CONTRACT, not a detail: the property index a row lands at IS its
+        // grid cell (`row * cols + col`), so this order is what puts Load Character at `Item_1_0`,
+        // Load Character from File at `Item_1_1` and Load Build from URL at `Item_2_0`. It must
+        // match `er_gfx::options_02_040::QUIT5_GRID_CELL_NAMES`.
+        struct ClonedRow {
+            row: QuitRow,
+            label: &'static [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY],
+            help: &'static [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY],
+            /// Where to record the row's action alias and its `PropertyNewButtonController`. Both
+            /// are telemetry: the row IDENTITY is the list cursor, never these pointers.
+            action_slot: &'static AtomicUsize,
+            controller_slot: &'static AtomicUsize,
+        }
+        let cloned_rows = [
+            ClonedRow {
+                row: QuitRow::LoadProfile,
+                label: &SYSTEM_QUIT_LOAD_PROFILE_LABEL_W,
+                help: &SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
+                action_slot: &SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT,
+                controller_slot: &SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT,
+            },
+            ClonedRow {
+                row: QuitRow::LoadSaveProfiles,
+                label: &SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
+                // Mode-locked at row-build time so the row never advertises the save flavor the
+                // active mode ignores (user directive 2026-07-06).
+                help: if crate::telemetry::seamless_coop_loaded() {
                     &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W
                 } else {
                     &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W
                 },
-            )
-        };
-        let (open_ret, open_row, open_controller, open_action) = if open_label_ok {
-            let r = unsafe { original(dialog, open_label, action_fn, enabled_fn, keyguide_fn) };
-            unsafe { label_dtor(open_label) };
+                action_slot: &SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT,
+                controller_slot: &SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT,
+            },
+            ClonedRow {
+                row: QuitRow::LoadBuildFromUrl,
+                label: &SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W,
+                help: &SYSTEM_QUIT_LOAD_BUILD_URL_HELP_W,
+                action_slot: &SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_LAST_OBJECT,
+                controller_slot: &SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT,
+            },
+        ];
+
+        let mut any_row_added = false;
+        let mut row_log = String::new();
+        for cloned in &cloned_rows {
+            // The scratch component lives on THIS stack frame for exactly as long as the native
+            // call needs it: `CS::MenuString` keeps the label POINTER (which is why the arrays are
+            // `const`/process-lifetime), while the component wrapper itself is destructed the
+            // instant AddCancelButton returns.
+            let mut label_storage =
+                std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
+            let label = label_storage.as_mut_ptr() as usize;
+            let built = unsafe {
+                system_quit_build_static_label_component(label, cloned.label, cloned.help)
+            };
+            if !built {
+                row_log.push_str(&format!(" {}=LABEL-BUILD-FAILED", cloned.row.label()));
+                continue;
+            }
+            let row_ret = unsafe { original(dialog, label, action_fn, enabled_fn, keyguide_fn) };
+            unsafe { label_dtor(label) };
             after_final = unsafe {
                 safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
             }
             .unwrap_or(after_final);
             let row_index = after_final.saturating_sub(1);
-            let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
+            let row_addr = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
             let controller =
-                unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+                unsafe { safe_read_usize(row_addr + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
             let action = if controller != 0 {
                 unsafe {
                     safe_read_usize(
@@ -1325,18 +1369,22 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 0
             };
             if action != 0 {
-                SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.store(action, Ordering::SeqCst);
+                cloned.action_slot.store(action, Ordering::SeqCst);
             }
+            // The property INDEX is only recorded once a controller was actually read back. A row
+            // whose controller is 0 was not really appended, and recording its index would complete
+            // the row table with a lie -- which the resolver would then trust.
             if controller != 0 {
-                SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT
-                    .store(controller, Ordering::SeqCst);
-                system_quit_row_table_record_index(QuitRow::LoadSaveProfiles, row_index);
+                cloned.controller_slot.store(controller, Ordering::SeqCst);
+                system_quit_row_table_record_index(cloned.row, row_index);
+                any_row_added = true;
             }
-            (r, row, controller, action)
-        } else {
-            (0, 0, 0, 0)
-        };
-        if load_label_ok || open_label_ok {
+            row_log.push_str(&format!(
+                " {}=#{row_index}:ret=0x{row_ret:x}:row=0x{row_addr:x}:controller=0x{controller:x}:action_alias=0x{action:x}",
+                cloned.row.label()
+            ));
+        }
+        if any_row_added {
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
         }
         // Raise the list widget's item count through the NATIVE setter, not by poking the field.
@@ -1374,7 +1422,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             })
             .join(" ");
         append_autoload_debug(format_args!(
-            "system-quit-dup: added native GameEnd rows Load Profile + Load Save Profiles dialog=0x{dialog:x} count {before}->{after_native}->{after_final} cursor_bound {prior_bound}->{bound_after} ret=0x{ret:x} load_ok={load_label_ok} load_ret=0x{load_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action_alias=0x{load_action:x} open_ok={open_label_ok} open_ret=0x{open_ret:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action_alias=0x{open_action:x}; row table [{table}]"
+            "system-quit-dup: cloned Quit rows dialog=0x{dialog:x} count {before}->{after_native}->{after_final} cursor_bound {prior_bound}->{bound_after} ret=0x{ret:x} added={any_row_added};{row_log}; row table [{table}]"
         ));
     }
 

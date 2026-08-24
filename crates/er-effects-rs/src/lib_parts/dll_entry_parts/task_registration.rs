@@ -580,6 +580,21 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
             CSTaskGroupIndex::FrameBegin,
         );
+        // BUILD IMPORT (System>Quit "Load Build from URL"). FrameBegin is the game thread, which is
+        // what every step of the import needs -- it mutates the inventory, `CSGaitemImp`,
+        // `PlayerGameData` and the equipment slots through the game's own functions. Registered
+        // unconditionally and from boot because it is inert until a row press queues a build: the
+        // runtime's tick returns immediately unless its phase is `Ready`, so the cost of an idle
+        // frame is one atomic load.
+        cs_task.run_recurring(
+            move |_task_data: &FD4TaskData| {
+                // Safety: FrameBegin runs on the game task thread, the context the runtime requires;
+                // every step inside it is individually precondition-checked (params streamed,
+                // character present).
+                unsafe { system_quit_build_import_tick() };
+            },
+            CSTaskGroupIndex::FrameBegin,
+        );
         // BUILD-OWN LIVE-RENDER DRIVER (gated, FrameBegin = GAME thread, ticks EVERY frame incl. the
         // loading screen). force_profile_render_tick's only other call sites are menu-phase-only (they
         // `return` before Continue), so maybe_build_profile_table_for_loading + the mark/refresh feed never

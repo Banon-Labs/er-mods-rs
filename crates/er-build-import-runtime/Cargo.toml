@@ -1,0 +1,33 @@
+[package]
+name = "er-build-import-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The GAME-SIDE half of the build importer: everything that reads or mutates Elden Ring's own
+# memory (catalog, grants, equipment, stats, spells) plus the WinHTTP fetch, behind a small
+# request/tick state machine.
+#
+# It is a library rather than part of `er-build-import-dll` because there are now two callers:
+# that standalone ME3 shell, which imports the configured build once at character load, and the
+# product DLL's System>Quit "Load Build from URL" row, which imports on demand. A `cdylib` cannot
+# be linked into another `cdylib` (its `DllMain` would collide), so the shared half has to live
+# here.
+#
+# The pure data transformation stays in the host-testable `er-build-import`; nothing in THIS crate
+# is host-testable, so nothing that can be proven by `cargo test` belongs in it.
+
+[dependencies]
+er-build-import = { path = "../er-build-import" }
+er-game-base = { path = "../er-game-base" }
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+] }
+
+[lints]
+workspace = true

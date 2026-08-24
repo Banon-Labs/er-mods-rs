@@ -161,7 +161,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         let Some(found) = catalog.lookup(Kind::Weapon, &slot.name) else {
             out.rejected.push(Rejected {
                 name: slot.name.clone(),
-                reason: "armament not in catalogue".into(),
+                reason: "armament not in catalog".into(),
             });
             continue;
         };
@@ -188,7 +188,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             let Some(found) = catalog.lookup(Kind::Protector, &slot.name) else {
                 out.rejected.push(Rejected {
                     name: slot.name.clone(),
-                    reason: format!("{part} armour not in catalogue"),
+                    reason: format!("{part} armour not in catalog"),
                 });
                 continue;
             };
@@ -228,7 +228,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         let Some(found) = catalog.lookup(Kind::Talisman, &slot.name) else {
             out.rejected.push(Rejected {
                 name: slot.name.clone(),
-                reason: "talisman not in catalogue".into(),
+                reason: "talisman not in catalog".into(),
             });
             continue;
         };
@@ -254,7 +254,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         let Some(found) = catalog.lookup(Kind::Spell, &slot.name) else {
             out.rejected.push(Rejected {
                 name: slot.name.clone(),
-                reason: "spell not in catalogue".into(),
+                reason: "spell not in catalog".into(),
             });
             continue;
         };
@@ -279,7 +279,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         let Some(found) = catalog.lookup(Kind::Tool, &slot.name) else {
             out.rejected.push(Rejected {
                 name: slot.name.clone(),
-                reason: "tool not in catalogue".into(),
+                reason: "tool not in catalog".into(),
             });
             continue;
         };
@@ -313,7 +313,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         let Some(found) = catalog.lookup(Kind::Tool, tear) else {
             out.rejected.push(Rejected {
                 name: tear.clone(),
-                reason: "physick tear not in catalogue".into(),
+                reason: "physick tear not in catalog".into(),
             });
             continue;
         };
@@ -342,7 +342,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             }
             None => out.rejected.push(Rejected {
                 name: rune.to_owned(),
-                reason: "great rune not in catalogue".into(),
+                reason: "great rune not in catalog".into(),
             }),
         }
     }

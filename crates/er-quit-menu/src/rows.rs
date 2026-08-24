@@ -1,4 +1,4 @@
-// POSITIVE row identity for the four-row System -> Quit dialog.
+// POSITIVE row identity for the five-row System -> Quit dialog.
 //
 // # Why the previous identity was wrong
 //
@@ -16,7 +16,7 @@
 // `0x23518180+0x70 = 0x235181f0`, `0x23517b80+0x70 = 0x23517bf0`.
 //
 // Therefore `action_obj == captured_action` is exactly `controller == captured_controller` wearing
-// a disguise, and it carries no row information whatsoever. Worse, the four visible buttons are
+// a disguise, and it carries no row information whatsoever. Worse, the visible buttons are
 // dispatched through only TWO controllers: in the measured run only the two NATIVE row controllers
 // ever reached `PropertyNewButtonController::Activate` (0x23517880 with index 0, 0x23517580 with
 // index 1, twice per frame), and the two cloned rows' controllers never appeared at all. So a click
@@ -30,13 +30,14 @@
 // `PropertyEditDialog.properties.items` starts at `dialog + 0x1268`, rows are `0x88` apart, and
 // `EditProperty.label` at `+0x8` is a `CS::MenuHelpLabelComponent` whose first field is the
 // `MenuString`'s RAW UTF-16 pointer (`CS::MenuString::MenuString` stores the pointer it is given).
-// The two cloned rows are built from this DLL's own process-lifetime label arrays, so they match by
-// exact POINTER equality; all four rows also match by text. That is measured, not assumed: the same
-// run reported `oracle_optionsetting_active_row_count = 4` with
+// The cloned rows are built from this DLL's own process-lifetime label arrays, so they match by
+// exact POINTER equality; every row also matches by text. That is measured, not assumed: a run of
+// the four-row build reported `oracle_optionsetting_active_row_count = 4` with
 // `oracle_optionsetting_active_row_quit_label_mask = 15`, i.e. all four rows' labels were readable
 // and each matched one of the four known Quit labels, on the very dialog (`0x175842080`) the fatal
 // click came from. `cloned_mask = 12` and `native_save_mask = 1` pin the order: row 0 Save Game,
-// row 1 Return to Desktop, row 2 Load Character, row 3 Load Character from File.
+// row 1 Return to Desktop, row 2 Load Character, row 3 Load Character from File -- and the fifth
+// row, Load Build from URL, is appended after them by the same cloner in the same pass.
 //
 // Which row was ACTIVATED comes from ONE source for all three input kinds: the dialog's own list
 // cursor, `dialog + 0xb0c` -- field `+0xd4` of the `CS::GridControl` embedded at `dialog + 0xa38`
@@ -58,15 +59,15 @@
 //
 // There is no separate focus field. So once the two rows this DLL adds are real grid cells, the
 // cursor identifies the row for mouse, keyboard and pad alike -- see `er_gfx::options_02_040` for the
-// movie-side half (the cells are named `Item_1_0`/`Item_1_1` so the grid measures 2x2, which is what
-// makes them hit-testable AND puts the vertical axis in play).
+// movie-side half (the cells are named `Item_1_0`/`Item_1_1`/`Item_2_0` so the grid measures 2x3,
+// which is what makes them hit-testable AND puts the vertical axis in play).
 //
 // The cursor's two halves are cross-checked and must agree: the captured build-time row TABLE
 // (index -> row) and the LIVE label read at that index. A mismatch, an unreadable label, an
 // out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row NEVER quits and
 // never runs anything.
 
-/// The four rows of the patched System -> Quit dialog, in property-list order.
+/// The five rows of the patched System -> Quit dialog, in property-list order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRow {
     /// Native first row, relabelled "Save Game" by the `MsgRepository::GetAndFormat` hook.
@@ -79,6 +80,11 @@ pub enum QuitRow {
     /// Cloned row, labelled "Load Character from File": opens the save-container browser, and the
     /// character picker follows once a container is chosen.
     LoadSaveProfiles,
+    /// Cloned row, labelled "Load Build from URL": runs the `er-build-planner` build importer
+    /// against a share link, on the character already in the world. Unlike the two rows above it
+    /// neither returns to the title nor touches the save container -- it grants, equips and
+    /// re-stats the LIVE character in place.
+    LoadBuildFromUrl,
 }
 
 impl QuitRow {
@@ -89,6 +95,7 @@ impl QuitRow {
             QuitRow::ReturnToDesktop => 2,
             QuitRow::LoadProfile => 3,
             QuitRow::LoadSaveProfiles => 4,
+            QuitRow::LoadBuildFromUrl => 5,
         }
     }
 
@@ -102,16 +109,18 @@ impl QuitRow {
             QuitRow::ReturnToDesktop => "Return to Desktop",
             QuitRow::LoadProfile => "Load Character",
             QuitRow::LoadSaveProfiles => "Load Character from File",
+            QuitRow::LoadBuildFromUrl => "Load Build from URL",
         }
     }
 }
 
-/// The four rows of the patched Quit dialog, in the captured table's stable order.
-pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 4] = [
+/// The five rows of the patched Quit dialog, in the captured table's stable order.
+pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 5] = [
     QuitRow::SaveGame,
     QuitRow::ReturnToDesktop,
     QuitRow::LoadProfile,
     QuitRow::LoadSaveProfiles,
+    QuitRow::LoadBuildFromUrl,
 ];
 
 /// The `std::function` storage inside a controller that the action thunks receive as their `this`.
@@ -135,13 +144,14 @@ pub fn quit_row_index_from_plus1(plus1: usize) -> i32 {
 }
 
 /// A pure snapshot of the row table captured from live memory. Root DLL code still owns the
-/// telemetry atomics; this crate owns the shape and interpretation of those four row indices.
+/// telemetry atomics; this crate owns the shape and interpretation of those row indices.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct QuitRowTable {
     pub save_game_index: i32,
     pub return_desktop_index: i32,
     pub load_profile_index: i32,
     pub load_save_profiles_index: i32,
+    pub load_build_from_url_index: i32,
 }
 
 impl QuitRowTable {
@@ -151,6 +161,7 @@ impl QuitRowTable {
             QuitRow::ReturnToDesktop => self.return_desktop_index,
             QuitRow::LoadProfile => self.load_profile_index,
             QuitRow::LoadSaveProfiles => self.load_save_profiles_index,
+            QuitRow::LoadBuildFromUrl => self.load_build_from_url_index,
         }
     }
 
@@ -225,7 +236,7 @@ impl QuitRowDiscriminator {
 /// Why the row could not be identified. Every one of these refuses the quit AND runs nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRowAmbiguity {
-    /// One or more of the four row indices was never captured, or two captured the same index.
+    /// One or more of the row indices was never captured, or two captured the same index.
     RowTableIncomplete,
     /// The activation's dialog is not the dialog the table was captured from (a rebuilt Quit pane,
     /// or a heap address reused after the old dialog died).
@@ -319,13 +330,15 @@ pub struct QuitRowFacts {
     pub return_desktop_index: i32,
     pub load_profile_index: i32,
     pub load_save_profiles_index: i32,
+    pub load_build_from_url_index: i32,
     /// The dialog the table above was captured from, and the dialog this activation belongs to.
     pub table_dialog: usize,
     pub activation_dialog: usize,
     /// Live list cursor `dialog + 0xb0c` (`GridControl + 0xd4`); `-1` when unreadable. THE row
     /// identity: the native grid writes it from mouse hover, keyboard and pad alike.
     pub cursor: i32,
-    /// Number of rows in the table (always 4 once complete); the cursor must be inside it.
+    /// Number of rows in the table (always `QUIT_ROW_TABLE_ROWS.len()` once complete); the cursor
+    /// must be inside it.
     pub row_count: i32,
     /// Label read live at the cursor row; `None` when the pointer was unreadable.
     pub cursor_row_label: Option<QuitRowLabel>,
@@ -348,6 +361,7 @@ impl QuitRowFacts {
             return_desktop_index: table.return_desktop_index,
             load_profile_index: table.load_profile_index,
             load_save_profiles_index: table.load_save_profiles_index,
+            load_build_from_url_index: table.load_build_from_url_index,
             table_dialog,
             activation_dialog,
             cursor,
@@ -363,6 +377,7 @@ impl QuitRowFacts {
             return_desktop_index: self.return_desktop_index,
             load_profile_index: self.load_profile_index,
             load_save_profiles_index: self.load_save_profiles_index,
+            load_build_from_url_index: self.load_build_from_url_index,
         }
         .index(row)
     }
@@ -373,6 +388,7 @@ impl QuitRowFacts {
             self.return_desktop_index,
             self.load_profile_index,
             self.load_save_profiles_index,
+            self.load_build_from_url_index,
         ];
         if idx.iter().any(|i| *i < 0 || *i >= self.row_count) {
             return false;
@@ -448,12 +464,13 @@ pub fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
 /// index, and what the label read live at the cursor actually is.
 pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
     format!(
-        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{}] live_label={:?} input_kind={:?}",
+        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{}] live_label={:?} input_kind={:?}",
         facts.cursor,
         facts.save_game_index,
         facts.return_desktop_index,
         facts.load_profile_index,
         facts.load_save_profiles_index,
+        facts.load_build_from_url_index,
         facts.cursor_row_label,
         facts.input_kind,
     )
@@ -474,7 +491,9 @@ pub fn quit_row_verdict_text(verdict: QuitRowVerdict) -> String {
 pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
     matches!(
         verdict.resolved_row(),
-        Some(QuitRow::LoadProfile) | Some(QuitRow::LoadSaveProfiles)
+        Some(QuitRow::LoadProfile)
+            | Some(QuitRow::LoadSaveProfiles)
+            | Some(QuitRow::LoadBuildFromUrl)
     )
 }
 
@@ -485,17 +504,19 @@ mod system_quit_row_identity_tests {
     use super::*;
 
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
-    /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1.
+    /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1,
+    /// plus row 4 (Load Build from URL), which the same cloner appends in the same pass.
     fn facts() -> QuitRowFacts {
         QuitRowFacts {
             save_game_index: 0,
             return_desktop_index: 1,
             load_profile_index: 2,
             load_save_profiles_index: 3,
+            load_build_from_url_index: 4,
             table_dialog: 0x175842080,
             activation_dialog: 0x175842080,
             cursor: 1,
-            row_count: 4,
+            row_count: QUIT_ROW_TABLE_ROWS.len() as i32,
             cursor_row_label: Some(QuitRowLabel::Foreign),
             input_kind: QuitInputKind::Confirm,
         }
@@ -537,6 +558,11 @@ mod system_quit_row_identity_tests {
                     QuitRow::LoadSaveProfiles,
                     Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles)),
                 ),
+                (
+                    4,
+                    QuitRow::LoadBuildFromUrl,
+                    Some(QuitRowLabel::Ours(QuitRow::LoadBuildFromUrl)),
+                ),
             ] {
                 let mut f = facts();
                 f.input_kind = kind;
@@ -554,13 +580,14 @@ mod system_quit_row_identity_tests {
         }
     }
 
-    /// Only the Return-to-Desktop row may quit; the other three are resolved and harmless.
+    /// Only the Return-to-Desktop row may quit; the other four are resolved and harmless.
     #[test]
     fn no_row_but_return_to_desktop_can_quit() {
         for (cursor, label) in [
             (0, Some(QuitRowLabel::Foreign)),
             (2, Some(QuitRowLabel::Ours(QuitRow::LoadProfile))),
             (3, Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles))),
+            (4, Some(QuitRowLabel::Ours(QuitRow::LoadBuildFromUrl))),
         ] {
             let mut f = facts();
             f.cursor = cursor;
@@ -576,7 +603,7 @@ mod system_quit_row_identity_tests {
 
     #[test]
     fn an_out_of_range_cursor_runs_nothing() {
-        for cursor in [-1, 4, 99] {
+        for cursor in [-1, QUIT_ROW_TABLE_ROWS.len() as i32, 99] {
             let mut f = facts();
             f.cursor = cursor;
             assert_eq!(
@@ -737,25 +764,27 @@ mod system_quit_row_identity_tests {
             return_desktop_index: 1,
             load_profile_index: 2,
             load_save_profiles_index: 3,
+            load_build_from_url_index: 4,
         };
         assert_eq!(table.row_count(), QUIT_ROW_TABLE_ROWS.len() as i32);
-        assert_eq!(table.index(QuitRow::SaveGame), 0);
-        assert_eq!(table.index(QuitRow::ReturnToDesktop), 1);
-        assert_eq!(table.index(QuitRow::LoadProfile), 2);
-        assert_eq!(table.index(QuitRow::LoadSaveProfiles), 3);
+        // Every row in the stable table order must round-trip through `index`, so a row added to
+        // `QuitRow` without a table field cannot pass this test by being ignored.
+        for (index, row) in QUIT_ROW_TABLE_ROWS.into_iter().enumerate() {
+            assert_eq!(table.index(row), index as i32, "{row:?}");
+        }
 
         let facts = QuitRowFacts::from_table(
             table,
             0x10_0000,
             0x10_0000,
-            3,
-            Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles)),
+            4,
+            Some(QuitRowLabel::Ours(QuitRow::LoadBuildFromUrl)),
             QuitInputKind::MouseClick,
         );
-        assert_eq!(facts.row_count, 4);
+        assert_eq!(facts.row_count, QUIT_ROW_TABLE_ROWS.len() as i32);
         assert_eq!(
             resolve_quit_row(&facts).resolved_row(),
-            Some(QuitRow::LoadSaveProfiles)
+            Some(QuitRow::LoadBuildFromUrl)
         );
     }
 

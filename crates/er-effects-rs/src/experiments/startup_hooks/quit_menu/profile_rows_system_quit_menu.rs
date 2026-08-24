@@ -1383,7 +1383,7 @@ pub(crate) fn wide_ptr_starts_with_ascii(ptr: usize, ascii: &[u8]) -> bool {
     true
 }
 
-/// Which of the four Quit-tab labels a row carries (0 = none of ours). Telemetry only
+/// Which of the five Quit-tab labels a row carries (0 = none of ours). Telemetry only
 /// (`oracle_optionsetting_active_row_quit_label_mask`); the routing identity lives in
 /// `system_quit_row_label_at`.
 ///
@@ -1399,6 +1399,8 @@ pub(crate) fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
         2
     } else if wide_ptr_starts_with_ascii(label_ptr, b"Return to Desktop") {
         4
+    } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Build from URL") {
+        5
     } else {
         0
     }
@@ -1459,6 +1461,11 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
     } else {
         0
     };
+    let build_url_controller = if table_live {
+        SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+    } else {
+        0
+    };
     let native_save_controller = if table_live {
         SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
     } else {
@@ -1489,7 +1496,9 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
             quit_label_mask |= 1usize << row_idx;
         }
         if controller != 0
-            && (controller == quickload_controller || controller == open_profiles_controller)
+            && (controller == quickload_controller
+                || controller == open_profiles_controller
+                || controller == build_url_controller)
         {
             cloned_mask |= 1usize << row_idx;
         }

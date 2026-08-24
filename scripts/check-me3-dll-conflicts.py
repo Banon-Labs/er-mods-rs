@@ -44,6 +44,11 @@ VALID_KINDS = {
     "present-compositor",
     "drives-input",
     "diagnostic-drive",
+    # Two DLLs statically linking the SAME feature crate. A linked crate's statics are per-DLL, so
+    # each gets its own copy of that feature's state machine, its own worker threads and its own
+    # game tasks -- all driving one piece of game state with no shared lock. Nothing is detoured,
+    # so it looks harmless to every other check here; the damage is two owners of one mutation.
+    "duplicate-owner",
 }
 
 
