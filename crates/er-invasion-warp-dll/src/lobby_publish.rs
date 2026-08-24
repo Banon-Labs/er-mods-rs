@@ -623,11 +623,19 @@ mod live {
         key: usize,
         value: usize,
     ) -> usize {
-        if !IN_OUR_OWN_WRITE.load(Ordering::SeqCst) && key != 0 && value != 0 {
-            let key_str = unsafe { core::ffi::CStr::from_ptr(key as *const i8) }.to_str();
-            if key_str == Ok(ADVERTISEMENT_MARKER_KEY.trim_end_matches('\0')) {
-                let value_str = unsafe { core::ffi::CStr::from_ptr(value as *const i8) }.to_str();
-                if value_str == Ok(ADVERTISEMENT_MARKER_VALUE) {
+        // Same rule as `pooled_key_for`: these pointers are Seamless's, so they are read through
+        // `safe_read_cstr` rather than `CStr::from_ptr`. This hook has never been seen to crash,
+        // but it takes the identical `key`/`value` pair from the identical caller as the hook
+        // that did, so leaving one of the pair unguarded would just be waiting for the other
+        // half of the same bug.
+        if !IN_OUR_OWN_WRITE.load(Ordering::SeqCst) {
+            let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) };
+            if key_bytes.as_deref()
+                == Some(ADVERTISEMENT_MARKER_KEY.trim_end_matches('\0').as_bytes())
+            {
+                let value_bytes =
+                    unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) };
+                if value_bytes.as_deref() == Some(ADVERTISEMENT_MARKER_VALUE.as_bytes()) {
                     let lobby = lobby as u64;
                     let previous = ADVERTISEMENT_LOBBY.swap(lobby, Ordering::SeqCst);
                     if previous != lobby {
@@ -660,24 +668,36 @@ mod live {
     /// Seamless's own key for the value that decides which pool a lobby belongs to.
     pub const LOBBY_KEY_NAME: &str = "lobby_key";
 
+    /// Steam's own ceiling on a lobby-data KEY (`k_nMaxLobbyKeyLength`). Used as the read bound
+    /// in [`pooled_key_for`] so a junk pointer that happens to land in mapped memory cannot walk
+    /// the process looking for a NUL that was never there.
+    const MAX_LOBBY_KEY_LEN: usize = 255;
+
+    /// Steam's ceiling on a lobby-data VALUE (`k_cubChatMetadataMax`). Same purpose as
+    /// [`MAX_LOBBY_KEY_LEN`]; the real `lobby_key` value is 16 characters, so this is a bound
+    /// rather than an expectation.
+    const MAX_LOBBY_VALUE_LEN: usize = 8192;
+
     /// If this call carries Seamless's `lobby_key` and the user opted into the DLL pool, the
     /// replacement to pass instead.
     ///
     /// Returns an owned NUL-terminated buffer that the caller must keep alive across the call —
     /// Steam copies the string during it, but not before.
     fn pooled_key_for(key: usize, value: usize) -> Option<std::ffi::CString> {
-        if key == 0 || value == 0 {
+        // These two pointers come from Seamless/Steam, not from us, and a NULL check is not
+        // enough to make them safe to hand to `CStr::from_ptr`. Both of the crashes reported on
+        // 2026-08-23 were a garbage NON-NULL `key` (`0x011000010e05acda` and
+        // `0x0110000107be5e2c`) walking into `strlen` and taking the game down from inside this
+        // exact call -- see bd `ersc-steam-garbage-key-ptr-crashes-lobby-publish-2026-08-24`.
+        // `safe_read_cstr` reads through `ReadProcessMemory`, which fails closed on an unmapped
+        // page instead of faulting, and refuses a run with no terminator in range. It rejects
+        // null itself, so the old `key == 0 || value == 0` guard is gone rather than duplicated.
+        let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) }?;
+        if key_bytes != LOBBY_KEY_NAME.as_bytes() {
             return None;
         }
-        let key_str = unsafe { core::ffi::CStr::from_ptr(key as *const i8) }
-            .to_str()
-            .ok()?;
-        if key_str != LOBBY_KEY_NAME {
-            return None;
-        }
-        let original = unsafe { core::ffi::CStr::from_ptr(value as *const i8) }
-            .to_str()
-            .ok()?;
+        let value_bytes = unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) }?;
+        let original = std::str::from_utf8(&value_bytes).ok()?;
         // Remember what Seamless computed, so the toggle can be applied or undone on a lobby that
         // already exists. Seamless publishes its advertisement ONCE at CreateLobby and never again,
         // so without a recorded original there is nothing to convert back to and no way to move an
