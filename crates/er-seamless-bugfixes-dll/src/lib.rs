@@ -32,6 +32,13 @@
 //! trampling a trampoline. If the product ever does hook one of these addresses, that check turns
 //! the collision into a log line rather than a silent corruption.
 
+// Everything below the crate docs is the install path, and the install path is `cfg(windows)`: on
+// the host there is no game to hook, so the registry rows, their stubs, and the logging they feed
+// have no caller. That is a cfg artifact, not dead code -- the same reason `er-invasion-warp-dll`
+// carries this attribute. Without it `cargo test -p er-seamless-bugfixes-dll` cannot even build,
+// which is how the crate's own host tests came to be unrunnable.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 pub(crate) mod guards;
 
 use std::{
@@ -181,6 +188,11 @@ fn install_guards(base: usize) {
         if !prologue_matches(guard, address) {
             continue;
         }
+        // Before the hook can arm, not after: a stub that resolves a game global reads that slot
+        // on its very first call, and the first call can land the instant the hook goes live.
+        if let Some(prepare) = guard.prepare {
+            prepare(base);
+        }
         if install_guard(guard, address) {
             armed += 1;
             log_message(format_args!(
@@ -195,20 +207,48 @@ fn install_guards(base: usize) {
         REGISTRY.len()
     ));
 
-    // A half-armed pair is not a safe state: the query guard alone sends the crashing caller into
-    // the apply path that faults on the same field. Say so rather than letting the log read as a
-    // partial success.
-    if armed != 0 && armed != REGISTRY.len() {
-        log_message(format_args!(
-            "WARNING: only {armed}/{} guards armed. These guards are designed to act together -- \
-             the query guard alone lets the caller proceed into the apply path that faults on the \
-             same field. Treat this run as UNGUARDED.",
-            REGISTRY.len()
-        ));
-    }
+    warn_on_partial_groups();
 
     if armed > 0 {
         spawn_telemetry_task();
+    }
+}
+
+/// Report any guard GROUP that came up partly armed.
+///
+/// A half-armed group is not a safe state: for `null_special_effect`, the query guard alone sends
+/// the crashing caller into the apply path that faults on the same field. Scoping this by group
+/// rather than by the whole registry matters as soon as two unrelated guards exist -- otherwise one
+/// unrelated guard failing to arm would declare an otherwise-complete run UNGUARDED, which is both
+/// false and the kind of noise that gets warnings ignored.
+#[cfg(windows)]
+fn warn_on_partial_groups() {
+    for guard in REGISTRY {
+        // Report each group once, at its first member.
+        if REGISTRY.iter().position(|other| other.group == guard.group)
+            != REGISTRY
+                .iter()
+                .position(|other| core::ptr::eq(other, guard))
+        {
+            continue;
+        }
+        let members: Vec<&Guard> = REGISTRY
+            .iter()
+            .filter(|other| other.group == guard.group)
+            .collect();
+        let armed = members
+            .iter()
+            .filter(|member| member.original.load(Ordering::SeqCst) != ORIGINAL_UNSET)
+            .count();
+        if armed == 0 || armed == members.len() {
+            continue;
+        }
+        log_message(format_args!(
+            "WARNING: group '{}' is only {armed}/{} armed. Its guards are designed to act \
+             together, so treat this run as UNGUARDED for that group.",
+            guard.group,
+            members.len()
+        ));
     }
 }
 

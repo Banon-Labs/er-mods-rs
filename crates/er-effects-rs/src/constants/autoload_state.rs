@@ -1252,7 +1252,9 @@ pub(crate) static MASQUERADE_PRESERVED_JOBS: [AtomicUsize; MASQUERADE_PRESERVED_
 /// confirm dialog is untouched (the teardown only runs after Yes). Grounded by the inner lookup's own
 /// disasm: repo ptr `0x143d81ee8`, `GetParamResCap` `0x140d4cc50`, `MenuOffscrRendParam` type `0x4e`.
 pub(crate) const MENU_OFFSCR_REND_PARAM_LOOKUP_RVA: usize = 0xd3ed90;
-pub(crate) const SOLO_PARAM_REPOSITORY_PTR_RVA: usize = 0x3d81ee8;
+/// Declared once in `er-game-base::rva`; the seamless-bugfixes guard tests the same slot.
+pub(crate) const SOLO_PARAM_REPOSITORY_PTR_RVA: usize =
+    er_game_base::rva::SOLO_PARAM_REPOSITORY_GLOBAL_RVA;
 pub(crate) const GET_PARAM_RESCAP_RVA: usize = 0xd4cc50;
 pub(crate) const MENU_OFFSCR_REND_PARAM_TYPE: u32 = 0x4e;
 pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG: AtomicUsize =

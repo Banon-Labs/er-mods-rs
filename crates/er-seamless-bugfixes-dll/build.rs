@@ -23,6 +23,11 @@ const HAS_SPECIAL_EFFECT_ID_EMPTY_RETURN_VA: u64 = 0x1404f995e;
 /// `int CS::SpecialEffect::Apply(SpecialEffect *container, int spEffectId, ChrIns *, ChrIns *,
 /// FloatVector4 *, byte, bool, byte)`.
 const APPLY_VA: u64 = 0x1404fa8e0;
+/// `FUN_140d3d5f0(out, platformKind)` -- the `LoadBalancerParam` row lookup that `DLPanic`s when
+/// `SoloParamRepository` is null. See `guards::null_param_repository`.
+const LOAD_BALANCER_PARAM_VA: u64 = 0x140d3d5f0;
+/// The SEH frame marker the prologue stores; named so the assembled `MOV` is not a bare literal.
+const SEH_FRAME_UNINITIALISED: i32 = -2;
 
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
@@ -68,5 +73,32 @@ fn main() {
             ),
         ],
         "generated_null_special_effect_prologues.rs",
+    );
+
+    generate(
+        &[(
+            PrologueSpec {
+                name: "LOAD_BALANCER_PARAM_PROLOGUE",
+                doc: "1.16.2 prologue of the `LoadBalancerParam` row lookup:\n\
+                      `PUSH R14; SUB RSP,0x40; MOV [RSP+0x20],-2`.",
+                visibility: "pub(crate)",
+                shape: Shape::Slice,
+                image: Image::EldenRing,
+                va: LOAD_BALANCER_PARAM_VA,
+                take: 0,
+                pin: &[
+                    0x41, 0x56, 0x48, 0x83, 0xec, 0x40, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff,
+                    0xff, 0xff,
+                ],
+            },
+            (|asm| {
+                use iced_x86::code_asm::*;
+                asm.push(r14)?;
+                asm.sub(rsp, 0x40)?;
+                asm.mov(qword_ptr(rsp + 0x20), SEH_FRAME_UNINITIALISED)?;
+                Ok(())
+            }) as prologue_build::Assemble,
+        )],
+        "generated_null_param_repository_prologues.rs",
     );
 }
