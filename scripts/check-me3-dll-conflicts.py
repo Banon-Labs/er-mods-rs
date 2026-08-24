@@ -88,6 +88,7 @@ def audit(table: dict, packages: list[str]) -> list[str]:
 
     conflicts = table.get("conflict", [])
     compatible = table.get("compatible", {})
+    opt_in_only = table.get("opt_in_only", {})
 
     conflicted: set[str] = set()
     for index, entry in enumerate(conflicts):
@@ -165,6 +166,16 @@ def audit(table: dict, packages: list[str]) -> list[str]:
         if not str(reason).strip():
             failures.append(f"[compatible]: {name!r} has an empty reason")
 
+    # [opt_in_only] is the third classification: co-loadable, but a dependency-closure walk must
+    # never select it, because it changes what the player sees and being reachable is not consent.
+    for name, reason in opt_in_only.items():
+        if name not in shipped:
+            failures.append(
+                f"[opt_in_only]: {name!r} is not a shipped cdylib (renamed or removed?)"
+            )
+        if not str(reason).strip():
+            failures.append(f"[opt_in_only]: {name!r} has an empty reason")
+
     # A package must not be classified twice: [compatible] asserts "no conflict at all",
     # which a [[conflict]] pair directly contradicts. No package is exempt -- including the
     # product, which is classified by appearing in its own conflict pairs.
@@ -174,11 +185,20 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             f"[compatible] means no conflict at all, so these cannot both be true"
         )
 
-    unclassified = shipped - conflicted - set(compatible)
+    # ...and the same for the third bucket. [compatible] means "load it freely"; [opt_in_only]
+    # means "never load it unless asked". A package in both leaves the closure free to pick the
+    # reading it likes, which is precisely the ambiguity that let a mushroom mod into a user's run.
+    for name in sorted(set(opt_in_only) & set(compatible)):
+        failures.append(
+            f"{name!r} is in [compatible] AND [opt_in_only] -- [compatible] lets the closure "
+            f"load it freely, [opt_in_only] forbids that without --with; pick one"
+        )
+
+    unclassified = shipped - conflicted - set(compatible) - set(opt_in_only)
     for name in sorted(unclassified):
         failures.append(
             f"{name!r} ships as an ME3-loadable DLL but is not classified. Add a "
-            f"[[conflict]] pair, or list it in [compatible] with a reason."
+            f"[[conflict]] pair, or list it in [compatible] or [opt_in_only] with a reason."
         )
 
     return failures
@@ -313,6 +333,39 @@ def selftest() -> int:
         "a pair declared BOTH shared and conflicting is caught",
     )
 
+    # --- [opt_in_only], the third classification -----------------------------------------
+    opt_sound = {
+        "conflict": [pair("prod", "bad")],
+        "opt_in_only": {"safe": "wears a costume the player did not ask for"},
+    }
+    check(audit(opt_sound, packages) == [], "[opt_in_only] alone classifies a shipped DLL")
+
+    opt_empty = {"conflict": [pair("prod", "bad")], "opt_in_only": {"safe": "   "}}
+    check(
+        any("[opt_in_only]" in f and "empty reason" in f for f in audit(opt_empty, packages)),
+        "an [opt_in_only] entry with no reason is caught",
+    )
+
+    opt_unknown = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "y"},
+        "opt_in_only": {"ghost": "renamed away"},
+    }
+    check(
+        any("[opt_in_only]" in f and "'ghost'" in f for f in audit(opt_unknown, packages)),
+        "an [opt_in_only] entry naming a package that no longer ships is caught",
+    )
+
+    opt_doubled = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "load me freely"},
+        "opt_in_only": {"safe": "never load me unasked"},
+    }
+    check(
+        any("[opt_in_only]" in f and "pick one" in f for f in audit(opt_doubled, packages)),
+        "a package in BOTH [compatible] and [opt_in_only] is caught",
+    )
+
     print("selftest:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -344,6 +397,7 @@ def main() -> int:
         f"me3-dll-conflicts.toml: {len(table.get('conflict', []))} conflict pairs, "
         f"{shared_count} shared-address pair{'' if shared_count == 1 else 's'}, "
         f"{len(table.get('compatible', {}))} compatible entries, "
+        f"{len(table.get('opt_in_only', {}))} opt-in-only entries, "
         f"{len(shipped_packages())} shipped shells all classified"
     )
     return 0
