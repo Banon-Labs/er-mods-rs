@@ -547,6 +547,48 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                  this position may hold a copy carrying another ash"
             ));
         }
+        // ONE ENTRY, ONE SLOT -- refused collisions, named. A collision is not a near-miss: the
+        // equip that was refused would have STRIPPED the slot it collided with, so the log has to
+        // say which slot kept the item and which position went without.
+        if worn.index_collisions.is_empty() {
+            log_line(
+                "[build-import] EQUIP COLLISIONS: none -- every position named its own inventory entry",
+            );
+        } else {
+            log_line(&format!(
+                "[build-import] EQUIP COLLISIONS: {} position(s) REFUSED because an earlier slot \
+                 already wears that exact inventory entry; equipping it again would have stripped \
+                 the earlier slot",
+                worn.index_collisions.len()
+            ));
+            for (slot, item_id, item_idx, held_by) in worn.index_collisions.iter().take(12) {
+                log_line(&format!(
+                    "[build-import]   COLLISION slot {slot} item 0x{item_id:08X} invIdx {item_idx} \
+                     is already worn in slot {held_by}"
+                ));
+            }
+        }
+
+        // AFTER EVERYTHING. Each per-position read-back ran before the positions following it, so
+        // it can only prove its own write landed. This is the sweep that proves it survived.
+        if worn.final_mismatches.is_empty() {
+            log_line(
+                "[build-import] EQUIP FINAL SWEEP: every position still holds its item after the \
+                 whole pass",
+            );
+        } else {
+            log_line(&format!(
+                "[build-import] EQUIP FINAL SWEEP: {} position(s) NO LONGER hold what was written \
+                 -- something later in the pass took them back off",
+                worn.final_mismatches.len()
+            ));
+            for (slot, expected, actual) in worn.final_mismatches.iter().take(12) {
+                log_line(&format!(
+                    "[build-import]   STRIPPED slot {slot} expected {expected} but holds {actual}"
+                ));
+            }
+        }
+
         if worn.no_inventory {
             log_line(
                 "[build-import] EQUIP: the inventory pointer was null, so NOTHING was attempted",

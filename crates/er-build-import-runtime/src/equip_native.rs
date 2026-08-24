@@ -280,8 +280,25 @@ pub struct EquipOutcome {
     /// falling back is the importer admitting it may have equipped an arbitrary twin, and that
     /// admission is worthless if the log buries it among the harmless ones.
     pub by_item_id: Vec<(PositionKind, i32, u32, &'static str)>,
+    /// `(slot, item id, inventory index, the slot that already claimed it)` for every position
+    /// whose inventory index was already spoken for by an earlier position in the same pass.
+    ///
+    /// EQUIPPING ONE ENTRY TWICE STRIPS THE FIRST SLOT. `EquipItemToChrAsmSlot` (`0x140787c30`)
+    /// calls `FUN_140247160(egd, oldSlot, true)` -- unequip it from where it already sits --
+    /// before writing the new slot, so a later position naming an entry an earlier position is
+    /// already wearing tears the earlier one back off. The per-position read-back cannot see it:
+    /// it runs before the position that will undo it. Observed 2026-08-23 on build
+    /// 94252a868b4f2a, where the ledger recorded `12 planned = 12 verified` and both hands were
+    /// empty by the end of the same import.
+    pub index_collisions: Vec<(i32, u32, i32, i32)>,
     /// `(slot, expected, actual)` for the first few positions that read back wrong.
     pub mismatches: Vec<(i32, i32, i32)>,
+    /// `(slot, expected, actual)` from the FINAL sweep, after every position has been written.
+    ///
+    /// The per-position read-back proves a write landed; only this proves it SURVIVED the rest
+    /// of the pass. They are kept apart because a position that passes the first and fails the
+    /// second is a different defect from one that never took.
+    pub final_mismatches: Vec<(i32, i32, i32)>,
     /// The equip game data pointer was unusable, so nothing at all was attempted.
     pub no_inventory: bool,
 }
@@ -345,6 +362,10 @@ pub unsafe fn equip_all(
     instances: &mut WornInstances,
 ) -> EquipOutcome {
     let mut outcome = EquipOutcome::default();
+    // `(slot, inventory index)` for every position this pass has already equipped, so a later
+    // position cannot name an entry an earlier one is wearing. See the guard below for why that
+    // is destructive rather than merely redundant.
+    let mut claimed: Vec<(i32, i32)> = Vec::new();
     // Cloned so the ledger stays writable while the pass walks it. The list is at most ~20
     // entries, and holding a borrow of the thing being recorded into is not worth the saving.
     let planned: Vec<PlannedPosition> = ledger.planned().to_vec();
@@ -492,6 +513,31 @@ pub unsafe fn equip_all(
             continue;
         }
 
+        // ONE INVENTORY ENTRY, ONE SLOT. Equipping an entry that an earlier position in this very
+        // pass is already wearing does not add a second copy -- `EquipItemToChrAsmSlot` unequips it
+        // from the earlier slot first (`FUN_140247160(egd, oldSlot, true)`), so the later write
+        // silently strips the earlier one and the earlier position's read-back, taken before this
+        // one ran, still says Verified. Refusing here keeps a wrong answer out of the character
+        // AND out of the log; the position is recorded as a failure, which is what it is.
+        if let Some((held_by, _)) = claimed
+            .iter()
+            .copied()
+            .find(|(_, claimed_idx)| *claimed_idx == item_idx)
+        {
+            outcome
+                .index_collisions
+                .push((slot, position.item.item_id, item_idx, held_by));
+            ledger.record(
+                at,
+                PositionResult::NotAttempted(
+                    "another position in this pass is already wearing this exact inventory entry; \
+                     equipping it here would strip that slot instead of filling this one",
+                ),
+            );
+            continue;
+        }
+        claimed.push((slot, item_idx));
+
         // Safety: same context. Asking where the item currently sits.
         let current = unsafe { get_slot(egd, item_idx) };
         if current == slot {
@@ -538,6 +584,30 @@ pub unsafe fn equip_all(
         let actual = unsafe { param_in_slot(egd, slot) };
         let expected = position.item.param_id as i32;
         ledger.record(at, verdict(&mut outcome, slot, expected, actual));
+    }
+
+    // THE SWEEP THAT ACTUALLY PROVES IT. Every read-back above happened before the positions after
+    // it were written, so each one proves only that its own write landed -- not that it was still
+    // there at the end. A position stripped by a later equip passes the first check and fails this
+    // one, and that difference is the whole reason the two are recorded separately.
+    for (at, position) in planned.iter().enumerate() {
+        // Same exclusions the pass itself uses: the physick is not a ChrAsmSlot, and the
+        // quick/pouch/rune positions read back through their own dispatcher rather than ChrAsm.
+        if position.kind == PositionKind::Physick || position.kind.is_quick_dispatch() {
+            continue;
+        }
+        let Some(slot) = position.slot else {
+            continue;
+        };
+        // Safety: same context; a plain read of the slot's current param id.
+        let actual = unsafe { param_in_slot(egd, slot) };
+        let expected = position.item.param_id as i32;
+        if actual != expected {
+            if outcome.final_mismatches.len() < MISMATCHES_KEPT {
+                outcome.final_mismatches.push((slot, expected, actual));
+            }
+            ledger.record(at, PositionResult::Mismatch { expected, actual });
+        }
     }
 
     outcome
