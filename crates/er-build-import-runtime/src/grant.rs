@@ -17,8 +17,13 @@
 //!   is no gem in it, so the weapon carries whatever skill its `EquipParamWeapon` row names --
 //!   for an infused row, usually none at all.
 //! * `AddInventoryEquip` -> `EquipInventoryData::InsertItem(..., reinforcement = 0)` passes a
-//!   hard-coded zero. Every weapon it inserts is +0, and the level cannot be smuggled into the
-//!   id either: `EquipParamWeapon::GetEntry` looks up `(paramId / 100) * 100`.
+//!   hard-coded zero, and `InsertItem` writes it straight onto the instance through
+//!   `GaitemLookupResult::SetReinforcement`. Every weapon it inserts is +0 until something puts
+//!   the level back.
+//!
+//! The level is put back in BOTH places the engine keeps it: folded into the minted item id
+//! (`er_build_import::plan::armament_item_id`, the half the player actually sees) and written to
+//! the instance field afterwards, since `InsertItem` has just zeroed that one.
 //!
 //! So an armament is minted the way the engine mints one that drops out of the world already
 //! carrying an ash -- `EquipParamCustomWeapon` goes through
@@ -42,7 +47,7 @@
 //! quantity cannot see an ash: the minted instance is asked for its own arts id and reinforcement
 //! through `GetSwordArtsParamForWeapon` / `GaitemLookupResult::GetReinforcement`.
 
-use er_build_import::plan::{Grant, NO_SKILL};
+use er_build_import::plan::{Grant, NO_SKILL, armament_item_id};
 
 /// `CS::EquipGameData::AddInventoryEquipByItemId(egd, int *itemId, u32 amount,
 /// bool updateTrophyStats, bool updateAutoEquip) -> int`.
@@ -296,17 +301,34 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
     // the plan asks it the same question.
     let levels = crate::catalog::ReinforceLevels::read();
 
+    // THE ID EACH GRANT ENDS UP UNDER, which for an armament is not `grant.item_id`: the upgrade
+    // level lives in the id's last two digits, so a +25 weapon is a DIFFERENT id from the +0 one
+    // the plan names. The read-back below has to ask about the id the inventory actually holds,
+    // or every armament reports missing.
+    let mut confirm_ids: Vec<u32> = Vec::with_capacity(grants.len());
+
     for grant in grants {
         if is_armament(grant) {
             // Safety: same context; the armament path is documented on the helper.
             if let Some(armament) = unsafe { grant_armament(module_base, egd, grant, &levels) } {
+                confirm_ids.push(armament.item_id);
                 outcome.armaments.push(armament);
                 continue;
             }
             // The mint declined (no `CSGaitemImp`, or the table is full). Fall through to the
-            // plain call so the player at least gets a bare weapon rather than nothing.
+            // plain call so the player at least gets a bare weapon rather than nothing -- still
+            // at the right level, which is the one part of an armament that id alone can carry.
         }
-        let id = grant.item_id as i32;
+        let full_id = if is_armament(grant) {
+            armament_item_id(
+                grant.item_id,
+                levels.clamp(grant.item_id & ITEM_ROW_MASK, grant.reinforce_lv),
+            )
+        } else {
+            grant.item_id
+        };
+        confirm_ids.push(full_id);
+        let id = full_id as i32;
         // `updateTrophyStats` and `updateAutoEquip` both true: the same arguments the engine's
         // own pickup path uses, so achievements and auto-equip behave as if the item were
         // found in the world.
@@ -320,14 +342,14 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         outcome.missing = grants.iter().map(|grant| grant.item_id).collect();
         return outcome;
     }
-    for grant in grants {
-        let id = grant.item_id as i32;
+    for full_id in &confirm_ids {
+        let id = *full_id as i32;
         // Safety: as above.
         let held = unsafe { get_quantity(inventory, &raw const id) };
         if held > 0 {
             outcome.confirmed += 1;
         } else {
-            outcome.missing.push(grant.item_id);
+            outcome.missing.push(*full_id);
         }
     }
 
@@ -369,15 +391,17 @@ unsafe fn grant_armament(
     // because the engine's own callers reserve sixteen bytes for it and over-reserving on our
     // own stack costs nothing.
     let mut handle = [0u32; 4];
+
+    // THE LEVEL IS PART OF THE ITEM ID, and it has to be decided before the mint rather than
+    // after it. The build's level is what the AUTHOR asked for, not necessarily a level this
+    // armament has -- somber armaments stop at +10 and a build's `weaponUpgrade` is one number
+    // for the whole character -- so the game is asked which `reinforceTypeId + level` rows exist
+    // and the request is clamped to one of them.
+    let wanted_level = levels.clamp(grant.item_id & ITEM_ROW_MASK, grant.reinforce_lv);
+    let minted_id = armament_item_id(grant.item_id, wanted_level);
+
     // Safety: our own buffer, the live singleton, and ids that are plain integers.
-    unsafe {
-        mint(
-            gaitem,
-            handle.as_mut_ptr(),
-            (grant.item_id & ITEM_ROW_MASK) as i32,
-            gem_argument,
-        )
-    };
+    unsafe { mint(gaitem, handle.as_mut_ptr(), minted_id as i32, gem_argument) };
     if handle[0] == 0 {
         return None;
     }
@@ -386,10 +410,9 @@ unsafe fn grant_armament(
     let inventory_index =
         unsafe { add_by_handle(egd, handle.as_mut_ptr(), grant.quantity, true, true) };
 
-    // The build's level is what the AUTHOR asked for, not necessarily a level this armament has.
-    // Somber armaments stop at +10 and a build's `weaponUpgrade` is one number for the character,
-    // so the game is asked which levels exist rather than trusted to survive an invented one.
-    let wanted_level = levels.clamp(grant.item_id & ITEM_ROW_MASK, grant.reinforce_lv);
+    // Set the instance field too. `AddInventoryEquip` -> `InsertItem` has just written a
+    // hard-coded 0 into it, and the reference exporter sets BOTH halves; this is the half that
+    // survives that zeroing.
     // Safety: game thread; the helper only reads and writes this one instance.
     let level = unsafe { apply_reinforcement(module_base, &handle, wanted_level) };
     // Safety: same context; a pure read through the instance's own gem slot.
@@ -407,7 +430,7 @@ unsafe fn grant_armament(
     Some(ArmamentOutcome {
         handle: owned_handle,
         label: grant.label.clone(),
-        item_id: grant.item_id,
+        item_id: minted_id,
         wanted_gem,
         arts_id,
         wanted_level,

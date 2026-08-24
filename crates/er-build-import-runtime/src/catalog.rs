@@ -159,6 +159,11 @@ pub struct BuildStats {
     pub unnamed: usize,
     /// How many goods rows were classified as spells.
     pub spell_rows: usize,
+    /// Ashes whose ONLY `EquipParamGem` row draws no icon, so the tile badge falls back to the
+    /// literal `ICON` placeholder. Non-zero is not a crash and not a wrong ash -- the name and
+    /// the skill are right -- but it is the exact defect a player reports as "the ash symbol
+    /// says ICON", so it is a number here rather than a discovery in-game.
+    pub iconless_ashes: usize,
 }
 
 /// Read a NUL-terminated UTF-16 string, bounded so a bad pointer cannot run away.
@@ -391,8 +396,21 @@ unsafe fn insert_ashes_of_war(
     let arts_getter = module_base + rva::GET_ARTS_NAME;
     let gem_getter = module_base + rva::GET_GEM_NAME;
 
-    // skill row -> (this gem has an item name, gem row).
-    let mut best: BTreeMap<u32, (bool, u32)> = BTreeMap::new();
+    // skill row -> (this gem draws an icon, it has an item name, gem row).
+    //
+    // THE ICON IS THE FIRST KEY, and it is why this is not just "named, else lowest row".
+    // MEASURED 2026-08-23: a build imported with every ash NAME correct and the ash badge on the
+    // tile rendering the literal placeholder text `ICON`. The names were right because the label
+    // comes from `EquipParamGem.swordArtsParamId` -> `GetArtsName`, which a development row
+    // carries just as faithfully as a real one; the icon was missing because that row has none.
+    // The old tiebreak fell back to THE LOWEST ROW ID whenever no gem for a skill was named, and
+    // the lowest rows are exactly the placeholder rows -- which is how ids like 103, 146, 185 and
+    // 191 ended up mounted on the player's weapons next to real ashes at 401000 and 22800.
+    //
+    // `0` and `u16::MAX` are both treated as "no icon": the field is unsigned, so a row that
+    // means "none" can only say so with one of the two ends, and neither names a real texture.
+    let mut best: BTreeMap<u32, (bool, bool, u32)> = BTreeMap::new();
+    let mut iconless = 0usize;
     for (gem_id, row) in repo.rows::<EquipParamGem>() {
         let Ok(arts_id) = u32::try_from(row.sword_arts_param_id()) else {
             continue;
@@ -402,18 +420,29 @@ unsafe fn insert_ashes_of_war(
         }
         // Safety: a verified getter RVA and the caller's live repository pointer.
         let named = unsafe { name_of(gem_getter, msg, gem_id) }.is_some();
-        let candidate = (named, gem_id);
+        let icon = row.icon_id();
+        let has_icon = icon != 0 && icon != u16::MAX;
+        let candidate = (has_icon, named, gem_id);
         best.entry(arts_id)
             .and_modify(|held| {
-                // A named gem beats an unnamed one; among equals the lower row id wins.
-                if (named, core::cmp::Reverse(gem_id)) > (held.0, core::cmp::Reverse(held.1)) {
+                // An icon beats no icon; then a named gem beats an unnamed one; among equals the
+                // lower row id wins.
+                if (has_icon, named, core::cmp::Reverse(gem_id))
+                    > (held.0, held.1, core::cmp::Reverse(held.2))
+                {
                     *held = candidate;
                 }
             })
             .or_insert(candidate);
     }
 
-    for (arts_id, (_, gem_id)) in best {
+    for (arts_id, (has_icon, _, gem_id)) in best {
+        // Counted, not silently accepted: an ash whose ONLY gem row draws no icon will still
+        // render `ICON` on the tile, and that has to be a number in the log rather than a
+        // surprise on the player's weapon.
+        if !has_icon {
+            iconless += 1;
+        }
         // Safety: as above.
         match unsafe { name_of(arts_getter, msg, arts_id) } {
             Some(name) => {
@@ -431,6 +460,7 @@ unsafe fn insert_ashes_of_war(
             None => stats.unnamed += 1,
         }
     }
+    stats.iconless_ashes = iconless;
 }
 
 /// Whether a param table has been streamed in.
