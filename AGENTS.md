@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
 
 ## Quick Reference
 
@@ -235,7 +235,7 @@ cp -rf source dest          # NOT: cp -r source dest
 ### Rules
 
 - Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `$HOME/.local/bin/bd prime` for detailed command reference and session close protocol
+- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
