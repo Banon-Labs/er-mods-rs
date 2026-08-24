@@ -509,6 +509,7 @@ unsafe extern "system" {
         template_file: isize,
     ) -> isize;
     fn CloseHandle(handle: isize) -> i32;
+    fn DeleteFileW(file_name: *const u16) -> i32;
     fn GetCurrentThreadId() -> u32;
     fn GetLastError() -> u32;
     fn RtlCaptureStackBackTrace(
@@ -1169,11 +1170,44 @@ pub(crate) unsafe fn write_minidump_named(file_name: &str, info: *mut ExceptionP
             )
         };
     }
+    let normal_error = unsafe { GetLastError() };
+    if ok == 0 && !exception_param.is_null() {
+        // Last tier: no exception parameter at all. Proton's `dbghelp` fails BOTH tiers above with
+        // `ERROR_NOACCESS` (998) on the machines this ships to, and that error is raised while it
+        // dereferences the `MINIDUMP_EXCEPTION_INFORMATION` it was handed -- so dropping that
+        // struct is the one variable left to change. The dump loses the faulting thread's
+        // registers, which the text record already carries, and keeps every thread's stack, which
+        // nothing else does.
+        ok = unsafe {
+            write_dump(
+                GetCurrentProcess(),
+                GetCurrentProcessId(),
+                file,
+                dump_type,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+    }
     let final_error = unsafe { GetLastError() };
     unsafe { CloseHandle(file) };
+    // `CreateFileW` above already created the file, so a failed dump leaves a 0-byte `.dmp` on
+    // disk. That empty file is worse than no file: it is indistinguishable from a captured dump
+    // until someone opens it, and users dutifully collect and send it. Delete it, so the ONLY
+    // `.dmp` that ever exists is one with a dump in it.
+    if ok == 0 {
+        let removed = unsafe { DeleteFileW(wide.as_ptr()) } != 0;
+        append_log(format_args!(
+            "minidump write FAILED -- no dump exists. rich_last_error={rich_error} \
+             normal_last_error={normal_error} last_error={final_error} \
+             empty_file_deleted={removed} path={}",
+            path.display()
+        ));
+        return;
+    }
     append_log(format_args!(
-        "minidump write ok={} type=0x{:x} rich_last_error={} last_error={} path={}",
-        ok != 0,
+        "minidump write ok=true type=0x{:x} rich_last_error={} last_error={} path={}",
         dump_type,
         rich_error,
         final_error,
