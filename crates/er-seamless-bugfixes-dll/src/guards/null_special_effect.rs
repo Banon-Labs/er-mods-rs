@@ -134,22 +134,26 @@ null_arg1_guard! {
 
 pub(crate) const HAS_SPECIAL_EFFECT_ID_GUARD: Guard = Guard {
     name: "SpecialEffect::HasSpecialEffectId",
+    group: "null_special_effect",
     rva: HAS_SPECIAL_EFFECT_ID_RVA,
     expected_prologue: HAS_SPECIAL_EFFECT_ID_PROLOGUE,
     detour: has_special_effect_id_guard,
     original: &ORIG_HAS_SPECIAL_EFFECT_ID,
     blocked: &BLOCKED_HAS_SPECIAL_EFFECT_ID,
+    prepare: None,
     rationale: "null container -> false (the original's own empty-list answer); paired with the \
                 Apply guard so the caller's 'if !has then apply' cannot fault on the same field",
 };
 
 pub(crate) const APPLY_GUARD: Guard = Guard {
     name: "SpecialEffect::Apply",
+    group: "null_special_effect",
     rva: APPLY_RVA,
     expected_prologue: APPLY_PROLOGUE,
     detour: apply_guard,
     original: &ORIG_APPLY,
     blocked: &BLOCKED_APPLY,
+    prepare: None,
     rationale: "null container -> -1 (the original's own conditions-not-met answer); FUN_1403fade0 \
                 already tests it with JS and unwinds to false",
 };

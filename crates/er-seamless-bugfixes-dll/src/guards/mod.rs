@@ -21,11 +21,14 @@
 //!    to the original with every register and the entire incoming stack frame untouched. That is
 //!    what makes a guard safe on a function whose stack arguments we have not typed.
 //!
-//! Adding a guard: write the stub with [`null_arg1_guard`], then add one [`Guard`] row to
-//! [`REGISTRY`]. No install, logging, or telemetry code changes.
+//! Adding a guard: write the stub -- with [`null_arg1_guard`] when the null thing is the first
+//! argument, by hand when it is not -- then add one [`Guard`] row to [`REGISTRY`]. No install,
+//! logging, or telemetry code changes. A guard whose stub needs an address it cannot compute
+//! itself, such as a game global, resolves it in `prepare`, which runs before the hook arms.
 
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 
+pub(crate) mod null_param_repository;
 pub(crate) mod null_special_effect;
 
 /// Value stored in a guard's `original` slot before installation succeeds. A stub whose slot still
@@ -37,6 +40,11 @@ pub(crate) const ORIGINAL_UNSET: usize = 0;
 pub(crate) struct Guard {
     /// Name used in the install log and the telemetry line.
     pub(crate) name: &'static str,
+    /// Guards that only make sense armed together share a group. A partially armed GROUP is an
+    /// unsafe state and is reported as such; a guard whose group is only itself is complete on its
+    /// own. Without this the install log called a run UNGUARDED whenever any one guard in the whole
+    /// registry failed, which is false as soon as two unrelated guards exist.
+    pub(crate) group: &'static str,
     /// 1.16.2 RVA of the guarded function's entry.
     pub(crate) rva: usize,
     /// Bytes this address was verified against, re-checked against the live image before hooking.
@@ -50,6 +58,9 @@ pub(crate) struct Guard {
     /// Times the guard's early-return branch actually fired. This is the guard's semaphore: a run
     /// that never increments it never met the bug, and proves nothing about the fix.
     pub(crate) blocked: &'static AtomicU64,
+    /// Run before the hook is installed, for a guard whose stub needs an address it cannot
+    /// compute itself -- a game global, whose absolute location is only known once the base is.
+    pub(crate) prepare: Option<fn(usize)>,
     /// Why the early-return value is the right answer, printed at install time so a reader of the
     /// log does not have to open this source to judge the guard.
     pub(crate) rationale: &'static str,
@@ -59,6 +70,7 @@ pub(crate) struct Guard {
 pub(crate) static REGISTRY: &[Guard] = &[
     null_special_effect::HAS_SPECIAL_EFFECT_ID_GUARD,
     null_special_effect::APPLY_GUARD,
+    null_param_repository::LOAD_BALANCER_PARAM_GUARD,
 ];
 
 /// Define a naked stub that returns early when the first integer argument (`rcx` under Win64) is
