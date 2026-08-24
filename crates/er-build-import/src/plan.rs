@@ -198,27 +198,23 @@ impl Entry {
 pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
     let mut out = Plan::default();
 
-    // ARMAMENTS THE BUILD ACTUALLY WEARS ARE GRANTED FIRST, and that ordering is load-bearing.
+    // ARMAMENTS ARE GRANTED IN PAYLOAD ORDER -- the order the build lists them, which is the order
+    // the player sees in their inventory and the only order they can check against the planner page.
     //
-    // Several copies of one armament that differ only by ash are ordinary in a build -- the
-    // report that produced this code carried three Heavy Banished Knight's Halberds -- and all
-    // of them have the SAME item id, because the ash lives on the gaitem instance rather than in
-    // the id. The equip step resolves an item id through `EquipInventoryData::GetItemInventoryIdx`,
-    // and `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST inventory index for a
-    // repeated id (`if (index < (mapping & 0xfff)) mapping = index`). So the game answers that
-    // question with the EARLIEST-granted copy, and the only way to make that the right copy is to
-    // grant the worn one first. Otherwise the character reliably ends up holding a twin with
-    // somebody else's ash on it, with every counter in the log still green.
-    // "Worn" means worn IN THE ACTIVE SET, asked the same way `equip.rs` asks it. `Slot::is_equipped`
-    // used to answer this from the bare `equipIndex`, and was removed precisely so there is no
-    // second, set-blind way to ask -- a row equipped only in an inactive set is carried, not worn,
-    // and must not win the grant-order race against the copy the player will actually hold.
-    let worn_set = doc.sets.active_weapons();
-    let worn = |slot: &&Slot| slot.equip_index_in_set(worn_set).is_some();
-    for slot in doc.inventory.slots.iter().filter(worn) {
-        plan_weapon(doc, catalog, slot, &mut out);
-    }
-    for slot in doc.inventory.slots.iter().filter(|slot| !worn(slot)) {
+    // This USED to be two passes, worn-in-the-active-set first and everything else after, and that
+    // reordering was load-bearing while the equip resolved a copy through
+    // `EquipInventoryData::GetItemInventoryIdx`: several copies of one armament differing only by
+    // ash share an item id (the ash lives on the gaitem instance), and
+    // `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST index for a repeated id, so the
+    // game always answered with the earliest-granted copy. Granting the worn one first was the only
+    // way to make that answer right.
+    //
+    // It is obsolete now: the equip carries each mint's `GaItemHandle` forward and asks
+    // `GetItemIndexByGaitemHandle` (0x14024c460), which names ONE instance and does not care where
+    // in the inventory it sits. The reorder bought nothing after that and cost the user the thing
+    // they can actually see -- reported 2026-08-23 against build 94252a868b4f2a, where the two worn
+    // armaments were granted at positions 1 and 2 while the payload puts them at `order` 2 and 8.
+    for slot in &doc.inventory.slots {
         plan_weapon(doc, catalog, slot, &mut out);
     }
     for slot in &doc.talismans.slots {

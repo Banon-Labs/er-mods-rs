@@ -731,11 +731,18 @@ fn an_ash_of_war_is_encoded_as_a_gem_item_id() {
 }
 
 #[test]
-fn the_worn_copy_of_a_duplicated_armament_is_granted_first() {
-    // Several copies of one armament differing only by ash are ordinary in a build, and they all
-    // share an item id because the ash lives on the gaitem instance. The equip step asks the
-    // inventory for an item id, and the game answers with the LOWEST index holding it, so the
-    // worn copy has to be granted first or the character wears a twin with somebody else's ash.
+fn armaments_are_granted_in_payload_order_even_when_a_later_one_is_worn() {
+    // THE ORDER THE PLAYER SEES. A build lists its armaments in `order`, and that is the order the
+    // planner page shows and the only one they can check their inventory against.
+    //
+    // This test replaces `the_worn_copy_of_a_duplicated_armament_is_granted_first`, which asserted
+    // the OPPOSITE: worn copies were hoisted ahead of everything else so the equip's item-id lookup
+    // -- which the game answers with the lowest inventory index -- would land on the right twin.
+    // That mitigation died with the gaitem-handle threading, which names one instance outright, and
+    // it was costing the user a visibly-scrambled inventory (reported 2026-08-23 against build
+    // 94252a868b4f2a: the two worn armaments were granted first while the payload puts them at
+    // `order` 2 and 8). Twins are still indistinguishable by item id here -- that has not changed,
+    // it is simply no longer the equip's question.
     let mut doc = model::BuildDoc {
         weapon_upgrade: 25,
         ..model::BuildDoc::default()
@@ -761,12 +768,17 @@ fn the_worn_copy_of_a_duplicated_armament_is_granted_first() {
     assert_eq!(result.grants.len(), 2);
     assert_eq!(
         result.grants[0].item_id, result.grants[1].item_id,
-        "the twins are indistinguishable by item id, which is the whole problem"
+        "the twins are indistinguishable by item id -- still true, just no longer load-bearing"
     );
     assert_eq!(
         result.grants[0].weapon_skill,
+        GEM_ITEM_CATEGORY | 30_500,
+        "payload order 0 is Carian Retaliation, and being unworn does not push it down the list"
+    );
+    assert_eq!(
+        result.grants[1].weapon_skill,
         GEM_ITEM_CATEGORY | 80_100,
-        "the WORN copy (Bloodhound's Step) must be granted first"
+        "the WORN copy stays at payload order 1 rather than being hoisted to the front"
     );
 }
 
