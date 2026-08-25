@@ -9,6 +9,12 @@
 //! first is [`guards::null_special_effect`], a null `SpecialEffect` container reached through
 //! `CS::SummonBuddyManager::Update`'s networked spirit-summon loop.
 //!
+//! A second, heavier mechanism lives in [`patches::REGISTRY`]: one rewritten instruction byte, for
+//! a fault raised in the middle of a function where detouring the entry would mean reimplementing
+//! everything the function does. Only [`patches::freelist_shutdown_assert`] uses it, and only to
+//! remove an `INT3` the game's own `JZ` already jumps over. See [`patches`] for the rules; they are
+//! stricter than a guard's, because a patch cannot report whether it was ever needed.
+//!
 //! # Version pinning
 //!
 //! Guard addresses are 1.16.2 RVAs. Each is re-checked against the live image's bytes before its
@@ -40,6 +46,7 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub(crate) mod guards;
+pub(crate) mod patches;
 
 use std::{
     fmt,
@@ -49,7 +56,10 @@ use std::{
 
 use er_game_base::log::{append_line, game_directory_path};
 
-use crate::guards::{Guard, ORIGINAL_UNSET, REGISTRY};
+use crate::{
+    guards::{Guard, ORIGINAL_UNSET, REGISTRY},
+    patches::Patch,
+};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -111,6 +121,7 @@ fn spawn_install_task() {
                     Ok(base) => {
                         GAME_BASE.store(base, Ordering::SeqCst);
                         install_guards(base);
+                        install_patches(base);
                         break;
                     }
                     Err(err) => {
@@ -127,41 +138,53 @@ fn spawn_install_task() {
         });
 }
 
-/// Confirm the live bytes at `address` still match what this guard's RVA was verified against.
+/// Confirm the live bytes at `address` still match what an RVA was verified against.
 ///
-/// Fail-closed, and doing double duty: a drifted prologue means either the running image is not the
-/// 1.16.2 build these addresses came from, or something else already detoured the entry. Both are
+/// Fail-closed, and doing double duty: a drifted window means either the running image is not the
+/// 1.16.2 build these addresses came from, or something else got to the address first. Both are
 /// reasons not to install, and both produce a log line naming the bytes actually found.
+///
+/// `drift_hint` is what that log line offers as the likely cause, which differs by what is being
+/// checked -- a detour target can be occupied by another hook, a mid-function window cannot.
 #[cfg(windows)]
-fn prologue_matches(guard: &Guard, address: usize) -> bool {
+fn code_window_matches(label: &str, address: usize, expected: &[u8], drift_hint: &str) -> bool {
     let mut actual = [0_u8; 32];
-    let Some(window) = actual.get_mut(..guard.expected_prologue.len()) else {
+    let Some(window) = actual.get_mut(..expected.len()) else {
         log_message(format_args!(
-            "DISARMED {} @0x{address:x}: expected_prologue is {} bytes, longer than the {} the \
+            "DISARMED {label} @0x{address:x}: expected window is {} bytes, longer than the {} the \
              checker can read",
-            guard.name,
-            guard.expected_prologue.len(),
+            expected.len(),
             actual.len(),
         ));
         return false;
     };
     if !unsafe { er_game_base::mem::read_bytes(address, window) } {
         log_message(format_args!(
-            "DISARMED {} @0x{address:x}: prologue unreadable",
-            guard.name
+            "DISARMED {label} @0x{address:x}: window unreadable"
         ));
         return false;
     }
-    if window != guard.expected_prologue {
+    if window != expected {
         log_message(format_args!(
-            "DISARMED {} @0x{address:x}: prologue mismatch (got {window:02x?}, want {:02x?}) -- \
-             either this is not the 1.16.2 build these RVAs were verified against, or the entry is \
-             already detoured. Not installing.",
-            guard.name, guard.expected_prologue,
+            "DISARMED {label} @0x{address:x}: byte mismatch (got {window:02x?}, want \
+             {expected:02x?}) -- {drift_hint}. Not installing.",
         ));
         return false;
     }
     true
+}
+
+/// [`code_window_matches`] for a guard's detour target, where the likeliest reason the bytes moved
+/// is that another hook already replaced the entry with its own jump.
+#[cfg(windows)]
+fn prologue_matches(guard: &Guard, address: usize) -> bool {
+    code_window_matches(
+        guard.name,
+        address,
+        guard.expected_prologue,
+        "either this is not the 1.16.2 build these RVAs were verified against, or the entry is \
+         already detoured",
+    )
 }
 
 #[cfg(windows)]
@@ -212,6 +235,93 @@ fn install_guards(base: usize) {
     if armed > 0 {
         spawn_telemetry_task();
     }
+}
+
+/// Apply every patch in the registry.
+///
+/// Separate from [`install_guards`] because the mechanism is different in a way that matters to a
+/// reader of the log: a guard that fails to arm leaves the game exactly as it was, while a patch
+/// that half-applies would leave a rewritten instruction behind. The read-back is what rules that
+/// out, so it is reported whether it succeeds or not.
+#[cfg(windows)]
+fn install_patches(base: usize) {
+    log_message(format_args!(
+        "attach: {} code patch(es); game base 0x{base:x}. Each patch removes one instruction the \
+         game's own control flow already skips, and writes exactly one byte to do it.",
+        patches::REGISTRY.len()
+    ));
+
+    let mut applied = 0_usize;
+    for patch in patches::REGISTRY {
+        if apply_patch(patch, base) {
+            applied += 1;
+        }
+    }
+
+    log_message(format_args!(
+        "patch complete: {applied}/{} patch(es) applied",
+        patches::REGISTRY.len()
+    ));
+}
+
+/// Verify the window, write the one byte, and read it back.
+#[cfg(windows)]
+fn apply_patch(patch: &Patch, base: usize) -> bool {
+    let window = base + patch.rva;
+    if !code_window_matches(
+        patch.name,
+        window,
+        patch.expected_window,
+        "either this is not the 1.16.2 build this window was verified against, or another mod \
+         already rewrote it",
+    ) {
+        return false;
+    }
+    let target = patch.target(base);
+    let Some(replaced) = patch.replaced() else {
+        log_message(format_args!(
+            "DISARMED {} @0x{target:x}: offset {} is outside its own {}-byte window",
+            patch.name,
+            patch.offset,
+            patch.expected_window.len(),
+        ));
+        return false;
+    };
+    if !er_hook::write_code_byte(target, patch.replacement) {
+        log_message(format_args!(
+            "DISARMED {} @0x{target:x}: VirtualProtect refused the write",
+            patch.name
+        ));
+        return false;
+    }
+    // A successful `VirtualProtect` says the write was permitted, not that the byte is still what
+    // we wrote. Read it back: this is the only proof this patch can offer that it changed anything.
+    let mut readback = [0_u8; 1];
+    if !unsafe { er_game_base::mem::read_bytes(target, &mut readback) } {
+        log_message(format_args!(
+            "DISARMED {} @0x{target:x}: wrote 0x{:02x} but could not read the byte back, so \
+             whether it landed is unknown",
+            patch.name, patch.replacement,
+        ));
+        return false;
+    }
+    if readback[0] != patch.replacement {
+        log_message(format_args!(
+            "DISARMED {} @0x{target:x}: wrote 0x{:02x} but found 0x{:02x} -- something else owns \
+             this address",
+            patch.name, patch.replacement, readback[0],
+        ));
+        return false;
+    }
+    patch.applied.store(true, Ordering::SeqCst);
+    log_message(format_args!(
+        "PATCHED {} @0x{target:x} (rva 0x{:x}): 0x{replaced:02x} -> 0x{:02x}, read back. {}",
+        patch.name,
+        patch.rva + patch.offset,
+        patch.replacement,
+        patch.rationale
+    ));
+    true
 }
 
 /// Report any guard GROUP that came up partly armed.

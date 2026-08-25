@@ -552,6 +552,53 @@ unsafe extern "system" {
     fn FlushInstructionCache(process: isize, base: *const c_void, size: usize) -> i32;
 }
 
+/// Bytes touched by [`write_code_byte`]. Named so the protection, the store, and the cache flush
+/// visibly agree on one length.
+#[cfg(windows)]
+const ONE_CODE_BYTE: usize = 1;
+
+/// Write a single byte of executable code at `address`, with the protection dance the write needs:
+/// `PAGE_EXECUTE_READWRITE`, the store, the original protection back, then an instruction-cache
+/// flush so threads already inside that code see the new byte.
+///
+/// Returns whether `VirtualProtect` allowed the write. It deliberately does NOT report whether the
+/// byte landed: a caller patching game code should read it back, because another mod can own the
+/// same address, and a successful `VirtualProtect` says nothing about that.
+#[cfg(windows)]
+pub fn write_code_byte(address: usize, value: u8) -> bool {
+    let target = address as *mut u8;
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONE_CODE_BYTE,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == WIN32_FALSE {
+        return false;
+    }
+    unsafe { *target = value };
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONE_CODE_BYTE,
+            old_protect,
+            &mut restored,
+        )
+    };
+    unsafe {
+        FlushInstructionCache(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            target as *const c_void,
+            ONE_CODE_BYTE,
+        )
+    };
+    true
+}
+
 /// Write a self-contained 3-byte return stub at `base+rva` after validating the expected first
 /// byte. RWX via VirtualProtect, write, restore, icache flush. Returns true on success. Shared by
 /// the gate-force patches (foreground / sign-in / user-index).
