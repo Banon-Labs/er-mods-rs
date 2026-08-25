@@ -32,6 +32,10 @@ pub mod releases;
 #[cfg(windows)]
 mod overlay;
 
+/// One imgui host per process, and a way for every other module to draw on it.
+#[cfg(windows)]
+pub mod overlay_host;
+
 #[cfg(windows)]
 pub use overlay::{claim_owner, draw_rows, install_if_owner, render_hits, visible_rows};
 

@@ -245,6 +245,30 @@ head -- a VISIBLE costume change on whatever character the run loads. Harmless t
 and hooks no prologue, which is exactly why it slipped in: co-loadable is not the same as \
 wanted. Load it only when the mushroom IS the experiment: `--with mushroom-man-runtime`."""
 
+"er-death-persist" = """Patches SpEffectParam / SpEffectVfxParam rows (saveCategory 5 -> 3 on \
+19980/19981/19982, plus their cycle-chain and VFX flags) from a CSTaskImp task at boot. It hooks \
+NOTHING -- no MinHook instance, no union entry, no VirtualProtect -- and that is precisely why it \
+sat in [compatible] for so long: it cannot corrupt another DLL's trampolines, so every \
+prologue-based check called it safe. It still LOCKS THE PLAYER OUT OF SEAMLESS INVASIONS.
+
+MECHANISM. Seamless filters its lobby list on `lobby_key` with k_ELobbyComparisonEqual, and that \
+key is a SHA256 fingerprint of the PARAM TABLES (BuildLobbyKey @ ersc 0xABC20). It re-derives on \
+a jittered timer AFTER this DLL's boot task has run, so the PATCHED fingerprint is what gets \
+published and filtered on -- and nobody else in the world has it. A search against a pool of one \
+finds nobody.
+
+MEASURED TWICE, byte-identical two days apart (2026-08-23 A/B; reconfirmed live 2026-08-25 on the \
+user's own save and the full 14-DLL pack):
+  with it     LOBBY KEY = 0044f570d958f07ace546a90fa62ba2044ef7c3a1f9864fb3cb336bf611965d3
+  without it  LOBBY KEY = 16ca67264987f56ca821525a2f65884cedc2546cf15ca3e69292c5c394c9d4ef
+With it dropped, the user invaded on the next attempt.
+
+WHY DEFAULT-OFF RATHER THAN A [[conflict]]: nothing crashes, nothing logs an error and no \
+prologue is contended, so there is no pair to rank. The failure is INVISIBLE and looks exactly \
+like "no hosts online" -- the worst possible way for a DLL to arrive uninvited on a \
+dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
+invade during that run: `--with er-death-persist`."""
+
 [compatible]
 "er-armament-icons" = """Co-loadable with the product. Its TilePopulate, GFx-parse (AOB-scanned) \
 and FileOpener::OpenFile (vtable-resolved) detours are on prologues no other shell claims, so they \
@@ -256,10 +280,18 @@ that forced this."""
 installs one hudhook/imgui DX12 overlay, reads the loaded-module list through GetProcAddress, and \
 draws text; it writes no game memory, claims no prologue and takes no input. The one thing that \
 could have conflicted -- a second imgui context on the game's swapchain, since er-net-effects \
-also runs a hudhook overlay -- was MEASURED on 2026-08-25 rather than assumed: both overlays \
-installed and both rendered at 3840x2160 in the same process, alongside er_effects_rs's own \
-separate Present hook. A named mutex (Local\\er-effects-build-watermark-owner) still arbitrates so \
-a second copy of THIS shell cannot double-install."""
+also runs a hudhook overlay -- is REAL, and a note here once claimed the \
+opposite. That note said a 2026-08-25 measurement showed both overlays rendering side by side; \
+the same day, the user's live session proved otherwise -- this shell logged `first render \
+display_width=3840 rows=14` while er-net-effects sat at hudhook_render_count = 0, its \
+interactive bar invisible since #336 and no error logged by anyone. Two Hudhook::apply() calls \
+in one process double-hook Present, and the second one loses silently. RESOLVED by \
+er_build_watermark_core's `overlay_host`: the first module to claim the named mutex \
+(Local\\er-effects-build-watermark-owner) HOSTS the imgui context, every other overlay module \
+registers a draw callback through the `er_overlay_register_guest_v1` export and is dispatched \
+once per frame, and both DLLs pin the same hudhook so the `ui` pointer crossing the DLL boundary \
+is the type both were built against (OVERLAY_ABI_TAG refuses the pair if that stops being true). \
+Load order no longer decides who is visible."""
 "er-better-refills" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
 "er-charm-enemies" = """Co-loadable with the product. It detours exactly one address -- \
 the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_shared_hook`, so the \
@@ -270,11 +302,6 @@ on a FrameBegin walk of WorldChrMan's ChrSets."""
 `GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
 above); nothing else it installs is claimed by another shell."""
 "er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
-"er-death-persist" = """One-shot SpEffectParam / SpEffectVfxParam row patch driven from a \
-CSTaskImp task: it moves saveCategory 5 -> 3 on rows 19980/19981/19982 and sets flags on their \
-cycle-chain and VFX rows, once, then stops. It installs NO detours -- the crate contains no \
-MinHook instance, no er-hook union entry and no VirtualProtect, so it shares no prologue with any \
-other shell. Same class as mushroom-man-runtime: touches param rows, not hook prologues."""
 "er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
 "er-invasion-warp" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
 "er-player-name-filter" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-effects-rs no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
