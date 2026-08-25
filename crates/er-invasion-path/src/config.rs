@@ -57,7 +57,7 @@ pub(crate) const DEFAULT_ARROW_METERS: f32 = 3.0;
 pub(crate) const DEFAULT_MARKER_SPACING_METERS: f32 = 8.0;
 
 /// Most markers a single route's trail may hold.
-pub(crate) const DEFAULT_MAX_MARKERS: usize = 48;
+pub(crate) const DEFAULT_MAX_MARKERS: usize = 144;
 
 /// The value `params+0x20` takes for "no range limit" -- the engine's own initialiser writes
 /// `0xbf800000`, which is `-1.0f`.
@@ -153,14 +153,19 @@ marker_fxr_id = 0
 # time-of-day and weather, not colour -- so telling two players apart means two different effects,
 # not two shades of one.
 #
-#   marker_fxr_ids = 302022, 302020, 302021, 302023
+# EVERY id must be an effect that LINGERS. 302020 (held), 302021 (projectile) and 302023 (burst)
+# are momentary Rainbow Stone stages: they flash once and vanish, so a player assigned one gets a
+# trail that is not there -- which looks like the colours changing rather than like a broken
+# marker. 302022, the lingering coloured stone, is the only one of the four that marks anything.
+#
+#   marker_fxr_ids = 302022
 
 # Metres between markers along the route. Markers are spaced evenly along the PATH, not placed at
 # navmesh corners, or a doorway would get six of them and open ground none.
 marker_spacing_meters = 8.0
 
 # Most markers one route's trail may hold.
-max_markers = 48
+max_markers = 144
 
 # Metres of already-walked trail kept behind you before those stones are torn down. The markers
 # you have passed are clutter; a few are kept so the trail does not appear to end at your feet.
@@ -550,7 +555,13 @@ mod tests {
     ///
     /// The four Rainbow Stone stages are visually distinct from each other even though they are
     /// stages rather than colours, so they make a usable default set. Any list of ids works.
-    const DEFAULT_MARKER_FXR_IDS: [u32; 4] = [302_022, 302_020, 302_021, 302_023];
+    const DEFAULT_MARKER_FXR_IDS: [u32; 1] = [302_022];
+
+    /// Rainbow Stone stages that FLASH AND VANISH: held, projectile, burst. Shipping one of these
+    /// as a per-player effect gives that player a trail that is not there, which is how it
+    /// shipped once already -- the file documented them as momentary and then used three of them
+    /// as defaults anyway.
+    const MOMENTARY_STAGES: [u32; 3] = [302_020, 302_021, 302_023];
 
     fn parse(text: &str) -> PathConfig {
         parse_config(text, PathBuf::from("test.toml"))
@@ -691,6 +702,18 @@ mod tests {
         }
     }
 
+    /// No default may be a momentary effect. A player assigned one sees no trail at all, and
+    /// that reads as the colours changing rather than as a marker that never persisted.
+    #[test]
+    fn no_default_effect_is_one_of_the_momentary_stages() {
+        for id in DEFAULT_MARKER_FXR_IDS {
+            assert!(
+                !MOMENTARY_STAGES.contains(&id),
+                "{id} flashes and vanishes; it cannot mark a trail"
+            );
+        }
+    }
+
     /// The list the generated file suggests must be the list the code names, or a player pastes
     /// a line that does something other than what the comment beside it promised.
     #[test]
@@ -719,6 +742,8 @@ mod tests {
     fn each_palette_slot_gets_its_own_effect() {
         let edited = DEFAULT_CONFIG_TOML.replace(
             "marker_fxr_id = 0",
+            // Momentary ids are fine as a PARSING fixture -- this asserts slot assignment, not
+            // that the effects are usable markers.
             "marker_fxr_ids = 302022, 302020, 302021",
         );
         let parsed = parse(&edited);
