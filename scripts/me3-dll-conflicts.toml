@@ -252,6 +252,14 @@ stay on its own MinHook instance. The ONE prologue it shares -- the Scaleform fi
 is registered through `er_hook::register_shared_hook`, which chains it into the product's single \
 union rather than installing a second instance; see the [[shared]] entry above for the measurement \
 that forced this."""
+"er-build-watermark-dll" = """Co-loadable with everything, because it detours nothing at all. It \
+installs one hudhook/imgui DX12 overlay, reads the loaded-module list through GetProcAddress, and \
+draws text; it writes no game memory, claims no prologue and takes no input. The one thing that \
+could have conflicted -- a second imgui context on the game's swapchain, since er-net-effects-dll \
+also runs a hudhook overlay -- was MEASURED on 2026-08-25 rather than assumed: both overlays \
+installed and both rendered at 3840x2160 in the same process, alongside er_effects_rs's own \
+separate Present hook. A named mutex (Local\\er-effects-build-watermark-owner) still arbitrates so \
+a second copy of THIS shell cannot double-install."""
 "er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
 "er-charm-enemies-dll" = """Co-loadable with the product. It detours exactly one address -- \
 the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_shared_hook`, so the \

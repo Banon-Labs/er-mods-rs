@@ -131,6 +131,15 @@ pub fn write_breadcrumb(reason: &str, args: fmt::Arguments<'_>) {
 }
 
 fn write_common_fields(out: &mut String) {
+    {
+        use fmt::Write as _;
+        // Every record, not just the log's first line. The breadcrumb and `-latest` files are
+        // written with a direct `fs::write` and never pass through the shared logger, and they
+        // are precisely the two files a tester sends on their own -- a crash report that cannot
+        // name its own build costs a round-trip to answer "is this already fixed", which is the
+        // exact question the 2026-08-23 dumps had to be dated by PE timestamp to answer.
+        let _ = writeln!(out, "build={}", er_game_base::build_id::GIT_DESCRIPTION);
+    }
     #[cfg(windows)]
     {
         use fmt::Write as _;

@@ -81,6 +81,14 @@ const KEY_PRESSED_SINCE_MASK: i16 = 0x0001;
 /// focus" are the same silence, and a run cannot tell them apart.
 #[cfg(windows)]
 const HEARTBEAT_TICK_INTERVAL: u64 = 600;
+
+/// Tick at which the loaded-mod roster is logged, once.
+///
+/// Deliberately later than the first frame: me3 loads each `[[natives]]` entry in sequence, so a
+/// roster taken at our own DllMain would list whichever DLLs preceded us and silently omit the
+/// rest. At 60 ticks the loader is long finished and the list is the whole profile.
+const ROSTER_LOG_TICK: u64 = 60;
+
 /// The catalog read + per-target coordinate conversion is a deliberate one-frame cost paid on a
 /// keypress. This bounds it so a corrupt catalog cannot turn one keypress into an unbounded
 /// walk on the game thread.
@@ -329,6 +337,19 @@ impl InvasionWarpDrive {
         }
 
         self.ticks = self.ticks.wrapping_add(1);
+
+        // Once, late enough that every `[[natives]]` entry has had its DllMain run. Logging the
+        // roster at our own DllMain would name only the DLLs the loader happened to reach first
+        // and would read as "the others are missing" -- a false negative about the very thing
+        // this line exists to measure. `latest_release` is None until the release lookup lands,
+        // so every mod reports `unknown`, which is deliberately NOT `STALE`.
+        if self.ticks == ROSTER_LOG_TICK {
+            log(format_args!(
+                "{}",
+                er_game_base::build_id::roster_line(&er_game_base::build_id::published_main_shas())
+            ));
+        }
+
         let focused = game_has_focus();
 
         // The heartbeat exists because every "nothing happened" path below is silent, and

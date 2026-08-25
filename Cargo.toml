@@ -44,6 +44,10 @@ members = [
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
   # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
   # split as er-loading-portrait / er-loading-portrait-dll.
+  # The build watermark every profile draws in the top-right: which mods are loaded, and whether
+  # any of them is an older PUBLISHED release than main's tip.
+  "crates/er-build-watermark",
+  "crates/er-build-watermark-dll",
   "crates/er-invasion-warp",
   "crates/er-invasion-warp-dll",
   # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with

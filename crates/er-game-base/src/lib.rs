@@ -9,7 +9,13 @@
 //! the typed eldenring / fromsoftware-shared accessors so the heavy consumers
 //! share one import surface. The mini-DLLs enable tier A only.
 
+pub mod build_id;
 pub mod fnv1a;
+/// Tier A: one blocking HTTPS GET over WinHTTP. Lives here rather than in the importer that
+/// first needed it because a second caller appeared -- the build watermark's release lookup --
+/// and a hand-declared WinHTTP ABI is exactly the kind of thing this crate exists to hold once.
+#[cfg(windows)]
+pub mod http;
 pub mod log;
 pub mod mem;
 #[cfg(all(windows, feature = "game-types"))]

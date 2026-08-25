@@ -719,13 +719,13 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     // `begin_fresh_run` never holds its own registry lock across file I/O (so there is no reverse
     // order against `LOG_OPEN`), and the re-entrancy guard held by this thread makes the rename's
     // trip through the `CreateFileW` detour come straight back out of this function.
-    er_game_base::log::begin_fresh_run(&path);
-    let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&path)
-    else {
+    // `open_fresh_run_append` IS `begin_fresh_run` + an appending open, which is what this used to
+    // spell out by hand -- and the hand-rolled version truncated a second time, deleting the build
+    // identity `begin_fresh_run` had just written. That is exactly what happened on the 2026-08-24
+    // run: every other log in the process opened with `build git=...` and the most-read log in the
+    // repo silently did not. Routing through the shared helper also puts this file back under
+    // `scripts/check-fresh-run-logs.py` instead of leaning on its exemption.
+    let Some(mut file) = er_game_base::log::open_fresh_run_append(&path) else {
         // Deliberately not latched: a directory that is not writable yet may be later, and the next
         // line retries. Nothing is published, so no reader sees a half-opened log.
         return;

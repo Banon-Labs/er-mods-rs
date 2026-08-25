@@ -2800,6 +2800,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-build-watermark"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "hudhook",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-build-watermark-dll"
+version = "0.1.0"
+dependencies = [
+ "er-build-watermark",
+ "er-game-base",
+]
+
+[[package]]
 name = "er-charm-enemies-dll"
 version = "0.1.0"
 dependencies = [

@@ -103,6 +103,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-crash-logging-dll:er_crash_logging_dll
 		er-death-persist-dll:er_death_persist
 		er-input-harness-dll:er_input_harness_dll
+		er-build-watermark-dll:er_build_watermark_dll
 		er-invasion-warp-dll:er_invasion_warp_dll
 		er-inventory-sort-dll:er_inventory_sort
 		er-loading-bar-dll:er_loading_bar_dll
