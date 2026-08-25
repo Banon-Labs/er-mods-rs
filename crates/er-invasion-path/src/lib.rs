@@ -195,34 +195,24 @@ fn wait_for_task_instance() -> &'static CSTaskImp {
     }
 }
 
-/// The item the local player is using this frame, if any.
-///
-/// # Safety
-///
-/// Must be called on the game thread.
-#[cfg(windows)]
-unsafe fn current_use_item() -> Option<u32> {
-    use eldenring::cs::WorldChrMan;
-    // SAFETY: singleton access on the game thread.
-    let world_chr_man = unsafe { WorldChrMan::instance() }.ok()?;
-    let player = world_chr_man.main_player.as_ref()?;
-    player
-        .chr_ins
-        .tae_queued_use_item
-        .as_valid()
-        .map(|item| item.param_id())
-}
-
 /// One game frame.
 #[cfg(windows)]
 fn tick(state: &mut TaskState) {
     let config = config::config();
     let ticks = TICKS.fetch_add(1, Ordering::Relaxed);
 
-    // SAFETY: the task runs on the game thread.
-    let used_item = unsafe { current_use_item() };
     let by_key = state.toggle.pressed(config.toggle_key);
-    let by_item = state.item.used(used_item, config.trigger_item_id);
+    // Read the player ONLY when an item trigger is actually configured. With the default
+    // `trigger_item_id = 0` there is nothing to compare against, so polling the player every
+    // frame buys nothing and costs a pointer chase through a world that may not exist yet --
+    // which is precisely what killed the game at ~100ms before this guard existed.
+    let by_item = if config.trigger_item_id > 0 {
+        // SAFETY: the task runs on the game thread; the reader screens the player pointer.
+        let used_item = unsafe { game::current_use_item() };
+        state.item.used(used_item, config.trigger_item_id)
+    } else {
+        false
+    };
     if by_key || by_item {
         let enabled = !ENABLED.fetch_xor(true, Ordering::SeqCst);
         if !enabled {

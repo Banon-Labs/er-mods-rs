@@ -3,7 +3,7 @@
 A walkable route to every other player in your session, drawn on the ground they would actually
 walk. Its own DLL, its own `[[natives]]` entry, no dependency on the product mod.
 
-Press the key (default `F7`) during an invasion:
+Press the key (default `;`) during an invasion:
 
 | situation | what you see |
 |---|---|
@@ -48,7 +48,7 @@ Every setting lives in that generated file. The ones worth knowing:
 
 | key | default | what it does |
 |---|---|---|
-| `toggle_key` | `"F7"` | key that switches the overlay on and off, **by name** (`"]"`, `"KP_Plus"`, `"Insert"`) |
+| `toggle_key` | `"semicolon"` | key that switches the overlay on and off, **by name** (`"]"`, `"KP_Plus"`, `"Insert"`) |
 | `trigger_item_id` | `0` | `EquipParamGoods` row whose USE also toggles it; `0` leaves the key as the only way in |
 | `near_suppress_meters` | `10.0` | closer than this **with clear line of sight** draws nothing |
 | `bold_at_meters` | `20.0` | at or inside this, full width and opacity |
@@ -56,6 +56,10 @@ Every setting lives in that generated file. The ones worth knowing:
 | `max_targets` | `6` | most players drawn at once |
 | `arrow_meters` | `3.0` | length of the no-route arrow |
 | `start_enabled` | `false` | begin with the overlay already on |
+
+## Pick a key no other mod in your profile reads
+
+The default was `F7` until a live 15-DLL run found `er-invasion-warp` polling `VK_F7` every frame in the same process: the key warped the player instead of drawing anything, and nothing warned about it. "Elden Ring binds nothing to it" is not the question — the mods loaded beside you are, and a default cannot know them. `;` is clear of everything this workspace's shells poll, which makes it a better default rather than a safe one.
 
 ## How the route is found
 

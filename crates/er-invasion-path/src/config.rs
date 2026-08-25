@@ -16,9 +16,21 @@ use crate::{geometry, log::path_log};
 
 const CONFIG_FILE_NAME: &str = "er-invasion-path.toml";
 
-/// Default toggle key. `F7` exists on every keyboard including 60% layouts, and Elden Ring binds
-/// nothing to it.
-pub(crate) const DEFAULT_TOGGLE_KEY_NAME: &str = "F7";
+/// Default toggle key.
+///
+/// It was `F7`, chosen because Elden Ring itself binds nothing to it. That reasoning was
+/// incomplete and the omission was caught live on 2026-08-25: `er-invasion-warp` polls `VK_F7`
+/// every frame in the same process, so in a profile holding both, pressing the key WARPED the
+/// player instead of drawing anything -- and nothing anywhere said why. The question is never
+/// "does the GAME use this key", it is "does any DLL sharing this process use it", and the mods
+/// loaded beside you are not something a default can know.
+///
+/// `;` is free of every binding this workspace's shells poll (`F1`, `F7`-`F9`, `Insert`,
+/// `Delete`, `]`, numpad-multiply, the arrows, `ctrl+alt+c`), exists on every layout including
+/// 60%, and is not a key anyone hits by accident. That makes it a better default, not a safe
+/// one -- a third-party mod can still claim it, which is why the durable answer is a detector
+/// that reports collisions at runtime rather than a cleverer guess here.
+pub(crate) const DEFAULT_TOGGLE_KEY_NAME: &str = "semicolon";
 
 /// Below this separation, in metres, a target with clear line of sight gets no path at all.
 ///
@@ -50,9 +62,13 @@ const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-path standalone DLL configura
 # A player the navmesh cannot reach from where you stand gets a glowing arrow out of your body
 # pointing at them instead of a path.
 
-# Key that toggles the overlay on and off. A NAME, not a number: "F7", "]", "KP_Plus", "Insert".
-# A raw virtual-key code such as 0x76 is accepted too.
-toggle_key = "F7"
+# Key that toggles the overlay on and off. A NAME, not a number: ";", "]", "KP_Plus", "Insert".
+# A raw virtual-key code such as 0xba is accepted too.
+#
+# Pick one no OTHER mod in your profile already reads. The default was F7 until a live run found
+# er-invasion-warp polling F7 every frame -- the key warped the player instead of drawing a path,
+# and nothing warned about it. The game's own bindings are not the only thing to avoid.
+toggle_key = "semicolon"
 
 # Item whose use ALSO toggles the overlay, by EquipParamGoods row id. 0 disables the item trigger
 # and leaves the key as the only way in. Example: 2110 is Furlcalling Finger Remedy.
@@ -229,7 +245,33 @@ mod tests {
         // The comment block promises 10 metres and one path per player; a default that drifted
         // from its own documentation is a bug report waiting to happen.
         assert!(DEFAULT_CONFIG_TOML.contains("near_suppress_meters = 10.0"));
-        assert!(DEFAULT_CONFIG_TOML.contains("toggle_key = \"F7\""));
+        assert!(
+            DEFAULT_CONFIG_TOML.contains(&format!("toggle_key = \"{DEFAULT_TOGGLE_KEY_NAME}\""))
+        );
+    }
+
+    #[test]
+    fn the_default_key_is_none_of_the_ones_this_workspace_already_polls() {
+        // F7 shipped as the default and collided with er-invasion-warp, which polls it every
+        // frame -- the key warped the player rather than toggling this overlay. These are the
+        // virtual keys the sibling shells read; the default must not be among them.
+        const CLAIMED_BY_SIBLING_SHELLS: &[(&str, VirtualKey)] = &[
+            ("er-invasion-warp F1", 0x70),
+            ("er-invasion-warp F7", 0x76),
+            ("er-invasion-warp F8", 0x77),
+            ("er-invasion-warp F9", 0x78),
+            ("er-invasion-warp Insert", 0x2d),
+            ("er-invasion-warp Delete", 0x2e),
+            ("er-invasion-warp ]", 0xdd),
+            ("er-net-effects numpad *", 0x6a),
+        ];
+        let default = parse_key(DEFAULT_TOGGLE_KEY_NAME).expect("the default parses");
+        for (owner, key) in CLAIMED_BY_SIBLING_SHELLS {
+            assert_ne!(
+                default, *key,
+                "the default toggle key is already read by {owner}"
+            );
+        }
     }
 
     #[test]

@@ -99,6 +99,57 @@ fn is_live(chr_ins: &ChrIns) -> bool {
     chr_ins.modules.data.hp > 0
 }
 
+/// The live local player, or `None` until one really exists.
+///
+/// `WorldChrMan::instance()` returning `Ok` does NOT mean there is a player: during boot the
+/// singleton is up long before the world is, and `main_player` holds a non-null pointer to
+/// nothing. Dereferencing it is an access violation on the game thread, every frame, from the
+/// first tick -- which is exactly how this DLL killed the game at ~100ms on 2026-08-25, before
+/// its overlay had rendered a single frame (`draws=0` in its own log, so the render path was
+/// never even reached).
+///
+/// So the pointer is screened before ANY field of it is read: plausibly heap-aligned, and its
+/// vtable inside the game image. That is the same discipline the product DLL uses for early-boot
+/// reads, and it is not optional here.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+unsafe fn live_main_player() -> Option<&'static PlayerIns> {
+    // SAFETY: singleton access on the game thread; `Err` before the singleton exists.
+    let world_chr_man = unsafe { WorldChrMan::instance() }.ok()?;
+    let main_player = world_chr_man.main_player.as_ref()?;
+    let address = std::ptr::from_ref::<PlayerIns>(main_player) as usize;
+    // SAFETY: a plausibility screen on the raw address; reads nothing through it.
+    if !unsafe { er_game_base::mem::is_heap_aligned_ptr(address) } {
+        return None;
+    }
+    let module_base = er_game_base::mem::game_module_base().ok()?;
+    // SAFETY: fault-tolerant read of the first qword; returns None rather than faulting.
+    let vtable = unsafe { er_game_base::mem::safe_read_usize(address) }?;
+    if !er_game_base::mem::vtable_in_game_image(vtable, module_base) {
+        return None;
+    }
+    // SAFETY: the address is heap-plausible and carries a vtable from the game image, which is
+    // as much as can be established without the engine's own liveness flag.
+    Some(unsafe { &*(address as *const PlayerIns) })
+}
+
+/// The item the local player is using this frame, if any.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+pub(crate) unsafe fn current_use_item() -> Option<u32> {
+    // SAFETY: game thread; the player pointer is screened before any field is read.
+    let player = unsafe { live_main_player() }?;
+    player
+        .chr_ins
+        .tae_queued_use_item
+        .as_valid()
+        .map(|item| item.param_id())
+}
+
 /// Read the session roster.
 ///
 /// Returns `None` before the world exists -- at the title screen, during a load, and in any menu
@@ -110,7 +161,8 @@ fn is_live(chr_ins: &ChrIns) -> bool {
 pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
     // SAFETY: singleton access on the game thread; `Err` before the world is up.
     let world_chr_man = unsafe { WorldChrMan::instance() }.ok()?;
-    let main_player = world_chr_man.main_player.as_ref()?;
+    // SAFETY: game thread; screened before any field is read.
+    let main_player = unsafe { live_main_player() }?;
     let local_position = physics_position(&main_player.chr_ins)?;
     let local_chr_ins = std::ptr::from_ref(&main_player.chr_ins) as usize;
 
