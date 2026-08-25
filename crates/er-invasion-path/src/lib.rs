@@ -744,7 +744,11 @@ unsafe fn marker_selfcheck(config: &config::PathConfig) {
         ));
         return;
     };
-    path_log(format_args!("marker-selfcheck: spawned, holding it"));
+    path_log(format_args!(
+        "marker-selfcheck: spawned bound={} -- false means the engine REJECTED the id (not \
+         resident, or out of range), not that the effect is invisible",
+        marker.bound()
+    ));
     // HELD, not despawned in the same tick. Despawning immediately proved nothing: every real
     // trail marker lives for seconds, and it is that gap -- during which the effect can finish on
     // its own, leaving a control block pointing at a dead instance -- that took the game down.

@@ -172,7 +172,37 @@ marker_fxr_id = 0
 # trail that is not there -- which looks like the colours changing rather than like a broken
 # marker. 302022, the lingering coloured stone, is the only one of the four that marks anything.
 #
-# CANDIDATES FOR ACTUAL PER-PLAYER COLOURS, untested on screen but promising on disk. 302464,
+# THE GAME DOES NOT COLOUR ITS MULTIPLAYER ROLES WITH N EFFECTS. It tints a shared asset through a
+# param: RoleParam.roleNameColor has exactly two values across all 49 rows, and the phantom body
+# colour is PhantomParam RGB -- gold (200,120,80), red (255,40,40), blue (112,118,255). The Hunter
+# is blue and still uses the GOLD sign effect. Looking for "N coloured role effects" finds nothing
+# because there are none.
+#
+# What does exist, in rough order of how likely each is to work as a ground marker:
+#
+#   PROVEN free-standing and lingering, but only two colours. The whole visible summon sign IS the
+#   effect -- CreateSignSfx builds a world matrix and spawns once, no mesh, no bone:
+#     30001 / 30000 / 30003   gold-white co-op sign
+#     30011 / 30010 / 30013   red invader sign
+#   (30020..30061 are vow-rank variants pointing at PhantomParam rows that DO NOT EXIST -- DS3-era
+#   dead data. Do not ship one untested.)
+#
+#   Full-body buff auras -- authored to render on a whole body rather than a weapon, so not bound
+#   to weapon geometry:
+#     301202 green (Greenburst Crystal Tear)   301252 silver (Silver-Pickled Fowl Foot)
+#     301262 gold (Gold-Pickled Fowl Foot)     302152 Baldachin's Blessing
+#
+#   Weapon-grease enchant auras -- thirteen element colours, all looping by definition
+#   (SpEffectVfxParam.midstSfxId) and naming no dummypoly. The catch: they are authored to coat a
+#   WEAPON MESH, so whether they render at a bare world transform is unproven:
+#     303001 fire     303011 lightning  303061 poison   303071 magic    303091 bleed
+#     303101 sleep    303111 frost      303131 holy     303191 rot
+#
+# The log says which of these the engine even accepts: a spawn logs `bound=false` when the id is
+# rejected or not resident, which is a different failure from an effect that spawns and is
+# invisible. Sweep candidates and read the log rather than squinting at the ground.
+#
+# CANDIDATES FROM FILE SHAPE, untested on screen but promising on disk. 302464,
 # 302465 and 302466 are 71056 / 71040 / 71056 bytes -- three near-identical files sharing 302022's
 # s84005 resource family, and 302464 vs 302466 differ only at the id and then on a regular 64-byte
 # stride. That is what a colour-table swap looks like: one effect authored in several colours.

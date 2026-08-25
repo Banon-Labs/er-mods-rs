@@ -138,20 +138,28 @@ type CtrlAliveFn = unsafe extern "C" fn(*mut u8) -> u64;
 type CtrlVoidFn = unsafe extern "C" fn(*mut u8);
 
 /// The three trailing arguments `SpawnFfxInstance` forwards to `FUN_140d94af0`, which builds the
-/// FXR's external parameter block.
+/// FXR's **external value** table.
 ///
-/// The engine's own one-shot call site passes `-1, -1, -1` -- unset -- and that is what this used.
-/// They are exposed because they are the only per-instance inputs the spawn has, and something in
-/// them is the most likely lever for an effect's variant: `FUN_140d94af0` turns the SECOND short
-/// into a float (`param_5 < 0 ? 0.0 : (float)param_5`) and feeds it into the parameter table
-/// beside time-of-day and weather.
+/// This was documented as an unproven lead that fed "time-of-day and weather, not colour". That
+/// was wrong in a way worth spelling out: they ARE that table, and the mapping is exact.
+/// `FUN_140d94af0` (RVA `0xd94af0`) builds nine entries with keys
+/// `{0, 1, 2, 1000, 2000, 2100, 2200, 3000, 10000}` — key 1 is the current hour and key 2 the
+/// wetness from the active `WEATHER_PARAM`, which is where the earlier description came from, but
+/// the three arguments below land on three OTHER keys:
 ///
-/// `-1` in all three is what the engine passes for a one-shot -- unset -- and remains the
-/// default.
+/// | field | spawn arg | external value |
+/// |---|---|---|
+/// | `a` | `param_7`, `i16` | **2100** |
+/// | `b` | `param_8`, `i16` | **2000** |
+/// | `c` | `param_9`, `i32` | **2200** |
 ///
-/// This is a LEAD, not a finding. Nothing here has been shown to change an effect's appearance.
-/// They are configurable and hot-reloadable so the values can be swept live in a second each,
-/// which is the cheapest way to find out and needs no rebuild.
+/// So they change an effect's appearance **if and only if** that FXR wired a node to one of those
+/// three external values. That is a real mechanism with a real limit, not a guess: an effect that
+/// references none of them will ignore all three no matter what is passed. `-1` is what the engine
+/// passes for a one-shot, and remains the default.
+///
+/// A table with arbitrary keys can be built with `FUN_1420b7840`/`FUN_1420b7c20` and handed to
+/// `FUN_141c9ee60` directly, bypassing `FUN_140d94af0` — still bounded by what the FXR references.
 #[derive(Clone, Copy)]
 pub(crate) struct SpawnVariant {
     pub(crate) a: i16,
@@ -169,6 +177,16 @@ struct CtrlBlock([u8; CTRL_BYTES]);
 
 pub(crate) struct Marker {
     ctrl: Box<CtrlBlock>,
+    /// Whether the engine bound an instance when this was spawned. False means the id was
+    /// rejected or is not resident -- not that the effect is invisible.
+    bound_at_spawn: bool,
+}
+
+impl Marker {
+    /// Did the engine accept the effect id and build an instance?
+    pub(crate) fn bound(&self) -> bool {
+        self.bound_at_spawn
+    }
 }
 
 impl Marker {
@@ -204,6 +222,7 @@ pub(crate) unsafe fn spawn_tracked(
 
     let mut marker = Marker {
         ctrl: Box::new(CtrlBlock([0u8; CTRL_BYTES])),
+        bound_at_spawn: false,
     };
     let transform = transform_at(position);
     let id = fxr_id;
@@ -222,7 +241,33 @@ pub(crate) unsafe fn spawn_tracked(
             variant.c,
         );
     }
+    // Did the id actually resolve? `FUN_1420dda60` returns 0 and spawns NOTHING when an id is
+    // unresolvable or not resident, so an unusable id is indistinguishable from a usable one that
+    // happens to be invisible -- unless the control block is asked. It is asked here, once, at
+    // spawn: bound means the engine accepted the id and built an instance.
+    //
+    // That turns "does effect N exist and spawn" into a log line instead of a frame somebody has
+    // to look at, which matters because the candidate colour ids are chosen from file sizes and
+    // resource lists, not from having been seen.
+    marker.bound_at_spawn = unsafe { ctrl_is_alive(marker.field(0)) };
     Some(marker)
+}
+
+/// Ask the engine whether a control block still has a live instance.
+///
+/// Two levels deep on purpose -- see [`CTRL_IS_ALIVE_RVA`].
+///
+/// # Safety
+///
+/// Must be called on the game thread with a constructed control block.
+unsafe fn ctrl_is_alive(ctrl: *mut u8) -> bool {
+    let Some(is_alive) = function(CTRL_IS_ALIVE_RVA) else {
+        return false;
+    };
+    // SAFETY: a validated address in the game image.
+    let is_alive: CtrlAliveFn = unsafe { std::mem::transmute::<usize, CtrlAliveFn>(is_alive) };
+    // SAFETY: the block was constructed by `SpawnFfxInstance`.
+    (unsafe { is_alive(ctrl) } & 0xff) != 0
 }
 
 /// Remove a spawned effect, following the sequence `CS::SosSignMan` uses for summon signs.
@@ -253,18 +298,10 @@ pub(crate) unsafe fn despawn(mut marker: Marker) {
     // pointer and hoping. A marker held for a few seconds -- which every real trail marker is --
     // can have its effect finish on its own in the meantime, and pushing parameters into a
     // finished instance is how this crashed a live session on 2026-08-25.
-    let alive = match function(CTRL_IS_ALIVE_RVA) {
-        Some(is_alive) => {
-            // SAFETY: a validated address in the game image, called on our own control block.
-            let is_alive: CtrlAliveFn =
-                unsafe { std::mem::transmute::<usize, CtrlAliveFn>(is_alive) };
-            // SAFETY: the block was constructed by `SpawnFfxInstance`.
-            (unsafe { is_alive(marker.field(0)) } & 0xff) != 0
-        }
-        // Without the predicate, refuse to touch the instance at all. Leaking one effect is a
-        // cosmetic problem; writing into a dead one is not.
-        None => false,
-    };
+    // Without the predicate this returns false and the instance is left alone: leaking one effect
+    // is cosmetic, writing into a dead one is not.
+    // SAFETY: game thread; our own constructed block.
+    let alive = unsafe { ctrl_is_alive(marker.field(0)) };
     if alive {
         // SAFETY: every write below is inside our own zeroed block, at offsets the const
         // assertion above bounds.
