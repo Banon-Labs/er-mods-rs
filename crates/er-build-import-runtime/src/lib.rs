@@ -40,7 +40,6 @@ pub mod export;
 pub mod export_doc;
 pub mod gaitem;
 pub mod grant;
-pub mod http;
 pub mod read_character;
 
 use std::path::PathBuf;
@@ -273,7 +272,7 @@ fn fetch_inner(share_id: &str) {
         build_path(share_id)
     ));
 
-    let body = match http::get(API_HOST, &build_path(share_id), USER_AGENT) {
+    let body = match er_game_base::http::get(API_HOST, &build_path(share_id), USER_AGENT) {
         Ok(body) => body,
         Err(err) => return set_error(format!("fetch: {err}")),
     };

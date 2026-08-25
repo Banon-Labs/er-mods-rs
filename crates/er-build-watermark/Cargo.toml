@@ -1,0 +1,24 @@
+[package]
+name = "er-build-watermark"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_build_watermark"
+
+# The layout half is host-testable and dependency-free; only the DRAW half needs hudhook, so the
+# geometry below is proven by `cargo test` rather than by launching a game and squinting.
+# Host-buildable so `layout.rs` is exercised by `cargo test` on Linux.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

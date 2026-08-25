@@ -120,7 +120,32 @@ fn wide(s: &str) -> Vec<u16> {
 /// # Errors
 ///
 /// Returns [`HttpError`] identifying the step that failed.
+/// [`get`] with an explicit body cap.
+///
+/// The default cap was chosen for a build-planner share document, which is a few kilobytes. The
+/// second caller -- the build watermark's release lookup -- reads a GitHub releases page where
+/// every release carries ~43 asset records, and that response is megabytes. Rather than raise
+/// the default for everyone (and lose the protection the cap exists to give), the limit is the
+/// caller's to state.
+pub fn get_with_limit(
+    host: &str,
+    path: &str,
+    user_agent: &str,
+    max_body_bytes: usize,
+) -> Result<String, HttpError> {
+    get_inner(host, path, user_agent, max_body_bytes)
+}
+
 pub fn get(host: &str, path: &str, user_agent: &str) -> Result<String, HttpError> {
+    get_inner(host, path, user_agent, MAX_BODY_BYTES)
+}
+
+fn get_inner(
+    host: &str,
+    path: &str,
+    user_agent: &str,
+    max_body_bytes: usize,
+) -> Result<String, HttpError> {
     let agent = wide(user_agent);
     let host_w = wide(host);
     let path_w = wide(path);
@@ -220,7 +245,7 @@ pub fn get(host: &str, path: &str, user_agent: &str) -> Result<String, HttpError
             if read == 0 {
                 break;
             }
-            if body.len() + read as usize > MAX_BODY_BYTES {
+            if body.len() + read as usize > max_body_bytes {
                 return Err(HttpError::TooLarge);
             }
             body.extend_from_slice(&chunk[..read as usize]);
