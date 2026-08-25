@@ -159,6 +159,31 @@ pub fn slot_stats_from_body(body: &[u8]) -> Option<SlotStats> {
     located_stat_block(body).map(|(_, stats)| stats)
 }
 
+/// Offset of the located eight-attribute stat block within a slot body.
+///
+/// # Why this is exported
+///
+/// This crate ships TWO ways to find a serialized `PlayerGameData` in a slot body, and they do not
+/// agree on real saves:
+///
+/// * [`located_stat_block`] scans the body and accepts the offset where the **Rune Level
+///   invariant** holds -- eight attributes in `1..=99` whose sum is `level + 79`. It is
+///   self-validating: nothing but a real attribute block satisfies it.
+/// * `bnd4::slot_player_game_data_offset` (and the DLL's `SerializedSaveSlot::player_game_data`)
+///   instead find the leading `FACE` magics and search a FIXED `0xa000..=0xa600` window before
+///   each. That window is an observation, not an invariant, and the observation was too narrow:
+///   measured across the ten characters of one real container the true delta ran
+///   `0x9d14..=0xa05c`, so NINE of the ten fell below the window's low bound and decoded as empty
+///   slots. The System>Quit "Load Character from File" preview offered one row out of ten
+///   (`slot_mask=0x8`, 2026-08-25) while the same file's stats cache decoded nine.
+///
+/// Exporting the stat-block offset lets the FACE-window locators keep their own acceptance test
+/// while adding this candidate, instead of a third copy of the search drifting from both.
+#[must_use]
+pub fn located_stat_block_offset(body: &[u8]) -> Option<usize> {
+    located_stat_block(body).map(|(stat_base, _)| stat_base)
+}
+
 fn slot_name_at_pgd(body: &[u8], pgd: usize) -> Option<String> {
     let mut units = [0u16; PGD_NAME_LEN_U16];
     let mut len = 0usize;

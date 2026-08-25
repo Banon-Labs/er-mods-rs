@@ -1321,6 +1321,21 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.store(bound as usize, Ordering::SeqCst);
 
+    // THE CURSOR IS A ROW INDEX, NOT A ProfileSummary SLOT -- resolve it before ANY of the checks
+    // below treat it as one. `05_010_ProfileSelect` lists only the slots that exist, so the two
+    // numbers coincide only for a container whose characters run densely from slot 0. Everything
+    // here used to pass `cursor` straight through as a slot, which made every sparse container
+    // unloadable: `~/Downloads/ER0000.co2` (one character, slot 3) previewed as a one-row list, the
+    // user pressed A on row 0, and the mod asked whether SLOT 0 held a character -- it did not, so
+    // the pick was refused, while the native `load_activate` in the same frame resolved row 0 to
+    // slot 3 and built its load job for it (`loadgame-builder: ... built for slot=3`, 2026-08-25).
+    //
+    // The resolution is the game's own: the same clamp -> row-list -> row -> `save_slot` chain
+    // `load_activate` is about to walk. An unresolvable row yields `None` and forwards the native
+    // activation rather than guessing a slot.
+    let row_slot = er_quit_menu_core::profile_rows::profile_select_row_for_cursor(cursor, bound)
+        .and_then(|row| unsafe { er_title_flow::profile_dialog_row_slot(dialog, row) });
+
     // A SLOT arm -- the activation that actually confirms a character load, one per user pick.
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT.fetch_add(1, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -1347,20 +1362,20 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     if !system_quit_profile_load_activation_allowed()
         && phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-        && (0..bound).contains(&cursor)
+        && let Some(slot) = row_slot
     {
-        if !unsafe { profile_slot_has_character(cursor) } {
+        if !unsafe { profile_slot_has_character(slot) } {
             append_autoload_debug(format_args!(
-                "system-quit-dup: ProfileSelect slot activation IGNORED dialog=0x{dialog:x} cursor={cursor} bound={bound} -- slot holds no character; not arming a switch (would strand the game at a blank title)"
+                "system-quit-dup: ProfileSelect slot activation IGNORED dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={slot} -- slot holds no character; not arming a switch (would strand the game at a blank title)"
             ));
             return unsafe { original(dialog, b, c, d) };
         }
         let foreign_save_committed =
-            match unsafe { system_quit_save_swap_prepare_selected_slot(cursor) } {
+            match unsafe { system_quit_save_swap_prepare_selected_slot(slot) } {
                 Ok(committed) => committed,
                 Err(()) => return 0,
             };
-        unsafe { system_quit_arm_quickload_autoload(cursor, "ProfileSelectSlotActivate") };
+        unsafe { system_quit_arm_quickload_autoload(slot, "ProfileSelectSlotActivate") };
         // The arm only takes when the preserved System dialog is present; on success it advances the
         // phase past IDLE. If it took, cancel-close ProfileSelect ourselves (no confirm-lambda runs on
         // this direct path) so the menu-pump return-title chain tears the world down + reloads the
@@ -1375,17 +1390,17 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
                 SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
+                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={slot} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {slot} (zero MessageBox)"
             ));
             return 0;
         }
         append_autoload_debug(format_args!(
-            "system-quit-dup: ProfileSelect slot activation direct-arm did NOT take (no preserved System dialog) dialog=0x{dialog:x} cursor={cursor}; forwarding native activation"
+            "system-quit-dup: ProfileSelect slot activation direct-arm did NOT take (no preserved System dialog) dialog=0x{dialog:x} cursor={cursor} row->slot={slot}; forwarding native activation"
         ));
     }
 
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x} phase={phase}; forwarding native (load-job Run remains guarded)"
+        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={row_slot:?} profile_window=0x{profile_window:x} phase={phase}; forwarding native (load-job Run remains guarded)"
     ));
     unsafe { original(dialog, b, c, d) }
 }

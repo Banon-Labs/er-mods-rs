@@ -393,6 +393,18 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWN
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
     AtomicUsize::new(usize::MAX);
+/// The `CS::ProfileSummary` slot the ProfileSelect cursor should be parked on, or
+/// [`SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_NONE`].
+///
+/// Armed when a foreign save's preview lands (the lowest slot it actually occupies) and consumed by
+/// the per-frame `05_010_ProfileSelect` run, which calls the game's own
+/// `ProfileLoadDialog::SelectSaveSlot`. Without it the cursor stays wherever the dialog's
+/// constructor left it -- row 0, which for a save whose character is not in slot 0 is a DIFFERENT
+/// character's row, or the live session's own.
+pub(crate) static SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_SLOT: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_NONE);
+/// "No cursor move is pending." Not a slot: slots are `0..10`.
+pub(crate) const SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_NONE: i32 = -1;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_LIST;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG;

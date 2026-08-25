@@ -1905,6 +1905,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 unsafe {
                     system_quit_hide_real_system_windows(base, "hide-real-after-profile-select-run")
                 };
+                // MENU-PUMP-OWNED CURSOR PARK. A foreign save's preview asked for the cursor to sit
+                // on the lowest slot that save occupies; this is the first frame of the dialog that
+                // shows it, so the rows exist and the game's own
+                // `ProfileLoadDialog::SelectSaveSlot` can find one. Retried each frame until it
+                // takes (an early frame can run before the row list is filled) and consumed on
+                // success, so a user who then moves the cursor is never fought.
+                unsafe { system_quit_park_profile_select_cursor(base, owner) };
             }
         }
     }

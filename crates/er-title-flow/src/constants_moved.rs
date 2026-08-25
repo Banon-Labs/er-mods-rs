@@ -1119,6 +1119,24 @@ pub const PROFILE_LOAD_DIALOG_VTABLE_RVA: usize =
 pub const DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET: usize =
     core::mem::offset_of!(ProfileLoadDialogVtableLayout, load_activate);
 
+/// Dialog vtable slot 18: the embedded ProfileSelect ROW LIST (`FUN_1409a3480`).
+pub const DIALOG_ROW_LIST_VTSLOT_90_OFFSET: usize =
+    core::mem::offset_of!(ProfileLoadDialogVtableLayout, row_list);
+
+/// `CS::MenuViewItemList<T>::at(index)` -- the row accessor, called with a LIST INDEX.
+pub const MENU_VIEW_ITEM_LIST_AT_VTSLOT_20_OFFSET: usize =
+    core::mem::offset_of!(MenuViewItemListVtableLayout, item_at);
+
+/// The ProfileSummary slot a ProfileSelect row describes.
+pub const MENU_SAVE_DATA_SUMMARY_SLOT_OFFSET: usize =
+    core::mem::offset_of!(MenuSaveDataSummaryLayout, save_slot);
+
+// Compile-time guards pinning the reverse-engineered 1.16.2 vtable/row ABI these three read.
+const _: () = assert!(DIALOG_ROW_LIST_VTSLOT_90_OFFSET == 0x90);
+const _: () = assert!(DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET == 0xa0);
+const _: () = assert!(MENU_VIEW_ITEM_LIST_AT_VTSLOT_20_OFFSET == 0x20);
+const _: () = assert!(MENU_SAVE_DATA_SUMMARY_SLOT_OFFSET == 0x08);
+
 #[repr(C)]
 pub struct ProfileLoadDialogLayout {
     pub unknown_000: [u8; 0xb08],
@@ -1846,14 +1864,61 @@ pub enum ProfileLoadMenuRva {
     MenuLoadGameFunctorVtable = 0x02ac3ea8,
     SelectorStepVtable = 0x2ac71e0,
     ProfileLoadDialogVtable = 0x2b229f8,
+    /// `CS::ProfileLoadDialog::SelectSaveSlot(this, int slot) -> bool` -- the game's OWN
+    /// "park the list cursor on the row that describes slot N". Its constructor
+    /// (`0x1409a3d90`) calls it with `GetMenuSystemSaveLoad()->saveSlot`, which is the only
+    /// caller in the image, so driving the cursor through it is exactly what the engine does.
+    ///
+    /// It is also the inverse of what `load_activate` reads, and its disassembly is the proof
+    /// that the cursor indexes ROWS rather than slots (byte-identical in the 1.16.2 dump and
+    /// `eldenring-deobf.bin`, shift 0):
+    ///
+    /// ```text
+    ///   1409a5f36: cmp  ebx,[rcx+0xb08]      ; row count
+    ///   1409a5f46: call qword [rax+0x90]     ; list = dialog->vt[+0x90](dialog)
+    ///   1409a5f54: call qword [r8+0x20]      ; row  = list->vt[+0x20](list, index)
+    ///   1409a5f58: cmp  esi,[rax+8]          ; row->save_slot == wanted?
+    ///   1409a5f79: lea  rcx,[rdi+0xa38] / call 0x140738d40   ; set the widget's cursor
+    ///   1409a5f8f: mov  al,1                 ; found
+    ///   1409a5f67: xor  al,al                ; no row carries that slot
+    /// ```
+    ProfileLoadSelectSaveSlot = 0x9a5f20,
 }
 
 /// Dialog vtable slot 20 (offset 0xa0) = load_activate 0x1409a4670. Read the live slot from
 /// the dialog vtable (robust to relocation) rather than hard-calling the RVA.
+///
+/// Slot 18 (offset 0x90) is the dialog's ROW LIST accessor -- `FUN_1409a3480`, which is just
+/// `return this + 0x1260`, the embedded
+/// `CS::BasicViewItemList<CS::MenuSaveDataSummary, 10>` the constructor fills. Both
+/// `load_activate` and `SelectSaveSlot` reach the rows through this slot rather than through a
+/// fixed field offset, so callers do too.
 #[repr(C)]
 pub struct ProfileLoadDialogVtableLayout {
-    pub unknown_slots_00_19: [usize; 20],
+    pub unknown_slots_00_17: [usize; 18],
+    pub row_list: usize,
+    pub unknown_slot_18: usize,
     pub load_activate: usize,
+}
+
+/// `CS::MenuViewItemList<T>` vtable. Slot 4 (offset 0x20) is `at(index) -> T*`: the row accessor
+/// both `load_activate` and `SelectSaveSlot` call with a LIST INDEX.
+#[repr(C)]
+pub struct MenuViewItemListVtableLayout {
+    pub unknown_slots_00_03: [usize; 4],
+    pub item_at: usize,
+}
+
+/// One `CS::MenuSaveDataSummary` row of the ProfileSelect list.
+///
+/// The row list is COMPACTED -- `FUN_140875590` pushes a row only for a slot whose
+/// `ProfileSummary->saveSlotsStates[slot]` byte is set -- so the row remembers which slot it came
+/// from, and `save_slot` is the field every native consumer reads. It is the only field this
+/// codebase needs; the rest of the 0x108-byte row is the row's own display state.
+#[repr(C)]
+pub struct MenuSaveDataSummaryLayout {
+    pub unknown_000: [u8; 0x08],
+    pub save_slot: i32,
 }
 
 // ----- from crates/er-effects-rs/src/constants/stats_panel_background.rs -----

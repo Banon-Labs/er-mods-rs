@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 52,653 |
+| all `experiments/**` | 80 | 52,764 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -127,7 +127,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_load/loaders/switch_reload.rs` | 498 | switch-reload adapter family | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
 | `own_stepper/bootstrap_drive.rs` | 874 | product bootstrap-drive policy | D5 |
-| `own_stepper/load_steps.rs` | 741 | product load-step policy | D5 |
+| `own_stepper/load_steps.rs` | 751 | product load-step policy | D5 |
 | `present_overlay.rs` | 950 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
@@ -139,7 +139,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/diagnostics/loadlist_wait_trace.rs` | 139 | product diagnostic | D4 |
 | `startup_hooks/diagnostics/mod.rs` | 22 | diagnostics module facade | `STAY` |
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,547 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,577 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 989 | Scaleform resource and profile-table families | D2 and R24 |
@@ -154,15 +154,15 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/generate_build_link_row.rs` | 233 | System>Quit "Generate Build Link" row: press -> `er-build-import-runtime::export::request`, FrameBegin tick -> `::export::tick`, plus the clipboard/ShellExecuteW sinks | R18 |
 | `startup_hooks/quit_menu/mod.rs` | 80 | quit-menu module facade | R10-R20 |
 | `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,945 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
-| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 2,018 | mixed profile-row title, quit, and sampler families | R11 |
+| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 2,025 | mixed profile-row title, quit, and sampler families | R11 |
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 1,227 | System>Quit destination commit family | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,895 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,523 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
-| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,226 | product profile renderer and quit swap families | R18-R19 |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,275 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,650 | System>Quit dialog implementation and picker adapter | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 681 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
-| `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,399 | ownership, telemetry, quit, and portrait families | R19 |
+| `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,414 | ownership, telemetry, quit, and portrait families | R19 |
 | `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,157 | product repro guard and quit/title families | R2 and R19 |
 | `startup_hooks/quit_menu/system_quit_row_identity.rs` | 342 | System>Quit row identity family | R18 |
 | `startup_hooks/save_picker/mod.rs` | 22 | save-picker module facade | R17 |
