@@ -71,7 +71,7 @@ pub(crate) unsafe fn portrait_pipeline_idle_in_gameplay(base: usize) -> bool {
 /// pipeline returned before the model could build+render (run32: force_profile_render_tick never reached
 /// maybe_build). Wall-clock recency (not a per-call decrement) makes it safe to poll multiple times a frame.
 pub(crate) fn native_loading_screen_active() -> bool {
-    pub(crate) use er_telemetry::counters::LAST_HITS;
+    pub(crate) use er_telemetry_core::counters::LAST_HITS;
     static LAST_CHANGE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let now_ms = EPOCH
@@ -287,7 +287,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // epoch 0 only (switch epochs keep the confirm-press anchor).
     if crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) == 0
     {
-        let _ = er_telemetry::counters::PORTRAIT_CONFIRM_MS.compare_exchange(
+        let _ = er_telemetry_core::counters::PORTRAIT_CONFIRM_MS.compare_exchange(
             0,
             crate::experiments::boot_view_epoch_ms().max(1) as usize,
             Ordering::SeqCst,
@@ -436,7 +436,7 @@ pub(crate) unsafe fn kick_target_profile_slot(
         // record and therefore matches whenever the same slot is re-selected. On 2026-08-22 that
         // hold kept the previous character's head and its crop envelope for a whole 3.1s window
         // while this check disagreed twice and nothing consumed the disagreement.
-        er_loading_portrait::loading_portrait_bridge_hold_face_check(slot, got, expected_face);
+        er_loading_portrait_core::loading_portrait_bridge_hold_face_check(slot, got, expected_face);
     }
     PORTRAIT_KICK_SLOT_KEY.store((slot + 1) as usize, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(renderer, Ordering::SeqCst);
@@ -487,7 +487,7 @@ pub(crate) fn portrait_loaded_slot() -> i32 {
 /// the correct 5 the whole time -- and slot 9's face sat on the loading screen for 29.7 seconds.
 ///
 /// So the sources are consulted strongest-first (see
-/// `er_loading_portrait::portrait_target_slot_from_sources`, which is host-tested):
+/// `er_loading_portrait_core::portrait_target_slot_from_sources`, which is host-tested):
 ///   1. the user's explicit on-screen save-picker pick, until that slot's load completes;
 ///   2. `GameMan+0xb78`, the native load-REQUEST register -- a load for it is in flight, so ac0
 ///      is stale by definition. `-1` is its no-request sentinel and falls through;
@@ -509,7 +509,7 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     let request = (gm != TITLE_OWNER_SCAN_START_ADDRESS)
         .then(|| unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) })
         .flatten();
-    let resolved = er_loading_portrait::portrait_target_slot_from_sources(
+    let resolved = er_loading_portrait_core::portrait_target_slot_from_sources(
         picker,
         request,
         Some(ac0),
@@ -536,7 +536,8 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
         0 => None,
         packed => Some((packed - 1) as i32),
     };
-    let (target, latching) = er_loading_portrait::portrait_window_target_slot(latched, resolved);
+    let (target, latching) =
+        er_loading_portrait_core::portrait_window_target_slot(latched, resolved);
     if latching && let Some(slot) = target {
         PORTRAIT_WINDOW_TARGET_SLOT.store(slot as usize + 1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
@@ -623,8 +624,8 @@ pub(crate) fn portrait_target_slot() -> i32 {
 /// empty slots never fire.
 pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     // The new-game / not-yet-resolved saved-map sentinel and the "is this a real packed BlockId"
-    // predicate both live in er-loading-portrait, where they are host-tested.
-    use er_loading_portrait::portrait_identity::packed_maps_disagree;
+    // predicate both live in er-loading-portrait-core, where they are host-tested.
+    use er_loading_portrait_core::portrait_identity::packed_maps_disagree;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
 
     // GAME side: require a REAL loaded character before asserting anything.
@@ -709,7 +710,8 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     // is 0 on nearly every real map, so the old packing threw away the only discriminating byte.
     PORTRAIT_RENDER_SEMAPHORE_STATE.store(
         ((render_target_slot as u32 as usize) << 16)
-            | ((er_loading_portrait::portrait_identity::packed_map_area_id(our_map) as usize) << 8)
+            | ((er_loading_portrait_core::portrait_identity::packed_map_area_id(our_map) as usize)
+                << 8)
             | cond,
         Ordering::SeqCst,
     );
@@ -754,8 +756,8 @@ pub(crate) static PROFILE_PREVIEW_FACE_HASH: [AtomicUsize; TITLE_PROFILE_SLOT_CO
 /// catches a stale record on a normally-loaded save therefore cannot catch this one; this mask is the
 /// record of the fact, set where the failure to source actually happens.
 pub(crate) static PROFILE_PREVIEW_PLACE_NAME_UNSOURCED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_CHECKS;
-pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_FACE_IDENTITY_CHECKS;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
 pub(crate) const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
 pub(crate) const SAVE_PGD_FACE_DELTA_WINDOW_LOW: usize = 0xa000;
 pub(crate) const SAVE_PGD_FACE_DELTA_WINDOW_HIGH: usize = 0xa600;

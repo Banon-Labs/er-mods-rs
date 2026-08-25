@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Shared cross-platform telemetry counters used by host checks and the Windows DLL.
-er-telemetry = { path = "../er-telemetry" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 er-title-flow = { path = "../er-title-flow" }
 
 [target.'cfg(windows)'.dependencies]
@@ -30,19 +30,19 @@ er-save-loader = { path = "../er-save-loader" }
 # Host-runnable save-source/redirect planner. Process-wide hooks stay in this product crate until
 # the later save-redirect owner slice.
 er-save-redirect = { path = "../er-save-redirect" }
-er-save-picker = { path = "../er-save-picker", default-features = false, features = ["boot-flow", "os-dialog"] }
+er-save-picker-core = { path = "../er-save-picker-core", default-features = false, features = ["boot-flow", "os-dialog"] }
 # Customized System>Quit decision core. Hooked surfaces stay in this crate until S8.
-er-quit-menu = { path = "../er-quit-menu" }
-# Game-side build importer, shared with the standalone er-build-import-dll shell. The System>Quit
+er-quit-menu-core = { path = "../er-quit-menu-core" }
+# Game-side build importer, shared with the standalone er-build-import shell. The System>Quit
 # "Load Build from URL" row calls `request` on a press and `tick` from the FrameBegin task.
-# NEVER load er_build_import.dll alongside this DLL in one me3 profile: each would drive its own
+# NEVER load er_build_import_core.dll alongside this DLL in one me3 profile: each would drive its own
 # copy of the runtime against the same character.
 er-build-import-runtime = { path = "../er-build-import-runtime" }
 # The importer's PURE half. Linked directly (not only through the runtime) because the System>Quit
 # link field validates what the player typed with the same `validate_build_url` the host tests pin,
 # rather than a second copy of the rule that could drift from it.
-er-build-import = { path = "../er-build-import" }
-# Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
+er-build-import-core = { path = "../er-build-import-core" }
+# Save-write suppression core, shared with the standalone er-save-disable (save-game-flow
 # WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
 # bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.
 # NEVER load er_save_disable.dll alongside this DLL in one me3 profile (two MinHook instances
@@ -60,11 +60,11 @@ er-gfx = { path = "../er-gfx" }
 erpx-rs = { path = "../erpx-rs", default-features = false }
 # Backend-neutral loading-bar labels/font/raster primitives. Runtime adapters in this crate still own
 # Elden Ring semaphores, D3D12 swapchains, and ME3/product integration.
-er-loading-bar = { path = "../er-loading-bar" }
+er-loading-bar-core = { path = "../er-loading-bar-core" }
 # Loading-screen portrait + stats feature (path B capture pipeline + compositors + native
 # overlay host), extracted in the portrait crate split. The product keeps bundling it;
-# product state crosses the seam via `er_loading_portrait::install_host` in bootstrap.rs.
-er-loading-portrait = { path = "../er-loading-portrait" }
+# product state crosses the seam via `er_loading_portrait_core::install_host` in bootstrap.rs.
+er-loading-portrait-core = { path = "../er-loading-portrait-core" }
 er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"
@@ -130,7 +130,7 @@ windows = { version = "0.62", features = [
   # comdlg32 (GetOpenFileNameW / GetSaveFileNameW / CommDlgExtendedError) for the OPT-IN OS file
   # picker: `er-effects.toml os_native_save_picker = true` routes BOTH System -> Quit surfaces --
   # "Load Character from File" and the Save Game destination list -- to the OS dialog instead of the
-  # in-game 05_010 browser. The reusable mechanism lives in er-save-picker::os_dialog; the product
+  # in-game 05_010 browser. The reusable mechanism lives in er-save-picker-core::os_dialog; the product
   # entrypoints still live in startup_hooks/save_picker/save_picker_os_dialog.rs.
   "Win32_UI_Controls_Dialogs",
   # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
@@ -163,7 +163,7 @@ windows = { version = "0.62", features = [
 # RVA, struct offset, or value vocabulary that is worth keeping whether or not anything reads it
 # today. The only other escapes are four per-site `#[allow]`s: two `permissions_set_readonly_false`
 # (the lint describes a UNIX behaviour this Windows-only DLL cannot reach) and two
-# `too_many_arguments` on pass-throughs that mirror `er_loading_bar`'s own signatures.
+# `too_many_arguments` on pass-throughs that mirror `er_loading_bar_core`'s own signatures.
 [lints]
 workspace = true
 

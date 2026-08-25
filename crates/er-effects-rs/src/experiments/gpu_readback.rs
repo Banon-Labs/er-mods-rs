@@ -1,8 +1,8 @@
 //! Boot/loading-screen frame rasterizer + save-picker overlay host (product side).
 //!
 //! The portrait capture pipeline (staged color+depth readback, depth-key worker,
-//! portrait/stats CPU compositors, frame bridge) moved to the `er-loading-portrait`
-//! crate (portrait crate split). A `pub(crate) use er_loading_portrait::*` shim used to sit here
+//! portrait/stats CPU compositors, frame bridge) moved to the `er-loading-portrait-core`
+//! crate (portrait crate split). A `pub(crate) use er_loading_portrait_core::*` shim used to sit here
 //! so every remaining flat-namespace reference (BootViewFrame, portrait_onto, RGBA8_BPP,
 //! MAX_RT_DIM, OVERLAY_FENCE_VAL, record_transition, ...) kept compiling unchanged. Those
 //! references are gone -- the 2026-08-21 lint-parity sweep pruned the last of them -- so the shim
@@ -11,7 +11,7 @@
 use super::*;
 
 // The shared import block for the remaining modules below (it used to live at the
-// top of resource_readback.rs before that file moved to er-loading-portrait).
+// top of resource_readback.rs before that file moved to er-loading-portrait-core).
 use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, WAIT_OBJECT_0};

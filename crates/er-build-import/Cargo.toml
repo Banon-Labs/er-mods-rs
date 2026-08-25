@@ -4,13 +4,25 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Host-buildable and game-free on purpose: this crate is pure data transformation
-# (planner JSON -> concrete item grants) so the whole mapping can be proven by
-# `cargo test` with no Elden Ring, no injection and no network.
+# Thin ME3-loadable shell around `er-build-import-runtime`, same split as er-loading-portrait-core /
+# er-loading-portrait. Everything worth testing lives in the host crate `er-build-import-core` and is
+# proven by `cargo test`; everything that touches the game lives in the runtime crate and is shared
+# with the product DLL. This shell exists only to trigger a ONE-SHOT import of the configured build
+# at character load, without the product's System>Quit menu.
+
+[lib]
+crate-type = ["cdylib"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+er-build-import-runtime = { path = "../er-build-import-runtime" }
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_SystemServices",
+] }
 
 [lints]
 workspace = true

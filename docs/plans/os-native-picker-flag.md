@@ -70,7 +70,7 @@ config that failed to load yields `None` => `false` => the validated in-game def
 `SAVE_PICKER_SURFACE` set once in `init_runtime_config` to 0 (in-game) or 1 (OS), exported as
 `oracle_save_picker_surface`.
 
-Companion counters (all new in `crates/er-telemetry/src/counters.rs`, exported in the existing
+Companion counters (all new in `crates/er-telemetry-core/src/counters.rs`, exported in the existing
 `oracle_save_picker_*` block):
 
 | Counter | Oracle | Meaning |

@@ -31,7 +31,7 @@
 //!
 //! # Why each marker is installed TWICE, bright and dimmed
 //!
-//! While a Seamless invasion attempt is in flight the pins are not clickable -- `er_invasion_warp`'s
+//! While a Seamless invasion attempt is in flight the pins are not clickable -- `er_invasion_warp_core`'s
 //! policy gate refuses every warp for its duration, from the map and the hotkeys alike -- and a pin
 //! that still looks as solid as a Site of Grace while doing nothing when confirmed is a worse UI
 //! than no pin. So the marker says so itself: the dimmed variant is placed through a

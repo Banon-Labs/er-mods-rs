@@ -5,7 +5,7 @@ Standing rule (2026-08-04): no product DLL, shell or harness in this repo may ap
 across runs. Each log file is truncated by the first write of the process that owns it; keeping
 an older run means copying the file aside yourself, not letting it accumulate.
 
-The failure that set the rule: `crates/er-invasion-warp-dll/src/lib.rs` opened its log with a
+The failure that set the rule: `crates/er-invasion-warp/src/lib.rs` opened its log with a
 plain `OpenOptions::new().append(true)` on a fixed name next to the game executable. Twelve
 separate launches piled into one 565 KB file, so a count taken over it ("37 confirms") read as
 ONE run doing something 37 times when it was really twelve runs, and per-run state could only be

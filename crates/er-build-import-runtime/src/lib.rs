@@ -20,7 +20,7 @@
 //!
 //! There are two callers with the same needs and different triggers:
 //!
-//! * `er-build-import-dll` -- a standalone ME3 shell that imports the build named in
+//! * `er-build-import` -- a standalone ME3 shell that imports the build named in
 //!   `er-effects.toml` once, as soon as a character is in the world.
 //! * `er-effects-rs` -- the product DLL, whose System>Quit **Load Build from URL** row imports on
 //!   demand, as many times as the player asks.
@@ -46,16 +46,16 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_build_import::equip::{
+use er_build_import_core::equip::{
     CHR_ASM_SLOT_QUICK_BASE, Capacity, EquipLedger, PositionKind, PositionResult, equip_plan,
 };
-use er_build_import::{API_HOST, BuildDoc, build_path, model, plan::plan};
+use er_build_import_core::{API_HOST, BuildDoc, build_path, model, plan::plan};
 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
 /// Config key naming the planner build to import, re-exported so callers naming it in a log line
 /// or a menu message cannot drift from the parser.
-pub use er_build_import::BUILD_URL_KEY;
+pub use er_build_import_core::BUILD_URL_KEY;
 
 /// The config file, beside the game executable.
 pub const CONFIG_FILE_NAME: &str = "er-effects.toml";
@@ -182,11 +182,11 @@ fn set_error(reason: String) {
 /// Read `build_url` out of the game-directory `er-effects.toml`.
 ///
 /// The file lookup lives here because it needs the game directory; the PARSING lives in
-/// `er-build-import`, which `cargo test` can reach.
+/// `er-build-import-core`, which `cargo test` can reach.
 pub fn configured_build_url() -> Option<String> {
     let path = er_game_base::log::game_directory_path()?.join(CONFIG_FILE_NAME);
     let contents = std::fs::read_to_string(path).ok()?;
-    er_build_import::build_url_from_config(&contents).map(str::to_owned)
+    er_build_import_core::build_url_from_config(&contents).map(str::to_owned)
 }
 
 // ------------------------------------------------------------------ request
@@ -220,7 +220,7 @@ impl core::fmt::Display for RequestError {
 ///
 /// Safe to call from any thread, including a menu action handler: nothing here touches game state.
 pub fn request(url: &str) -> Result<(), RequestError> {
-    let Some(share_id) = er_build_import::share_id_from_url(url) else {
+    let Some(share_id) = er_build_import_core::share_id_from_url(url) else {
         return Err(RequestError::NoShareId);
     };
     // Claim Idle/Done/Failed -> Fetching atomically. Losing this race means another caller (or the
@@ -464,7 +464,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     let wanted_ashes = planned
         .grants
         .iter()
-        .filter(|grant| grant.weapon_skill != er_build_import::plan::NO_SKILL)
+        .filter(|grant| grant.weapon_skill != er_build_import_core::plan::NO_SKILL)
         .count();
     let ashes_mounted = outcome
         .armaments
@@ -501,7 +501,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     // (an ash lives on the instance, so the item id alone cannot say), and it is what the
     // post-import read-back adjudicates the worn armament against. One table, both jobs -- the
     // alternative is a second opinion about what the build asked for.
-    let wants = er_build_import::plan::equipped_armament_skills(doc, &catalog);
+    let wants = er_build_import_core::plan::equipped_armament_skills(doc, &catalog);
 
     // Equip only what was actually granted: equipping an item the inventory does not hold cannot
     // work, and the outcome distinguishes those from real equip failures.
@@ -614,8 +614,8 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         let mut correct = 0usize;
         let mut asked = 0usize;
         for want in &wants {
-            let Some(gem) = (want.weapon_skill != er_build_import::plan::NO_SKILL)
-                .then_some(want.weapon_skill & !er_build_import::plan::GEM_ITEM_CATEGORY)
+            let Some(gem) = (want.weapon_skill != er_build_import_core::plan::NO_SKILL)
+                .then_some(want.weapon_skill & !er_build_import_core::plan::GEM_ITEM_CATEGORY)
             else {
                 continue;
             };
@@ -628,7 +628,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 // Safety: `msg` is the live repository this import already read from.
                 unsafe {
                     catalog::name_for(
-                        er_build_import::catalog::Kind::AshOfWar,
+                        er_build_import_core::catalog::Kind::AshOfWar,
                         msg,
                         module_base,
                         arts,
@@ -641,7 +641,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             // RIGHT id with the wrong arts row holds a different COPY of the right armament,
             // which is the exact failure the gaitem-handle threading exists to prevent and the
             // only one an id-keyed equip could ever produce.
-            let planned_item = er_build_import::equip::armament_planner_index(want.slot)
+            let planned_item = er_build_import_core::equip::armament_planner_index(want.slot)
                 .and_then(|index| equips.armaments.get(index as usize))
                 .and_then(|entry| entry.as_ref())
                 .map(|item| item.item_id);

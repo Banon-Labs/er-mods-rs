@@ -2,10 +2,10 @@
 // Shared imports preserved from the former flat startup-hook namespace for child modules.
 use crate::telemetry::*;
 use crate::*;
-use er_save_picker::os_dialog::{no_picker_cover, os_pick_validated};
-use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
-use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
-use er_telemetry::counters::SAVE_PICKER_SURFACE;
+use er_save_picker_core::os_dialog::{no_picker_cover, os_pick_validated};
+use er_telemetry_core::counters::SAVE_PICKER_OPEN_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_PICK_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_SURFACE;
 use std::{
     path::Path,
     sync::{OnceLock, atomic::Ordering},

@@ -252,7 +252,7 @@ pub(crate) fn own_window() -> Option<HWND> {
 /// path must NEVER trigger any of these, so the proof oracle asserts this counter == 0 for the
 /// whole run. Every injection site increments it; it is exported in telemetry as
 /// `simulated_button_presses_total`.
-pub(crate) use er_telemetry::counters::SIMULATED_INPUT_PRESSES_TOTAL;
+pub(crate) use er_telemetry_core::counters::SIMULATED_INPUT_PRESSES_TOTAL;
 /// One synthesized key press.
 pub(crate) const SIMULATED_PRESS_INCREMENT: usize = 1;
 

@@ -1,19 +1,20 @@
-# Product (A): OUR OWN DRAWN save picker -- the boot-time "the game started with no save"
-# product, plus the OS-native common-file-dialog mechanism it is coupled to
-# (user decision 2026-07-30).
+# Thin standalone ME3-loadable shell for the `er-save-picker-core` feature crate (product A):
+# own DllMain, own log file, individually shippable.
 #
-# The boot picker cannot be a native game menu: at a no-save boot the game's menu assets
-# are not ready and the title is deliberately suppressed, so it composites on the same
-# D3D12 Present layer as the boot loading bar and reads OS input directly (the game's own
-# input path is frozen behind the held save-check job).
-#
-# This crate also owns the SHARED row model, because the dependency direction is
-# `er-quit-menu -> er-save-picker`, one way. A must never reference the dim overlay: the
-# dim is for the in-game quit-menu case only, and that asymmetry is what keeps the
-# dependency acyclic.
-#
-# Product state crosses the seam as injected function pointers: see `host::install_host`.
-# This crate must NOT depend on the root crate, nor on `er-quit-menu`.
+# UNLIKE `er-loading-portrait`, this DLL is designed to COEXIST conservatively
+# in the S6-safe subset. The user requirement (2026-07-30) is that a profile may list
+# either new DLL, both, neither, and combinations with the product and other companions;
+# S6 only proves the standalone shell and product-already-present stand-down case.
+#   1. product (A) installs NO game-address detour at all -- its only OS hook is a
+#      `WH_KEYBOARD_LL` keyboard hook, which is per-DLL and cannot collide;
+#   2. if the product DLL is already loaded, this standalone shell stands down before
+#      installing its host or arming the picker;
+#   3. standalone-first co-load remains outside S6 proof and must be covered by the
+#      later save-redirect/feature-ownership slices before claiming the full matrix; and
+#   4. anything that ever does hook a game address must go through the `er-hook` union
+#      (`register_union_hook` / the `er_effects_union_register` C export), never a bare
+#      `MhHook::new`, so one MinHook instance owns each address and handlers chain.
+# See docs/plans/save-picker-crate-extraction.md, "Hook-ownership election".
 [package]
 name = "er-save-picker"
 version = "0.1.0"
@@ -22,52 +23,25 @@ publish = false
 
 [lib]
 name = "er_save_picker"
-
-[features]
-default = ["boot-flow", "os-dialog"]
-# The boot missing-save flow: the drawn overlay, its input threads, and the arm/disarm
-# lifecycle keyed off the missing-save hold. `er-quit-menu` takes this crate with
-# `default-features = false`, so a standalone product-(B) DLL links ONLY the shared row
-# model, the config keys and the comdlg32 surface -- never (A)'s boot behavior.
-#
-# The feature is a COMPILE-time convenience for that build, NOT the safety guarantee:
-# cargo unifies features across a build graph, so in the product DLL (which wants
-# `boot-flow`) `er-quit-menu` gets it too. The runtime guarantee is that nothing in the
-# boot flow arms unless a host explicitly calls the arm entry point -- see the crate docs.
-boot-flow = []
-# The comdlg32 common-file-dialog surface. On by default because the OS-native picker must
-# ALWAYS be available as a fallback: we never force a user onto an in-game picker we built
-# (user principle 2026-07-30). `er-quit-menu` depends on this feature explicitly.
-os-dialog = []
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
+# host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# BND4 slot walk + PlayerGameData reads: a picked container's active character slots
-# (name + level) are parsed straight from bytes, with no live game state.
-er-save-loader = { path = "../er-save-loader" }
-# Shared cross-platform telemetry counters (the oracle_save_picker_* fields).
-er-telemetry = { path = "../er-telemetry" }
-# Backend-neutral glyph/raster primitives. The overlay's text and rects go through the
-# SAME `draw_text_rgb` / `fill_rect_rgb` the boot view uses, so the picker and the boot
-# bar cannot drift apart visually.
-er-loading-bar = { path = "../er-loading-bar" }
+er-save-picker-core = { path = "../er-save-picker-core" }
+er-save-redirect = { path = "../er-save-redirect" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's log describes exactly one run instead of accumulating across launches.
+er-game-base = { path = "../er-game-base" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
-  "Win32_System_Time",
-  "Win32_System_Threading",
-  "Win32_UI_Controls_Dialogs",
-  "Win32_UI_Input_KeyboardAndMouse",
-  "Win32_UI_WindowsAndMessaging",
 ] }
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
 # set, denied. Zero violations on the shipping target
 # (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
-# build, so the deny carries no `# DEBT:` allows. The two module-scoped
-# `cfg_attr(not(windows), allow(...))` in this crate are cfg artifacts of the HOST build, not
-# shipping-target debt -- see the comment beside each.
+# build, so the deny carries no `# DEBT:` allows.
 [lints]
 workspace = true

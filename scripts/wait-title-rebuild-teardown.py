@@ -16,7 +16,7 @@ Two RE'd, independently-derived quit signals are REQUIRED together before any ti
 in depth against a boot-title false-positive; either alone is sufficient in principle, but a title verdict
 never fires unless BOTH agree):
   1. TELEMETRY quit signal -- a title-binding line with `epoch >= 1`. `standalone_tick`
-     (er-telemetry/src/lib.rs:525) feeds `play_time_ms = -1` while GameDataMan is null (boot title, no
+     (er-telemetry-core/src/lib.rs:525) feeds `play_time_ms = -1` while GameDataMan is null (boot title, no
      character loaded), so the load-epoch counter (read/epoch.rs) stays 0 at the boot title and only
      increments once the world has simulated. A title reached with `epoch >= 1` therefore had a prior
      in-world session + a quit -- i.e. it is the WARM title. The boot title is always epoch 0.

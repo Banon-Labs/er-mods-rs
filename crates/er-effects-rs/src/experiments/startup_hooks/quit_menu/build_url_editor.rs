@@ -388,7 +388,7 @@ pub(crate) unsafe fn build_url_editor_menu_pump() {
             BuildUrlKeyboardOutcome::Accepted(text) => unsafe { on_accepted(text) },
             BuildUrlKeyboardOutcome::Cancelled => {
                 SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT.fetch_add(1, Ordering::SeqCst);
-                set_build_url_row_help(er_build_import::BUILD_URL_ROW_HELP);
+                set_build_url_row_help(er_build_import_core::BUILD_URL_ROW_HELP);
                 append_autoload_debug(format_args!(
                     "system-quit-build-url: backed out of the link field; nothing applied"
                 ));
@@ -420,7 +420,7 @@ pub(crate) unsafe fn build_url_editor_menu_pump() {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         guard
             .as_deref()
-            .unwrap_or(er_build_import::BUILD_URL_PREFIX)
+            .unwrap_or(er_build_import_core::BUILD_URL_PREFIX)
             .to_owned()
     };
     let initial: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
@@ -448,7 +448,7 @@ pub(crate) unsafe fn build_url_editor_menu_pump() {
 ///
 /// Menu-pump context.
 unsafe fn on_accepted(text: String) {
-    match er_build_import::validate_build_url(&text) {
+    match er_build_import_core::validate_build_url(&text) {
         Ok(share_id) => {
             SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT.fetch_add(1, Ordering::SeqCst);
             let url = text.trim().to_owned();
@@ -529,8 +529,8 @@ mod tests {
                 "an empty accept must not re-open an empty field, got {reopened:?}"
             );
             assert!(
-                reopened == er_build_import::BUILD_URL_PREFIX
-                    || er_build_import::validate_build_url(&reopened).is_ok(),
+                reopened == er_build_import_core::BUILD_URL_PREFIX
+                    || er_build_import_core::validate_build_url(&reopened).is_ok(),
                 "the re-open text must be the prefix or an importable link, got {reopened:?}"
             );
         }

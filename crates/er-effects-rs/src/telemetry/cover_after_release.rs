@@ -80,7 +80,7 @@ const CLOCK_MAP_MAX_BRACKET_MS: u64 = 1;
 ///
 /// Runs on the game render thread inside Present: no allocation, no scan, no lock.
 pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         BOOT_VIEW_STOP_LS_FADEOUT_BASELINE, BOOT_VIEW_STOP_LS_UPDATE_BASELINE, BOOT_VIEW_STOP_MS,
         BOOT_VIEW_STOPPED, COVER_PLATE_AFTER_RELEASE_SAMPLES, COVER_PLATE_VISIBLE_AFTER_RELEASE,
         COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN, COVER_PLATE_VISIBLE_AFTER_RELEASE_FIRST_MS,
@@ -139,7 +139,7 @@ pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
         append_autoload_debug(format_args!(
             "COVER-AFTER-RELEASE #{n}: the game's own CSFakeLoadingScreenImp plate is VISIBLE at {now_usize}ms, {}ms after our cover stopped (stop_reason={} native_ls_updates_since_stop={updates} fadeouts_since_stop={fadeouts}) -- this surface is the GAME's, not our compositor's",
             now_ms.saturating_sub(stop_ms),
-            er_telemetry::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
         ));
     }
 }
@@ -164,7 +164,7 @@ pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
 /// to maintain `SYSTEM_QUIT_INGAME_TOP_WINDOW` -- no new hook, no new task, and no per-frame work
 /// added anywhere that was not already running.
 pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         BOOT_VIEW_STOP_MS, BOOT_VIEW_STOPPED, IN_GAME_MENU_OPEN_EDGES, IN_GAME_MENU_OPEN_FIRST_MS,
         IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP, IN_GAME_MENU_OPEN_LAST_MS,
         IN_GAME_MENU_OPEN_MS_FIRST_N, IN_GAME_MENU_OPEN_MS_FIRST_N_LEN, IN_GAME_MENU_RUN_LAST_MS,
@@ -223,7 +223,7 @@ pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {
 /// Called from the per-Present exposure recorder purely because that is somewhere that already runs
 /// early and already reads the boot-view clock. Steady-state cost is one atomic load.
 pub(crate) fn log_clock_map_once() {
-    use er_telemetry::counters::{LOG_EPOCH_OFFSET_LOGGED, LOG_EPOCH_OFFSET_MS};
+    use er_telemetry_core::counters::{LOG_EPOCH_OFFSET_LOGGED, LOG_EPOCH_OFFSET_MS};
     if LOG_EPOCH_OFFSET_LOGGED.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -258,7 +258,7 @@ pub(crate) fn log_clock_map_once() {
 /// Emit the post-release watch oracles plus the boot-view null detector. Called from the telemetry
 /// writer.
 pub(crate) fn cover_after_release_write(body: &mut String) {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         BOOT_VIEW_DRAW_AFTER_STOP, BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS,
         BOOT_VIEW_DRAW_AFTER_STOP_TOTAL, BOOT_VIEW_FADE_HELD_MS, BOOT_VIEW_FADE_HOLD_HONORED,
         BOOT_VIEW_FADE_HOLD_REASSERTS, BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS,

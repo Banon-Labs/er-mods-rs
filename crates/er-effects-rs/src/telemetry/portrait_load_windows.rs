@@ -41,8 +41,8 @@
 /// record name hashes as an independent second axis (a slot index can coincide; a name hash is the
 /// character). Returns a short tag for the verdict line.
 fn portrait_published_identity_check(published_slot_tag: usize) -> &'static str {
-    use er_loading_portrait::portrait_identity::{PublishedIdentity, published_identity_verdict};
-    use er_telemetry::counters::{
+    use er_loading_portrait_core::portrait_identity::{PublishedIdentity, published_identity_verdict};
+    use er_telemetry_core::counters::{
         LS_PORTRAIT_PUBLISHED_NAME_HASH, PORTRAIT_PUBLISHED_IDENTITY_CHECKS,
         PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES, PORTRAIT_PUBLISHED_SLOT_MISMATCHES,
         PORTRAIT_TARGET_NAME_HASH, SYSTEM_QUIT_FRESH_DESER_DONE_SLOT,
@@ -186,7 +186,7 @@ fn loadwin_max_side_packed(packed: usize) -> usize {
 }
 
 fn portrait_loadwin_tick() {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         LOADING_BG_PORTRAIT_DIMS, LOADING_BG_PORTRAIT_RGBA_VERSION, LOADING_SCREEN_UPDATE_LAST_MS,
         LS_PORTRAIT_LAST_H, LS_PORTRAIT_LAST_W, LS_PORTRAIT_REJECTED_PUBLISHES,
         PORTRAIT_ONTO_DRAW_HITS, PROFILE_LOADSCREEN_TABLE_BUILDS,
@@ -212,7 +212,7 @@ fn portrait_loadwin_tick() {
             Ordering::SeqCst,
         );
         LOADWIN_BASE_EXPOSURE.store(
-            er_telemetry::counters::NATIVE_LS_EXPOSURE_FRAMES.load(Ordering::SeqCst),
+            er_telemetry_core::counters::NATIVE_LS_EXPOSURE_FRAMES.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
         // Reject-attribution baseline for windows that are NOT profile switches
@@ -226,7 +226,7 @@ fn portrait_loadwin_tick() {
         // from the ~4 Hz telemetry writer, so a reject in the first ~250 ms of a non-switch window
         // can still be misfiled; switch windows keep the exact arm-time value set above it. Neither
         // path has been exercised against a live reject yet.
-        er_telemetry::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.store(
+        er_telemetry_core::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.store(
             LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
@@ -291,7 +291,7 @@ fn portrait_loadwin_tick() {
 }
 
 fn portrait_loadwin_close(close_ms: usize) {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         LOADING_BG_PORTRAIT_RGBA_VERSION, LS_PORTRAIT_PUBLISHED_SLOT, LS_PORTRAIT_REJECTED_PUBLISHES,
         PORTRAIT_KICK_SLOT_KEY, PORTRAIT_ONTO_DRAW_HITS, PROFILE_LOADSCREEN_TABLE_BUILDS,
     };
@@ -320,7 +320,7 @@ fn portrait_loadwin_close(close_ms: usize) {
     // Frames of THIS window where the game's own loading screen reached the screen uncovered
     // (er-effects-rs-wmw defect #1). Orthogonal to the portrait verdict: a window can publish a
     // perfect 1542 head and still have flashed vanilla for a frame.
-    let exposure = er_telemetry::counters::NATIVE_LS_EXPOSURE_FRAMES
+    let exposure = er_telemetry_core::counters::NATIVE_LS_EXPOSURE_FRAMES
         .load(Ordering::SeqCst)
         .saturating_sub(LOADWIN_BASE_EXPOSURE.load(Ordering::SeqCst));
     let base_cause = if displayed > 0 {
@@ -438,7 +438,7 @@ fn portrait_loadwin_try_release_window_state(now_ms: usize) {
     // A switch still in flight waits, and is NOT subject to the grace backstop below: the gap
     // between a switch's teardown window and its character-load window can legitimately exceed any
     // grace period, and firing inside it is the one outcome this must never produce.
-    if er_telemetry::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+    if er_telemetry_core::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
         return;
     }
     let cover_released = crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0;
@@ -456,5 +456,5 @@ fn portrait_loadwin_try_release_window_state(now_ms: usize) {
     // Telemetry-writer/game-task thread, not the render thread. The reset bounded-drains in-flight
     // portrait jobs for up to ~15 ms; once per loading window, and the same drain the switch rearm
     // already performs from the confirm-press hook.
-    er_loading_portrait::loading_portrait_window_reset("loadwin-close");
+    er_loading_portrait_core::loading_portrait_window_reset("loadwin-close");
 }

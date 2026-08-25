@@ -217,7 +217,7 @@ pub(crate) const PGD_STAT_COUNT: usize =
 pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
     core::mem::offset_of!(GameMan, character_name_is_empty);
 /// One-shot latch for the in-world LOAD-CORRECTNESS dump.
-pub(crate) use er_telemetry::counters::LOAD_CORRECTNESS_DUMPED;
+pub(crate) use er_telemetry_core::counters::LOAD_CORRECTNESS_DUMPED;
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
 /// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
 /// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).

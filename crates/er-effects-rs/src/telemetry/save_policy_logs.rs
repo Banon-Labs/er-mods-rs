@@ -499,18 +499,18 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
         // and split on whether anything has ever published cleanly: before the first clean publish
         // this is warm-up -- the offscreen RT is still the blank background and refusing it is
         // correct -- while after it means the pipeline began emitting blanks mid-window.
-        er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_VERSION.store(version, Ordering::SeqCst);
-        er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT
+        er_telemetry_core::counters::LS_PORTRAIT_REJECT_LAST_VERSION.store(version, Ordering::SeqCst);
+        er_telemetry_core::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT
             .store(neutral_pct, Ordering::SeqCst);
         let warmup = reject_is_warmup(
             LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
-            er_telemetry::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.load(Ordering::SeqCst),
+            er_telemetry_core::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.load(Ordering::SeqCst),
         );
         if warmup {
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH
+            er_telemetry_core::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH
                 .fetch_add(1, Ordering::SeqCst);
         } else {
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH
+            er_telemetry_core::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH
                 .fetch_add(1, Ordering::SeqCst);
         }
     }

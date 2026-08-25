@@ -4,7 +4,7 @@ use super::*;
 
 // === SAVE-FLOW state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
 // Drives the System->Quit "Save Game" row's destination pick and CLOSE-THEN-FIRE commit.
-// Stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
+// Stage map lives on `er_telemetry_core::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
 // 0 IDLE, 3 DEST_BROWSE, 4 OVERWRITE_CONFIRM, 5 CLOSING_ABORT, 6 CLOSING_COMMIT,
 // 7 FIRE_GATE_WAIT, 8 COMMIT_WAIT. Ids 1 and 2 are RETIRED (see `autoload_state.rs`).
 //

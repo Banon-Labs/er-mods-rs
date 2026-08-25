@@ -1,201 +1,70 @@
-//! Import an Elden Ring build from an `er-build-planner` share link.
+//! ME3 shell that imports the `er-effects.toml` `build_url` build once, at character load.
 //!
-//! The planner's `?b=<id>` links are not encoded payloads -- they are ids for
-//! builds stored server-side, fetched with a single unauthenticated
-//! `GET https://er-inventory-api.nyasu.business/inventories/<id>`. The response
-//! identifies every item by **display name**, so importing a build is two
-//! problems: parsing the document ([`model`]) and resolving those names to item
-//! ids ([`catalog`]) before computing what to grant ([`plan`]).
+//! All of the work lives in `er-build-import-runtime`; this crate is the standalone trigger for it.
+//! The product DLL (`er-effects-rs`) drives the SAME runtime from its System>Quit "Load Build from
+//! URL" row instead, so the two must never share a profile -- see `scripts/me3-dll-conflicts.toml`.
 //!
-//! This crate is deliberately host-buildable and free of game and network
-//! dependencies, so the whole mapping is provable with `cargo test`.
-//!
-//! ```
-//! use er_build_import::{catalog::{entry, Kind, MapCatalog}, model, plan::plan};
-//!
-//! let doc = model::parse(r#"{
-//!     "name": "example", "weaponUpgrade": 25,
-//!     "inventory": {"slots": [{"name": "Misericorde", "infusion": "Occult"}]}
-//! }"#).expect("valid build document");
-//!
-//! let catalog = MapCatalog::new().with(Kind::Weapon, "Misericorde", entry(1_070_000));
-//! let result = plan(&doc, &catalog);
-//!
-//! assert!(result.is_complete());
-//! assert_eq!(result.grants[0].item_id, 1_070_000 + 1200); // Occult offset
-//! assert_eq!(result.grants[0].reinforce_lv, 25);
-//! ```
+//! Nothing here sleeps: `DllMain` spawns two threads and returns, the fetch blocks in WinHTTP, and
+//! the game task re-checks its preconditions once a frame.
 
-pub mod catalog;
-pub mod equip;
-pub mod model;
-pub mod name;
-pub mod plan;
+#![cfg(windows)]
 
-pub use catalog::{Catalog, Entry, Kind};
-pub use equip::{
-    Capacity, EquipLedger, EquipPlan, EquipRef, LedgerCounts, PlannedPosition, PositionKind,
-    PositionResult,
-};
-pub use model::BuildDoc;
-pub use plan::{Grant, Plan, Unresolved};
+use windows::Win32::Foundation::{HINSTANCE, TRUE};
+use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 
-/// The API host serving `?b=` builds.
-pub const API_HOST: &str = "er-inventory-api.nyasu.business";
-
-/// Path for fetching a build by its share id.
+/// DLL entry point. Spawns the request and the task registrar, and returns.
 ///
-/// Verified to need no `Authorization` header: the response is byte-identical
-/// with and without a session.
-pub fn build_path(share_id: &str) -> String {
-    format!("/inventories/{share_id}")
-}
-
-/// Config key naming the build to import, in the game-directory `er-effects.toml`.
+/// # Safety
 ///
-/// A key in the file the product already ships rather than an environment variable: a
-/// runtime-affecting product lever behind an agent-only env var is not a product lever.
-pub const BUILD_URL_KEY: &str = "build_url";
-
-/// Pull `build_url` out of an `er-effects.toml`'s text.
-///
-/// A deliberate one-key scan rather than a TOML dependency. The product's own parser is private to
-/// `er-effects-rs`, and pulling a whole TOML crate into a crate that needs exactly one string would
-/// be the larger sin -- but the scan still has to agree with the file the product writes, which is
-/// why it lives here, where `cargo test` can hold it to that.
-///
-/// Accepts `key = 'value'` and `key = "value"`, ignores comment lines, and returns `None` when the
-/// key is absent or its value is empty, so an unset key means "import nothing" rather than "import
-/// the empty build".
-///
-/// ```
-/// assert_eq!(
-///     er_build_import::build_url_from_config("# comment\nbuild_url = 'x?b=abc'\n"),
-///     Some("x?b=abc"),
-/// );
-/// assert_eq!(er_build_import::build_url_from_config("slot = 0\n"), None);
-/// ```
-pub fn build_url_from_config(contents: &str) -> Option<&str> {
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != BUILD_URL_KEY {
-            continue;
-        }
-        let value = value.trim().trim_matches(|c| c == '\'' || c == '"').trim();
-        if !value.is_empty() {
-            return Some(value);
-        }
+/// Called by the loader. Nothing slow or reentrant runs under the loader lock.
+#[unsafe(no_mangle)]
+pub extern "system" fn DllMain(_module: HINSTANCE, reason: u32, _reserved: *mut ()) -> i32 {
+    if reason == DLL_PROCESS_ATTACH {
+        std::thread::spawn(start_configured_import);
+        std::thread::spawn(register_task);
     }
-    None
+    TRUE.0
 }
 
-/// The URL prefix the in-game editor opens with, so a player only has to supply the id.
-///
-/// Not used for validation -- [`validate_build_url`] accepts any host, because the planner has
-/// moved domain before and refusing an unfamiliar one would reject a link that works.
-pub const BUILD_URL_PREFIX: &str = "https://er-build-planner.nyasu.business/?b=";
-
-/// The System>Quit row's help line when nothing has gone wrong. The row's help is a live buffer the
-/// link field rewrites to report a refusal, so this is what it is restored to.
-pub const BUILD_URL_ROW_HELP: &str =
-    "Paste or type an er-build-planner link to rebuild this character";
-
-/// Why a URL cannot be imported. Each variant carries the ONE sentence a player sees when the
-/// editor refuses their input, so the reason a thing was rejected lives with the rejection rather
-/// than being reconstructed at the call site.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum UrlRejection {
-    /// Nothing was entered, or only the prefix the editor pre-filled.
-    Empty,
-    /// The self-contained `?i=` form. It carries the whole build in the URL and is never fetched,
-    /// so it is called out separately: telling a player "no ?b=" about a link that plainly has a
-    /// payload reads as a bug in us.
-    SelfContained,
-    /// No `b=` parameter at all.
-    NoShareId,
-    /// A `b=` that is present but not an id -- empty, or carrying something other than the
-    /// letters and digits every share id is made of.
-    MalformedShareId,
-}
-
-impl UrlRejection {
-    /// The line the editor shows. Kept short: it is rendered on a menu row's help field, and the
-    /// player is looking at their own text while reading it.
-    pub fn indicator(self) -> &'static str {
-        match self {
-            UrlRejection::Empty => "Enter a build link - nothing was typed after the prefix",
-            UrlRejection::SelfContained => {
-                "That is a ?i= link; only shared ?b= links can be loaded"
-            }
-            UrlRejection::NoShareId => "That link has no ?b= build id",
-            UrlRejection::MalformedShareId => "That build id is not valid",
-        }
-    }
-
-    /// Stable telemetry code (`0` means "accepted").
-    pub fn code(self) -> usize {
-        match self {
-            UrlRejection::Empty => 1,
-            UrlRejection::SelfContained => 2,
-            UrlRejection::NoShareId => 3,
-            UrlRejection::MalformedShareId => 4,
-        }
+/// Ask the runtime for the configured build. Off the loader thread because reading the config file
+/// touches the filesystem.
+fn start_configured_import() {
+    match er_build_import_runtime::request_configured() {
+        Ok(true) => {}
+        // No `build_url` set: the runtime already logged that, and doing nothing is correct.
+        Ok(false) => {}
+        Err(err) => er_build_import_runtime::log_line(&format!(
+            "[build-import] configured import refused: {err}"
+        )),
     }
 }
 
-/// Decide whether a typed URL can be imported, and say why not when it cannot.
-///
-/// This is the gate the in-game editor runs on Accept. It is deliberately the ONLY place that
-/// decision is made -- the editor re-opens rather than closing when this returns `Err`, so a
-/// disagreement between this and [`share_id_from_url`] would let a link through that the fetch
-/// then cannot use.
-///
-/// Whitespace is trimmed first: the field is pre-filled and typed into on a controller, and a
-/// trailing space is a slip, not a different link.
-///
-/// ```
-/// use er_build_import::{validate_build_url, UrlRejection};
-/// assert_eq!(validate_build_url("https://p/?b=af97a9da874151"), Ok("af97a9da874151"));
-/// assert_eq!(validate_build_url("https://p/?i=eyJ2IjoxfQ"), Err(UrlRejection::SelfContained));
-/// assert_eq!(validate_build_url("https://p/?b="), Err(UrlRejection::MalformedShareId));
-/// ```
-pub fn validate_build_url(url: &str) -> Result<&str, UrlRejection> {
-    let url = url.trim();
-    if url.is_empty() || url == BUILD_URL_PREFIX || url.trim_end_matches('?').is_empty() {
-        return Err(UrlRejection::Empty);
-    }
-    let Some((_, query)) = url.split_once('?') else {
-        return Err(UrlRejection::NoShareId);
+/// Register the FrameBegin task that owns every game-touching step.
+fn register_task() {
+    use eldenring::cs::{CSTaskGroupIndex, CSTaskImp};
+    use eldenring::fd4::FD4TaskData;
+    use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
+
+    let task = loop {
+        match unsafe { CSTaskImp::instance() } {
+            Ok(task) => break task,
+            // No sleep (banned by scripts/check-no-timeouts.py): yield and re-poll, the same shape
+            // er-invasion-warp and er-telemetry use.
+            Err(_) => std::thread::yield_now(),
+        }
     };
-    // An id typed straight into the prefix leaves `?b=<id>`; a bare `?b=` leaves nothing.
-    if let Some(value) = query.split('&').find_map(|pair| pair.strip_prefix("b=")) {
-        let id = value.split('#').next().unwrap_or(value);
-        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return Err(UrlRejection::MalformedShareId);
-        }
-        return Ok(id);
-    }
-    if query.split('&').any(|pair| pair.starts_with("i=")) {
-        return Err(UrlRejection::SelfContained);
-    }
-    Err(UrlRejection::NoShareId)
-}
+    er_build_import_runtime::log_line(
+        "[build-import] CSTaskImp resolved; registering FrameBegin import task",
+    );
 
-/// Extract the `?b=` share id from a planner URL.
-///
-/// Returns `None` for a URL that carries no `b` parameter, including the
-/// self-contained `?i=` form, which needs no network at all.
-pub fn share_id_from_url(url: &str) -> Option<&str> {
-    let query = url.split_once('?')?.1;
-    query
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("b="))
-        .map(|id| id.split('#').next().unwrap_or(id))
-        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric()))
+    let handle = task.run_recurring(
+        move |_data: &FD4TaskData| {
+            // Safety: this closure runs on the game task thread, which is the context the runtime's
+            // tick requires; each step inside it is individually precondition-checked.
+            let _ = unsafe { er_build_import_runtime::tick() };
+        },
+        CSTaskGroupIndex::FrameBegin,
+    );
+    // The handle cancels the task on drop, and the task must outlive this bootstrap thread.
+    std::mem::forget(handle);
 }

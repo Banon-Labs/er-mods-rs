@@ -70,7 +70,7 @@ fn write_game_module_oracles(body: &mut String) {
         // menu_job_present (CSMenuMan+0x798 live in-world menu job) + stable_frames are the arm gate.
         {
             use std::sync::atomic::Ordering as SwOrd;
-            use er_telemetry::counters as swctr;
+            use er_telemetry_core::counters as swctr;
             let sw_last_slot = swctr::SWITCH_TRIGGER_LAST_SLOT.load(SwOrd::SeqCst);
             let sw_last_slot_i: i64 = if sw_last_slot == usize::MAX {
                 -1
@@ -226,7 +226,7 @@ fn write_game_module_oracles(body: &mut String) {
         // (present fast but frame still 50ms). bd FOCUS-AB-falsifies...next-present-duration-2026-07-21.
         {
             use std::sync::atomic::Ordering as PsOrd;
-            let present_us = er_telemetry::counters::PRESENT_CALL_LAST_US.load(PsOrd::SeqCst);
+            let present_us = er_telemetry_core::counters::PRESENT_CALL_LAST_US.load(PsOrd::SeqCst);
             body.push_str(&format!("  \"oracle_present_call_us\": {present_us},\n"));
         }
         // PRESENT-CADENCE semaphores (bd GPU-timestamp-semaphore-split-reload-20fps-residual-2026-07-22):
@@ -238,16 +238,16 @@ fn write_game_module_oracles(body: &mut String) {
         {
             use std::sync::atomic::Ordering as PcOrd;
             let sync_interval =
-                er_telemetry::counters::PRESENT_SYNC_INTERVAL_LAST.load(PcOrd::SeqCst) as i64;
+                er_telemetry_core::counters::PRESENT_SYNC_INTERVAL_LAST.load(PcOrd::SeqCst) as i64;
             let refresh_x100 =
-                er_telemetry::counters::PRESENT_REFRESH_PER_PRESENT_X100.load(PcOrd::SeqCst);
-            let qpc_delta_us = er_telemetry::counters::PRESENT_QPC_DELTA_US.load(PcOrd::SeqCst);
+                er_telemetry_core::counters::PRESENT_REFRESH_PER_PRESENT_X100.load(PcOrd::SeqCst);
+            let qpc_delta_us = er_telemetry_core::counters::PRESENT_QPC_DELTA_US.load(PcOrd::SeqCst);
             // gpu_frame_us (goal §3.3): per-frame GPU-busy time from the injected D3D12 timestamp pair on
             // the game queue. Large => render-bound; small with a big qpc_delta_us => present/vblank wait.
             // samples/state make a 0 attributable (oracle not live vs GPU instant). bd er-effects-rs-03ma.
-            let gpu_frame_us = er_telemetry::counters::GPU_FRAME_US_LAST.load(PcOrd::SeqCst);
-            let gpu_frame_samples = er_telemetry::counters::GPU_FRAME_ORACLE_SAMPLES.load(PcOrd::SeqCst);
-            let gpu_frame_state = er_telemetry::counters::GPU_FRAME_ORACLE_STATE.load(PcOrd::SeqCst);
+            let gpu_frame_us = er_telemetry_core::counters::GPU_FRAME_US_LAST.load(PcOrd::SeqCst);
+            let gpu_frame_samples = er_telemetry_core::counters::GPU_FRAME_ORACLE_SAMPLES.load(PcOrd::SeqCst);
+            let gpu_frame_state = er_telemetry_core::counters::GPU_FRAME_ORACLE_STATE.load(PcOrd::SeqCst);
             body.push_str(&format!(
                 "  \"oracle_present_sync_interval\": {sync_interval},\n  \"oracle_present_refresh_per_present_x100\": {refresh_x100},\n  \"oracle_present_qpc_delta_us\": {qpc_delta_us},\n  \"oracle_gpu_frame_us\": {gpu_frame_us},\n  \"oracle_gpu_frame_samples\": {gpu_frame_samples},\n  \"oracle_gpu_frame_state\": {gpu_frame_state},\n"
             ));
@@ -257,7 +257,7 @@ fn write_game_module_oracles(body: &mut String) {
         // for load2/load3 the composite never stopped for that reload. bd PRESENT-FAST-work-stall...
         {
             use std::sync::atomic::Ordering as CoOrd;
-            let composite_us = er_telemetry::counters::COMPOSITE_LAST_US.load(CoOrd::SeqCst);
+            let composite_us = er_telemetry_core::counters::COMPOSITE_LAST_US.load(CoOrd::SeqCst);
             let bv_epoch = crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(CoOrd::Relaxed);
             // `oracle_current_load_epoch` IS NOT A LOAD COUNT. It counts fresh deserializes committed
             // INSIDE the switch machine, so the boot load never increments it: a session that loaded
@@ -277,8 +277,8 @@ fn write_game_module_oracles(body: &mut String) {
         // game-side loop cost (the playable-window 50ms is not the DLL). bd CORRECTION-scan-fix-didnt...
         {
             use std::sync::atomic::Ordering as GtOrd;
-            let gt_us = er_telemetry::counters::GAME_TASK_LAST_US.load(GtOrd::SeqCst);
-            let bd_us = er_telemetry::counters::BUILD_DRIVER_LAST_US.load(GtOrd::SeqCst);
+            let gt_us = er_telemetry_core::counters::GAME_TASK_LAST_US.load(GtOrd::SeqCst);
+            let bd_us = er_telemetry_core::counters::BUILD_DRIVER_LAST_US.load(GtOrd::SeqCst);
             body.push_str(&format!(
                 "  \"oracle_game_task_us\": {gt_us},\n  \"oracle_build_driver_us\": {bd_us},\n"
             ));
@@ -356,10 +356,10 @@ fn write_game_module_oracles(body: &mut String) {
         // Consecutive-live-frames streak for the child-done-override RELEASE (bd
         // CORRECTION-STEP4-finalize-substate-is-0): count up while live, reset on any non-live frame.
         if play_time_live {
-            er_telemetry::counters::WORLD_LIVE_STABLE_FRAMES
+            er_telemetry_core::counters::WORLD_LIVE_STABLE_FRAMES
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         } else {
-            er_telemetry::counters::WORLD_LIVE_STABLE_FRAMES
+            er_telemetry_core::counters::WORLD_LIVE_STABLE_FRAMES
                 .store(0, std::sync::atomic::Ordering::Relaxed);
         }
         if play_time_live {
@@ -1969,56 +1969,56 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_boot_view_stop_reason",
-            er_telemetry::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
         );
         // Cover END-CONDITION health (er-effects-rs-drb7). semantic_releases should equal the load
         // window count; the two latches say WHICH half is missing when it does not.
         push_json_usize(
             body,
             "oracle_boot_view_semantic_releases",
-            er_telemetry::counters::BOOT_VIEW_SEMANTIC_RELEASES.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_SEMANTIC_RELEASES.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_boot_view_release_render_ready_seen",
-            er_telemetry::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_boot_view_release_native_done_seen",
-            er_telemetry::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_boot_view_release_ready_ms",
-            er_telemetry::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst),
         );
         // q6vk character-load gate. held_for_confirm > 0 proves the gate engaged on a switch;
         // before_confirm MUST stay 0 -- a release without its character load is the defect back.
         push_json_usize(
             body,
             "oracle_boot_view_release_held_for_confirm",
-            er_telemetry::counters::BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_boot_view_release_before_confirm",
-            er_telemetry::counters::BOOT_VIEW_RELEASE_BEFORE_CONFIRM.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_BEFORE_CONFIRM.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_boot_view_release_require_confirm",
-            er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_boot_view_cover_window_ms",
-            er_telemetry::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_boot_view_fps_bail_resumes",
-            er_telemetry::counters::BOOT_VIEW_FPS_BAIL_RESUMES.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_RESUMES.load(Ordering::SeqCst),
         );
         let native_loading_updates = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
         let forced_continue_observed = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
@@ -2239,22 +2239,22 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_ls_portrait_rejects_before_window_publish",
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH.load(Ordering::SeqCst),
+            er_telemetry_core::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_ls_portrait_rejects_after_window_publish",
-            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH.load(Ordering::SeqCst),
+            er_telemetry_core::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_ls_portrait_reject_last_version",
-            er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_VERSION.load(Ordering::SeqCst),
+            er_telemetry_core::counters::LS_PORTRAIT_REJECT_LAST_VERSION.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_ls_portrait_reject_last_neutral_pct",
-            er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT.load(Ordering::SeqCst),
+            er_telemetry_core::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT.load(Ordering::SeqCst),
         );
         // Publish identity + race measurability (bd er-effects-rs-dpf6 Phase 1): which character the
         // published head belongs to (slot+1 / FNV-1a64 name hash; 0 = no head/unknown), the last
@@ -2263,17 +2263,17 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_ls_portrait_slot",
-            er_telemetry::counters::LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst),
+            er_telemetry_core::counters::LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_ls_portrait_name_hash",
-            er_telemetry::counters::LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst),
+            er_telemetry_core::counters::LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_portrait_confirm_to_publish_ms",
-            er_telemetry::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST.load(Ordering::SeqCst),
+            er_telemetry_core::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST.load(Ordering::SeqCst),
         );
         write_portrait_bridge_hold_oracles(body);
         // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
@@ -2853,7 +2853,7 @@ fn write_game_module_oracles(body: &mut String) {
         // already emitted (oracle_wcm_*/oracle_worldchrman_* in write_player_presence_oracle) and are flat
         // per AC-2, so they are not duplicated here.
         {
-            const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait::GX_DRAW_CONTEXT_RVA;
+            const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait_core::GX_DRAW_CONTEXT_RVA;
             const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
             const GXDC_OUTPUT_VEC_END_OFFSET: usize = 0x130;
             const GXDC_OUTPUT_VEC_CAP_OFFSET: usize = 0x138;
@@ -2956,17 +2956,17 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(
             body,
             "oracle_portrait_published_identity_checks",
-            er_telemetry::counters::PORTRAIT_PUBLISHED_IDENTITY_CHECKS.load(Ordering::SeqCst),
+            er_telemetry_core::counters::PORTRAIT_PUBLISHED_IDENTITY_CHECKS.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_portrait_published_slot_mismatches",
-            er_telemetry::counters::PORTRAIT_PUBLISHED_SLOT_MISMATCHES.load(Ordering::SeqCst),
+            er_telemetry_core::counters::PORTRAIT_PUBLISHED_SLOT_MISMATCHES.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_portrait_published_name_hash_mismatches",
-            er_telemetry::counters::PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES.load(Ordering::SeqCst),
+            er_telemetry_core::counters::PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,

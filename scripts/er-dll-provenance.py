@@ -262,7 +262,7 @@ def selftest() -> int:
     check("er-effects-rs" in members, "the package is in its own forward closure")
     check("er-game-base" in members, "a real path dependency is in the closure")
     check(
-        "er-save-disable-dll" not in members,
+        "er-save-disable" not in members,
         "an unrelated sibling shell is NOT in the closure (forward, not reverse)",
     )
     check(
@@ -270,7 +270,7 @@ def selftest() -> int:
         f"out-of-repo path deps are reported as external ({', '.join(external) or 'none'})",
     )
 
-    small, _ = forward_closure("er-crash-logging-dll")
+    small, _ = forward_closure("er-crash-logging")
     check(len(small) < len(members), "a leaf shell has a smaller closure than the product")
 
     sha_a, count_a = source_sha(small)

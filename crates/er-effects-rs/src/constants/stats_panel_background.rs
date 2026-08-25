@@ -7,10 +7,10 @@
 // resolves our texture). The dummy-face shapes ARE the visible per-row boxes (05_010 RE 2026-07-04), so
 // redirecting their texture paints our background on-screen -- no symbol rewrite needed. A texture
 // upload is cheap (no per-frame render), so all 10 slots get a background with NO GX-queue overflow.
-pub(crate) use er_loading_portrait::STATS_PANEL_BG_RGBA;
-pub(crate) use er_loading_portrait::STATS_PANEL_SLOT_COUNT;
-pub(crate) use er_loading_portrait::STATS_PANEL_SYSTEX_KEYS;
-pub(crate) use er_loading_portrait::STATS_PANEL_TEX_DIM;
+pub(crate) use er_loading_portrait_core::STATS_PANEL_BG_RGBA;
+pub(crate) use er_loading_portrait_core::STATS_PANEL_SLOT_COUNT;
+pub(crate) use er_loading_portrait_core::STATS_PANEL_SYSTEX_KEYS;
+pub(crate) use er_loading_portrait_core::STATS_PANEL_TEX_DIM;
 /// Last-error codes for `STATS_PANEL_LAST_ERROR` (a memory-read oracle).
 pub(crate) const STATS_PANEL_ERR_NONE: usize = 0;
 pub(crate) const STATS_PANEL_ERR_TPF_REPO_NULL: usize = 1;
@@ -20,15 +20,15 @@ pub(crate) const STATS_PANEL_ERR_PANIC: usize = 4;
 pub(crate) const STATS_PANEL_ERR_RESCAP_NULL: usize = 5;
 pub(crate) const STATS_PANEL_ERR_BASE_UNRESOLVED: usize = 6;
 /// Bitmask (bit N = slot N) of slots whose neutral-bg texture is registered in the repos.
-pub(crate) use er_telemetry::counters::STATS_PANEL_TEX_REGISTERED_MASK;
+pub(crate) use er_telemetry_core::counters::STATS_PANEL_TEX_REGISTERED_MASK;
 /// Count of native `CreateTpfResCap` register attempts across all slots.
-pub(crate) use er_telemetry::counters::STATS_PANEL_TEX_REGISTER_ATTEMPTS;
+pub(crate) use er_telemetry_core::counters::STATS_PANEL_TEX_REGISTER_ATTEMPTS;
 /// Count of failed/abandoned register attempts (precondition miss or caught panic).
-pub(crate) use er_telemetry::counters::STATS_PANEL_TEX_REGISTER_FAILURES;
+pub(crate) use er_telemetry_core::counters::STATS_PANEL_TEX_REGISTER_FAILURES;
 /// Count of bind-observer target rewrites that pointed a dummy-face bind at our key.
-pub(crate) use er_telemetry::counters::STATS_PANEL_BIND_REDIRECTS;
+pub(crate) use er_telemetry_core::counters::STATS_PANEL_BIND_REDIRECTS;
 /// Bitmask (bit N = slot N) of slots whose native bind target we have redirected at least once.
-pub(crate) use er_telemetry::counters::STATS_PANEL_BIND_REDIRECT_MASK;
+pub(crate) use er_telemetry_core::counters::STATS_PANEL_BIND_REDIRECT_MASK;
 /// Last error code (see `STATS_PANEL_ERR_*`).
 pub(crate) static STATS_PANEL_LAST_ERROR: AtomicUsize = AtomicUsize::new(STATS_PANEL_ERR_NONE);
 
@@ -112,8 +112,8 @@ pub(crate) const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
 pub(crate) const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED;
-pub(crate) use er_telemetry::counters::TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN;
+pub(crate) use er_telemetry_core::counters::TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN;
 pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_VALUE;
 /// Small fixed set of title text CSScaleformValue pointers that must remain hidden while the
 /// branch-owned `05_001_Title_Logo` replacement surface is visible. One slot was insufficient:
@@ -128,8 +128,8 @@ pub(crate) static TITLE_TEXT_GFX_VALUES: [AtomicUsize; 8] = [
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
 ];
-pub(crate) use er_telemetry::counters::TITLE_TEXT_GFX_VALUE_COUNT;
-pub(crate) use er_telemetry::counters::TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS;
+pub(crate) use er_telemetry_core::counters::TITLE_TEXT_GFX_VALUE_COUNT;
+pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS;
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
@@ -142,7 +142,7 @@ pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
     AtomicUsize::new(0);
-pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_BIND_HITS;
-pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_LAST_PROXY;
-pub(crate) use er_telemetry::counters::TITLE_PROFILE_FACE_LAST_VALUE;
+pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_BIND_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_LAST_PROXY;
+pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_LAST_VALUE;
 

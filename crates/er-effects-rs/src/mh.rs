@@ -26,7 +26,7 @@ pub use er_hook::*;
 pub fn leak_installed_hook(_hook: MhHook) {}
 
 /// C-ABI export (2026-07-18, user-directed cross-DLL union). A COMPANION DLL loaded into the same
-/// process (the log-only `er-reload-trace-dll`) hooks ~40 native load/menu functions that OVERLAP
+/// process (the log-only `er-reload-trace`) hooks ~40 native load/menu functions that OVERLAP
 /// this DLL's own hooks (e.g. `0xb0e180` continue-confirm, `0xb0d960` title-SetState). If the
 /// companion drove its OWN MinHook instance, two instances patching the same address would corrupt
 /// each other's trampolines (the exact silent race the internal union was built to fix, now across
@@ -62,13 +62,13 @@ pub unsafe extern "system" fn er_effects_union_register(
 
 /// C-ABI export: the live `CS::LoadingScreenData*`, or 0 when no loading screen is up.
 ///
-/// Published for the standalone `er-crash-logging-dll` hang watchdog, which needs this object to
+/// Published for the standalone `er-crash-logging` hang watchdog, which needs this object to
 /// detect a stuck LOAD -- a failure its frame counter structurally cannot see, because frames keep
 /// advancing through a loading screen (measured on a Seamless invasion-load softlock, 2026-08-15:
 /// eleven minutes at 12% with the frame counter ticking throughout).
 ///
 /// It is an EXPORT rather than a second hook for the same reason `er_effects_union_register` exists.
-/// This DLL already detours the loading-screen update (`er-loading-portrait`, RVA 0x90a6b0) and
+/// This DLL already detours the loading-screen update (`er-loading-portrait-core`, RVA 0x90a6b0) and
 /// records the object there; a companion installing its own MinHook on that same prologue would
 /// corrupt trampolines, which is the conflict class tracked in `scripts/me3-dll-conflicts.toml`. So
 /// the companion polls this instead, on the thread it already runs.
@@ -77,5 +77,6 @@ pub unsafe extern "system" fn er_effects_union_register(
 /// callers must treat as "no data" rather than as an address.
 #[unsafe(no_mangle)]
 pub extern "system" fn er_effects_loading_screen_data() -> usize {
-    er_loading_portrait::layout::LOADING_SCREEN_LAST_DATA.load(std::sync::atomic::Ordering::SeqCst)
+    er_loading_portrait_core::layout::LOADING_SCREEN_LAST_DATA
+        .load(std::sync::atomic::Ordering::SeqCst)
 }

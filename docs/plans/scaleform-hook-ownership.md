@@ -32,20 +32,20 @@ The source files are mixed at this baseline: `profile_table_gfx_files.rs` is 898
 The current workspace contains this path:
 
 ```text
-er-title-flow -> er-loading-portrait -> er-gfx
+er-title-flow -> er-loading-portrait-core -> er-gfx
 ```
 
 The candidate native Scaleform slice uses both `er-gfx` and title-flow-owned pointer bounds / scene-object identities. Putting that slice in `er-gfx` would require an `er-gfx -> er-title-flow` edge or a new public callback surface invented only to avoid it. The direct edge closes this package cycle:
 
 ```text
-er-gfx -> er-title-flow -> er-loading-portrait -> er-gfx
+er-gfx -> er-title-flow -> er-loading-portrait-core -> er-gfx
 ```
 
 A sibling owner keeps the existing direction intact:
 
 ```text
 er-scaleform-hooks -> er-gfx
-er-scaleform-hooks -> er-hook / er-game-base / er-telemetry
+er-scaleform-hooks -> er-hook / er-game-base / er-telemetry-core
 ```
 
 R23 may either use a narrow title-flow dependency for the current named-child bind seam (which remains acyclic from the sibling crate) or invert that one seam through a specific adapter. It must not solve the boundary with a broad product host structure.
@@ -58,12 +58,12 @@ Four packages directly consume `er-gfx` at this baseline:
 |---|---|---|
 | `er-effects-rs` | shipped `cdylib` | derives and serves the title, ProfileSelect, text-input, and System-Quit movies |
 | `er-armament-icons` | standalone `cdylib` | derives badge movies; owns a separate parse hook, and CHAINS on the file-open prologue the product also detours (`er_hook::register_shared_hook`, `[[shared]]` in `scripts/me3-dll-conflicts.toml`) |
-| `er-invasion-warp-dll` | standalone `cdylib` | derives map/notice movies; owns a separate parse hook |
-| `er-loading-portrait` | reusable library | parses/rasterizes the captured menu font in host-tested code |
+| `er-invasion-warp` | standalone `cdylib` | derives map/notice movies; owns a separate parse hook |
+| `er-loading-portrait-core` | reusable library | parses/rasterizes the captured menu font in host-tested code |
 
 Deepening `er-gfx` makes native hook configuration, game addresses, and hook lifecycle part of the interface seen by all four consumers (or adds a public feature matrix that every unified Cargo graph must coordinate). It also makes the existing host examples and integration tests share a package with process-hook code.
 
-A sibling crate adds one explicit interface only for consumers that install native Scaleform hooks. Existing codec consumers keep the current API and dependency closure. Standalone DLLs can adopt shared `MemoryFile`/parse plumbing later without taking a dependency on the product DLL, while `er-loading-portrait` remains a codec/raster consumer only. This is less exported coupling than adding hook APIs to the already-shared codec.
+A sibling crate adds one explicit interface only for consumers that install native Scaleform hooks. Existing codec consumers keep the current API and dependency closure. Standalone DLLs can adopt shared `MemoryFile`/parse plumbing later without taking a dependency on the product DLL, while `er-loading-portrait-core` remains a codec/raster consumer only. This is less exported coupling than adding hook APIs to the already-shared codec.
 
 ## Ownership rule for R23/R24a+
 
@@ -77,6 +77,6 @@ A sibling crate adds one explicit interface only for consumers that install nati
 
 ## R23 boundary realization
 
-R23 realizes the sibling as a normal library with direct edges to `er-gfx`, `er-game-base`, `er-telemetry`, and (on Windows) `er-hook`. It deliberately has no dependency on `er-effects-rs`, `er-title-flow`, or `er-loading-portrait`.
+R23 realizes the sibling as a normal library with direct edges to `er-gfx`, `er-game-base`, `er-telemetry-core`, and (on Windows) `er-hook`. It deliberately has no dependency on `er-effects-rs`, `er-title-flow`, or `er-loading-portrait-core`.
 
-The named-child bind seam uses one post-bind `NamedChildBindEvent` callback installed through `ScaleformHooksHost`. The hook owner reports the native parent, output proxy, name pointer, and original return value; title/ProfileSelect feature code retains the policy applied to those facts. This avoids both the `er-title-flow -> er-loading-portrait -> er-gfx` cycle risk and a broad host structure that mirrors product globals. No descriptor, resource, or message callback is added speculatively; the R24 slice that first proves another host-owned concern must add its own narrow input.
+The named-child bind seam uses one post-bind `NamedChildBindEvent` callback installed through `ScaleformHooksHost`. The hook owner reports the native parent, output proxy, name pointer, and original return value; title/ProfileSelect feature code retains the policy applied to those facts. This avoids both the `er-title-flow -> er-loading-portrait-core -> er-gfx` cycle risk and a broad host structure that mirrors product globals. No descriptor, resource, or message callback is added speculatively; the R24 slice that first proves another host-owned concern must add its own narrow input.

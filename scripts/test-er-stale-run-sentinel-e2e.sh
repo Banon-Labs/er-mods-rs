@@ -52,7 +52,7 @@ game = "eldenring"
 [[natives]]
 path = '/nonexistent/er_effects_rs.dll'
 [[natives]]
-path = '/nonexistent/er_invasion_warp_dll.dll'
+path = '/nonexistent/er_invasion_warp.dll'
 TOML
 
 # comm comes from the executable's basename, so the decoy must BE a binary called `me3`. A copied

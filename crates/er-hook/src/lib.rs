@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // through a function pointer the product installs at startup via `set_hook_logger`. Default is a
 // no-op (no logger installed). `er-effects-rs` installs its telemetry sink in DllMain BEFORE any hook
 // is registered, so every line the old in-product union code emitted is still emitted, to the same
-// log. Crates that only use the raw `MH_*` externs (er-reload-trace-dll, er-input-harness-dll) never
+// log. Crates that only use the raw `MH_*` externs (er-reload-trace, er-input-harness) never
 // touch the union and never install a logger; the seam stays inert for them.
 // ============================================================================
 /// Signature of a logging sink: the union/registry code hands it `format_args!` output.
@@ -62,7 +62,7 @@ fn hook_log(args: std::fmt::Arguments<'_>) {
 // ============================================================================
 pub type UnionFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 // 96 slots: this DLL's own union targets PLUS a companion DLL's (the log-only
-// er-reload-trace-dll routes its ~40 native load/menu hooks through THIS DLL's union via
+// er-reload-trace routes its ~40 native load/menu hooks through THIS DLL's union via
 // the `er_effects_union_register` export, so a single MinHook instance owns every shared
 // address instead of two instances corrupting each other's trampolines). One slot per
 // unique game address; chained handlers on the same address share a slot.

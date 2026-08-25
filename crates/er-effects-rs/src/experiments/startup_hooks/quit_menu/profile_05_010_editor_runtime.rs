@@ -4,7 +4,9 @@ use er_gfx::profile_05_010_protocol::{
     CONTROL_FILE_NAME, ProfileEditorCommand, ProfileEditorStatus, RenderMode, STATUS_FILE_NAME,
     SelectedKind,
 };
-use er_telemetry::counters::{PROFILE_EDITOR_DEFERRED_APPLIES, PROFILE_SELECT_WINDOW_RUN_TICKS};
+use er_telemetry_core::counters::{
+    PROFILE_EDITOR_DEFERRED_APPLIES, PROFILE_SELECT_WINDOW_RUN_TICKS,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
@@ -581,7 +583,7 @@ unsafe fn apply_profile_editor_chrome_probe(
     base: usize,
     row_proxy: usize,
     live_drive_cell_count: usize,
-    drive_strip_focus: Option<er_save_picker::DriveStripFocus>,
+    drive_strip_focus: Option<er_save_picker_core::DriveStripFocus>,
     command: &ProfileEditorCommand,
 ) -> (u32, u32, String) {
     match command.selected_name.as_str() {
@@ -889,17 +891,17 @@ fn current_path_cursor_transform() -> er_gfx::profile_05_010_layout::TransformLa
 pub(crate) unsafe fn apply_drive_row_native_cursor(
     base: usize,
     row_proxy: usize,
-    focus: er_save_picker::DriveStripFocus,
+    focus: er_save_picker_core::DriveStripFocus,
 ) -> bool {
     use er_gfx::title_05_010::DRIVE_CELL_CAPACITY;
     let transform = match focus {
-        er_save_picker::DriveStripFocus::Cell(active_cell) => {
+        er_save_picker_core::DriveStripFocus::Cell(active_cell) => {
             if active_cell >= DRIVE_CELL_CAPACITY {
                 return false;
             }
             drive_cell_cursor_transform(active_cell)
         }
-        er_save_picker::DriveStripFocus::CurrentPath => current_path_cursor_transform(),
+        er_save_picker_core::DriveStripFocus::CurrentPath => current_path_cursor_transform(),
     };
     let Some((cursor_proxy, _cursor_slot)) =
         (unsafe { resolve_row_child_proxy(base, row_proxy, "Cursor") })

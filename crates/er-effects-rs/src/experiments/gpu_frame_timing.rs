@@ -54,10 +54,10 @@ use windows::core::Interface;
 
 use super::*;
 
-/// Emitted RAM oracles (see `er-telemetry/src/counters.rs` for the doc contract).
-pub(crate) use er_telemetry::counters::GPU_FRAME_ORACLE_SAMPLES;
-pub(crate) use er_telemetry::counters::GPU_FRAME_ORACLE_STATE;
-pub(crate) use er_telemetry::counters::GPU_FRAME_US_LAST;
+/// Emitted RAM oracles (see `er-telemetry-core/src/counters.rs` for the doc contract).
+pub(crate) use er_telemetry_core::counters::GPU_FRAME_ORACLE_SAMPLES;
+pub(crate) use er_telemetry_core::counters::GPU_FRAME_ORACLE_STATE;
+pub(crate) use er_telemetry_core::counters::GPU_FRAME_US_LAST;
 
 /// `ID3D12CommandQueue::ExecuteCommandLists` vtable index: IUnknown(3) + ID3D12Object(4) +
 /// ID3D12DeviceChild(1) + ID3D12Pageable(0) = 8; then UpdateTileMappings(8), CopyTileMappings(9),
@@ -133,10 +133,10 @@ pub(crate) unsafe fn try_install_gpu_frame_oracle(_base: usize) {
         return;
     }
     // The present hook owns the frame-boundary reset AND provides the swapchain -> game device.
-    if er_telemetry::counters::GAME_PRESENT_HOOKED.load(Ordering::SeqCst) == 0 {
+    if er_telemetry_core::counters::GAME_PRESENT_HOOKED.load(Ordering::SeqCst) == 0 {
         return;
     }
-    let sc = er_telemetry::counters::GAME_SWAPCHAIN.load(Ordering::SeqCst);
+    let sc = er_telemetry_core::counters::GAME_SWAPCHAIN.load(Ordering::SeqCst);
     if sc <= 0x10000 {
         return;
     }

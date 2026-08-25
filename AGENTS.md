@@ -350,7 +350,7 @@ A THIRD cloned row, **Load Build from URL**, was added later and has never had a
 It is the odd one out on the tab: it neither returns to the title nor touches a save container,
 but rebuilds the character you are already playing from the `build_url` set in the game-directory
 `er-effects.toml` (items granted, gear worn, spells memorised, level and attributes matched). The
-importer behind it is `er-build-import-runtime`, shared with the standalone `er-build-import-dll`
+importer behind it is `er-build-import-runtime`, shared with the standalone `er-build-import`
 shell -- which must therefore never be loaded in the same me3 profile as the product DLL. Its label
 bytes live in `SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W`, beside the two above.
 
@@ -415,11 +415,11 @@ cargo xwin build --release --target x86_64-pc-windows-msvc
 
 # ...but that builds ONLY er-effects-rs. The workspace sets
 #     default-members = ["crates/er-effects-rs"]
-# so the bare command above silently skips EVERY other DLL crate -- er-invasion-warp-dll,
-# er-loading-portrait-dll, er-save-picker-dll, and the rest. It exits 0 in a fraction of a
+# so the bare command above silently skips EVERY other DLL crate -- er-invasion-warp,
+# er-loading-portrait, er-save-picker, and the rest. It exits 0 in a fraction of a
 # second having compiled nothing, which reads exactly like a successful incremental build.
 # For any other DLL, name it:
-cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-warp-dll
+cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-warp
 ```
 
 **Check the output hash before staging or launching.** A build that "succeeded" without

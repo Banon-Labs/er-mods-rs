@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vanilla-reload FPS comparison (2026-07-22, bd USER-chose-vanilla-reload-comparison).
-# Loads ONLY the telemetry-only DLL (er_telemetry_dll -- no product hooks, no reload driver, no
+# Loads ONLY the telemetry-only DLL (er_telemetry -- no product hooks, no reload driver, no
 # autopilot), launches offline ER LIVE for the USER to drive, and polls er-telemetry-standalone.json to
 # a timeseries. The USER drives: title -> Continue (loads angrE = the BOOT-equivalent load), play +
 # walk forward, then System -> Quit to Title -> Continue (the RELOAD), play + walk forward ~3s. We then
@@ -10,8 +10,8 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/vanilla-reload-fps-$(date +%Y%m%d-%H%M%S)}"
-TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
-HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_dll.dll"
+TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
+HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.dll"
 
 fail() {
 	echo "run-vanilla-reload-fps: $*" >&2
@@ -40,20 +40,20 @@ steam_running || fail "Steam is not running. Start Steam (interactive login) fir
 if tasklist.exe 2>/dev/null | grep -qiE 'eldenring\.exe|start_protected_game\.exe'; then
 	fail "An Elden Ring process is already running. Tear it down (taskkill.exe /F /IM eldenring.exe) before launching."
 fi
-[[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll)"
-[[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness-dll)"
+[[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry)"
+[[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness)"
 
 ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
 [[ -f "$ME3" ]] || fail "Windows me3.exe not found at $ME3 (set ME3=<path to me3.exe>)"
 mkdir -p "$ARTIFACT_DIR"
-cp -f "$TELEM_DLL" "$GAME_DIR/er_telemetry_dll.dll"
-cp -f "$HARNESS_DLL" "$GAME_DIR/er_input_harness_dll.dll"
+cp -f "$TELEM_DLL" "$GAME_DIR/er_telemetry.dll"
+cp -f "$HARNESS_DLL" "$GAME_DIR/er_input_harness.dll"
 TS_GAME="$GAME_DIR/er-telemetry-timeseries.jsonl"
 rm -f "$TS_GAME" "$GAME_DIR/er-input-harness.log"
 
 winpath() { python3 -c "p='$1'; print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') else p)"; }
-WIN_TELEM="$(winpath "$GAME_DIR/er_telemetry_dll.dll")"
-WIN_HARNESS="$(winpath "$GAME_DIR/er_input_harness_dll.dll")"
+WIN_TELEM="$(winpath "$GAME_DIR/er_telemetry.dll")"
+WIN_HARNESS="$(winpath "$GAME_DIR/er_input_harness.dll")"
 PROFILE="$ARTIFACT_DIR/vanilla-telemetry.me3"
 cat >"$PROFILE" <<EOF
 profileVersion = "v1"

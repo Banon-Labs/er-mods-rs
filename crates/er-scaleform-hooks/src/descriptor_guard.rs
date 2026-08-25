@@ -16,7 +16,9 @@ use std::{
 
 use er_game_base::mem::game_rva;
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use er_telemetry::counters::{SCALEFORM_DESC_ADVANCE_INSTALLED, SCALEFORM_DESC_PROVIDER_NULL_HITS};
+use er_telemetry_core::counters::{
+    SCALEFORM_DESC_ADVANCE_INSTALLED, SCALEFORM_DESC_PROVIDER_NULL_HITS,
+};
 
 const SCALEFORM_DESC_ADVANCE_RVA: usize = 0x00ec_9530;
 const SCALEFORM_DESC_PROVIDER_OFFSET: usize = 0x38;

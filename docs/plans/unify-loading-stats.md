@@ -14,7 +14,7 @@ One presentation everywhere = the subsequent-loads one.
 - `+15320ms ... 361x184 (live=true)` -- WITH "HP 1450    FP 78    Stamina 110".
 
 ## Hypothesis to VERIFY FIRST (do not implement until confirmed in source)
-`crates/er-loading-portrait/src/stats_loading_text.rs`: the `live=false`
+`crates/er-loading-portrait-core/src/stats_loading_text.rs`: the `live=false`
 variant builds from the on-disk save-slot cache
 (`ensure_profile_slot_stats_cached` / `profile_slot_attributes` host-seam fns)
 before the character mounts; `live=true` reads live GameDataMan

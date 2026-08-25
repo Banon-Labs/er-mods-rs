@@ -22,7 +22,7 @@
 //!   the level back.
 //!
 //! The level is put back in BOTH places the engine keeps it: folded into the minted item id
-//! (`er_build_import::plan::armament_item_id`, the half the player actually sees) and written to
+//! (`er_build_import_core::plan::armament_item_id`, the half the player actually sees) and written to
 //! the instance field afterwards, since `InsertItem` has just zeroed that one.
 //!
 //! So an armament is minted the way the engine mints one that drops out of the world already
@@ -47,7 +47,7 @@
 //! quantity cannot see an ash: the minted instance is asked for its own arts id and reinforcement
 //! through `GetSwordArtsParamForWeapon` / `GaitemLookupResult::GetReinforcement`.
 
-use er_build_import::plan::{Grant, NO_SKILL, armament_item_id};
+use er_build_import_core::plan::{Grant, NO_SKILL, armament_item_id};
 
 /// `CS::EquipGameData::AddInventoryEquipByItemId(egd, int *itemId, u32 amount,
 /// bool updateTrophyStats, bool updateAutoEquip) -> int`.
@@ -77,7 +77,7 @@ const GAITEM_HANDLE_DTOR: usize = 0x682480;
 const SET_REINFORCEMENT: usize = 0x672e00;
 /// `CS::GaitemLookupResult::GetReinforcement(GaitemLookupResult*) -> int` -- `vtable + 0x18`.
 const GET_REINFORCEMENT: usize = 0x672740;
-// Declared once in `er-game-base::rva`; `er-better-refills-dll` and `equip_native` read the
+// Declared once in `er-game-base::rva`; `er-better-refills` and `equip_native` read the
 // same values from there.
 use er_game_base::rva::{
     GET_EQUIP_INVENTORY_DATA_RVA as GET_EQUIP_INVENTORY_DATA,
@@ -266,7 +266,7 @@ pub fn gem_row_of(weapon_skill: u32) -> Option<u32> {
     if weapon_skill == NO_SKILL {
         return None;
     }
-    if weapon_skill & ITEM_CATEGORY_MASK != er_build_import::plan::GEM_ITEM_CATEGORY {
+    if weapon_skill & ITEM_CATEGORY_MASK != er_build_import_core::plan::GEM_ITEM_CATEGORY {
         return None;
     }
     Some(weapon_skill & ITEM_ROW_MASK)

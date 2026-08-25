@@ -70,8 +70,8 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         // each of its frames; it stops the moment the screen is destroyed). Keep owning while it ticks, plus a
         // short grace to cover its fade-out, so the native screen is never exposed; then release to gameplay.
         let native_loadscreen_up = {
-            pub(crate) use er_telemetry::counters::LAST_LOADSCREEN_HITS;
-            pub(crate) use er_telemetry::counters::LOADSCREEN_GRACE;
+            pub(crate) use er_telemetry_core::counters::LAST_LOADSCREEN_HITS;
+            pub(crate) use er_telemetry_core::counters::LOADSCREEN_GRACE;
             const LOADSCREEN_GRACE_FRAMES: usize = 12;
             let hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
             if LAST_LOADSCREEN_HITS.swap(hits, Ordering::SeqCst) != hits {

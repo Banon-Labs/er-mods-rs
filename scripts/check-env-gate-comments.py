@@ -35,11 +35,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "crates" / "er-effects-rs" / "src"
-# The er-loading-portrait feature crate is product DLL code (portrait crate split, 2026-07-29):
+# The er-loading-portrait-core feature crate is product DLL code (portrait crate split, 2026-07-29):
 # its env reads are policed exactly like the root crate's. Scanned only when SRC_DIR is the
 # real product tree, so the fixture-based regression tests stay hermetic.
 PRODUCT_SRC_DIR = SRC_DIR
-PORTRAIT_SRC_DIR = REPO_ROOT / "crates" / "er-loading-portrait" / "src"
+PORTRAIT_SRC_DIR = REPO_ROOT / "crates" / "er-loading-portrait-core" / "src"
 AUTO_DIR = REPO_ROOT / ".auto"
 BASELINE_PATH = AUTO_DIR / "env_gate_comment_baseline.json"
 POLICY_PATH = AUTO_DIR / "env_gate_comment_policy.rego"

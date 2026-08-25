@@ -1,7 +1,7 @@
 //! Shared test fixtures: a representative build, and the decoders that reverse the pipeline.
 //!
 //! The decoders live here and **not** in the crate. `er-build-export` writes links; reading
-//! them is `er-build-import`'s job, and a decoder shipped alongside the encoder is a decoder
+//! them is `er-build-import-core`'s job, and a decoder shipped alongside the encoder is a decoder
 //! that will be quietly kept in agreement with it. These are written from the reference
 //! implementation's decompressor, so they are an independent check rather than a mirror --
 //! a bug in `lzutf8::compress` has to be a bug in `rotemdan/lzutf8.js` too to slip past them.

@@ -1,7 +1,7 @@
 # World-map invasion-spawn warp targets
 
-Tracking issue: bd `er-effects-rs-5es`. Crates: `crates/er-invasion-warp`,
-`crates/er-invasion-warp-dll`.
+Tracking issue: bd `er-effects-rs-5es`. Crates: `crates/er-invasion-warp-core`,
+`crates/er-invasion-warp`.
 
 ## What the feature is
 
@@ -138,7 +138,7 @@ The body is a **verbatim memcpy**, so the on-disk point record *is* the runtime
 (`0x140660d20`) has signature `(out, int area, byte block, byte region, uint index)` and
 stores `areaId`->byte3 ... `indexId`->byte0. So disk `3c 22 33 00` becomes the runtime i32
 `0x3C223300` = `m60_34_51_00`. Reading the disk bytes as a little-endian u32 and using that
-as a `DLMap` key **misses every entry**. `crates/er-invasion-warp/src/invasion_warp.rs` has a
+as a `DLMap` key **misses every entry**. `crates/er-invasion-warp-core/src/invasion_warp.rs` has a
 unit test that exists purely to pin this.
 
 That same constructor **BCD-packs the index byte** when `area - 0x32 < 0x27`, i.e. areas
@@ -171,7 +171,7 @@ rather than `-2pi` because every float in both files is authored to two decimal 
 (verified over all 28292 floats). Roughly half the table therefore needs wrapping before it
 can drive a compass/pin -- `InvasionWarpTarget::heading_radians`.
 
-`crates/er-invasion-warp/tests/aip_corpus.rs` re-proves all of the above on every
+`crates/er-invasion-warp-core/tests/aip_corpus.rs` re-proves all of the above on every
 `cargo test`, from the local extraction, and SKIPs when the corpus is absent. No game-derived
 bytes are versioned; the crate carries lengths, counts and FNV-1a64 digests only.
 
@@ -421,7 +421,7 @@ always performs is how a reload softlocks, so it is replicated -- and
 zero that would be false. No `CSNetMan`, `QuickmatchManager` or `CSBreakInPointManager` code is
 entered.
 
-Implemented in `crates/er-invasion-warp/src/warp.rs`. **RUNTIME-PROVEN 2026-08-03**: four warps
+Implemented in `crates/er-invasion-warp-core/src/warp.rs`. **RUNTIME-PROVEN 2026-08-03**: four warps
 issued, four arrived, `"verdict":"arrived","passed":true`, including a cross-area jump in **both**
 directions (area 60 -> 61 and 61 -> 60), each landing in the requested block at the requested
 point. Every warp reported `spawn_flag=1`, `requested == effective`, and `session_touches=1` --
@@ -459,7 +459,7 @@ Nothing in sections 1-2 is. Everything below is:
 * whether the world streams in correctly at the destination.
 
 **Build success, launch success, "no crash", and hook counters do not prove any of it.** The
-oracles that do are specified in `crates/er-invasion-warp/src/oracles.rs`:
+oracles that do are specified in `crates/er-invasion-warp-core/src/oracles.rs`:
 catalog counts (exact, against the fingerprints -- 257/4482 base-only, 365/7073 with DLC),
 list rows, selected target id, requested block/position/yaw, and the **settled** player block
 and position read back after the warp. Plus two that must stay at zero:
@@ -470,7 +470,7 @@ and position read back after the warp. Plus two that must stay at zero:
 | oracle | state |
 |---|---|
 | `oracle_invasion_warp_catalog_targets` / `_blocks` / `_areas` | **LIVE.** Written by `crate::sampler` from the fail-closed `CSAutoInvadePoint` read; emitted to `er-invasion-warp-telemetry.json` + the DLL log with both expected fingerprints on the same line. |
-| `_selected_id`, `_requested_block/_position/_yaw`, `_final_block/_position` | **LIVE as of the hotkey slice.** Written per warp by `er-invasion-warp-dll/src/drive.rs` into `er-invasion-warp-run.json`. `_final_*` are the **settled** read-back, emitted as JSON `null` while pending so a not-yet-measured value can never be misread as "settled at the origin". |
+| `_selected_id`, `_requested_block/_position/_yaw`, `_final_block/_position` | **LIVE as of the hotkey slice.** Written per warp by `er-invasion-warp/src/drive.rs` into `er-invasion-warp-run.json`. `_final_*` are the **settled** read-back, emitted as JSON `null` while pending so a not-yet-measured value can never be misread as "settled at the origin". |
 | `_list_rows` | name only -- needs the world-map surface, which is not built |
 | `_session_touches` | **MEASURED as of the hotkey slice**, and expected to be **0 or 1**, not 0. See section 3c: the reload sequence's `SetupMapReentry` is vanilla, so it is counted rather than asserted away. |
 | `_msgbox_builds` | **UNMEASURED, and deliberately has no counter.** Attributing a `MessageBoxDialog` build needs a builder detour this DLL does not install. |
@@ -489,7 +489,7 @@ The world-map surface is a shell around a warp call, so the warp is built and pr
 `F7` warps to the nearest invasion point (excluding the one underfoot, so repeated presses keep
 moving); `F8` steps through the catalog's stable order, which crosses the map because the order
 is by block id rather than by distance. Both are ignored unless the Elden Ring window has focus.
-Selection lives in `crates/er-invasion-warp/src/select.rs` and is pure, so the ranking rules are
+Selection lives in `crates/er-invasion-warp-core/src/select.rs` and is pure, so the ranking rules are
 `cargo test`-provable with no game; only the coordinate conversion and the warp itself are
 native.
 
@@ -502,7 +502,7 @@ never becomes a candidate.
 Two choices are ours rather than the engine's, so they are recorded here with their reasoning
 instead of appearing as unexplained constants in the code.
 
-**One pin per BLOCK, not per point (365, not 7073).** `crates/er-invasion-warp/src/map_surface.rs`,
+**One pin per BLOCK, not per point (365, not 7073).** `crates/er-invasion-warp-core/src/map_surface.rs`,
 `PinGranularity::PerBlock` (the default). Three reasons, in order of weight:
 
 1. *Cost.* A `CS::WorldMapWarpPinData` row is `0x350` bytes and owns a `MenuString` plus a
@@ -534,7 +534,7 @@ failure than a crash because it is silent.
 
 ### 3f. Hook seams and the two guards on them
 
-`crates/er-invasion-warp-dll/src/map_seams.rs` carries every detour target with its RVA, its
+`crates/er-invasion-warp/src/map_seams.rs` carries every detour target with its RVA, its
 prologue bytes and its argument count.
 
 * **Offline guard**: every address byte-checked against `eldenring-deobf.bin` at shift 0.
@@ -743,7 +743,7 @@ rule that the surface must reflect what is actually loaded because mods rewrite 
 
 ### Reading it live
 
-`crates/er-invasion-warp/src/msb_invasion_points.rs`, using the engine's own calls:
+`crates/er-invasion-warp-core/src/msb_invasion_points.rs`, using the engine's own calls:
 
 | what | address | note |
 |---|---|---|
@@ -886,7 +886,7 @@ upper half of the value's 8-byte `pointCount`. Nothing zeroes it. The engine nev
 because it only reads the low dword: `_GetCurBreakInPointVecFromAutoIntrudePoint`
 (`0x140a0c4f0`) tests `0 < (int)count` and loops `while ((int)i < (int)count)`.
 
-Consequences, already applied in `crates/er-invasion-warp/src/live_read.rs`:
+Consequences, already applied in `crates/er-invasion-warp-core/src/live_read.rs`:
 
 * `pointCount` is read as a **u32**; the upper dword is ignored, and stale junk there is
   NORMAL engine behaviour, not corruption, so it must not fail a read.

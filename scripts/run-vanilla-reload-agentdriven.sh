@@ -30,9 +30,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/vanilla-reload-agentdriven-$(date +%Y%m%d-%H%M%S)}"
 PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
-TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace_dll.dll"
-HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_dll.dll"
-TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace.dll"
+HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.dll"
+TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 300)"
 OBSERVE_SECONDS="${OBSERVE_SECONDS:-$CAP_SECONDS}"
 
@@ -75,9 +75,9 @@ win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[
 
 # --- stage the 4 DLLs + a 4-native me3 profile (product FIRST for the union export) ---
 PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
-TRACE_GAMEDIR="$GAME_DIR/er_reload_trace_dll.dll"
-HARNESS_GAMEDIR="$GAME_DIR/er_input_harness_dll.dll"
-TELEM_GAMEDIR="$GAME_DIR/er_telemetry_dll.dll"
+TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
+HARNESS_GAMEDIR="$GAME_DIR/er_input_harness.dll"
+TELEM_GAMEDIR="$GAME_DIR/er_telemetry.dll"
 cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
@@ -244,7 +244,7 @@ fi
 [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-	for d in er_effects_rs.dll er_reload_trace_dll.dll er_input_harness_dll.dll er_telemetry_dll.dll; do
+	for d in er_effects_rs.dll er_reload_trace.dll er_input_harness.dll er_telemetry.dll; do
 		f="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/$d"
 		[[ -f "$f" ]] && echo "$d: mtime=$(date -r "$f" +%Y%m%d-%H%M%S) sha=$(sha256sum "$f" | cut -c1-16)"
 	done

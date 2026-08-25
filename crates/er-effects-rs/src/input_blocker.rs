@@ -12,10 +12,10 @@ static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
 /// (i.e. whether native ER reads keyboard input via DInput at all). If the keyboard counter stays 0
 /// while the harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key`
 /// stamp never reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
-pub use er_telemetry::counters::DINPUT_KB_HOOK_FIRES;
-pub(crate) use er_telemetry::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
-pub(crate) use er_telemetry::counters::INJECTED_KEY;
-pub(crate) use er_telemetry::counters::SUPPRESS_ARROW_KEYS;
+pub use er_telemetry_core::counters::DINPUT_KB_HOOK_FIRES;
+pub(crate) use er_telemetry_core::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
+pub(crate) use er_telemetry_core::counters::INJECTED_KEY;
+pub(crate) use er_telemetry_core::counters::SUPPRESS_ARROW_KEYS;
 
 #[derive(Default)]
 pub struct InputBlocker {
@@ -163,7 +163,7 @@ unsafe fn with_probe_device(
     unsafe { release_di8(di8) };
 }
 
-pub(crate) use er_telemetry::counters::DINPUT_KB_GET_STATE_ORIG;
+pub(crate) use er_telemetry_core::counters::DINPUT_KB_GET_STATE_ORIG;
 
 /// The keyboard detour, in the hook union's four-`usize` shape.
 ///
@@ -261,7 +261,7 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         })
     };
 
-    // THROUGH THE UNION, NEVER A BARE `MhHook`. `er-net-effects-dll` and `er-charm-enemies-dll`
+    // THROUGH THE UNION, NEVER A BARE `MhHook`. `er-net-effects` and `er-charm-enemies`
     // detour this same `GetDeviceState` slot, and each links its own MinHook instance -- two
     // instances on one prologue overwrite each other's trampolines and the loser silently never
     // runs. Owning it in the union is also what lets those DLLs chain in through this DLL's

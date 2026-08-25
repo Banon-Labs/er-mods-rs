@@ -928,7 +928,7 @@ fn stats_panel_output_keeps_load_character_row_text_from_overlapping() {
 
     // The old level-number -> stat-line gutter check lived here. It measured two fields that a
     // merged row no longer draws. The equivalent boundary is now header-ink -> attribute-box, which
-    // `er-loading-portrait/tests/merged_row_header_fits.rs` measures against the real font for the
+    // `er-loading-portrait-core/tests/merged_row_header_fits.rs` measures against the real font for the
     // worst-case name and suffix -- a stronger check than a fixed gutter constant, because the
     // merged header's width varies with the name.
 }

@@ -1297,7 +1297,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         // Split out from the shared total: a picker activation is a BROWSE step (up, enter dir,
         // page, pick file), never a load. Summing both kinds into one counter is what let a reader
         // divide the activation count by 2 and call the result a load count -- true only in a session
-        // with zero directory navigation. See er_telemetry::load_count.
+        // with zero directory navigation. See er_telemetry_core::load_count.
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT.fetch_add(1, Ordering::SeqCst);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
         return unsafe { save_picker_handle_activation(dialog, cursor) };

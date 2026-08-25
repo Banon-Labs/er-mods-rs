@@ -20,7 +20,7 @@ pub(crate) fn install_system_quit_continue_confirm_hook() {
         return;
     };
     // CROSS-DLL UNION (2026-07-18): install through the union, NOT a bare MhHook. The companion
-    // er-reload-trace-dll also observes this address (0xb0e180) and routes through THIS DLL's union
+    // er-reload-trace also observes this address (0xb0e180) and routes through THIS DLL's union
     // via the `er_effects_union_register` export. A bare MhHook here would let whichever DLL grabbed
     // the single MinHook slot first win and silently drop the other -- and if the trace preempted,
     // this CRITICAL continue-confirm guard (it drives a fresh picked-slot deserialize before SetState5)
@@ -142,10 +142,10 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
     }
 }
 
-pub(crate) use er_telemetry::counters::TESTNET_FF_FIRED_EPOCH;
-pub(crate) use er_telemetry::counters::TESTNET_FF_LAST_MMS;
+pub(crate) use er_telemetry_core::counters::TESTNET_FF_FIRED_EPOCH;
+pub(crate) use er_telemetry_core::counters::TESTNET_FF_LAST_MMS;
 /// Stuck-frame + one-shot state for the load2/boot testNetStep force-finish below.
-pub(crate) use er_telemetry::counters::TESTNET_FF_STUCK_FRAMES;
+pub(crate) use er_telemetry_core::counters::TESTNET_FF_STUCK_FRAMES;
 pub(crate) const TESTNET_FF_STUCK_FRAME_THRESHOLD: usize = 120;
 
 /// Lifetime of the load2 `warpRequested` clear, as a per-epoch phase.

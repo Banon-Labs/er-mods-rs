@@ -338,7 +338,7 @@ pub(crate) fn worldreswait_hold_enabled() -> bool {
 /// this switch gate the Phase-3 hold-suppression would (and did, run angre-phase3fix-1) disable those
 /// load1 holds and softlock LOAD1 at 8/11.
 pub(crate) fn switch_reload_active() -> bool {
-    er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+    er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         >= crate::constants::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
 }
 
@@ -350,7 +350,7 @@ pub(crate) fn switch_reload_active() -> bool {
 pub(crate) fn outgoing_teardown_suppresses_holds() -> bool {
     outgoing_teardown_enabled()
         && switch_reload_active()
-        && er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
+        && er_telemetry_core::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
 }
 
 pub(crate) fn autoload_disabled() -> bool {
@@ -503,7 +503,7 @@ pub(crate) fn prove_movement_enabled() -> bool {
 /// the ProfileSelect cursor to a non-current slot, and confirm. This drives the exact user flow with
 /// zero human input so the switch bug (return-title reload crash / wrong-slot) reproduces
 /// deterministically. Diagnostic repro harness, not a product lever.
-/// True when the separate `er_input_harness_dll.dll` is loaded in the process (i.e. listed in the ME3
+/// True when the separate `er_input_harness.dll` is loaded in the process (i.e. listed in the ME3
 /// profile). This is the DECOUPLED TOGGLE for the load2 flow (bd
 /// harness-orchestrates-product-exposes-primitives-boundary / load2-flow-decoupled-into-harness-dll):
 /// the product ships with the load2 driver INERT; including the harness DLL in the profile turns it on.
@@ -515,7 +515,7 @@ pub(crate) fn harness_dll_present() -> bool {
     if CACHED.load(Ordering::Relaxed) == 1 {
         return true;
     }
-    let present = unsafe { GetModuleHandleA(s!("er_input_harness_dll.dll")) }
+    let present = unsafe { GetModuleHandleA(s!("er_input_harness.dll")) }
         .map(|h| !h.is_invalid())
         .unwrap_or(false);
     if present {
@@ -547,7 +547,7 @@ pub(crate) fn system_quit_repro_enabled() -> bool {
     // suppressed the move-probe (load2 can_move never latched). The move-probe (prove_movement_enabled)
     // stays on harness presence. bd MILESTONE-detdrive-works-but-sqrepro-menunav-conflict-2026-07-21.
     harness_dll_present()
-        && er_telemetry::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE
+        && er_telemetry_core::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE
             .load(std::sync::atomic::Ordering::SeqCst)
             == 0
 }

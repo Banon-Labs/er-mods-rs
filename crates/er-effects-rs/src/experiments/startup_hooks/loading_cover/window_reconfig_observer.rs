@@ -13,21 +13,21 @@ use super::*;
 // native calls -- and the eventual product fix (window at final geometry from creation) has
 // its before/after proof. Pure passthrough: nothing is modified, reordered, or suppressed.
 
-pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG;
 /// Trampolines (0 = hook not installed).
-pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_ORIG;
-pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_ORIG;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_ORIG;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_CREATE_WINDOW_ORIG;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_MOVE_WINDOW_ORIG;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_POS_ORIG;
 
-pub(crate) use er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS;
 /// Total call counts (telemetry: the reconfig timeline's RAM counters).
-pub(crate) use er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_CALLS;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_CREATE_WINDOW_CALLS;
 /// Last SetWindowPos geometry, packed (cx << 32 | cy) and (x << 32 | y as u32) for telemetry.
-pub(crate) use er_telemetry::counters::WINRECONFIG_LAST_SET_POS_SIZE;
-pub(crate) use er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_CALLS;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS;
-pub(crate) use er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_LAST_SET_POS_SIZE;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_MOVE_WINDOW_CALLS;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_POS_CALLS;
 
 /// Per-hook log cap: the first calls carry the whole startup story; later calls only count.
 pub(crate) const WINRECONFIG_LOG_CAP: usize = 48;
@@ -290,11 +290,11 @@ pub(crate) fn install_window_reconfig_observer_hooks() {
 // the screen at pre-final geometry. Config-respecting: WINDOWED mode skips the apply entirely.
 
 /// Attach-relative ms when the early apply finished, and the applied (w<<16|h) pack.
-pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_MS;
-pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RECT;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_EARLY_APPLY_MS;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_EARLY_APPLY_RECT;
 /// Result latch: 0 = not finished, 1 = applied, 2 = skipped (WINDOWED), 3 = window never found,
 /// 4 = monitor info failed, 5 = config unreadable (skipped), 6 = already at final geometry.
-pub(crate) use er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT;
+pub(crate) use er_telemetry_core::counters::WINRECONFIG_EARLY_APPLY_RESULT;
 
 pub(crate) const WINRECONFIG_EARLY_APPLY_MAX_MS: u128 = 20_000;
 pub(crate) const WINRECONFIG_EARLY_APPLY_POLL_MS: u64 = 20;

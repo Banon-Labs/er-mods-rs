@@ -1,103 +1,229 @@
-//! Product (A): the DLL-drawn boot save picker, its shared row model, and the OS-native
-//! common-file-dialog mechanism.
+//! Standalone ME3-loadable shell for product (A), the DLL-drawn boot save picker.
 //!
-//! The save-picker crate extraction has moved the host-testable row model, config keys,
-//! slot parser, reusable OS common-file-dialog mechanism, and DLL-drawn boot overlay here.
-//! Product entrypoints still live under `er-effects-rs/src/experiments/startup_hooks/save_picker/`
-//! until the remaining quit-menu seams are extracted.
+//! This DLL is deliberately separate from the product `er_effects_rs.dll`, following the
+//! `er-loading-bar` / `er-loading-portrait` shape: the feature crate owns the picker
+//! logic, this thin shell installs a standalone host seam and arms the boot picker when loaded
+//! by ME3.
 //!
-//! Contents and remaining planned moves:
-//! * `model` -- moved from `experiments/save_picker.rs`: `SavePickerModel`,
-//!   `PickerIntent`, `PickerRow`, `PickerEntry`, `PickerActivation`, `PickRejection`, the
-//!   dense row layout (`entry_row_base` and everything derived from it), drive/page
-//!   cycling, `save_picker_accepts` / `save_picker_extension_accepted`, the civil-time
-//!   helpers, `truncate_utf16`, and the process-wide `ACTIVE_SAVE_PICKER` slot. Pure
-//!   filesystem logic with ~960 lines of its own tests -- host-runnable, which is the
-//!   point: the cancel/reopen state machine is only exercisable by launching the whole
-//!   game today.
-//! * `slots` -- `SaveSlotInfo` + `parse_save_character_slots`, moved from
-//!   `startup_hooks/loading_cover/loading_cover_save_slot.rs` because they are picker-owned
-//!   offline save-container parsing.
-//! * `overlay` -- moved from `experiments/gpu_readback/save_picker_overlay.rs`: the
-//!   arm/disarm lifecycle keyed off the missing-save hold, both input paths (the
-//!   render-thread `GetAsyncKeyState`/XInput poll and the dedicated `WH_KEYBOARD_LL`
-//!   thread), the file stage and the character sub-stage, the CPU compositor
-//!   (`overlay_save_picker_onto`), the explicit [`overlay::arm_boot_picker`] entrypoint,
-//!   and the deferred pick completion that runs the redirect install on the game-task
-//!   thread.
-//! * `os_dialog` -- moved from the mechanism half of
-//!   `startup_hooks/save_picker/save_picker_os_dialog.rs`: `os_dialog_run`,
-//!   `os_pick_validated`, `classify_os_outcome`, `should_reopen`, `os_dialog_filter`,
-//!   `OsDialogClaim`, `os_dialog_owner`, `os_pick_path_from_buffer`, `OsPickOutcome`. It
-//!   converts strings and calls comdlg32, with product state supplied through host callbacks
-//!   and a caller-supplied cover factory. Its two System>Quit entrypoints
-//!   (`os_open_save_picker_load`, `os_open_save_dest_picker`) are not here -- they are
-//!   quit-menu callers and still live in the product shim for now.
-//! * `config` -- the three picker keys and their plumbing, moved out of
-//!   `er-effects-rs/src/config.rs`: `preferred_save_picker_dir`,
-//!   `autoupdate_preferred_picker_dir` and `os_native_save_picker` (with its
-//!   `use_os_file_picker` / `save_picker.os_native` aliases), their parse + validation,
-//!   the generated boilerplate doc text, and `remember_preferred_save_picker_dir`. Only
-//!   picker code reads them, so they move with the picker; the product's `er-effects.toml`
-//!   parser keeps one file and delegates those keys here.
-//! * `surface` -- the pure surface/outcome routing types (`PickerOpenRequest`,
-//!   `PickerSurface`, `PickerOpenOutcome`) and destination target routing (`DestRoute`).
-//!   The host product still opens native menu windows and stages save-flow state.
-//! * `boot` -- boot missing-save telemetry state values and the pure OS-dialog abort
-//!   decision table; the host product still owns the dialog thread, telemetry flush, and
-//!   process exit.
-//!
-//! # The screen cover is the CALLER's decision, not this crate's
-//!
-//! Under the 2026-07-30 user decision the dim belongs to product (B) and the boot dialog
-//! must NOT be dimmed. The extracted `os_pick_validated` preserves that caller-decides
-//! shape through the [`host::PickerCoverFactory`] seam: the System>Quit product shim passes
-//! a factory that arms its dim, and the boot flow passes [`os_dialog::no_picker_cover`].
-//! Same behavior, expressed across a crate boundary instead of an in-crate enum.
-//!
-//! # The OS-native surface is a REQUIREMENT, not an option
-//!
-//! We never force a user onto an in-game picker we built (user principle 2026-07-30).
-//! Both places that draw one -- this crate's boot picker and `er-quit-menu`'s in-game
-//! browse rows -- must offer the OS-native dialog as a selectable surface. That is why the
-//! comdlg32 mechanism and the `os_native_save_picker` config key live HERE, in the crate
-//! both products depend on, rather than being duplicated: `er-quit-menu` gets the fallback
-//! surface through its one-way dependency on this crate.
-//!
-//! # Linking this crate is not arming it
-//!
-//! `er-quit-menu` statically links this crate, so a profile containing ONLY the standalone
-//! product-(B) DLL still offers the OS-native surface. It must NOT thereby acquire (A)'s
-//! boot missing-save behavior. Two mechanisms, and only the second is a guarantee:
-//!
-//! 1. the `boot-flow` cargo feature, which `er-quit-menu` turns off. This isolates the
-//!    standalone-(B) build, but cargo UNIFIES features across a build graph, so in the
-//!    product DLL -- which wants `boot-flow` -- `er-quit-menu` gets it too. A feature alone
-//!    therefore cannot carry the requirement.
-//! 2. an explicit arm entry point. Nothing in the boot flow installs a hook, spawns a
-//!    thread or arms a model until a host calls it; `er-quit-menu` never does. This holds
-//!    in every build, feature unification included, and is the real guarantee.
-//!
-//! # Product state crosses the seam as injected function pointers
-//!
-//! See [`host::install_host`]. This crate must not depend on the root crate.
+//! Co-loading stays conservative when the product DLL is already present: this standalone shell
+//! does not install its host or arm, so the product remains the owner of the boot flow. S6 does not
+//! claim a standalone-first co-load proof; when loaded by itself this DLL owns a standalone pending
+//! latch, opens the picker model, starts the low-level keyboard hook, and records selected paths in
+//! its own log. It does not install product save-redirect hooks; a standalone pick is validated and
+//! planned through `er-save-redirect`, then closes the standalone latch instead of pretending to
+//! install hooks or load the game save.
 
-pub mod boot;
-pub mod config;
-pub mod host;
-pub mod model;
-#[cfg(feature = "os-dialog")]
-pub mod os_dialog;
-#[cfg(feature = "boot-flow")]
-pub mod overlay;
-pub mod slots;
-pub mod surface;
+// A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
+// `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
+// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The SHIPPING
+// target (x86_64-pc-windows-msvc) carries the full deny with no allows.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
-pub use boot::*;
-pub use config::*;
-pub use host::*;
-pub use model::*;
-#[cfg(feature = "os-dialog")]
-pub use os_dialog::*;
-pub use slots::*;
-pub use surface::*;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(windows)]
+use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+#[cfg(windows)]
+use windows::core::PCSTR;
+
+const DLL_PROCESS_ATTACH: u32 = 1;
+const DLL_MAIN_SUCCESS: i32 = 1;
+const LOG_FILE_NAME: &str = "er-save-picker.log";
+
+#[cfg(windows)]
+static START: std::sync::Once = std::sync::Once::new();
+
+static STANDALONE_MISSING_SAVE_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Where the standalone log lands: next to the executable, falling back to the CWD.
+fn log_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Fresh per process: the first line of a run truncates the file (rotating the previous
+/// run's aside as `.log.prev`), later lines append. No log in this repo accumulates across
+/// runs -- which save path a run picked must be readable without splitting a file by hand.
+fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
+    er_game_base::log::append_line(
+        &dir.join(LOG_FILE_NAME),
+        format_args!("er-save-picker: {args}"),
+    );
+}
+
+/// The standalone host seam. There is no product save hook owner behind this DLL, so the
+/// completion callback validates/plans the pick and releases this DLL's own picker latch instead of
+/// claiming it activated autoload.
+fn install_standalone_host() -> bool {
+    er_save_picker_core::install_host(er_save_picker_core::SavePickerHost {
+        append_autoload_debug: standalone_log,
+        missing_save_selection_pending: standalone_missing_save_selection_pending,
+        complete_missing_save_selection_from_picker: standalone_complete_missing_save_selection,
+        picker_start_dir: standalone_picker_start_dir,
+        remember_picker_dir: standalone_remember_picker_dir,
+        ..er_save_picker_core::SavePickerHost::defaults()
+    })
+}
+
+fn standalone_log(args: std::fmt::Arguments<'_>) {
+    append_log(&log_dir(), args);
+}
+
+fn standalone_missing_save_selection_pending() -> bool {
+    STANDALONE_MISSING_SAVE_PENDING.load(Ordering::SeqCst)
+}
+
+fn standalone_complete_missing_save_selection(
+    path: &Path,
+) -> er_save_picker_core::MissingSaveSelectionOutcome {
+    use er_save_picker_core::MissingSaveSelectionOutcome;
+    let validated = match er_save_redirect::validate_save_file_path(path.to_path_buf()) {
+        Ok(validated) => validated,
+        Err(err) => {
+            let message = standalone_rejection_message(err);
+            standalone_log(format_args!(
+                "standalone pick rejected by shared save-source validation: '{}' -- {err:?} visible='{}: {}'",
+                path.display(),
+                message.headline(),
+                message.detail()
+            ));
+            return MissingSaveSelectionOutcome::Rejected(message);
+        }
+    };
+    let plan = er_save_redirect::plan_validated_save_source(validated.clone(), false);
+    standalone_log(format_args!(
+        "standalone pick accepted for surface proof: '{}' plan={plan:?} (no save hook owner installed)",
+        validated.display()
+    ));
+    STANDALONE_MISSING_SAVE_PENDING.store(false, Ordering::SeqCst);
+    MissingSaveSelectionOutcome::Completed
+}
+
+fn standalone_rejection_message(
+    err: er_save_redirect::SaveSourceRejection,
+) -> er_save_picker_core::PickerStatusMessage {
+    match err {
+        er_save_redirect::SaveSourceRejection::MissingOrNotFile => {
+            er_save_picker_core::PickerStatusMessage::new(
+                "SAVE NOT FOUND",
+                "The selected path is missing or is not a file.",
+            )
+        }
+        er_save_redirect::SaveSourceRejection::WrongSize { len, expected } => {
+            er_save_picker_core::PickerStatusMessage::new(
+                "WRONG SAVE SIZE",
+                format!("Expected {expected} bytes, but this file is {len} bytes."),
+            )
+        }
+        er_save_redirect::SaveSourceRejection::NotBnd4 => {
+            er_save_picker_core::PickerStatusMessage::new(
+                "NOT AN ELDEN RING SAVE",
+                "The file is not a readable BND4 save container.",
+            )
+        }
+        er_save_redirect::SaveSourceRejection::Unreadable => {
+            er_save_picker_core::PickerStatusMessage::new(
+                "SAVE UNREADABLE",
+                "The save exists, but could not be read.",
+            )
+        }
+    }
+}
+
+fn standalone_picker_start_dir() -> PathBuf {
+    // ME3 launches with the game directory as CWD on the approved path. Starting there is more
+    // useful than an empty model and does not invent a user-specific save path.
+    std::env::current_dir()
+        .ok()
+        .filter(|path| path.exists())
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(PathBuf::from))
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn standalone_remember_picker_dir(dir: &Path) {
+    standalone_log(format_args!(
+        "standalone picker remembered directory for this run only: '{}'",
+        dir.display()
+    ));
+}
+
+#[cfg(windows)]
+fn product_dll_present() -> bool {
+    unsafe { GetModuleHandleA(PCSTR(c"er_effects_rs.dll".as_ptr().cast::<u8>())).is_ok() }
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Called by the Windows loader. Do not call directly.
+pub unsafe extern "system" fn DllMain(
+    module: *mut core::ffi::c_void,
+    reason: u32,
+    _reserved: *mut core::ffi::c_void,
+) -> i32 {
+    if reason == DLL_PROCESS_ATTACH {
+        let module_base = module as usize;
+        START.call_once(|| {
+            if product_dll_present() {
+                STANDALONE_MISSING_SAVE_PENDING.store(false, Ordering::SeqCst);
+                append_log(
+                    &log_dir(),
+                    format_args!(
+                        "loaded module_base=0x{module_base:x}; product DLL already present; standalone boot-save-picker stood down before host install"
+                    ),
+                );
+                return;
+            }
+
+            let host_installed = install_standalone_host();
+            STANDALONE_MISSING_SAVE_PENDING.store(true, Ordering::SeqCst);
+            let armed = er_save_picker_core::overlay::arm_boot_picker();
+            er_save_picker_core::overlay::ensure_save_picker_keyboard_hook();
+            append_log(
+                &log_dir(),
+                format_args!(
+                    "loaded module_base=0x{module_base:x}; standalone boot-save-picker armed={armed}; host_installed={host_installed}; standalone-first co-load is not S6 proof; start_dir='{}'",
+                    standalone_picker_start_dir().display()
+                ),
+            );
+        });
+    }
+    DLL_MAIN_SUCCESS
+}
+
+#[cfg(not(windows))]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_save_picker_host_stub() -> i32 {
+    DLL_MAIN_SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_host_installs_once_and_refuses_invalid_picks_without_releasing_the_latch() {
+        STANDALONE_MISSING_SAVE_PENDING.store(true, Ordering::SeqCst);
+        assert!(install_standalone_host());
+        assert!(!install_standalone_host());
+        assert!(standalone_missing_save_selection_pending());
+        assert!(matches!(
+            standalone_complete_missing_save_selection(Path::new("Z:\\saves\\ER0000.sl2")),
+            er_save_picker_core::MissingSaveSelectionOutcome::Rejected(_)
+        ));
+        assert!(standalone_missing_save_selection_pending());
+    }
+
+    #[test]
+    fn standalone_start_dir_is_non_empty() {
+        assert!(!standalone_picker_start_dir().as_os_str().is_empty());
+    }
+}

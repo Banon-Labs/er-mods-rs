@@ -1,6 +1,6 @@
-# er-invasion-warp -- invade only where YOU are standing.
+# er-invasion-warp-core -- invade only where YOU are standing.
 #
-# Drop this in as:  ...\steamapps\common\ELDEN RING\Game\er-invasion-warp.toml
+# Drop this in as:  ...\steamapps\common\ELDEN RING\Game\er-invasion-warp-core.toml
 # (overwrite the file the DLL wrote on first run -- it is the same schema, just longer)
 #
 # Edits take effect immediately. The file is re-read when the next match arrives; no restart.

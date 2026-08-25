@@ -22,10 +22,10 @@ use super::*;
 // engine asked for; it does NOT prove pixels. Layers 2 (per-part `CSPartsModelIns` binding) and 3
 // (torso pixel check on the captured RT) remain open on er-effects-rs-91l5.
 
-// Pure equipment-resolution/classification logic now lives in er-loading-portrait. This module keeps
+// Pure equipment-resolution/classification logic now lives in er-loading-portrait-core. This module keeps
 // the root-owned unsafe memory sampling and telemetry publication, and re-exports the moved names as
 // compatibility shims for existing root callsites.
-pub(crate) use er_loading_portrait::portrait_equip::{
+pub(crate) use er_loading_portrait_core::portrait_equip::{
     PORTRAIT_EQUIP_CAPTURE_BAD, PORTRAIT_EQUIP_CAPTURE_CLEAN, PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED,
     PORTRAIT_EQUIP_SLOT_CHEST, PORTRAIT_EQUIP_SLOT_HANDS, PORTRAIT_EQUIP_SLOT_HEAD,
     PORTRAIT_EQUIP_SLOT_LEGS, PortraitEquipSample, portrait_effective_protector_id,
@@ -33,22 +33,22 @@ pub(crate) use er_loading_portrait::portrait_equip::{
     portrait_equip_unpack,
 };
 
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_BAD_FRAMES;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_BAD_FRAMES_TOTAL;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_BAD_MASK;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_CAPTURE_VERDICT;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_FIRST_UNK0;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_FIRST_UNKD4;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_FIRST_UNKD8;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_ORACLE_SLOT;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_ORACLE_WINDOW;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_RECORD_PARAM_ID;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_SAMPLED_FRAMES;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_WINDOWS_BAD;
-pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_WINDOWS_SAMPLED;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_BAD_FRAMES;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_BAD_FRAMES_TOTAL;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_BAD_MASK;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_CAPTURE_VERDICT;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_FIRST_UNK0;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_FIRST_UNKD4;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_FIRST_UNKD8;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_ORACLE_SLOT;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_ORACLE_WINDOW;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_RECORD_PARAM_ID;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_SAMPLED_FRAMES;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_WINDOWS_BAD;
+pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_WINDOWS_SAMPLED;
 
 /// Byte offset of protector `slot`'s entry within a `ChrAsm`'s `equipment_param_ids` array.
 /// `CS::ChrAsm::GetProtectorParamIdBySlot` (deobf 0x1403be950) is literally

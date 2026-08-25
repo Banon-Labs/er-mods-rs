@@ -1,19 +1,13 @@
-# World-map invasion-spawn WARP-TARGET feature crate (bd er-effects-rs-5es).
+# Thin standalone ME3-loadable shell for the `er-invasion-warp-core` feature crate
+# (bd er-effects-rs-5es): own DllMain, own log file, individually shippable.
 #
-# A LOCAL exploration surface: the fixed auto-invasion spawn points the engine already loads
-# from `other:/AutoInvadePoint.aipbnd` become selectable world-map warp targets, warped to by
-# BlockId/position/yaw exactly like a Site of Grace. It does NOT fake an invasion, does NOT
-# start or spoof multiplayer/session state, and does NOT read or write anything under
-# CSNetMan / QuickmatchManager / CSBreakInPointManager. The only engine data it consumes is
-# the `CSAutoInvadePoint` singleton, which is a plain coordinate table.
-#
-# Product state crosses the seam through `host::install_host` function pointers (the
-# `er-loading-portrait` / `er-quit-menu` pattern). This crate must NOT depend on the root
-# `er-effects-rs` crate.
-#
-# Most of the crate is deliberately platform-independent so the catalog, the block grouping,
-# the on-disk `.aip` decoder and the coordinate/yaw math are provable by `cargo test` on the
-# host with no game running -- that testability is the point of the crate split.
+# It is designed to COEXIST with the product DLL and the other companions: a profile may list
+# it, omit it, or combine it freely. It installs NO detours at all -- it arms the host seam and
+# registers one recurring `CSTaskImp` game task that READS the `CSAutoInvadePoint` coordinate
+# table for oracle 1 -- so it contends on nothing. When it does start hooking, every detour
+# MUST go through the `er-hook` union rather than a bare `MhHook::new`, for the same reason
+# er-quit-menu does: two MinHook instances patching one prologue corrupt each other's
+# trampolines.
 [package]
 name = "er-invasion-warp"
 version = "0.1.0"
@@ -22,22 +16,52 @@ publish = false
 
 [lib]
 name = "er_invasion_warp"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
+# host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Shared cross-platform telemetry counters (the oracle_* fields the feature will write).
-er-telemetry = { path = "../er-telemetry" }
-# Shared zero-dependency content fingerprint owner.
+er-invasion-warp-core = { path = "../er-invasion-warp-core" }
+
+# Tier A only (zero external deps, host-buildable): `game_module_base()` for the RVA-relative
+# native calls the warp driver makes, and the fresh-per-process log writer. NOT windows-gated,
+# because the log helper is compiled on the host too -- see `append_log` below.
 er-game-base = { path = "../er-game-base" }
 
+# The GFX codec, for the world-map movie edit that gives the invasion pins a red icon. Host-
+# buildable on purpose: the edit itself is pure byte manipulation and is covered by offline
+# tests against the extraction corpus, so only the load-time swap needs the game.
+er-gfx = { path = "../er-gfx" }
+
+[target.'cfg(windows)'.dependencies.er-hook]
+# The shared MinHook union. Every detour this DLL installs MUST go through it: two MinHook
+# instances patching one prologue corrupt each other's trampolines, and er_effects_rs.dll may be
+# loaded in the same process.
+path = "../er-hook"
+
+# Game-thread task registration ONLY (`CSTaskImp` + `FD4TaskData`, the er-telemetry
+# pattern). Windows-only so the host `cargo test` of this shell never pulls the game bindings
+# into its graph.
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
-# `er-game-base` remains Tier A only (zero external deps): on Windows this also supplies the
-# fault-tolerant `ReadProcessMemory` primitive used by the live `CSAutoInvadePoint` walk.
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
 # set, denied. Zero violations on the shipping target
 # (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
-# build, so the deny carries no `# DEBT:` allows.
+# build, so the deny carries no `# DEBT:` allows. The single crate-root
+# `cfg_attr(not(windows), allow(dead_code, unused_imports))` is a cfg artifact of the HOST
+# build -- every consumer in this shell is `DllMain` and the `#[cfg(windows)]` hooks/tasks it
+# installs, so a host compile cfg's the callers out -- not shipping-target debt. See the
+# comment beside it in `src/lib.rs`.
 [lints]
 workspace = true
+
+# Assembles every byte-checked prologue from NAMED instructions in `build.rs` -- for Elden Ring
+# and for Seamless Co-op's ersc.dll -- so no hand-typed byte can disarm a check.
+# See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }

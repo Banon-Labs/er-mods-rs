@@ -8,13 +8,13 @@ Issue: `er-effects-rs-orao`
 
 Do **not** fold full save-redirect ownership into S6.
 
-Static inspection shows the missing-save picker completion path is only the front door. A true standalone `er-save-picker-dll` save load also needs the product save-redirect owner and the boot-hold/title-flow owner. Moving just `complete_missing_save_selection_from_picker` would create another surface proof: it could validate a picked path, but it could not make Elden Ring read that save or resume the held boot job.
+Static inspection shows the missing-save picker completion path is only the front door. A true standalone `er-save-picker` save load also needs the product save-redirect owner and the boot-hold/title-flow owner. Moving just `complete_missing_save_selection_from_picker` would create another surface proof: it could validate a picked path, but it could not make Elden Ring read that save or resume the held boot job.
 
 This branch implements the first safe slice anyway: `crates/er-save-redirect` now owns the host-runnable missing-save state machine and save-source planning/validation. It enforces the exact fixed PC save size (`0x1ba03d0`) for `.sl2`/`.co2`, not a loose minimum, and it exposes the staged-root/direct-file plan without installing runtime hooks.
 
 ## Current ownership chain
 
-The S6 standalone DLL currently installs a `SavePickerHost`, arms `er_save_picker::overlay::arm_boot_picker()`, records a selected path, and releases its local latch. That is intentionally not autoload proof.
+The S6 standalone DLL currently installs a `SavePickerHost`, arms `er_save_picker_core::overlay::arm_boot_picker()`, records a selected path, and releases its local latch. That is intentionally not autoload proof.
 
 The product path that makes a picked save become the active game save is:
 
@@ -38,7 +38,7 @@ The product path that makes a picked save become the active game save is:
 
 A standalone autoload/save-load slice needs all of these properties at once:
 
-- one owner for process-wide Win32/NT save hooks, otherwise co-loading `er_effects_rs.dll` and `er_save_picker_dll.dll` can double-detour the same `kernel32`/`shell32`/`ntdll` prologues;
+- one owner for process-wide Win32/NT save hooks, otherwise co-loading `er_effects_rs.dll` and `er_save_picker.dll` can double-detour the same `kernel32`/`shell32`/`ntdll` prologues;
 - the missing-save latch shared by the picker overlay, save-redirect activation, boot-progress hold, title menu suppression, and title state gate;
 - source validation/staging state shared by `CreateFileW`/`SHGetFolderPathW` detours and later System>Quit/save-destination code;
 - boot title-flow hooks that are not owned by Product A today and are not listed in S6; they overlap later S8/S9 territory.
@@ -57,7 +57,7 @@ Implemented on this branch as the first code slice: `crates/er-save-redirect` mo
 - Wine path-root formatting helpers,
 - direct-stage path planning.
 
-Gate: host tests only. This gives `er-save-picker-dll` a real shared completion planner without installing hooks yet; the standalone shell validates/plans the selected save through this crate, then still stops at surface/staging proof.
+Gate: host tests only. This gives `er-save-picker` a real shared completion planner without installing hooks yet; the standalone shell validates/plans the selected save through this crate, then still stops at surface/staging proof.
 
 ### S6b.2: move the save file hook owner
 
