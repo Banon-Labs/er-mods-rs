@@ -496,9 +496,19 @@ pub(crate) unsafe fn own_stepper_stage2(
         let expected_slot = ready.expected_slot;
         let cursor_target = ready.cursor_target;
         let lav = ready.load_activate;
-        // For a fixed slot, write the dialog row cursor (UI state, not a save write); for
-        // most-recent, leave the dialog's own highlight untouched.
-        if want_slot != OWN_STEPPER_SLOT_NONE {
+        // For a fixed slot, put the dialog row cursor on that slot's ROW (UI state, not a save
+        // write); for most-recent, leave the dialog's own highlight untouched.
+        //
+        // NATIVE FIRST, because the cursor indexes ROWS and `want_slot` is a SLOT.
+        // `05_010_ProfileSelect` lists only the slots that exist, so writing a slot number into the
+        // cursor selects the wrong character for any container whose characters are not dense from
+        // slot 0 -- `cursor_target`'s `bound == 1 -> row 0` special case is that same bug with one
+        // case patched. `SelectSaveSlot` is the game's own slot -> row search (see
+        // `ProfileLoadMenuRva::ProfileLoadSelectSaveSlot`); the raw write stays as the fallback for
+        // when it reports no row carries that slot, so this can only improve on the old behavior.
+        if want_slot != OWN_STEPPER_SLOT_NONE
+            && !unsafe { er_title_flow::profile_dialog_select_save_slot(base, dialog, want_slot) }
+        {
             unsafe {
                 *((dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) as *mut i32) = cursor_target;
             }

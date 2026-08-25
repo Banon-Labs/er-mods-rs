@@ -229,6 +229,87 @@ pub fn startup_modal_blocking_state() -> StartupModalBlockingState {
         closing_latch: closing,
     }
 }
+/// Resolve a ProfileSelect list ROW INDEX to the `CS::ProfileSummary` slot that row describes.
+///
+/// The list is COMPACTED (only occupied slots get rows), so `row` and the slot are different
+/// numbers for any container whose characters are not dense from slot 0. This walks the exact chain
+/// `CS::ProfileLoadDialog::load_activate` (`0x1409a4670`) walks -- dialog vtable slot `+0x90` for
+/// the embedded row list, the list's own vtable slot `+0x20` for the row, then the row's
+/// `save_slot` at `+0x8` -- so the answer is by construction the slot the native activation is
+/// about to load, not a second guess at it.
+///
+/// `dialog` MUST already be a validated `CS::ProfileLoadDialog` (vtable checked by the caller), and
+/// `row` MUST come from `er_quit_menu_core::profile_rows::profile_select_row_for_cursor`, which
+/// applies the same clamp `load_activate` applies. Returns `None` when any pointer in the chain is
+/// unreadable or the resolved slot is out of range, so an unresolvable pick can fail closed instead
+/// of being treated as slot 0.
+pub unsafe fn profile_dialog_row_slot(dialog: usize, row: i32) -> Option<i32> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if dialog == null || dialog <= PAB_MIN_HEAP_PTR || row < 0 {
+        return None;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+    let row_list_fn = unsafe { safe_read_usize(dialog_vt + DIALOG_ROW_LIST_VTSLOT_90_OFFSET) }
+        .unwrap_or(null);
+    if row_list_fn == null || row_list_fn <= PAB_MIN_HEAP_PTR {
+        return None;
+    }
+    let row_list_of: unsafe extern "system" fn(usize) -> usize =
+        unsafe { core::mem::transmute(row_list_fn) };
+    let list = unsafe { row_list_of(dialog) };
+    if list == null || list <= PAB_MIN_HEAP_PTR {
+        return None;
+    }
+    let list_vt = unsafe { safe_read_usize(list) }.unwrap_or(null);
+    let item_at_fn = unsafe { safe_read_usize(list_vt + MENU_VIEW_ITEM_LIST_AT_VTSLOT_20_OFFSET) }
+        .unwrap_or(null);
+    if item_at_fn == null || item_at_fn <= PAB_MIN_HEAP_PTR {
+        return None;
+    }
+    let item_at: unsafe extern "system" fn(usize, i32) -> usize =
+        unsafe { core::mem::transmute(item_at_fn) };
+    let record = unsafe { item_at(list, row) };
+    if record == null || record <= PAB_MIN_HEAP_PTR {
+        return None;
+    }
+    let slot = unsafe { safe_read_i32(record + MENU_SAVE_DATA_SUMMARY_SLOT_OFFSET) }?;
+    (0..er_game_base::profile_summary::PROFILE_SUMMARY_SLOT_COUNT as i32)
+        .contains(&slot)
+        .then_some(slot)
+}
+
+/// Park the ProfileSelect list cursor on the row describing `slot`, through the game's own
+/// `CS::ProfileLoadDialog::SelectSaveSlot` (`0x1409a5f20`).
+///
+/// This is native ownership rather than a field poke: the same call the dialog's constructor makes
+/// with `GetMenuSystemSaveLoad()->saveSlot`. It searches the rows for `save_slot == slot` and, on a
+/// hit, sets the cursor through the list widget's own setter (`0x140738d40`) -- so a row list that
+/// does not contain `slot` leaves the cursor exactly where it was and returns `false`, which is the
+/// correct answer rather than a failure to paper over.
+pub unsafe fn profile_dialog_select_save_slot(base: usize, dialog: usize, slot: i32) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == null || dialog == null || dialog <= PAB_MIN_HEAP_PTR {
+        return false;
+    }
+    if !(0..er_game_base::profile_summary::PROFILE_SUMMARY_SLOT_COUNT as i32).contains(&slot) {
+        return false;
+    }
+    // Fail closed on anything that is not the dialog this call expects: it dereferences
+    // `[dialog+0xb08]` and two vtables before touching anything.
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+    if dialog_vt != base + PROFILE_LOAD_DIALOG_VTABLE_RVA {
+        return false;
+    }
+    let bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(0);
+    if bound <= 0 {
+        return false;
+    }
+    let select: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
+        core::mem::transmute(base + ProfileLoadMenuRva::ProfileLoadSelectSaveSlot as usize)
+    };
+    unsafe { select(dialog, slot) != 0 }
+}
+
 pub unsafe fn profile_load_dialog_ready(
     base: usize,
     dialog: usize,
