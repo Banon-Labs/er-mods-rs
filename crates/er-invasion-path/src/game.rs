@@ -220,30 +220,42 @@ pub(crate) unsafe fn camera() -> Option<Camera> {
     let cameras = unsafe { CSCamera::instance() }.ok()?;
     let cam = &cameras.pers_cam_1;
     let matrix = cam.matrix;
-    let camera = Camera {
-        right: [matrix.0.0, matrix.0.1, matrix.0.2],
-        up: [matrix.1.0, matrix.1.1, matrix.1.2],
-        forward: [matrix.2.0, matrix.2.1, matrix.2.2],
-        eye: [matrix.3.0, matrix.3.1, matrix.3.2],
+    let raw = [
+        [matrix.0.0, matrix.0.1, matrix.0.2],
+        [matrix.1.0, matrix.1.1, matrix.1.2],
+        [matrix.2.0, matrix.2.1, matrix.2.2],
+    ];
+    let eye = [matrix.3.0, matrix.3.1, matrix.3.2];
+    if raw
+        .iter()
+        .flatten()
+        .chain(eye.iter())
+        .any(|axis| !axis.is_finite())
+        || !cam.fov.is_finite()
+        || !cam.aspect_ratio.is_finite()
+    {
+        return None;
+    }
+    // Normalised, because the projection inverts this basis by TRANSPOSING it -- exact for an
+    // orthonormal basis and silently wrong for a scaled one. The engine's own tag path calls a
+    // general `Invert` instead; three square roots a frame buys the same guarantee. A zero-length
+    // axis is the struct before the first real frame, and projecting through it would put every
+    // path at the centre of the screen rather than nowhere.
+    let (Some(right), Some(up), Some(forward)) = (
+        geometry::normalize(raw[0]),
+        geometry::normalize(raw[1]),
+        geometry::normalize(raw[2]),
+    ) else {
+        return None;
+    };
+    Some(Camera {
+        right,
+        up,
+        forward,
+        eye,
         fov_y: cam.fov,
         aspect: cam.aspect_ratio,
-    };
-    let finite = camera
-        .right
-        .iter()
-        .chain(camera.up.iter())
-        .chain(camera.forward.iter())
-        .chain(camera.eye.iter())
-        .all(|axis| axis.is_finite());
-    if !finite || !camera.fov_y.is_finite() || !camera.aspect.is_finite() {
-        return None;
-    }
-    // An identity-ish or zeroed basis is what the struct holds before the first real frame;
-    // projecting through it puts every path at the screen's centre.
-    if geometry::length(camera.forward) < 0.5 {
-        return None;
-    }
-    Some(camera)
+    })
 }
 
 /// Where the "no route" arrow leaves the player's body.
