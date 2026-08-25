@@ -27,7 +27,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/armament-icons-live-$(date +%Y%m%d-%H%M%S)}"
-TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
 BADGE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_armament_icons.dll"
 FRIDA_DLL="$REPO_ROOT/target/frida-gadget/frida-gadget.dll"
 
@@ -75,7 +75,7 @@ BADGE_GAMEDIR="$GAME_DIR/er_armament_icons.dll"
 cp -f "$BADGE_DLL" "$BADGE_GAMEDIR"
 TELEM_GAMEDIR=""
 if [[ -f "$TELEM_DLL" ]]; then
-	TELEM_GAMEDIR="$GAME_DIR/er_telemetry_dll.dll"
+	TELEM_GAMEDIR="$GAME_DIR/er_telemetry.dll"
 	cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
 fi
 

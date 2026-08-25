@@ -15,7 +15,7 @@ name = "er_save_redirect"
 er-game-base = { path = "../er-game-base" }
 er-hook = { path = "../er-hook" }
 er-save-loader = { path = "../er-save-loader" }
-er-telemetry = { path = "../er-telemetry" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 
 [lints]
 workspace = true

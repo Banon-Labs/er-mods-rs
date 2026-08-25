@@ -126,13 +126,13 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             The standalone boot save-picker surface/staging DLL is built separately:
 
             ```bash
-            cargo xwin build --release --target x86_64-pc-windows-msvc -p er-save-picker-dll
+            cargo xwin build --release --target x86_64-pc-windows-msvc -p er-save-picker
             ```
 
             It creates:
 
             ```text
-            /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_save_picker_dll.dll
+            /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_save_picker.dll
             ```
 
             This standalone picker DLL validates/plans picked saves through `er-save-redirect` and
@@ -197,7 +197,7 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
 
             [[natives]]
             # Replace this with the absolute path to your locally-built standalone boot picker DLL.
-            path = '/absolute/path/to/er_save_picker_dll.dll'
+            path = '/absolute/path/to/er_save_picker.dll'
             """
         ).lstrip(),
         encoding="utf-8",

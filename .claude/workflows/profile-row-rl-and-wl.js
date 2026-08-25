@@ -227,7 +227,7 @@ YOUR LANE: WHERE does "WL <n>" render, and does the geometry actually work?
    (b) Put "RL <lvl>  WL <wl>" all in ONE field (which one? the caption is engine-owned, the value
        field is int-formatted natively \u2014 both are constrained; ErStats is BLANK on character rows and
        is 587px wide at x=-324, so it is a genuine candidate. Check what hides/shows it:
-       RowSlotFieldVisibility in crates/er-loading-portrait/src/title_stats_text.rs, NATIVE vs
+       RowSlotFieldVisibility in crates/er-loading-portrait-core/src/title_stats_text.rs, NATIVE vs
        browse_row.)
    (c) Add a brand-new DefineEditText field to the row template via the existing GFX edit pipeline
        (crates/er-gfx/src/title_05_010.rs, examples/make_05_010_stats.rs,
@@ -238,7 +238,7 @@ YOUR LANE: WHERE does "WL <n>" render, and does the geometry actually work?
 4. CHECK THE OVERLAP TRAP: ErStats [x=-324 w=587] and ErCharStats [x=-230 w=484] overlap heavily,
    and the row clips are RECYCLED across list kinds, so a field one kind writes keeps its text when
    another kind reuses the clip unless every kind states its visibility. Read
-   RowSlotFieldVisibility (crates/er-loading-portrait/src/title_stats_text.rs) and
+   RowSlotFieldVisibility (crates/er-loading-portrait-core/src/title_stats_text.rs) and
    apply_row_slot_info_visibility (title_resources_stats_text.rs ~line 1240). Whatever surface you
    pick, state EXACTLY what its visibility must be for each row kind (native character row, browse
    file row, drive row) or it will leak across views. This leak is a bug the user has already hit

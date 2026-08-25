@@ -4,11 +4,11 @@ use std::{
 };
 
 use er_save_loader::{SaveLoadMethod, SaveLoadRequest};
-use er_save_picker::{
+use er_save_picker_core::{
     AUTOUPDATE_PICKER_DIR_KEY, OS_NATIVE_SAVE_PICKER_KEY, PREFERRED_PICKER_DIR_KEY,
     SavePickerRuntimeConfig, boilerplate_picker_block, os_native_save_picker_from,
 };
-use er_telemetry::counters::SAVE_PICKER_SURFACE;
+use er_telemetry_core::counters::SAVE_PICKER_SURFACE;
 use windows::Win32::{
     Foundation::{HINSTANCE, HMODULE},
     System::LibraryLoader::GetModuleFileNameW,

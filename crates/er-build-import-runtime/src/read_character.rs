@@ -22,11 +22,11 @@
 //! contents are evidence. An id that resolves to no name is DROPPED rather than guessed at, which
 //! makes a garbage read produce a smaller build rather than a wrong one.
 
-use er_build_import::catalog::Kind;
-use er_build_import::equip::{
+use er_build_import_core::catalog::Kind;
+use er_build_import_core::equip::{
     ARMAMENT_CHR_ASM_SLOTS, CHR_ASM_SLOT_ACCESSORY_1, CHR_ASM_SLOT_PROTECTOR_HEAD, PROTECTOR_PARTS,
 };
-use er_build_import::plan::split_armament_id;
+use er_build_import_core::plan::split_armament_id;
 
 use crate::catalog::name_for;
 use crate::character::player_game_data;

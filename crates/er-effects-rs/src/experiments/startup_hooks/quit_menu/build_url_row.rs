@@ -1,7 +1,7 @@
 //! The System>Quit **Load Build from URL** row.
 //!
 //! The importer itself lives in `er-build-import-runtime`, which the standalone
-//! `er-build-import-dll` shell also drives. This module is only the row's two halves inside the
+//! `er-build-import` shell also drives. This module is only the row's two halves inside the
 //! product DLL: the PRESS, which hands the runtime a URL, and the per-frame TICK, which is the game
 //! thread the runtime needs in order to touch anything.
 //!
@@ -60,7 +60,7 @@ pub(crate) fn system_quit_start_build_import(dialog: usize) -> BuildUrlPress {
     // "almost certainly" is how a failure the player asked about goes missing -- and draining here
     // also guarantees the line lands ABOVE this press in the log, attributed to the right request.
     drain_build_import_failure();
-    set_build_url_row_help(er_build_import::BUILD_URL_ROW_HELP);
+    set_build_url_row_help(er_build_import_core::BUILD_URL_ROW_HELP);
     if request_build_url_editor(dialog) {
         BuildUrlPress::EditorOpening
     } else {
@@ -70,7 +70,7 @@ pub(crate) fn system_quit_start_build_import(dialog: usize) -> BuildUrlPress {
 }
 
 /// Hand a VALIDATED link to the importer. Called only by the link field, after
-/// `er_build_import::validate_build_url` has accepted it.
+/// `er_build_import_core::validate_build_url` has accepted it.
 pub(crate) fn system_quit_start_build_import_url(url: &str) -> BuildUrlPress {
     match er_build_import_runtime::request(url) {
         Ok(()) => {
@@ -97,7 +97,7 @@ pub(crate) fn persist_build_url(url: &str) {
         return;
     };
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let key = er_build_import::BUILD_URL_KEY;
+    let key = er_build_import_core::BUILD_URL_KEY;
     let assignment = format!("{key} = '{url}'");
     let mut lines: Vec<String> = Vec::new();
     let mut replaced = false;
@@ -141,7 +141,7 @@ pub(crate) fn system_quit_log_build_import_press(site: &str, press: &BuildUrlPre
 ///
 /// A press returns `Ok` the instant the worker is spawned, so a 404, an unparseable payload or a
 /// build whose level and attributes disagree all fail long afterwards -- and land only in
-/// `er-build-import.log`. A reader following the row press through
+/// `er-build-import-core.log`. A reader following the row press through
 /// `er-effects-autoload-debug.log` would otherwise see "STARTED" and never learn it went nowhere.
 fn drain_build_import_failure() {
     let Some(reason) = er_build_import_runtime::take_error() else {

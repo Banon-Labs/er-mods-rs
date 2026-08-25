@@ -1,6 +1,6 @@
 //! Produce an `er-build-planner` `?i=` share link, entirely offline.
 //!
-//! This is the write half of what `er-build-import` reads, and it is a different problem.
+//! This is the write half of what `er-build-import-core` reads, and it is a different problem.
 //! A `?b=` link is an id the planner resolves server-side, so writing one would mean holding
 //! an account and posting a build. A `?i=` link is *self-contained*: the whole character
 //! document is compressed into the URL, so it can be produced from nothing but the document,
@@ -59,7 +59,7 @@ pub use model::BuildExportDoc;
 /// Everything before the payload in a self-contained share link.
 ///
 /// `?i=` and not `?b=`: the planner treats them as different link kinds, and
-/// `er_build_import::UrlRejection::SelfContained` is the importer refusing this one because
+/// `er_build_import_core::UrlRejection::SelfContained` is the importer refusing this one because
 /// it has no id to fetch. A link produced here is read by the planner, not by us.
 pub const SHARE_URL_PREFIX: &str = "https://er-build-planner.nyasu.business/?i=";
 

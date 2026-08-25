@@ -35,17 +35,17 @@ fn write_portrait_bridge_hold_oracles(body: &mut String) {
     push_json_usize(
         body,
         "oracle_portrait_bridge_same_identity_holds",
-        er_telemetry::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_portrait_bridge_hold_revocations",
-        er_telemetry::counters::PORTRAIT_BRIDGE_HOLD_REVOCATIONS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PORTRAIT_BRIDGE_HOLD_REVOCATIONS.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_portrait_bridge_hold_unproven",
-        er_telemetry::counters::PORTRAIT_BRIDGE_HOLD_UNPROVEN.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PORTRAIT_BRIDGE_HOLD_UNPROVEN.load(Ordering::SeqCst),
     );
     // The live latch, as slot+1 (0 = no hold outstanding). A snapshot taken mid-loading-screen with
     // this set is a window currently riding a held head; the same snapshot after the window closed
@@ -53,6 +53,6 @@ fn write_portrait_bridge_hold_oracles(body: &mut String) {
     push_json_usize(
         body,
         "oracle_portrait_bridge_hold_provisional_slot",
-        er_telemetry::counters::PORTRAIT_BRIDGE_HOLD_PROVISIONAL.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PORTRAIT_BRIDGE_HOLD_PROVISIONAL.load(Ordering::SeqCst),
     );
 }

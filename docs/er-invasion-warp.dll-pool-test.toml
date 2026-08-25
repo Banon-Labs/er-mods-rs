@@ -1,6 +1,6 @@
-# er-invasion-warp -- "only match other DLL users, anywhere in the world" test config.
+# er-invasion-warp-core -- "only match other DLL users, anywhere in the world" test config.
 #
-# Drop in as:  ...\steamapps\common\ELDEN RING\Game\er-invasion-warp.toml
+# Drop in as:  ...\steamapps\common\ELDEN RING\Game\er-invasion-warp-core.toml
 # (overwrite whatever is there -- same schema, just preset for this test)
 #
 # BOTH of you need this file and the SAME DLL. Nothing else has to match:

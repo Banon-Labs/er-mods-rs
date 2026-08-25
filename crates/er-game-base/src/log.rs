@@ -13,7 +13,7 @@
 //! the process that owns it; keeping an older run means copying the file aside
 //! yourself, not letting it accumulate.
 //!
-//! The concrete failure that set the rule: `er-invasion-warp-dll` opened its log
+//! The concrete failure that set the rule: `er-invasion-warp` opened its log
 //! with a plain `append(true)` on a fixed name next to the game executable. Twelve
 //! separate launches piled into one 565 KB file, so a count taken over it ("37
 //! confirms") read as ONE run doing something 37 times when it was really twelve
@@ -127,7 +127,7 @@ pub fn begin_fresh_run(path: &Path) {
         //
         // Placed here, in the one-shot every sanctioned opener already routes through, because
         // the alternative -- asking each DLL to log its own identity at boot -- is a rule that
-        // holds until someone adds the twentieth shell and forgets. `er-invasion-warp-dll` is
+        // holds until someone adds the twentieth shell and forgets. `er-invasion-warp` is
         // the worked example: its opening line was `loaded module_base=0x…`, and dating a
         // tester's log on 2026-08-24 meant string-matching its format literals against the
         // repo, which could only prove "not older than 2026-08-18" because no later commit

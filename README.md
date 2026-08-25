@@ -194,7 +194,7 @@ so in `er-effects-autoload-debug.log`.
 
 Every change the import makes is confirmed by reading game memory back afterwards,
 never by a call having returned, and the counts it reports are those read-backs. The
-detail lands in `er-build-import.log` beside the game executable; the row's own
+detail lands in `er-build-import-core.log` beside the game executable; the row's own
 outcome, including a fetch that failed after the press, lands in
 `er-effects-autoload-debug.log`.
 

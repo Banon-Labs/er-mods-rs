@@ -309,7 +309,7 @@ pub(crate) fn install_continue_trace_hooks() {
     const SAVE_DISPATCH_SYSTEM_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_SYSTEM_RVA as u32;
     // 0x67b750 WRITES a save, it does not load one -- see the decompile evidence on
     // `SAVE_WRITE_TO_SLOT_RVA` (constants/stats_panel_text.rs). The trace LABEL below is
-    // deliberately left as "continue_load_67b750": er-reload-trace-dll matches that exact
+    // deliberately left as "continue_load_67b750": er-reload-trace matches that exact
     // string (its lib.rs:555 and :724), so renaming it here would desync the two DLLs' log
     // correlation. The address is in the label, so it stays unambiguous.
     const SAVE_WRITE_TO_SLOT_RVA: u32 = 0x0067b750;
@@ -765,7 +765,7 @@ pub(crate) fn install_continue_trace_hooks() {
 /// MoveMapStep child STEP_Cleanup deobf RVA (dump 0x140af5840, shift -0xf0 content-unique). Fires when a
 /// child leaves the resident STEP_MoveMap(18) toward Finish -- the load-in completion (or teardown) edge.
 const MMS_CHILD_CLEANUP_RVA: u32 = 0xaf5750;
-pub(crate) use er_telemetry::counters::MMS_CHILD_CLEANUP_ORIG;
+pub(crate) use er_telemetry_core::counters::MMS_CHILD_CLEANUP_ORIG;
 
 /// Logs the GameMan load-in signals at the moment a MoveMapStep child advances out of STEP_MoveMap. On a
 /// SUCCESSFUL switch-load this names the input that drives the incoming child to Finish; on the re-load
@@ -818,8 +818,8 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
 const MMS_STEP_INIT_RVA: u32 = 0xaec120;
 /// STEP_MoveMap_Finish deobf RVA (dump 0x140aec140, shift -0xf0 content-unique). Load complete.
 const MMS_STEP_FINISH_RVA: u32 = 0xaec050;
-pub(crate) use er_telemetry::counters::MMS_STEP_FINISH_ORIG;
-pub(crate) use er_telemetry::counters::MMS_STEP_INIT_ORIG;
+pub(crate) use er_telemetry_core::counters::MMS_STEP_FINISH_ORIG;
+pub(crate) use er_telemetry_core::counters::MMS_STEP_INIT_ORIG;
 
 /// Pass-through: call the chained original (union trampoline) with the received ABI. The step
 /// executors are `fn(InGameStep*, FD4TaskData*)`; the union passes 4 regs and the callee ignores
@@ -863,7 +863,7 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
     ret
 }
 
-pub(crate) use er_telemetry::counters::POPULATE_BLOCKS_LISTS_ORIG;
+pub(crate) use er_telemetry_core::counters::POPULATE_BLOCKS_LISTS_ORIG;
 
 /// DECISIVE DIVERGENCE PROBE: log the input MSB-list block count `*(rdx+0x10)` every time PopulateLists'
 /// source-builder runs, tagged with IN_WORLD (load 1 = false, subsequent reloads = true). Hypothesis: the
@@ -892,10 +892,10 @@ pub(crate) unsafe extern "system" fn populate_blocks_lists_hook(
     }
     unsafe { mms_call_original(&POPULATE_BLOCKS_LISTS_ORIG, this, list, c, d) }
 }
-pub(crate) use er_telemetry::counters::POPULATE_BLOCKS_LISTS_CALLS;
+pub(crate) use er_telemetry_core::counters::POPULATE_BLOCKS_LISTS_CALLS;
 
-pub(crate) use er_telemetry::counters::WORLDRES_ENTRY_CTOR_1C_HITS;
-pub(crate) use er_telemetry::counters::WORLDRES_ENTRY_CTOR_ORIG;
+pub(crate) use er_telemetry_core::counters::WORLDRES_ENTRY_CTOR_1C_HITS;
+pub(crate) use er_telemetry_core::counters::WORLDRES_ENTRY_CTOR_ORIG;
 
 /// DECISIVE: the load-state ENTRY constructor. `entry`=rcx, `desc`=rdx (descriptor node whose first
 /// dword is the BlockId key written to entry+0x8). Logs when an entry is created for an area-0x1c block,
@@ -923,26 +923,26 @@ pub(crate) unsafe extern "system" fn worldres_entry_ctor_hook(
     unsafe { mms_call_original(&WORLDRES_ENTRY_CTOR_ORIG, entry, desc, c, d) }
 }
 
-pub(crate) use er_telemetry::counters::WORLDRES_BLOCKRES_GETTER_ORIG;
-pub(crate) use er_telemetry::counters::WORLDRES_GETTER_LAST_1C;
+pub(crate) use er_telemetry_core::counters::WORLDRES_BLOCKRES_GETTER_ORIG;
+pub(crate) use er_telemetry_core::counters::WORLDRES_GETTER_LAST_1C;
 // One-shot: dump the PRISTINE full FD4FileCap state for the stalled 0x1c block's two caps the first
 // time the resident-null stall (status 0x04 + data +0x90 null) is observed. The refcount +0x58 is the
 // missing semaphore for the teardown refcount-leak root: it tells whether ONE release would evict the
 // cap (leak == 1) or more, and +0x8c (resident bit) / +0x78 (read-job) / +0x80 (pending) reveal why a
 // re-issued read did not recreate the content child. Read-only. Disable the corrective action for a
 // pristine reading by dropping `er-effects-blockres-stalecap-fix-DISABLE.txt` in the game dir.
-pub(crate) use er_telemetry::counters::WORLDRES_CAPSTATE_DUMPED;
+pub(crate) use er_telemetry_core::counters::WORLDRES_CAPSTATE_DUMPED;
 
-pub(crate) use er_telemetry::counters::BLOCKRES_PHASE2_ORIG;
+pub(crate) use er_telemetry_core::counters::BLOCKRES_PHASE2_ORIG;
 // Retry accounting is PER block-res, not global: BLOCKRES_STALECAP_LAST_BRES pins the block we are
 // currently retrying; when a DIFFERENT block-res stalls (or the same block re-enters after a fresh
 // second load) the counter resets, so one exhausted block can never starve later loads (the old single
 // global counter capped the WHOLE session at 6 and never re-armed). Bound is per block; a genuinely
 // un-evictable file trips the cap in << 1s of frames and the block is left to the game.
-pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_LAST_BRES;
-pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_LAST_DEAD_CAP;
-pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_RETRIES;
-pub(crate) use er_telemetry::counters::BLOCKRES_STALECAP_UNRECOVERABLE;
+pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_LAST_BRES;
+pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_LAST_DEAD_CAP;
+pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_RETRIES;
+pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_UNRECOVERABLE;
 // ONE ATTEMPT, NOT A LOOP (2026-07-30). This was 32, and the 2026-07-30 msb-parse capture showed
 // exactly what those 32 extra attempts bought: nothing. The re-enqueue MECHANICALLY WORKS -- the
 // sole `msbResCap` writer fired once per re-issue, 33 times, each with a fresh `FD4FileLoadProcess`
@@ -1255,7 +1255,7 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
     ret
 }
 
-pub(crate) use er_telemetry::counters::EBL_CENSUS_DONE;
+pub(crate) use er_telemetry_core::counters::EBL_CENSUS_DONE;
 
 /// EBL-MOUNT-CENSUS (RE 2026-07-17): one-shot read-only walk of the mounted-archive registry
 /// `R = *(EBL_REGISTRY_GLOBAL_RVA)` container B `[R+0x90 .. R+0x98)` stride 0x40 (per entry: archive name =
@@ -1306,9 +1306,9 @@ pub(crate) fn run_ebl_mount_census(src: &str) {
     ));
 }
 
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_DET_LOGS_L1;
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_DET_LOGS_L2;
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_DETECTOR_ORIG;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DET_LOGS_L1;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DET_LOGS_L2;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DETECTOR_ORIG;
 
 /// Read-only instrument of the map-mount change-detector 0x14082d5b0 (rcx=controller, rdx=descriptor -> al
 /// in rax; al=1 CHANGED->mount runs, al=0 UNCHANGED->mount skipped). Logs controller id/bits (+0x120 id,
@@ -1352,13 +1352,13 @@ pub(crate) unsafe extern "system" fn mount_guard_detector_hook(
     ret
 }
 
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_LOGS;
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_FLIP_COUNT;
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_FLIP_LAST_TICK;
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_TICK;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DECLINE_LOGS;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_FLIP_COUNT;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_FLIP_LAST_TICK;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_TICK;
 /// Decline-reason log budget: enough to cover a whole stall window without flooding.
 const MOUNT_GUARD_DECLINE_LOG_CAP: usize = 40;
-pub(crate) use er_telemetry::counters::MOUNT_GUARD_DECLINE_BOOT_LOGS;
+pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DECLINE_BOOT_LOGS;
 /// Token budget for the expected boot-phase declines -- enough to prove the driver ticks, small
 /// enough that it cannot crowd out the reload-phase reasons that actually matter.
 const MOUNT_GUARD_DECLINE_BOOT_LOG_CAP: usize = 3;

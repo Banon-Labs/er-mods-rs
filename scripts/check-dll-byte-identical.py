@@ -14,7 +14,7 @@ from the code:
     - the RSDS GUID + Age in the CodeView    (LLD reseeds it per link)
       debug record
 
-Measured on crates/er-crash-logging-dll: clean-build A vs clean-build B, same
+Measured on crates/er-crash-logging: clean-build A vs clean-build B, same
 source, differed in 10 bytes, all inside those three fields
 (scripts/probe-dll-build-determinism.sh reproduces it). Leaving them in would
 make the gate red on an empty diff -- it would be measuring the linker's clock.

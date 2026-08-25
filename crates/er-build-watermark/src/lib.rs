@@ -1,42 +1,98 @@
-//! The build watermark: a faint list, top right, of every one of this workspace's DLLs in the
-//! process and how each stands against `main`.
+//! The build watermark as a mod of its own.
 //!
-//! # Why it exists
+//! # Why it is its own DLL
 //!
-//! On 2026-08-24 a tester reported a crash against an invasion-warp DLL three days older than the
-//! fix for that exact crash, sitting beside two DLLs built the same afternoon. Nothing on screen
-//! said so; the only way to establish it was parsing the module table out of a minidump. This is
-//! that answer, permanently on screen, for anyone who screenshots anything.
+//! The watermark answers "which builds are in this process, and is any of them behind `main`" --
+//! a question about the whole profile, not about any one feature. Living inside a feature DLL
+//! made it hostage to that feature: it appeared only in profiles that happened to load
+//! `er-net-effects`, and a profile of one unrelated mod got no watermark at all. As its own
+//! `[[natives]]` entry it is opt-in per profile, ships on its own, and has no opinion about what
+//! else is loaded -- it reports whatever answers `er_build_identity_v1`, which every DLL in this
+//! workspace exports whether or not it knows this shell exists.
 //!
-//! # Loud only when it must be
+//! # What it does not do
 //!
-//! Quiet states are drawn at **1%** -- present in a screenshot, effectively invisible while
-//! playing. The single loud state, **25% red**, is a build that is an older PUBLISHED release
-//! than `main`'s tip: somebody is running code we have already moved past, and a bug report
-//! against it may describe something already fixed. A dirty local tree is NOT that, and is drawn
-//! as quietly as the tip -- see `er_game_base::build_id::Standing`.
-//!
-//! # Why hudhook rather than the D3D12 compositor
-//!
-//! `er-d3d12-compositor` COPIES an RGBA frame onto the backbuffer; it never blends, so "1%
-//! opacity" is not expressible through it at all -- the first cut of this watermark had to paint
-//! an opaque dark panel and call it faint. Real alpha through that path would have meant either a
-//! per-frame backbuffer readback (a fence stall inside `Present`) or a blend pipeline with its
-//! own shaders. `er-net-effects-dll` already runs a hudhook/imgui DX12 overlay in this same
-//! process, alongside the product's own `Present` hook, and `DrawList::add_text` takes a float
-//! alpha imgui blends for free. Reusing it costs one dependency and no stall.
-
-pub mod layout;
-pub mod releases;
+//! No detours, no game memory writes, no input. It installs one hudhook overlay, reads the
+//! module list, and draws text. If another module in the process already owns the overlay, this
+//! one stands down and draws nothing rather than installing a second imgui on the same swapchain.
 
 #[cfg(windows)]
-mod overlay;
+use std::sync::Once;
+
+/// `DLL_PROCESS_ATTACH`.
+#[cfg(windows)]
+const DLL_PROCESS_ATTACH: u32 = 1;
+
+/// `DllMain` must return TRUE or the loader unloads us.
+#[cfg(windows)]
+const DLL_MAIN_SUCCESS: i32 = 1;
+
+/// Log file name, beside the game executable like every other shell in this repo.
+#[cfg(windows)]
+const LOG_FILE_NAME: &str = "er-build-watermark.log";
 
 #[cfg(windows)]
-pub use overlay::{claim_owner, draw_rows, install_if_owner, render_hits, visible_rows};
+static START: Once = Once::new();
 
-/// Host stub so callers compile on Linux; there is no swapchain to draw on.
+#[cfg(windows)]
+fn log_path() -> std::path::PathBuf {
+    er_game_base::log::game_directory_path()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(LOG_FILE_NAME)
+}
+
+#[cfg(windows)]
+fn watermark_log(args: std::fmt::Arguments<'_>) {
+    er_game_base::log::append_line(&log_path(), format_args!("er-build-watermark: {args}"));
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Called by the Windows loader. Do not call directly.
+pub unsafe extern "system" fn DllMain(
+    module: *mut core::ffi::c_void,
+    reason: u32,
+    _reserved: *mut core::ffi::c_void,
+) -> i32 {
+    if reason == DLL_PROCESS_ATTACH {
+        let module_base = module as usize;
+        START.call_once(|| {
+            watermark_log(format_args!(
+                "loaded module_base=0x{module_base:x}; standalone build-watermark shell (no \
+                 detours, no game writes)"
+            ));
+            // Off the loader thread: hudhook's install takes locks and enumerates modules, and
+            // neither belongs inside `DllMain` where the loader lock is held.
+            let spawned = std::thread::Builder::new()
+                .name("er-build-watermark-install".to_string())
+                .spawn(move || {
+                    // No wait before claiming, and none is needed. The first cut slept six
+                    // seconds to let a module with a richer UI claim the imgui context first --
+                    // a sleep used as synchronization, which `scripts/check-no-timeouts.py`
+                    // rightly rejects. The live run on 2026-08-25 also made it pointless: this
+                    // shell's overlay and `er-net-effects`' bar both installed and both rendered
+                    // at 3840x2160 in the same process, so there was no context to yield.
+                    // hudhook tolerates being installed before the swapchain exists; it hooks
+                    // `Present` and waits for the game to call it.
+                    let owned =
+                        er_build_watermark_core::install_if_owner(module_base, watermark_log);
+                    watermark_log(format_args!(
+                        "overlay claim -> owner={owned} (false means another module already owns \
+                         it and is expected to carry the rows itself)"
+                    ));
+                });
+            if spawned.is_err() {
+                watermark_log(format_args!("could not spawn the install thread"));
+            }
+        });
+    }
+    DLL_MAIN_SUCCESS
+}
+
 #[cfg(not(windows))]
-pub fn install_if_owner(_hmodule_raw: usize, _log: fn(std::fmt::Arguments<'_>)) -> bool {
-    false
+#[unsafe(no_mangle)]
+pub extern "C" fn er_build_watermark_host_stub() -> i32 {
+    1
 }

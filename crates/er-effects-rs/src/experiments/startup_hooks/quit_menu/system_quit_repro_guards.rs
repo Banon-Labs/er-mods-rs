@@ -214,20 +214,20 @@ pub(crate) fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
 /// One-shot: we force-built the OptionSetting Quit-tab pane (via the game's own tab-select
 /// FUN_14093b850) so the cloned Load-Profile row + its action object get created without the
 /// mouse-only tab visit.
-pub(crate) use er_telemetry::counters::SQ_REPRO_PANE_BUILD_TRIED;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PANE_BUILD_TRIED;
 /// One-shot: the deterministic Load-Profile route (`system_quit_open_profile_load_dialog`) was fired
 /// this switch, so we do not re-fire it. Native ER has no keyboard bind for the OptionSetting
 /// tab-switch (mouse-only), so instead of navigating to the Quit tab we invoke the DLL's own route
 /// directly when the Load-Profile row action was captured -- it opens ProfileSelect and sets the
 /// return-chain System dialog, exactly like a click.
-pub(crate) use er_telemetry::counters::SQ_REPRO_ROUTE_FIRED;
-pub(crate) use er_telemetry::counters::SQ_REPRO_ROWNAV_BASE;
-pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_BASELINE;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_ROUTE_FIRED;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_ROWNAV_BASE;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_TAB_BASELINE;
 /// TO_PROFILE tab-switch key auto-discovery state (native keyboard): the discovered VK that moves
 /// OPTIONSETTING_CURRENT_TAB (0 = not found yet), the tab index observed when the current candidate
 /// window began (to detect a change), and the phase-local tick when we reached the Quit tab (so the
 /// DOWN,DOWN,Enter row nav has its own base; usize::MAX = not yet on the Quit tab).
-pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_DISCOVERED;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_TAB_DISCOVERED;
 
 /// SELF-DRIVEN System->Quit->Load-Profile REPRO AUTOPILOT tick (gated by `system_quit_repro_enabled`).
 /// Runs every game-task frame. The input block stays engaged in-world (see `block_input_enabled`) so
@@ -771,8 +771,8 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
     if ret != 0 && selected < TITLE_PROFILE_SLOT_COUNT && slot == selected as i32 {
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
         // Which slot's deserialize completed (slot+1) -- ground truth for the published-vs-loaded
-        // portrait oracle. See er_telemetry counters.
-        er_telemetry::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+        // portrait oracle. See er_telemetry_core counters.
+        er_telemetry_core::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
             .store((slot + 1) as usize, Ordering::SeqCst);
         SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
         let gm = game_man_ptr_or_null();
@@ -1001,7 +1001,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             // Counted, not just logged: this forward reaches the unconditional ALLOW increment
             // below, so without its own bucket it would break the load-count decomposition
             // (`allow == fresh_deser + non_switch + world_up`) with no way to tell which bucket lost
-            // it. See er_telemetry::load_count.
+            // it. See er_telemetry_core::load_count.
             SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "system-quit-quickload: continue_confirm called while OLD WORLD STILL UP phase={phase} selected={selected} shim=0x{shim:x} -- forwarding WITHOUT fresh deserialize (unexpected caller)"
@@ -1141,7 +1141,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     // is classified into exactly one bucket -- switch reload (FRESH_DESER_COUNT, == the load epoch),
     // old-world-up (WORLD_UP_COUNT), or neither, i.e. the boot/title Continue (NON_SWITCH_COUNT) --
     // so `allow == fresh_deser + non_switch + world_up` holds by construction and any drift is a
-    // real telemetry fault. That identity is what `er_telemetry::load_count` audits, and the missing
+    // real telemetry fault. That identity is what `er_telemetry_core::load_count` audits, and the missing
     // boot bucket is exactly why a 3-load session reports oracle_current_load_epoch = 2.
     if !switch_active {
         SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT.fetch_add(1, Ordering::SeqCst);

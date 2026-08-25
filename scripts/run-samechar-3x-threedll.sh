@@ -6,9 +6,9 @@
 #   1. er_effects_rs.dll         (PRODUCT): boot autoload = load1; owns the single MinHook instance +
 #                                the er_effects_union_register export; its ProfileSelect hooks arm the
 #                                native reload from menu transitions.
-#   2. er_reload_trace_dll.dll   (COMPANION, log-only): unions its load/menu trace hooks through the
+#   2. er_reload_trace.dll   (COMPANION, log-only): unions its load/menu trace hooks through the
 #                                product export and logs the pipeline.
-#   3. er_input_harness_dll.dll  (COMPANION, self-drive): DEFAULT-ON by PRESENCE (no env/marker gate).
+#   3. er_input_harness.dll  (COMPANION, self-drive): DEFAULT-ON by PRESENCE (no env/marker gate).
 #                                Drives the reversed menu-nav via DIRECT input memory -- CSMenuMan
 #                                keystate bitmap (inputmgr+0x90+eventId) + DLUID stay-active (+0x88d),
 #                                game-thread-timed through the product union. NOTE: the OptionSetting
@@ -33,13 +33,13 @@ fi
 BOOT_SLOT="${BOOT_SLOT:-0}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/samechar-3x-threedll-$(date +%Y%m%d-%H%M%S)}"
 PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
-TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace_dll.dll"
-HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_dll.dll"
+TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace.dll"
+HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.dll"
 # TELEMETRY (semaphore DLL): standalone read-side oracle -- writes er-telemetry-timeseries.jsonl with
 # fixed_spf / now_loading / play_time AND per-core CPU (oracle_core_max_busy / proc_cpu_cores), aligned by
 # oracle_tick_ms, so a product load2/load3 run can be tested for single-core contention (bd NEXT-telemetry
 # -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
-TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
 LAUNCH_ENV_VARS=(
 	"ER_EFFECTS_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-effects-autoload-debug.log"
 	"ER_EFFECTS_CRASH_LOG_PATH=$ARTIFACT_DIR/er-effects-crash.log"
@@ -79,8 +79,8 @@ source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
 [[ -f "$PRODUCT_DLL" ]] || fail "product DLL not built: $PRODUCT_DLL"
 [[ -f "$TRACE_DLL" ]] || fail "trace DLL not built: $TRACE_DLL"
-[[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness-dll)"
-[[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll)"
+[[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness)"
+[[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry)"
 [[ "${RENDERDOC:-0}" != "1" || -f "$RDOC_DLL" ]] || fail "RENDERDOC=1 but renderdoc.dll not found at '$RDOC_DLL' (set RENDERDOC_DLL=<path to Windows renderdoc.dll>)."
 
 if [[ -z "${ME3:-}" ]]; then
@@ -113,9 +113,9 @@ me3_profile_arg() {
 
 # --- stage ALL THREE DLLs to GAME_DIR + a THREE-native me3 profile (product FIRST) ---
 PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
-TRACE_GAMEDIR="$GAME_DIR/er_reload_trace_dll.dll"
-HARNESS_GAMEDIR="$GAME_DIR/er_input_harness_dll.dll"
-TELEM_GAMEDIR="$GAME_DIR/er_telemetry_dll.dll"
+TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
+HARNESS_GAMEDIR="$GAME_DIR/er_input_harness.dll"
+TELEM_GAMEDIR="$GAME_DIR/er_telemetry.dll"
 cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
@@ -358,7 +358,7 @@ REL_DIR="$REPO_ROOT/target/x86_64-pc-windows-msvc/release"
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
 	echo "dll_build_id: $(grep -oE 'dll:[0-9a-f]{6,}' "$ARTIFACT_DIR/er-effects-autoload-debug.log" 2>/dev/null | head -1 || echo '?')"
-	for d in er_effects_rs.dll er_reload_trace_dll.dll er_input_harness_dll.dll; do
+	for d in er_effects_rs.dll er_reload_trace.dll er_input_harness.dll; do
 		if [[ -f "$REL_DIR/$d" ]]; then
 			echo "$d: mtime=$(date -r "$REL_DIR/$d" +%Y%m%d-%H%M%S 2>/dev/null) sha=$(sha256sum "$REL_DIR/$d" 2>/dev/null | cut -c1-16)"
 		fi

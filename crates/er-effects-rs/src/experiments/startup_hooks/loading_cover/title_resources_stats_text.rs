@@ -156,7 +156,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     if stats_panel_enabled()
         && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") }
         && let Some(slot) = unsafe { systex_profile_target_slot(target_ptr) }
-        && let Some(key) = er_loading_portrait::stats_panel_registered_systex_key(
+        && let Some(key) = er_loading_portrait_core::stats_panel_registered_systex_key(
             slot,
             STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst),
         )
@@ -666,8 +666,8 @@ pub(crate) fn profile_slot_weapon_level(slot: i32) -> Option<u8> {
         .matchmaking_weapon_level
 }
 
-/// The merged row header's value bag (see `er_loading_portrait::profile_row_label`).
-pub(crate) use er_loading_portrait::profile_row_label::RowHeaderValues as ProfileRowHeaderValues;
+/// The merged row header's value bag (see `er_loading_portrait_core::profile_row_label`).
+pub(crate) use er_loading_portrait_core::profile_row_label::RowHeaderValues as ProfileRowHeaderValues;
 
 /// The character name of save `slot`, or `None` when the slot is empty or the save is unreadable.
 /// This is cached from the same `.sl2` read as [`profile_slot_attributes`]. Native ProfileSelect
@@ -728,7 +728,7 @@ pub(crate) fn build_loaded_char_name() -> Option<String> {
 /// together or not at all.
 pub(crate) fn build_loaded_char_level() -> Option<i32> {
     let pgd = loaded_player_game_data_ptr()?;
-    unsafe { safe_read_i32(pgd + er_loading_portrait::pgd_layout::PGD_LEVEL_68_OFFSET) }
+    unsafe { safe_read_i32(pgd + er_loading_portrait_core::pgd_layout::PGD_LEVEL_68_OFFSET) }
 }
 
 /// The LOADED character's highest weapon upgrade level, off the same live `PlayerGameData` the name
@@ -736,7 +736,9 @@ pub(crate) fn build_loaded_char_level() -> Option<i32> {
 pub(crate) fn build_loaded_char_weapon_level() -> Option<u8> {
     let pgd = loaded_player_game_data_ptr()?;
     let word = unsafe {
-        safe_read_i32(pgd + er_loading_portrait::pgd_layout::PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET)
+        safe_read_i32(
+            pgd + er_loading_portrait_core::pgd_layout::PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET,
+        )
     }?;
     u8::try_from(word & 0xff).ok()
 }
@@ -939,9 +941,9 @@ pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> 
 }
 
 /// Build the ProfileSelect stats line for `attributes[start..end]` as a NUL-terminated UTF-16
-/// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait`;
+/// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait-core`;
 /// this compatibility name keeps the startup-hook callsite stable.
-pub(crate) use er_loading_portrait::build_title_stats_compact_html_utf16 as build_stats_compact_html_utf16;
+pub(crate) use er_loading_portrait_core::build_title_stats_compact_html_utf16 as build_stats_compact_html_utf16;
 
 fn decode_scaleform_html_line(line: &[u16]) -> Option<String> {
     let body = line.strip_suffix(&[0]).unwrap_or(line);
@@ -1651,8 +1653,8 @@ pub(crate) unsafe fn set_row_field_visible(
 }
 
 /// Which of a row's per-slot info fields should be on screen. Pure row-visibility decision ownership
-/// lives in `er-loading-portrait`; this compatibility name keeps the startup-hook callsite stable.
-pub(crate) use er_loading_portrait::RowSlotFieldVisibility;
+/// lives in `er-loading-portrait-core`; this compatibility name keeps the startup-hook callsite stable.
+pub(crate) use er_loading_portrait_core::RowSlotFieldVisibility;
 
 /// Apply a row's field visibility through the game's own wrapper.
 ///
@@ -1929,7 +1931,7 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         if let Some(wl) = weapon_level {
             values = values.with_weapon_level(i32::from(wl));
         }
-        let header = er_loading_portrait::profile_row_label::row_header_label(&values);
+        let header = er_loading_portrait_core::profile_row_label::row_header_label(&values);
         let merged = values.rune_level.is_some();
         let header_utf16 = nul_terminated_utf16(&header);
         PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
@@ -2025,7 +2027,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // one visual line.
     let mut staged_player_name: Option<(usize, Vec<u16>)> = None;
     let mut staged_location: Option<(usize, Vec<u16>)> = None;
-    let mut drive_strip_focus: Option<er_save_picker::DriveStripFocus> = None;
+    let mut drive_strip_focus: Option<er_save_picker_core::DriveStripFocus> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -2122,7 +2124,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     if let Some(wl) = weapon_level {
                         values = values.with_weapon_level(i32::from(wl));
                     }
-                    er_loading_portrait::profile_row_label::row_header_label(&values)
+                    er_loading_portrait_core::profile_row_label::row_header_label(&values)
                 })
             } else {
                 None

@@ -404,7 +404,7 @@ pub(crate) fn save_picker_note_path_editor_window_state(window: usize, state: i3
     if text_input_02_990_window_is_live(state) {
         let previous_window = SAVE_PICKER_PATH_EDITOR_WINDOW.swap(window, Ordering::SeqCst);
         SAVE_PICKER_PATH_EDITOR_WINDOW_LAST_PROFILE_TICK.store(
-            er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+            er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
         if previous_window == 0 {
@@ -798,7 +798,7 @@ pub(crate) fn save_picker_request_path_editor(dialog: usize) {
     if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
         let cleared_stale_warning = crate::experiments::save_picker::active_save_picker_lock()
             .as_mut()
-            .is_some_and(er_save_picker::SavePickerModel::begin_path_edit);
+            .is_some_and(er_save_picker_core::SavePickerModel::begin_path_edit);
         SAVE_PICKER_PATH_EDITOR_PENDING_DIALOG.store(dialog, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "save-picker-path: activation requested dialog=0x{dialog:x} cleared_stale_warning={cleared_stale_warning}"
@@ -825,7 +825,7 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
         SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.store(dialog, Ordering::SeqCst);
         SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
         SAVE_PICKER_PATH_EDITOR_WINDOW_LAST_PROFILE_TICK.store(
-            er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+            er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
     }
@@ -1030,7 +1030,7 @@ fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
             ));
         }
         PathEditorOutcome::TextUnreadable => {
-            model.set_status_message(er_save_picker::PickerStatusMessage::new(
+            model.set_status_message(er_save_picker_core::PickerStatusMessage::new(
                 "PATH TEXT UNREADABLE",
                 "The native editor returned invalid UTF-16; the folder was not changed.",
             ));
@@ -1048,7 +1048,8 @@ pub(crate) unsafe fn save_picker_menu_pump_path_editor() {
     let editor_window = SAVE_PICKER_PATH_EDITOR_WINDOW.load(Ordering::SeqCst);
     if active_before_watchdog != 0 && editor_window != 0 {
         let last = SAVE_PICKER_PATH_EDITOR_WINDOW_LAST_PROFILE_TICK.load(Ordering::SeqCst);
-        let now = er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst);
+        let now =
+            er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst);
         if now.saturating_sub(last) >= PATH_EDITOR_WINDOW_STALE_PROFILE_TICKS
             && SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB
                 .compare_exchange(
@@ -1120,7 +1121,7 @@ pub(crate) unsafe fn save_picker_menu_pump_path_editor() {
             SAVE_PICKER_PATH_EDITOR_PENDING_DIALOG.store(0, Ordering::SeqCst);
             let mut guard = crate::experiments::save_picker::active_save_picker_lock();
             if let Some(model) = guard.as_mut() {
-                model.set_status_message(er_save_picker::PickerStatusMessage::new(
+                model.set_status_message(er_save_picker_core::PickerStatusMessage::new(
                     "PATH EDITOR UNAVAILABLE",
                     "The native text editor could not be opened; the current folder was not changed.",
                 ));
@@ -1214,11 +1215,11 @@ mod tests {
             "https://er-build-planner.nyasu.business/?b=bc2a932db14675"
         );
         assert_eq!(
-            er_build_import::validate_build_url(&decoded),
+            er_build_import_core::validate_build_url(&decoded),
             Ok("bc2a932db14675"),
             "decoding must produce a link the gate accepts"
         );
-        assert!(er_build_import::validate_build_url(from_the_field).is_err());
+        assert!(er_build_import_core::validate_build_url(from_the_field).is_err());
     }
 
     /// Both placeholders in one string, ASCII left alone. A link and a path never legitimately

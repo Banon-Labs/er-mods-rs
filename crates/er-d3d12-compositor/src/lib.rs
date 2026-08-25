@@ -48,7 +48,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, w};
 
-use er_loading_bar::{BarStyle, LoadingLabel, PHASE_COUNT, RgbaFrame, render_label_bar_frame};
+use er_loading_bar_core::{BarStyle, LoadingLabel, PHASE_COUNT, RgbaFrame, render_label_bar_frame};
 
 /// Logging sink used by the wrapper DLL/product caller. Optional; default is silent.
 pub type LogFn = fn(std::fmt::Arguments<'_>);
@@ -544,7 +544,7 @@ fn smoke_frame(width: usize, height: usize, frame_index: usize) -> CompositorFra
         SMOKE_MIN_PERMILLE + loop_frame * (SMOKE_MAX_PERMILLE - SMOKE_MIN_PERMILLE) / LOOP_FRAMES;
     let mut text = String::new();
     LoadingLabel::new(
-        er_loading_bar::phase_label(phase),
+        er_loading_bar_core::phase_label(phase),
         phase + 1,
         PHASE_COUNT,
         "STANDALONE D3D12 SMOKE",
@@ -686,7 +686,7 @@ unsafe fn copy_frame_to_backbuffer(
     };
 
     let row_pitch = footprint.Footprint.RowPitch as usize;
-    let src_row = frame.width.saturating_mul(er_loading_bar::RGBA8_BPP);
+    let src_row = frame.width.saturating_mul(er_loading_bar_core::RGBA8_BPP);
     let mut mapped: *mut c_void = std::ptr::null_mut();
     if unsafe { upload.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
         LAST_FAIL_CODE.store(19, Ordering::SeqCst);

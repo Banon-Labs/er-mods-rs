@@ -2,7 +2,7 @@
 """Summarize / diff the decoupled Phase-A oracle streams for the warm-title-rebuild A/B.
 
 Two independent, per-oracle-marker-gated read streams (bd decoupled-diagnostics-architecture-buildplan-
-2026-07-24), emitted by er-telemetry-dll when the matching er-oracle-*.on marker is present:
+2026-07-24), emitted by er-telemetry when the matching er-oracle-*.on marker is present:
 
   er-oracle-title-binding.jsonl  -- the crux: does the (armed) warm switch title bind dialog+0xb78?
       fields: epoch, play_time_ms, dialog_ptr, proxy_bound, proxy_handle_nonnull, tfc_14c, tfc_18c,

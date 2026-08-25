@@ -24,7 +24,7 @@ pub mod profile_summary;
 pub mod rva;
 
 /// Tier B typed-binding re-export facade. Only compiled when `game-types` is
-/// enabled (product + er-telemetry); the zero-dep mini-DLLs never pull this in.
+/// enabled (product + er-telemetry-core); the zero-dep mini-DLLs never pull this in.
 #[cfg(all(windows, feature = "game-types"))]
 pub mod game_types {
     pub use eldenring;

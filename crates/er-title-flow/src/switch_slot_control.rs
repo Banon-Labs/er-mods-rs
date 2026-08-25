@@ -129,7 +129,7 @@ pub unsafe fn poll_switch_slot_control_file(base: usize) {
     // were fighting (arming extra switches) AND the menu-nav suppressed the move-probe (load2 can_move
     // never latched). bd MILESTONE-detdrive-works-but-sqrepro-menunav-conflict-2026-07-21.
     if path.exists() {
-        er_telemetry::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE.store(1, Ordering::SeqCst);
+        er_telemetry_core::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE.store(1, Ordering::SeqCst);
     }
     let mtime = std::fs::metadata(&path)
         .ok()

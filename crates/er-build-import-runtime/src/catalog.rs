@@ -25,7 +25,7 @@
 
 use std::collections::BTreeSet;
 
-use er_build_import::catalog::{Entry, Kind, MapCatalog};
+use er_build_import_core::catalog::{Entry, Kind, MapCatalog};
 
 /// `MsgRepositoryImp::LookupEntry` returns a placeholder like `?GoodsName?` for a row that
 /// has no name. Those are misses, not items, and a catalog that accepted them would
@@ -248,7 +248,7 @@ pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) 
 /// Insert one resolved row.
 ///
 /// `somber` is left false ON PURPOSE, and setting it would be a regression rather than a fix.
-/// It only feeds [`er_build_import::plan::somber_remap`], a table this repository reproduces from
+/// It only feeds [`er_build_import_core::plan::somber_remap`], a table this repository reproduces from
 /// the planner without knowing its intent, and the importer no longer needs to guess how far an
 /// armament upgrades: [`ReinforceLevels`] asks the game which `reinforceTypeId + level` rows
 /// exist and clamps to the highest one the build can have. Reviving the flag would put a guessed

@@ -34,14 +34,14 @@
 //! -- and [`EquipOutcome::by_item_id`] records that it was, because an unannounced fall back to
 //! the ambiguous question is how this bug stayed invisible.
 
-use er_build_import::equip::{
+use er_build_import_core::equip::{
     CHR_ASM_SLOT_QUICK_BASE, EquipLedger, EquipRef, PlannedPosition, PositionKind, PositionResult,
 };
-use er_build_import::plan::ArmamentSkill;
+use er_build_import_core::plan::ArmamentSkill;
 
 /// `EquipItemToChrAsmSlot(ChrAsmSlot slot, MenuGaitem *item)`.
 const EQUIP_ITEM_TO_CHR_ASM_SLOT: usize = 0x787c30;
-// Both addresses are declared once in `er-game-base::rva`, which `er-better-refills-dll` also
+// Both addresses are declared once in `er-game-base::rva`, which `er-better-refills` also
 // reads them from.
 use er_game_base::rva::{
     GET_EQUIP_INVENTORY_DATA_RVA as GET_EQUIP_INVENTORY_DATA,
@@ -160,7 +160,7 @@ type GetTearFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
 /// the smallest thing that is. An entry is consumed once claimed, so two positions asking for the
 /// same armament with the same ash get two DIFFERENT copies rather than the same one twice.
 ///
-/// The ash side of the pair comes from [`er_build_import::plan::equipped_armament_skills`], the
+/// The ash side of the pair comes from [`er_build_import_core::plan::equipped_armament_skills`], the
 /// same table the post-import read-back is adjudicated against, and the gem encoding is decoded
 /// by the grant's own [`crate::grant::gem_row_of`] rather than re-implemented here.
 pub struct WornInstances {

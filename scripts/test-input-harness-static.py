@@ -11,14 +11,14 @@ READINESS_WATCH = REPO_ROOT / "scripts/er-readiness-watch.py"
 
 
 def test_pad_inject_uses_both_cs_ingame_pad_typeids() -> None:
-    src = (REPO_ROOT / "crates/er-input-harness-dll/src/pad_inject.rs").read_text()
+    src = (REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text()
     assert "const CS_INGAME_PAD_TYPEID_RVAS: [usize; 2] = [0x3d5df27, 0x3d5df28];" in src
     assert "let targets = CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva);" in src
     assert "for target in targets" in src
 
 
 def test_pad_inject_direct_stamp_writes_are_enabled() -> None:
-    src = (REPO_ROOT / "crates/er-input-harness-dll/src/pad_inject.rs").read_text()
+    src = (REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text()
     assert "BISect: write disabled" not in src
     assert "BISECT: write disabled" not in src
     assert "crate::win32::write_u8(cached + off, val)" in src
@@ -38,7 +38,7 @@ def _prose(src: str) -> str:
 
 
 def test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids() -> None:
-    src = (REPO_ROOT / "crates/er-input-harness-dll/src/pad_inject.rs").read_text()
+    src = (REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text()
     prose = _prose(src)
     assert "TO" + "DO(id-map)" not in src
     # The NEGATIVE finding must stay written down: the full 1000..1080 sweep produced no response.
@@ -62,7 +62,7 @@ def test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids() -> None
 
 
 def test_input_harness_manifest_names_actual_hook_layer() -> None:
-    manifest = (REPO_ROOT / "crates/er-input-harness-dll/Cargo.toml").read_text()
+    manifest = (REPO_ROOT / "crates/er-input-harness/Cargo.toml").read_text()
     assert "FD4PadDevice::poll" not in manifest
     assert "DLUID virtual-key builders/writer" in manifest
     assert "0x240e70/0x241130/0x26634a0" in manifest
@@ -103,7 +103,7 @@ def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
 
 
 def test_continue_and_boot_view_timing_oracles_exist() -> None:
-    counters = (REPO_ROOT / "crates/er-telemetry/src/counters.rs").read_text()
+    counters = (REPO_ROOT / "crates/er-telemetry-core/src/counters.rs").read_text()
     assert "pub static BOOT_VIEW_PUMP_STOP_MS" in counters
     assert "pub static BOOT_VIEW_DARK_GAP_FAILURES" in counters
     assert "pub static BOOT_VIEW_PRESENT_FULL_CLEAR_HITS" in counters

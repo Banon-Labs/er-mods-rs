@@ -63,7 +63,7 @@ pub const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
 /// `return GLOBAL_MenuHeapAllocator;` reading this address.
 /// Aliased in the tree as GLOBAL_MENU_HEAP_ALLOCATOR_RVA (er-effects-rs save-picker path editor,
 /// which passes it as the allocator argument of the SoftwareKeyboard job alloc) /
-/// MENU_HEAP_ALLOCATOR_POINTER_RVA (er-player-name-filter-dll, which passes it to
+/// MENU_HEAP_ALLOCATOR_POINTER_RVA (er-player-name-filter, which passes it to
 /// `DLString<wchar_t>::FromU16Array` exactly as `GetPlayerChrName` does).
 pub const GLOBAL_MENU_HEAP_ALLOCATOR_RVA: usize = 0x3d87350;
 /// SaveLoad IO device singleton global. Its lazy getter is 0x140e6e060, and
@@ -96,7 +96,7 @@ pub const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 /// into a `MenuString`.
 ///
 /// Cross-cutting because two DLLs reach it for opposite reasons: `er-effects-rs` hooks it READ-ONLY
-/// to detect corrupted-save popups by message id, and `er-invasion-warp-dll` calls it to build a
+/// to detect corrupted-save popups by message id, and `er-invasion-warp` calls it to build a
 /// `MenuString` for the system-message banner. Declared twice with different names until 2026-08-06,
 /// which is exactly the alias drift this module exists to stop.
 ///
@@ -123,8 +123,8 @@ pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
 
 // ---- inventory functions shared by more than one DLL ----
 //
-// These moved here when a second crate needed them: `er-better-refills-dll` reads the player's
-// inventory to decide what to replenish, and `er-build-import-dll` reads it to confirm granted
+// These moved here when a second crate needed them: `er-better-refills` reads the player's
+// inventory to decide what to replenish, and `er-build-import` reads it to confirm granted
 // items and to resolve the inventory INDEX that the equip path requires. Two literal copies of
 // one address is exactly the drift `scripts/check-rva-alias-drift.py` exists to stop.
 
@@ -135,7 +135,7 @@ pub const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
 // ---- the message repository singleton ----
 //
 // Moved here for the same reason as the inventory functions above: two crates now read it.
-// `er-invasion-warp-dll` resolves a `PlaceName`, and `er-build-import-dll` builds its whole
+// `er-invasion-warp` resolves a `PlaceName`, and `er-build-import` builds its whole
 // name -> item-id catalog out of the game's own strings.
 //
 // IT IS READ FROM THE GAME'S OWN GLOBAL, NOT from a typed upstream singleton. `fromsoftware-rs`

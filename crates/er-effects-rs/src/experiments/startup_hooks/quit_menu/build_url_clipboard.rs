@@ -131,7 +131,7 @@ pub(crate) fn clipboard_sequence() -> u32 {
 /// player is typing, because it cannot pass this gate.
 pub(crate) fn clipboard_build_url() -> Option<String> {
     let text = clipboard_text()?;
-    er_build_import::validate_build_url(&text).ok()?;
+    er_build_import_core::validate_build_url(&text).ok()?;
     Some(text.trim().to_owned())
 }
 
@@ -146,7 +146,7 @@ pub(crate) fn build_url_initial_text() -> String {
             ));
             link
         }
-        None => er_build_import::BUILD_URL_PREFIX.to_owned(),
+        None => er_build_import_core::BUILD_URL_PREFIX.to_owned(),
     }
 }
 

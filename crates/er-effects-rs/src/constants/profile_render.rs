@@ -33,7 +33,7 @@ pub(crate) static OWNED_MAX_OUTSTANDING: [AtomicUsize; OWNED_CLASS_COUNT] =
     [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
 /// Total ledger-check violations observed (outstanding > bound). Nonzero == a taken-without-release
 /// leak of a native-owned object -- the run-stopping oracle for this bug class.
-pub(crate) use er_telemetry::counters::OWNED_LEDGER_VIOLATIONS;
+pub(crate) use er_telemetry_core::counters::OWNED_LEDGER_VIOLATIONS;
 
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
@@ -44,23 +44,23 @@ pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED: usize = 0;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES: usize = 1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
 /// Latched from the moment the user clicks System->Quit->Load Profile (the profile-load route FIRE) until
 /// ProfileSelect is reset. `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` is only set later, in the MenuWindowJob::Run
 /// hook, so there is a window where the own_stepper self-pump builds the native load-confirm MessageBox
 /// while that var is still 0 -- the confirm then escapes msgbox suppression and CRASHES the game (2026-07-15).
 /// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED;
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
 /// Live/deobf `CS::ProfileLoadDialog` activation vtable target (`dump 0x1409a47c0` -> deobf
@@ -106,15 +106,15 @@ pub(crate) const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
 pub(crate) const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
 pub(crate) static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SAVE_PICKER_LIST_BUILDER_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_LIST_BUILDER_INSTALLED;
 /// Times the list-builder hook re-staged the browse rows before a native list build (oracle; each
 /// re-stage repairs any game-save record stomp that landed since the previous staging).
-pub(crate) use er_telemetry::counters::SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT;
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
 /// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;
 /// Telemetry: number of native ProfileSelect close-finalize calls issued (expected 1 per flow).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT;
 /// The load-ONLY save routine `FUN_14067b380` (dump 0x14067b380 -> LIVE/deobf 0x67b290, shift -0xf0),
 /// called by `CS::MoveMapStep::DoSaveStuff` when `GameMan.saveState/b80 == 2`: it reads the slot's save
 /// file and runs `PlayerGameData::Deserialize -> CSGaitemImp::Deserialize` (the in-world deserialize
@@ -127,12 +127,12 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_CO
 pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_RVA: u32 = 0x67b290;
 pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT;
 /// Count of frames the menu-pump Run hook forced GameMan.saveState/b80 back to idle to abort a
 /// half-started in-world load transition so the queued return-title chain can run.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT;
 /// `CS::GameMan::RequestLoadSlot(slot)` -- the native setter that transitions GameMan.saveState/b80
 /// 0->2 to REQUEST an in-world load of an explicit slot 0-9 (dump `FUN_14067b2f0` -> LIVE/deobf
 /// `0x67b200`, shift -0xf0, content-unique). It validates the slot's ProfileSummary then calls the
@@ -150,11 +150,11 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT;
 pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA: u32 = 0x67b200;
 pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED;
 /// Count of in-world load requests we neutralized (returned "not armed") during the switch so
 /// GameMan.saveState/b80 stayed 0 and no NowLoading transition started.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =
@@ -173,9 +173,9 @@ pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ORIG: AtomicUsize =
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
@@ -206,15 +206,15 @@ pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES: usize = 1;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED: usize = 2;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID: AtomicUsize =
     AtomicUsize::new(usize::MAX);
 /// Captured fourth constructor argument for native ProfileSelect LoadJob builder, mirrored from the
@@ -240,16 +240,16 @@ pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
 /// a separate trace-set hook -- same precedent as `install_c30_writer_hook`).
 pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED;
 pub(crate) static START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK: Once = Once::new();
 pub(crate) static START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK: Once = Once::new();
 /// One-shot per armed switch: 0 = the fresh picked-slot deserialize has not yet run for the active
 /// System->Quit switch (reset by `system_quit_arm_quickload_autoload`); 1 = it succeeded and the
 /// confirm may stream. While 0, any confirm during an active switch first drives the deserialize.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE;
 /// Count of successful fresh picked-slot deserializes driven by the confirm hook (product proof
 /// expects exactly 1 per switch).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT;
 /// One-shot guard for the MENU-FREE clean-title switch reload (own_load_switch_reload_fire, 2026-07-18).
 /// The warm-rebuilt TitleTopDialog never reaches Loop post-return-title (press-start SceneObjProxy at
 /// dialog+0xb78 unbound), so the title accept-byte/open-menu path deadlocks. For a genuine in-world
@@ -257,14 +257,14 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_
 /// -> continue_confirm -> SetState5). 0 = not yet attempted this switch; compare_exchange(0,1) claims
 /// the single attempt so a flickering-owner / partial-feed frame never re-runs the leak-prone feed.
 /// Reset per switch in system_quit_arm_quickload_autoload.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED;
 /// MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix). Continuous in-world frames observed
 /// after own_load_switch_reload_fire committed the picked slot (FRESH_DESER_DONE==1) while the switch phase
 /// is still armed. Once sustained, the switch is DONE: reset the phase to IDLE + clear the arm so the
 /// return-title chain cannot re-submit and bounce the freshly-loaded world back to title (which would block
 /// the NEXT switch). Reset whenever the completion condition breaks. See bd
 /// repeatability-menu-free-phase-reset-fix-2026-07-18.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_FREE_STABLE_TICKS;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_MENU_FREE_STABLE_TICKS;
 /// Sustained in-world frames after the menu-free reload commit before latching the switch DONE (~1s at
 /// task rate). Long enough that a transient mid-stream player flicker does not latch prematurely, short
 /// enough to disarm well before the return-title chain's queue-ready re-submit window (~tens of seconds).
@@ -272,22 +272,22 @@ pub(crate) const SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD: usize = 60;
 /// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
 /// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
 /// character and the post-load autosave would then write it back to the picked slot.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT;
 /// Count of confirms forwarded to the native original (boot autoload, normal play, or post-deser).
 /// This is the AUTHORITATIVE total world-load count for a session, boot included -- unlike the load
-/// epoch, which skips the boot load. See `er_telemetry::load_count`.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT;
+/// epoch, which skips the boot load. See `er_telemetry_core::load_count`.
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT;
 /// Bucket: forwards from outside the switch machine (the boot/title Continue).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT;
 /// Bucket: forwards that arrived while the previous world was still up.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT;
 /// Switch forwards whose native requested-slot proof did not fire (carries the `FORWARD #n` label).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT;
 pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
 pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
 pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
 /// Continuous in-world game-task frames observed while a return-title reload is still ARMED
 /// (`SYSTEM_QUIT_QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED`) with the local player present. A genuine
 /// user-initiated return-title tears the world down within ~1-2s so the player vanishes and this never
@@ -295,13 +295,13 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
 /// of the character we just loaded (`system_quit_arm_quickload_autoload`) -- leaves the player present
 /// indefinitely. Reset to 0 whenever no reload is armed. See bd
 /// angre-reload-full-causal-chain-and-fix-2026-07-18.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS;
 /// Continuous armed+in-world frames after which a still-armed return-title is treated as SPURIOUS and
 /// disarmed (phase -> IDLE). ~5s at the game-task rate: far below a genuine stable load's tens-of-seconds
 /// presence (observed ~47s to the destructive submit) and comfortably above a real switch's ~1-2s
 /// arm->teardown window, so it never disarms a legitimate user switch.
 pub(crate) const SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS: usize = 300;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT;
 /// SPURIOUS-vs-GENUINE arm discriminator (2026-07-18, bd repeatable-multi-save-consolidated-plan).
 /// Records whether the LOCAL PLAYER WAS ABSENT at the moment a return-title reload was armed
 /// (`system_quit_arm_quickload_autoload`). The two arm scenarios differ causally by exactly this:
@@ -314,20 +314,20 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT;
 /// The time-based disarm below is only correct for the SPURIOUS case; gating it on this flag stops it
 /// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
 /// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT;
 /// Latch (0/1): we drove menuData+0x5d=1 to walk the child past 18 and are holding it until the child
 /// leaves step 18, then we CLEAR it -- a lingering 0x5d re-requests quit-to-title ~4s after the reload
 /// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
-pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET;
+pub(crate) use er_telemetry_core::counters::ENDING_REQUEST_SET;
 /// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
-pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET_COUNT;
+pub(crate) use er_telemetry_core::counters::ENDING_REQUEST_SET_COUNT;
 /// The MoveMapStep pointer as resolved by write_oracle (the ONLY resolution that reliably tracks
 /// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
 /// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
 /// 0 == not currently resolved.
-pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_INGAME_PTR;
-pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_MMS_PTR;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
+pub(crate) use er_telemetry_core::counters::ORACLE_RELIABLE_INGAME_PTR;
+pub(crate) use er_telemetry_core::counters::ORACLE_RELIABLE_MMS_PTR;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 /// Native return-title final functor (`FUN_1407a3990` dump -> live/deobf `0x1407a3900`).

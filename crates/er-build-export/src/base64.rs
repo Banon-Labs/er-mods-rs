@@ -8,7 +8,7 @@
 //! whose base64 the site's decoder rejects for the one input in four that needs padding.
 //!
 //! Encode-only on purpose. This crate writes links; reading them back is
-//! `er-build-import`'s job.
+//! `er-build-import-core`'s job.
 
 /// The standard alphabet, in index order.
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

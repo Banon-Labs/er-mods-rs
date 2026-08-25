@@ -8,19 +8,19 @@ publish = false
 # memory (catalog, grants, equipment, stats, spells) plus the WinHTTP fetch, behind a small
 # request/tick state machine.
 #
-# It is a library rather than part of `er-build-import-dll` because there are now two callers:
+# It is a library rather than part of `er-build-import` because there are now two callers:
 # that standalone ME3 shell, which imports the configured build once at character load, and the
 # product DLL's System>Quit "Load Build from URL" row, which imports on demand. A `cdylib` cannot
 # be linked into another `cdylib` (its `DllMain` would collide), so the shared half has to live
 # here.
 #
-# The pure data transformation stays in the host-testable `er-build-import`; nothing in THIS crate
+# The pure data transformation stays in the host-testable `er-build-import-core`; nothing in THIS crate
 # is host-testable, so nothing that can be proven by `cargo test` belongs in it.
 
 [dependencies]
-er-build-import = { path = "../er-build-import" }
+er-build-import-core = { path = "../er-build-import-core" }
 # The EXPORT half's pure data transformation: the planner document and the `?i=` encoder. Host-
-# testable and game-free, for the same reason `er-build-import` is -- the encoder is provable by
+# testable and game-free, for the same reason `er-build-import-core` is -- the encoder is provable by
 # `cargo test`, and nothing provable that way belongs in this crate.
 er-build-export = { path = "../er-build-export" }
 er-game-base = { path = "../er-game-base" }

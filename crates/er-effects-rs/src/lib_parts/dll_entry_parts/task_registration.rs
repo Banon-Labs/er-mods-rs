@@ -1,4 +1,4 @@
-pub(crate) use er_telemetry::counters::AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT;
+pub(crate) use er_telemetry_core::counters::AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT;
 
 fn poll_cached_mms18_ending_request_advancer() {
     // Native full deserialize owns GameMan::warp_requested and MoveMapStep::CheckReturnToTitle
@@ -102,7 +102,7 @@ fn poll_autoload_handoff_parent_state_guard() {
 struct GameTaskTimer(std::time::Instant);
 impl Drop for GameTaskTimer {
     fn drop(&mut self) {
-        er_telemetry::counters::GAME_TASK_LAST_US
+        er_telemetry_core::counters::GAME_TASK_LAST_US
             .store(self.0.elapsed().as_micros() as usize, Ordering::SeqCst);
     }
 }
@@ -132,7 +132,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // cannot answer "is this task still running" for anyone else. Any thread can read
                 // this one, which is what lets the boot picker record whether the game was alive
                 // across a dialog that blocked for half a minute.
-                er_telemetry::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
+                er_telemetry_core::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
                 // Boot-phase marker: first frame our recurring task actually ticks.
                 if er_boot_profiler::profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
@@ -633,7 +633,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         };
                     }
                 }
-                er_telemetry::counters::BUILD_DRIVER_LAST_US
+                er_telemetry_core::counters::BUILD_DRIVER_LAST_US
                     .store(_bt.elapsed().as_micros() as usize, Ordering::SeqCst);
             },
             CSTaskGroupIndex::FrameBegin,

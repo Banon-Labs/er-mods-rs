@@ -88,7 +88,7 @@ fn write_portrait_framing_oracles(body: &mut String) {
     // are emitted here rather than held back by `scripts/check-oracle-writers.py`.
     //
     // `draw_refused_unmasked` counts frames the compositor declined to blit because the published
-    // buffer had no alpha cut (`portrait_onto`, er-loading-portrait). `bake_publish_refused_unmasked`
+    // buffer had no alpha cut (`portrait_onto`, er-loading-portrait-core). `bake_publish_refused_unmasked`
     // counts the same refusal one stage earlier, at the two colour-only readback writers that can put
     // an opaque buffer into LOADING_BG_PORTRAIT_RGBA in the first place (`save_swap_profile_table.rs`
     // and the default-off diagnostic in `dlstring_lookat_math.rs`).
