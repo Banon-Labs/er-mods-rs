@@ -1503,14 +1503,27 @@ pub const TITLE_PROCEED_GATE_SET_VALUE: u8 = true as u8;
 /// DInput/keystate/XInput event). bd title-global-accept-byte-144589bdc-zeroinput-advance-2026.
 pub const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
 
-/// Menu-system manager singleton pointer global 0x143d5dea8 (89 refs). The title press-accept
-/// handler 0x1409b1260 does `mov rax,[0x143d5dea8]; if rax: movb [rax],1; jmp registrar 0x1409b24e0`
-/// -- it sets the singleton's +0 byte (a "menu-open in progress" flag) then opens the main menu
-/// IN PLACE. Replicating this (set the flag, then registrar on the validated TitleTopDialog) is the
-/// NARROW title-specific advance that should reach the main menu WITHOUT the language/ToS build that
-/// the broad global accept byte over-triggers, and without the competing-dialog revert a bare
-/// registrar self-fire caused. bd title-accept-to-registrar-narrow-path-143d5dea8-2026.
-pub const TITLE_MENU_TRANSITION_SINGLETON_RVA: usize = 0x3d5dea8;
+/// The title press-accept handler 0x1409b1260 does
+/// `mov rax,[0x143d5dea8]; if rax: movb [rax],1; jmp registrar 0x1409b24e0` -- it writes the
+/// singleton's +0 byte then opens the main menu IN PLACE. Replicating this (write the byte, then
+/// registrar on the validated TitleTopDialog) is the NARROW title-specific advance that should
+/// reach the main menu WITHOUT the language/ToS build that the broad global accept byte
+/// over-triggers, and without the competing-dialog revert a bare registrar self-fire caused.
+/// bd title-accept-to-registrar-narrow-path-143d5dea8-2026.
+///
+/// WHAT THAT GLOBAL AND THAT BYTE ACTUALLY ARE, corrected 2026-08-25. This name said "menu-system
+/// manager singleton" and called +0 "a menu-open in progress flag". Both were guesses read off
+/// this one write site. `0x143d5dea8` is `GLOBAL_CSPcKeyConfig` -- the key-configuration singleton
+/// holding the player's keyboard, mouse and pad bindings -- and +0 is its input-device SOURCE
+/// byte: `FUN_1409b0800` writes 0 there for a pad press and this handler writes 1 for a key press,
+/// which is how the title screen decides whether to draw pad or keyboard button glyphs. The
+/// advance may still work (the registrar jump is what opens the menu, and the byte write is a
+/// side-effect the real handler also performs), but nothing here is a menu-open flag.
+///
+/// The name is kept because the call sites describe the title advance, not the singleton; the
+/// VALUE now comes from the one place that declares it, so a 1.16.x correction lands in both.
+pub const TITLE_MENU_TRANSITION_SINGLETON_RVA: usize =
+    er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA;
 
 pub const TITLE_MENU_TRANSITION_FLAG_SET_VALUE: u8 = true as u8;
 

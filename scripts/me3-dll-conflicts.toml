@@ -156,6 +156,84 @@ crates/er-charm-enemies/src/hotkey.rs:215 `register_shared_hook(get_state_addres
 get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
 `with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
 
+[[shared]]
+a = "er-effects-rs"
+b = "er-hotkey-conflicts"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "hook_get_device_state"
+reason = """A FOURTH shell on the DirectInput keyboard `GetDeviceState` slot -- and the only \
+one whose whole purpose is to report the class of bug a private MinHook instance on this prologue \
+causes. It observes and nothing else: the detour calls the rest of the chain, records that SOME \
+module read the keyboard, copies the returned buffer for a consumption check, and returns the \
+chain's value untouched. It never blanks a key, never writes the buffer and never injects.
+
+Registered through `er_hook::register_shared_hook_with_budget`, spelled out at the install site \
+rather than behind a helper so `check-shared-hook-rvas.py` can see the registrar beside the \
+handler and a revert to a private instance goes red instead of silently disabling one of the \
+three shells above.
+
+Note what it cannot do, which is why it does not make the other rows redundant: `GetDeviceState` \
+returns all 256 scancodes at once, so this DLL can say WHICH MODULES read the keyboard and never \
+WHICH KEY any of them is bound to. Its exact `(module, key)` findings come from the \
+argument-carrying user32 surfaces instead."""
+evidence = """crates/er-hotkey-conflicts/src/hooks.rs `register_shared_hook_with_budget(keyboard, \
+hook_get_device_state, &DINPUT_GET_STATE_ORIG, ...)`, resolved from the same probe device \
+(`probe_device_state_address` on `GUID_SysKeyboard`, vtable slot 9) as the three shells above."""
+
+[[shared]]
+a = "er-net-effects"
+b = "er-hotkey-conflicts"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "hook_get_device_state"
+reason = """A FOURTH shell on the DirectInput keyboard `GetDeviceState` slot -- and the only \
+one whose whole purpose is to report the class of bug a private MinHook instance on this prologue \
+causes. It observes and nothing else: the detour calls the rest of the chain, records that SOME \
+module read the keyboard, copies the returned buffer for a consumption check, and returns the \
+chain's value untouched. It never blanks a key, never writes the buffer and never injects.
+
+Registered through `er_hook::register_shared_hook_with_budget`, spelled out at the install site \
+rather than behind a helper so `check-shared-hook-rvas.py` can see the registrar beside the \
+handler and a revert to a private instance goes red instead of silently disabling one of the \
+three shells above.
+
+Note what it cannot do, which is why it does not make the other rows redundant: `GetDeviceState` \
+returns all 256 scancodes at once, so this DLL can say WHICH MODULES read the keyboard and never \
+WHICH KEY any of them is bound to. Its exact `(module, key)` findings come from the \
+argument-carrying user32 surfaces instead."""
+evidence = """crates/er-hotkey-conflicts/src/hooks.rs `register_shared_hook_with_budget(keyboard, \
+hook_get_device_state, &DINPUT_GET_STATE_ORIG, ...)`, resolved from the same probe device \
+(`probe_device_state_address` on `GUID_SysKeyboard`, vtable slot 9) as the three shells above."""
+
+[[shared]]
+a = "er-charm-enemies"
+b = "er-hotkey-conflicts"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "get_device_state_union"
+handler_b = "hook_get_device_state"
+reason = """A FOURTH shell on the DirectInput keyboard `GetDeviceState` slot -- and the only \
+one whose whole purpose is to report the class of bug a private MinHook instance on this prologue \
+causes. It observes and nothing else: the detour calls the rest of the chain, records that SOME \
+module read the keyboard, copies the returned buffer for a consumption check, and returns the \
+chain's value untouched. It never blanks a key, never writes the buffer and never injects.
+
+Registered through `er_hook::register_shared_hook_with_budget`, spelled out at the install site \
+rather than behind a helper so `check-shared-hook-rvas.py` can see the registrar beside the \
+handler and a revert to a private instance goes red instead of silently disabling one of the \
+three shells above.
+
+Note what it cannot do, which is why it does not make the other rows redundant: `GetDeviceState` \
+returns all 256 scancodes at once, so this DLL can say WHICH MODULES read the keyboard and never \
+WHICH KEY any of them is bound to. Its exact `(module, key)` findings come from the \
+argument-carrying user32 surfaces instead."""
+evidence = """crates/er-hotkey-conflicts/src/hooks.rs `register_shared_hook_with_budget(keyboard, \
+hook_get_device_state, &DINPUT_GET_STATE_ORIG, ...)`, resolved from the same probe device \
+(`probe_device_state_address` on `GUID_SysKeyboard`, vtable slot 9) as the three shells above."""
+
 [[conflict]]
 a = "er-effects-rs"
 b = "er-save-disable"
@@ -301,6 +379,29 @@ on a FrameBegin walk of WorldChrMan's ChrSets."""
 "er-net-effects" = """Keyboard-selected network SpEffects. Its DirectInput keyboard and mouse \
 `GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
 above); nothing else it installs is claimed by another shell."""
+"er-hotkey-conflicts" = """Co-loadable with everything, and the one shell that would be \
+self-refuting if it were not. It is a passive observer: it detours the input-read APIs \
+(`GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState`, `RegisterHotKey`, `SetWindowsHookExA/W`, \
+`XInputGetState`, and the DirectInput device-state slot), and EVERY detour calls the rest of the \
+chain first and returns its value byte for byte. No input is swallowed, altered or injected; no \
+param row is patched (which breaks Seamless invasions); no game memory is written; and it never \
+`LoadLibrary`s a module that was not already in the process.
+
+The one prologue it shares -- the DirectInput `GetDeviceState` slot, claimed by three other shells \
+-- is registered through `er_hook::register_shared_hook_with_budget`, so the product's single \
+MinHook instance owns it and the handlers chain. See the `[[shared]]` rows above. The user32 and \
+XInput prologues it also takes are claimed by no other shell in this workspace, and they go \
+through the same registrar so a third-party DLL detouring one of them is chained rather than \
+trampled.
+
+It draws through `er_build_watermark_core`'s `overlay_host` as a GUEST ONLY and never calls \
+`Hudhook::apply()`, even when nothing else hosts: a one-line diagnostic is not worth owning the \
+swapchain, and a second `Present` hook silently disables the first. Loaded with no overlay host in \
+the profile it simply draws nothing, and says so in its log.
+
+The two things it READS are `K32EnumProcessModules` (to name the module a call came from) and the \
+game's own `CSPcKeyConfig` binding table at `GLOBAL_CSPcKeyConfig+0x440` (to check a mod's key \
+against the player's configured bindings). Both are loads through the fault-safe reader."""
 "er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
 "er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
 "er-invasion-warp" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."

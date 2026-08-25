@@ -16,6 +16,24 @@ pub const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 pub const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 /// `GameMan` singleton global (save-slot owner).
 pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
+/// `CS::CSPcKeyConfig` singleton global (Ghidra: `GLOBAL_CSPcKeyConfig`) -- the PLAYER'S OWN
+/// keyboard, mouse and gamepad bindings. NULL until the game initialises its key configuration.
+///
+/// `+0x008` is the DEFAULT binding table loaded from `KeyAssignParam_TypeA` and `+0x440` is the
+/// CURRENT one the player configured: `0x36` entries of `0x14` bytes each. Stride, count and
+/// offset all come from the accessor `GetAssign` (`0x242ab0`), which is literally
+/// `cmp r8d,0x35; ja fail; lea rcx,[rcx + idx*0x14 + 0x440]`.
+///
+/// `+0x000` is the input-device SOURCE byte: the title screen writes 0 for a pad press and 1 for a
+/// key press (`FUN_1409b0800` / `FUN_1409b1260`), which is what flips the on-screen button glyphs.
+/// `er-title-flow` aliases this global as `TITLE_MENU_TRANSITION_SINGLETON_RVA` and its narrow
+/// title advance sets that byte -- correct behaviour, but it is the device-source byte and not a
+/// "menu-open in progress" flag as the comment there used to say.
+///
+/// RE 2026-08-25 against the 1.16.2 dump; see bd
+/// `er-keybinding-table-cspckeyconfig-1162-2026-08-25` for the full layout, the internal-key-id
+/// enum and the scancode lookup table that goes with it.
+pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: usize = 0x3d5dea8;
 /// `CS::FieldArea**` singleton global -- 1.16.2 runtime VA `0x143d691d8`.
 ///
 /// The 1.16.2 Ghidra dump has 264 reads of this global. `ConvertBlockCoordsToPhysicsCoords`

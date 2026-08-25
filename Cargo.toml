@@ -50,6 +50,11 @@ members = [
   "crates/er-build-watermark",
   "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
+  # Which mods in this profile are fighting over the same key, and does the game already use it.
+  # A passive observer: it hooks the input-read APIs, attributes each call to the module it came
+  # from, and prints ONE warning once the profile has settled. Every detour chains straight back
+  # to the original -- it swallows no input, injects none, and writes no game memory.
+  "crates/er-hotkey-conflicts",
   # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
   # no product dependency: every guard is a null-container intercept on a vanilla function.
   "crates/er-seamless-bugfixes",

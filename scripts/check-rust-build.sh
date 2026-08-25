@@ -101,6 +101,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-build-import:er_build_import
 		er-charm-enemies:er_charm_enemies
 		er-crash-logging:er_crash_logging
+		er-hotkey-conflicts:er_hotkey_conflicts
 		er-death-persist:er_death_persist
 		er-input-harness:er_input_harness
 		er-build-watermark:er_build_watermark
