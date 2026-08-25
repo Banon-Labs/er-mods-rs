@@ -237,6 +237,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-invasion-warp-core -p er-invasion-warp
 
+# er-net-effects's host-portable modules. Six of them are ungated with a comment saying
+# "so its tests run on the host" -- and until this line existed NOTHING ran them: the workspace
+# pins `default-members` to er-effects-rs, so a bare `cargo test` never selects this crate and the
+# windows-target `cargo xwin test --lib` in check-rust-build.sh selects er-effects-rs only. 42
+# tests sat inert. The load-bearing one now is `selector_gate`: it decides whether this DLL may
+# take the player's arrow keys away from the game, which is not a claim to leave to review.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
+
 # The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
 # grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
 # it had 23 tests, so the whole mapping could regress silently -- the game-side crates

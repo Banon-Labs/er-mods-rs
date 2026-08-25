@@ -22,8 +22,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{
-    config::runtime_config, crash_telemetry, duration_filter, input_suppression,
-    log::net_effects_log, stacked_config,
+    config::runtime_config,
+    crash_telemetry, duration_filter, input_suppression,
+    log::net_effects_log,
+    present_overlay,
+    selector_gate::{
+        self, SelectorInputState, SelectorKey, VK_0, VK_ADD, VK_DOWN, VK_INSERT, VK_LEFT,
+        VK_NUMPAD0, VK_OEM_7, VK_RIGHT, VK_SUBTRACT, VK_UP,
+    },
+    stacked_config,
 };
 
 const EFFECT_HOTKEY_UP: usize = 1 << 0;
@@ -37,19 +44,11 @@ const EFFECT_HOTKEY_STACK_ADD: usize = 1 << 6;
 /// Numpad `-`: take it back out.
 const EFFECT_HOTKEY_STACK_REMOVE: usize = 1 << 7;
 
-const VK_LEFT: u32 = 0x25;
-const VK_UP: u32 = 0x26;
-const VK_RIGHT: u32 = 0x27;
-const VK_DOWN: u32 = 0x28;
-const VK_INSERT: u32 = 0x2d;
-const VK_0: u32 = 0x30;
-const VK_NUMPAD0: u32 = 0x60;
+// The selector-command keys live in `selector_gate`, which owns their classification; only the
+// extra names the trigger-hotkey FILE can spell are declared here.
 const VK_MULTIPLY: u32 = 0x6a;
-const VK_ADD: u32 = 0x6b;
-const VK_SUBTRACT: u32 = 0x6d;
 const VK_DECIMAL: u32 = 0x6e;
 const VK_DIVIDE: u32 = 0x6f;
-const VK_OEM_7: u32 = 0xde;
 const LLKHF_ALTDOWN: u32 = 0x20;
 const DEFAULT_EFFECT_TRIGGER_HOTKEYS_JSON: &str = r#"{
   "hotkeys": [
@@ -69,12 +68,18 @@ static EFFECT_SELECTOR_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
 static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> = OnceLock::new();
 static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
-static EFFECT_SELECTOR_VISIBLE_FOR_HOOK: AtomicBool = AtomicBool::new(false);
-static EFFECT_RUNTIME_READY_FOR_HOOK: AtomicBool = AtomicBool::new(false);
+/// The one gate both keyboard hooks read: is the selector list on screen AND able to act? See
+/// [`crate::selector_gate`]. It folds in runtime-readiness, so there is no second flag that can
+/// disagree with this one -- the pair that used to be here did exactly that, and the visible half
+/// won.
+static EFFECT_SELECTOR_OPEN_FOR_HOOK: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_INPUT_SUPPRESSED_KEYS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_INPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
+/// Keypresses the selector saw and refused because it was closed. The product proof for the fix:
+/// during normal play this climbs and `effect_input_suppressed_arrow_keys` stays flat.
+static EFFECT_KEYS_IGNORED_WHILE_CLOSED: AtomicUsize = AtomicUsize::new(0);
 /// `RemoveSpEffect` calls this DLL declined to make because it never applied that effect. A
 /// large number here is the mass-strip that used to take the player's talisman and gear effects
 /// with it on every selection change.
@@ -796,7 +801,16 @@ fn queue_effect_trigger_key(vk: u32, alt: bool) {
     }
 }
 
+/// The single funnel every keyboard path feeds -- the DirectInput detour and the low-level hook
+/// both arrive here, so the "is the selector even open?" question is asked in exactly one place.
 pub(crate) fn queue_effect_keyboard_vk(vk: u32, alt_down: bool) {
+    if !selector_gate::should_handle_key(
+        selector_open_for_hook(),
+        selector_gate::key_for_vk(vk, alt_down),
+    ) {
+        EFFECT_KEYS_IGNORED_WHILE_CLOSED.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
     queue_effect_trigger_key(vk, alt_down);
     let action = effect_hotkey_action_for_key(vk, alt_down);
     if action == 0 {
@@ -861,15 +875,19 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
         let msg = wparam.0 as u32;
         let key_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let key_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-        let runtime_ready = EFFECT_RUNTIME_READY_FOR_HOOK.load(Ordering::SeqCst);
+        let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
+        let open = selector_open_for_hook();
         let foreground_is_game = foreground_window_belongs_to_this_process();
+        // Swallowing a key here takes it from EVERY window, so the gate is the strict one: only
+        // while the selector is genuinely open, and only for the keys it actually drives.
         let suppress_arrow = foreground_is_game
-            && runtime_ready
             && (key_down || key_up)
-            && is_arrow_key(kb.vkCode)
-            && EFFECT_SELECTOR_VISIBLE_FOR_HOOK.load(Ordering::SeqCst);
-        if key_down && runtime_ready && !foreground_is_game {
-            let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
+            && selector_gate::should_consume_key(
+                open,
+                selector_gate::key_for_vk(kb.vkCode, alt_down),
+            );
+        if key_down && !foreground_is_game {
+            // `queue_effect_keyboard_vk` applies the open gate itself.
             queue_effect_keyboard_vk(kb.vkCode, alt_down);
         }
         if suppress_arrow {
@@ -964,8 +982,33 @@ pub(crate) fn record_suppressed_arrow_keys(count: usize) {
     EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.fetch_add(count, Ordering::SeqCst);
 }
 
-pub(crate) fn effect_runtime_ready() -> bool {
-    EFFECT_RUNTIME_READY_FOR_HOOK.load(Ordering::SeqCst)
+pub(crate) fn record_keys_ignored_while_closed(count: usize) {
+    EFFECT_KEYS_IGNORED_WHILE_CLOSED.fetch_add(count, Ordering::SeqCst);
+}
+
+pub(crate) fn effect_keys_ignored_while_closed() -> usize {
+    EFFECT_KEYS_IGNORED_WHILE_CLOSED.load(Ordering::SeqCst)
+}
+
+/// The gate as the hook threads see it. Republished from the game thread every tick by
+/// [`sync_selector_input_gate`].
+fn selector_open_for_hook() -> bool {
+    EFFECT_SELECTOR_OPEN_FOR_HOOK.load(Ordering::SeqCst)
+}
+
+/// Is the selector open, from the game thread's own state?
+pub(crate) fn selector_open(state: &NetEffectsState) -> bool {
+    selector_input_state(state).is_open()
+}
+
+fn selector_input_state(state: &NetEffectsState) -> SelectorInputState {
+    SelectorInputState {
+        shown: state.effect_selector_visible,
+        // Read from the render thread's own flag rather than mirrored here: the `[+]` button is
+        // clicked in the hudhook render loop, and a mirror would lag it by a frame.
+        collapsed: present_overlay::overlay_collapsed(),
+        runtime_ready: state.runtime_ready,
+    }
 }
 
 fn clear_effect_selector_text() {
@@ -992,17 +1035,16 @@ pub(crate) fn set_runtime_ready(state: &mut NetEffectsState, ready: bool) {
         return;
     }
     state.runtime_ready = ready;
-    EFFECT_RUNTIME_READY_FOR_HOOK.store(ready, Ordering::SeqCst);
     crash_telemetry::runtime_ready(ready);
     if ready {
-        sync_effect_selector_input_suppression(state.effect_selector_visible);
+        sync_selector_input_gate(state);
         state.last_driver_command = Some("runtime-gate: character/map ready".to_owned());
         net_effects_log(format_args!(
             "runtime-gate: character/map ready; enabling net-effects processing"
         ));
     } else {
         let discarded = discard_pending_effect_selector_inputs();
-        sync_effect_selector_input_suppression(false);
+        sync_selector_input_gate(state);
         clear_effect_selector_text();
         state.last_driver_command = Some(format!(
             "runtime-gate: character/map absent; suspended net-effects processing; discarded={discarded}"
@@ -1043,14 +1085,25 @@ fn truncated_effect_name(call: &NamedEffectCall) -> Option<String> {
     Some(out)
 }
 
-fn sync_effect_selector_input_suppression(visible: bool) {
-    EFFECT_SELECTOR_VISIBLE_FOR_HOOK.store(visible, Ordering::SeqCst);
-    input_suppression::set_arrow_key_suppression(visible);
-    if !visible {
-        // A bar that is not drawn cannot be hovered. Clearing it from the game thread too means
-        // a stalled render loop can never leave the left mouse button blanked for good.
+/// Republish the keyboard gate to both hook threads from the game thread's live state.
+///
+/// Called from every path that can change any of its three inputs, so the hooks can never be left
+/// armed by a stale flag -- which is precisely how the arrow keys stayed swallowed at the title
+/// screen: `set_runtime_ready(false)` disarmed them and the `publish_effect_selector_text` call
+/// immediately after re-armed them from `effect_selector_visible` alone.
+fn sync_selector_input_gate(state: &NetEffectsState) -> bool {
+    let gate = selector_input_state(state);
+    let open = gate.is_open();
+    EFFECT_SELECTOR_OPEN_FOR_HOOK.store(open, Ordering::SeqCst);
+    input_suppression::set_selector_open(open);
+    if !gate.shown {
+        // A bar that is not drawn cannot be hovered. Keyed on `shown`, NOT on `open`: a collapsed
+        // bar still draws its `[+]` button, and a click on that button must still be kept out of
+        // the game. Clearing it from the game thread too means a stalled render loop can never
+        // leave the left mouse button blanked for good.
         input_suppression::set_pointer_over_overlay(false);
     }
+    open
 }
 
 pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
@@ -1073,7 +1126,7 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
         state.calls.iter().filter(|call| call.stacked).count(),
         Ordering::Relaxed,
     );
-    sync_effect_selector_input_suppression(state.effect_selector_visible);
+    sync_selector_input_gate(state);
     if !state.effect_selector_visible {
         clear_effect_selector_text();
         return;
@@ -1329,48 +1382,62 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
     let stack_adds = EFFECT_HOTKEY_PENDING_STACK_ADD.swap(0, Ordering::SeqCst);
     let stack_removes = EFFECT_HOTKEY_PENDING_STACK_REMOVE.swap(0, Ordering::SeqCst);
     let arrow_total = ups + downs + lefts + rights;
-    let arrows_allowed = state.effect_selector_visible;
+    // Second reading of the same gate the hooks use, from the game thread's own state. The
+    // cursor keys should not reach this queue while closed at all, so a nonzero `ignored` below
+    // means one slipped in between a poll and this tick -- dropped here rather than acted on.
+    let open = selector_open(state);
+    let arrows_allowed = selector_gate::should_handle_key(open, SelectorKey::Arrow);
     // The stack keys ride with the arrows: they act on what the selector is highlighting, so
-    // they mean nothing while it is hidden.
-    let stack_total = if arrows_allowed {
+    // they mean nothing while it is closed.
+    let stack_allowed = selector_gate::should_handle_key(open, SelectorKey::StackEdit);
+    let toggle_allowed = selector_gate::should_handle_key(open, SelectorKey::EffectToggle);
+    let stack_total = if stack_allowed {
         stack_adds + stack_removes
     } else {
         0
     };
-    let applied_total = toggles + stack_total + if arrows_allowed { arrow_total } else { 0 };
-    if !arrows_allowed && arrow_total != 0 {
+    let toggle_total = if toggle_allowed { toggles } else { 0 };
+    let arrow_applied = if arrows_allowed { arrow_total } else { 0 };
+    let applied_total = toggle_total + stack_total + arrow_applied;
+    let ignored = (arrow_total - arrow_applied)
+        + (stack_adds + stack_removes - stack_total)
+        + (toggles - toggle_total);
+    if ignored != 0 {
+        record_keys_ignored_while_closed(ignored);
         state.last_driver_command = Some(format!(
-            "effect-hotkey: ignored {arrow_total} arrow keypresses because selector is hidden"
+            "effect-hotkey: ignored {ignored} keypresses because the selector is closed"
         ));
     }
     if applied_total == 0 {
         return;
     }
     EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(applied_total, Ordering::SeqCst);
-    for _ in 0..toggles {
+    for _ in 0..toggle_total {
         toggle_selected_effect(player, state);
     }
-    if !arrows_allowed {
-        return;
+    if arrows_allowed {
+        for _ in 0..lefts {
+            step_selected_catalog(player, state, -1);
+        }
+        for _ in 0..rights {
+            step_selected_catalog(player, state, 1);
+        }
+        for _ in 0..ups {
+            step_selected_effect(player, state, 1);
+        }
+        for _ in 0..downs {
+            step_selected_effect(player, state, -1);
+        }
     }
-    for _ in 0..lefts {
-        step_selected_catalog(player, state, -1);
-    }
-    for _ in 0..rights {
-        step_selected_catalog(player, state, 1);
-    }
-    for _ in 0..ups {
-        step_selected_effect(player, state, 1);
-    }
-    for _ in 0..downs {
-        step_selected_effect(player, state, -1);
-    }
-    // After the cursor has moved, so a press of + in the same frame stacks what is NOW selected.
-    for _ in 0..stack_adds {
-        stack_add_selected(player, state);
-    }
-    for _ in 0..stack_removes {
-        stack_remove_selected(player, state);
+    if stack_allowed {
+        // After the cursor has moved, so a press of + in the same frame stacks what is NOW
+        // selected.
+        for _ in 0..stack_adds {
+            stack_add_selected(player, state);
+        }
+        for _ in 0..stack_removes {
+            stack_remove_selected(player, state);
+        }
     }
     STACKED_EFFECT_COUNT.store(
         state.calls.iter().filter(|call| call.stacked).count(),
@@ -1404,10 +1471,14 @@ fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut NetEffects
     if pending.is_empty() || state.effect_trigger_hotkeys.is_empty() {
         return;
     }
-    let mut hidden_arrow_ignores = 0usize;
+    let open = selector_open(state);
+    let mut closed_ignores = 0usize;
     for keypress in pending {
-        if !state.effect_selector_visible && is_arrow_key(keypress.vk) {
-            hidden_arrow_ignores = hidden_arrow_ignores.saturating_add(1);
+        if !selector_gate::should_handle_key(
+            open,
+            selector_gate::key_for_vk(keypress.vk, keypress.alt),
+        ) {
+            closed_ignores = closed_ignores.saturating_add(1);
             continue;
         }
         let matched = state
@@ -1420,15 +1491,12 @@ fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut NetEffects
         };
         trigger_effect_hotkey(player, state, &hotkey);
     }
-    if hidden_arrow_ignores != 0 {
+    if closed_ignores != 0 {
+        record_keys_ignored_while_closed(closed_ignores);
         state.last_driver_command = Some(format!(
-            "effect-trigger: ignored {hidden_arrow_ignores} arrow keypresses because selector is hidden"
+            "effect-trigger: ignored {closed_ignores} keypresses because the selector is closed"
         ));
     }
-}
-
-fn is_arrow_key(vk: u32) -> bool {
-    matches!(vk, VK_LEFT | VK_UP | VK_RIGHT | VK_DOWN)
 }
 
 fn trigger_effect_hotkey(
@@ -1834,17 +1902,17 @@ fn execute_driver_command(
     match parts.as_slice() {
         ["selector", "on"] | ["overlay", "on"] => {
             state.effect_selector_visible = true;
-            sync_effect_selector_input_suppression(true);
+            sync_selector_input_gate(state);
             Ok(())
         }
         ["selector", "off"] | ["overlay", "off"] => {
             state.effect_selector_visible = false;
-            sync_effect_selector_input_suppression(false);
+            sync_selector_input_gate(state);
             Ok(())
         }
         ["selector", "toggle"] | ["overlay", "toggle"] => {
             state.effect_selector_visible = !state.effect_selector_visible;
-            sync_effect_selector_input_suppression(state.effect_selector_visible);
+            sync_selector_input_gate(state);
             Ok(())
         }
         ["network", "on"] => {

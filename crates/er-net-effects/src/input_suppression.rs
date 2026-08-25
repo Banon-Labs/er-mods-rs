@@ -10,9 +10,20 @@ use er_hook::{MH_STATUS, UnionFn, register_shared_hook_with_budget};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::{GUID, s};
 
-use crate::{dinput_state, effects, hold_repeat::HoldRepeat, log::net_effects_log};
+use crate::{
+    dinput_state, effects,
+    hold_repeat::HoldRepeat,
+    log::net_effects_log,
+    selector_gate::{
+        self, SelectorKey, VK_0, VK_ADD, VK_DOWN, VK_INSERT, VK_LEFT, VK_NUMPAD0, VK_RIGHT,
+        VK_SUBTRACT, VK_UP,
+    },
+};
 
-static SUPPRESS_ARROW_KEYS: AtomicBool = AtomicBool::new(false);
+/// Is the selector list on screen and able to act? See [`crate::selector_gate`] -- this is NOT
+/// "the bar exists": a bar minimized to its `[+]` button is closed, and so is one on the title
+/// screen, and neither may touch the player's keys.
+static SELECTOR_OPEN: AtomicBool = AtomicBool::new(false);
 static HOOKS_INSTALLED: AtomicBool = AtomicBool::new(false);
 static DINPUT_KB_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_MOUSE_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -54,16 +65,6 @@ const DIK_INSERT: usize = 0xd2;
 /// Numpad `+` and `-`, from `dinput.h`. They edit the always-on effect stack.
 const DIK_ADD: usize = 0x4e;
 const DIK_SUBTRACT: usize = 0x4a;
-
-const VK_LEFT: u32 = 0x25;
-const VK_UP: u32 = 0x26;
-const VK_RIGHT: u32 = 0x27;
-const VK_DOWN: u32 = 0x28;
-const VK_INSERT: u32 = 0x2d;
-const VK_0: u32 = 0x30;
-const VK_NUMPAD0: u32 = 0x60;
-const VK_ADD: u32 = 0x6b;
-const VK_SUBTRACT: u32 = 0x6d;
 
 const DINPUT_KEY_LEFT: usize = 1 << 0;
 const DINPUT_KEY_RIGHT: usize = 1 << 1;
@@ -131,8 +132,13 @@ const REPEAT_KEYS: [RepeatKey; 4] = [
     },
 ];
 
-pub(crate) fn set_arrow_key_suppression(enabled: bool) {
-    SUPPRESS_ARROW_KEYS.store(enabled, Ordering::Relaxed);
+/// Publish whether the selector is open to the DirectInput detours.
+///
+/// The hooks install on the FIRST call whatever the value is: they are how the mouse click on the
+/// overlay button is kept out of the game, and how a later opening is noticed at all. What `open`
+/// changes is only what the installed hook DOES -- closed, it forwards every read untouched.
+pub(crate) fn set_selector_open(open: bool) {
+    SELECTOR_OPEN.store(open, Ordering::Relaxed);
     if !HOOKS_INSTALLED.load(Ordering::Relaxed) {
         // Retried from the caller's FrameBegin tick until `dinput8.dll` is loaded -- no sleep, and
         // no install thread: a game frame is already proof that every native in the profile has
@@ -146,6 +152,10 @@ pub(crate) fn set_arrow_key_suppression(enabled: bool) {
             )),
         }
     }
+}
+
+fn selector_open() -> bool {
+    SELECTOR_OPEN.load(Ordering::Relaxed)
 }
 
 pub(crate) fn dinput_kb_hook_fires() -> usize {
@@ -311,10 +321,12 @@ fn reset_dinput_repeat_state() {
 }
 
 fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
-    if hr != 0 || data.is_null() || !effects::effect_runtime_ready() {
+    if hr != 0 || data.is_null() {
         reset_dinput_repeat_state();
         return;
     }
+
+    let open = selector_open();
 
     let alt_down =
         dinput_key_down(size, data, DIK_LEFT_ALT) || dinput_key_down(size, data, DIK_RIGHT_ALT);
@@ -339,6 +351,7 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
     let new_edges = pressed_mask & !previous_mask;
 
     let mut queued = 0usize;
+    let mut ignored = 0usize;
     for (bit, vk, needs_alt) in [
         (DINPUT_KEY_LEFT, VK_LEFT, false),
         (DINPUT_KEY_RIGHT, VK_RIGHT, false),
@@ -354,10 +367,19 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
         if new_edges & bit == 0 || (needs_alt && !alt_down) {
             continue;
         }
+        // The gate is asked per key, not once for the poll: Alt+0 has to keep working while the
+        // rest of this table is deaf, or a hidden bar could never be brought back.
+        if !selector_gate::should_handle_key(open, selector_gate::key_for_vk(vk, alt_down)) {
+            ignored = ignored.saturating_add(1);
+            continue;
+        }
         effects::queue_effect_keyboard_vk(vk, alt_down);
         queued = queued.saturating_add(1);
     }
-    let repeated = queue_held_arrow_repeats(pressed_mask, new_edges);
+    if ignored != 0 {
+        effects::record_keys_ignored_while_closed(ignored);
+    }
+    let repeated = queue_held_arrow_repeats(open, pressed_mask, new_edges);
     queued = queued.saturating_add(repeated);
     if repeated != 0 {
         DINPUT_REPEATED_SELECTOR_KEYS.fetch_add(repeated, Ordering::SeqCst);
@@ -367,9 +389,9 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
     }
 }
 
-fn queue_held_arrow_repeats(pressed_mask: usize, new_edges: usize) -> usize {
+fn queue_held_arrow_repeats(open: bool, pressed_mask: usize, new_edges: usize) -> usize {
     let held_arrows = pressed_mask & DINPUT_ARROW_KEY_MASK;
-    if held_arrows == 0 || !SUPPRESS_ARROW_KEYS.load(Ordering::Relaxed) {
+    if held_arrows == 0 || !selector_gate::should_handle_key(open, SelectorKey::Arrow) {
         if let Some(state) = DINPUT_REPEAT_STATE.get()
             && let Ok(mut state) = state.lock()
         {
@@ -402,11 +424,16 @@ fn queue_held_arrow_repeats(pressed_mask: usize, new_edges: usize) -> usize {
     queued
 }
 
+/// Blank the arrow keys out of a DirectInput keyboard read -- but ONLY while the selector is open.
+///
+/// This is the hard taking: the game polls this table for menu navigation and quick-item switching,
+/// so a byte zeroed here is a key the player pressed and the game never saw. Closed, the buffer is
+/// returned exactly as the original produced it.
 fn zero_dinput_arrow_state(hr: i32, size: u32, data: *mut u8) {
     if hr != 0
         || data.is_null()
         || size as usize <= DIK_DOWN
-        || !SUPPRESS_ARROW_KEYS.load(Ordering::Relaxed)
+        || !selector_gate::should_consume_key(selector_open(), SelectorKey::Arrow)
     {
         return;
     }
