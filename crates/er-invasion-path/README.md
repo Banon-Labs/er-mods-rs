@@ -71,9 +71,13 @@ The ones worth knowing:
 | `arrow_meters` | `3.0` | length of the no-route arrow |
 | `start_enabled` | `false` | begin with the overlay already on |
 | `marker_fxr_id` | `0` | spawn the game's OWN effects along the route; `302022` is the Rainbow Stone's lingering coloured stone. `0` is off, and off is the only setting here that leaves the game untouched |
-| `marker_spacing_meters` | `4.0` | metres between markers, measured along the path |
+| `marker_fxr_ids` | *(unset)* | one effect **per player**, in tracking order — overrides `marker_fxr_id`. e.g. `302022, 302020, 302021, 302023` |
+| `marker_spacing_meters` | `8.0` | metres between markers, measured along the path |
+| `marker_keep_behind_meters` | `12.0` | how much already-walked trail is kept behind you before those stones are removed |
 | `max_markers` | `48` | most markers one trail may hold |
 | `markers_per_pass` | `3` | markers placed per pass (~6 passes a second), so the trail creeps out from your feet rather than appearing whole |
+| `search_range_meters` | `0.0` | how far the navmesh search may range; `0` = unlimited, the engine's own default |
+| `search_budget` | `100000` | iterations the search may spend — the engine's own default. `CS::CSAiFunc` uses `800`, which fails on spiral descents |
 
 ## Pick a key no other mod in your profile reads
 
@@ -178,12 +182,37 @@ no detours and no writes to game memory — but these are real objects with real
 appear on the spawning client and on no other. A trail pointing at an invader does not point back
 at you, and nothing about your position reaches their game.
 
-**They are not yet removed.** The effects are spawned through the engine's fire-and-forget wrapper,
-which discards the control struct, so nothing here holds a handle to despawn them. A trail is no
-longer re-laid over itself, and laying stops the moment a route changes — but the stones from a
-route you have already left behind stay until the effect expires on its own. Fixing that means
-spawning through `CS::CSSfxImp::SpawnFfxInstance` directly and keeping the `FXHGSfxCtrl`, the way
-`CS::SosSignMan` does for summon signs.
+**They are removed again.** Each marker is spawned through `CS::CSSfxImp::SpawnFfxInstance`
+directly — not the fire-and-forget wrapper, which discards the control block and leaves an effect
+nothing can ever take back — and the block is kept so the effect can be torn down. Stones go when
+the route changes, when you walk past them, when a player leaves, and when the overlay is switched
+off.
+
+Removing one follows `CS::SosSignMan::ClearSignsWithSfxSetting_`, the game's own summon-sign
+cleanup: stop flag, push, finalise, release, unlink. The guard in front of it is
+`FUN_1420b6370`, and using anything weaker is what crashed a live session on 2026-08-25 — that
+function is **two levels deep**, requiring both a non-null instance pointer at `ctrl+0x08` *and*
+`FUN_1420b6280` reporting the instance still alive. A marker held for a few seconds, which every
+real trail marker is, can have its effect finish in the meantime; reading the pointer alone passes
+for that case and pushes parameters into a dead object.
+
+### Proving the effects without a second player
+
+The marker path only ever ran for a remote player's route, so its first real execution was in a
+live session — and it took the game down. Now, whenever markers are enabled, the overlay's
+self-check also spawns one at your feet, **holds it for 300 frames**, and removes it, logging each
+step:
+
+```
+marker-selfcheck: spawning fxr 302022 at the player
+marker-selfcheck: spawned, holding it
+marker-selfcheck: despawning after 300 frames held
+marker-selfcheck: PASS -- a held marker spawned and despawned without faulting
+```
+
+The hold is the point. An earlier version of this probe spawned and despawned in the same tick,
+passed, and proved nothing — the gap during which an effect can finish on its own is the entire
+bug.
 
 The drawing goes through `er_build_watermark_core::overlay_host`: if another module in this
 workspace already hosts the process's imgui context, this DLL registers as a guest and draws

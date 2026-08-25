@@ -165,6 +165,17 @@ pub(crate) unsafe fn current_use_item() -> Option<u32> {
         .map(|item| item.param_id())
 }
 
+/// The local player's feet, or `None` before there is a player.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+pub(crate) unsafe fn local_position() -> Option<[f32; 3]> {
+    // SAFETY: game thread; the reader screens the player pointer before any field is read.
+    let main_player = unsafe { live_main_player() }?;
+    physics_position(&main_player.chr_ins)
+}
+
 /// Read the session roster.
 ///
 /// Returns `None` before the world exists -- at the title screen, during a load, and in any menu

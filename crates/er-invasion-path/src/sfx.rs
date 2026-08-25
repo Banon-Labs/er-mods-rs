@@ -19,37 +19,13 @@
 
 #![cfg(windows)]
 
-use crate::log::path_log;
-
-/// `FUN_140d929f0(uint *fxrId, FloatMatrix4x4 *worldTransform)`.
+/// The fire-and-forget wrapper `FUN_140d929f0` is deliberately NOT used.
 ///
-/// The engine's own "spawn this effect there" primitive: it resolves the SFX singleton, calls
-/// `CS::CSSfxImp::SpawnFfxInstance` with the argument set the game uses for a one-shot
-/// (`..., 0, 8, -1, -1, -1`), and performs the `FX4HG::FXHGSfxCtrl` construct/release bookkeeping
-/// around it. Fire and forget: nothing is returned to keep or free.
+/// It resolves the singleton, spawns, and then throws the control block away -- which is why the
+/// first version of this feature could place stones and never take them back. Everything here
+/// goes through [`SPAWN_FFX_INSTANCE_RVA`] and keeps the block.
 ///
-/// This is precisely what `CS::ChrIns::SpawnOneShotSfx` calls once per spawn transform after it
-/// has resolved a dummypoly into a list of them. Calling it directly is what removes the need for
-/// a character or an asset to hang the effect off -- the three named `SpawnOneShotSfx` overloads
-/// are all attachment-based and none of them takes a bare position.
-///
-/// Byte-verified against `eldenring-deobf.bin` (shift 0): `48 8b c4 55 48 8d a8 48 f8 ff ff`.
-const SPAWN_FXR_AT_TRANSFORM_RVA: u32 = 0xd9_29f0;
-
-/// `GLOBAL_CSSfx`, the `CSSfxImp` singleton.
-///
-/// Read and checked HERE, before the call, because the callee's own null check is a `DLPanic` --
-/// `"未初期化のシングルトンにアクセスしました。"`, a subroutine that does not return. Calling the
-/// spawn before the SFX manager exists would not fail, it would take the game down. The singleton
-/// is absent for the whole of boot, which is exactly when a task like ours starts ticking.
-///
-/// From `140d92a37: mov 0x2ff0f7a(%rip),%rcx  # 0x143d839b8`, immediately followed by the
-/// `test %rcx,%rcx` that guards that panic. NOT `0x143c5adb0` -- that is `__security_cookie`,
-/// loaded first and immediately xor'd with `rsp`, and mistaking it for the singleton would hand
-/// the engine a stack-derived value as a `this` pointer.
 const GLOBAL_CSSFX_RVA: u32 = 0x3d8_39b8;
-
-type SpawnFxrFn = unsafe extern "C" fn(*const u32, *const [f32; 16]);
 
 /// A world transform with no rotation and no scale, positioned at `position`.
 ///
@@ -83,87 +59,262 @@ fn transform_at(position: [f32; 3]) -> [f32; 16] {
     ]
 }
 
-/// Is the SFX manager up?
-///
-/// # Safety
-///
-/// Must be called on the game thread.
-unsafe fn sfx_manager_ready() -> bool {
-    let Ok(module_base) = er_game_base::mem::game_module_base() else {
-        return false;
-    };
-    let address = module_base + GLOBAL_CSSFX_RVA as usize;
-    // SAFETY: fault-tolerant read; returns None rather than faulting if the page is not mapped.
-    let singleton = unsafe { er_game_base::mem::safe_read_usize(address) };
-    singleton.is_some_and(|singleton| {
-        // SAFETY: a plausibility screen on the raw value; it reads nothing through the pointer.
-        singleton != 0 && unsafe { er_game_base::mem::is_heap_aligned_ptr(singleton) }
-    })
-}
-
 /// Resolve a game function by RVA, refusing anything that is not inside the game image.
 fn function(rva: u32) -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
     Some(module_base + rva as usize)
 }
 
-/// Spawn one effect at a world position. Returns whether the call was made.
+/// Bytes of `UnkSfxCtrlStruct`, the control block `SpawnFfxInstance` writes into.
 ///
-/// Refuses rather than risks: a zero id, an SFX manager that is not up yet, or a coordinate that
-/// is not finite all return `false` without calling the engine.
+/// Ghidra lays it out as `0x30 + 0x3d8 = 0x408`, and `FUN_140d929f0`'s own stack spaces two of
+/// them `0x838 - 0x428 = 0x410` apart -- while `FUN_1420b6ac0` is handed a `0x3e0` block starting
+/// at `+0x30`, i.e. through `0x410`. `0x440` is over-allocated on purpose: every byte is zeroed,
+/// the slack costs nothing, and being short here would let the engine write past the end.
+const CTRL_BYTES: usize = 0x440;
+
+/// `CS::CSSfxImp::SpawnFfxInstance` -- RVA `0xd95280`. Called directly rather than through
+/// `FUN_140d929f0`, because the wrapper discards the control block this returns and a discarded
+/// control block is an effect that can never be removed.
+const SPAWN_FFX_INSTANCE_RVA: u32 = 0xd9_5280;
+
+/// `FUN_1420b6370(ctrl) -> bool` -- the engine's OWN liveness check, and it is two levels deep:
+/// the instance pointer at `ctrl+0x08` must be non-null AND `FUN_1420b6280` must report that
+/// instance still alive. That second level is why this crate no longer reads `+0x08` itself and
+/// has no constant for it.
 ///
-/// # Safety
+/// Reading `ctrl+0x08` alone -- which is what this module did first -- passes for a control block
+/// whose effect has already finished, and the teardown then pushes parameters into a dead object.
+/// The engine's sign cleanup calls this before deciding anything, and so does this now.
+const CTRL_IS_ALIVE_RVA: u32 = 0x20b_6370;
+
+/// `FUN_1420b6ac0(ctrl, params, len, arg4)` -- push the parameter block to the live instance.
+const CTRL_PUSH_PARAMS_RVA: u32 = 0x20b_6ac0;
+/// `FUN_1420b63c0(ctrl)` -- finalise: acts on the instance at `ctrl+0x08` if there is one.
+const CTRL_FINALISE_RVA: u32 = 0x20b_63c0;
+/// `FUN_141c92f30(ctrl + 0x20)` -- tear down the control's second sub-object.
+const CTRL_SUBOBJECT_RELEASE_RVA: u32 = 0x1c9_2f30;
+/// `FUN_1420b5c40(ctrl)` -- unlink the control from the instance's observer list. NOT a kill:
+/// on its own this only unregisters, which is why the stop above has to happen first.
+const CTRL_UNLINK_RVA: u32 = 0x20b_5c40;
+
+/// Offsets inside the control block, all from the SAME base -- the pointer handed to
+/// `SpawnFfxInstance` as its out-parameter.
 ///
-/// Must be called on the game thread. The engine spawns on the calling thread and touches its own
-/// allocators, so calling this from the render thread would race the game's own SFX work.
-pub(crate) unsafe fn spawn_at(fxr_id: u32, position: [f32; 3]) -> bool {
-    if fxr_id == 0 || !position.iter().all(|axis| axis.is_finite()) {
-        return false;
-    }
-    // SAFETY: game thread; a fault-tolerant read of one global.
-    if !unsafe { sfx_manager_ready() } {
-        return false;
-    }
-    let Some(spawn) = function(SPAWN_FXR_AT_TRANSFORM_RVA) else {
-        return false;
-    };
-    // SAFETY: a validated address inside the game image, called with the two arguments the
-    // engine's own call site passes: a pointer to the id and a pointer to a 4x4 transform.
-    let spawn: SpawnFxrFn = unsafe { std::mem::transmute::<usize, SpawnFxrFn>(spawn) };
-    let transform = transform_at(position);
-    let id = fxr_id;
-    // SAFETY: both pointers are to live locals that outlive the call, which copies from them.
-    unsafe { spawn(&raw const id, &raw const transform) };
-    true
+/// Deriving them from one base is not pedantry. The sign code this recipe came from reaches them
+/// through `FXHGSfxCtrl_Sign.super_FXHGSfxCtrl.field2_0x10`, so its printed offsets are relative
+/// to that inner field and transcribing them directly would be wrong by `0x10` -- into the live
+/// observer list.
+mod ctrl {
+    /// Sub-object released during teardown.
+    pub(super) const SUBOBJECT: usize = 0x20;
+    /// Start of the parameter block.
+    pub(super) const PARAMS: usize = 0x30;
+    /// Length of that block, as `FUN_1420b6ac0` is told.
+    pub(super) const PARAMS_LEN: i32 = 0x3e0;
+    /// The STOP flag (block offset `0x3d4`).
+    ///
+    /// One byte below the AUTO-RELEASE flag at `0x405` that `FUN_141c93450` sets. Setting that
+    /// one instead hands the effect to the engine to manage and it can never be removed -- which
+    /// is exactly the bug being fixed here, so the two are named rather than spelled inline.
+    pub(super) const STOP_FLAG: usize = 0x404;
+    /// Three fields the sign teardown clears before pushing (block `0x18`/`0x20`/`0x28`).
+    pub(super) const CLEARED: [usize; 3] = [0x48, 0x50, 0x58];
 }
 
-/// Spawn a run of markers, reporting how many were placed.
+type SpawnInstanceFn = unsafe extern "C" fn(
+    usize,
+    *mut u8,
+    *const u32,
+    *const [f32; 16],
+    u64,
+    i32,
+    i16,
+    i16,
+    i32,
+) -> *mut u8;
+type CtrlPushFn = unsafe extern "C" fn(*mut u8, *mut u8, i32, usize) -> u64;
+type CtrlAliveFn = unsafe extern "C" fn(*mut u8) -> u64;
+type CtrlVoidFn = unsafe extern "C" fn(*mut u8);
+
+/// A spawned effect, kept so it can be removed again.
+///
+/// The control block is boxed and 16-byte aligned: the engine writes a `FloatMatrix4x4` worth of
+/// state through it, and it must not move once the instance holds a pointer back to it -- which
+/// it does, through the observer list `FUN_1420b5c40` unlinks from.
+#[repr(C, align(16))]
+struct CtrlBlock([u8; CTRL_BYTES]);
+
+pub(crate) struct Marker {
+    ctrl: Box<CtrlBlock>,
+}
+
+impl Marker {
+    fn field(&mut self, offset: usize) -> *mut u8 {
+        // SAFETY: every offset used is inside CTRL_BYTES, checked by the const assertion below.
+        unsafe { self.ctrl.0.as_mut_ptr().add(offset) }
+    }
+}
+
+const _: () = {
+    assert!(ctrl::STOP_FLAG < CTRL_BYTES);
+    assert!(ctrl::PARAMS + ctrl::PARAMS_LEN as usize <= CTRL_BYTES);
+};
+
+/// Spawn an effect and KEEP the handle, so it can be despawned later.
 ///
 /// # Safety
 ///
 /// Must be called on the game thread.
-pub(crate) unsafe fn spawn_markers(fxr_id: u32, positions: &[[f32; 3]]) -> usize {
-    let mut placed = 0;
-    for position in positions {
-        // SAFETY: game thread, as this function's own contract requires.
-        if unsafe { spawn_at(fxr_id, *position) } {
-            placed += 1;
+pub(crate) unsafe fn spawn_tracked(fxr_id: u32, position: [f32; 3]) -> Option<Marker> {
+    if fxr_id == 0 || !position.iter().all(|axis| axis.is_finite()) {
+        return None;
+    }
+    // SAFETY: game thread; a fault-tolerant read of one global.
+    let singleton = unsafe { sfx_singleton() }?;
+    let spawn = function(SPAWN_FFX_INSTANCE_RVA)?;
+    // SAFETY: a validated address inside the game image.
+    let spawn: SpawnInstanceFn = unsafe { std::mem::transmute::<usize, SpawnInstanceFn>(spawn) };
+
+    let mut marker = Marker {
+        ctrl: Box::new(CtrlBlock([0u8; CTRL_BYTES])),
+    };
+    let transform = transform_at(position);
+    let id = fxr_id;
+    // SAFETY: the callee constructs the block it is given before writing to it, and the trailing
+    // arguments are the ones the engine's own call site passes for a one-shot.
+    unsafe {
+        spawn(
+            singleton,
+            marker.ctrl.0.as_mut_ptr(),
+            &raw const id,
+            &raw const transform,
+            0,
+            8,
+            -1,
+            -1,
+            -1,
+        );
+    }
+    Some(marker)
+}
+
+/// Remove a spawned effect, following the sequence `CS::SosSignMan` uses for summon signs.
+///
+/// # Safety
+///
+/// Must be called on the game thread, with a marker this module spawned.
+pub(crate) unsafe fn despawn(mut marker: Marker) {
+    let (Some(push), Some(finalise), Some(subobject), Some(unlink)) = (
+        function(CTRL_PUSH_PARAMS_RVA),
+        function(CTRL_FINALISE_RVA),
+        function(CTRL_SUBOBJECT_RELEASE_RVA),
+        function(CTRL_UNLINK_RVA),
+    ) else {
+        return;
+    };
+    // SAFETY: four validated addresses inside the game image.
+    let (push, finalise, subobject, unlink): (CtrlPushFn, CtrlVoidFn, CtrlVoidFn, CtrlVoidFn) = unsafe {
+        (
+            std::mem::transmute::<usize, CtrlPushFn>(push),
+            std::mem::transmute::<usize, CtrlVoidFn>(finalise),
+            std::mem::transmute::<usize, CtrlVoidFn>(subobject),
+            std::mem::transmute::<usize, CtrlVoidFn>(unlink),
+        )
+    };
+
+    // Ask the engine whether this control still has a LIVE instance, rather than reading the
+    // pointer and hoping. A marker held for a few seconds -- which every real trail marker is --
+    // can have its effect finish on its own in the meantime, and pushing parameters into a
+    // finished instance is how this crashed a live session on 2026-08-25.
+    let alive = match function(CTRL_IS_ALIVE_RVA) {
+        Some(is_alive) => {
+            // SAFETY: a validated address in the game image, called on our own control block.
+            let is_alive: CtrlAliveFn =
+                unsafe { std::mem::transmute::<usize, CtrlAliveFn>(is_alive) };
+            // SAFETY: the block was constructed by `SpawnFfxInstance`.
+            (unsafe { is_alive(marker.field(0)) } & 0xff) != 0
+        }
+        // Without the predicate, refuse to touch the instance at all. Leaking one effect is a
+        // cosmetic problem; writing into a dead one is not.
+        None => false,
+    };
+    if alive {
+        // SAFETY: every write below is inside our own zeroed block, at offsets the const
+        // assertion above bounds.
+        unsafe {
+            marker.field(ctrl::STOP_FLAG).write(1);
+            for offset in ctrl::CLEARED {
+                marker.field(offset).cast::<u64>().write(0);
+            }
+        }
+        let base = marker.field(0);
+        let params = marker.field(ctrl::PARAMS);
+        // SAFETY: the block is constructed and still bound to a live instance.
+        unsafe {
+            push(base, params, ctrl::PARAMS_LEN, 0);
+            finalise(base);
         }
     }
-    if placed == 0 && !positions.is_empty() {
-        path_log(format_args!(
-            "markers: {} position(s) and none spawned -- fxr id {fxr_id}, SFX manager up: {}",
-            positions.len(),
-            // SAFETY: game thread.
-            unsafe { sfx_manager_ready() }
-        ));
+    let base = marker.field(0);
+    let subobject_ptr = marker.field(ctrl::SUBOBJECT);
+    // SAFETY: teardown of our own block, in the order the engine's own sign cleanup uses.
+    unsafe {
+        subobject(subobject_ptr);
+        unlink(base);
     }
-    placed
+}
+
+/// The `CSSfxImp` singleton, or `None` before it exists.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+unsafe fn sfx_singleton() -> Option<usize> {
+    let module_base = er_game_base::mem::game_module_base().ok()?;
+    // SAFETY: fault-tolerant read; None rather than a fault if the page is not mapped.
+    let singleton =
+        unsafe { er_game_base::mem::safe_read_usize(module_base + GLOBAL_CSSFX_RVA as usize) }?;
+    // SAFETY: a plausibility screen on the raw value; reads nothing through the pointer.
+    (singleton != 0 && unsafe { er_game_base::mem::is_heap_aligned_ptr(singleton) })
+        .then_some(singleton)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every offset the teardown writes through must land inside the block we allocate. These are
+    /// all compile-time constants, so they are checked at compile time -- a runtime assertion here
+    /// would fire after the wild write it was meant to prevent.
+    #[test]
+    fn every_control_offset_lands_inside_the_block_we_allocate() {
+        const {
+            assert!(ctrl::SUBOBJECT < CTRL_BYTES);
+            assert!(ctrl::STOP_FLAG < CTRL_BYTES);
+            assert!(ctrl::PARAMS + ctrl::PARAMS_LEN as usize <= CTRL_BYTES);
+            let mut index = 0;
+            while index < ctrl::CLEARED.len() {
+                assert!(ctrl::CLEARED[index] + 8 <= CTRL_BYTES);
+                index += 1;
+            }
+        }
+    }
+
+    /// The stop flag and the auto-release flag are ADJACENT bytes. Setting the wrong one leaves
+    /// the effect running forever under the engine's own management, which is the exact bug the
+    /// despawn exists to fix, so the distance between them is asserted rather than trusted.
+    #[test]
+    fn the_stop_flag_is_not_the_auto_release_flag() {
+        const AUTO_RELEASE_FLAG: usize = 0x405;
+        assert_eq!(ctrl::STOP_FLAG + 1, AUTO_RELEASE_FLAG);
+    }
+
+    #[test]
+    fn the_control_block_is_aligned_for_the_matrix_the_engine_writes_through_it() {
+        assert_eq!(align_of::<CtrlBlock>(), 16);
+        assert_eq!(size_of::<CtrlBlock>(), CTRL_BYTES);
+    }
 
     #[test]
     fn a_transform_carries_the_position_in_row_three_and_is_otherwise_identity() {

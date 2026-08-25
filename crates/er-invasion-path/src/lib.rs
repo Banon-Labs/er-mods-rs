@@ -84,11 +84,13 @@ const ROSTER_EVERY_TICKS: usize = 10;
 
 /// Frames a completed route is kept before its target is re-asked.
 ///
-/// A route is only wrong once someone has moved a body-length or two, and the search is not free
-/// -- it runs on the AI world's own job alongside every NPC in the map. Half a second of staleness
-/// on a line drawn across a hillside is invisible.
+/// Was 30 -- half a second -- which is how often the ROUTE was re-asked, and therefore how often
+/// a trail could be torn down and re-laid. A live run at that rate placed over a thousand stones
+/// in three minutes: the target moves, the route legitimately changes, and the whole trail
+/// restarts. Two seconds is still far faster than anyone crosses a trail's worth of ground, and
+/// it cuts the churn by four.
 #[cfg(windows)]
-const ROUTE_REFRESH_TICKS: usize = 30;
+const ROUTE_REFRESH_TICKS: usize = 120;
 
 #[cfg(windows)]
 static START: Once = Once::new();
@@ -109,6 +111,10 @@ static SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
 /// World-marker effects actually handed to the engine.
 #[cfg(windows)]
 static MARKERS_SPAWNED: AtomicUsize = AtomicUsize::new(0);
+/// World-marker effects taken back off the engine again. If this does not track `markers`, the
+/// stones are accumulating and the despawn is not working.
+#[cfg(windows)]
+static MARKERS_REMOVED: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(windows)]
 unsafe extern "system" {
@@ -335,8 +341,11 @@ fn tick(state: &mut TaskState) {
         let enabled = !ENABLED.fetch_xor(true, Ordering::SeqCst);
         if !enabled {
             render::clear();
-            for (_, target) in state.targets.drain() {
-                abandon(&mut state.draining, target.pending);
+            for (_, mut target) in state.targets.drain() {
+                abandon(&mut state.draining, target.pending.take());
+                // SAFETY: game thread; every marker was spawned by this module.
+                let removed = unsafe { target.trail.clear_placed() };
+                MARKERS_REMOVED.fetch_add(removed, Ordering::Relaxed);
             }
             // Re-armed rather than left Done: switching the overlay off and on is what a user does
             // after moving somewhere else, and the navmesh answer is a property of where they are
@@ -357,6 +366,8 @@ fn tick(state: &mut TaskState) {
     // Before anything else, and regardless of whether the overlay is on: a request the engine is
     // still holding on our behalf is not released by the player pressing a key.
     drain_abandoned(state);
+    // SAFETY: the task runs on the game thread.
+    unsafe { drain_held_marker(ticks) };
 
     if ENABLED.load(Ordering::SeqCst) && ticks.is_multiple_of(ROSTER_EVERY_TICKS) {
         rebuild(state, ticks, &config);
@@ -365,7 +376,7 @@ fn tick(state: &mut TaskState) {
     if ticks.is_multiple_of(STATUS_LOG_TICKS) {
         path_log(format_args!(
             "status: enabled={} overlay_installed={} draws={} last_segments={} tracked_targets={} \
-             routes_found={} arrows={} suppressed={} draining={} markers={}",
+             routes_found={} arrows={} suppressed={} draining={} markers={} removed={} live={}",
             ENABLED.load(Ordering::SeqCst),
             render::installed(),
             render::draws(),
@@ -379,6 +390,14 @@ fn tick(state: &mut TaskState) {
             // the world's shared request ring is the thing at risk -- not this overlay.
             state.draining.len(),
             MARKERS_SPAWNED.load(Ordering::Relaxed),
+            MARKERS_REMOVED.load(Ordering::Relaxed),
+            // What is actually in the world right now. If this grows without bound the despawn
+            // is not working, whatever the two counters above say.
+            state
+                .targets
+                .values()
+                .map(|target| target.trail.placed_count())
+                .sum::<usize>(),
         ));
     }
 }
@@ -393,7 +412,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
         return;
     };
 
-    advance_self_check(state, &roster);
+    advance_self_check(state, &roster, config);
 
     // The line that makes an empty screen readable. A run that draws nothing has three
     // indistinguishable causes -- nobody in the roster, every navmesh request refused, every
@@ -421,8 +440,12 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
         .copied()
         .collect();
     for handle in departed {
-        if let Some(target) = state.targets.remove(&handle) {
-            abandon(&mut state.draining, target.pending);
+        if let Some(mut target) = state.targets.remove(&handle) {
+            abandon(&mut state.draining, target.pending.take());
+            // A player who left takes their trail with them.
+            // SAFETY: game thread; every marker was spawned by this module.
+            let removed = unsafe { target.trail.clear_placed() };
+            MARKERS_REMOVED.fetch_add(removed, Ordering::Relaxed);
         }
     }
 
@@ -436,8 +459,11 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
             // distance is the normal course of a fight, and it happens with a request in flight
             // every time. Dropping it here would burn a slot out of the world's shared ring on
             // every approach.
-            if let Some(target) = state.targets.remove(&remote.field_ins_handle) {
-                abandon(&mut state.draining, target.pending);
+            if let Some(mut target) = state.targets.remove(&remote.field_ins_handle) {
+                abandon(&mut state.draining, target.pending.take());
+                // SAFETY: game thread; every marker was spawned by this module.
+                let removed = unsafe { target.trail.clear_placed() };
+                MARKERS_REMOVED.fetch_add(removed, Ordering::Relaxed);
             }
             continue;
         }
@@ -473,6 +499,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
                 navpath::request(
                     roster.local_chr_ins,
                     roster.local_field_ins_handle,
+                    navpath::SearchLimits::new(config.search_range_meters, config.search_budget),
                     roster.local_position,
                     remote.position,
                 )
@@ -494,24 +521,41 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
         }
 
         let slot = state.palette.slot_for(remote.field_ins_handle);
+        // This player's own effect. The palette slot is already stable across frames, so a given
+        // player keeps the same stones for as long as they are in the session.
+        let marker_fxr = config.marker_fxr_for(slot);
         let shape = match target.route.as_ref() {
             Some(points) if points.len() >= 2 => {
                 // The game's own effects along the route, if the player asked for them. Only from
                 // a route that actually exists -- an arrow gets no trail, because there is no
                 // walkable line to lay one along.
-                if config.marker_fxr_id > 0 {
+                if let Some(marker_fxr) = marker_fxr {
                     // Retargeting first is what stops the pile-up: a route that has not moved
-                    // keeps the trail it already has instead of laying a second one over it.
-                    target.trail.retarget(geometry::resample(
+                    // keeps the trail it already has instead of laying a second one over it. A
+                    // route that HAS moved tears its old stones down before laying new ones.
+                    let spots = geometry::resample(
                         points,
                         config.marker_spacing_meters,
                         config.max_markers,
-                    ));
+                    );
+                    if target.trail.retarget(spots) {
+                        // SAFETY: game thread; every marker was spawned by this module.
+                        let removed = unsafe { target.trail.clear_placed() };
+                        MARKERS_REMOVED.fetch_add(removed, Ordering::Relaxed);
+                    }
+                    // Stones you have already walked past are clutter behind you, so they go as
+                    // you pass them rather than waiting for the whole route to change.
+                    // SAFETY: game thread; every marker was spawned by this module.
+                    let behind = unsafe {
+                        target
+                            .trail
+                            .prune_behind(roster.local_position, config.marker_keep_behind_meters)
+                    };
+                    MARKERS_REMOVED.fetch_add(behind, Ordering::Relaxed);
                     if !target.trail.finished() {
-                        let batch = target.trail.next_batch(config.markers_per_pass);
-                        // SAFETY: the task runs on the game thread, which is where the engine
-                        // expects its SFX work; the spawn screens the singleton before calling.
-                        let placed = unsafe { sfx::spawn_markers(config.marker_fxr_id, batch) };
+                        // SAFETY: as above.
+                        let placed =
+                            unsafe { target.trail.lay_next(marker_fxr, config.markers_per_pass) };
                         MARKERS_SPAWNED.fetch_add(placed, Ordering::Relaxed);
                     }
                 }
@@ -538,8 +582,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
         // imgui line on top of it is a second drawing of the same thing, which is what the first
         // live run looked like. The ARROW still draws either way: there is no trail for a target
         // the navmesh cannot reach, so suppressing it would leave nothing at all.
-        let markers_own_this_route =
-            config.marker_fxr_id > 0 && matches!(shape, RouteShape::Walk(_));
+        let markers_own_this_route = marker_fxr.is_some() && matches!(shape, RouteShape::Walk(_));
         if !markers_own_this_route {
             snapshot.routes.push(Route::new(
                 shape,
@@ -555,7 +598,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
 
 /// Drive [`SelfCheck`] one step. Costs one navmesh request, once per enable, and draws nothing.
 #[cfg(windows)]
-fn advance_self_check(state: &mut TaskState, roster: &game::Roster) {
+fn advance_self_check(state: &mut TaskState, roster: &game::Roster, config: &config::PathConfig) {
     match std::mem::replace(&mut state.self_check, SelfCheck::Done) {
         SelfCheck::Done => {}
         SelfCheck::Idle => {
@@ -574,6 +617,7 @@ fn advance_self_check(state: &mut TaskState, roster: &game::Roster) {
                 navpath::request(
                     roster.local_chr_ins,
                     roster.local_field_ins_handle,
+                    navpath::SearchLimits::new(config.search_range_meters, config.search_budget),
                     roster.local_position,
                     target,
                 )
@@ -616,6 +660,8 @@ fn advance_self_check(state: &mut TaskState, roster: &game::Roster) {
                         "selfcheck: PASS -- {} waypoints over {distance_meters:.0}m",
                         points.len()
                     ));
+                    // SAFETY: game thread.
+                    unsafe { marker_selfcheck(config) };
                 }
                 navpath::PollOutcome::NoRoute => {
                     path_log(format_args!(
@@ -625,6 +671,87 @@ fn advance_self_check(state: &mut TaskState, roster: &game::Roster) {
                 }
             }
         }
+    }
+}
+
+/// Prove the SFX spawn/despawn round-trip WITHOUT a second player.
+///
+/// The marker path only runs for a remote player's route, so the first execution of a direct
+/// `SpawnFfxInstance` call and the sign-style teardown was in a live Seamless session -- and it
+/// took the game down on 2026-08-25, from a log whose last line was `selfcheck: PASS` and whose
+/// next line never came. That is a debugging loop that costs somebody else's session every turn.
+///
+/// So when markers are enabled, one is spawned at the player's own feet and immediately removed
+/// again, with a log line on each side. Solo, in any world, in one tick. If the engine is going
+/// to fault on either half, it faults here where the only thing lost is a probe.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+#[cfg(windows)]
+unsafe fn marker_selfcheck(config: &config::PathConfig) {
+    let Some(fxr_id) = config.marker_fxr_for(0) else {
+        return;
+    };
+    // SAFETY: game thread; the reader screens the player pointer before touching it.
+    let Some(at) = (unsafe { game::local_position() }) else {
+        return;
+    };
+    path_log(format_args!(
+        "marker-selfcheck: spawning fxr {fxr_id} at the player"
+    ));
+    // SAFETY: game thread.
+    let Some(marker) = (unsafe { sfx::spawn_tracked(fxr_id, at) }) else {
+        path_log(format_args!(
+            "marker-selfcheck: REFUSED -- the SFX manager is not up, nothing was spawned"
+        ));
+        return;
+    };
+    path_log(format_args!("marker-selfcheck: spawned, holding it"));
+    // HELD, not despawned in the same tick. Despawning immediately proved nothing: every real
+    // trail marker lives for seconds, and it is that gap -- during which the effect can finish on
+    // its own, leaving a control block pointing at a dead instance -- that took the game down.
+    HELD_MARKER.with(|held| *held.borrow_mut() = Some((marker, TICKS.load(Ordering::Relaxed))));
+}
+
+/// Frames the self-check holds its marker before removing it, so the round-trip spans the same
+/// kind of gap a real trail marker does.
+#[cfg(windows)]
+const MARKER_SELFCHECK_HOLD_TICKS: usize = 300;
+
+#[cfg(windows)]
+thread_local! {
+    /// The self-check's held marker. Thread-local because it is only ever touched from the game
+    /// thread, and a `static mut` would be a lie about that.
+    static HELD_MARKER: std::cell::RefCell<Option<(sfx::Marker, usize)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Despawn the self-check's held marker once it has been held long enough.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+#[cfg(windows)]
+unsafe fn drain_held_marker(ticks: usize) {
+    let due = HELD_MARKER.with(|held| {
+        let mut held = held.borrow_mut();
+        match held.as_ref() {
+            Some((_, since)) if ticks.saturating_sub(*since) >= MARKER_SELFCHECK_HOLD_TICKS => {
+                held.take().map(|(marker, _)| marker)
+            }
+            _ => None,
+        }
+    });
+    if let Some(marker) = due {
+        path_log(format_args!(
+            "marker-selfcheck: despawning after {MARKER_SELFCHECK_HOLD_TICKS} frames held"
+        ));
+        // SAFETY: game thread; this handle came from `sfx::spawn_tracked`.
+        unsafe { sfx::despawn(marker) };
+        path_log(format_args!(
+            "marker-selfcheck: PASS -- a held marker spawned and despawned without faulting"
+        ));
     }
 }
 

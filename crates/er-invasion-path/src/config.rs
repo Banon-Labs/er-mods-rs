@@ -53,22 +53,23 @@ pub(crate) const DEFAULT_MAX_TARGETS: usize = 6;
 /// Length of the "no walkable route" arrow, in metres of world space.
 pub(crate) const DEFAULT_ARROW_METERS: f32 = 3.0;
 
-/// FXR spawned at each point along a route when world markers are switched on.
-///
-/// `302022` is the Rainbow Stone's LINGERING coloured stone -- the one that stays on the ground
-/// after the throw, which is the whole reason it is the right effect for a trail. Its siblings
-/// are `302020` (held in hand), `302021` (the projectile in flight) and `302023` (the burst on
-/// impact); all three are momentary, so a trail built from them would flash once and vanish.
-///
-/// Zero means "no world markers", and that is the shipped default. Spawning these is the only
-/// thing this DLL does that changes the game, so it is opt-in rather than opt-out.
-pub(crate) const DEFAULT_MARKER_FXR_ID: u32 = 0;
-
 /// Metres between markers along a route.
-pub(crate) const DEFAULT_MARKER_SPACING_METERS: f32 = 4.0;
+pub(crate) const DEFAULT_MARKER_SPACING_METERS: f32 = 8.0;
 
 /// Most markers a single route's trail may hold.
 pub(crate) const DEFAULT_MAX_MARKERS: usize = 48;
+
+/// The value `params+0x20` takes for "no range limit" -- the engine's own initialiser writes
+/// `0xbf800000`, which is `-1.0f`.
+pub(crate) const UNLIMITED_SEARCH_RANGE: f32 = -1.0;
+
+/// `params+0x24`: iterations the engine may spend. The engine's own default.
+pub(crate) const DEFAULT_SEARCH_BUDGET: i32 = 100_000;
+
+/// Metres of already-walked trail kept behind you before the stones are torn down.
+///
+/// Not zero: a trail that ends exactly at your feet reads as broken rather than as followed.
+pub(crate) const DEFAULT_MARKER_KEEP_BEHIND_METERS: f32 = 12.0;
 
 /// Markers spawned per roster pass, i.e. per ~sixth of a second.
 ///
@@ -146,19 +147,59 @@ start_enabled = false
 # watch the difference immediately.
 marker_fxr_id = 0
 
+# One effect per player instead of one for everybody, assigned in the order players are tracked so
+# a given player keeps the same stones for as long as they are in your session. Overrides
+# marker_fxr_id when present. An FXR carries no tint -- SpawnFfxInstance's spare arguments feed
+# time-of-day and weather, not colour -- so telling two players apart means two different effects,
+# not two shades of one.
+#
+#   marker_fxr_ids = 302022, 302020, 302021, 302023
+
 # Metres between markers along the route. Markers are spaced evenly along the PATH, not placed at
 # navmesh corners, or a doorway would get six of them and open ground none.
-marker_spacing_meters = 4.0
+marker_spacing_meters = 8.0
 
 # Most markers one route's trail may hold.
 max_markers = 48
+
+# Metres of already-walked trail kept behind you before those stones are torn down. The markers
+# you have passed are clutter; a few are kept so the trail does not appear to end at your feet.
+marker_keep_behind_meters = 12.0
 
 # Markers placed per pass (about six passes a second). The trail is laid from your feet outwards
 # a few at a time rather than all at once, and laying STOPS the moment the route changes -- the
 # far end of a route to somebody who is moving was never going to be where they are by the time
 # you got there. Raise it for a trail that appears faster, lower it for one that creeps.
 markers_per_pass = 3
+
+# ---------------------------------------------------------------------------
+# How hard the engine looks for a route. Both of these WERE copied from CS::CSAiFunc -- an NPC
+# working out how to walk at something it can already see -- and that was the wrong place to copy
+# from. A downward corkscrew has an enormous path length inside a tiny footprint, so an NPC-sized
+# iteration budget is spent going round and round before it reaches the bottom, and the search
+# reports "no route", which looks exactly like there not being one.
+#
+# These are the engine's OWN defaults now.
+
+# Metres the search may range. 0 or negative = unlimited, which is what the engine itself sets.
+search_range_meters = 0.0
+
+# Iterations the search may spend. The engine's own default is 100000; CSAiFunc uses 800.
+search_budget = 100000
 "#;
+
+impl PathConfig {
+    /// The effect for a target holding palette slot `slot`, or `None` when markers are off.
+    ///
+    /// Wraps rather than running out: with more players than effects two of them share a look,
+    /// which is worse than telling them apart and far better than one of them getting no trail.
+    pub(crate) fn marker_fxr_for(&self, slot: usize) -> Option<u32> {
+        if self.marker_fxr_ids.is_empty() {
+            return None;
+        }
+        Some(self.marker_fxr_ids[slot % self.marker_fxr_ids.len()])
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct PathConfig {
@@ -172,10 +213,14 @@ pub(crate) struct PathConfig {
     pub(crate) max_targets: usize,
     pub(crate) arrow_meters: f32,
     pub(crate) start_enabled: bool,
-    pub(crate) marker_fxr_id: u32,
     pub(crate) marker_spacing_meters: f32,
     pub(crate) max_markers: usize,
     pub(crate) markers_per_pass: usize,
+    pub(crate) search_range_meters: f32,
+    pub(crate) search_budget: i32,
+    pub(crate) marker_keep_behind_meters: f32,
+    /// Effects by palette slot. Empty means markers are off.
+    pub(crate) marker_fxr_ids: Vec<u32>,
 }
 
 /// The parsed config, plus the exact text it was parsed from.
@@ -225,6 +270,52 @@ fn positive_float(text: &str, key: &str, default: f32) -> f32 {
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(default)
+}
+
+/// The configured search range, in the form the engine's parameter block wants.
+///
+/// The engine reads `params+0x20` as a limit where **negative means unlimited**, which is not a
+/// number anybody would type on purpose, so the config spells it `0` and this converts. Anything
+/// non-finite is a typo, and a typo must not silently become a tighter search than the player
+/// asked for -- a search that gives up reports "no route", which reads as "you cannot walk
+/// there" rather than as a broken setting.
+fn search_range(text: &str) -> f32 {
+    match setting(text, "search_range_meters").and_then(|value| value.parse::<f32>().ok()) {
+        Some(range) if range.is_finite() && range > 0.0 => range,
+        // Both "0" (the documented spelling) and a malformed value land on unlimited.
+        _ => UNLIMITED_SEARCH_RANGE,
+    }
+}
+
+/// The configured iteration budget, never zero or negative.
+fn search_budget(text: &str) -> i32 {
+    setting(text, "search_budget")
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|budget| *budget > 0)
+        .unwrap_or(DEFAULT_SEARCH_BUDGET)
+}
+
+/// The per-slot effect list.
+///
+/// `marker_fxr_ids` wins when present; otherwise the single `marker_fxr_id` is used for every
+/// target, which is what a config written before this setting existed will do. Zero anywhere in
+/// the list is dropped rather than spawned -- `0` is the "no markers" value and spawning it would
+/// ask the engine for effect zero.
+fn marker_fxr_ids(text: &str) -> Vec<u32> {
+    if let Some(list) = setting(text, "marker_fxr_ids") {
+        let ids: Vec<u32> = list
+            .split(',')
+            .filter_map(|entry| entry.trim().parse::<u32>().ok())
+            .filter(|id| *id > 0)
+            .collect();
+        if !ids.is_empty() {
+            return ids;
+        }
+    }
+    match setting(text, "marker_fxr_id").and_then(|value| value.parse::<u32>().ok()) {
+        Some(id) if id > 0 => vec![id],
+        _ => Vec::new(),
+    }
 }
 
 fn parse_config(text: &str, path: PathBuf) -> PathConfig {
@@ -279,9 +370,6 @@ fn parse_config(text: &str, path: PathBuf) -> PathConfig {
             .unwrap_or(DEFAULT_MAX_TARGETS),
         arrow_meters: positive_float(text, "arrow_meters", DEFAULT_ARROW_METERS),
         start_enabled: setting(text, "start_enabled").is_some_and(|value| value == "true"),
-        marker_fxr_id: setting(text, "marker_fxr_id")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(DEFAULT_MARKER_FXR_ID),
         // A spacing of zero would ask for a marker every zero metres, so it is floored rather
         // than accepted: the resampler refuses it anyway, and a silent no-markers is worse than
         // a sane one.
@@ -299,6 +387,14 @@ fn parse_config(text: &str, path: PathBuf) -> PathConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|count| *count > 0)
             .unwrap_or(DEFAULT_MARKERS_PER_PASS),
+        search_range_meters: search_range(text),
+        search_budget: search_budget(text),
+        marker_fxr_ids: marker_fxr_ids(text),
+        marker_keep_behind_meters: positive_float(
+            text,
+            "marker_keep_behind_meters",
+            DEFAULT_MARKER_KEEP_BEHIND_METERS,
+        ),
     }
 }
 
@@ -434,6 +530,28 @@ pub(crate) fn reload_if_changed() -> Option<Reloaded> {
 mod tests {
     use super::*;
 
+    /// FXR spawned at each point along a route when world markers are switched on.
+    ///
+    /// `302022` is the Rainbow Stone's LINGERING coloured stone -- the one that stays on the ground
+    /// after the throw, which is the whole reason it is the right effect for a trail. Its siblings
+    /// are `302020` (held in hand), `302021` (the projectile in flight) and `302023` (the burst on
+    /// impact); all three are momentary, so a trail built from them would flash once and vanish.
+    ///
+    /// Zero means "no world markers", and that is the shipped default. Spawning these is the only
+    /// thing this DLL does that changes the game, so it is opt-in rather than opt-out.
+    const DEFAULT_MARKER_FXR_ID: u32 = 0;
+
+    /// Effects assigned to targets in palette-slot order, so each player's trail looks different.
+    ///
+    /// The original ask was N players, N colours -- which the imgui line does by generating a hue per
+    /// slot. An FXR is not tintable that way: `SpawnFfxInstance`'s trailing arguments feed an external
+    /// parameter table that carries time-of-day and weather, not a colour, so the only honest way to
+    /// give two players visibly different stones is two different effects.
+    ///
+    /// The four Rainbow Stone stages are visually distinct from each other even though they are
+    /// stages rather than colours, so they make a usable default set. Any list of ids works.
+    const DEFAULT_MARKER_FXR_IDS: [u32; 4] = [302_022, 302_020, 302_021, 302_023];
+
     fn parse(text: &str) -> PathConfig {
         parse_config(text, PathBuf::from("test.toml"))
     }
@@ -524,6 +642,115 @@ mod tests {
     /// shipping build consumes it: its whole job is to keep the comment honest.
     const RAINBOW_STONE_LINGERING_FXR_ID: u32 = 302_022;
 
+    /// The bug behind "it fails on downward corkscrews": both limits were copied from
+    /// `CS::CSAiFunc`, an NPC walking at something it can already see. A spiral descent has an
+    /// enormous path length in a tiny footprint, so an NPC-sized budget is spent before it
+    /// reaches the bottom and the search reports no route.
+    #[test]
+    fn the_shipped_limits_are_the_engines_own_not_the_npc_ones() {
+        let parsed = parse(DEFAULT_CONFIG_TOML);
+        assert_eq!(parsed.search_budget, DEFAULT_SEARCH_BUDGET);
+        assert_eq!(parsed.search_budget, 100_000, "CSAiFunc's 800 is the bug");
+        assert_eq!(parsed.search_range_meters, UNLIMITED_SEARCH_RANGE);
+    }
+
+    /// `0` is how the config spells "unlimited"; the engine spells it `-1.0`.
+    #[test]
+    fn zero_range_becomes_the_engines_unlimited_sentinel() {
+        let edited =
+            DEFAULT_CONFIG_TOML.replace("search_range_meters = 0.0", "search_range_meters = 0");
+        assert_eq!(parse(&edited).search_range_meters, UNLIMITED_SEARCH_RANGE);
+    }
+
+    #[test]
+    fn a_real_range_is_passed_through() {
+        let edited =
+            DEFAULT_CONFIG_TOML.replace("search_range_meters = 0.0", "search_range_meters = 250.0");
+        assert_eq!(parse(&edited).search_range_meters, 250.0);
+    }
+
+    /// A broken value must not become a TIGHTER search than was asked for: that would report no
+    /// route, which reads as "you cannot walk there" rather than as a typo.
+    #[test]
+    fn a_broken_limit_falls_back_to_unlimited_never_to_a_smaller_search() {
+        for bad in ["nonsense", "-5", "0.0"] {
+            let edited = DEFAULT_CONFIG_TOML.replace(
+                "search_range_meters = 0.0",
+                &format!("search_range_meters = {bad}"),
+            );
+            assert_eq!(
+                parse(&edited).search_range_meters,
+                UNLIMITED_SEARCH_RANGE,
+                "{bad}"
+            );
+        }
+        for bad in ["nonsense", "0", "-1"] {
+            let edited = DEFAULT_CONFIG_TOML
+                .replace("search_budget = 100000", &format!("search_budget = {bad}"));
+            assert_eq!(parse(&edited).search_budget, DEFAULT_SEARCH_BUDGET, "{bad}");
+        }
+    }
+
+    /// The list the generated file suggests must be the list the code names, or a player pastes
+    /// a line that does something other than what the comment beside it promised.
+    #[test]
+    fn the_shipped_file_quotes_the_effect_list_the_code_names() {
+        let suggested = DEFAULT_MARKER_FXR_IDS
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            DEFAULT_CONFIG_TOML.contains(&suggested),
+            "the generated config must name {suggested}"
+        );
+    }
+
+    #[test]
+    fn a_single_id_still_applies_to_every_target() {
+        let edited = DEFAULT_CONFIG_TOML.replace("marker_fxr_id = 0", "marker_fxr_id = 302022");
+        let parsed = parse(&edited);
+        assert_eq!(parsed.marker_fxr_for(0), Some(302_022));
+        assert_eq!(parsed.marker_fxr_for(3), Some(302_022));
+    }
+
+    /// The original ask: N players, N looks -- and a given player keeps theirs.
+    #[test]
+    fn each_palette_slot_gets_its_own_effect() {
+        let edited = DEFAULT_CONFIG_TOML.replace(
+            "marker_fxr_id = 0",
+            "marker_fxr_ids = 302022, 302020, 302021",
+        );
+        let parsed = parse(&edited);
+        assert_eq!(parsed.marker_fxr_for(0), Some(302_022));
+        assert_eq!(parsed.marker_fxr_for(1), Some(302_020));
+        assert_eq!(parsed.marker_fxr_for(2), Some(302_021));
+    }
+
+    /// More players than effects must share a look, never lose a trail.
+    #[test]
+    fn the_list_wraps_rather_than_running_out() {
+        let edited =
+            DEFAULT_CONFIG_TOML.replace("marker_fxr_id = 0", "marker_fxr_ids = 302022, 302020");
+        let parsed = parse(&edited);
+        assert_eq!(parsed.marker_fxr_for(2), parsed.marker_fxr_for(0));
+        assert_eq!(parsed.marker_fxr_for(5), parsed.marker_fxr_for(1));
+    }
+
+    /// Zero is the "no markers" value; it must never reach the engine as an effect id.
+    #[test]
+    fn zeroes_are_dropped_from_the_list_rather_than_spawned() {
+        let edited =
+            DEFAULT_CONFIG_TOML.replace("marker_fxr_id = 0", "marker_fxr_ids = 0, 302022, 0");
+        assert_eq!(parse(&edited).marker_fxr_ids, vec![302_022]);
+    }
+
+    #[test]
+    fn markers_stay_off_when_neither_setting_names_an_effect() {
+        assert!(parse(DEFAULT_CONFIG_TOML).marker_fxr_ids.is_empty());
+        assert_eq!(parse(DEFAULT_CONFIG_TOML).marker_fxr_for(0), None);
+    }
+
     /// The generated file tells the player which id to try, and a comment that drifts from the
     /// constant is worse than no comment: they would paste a number that spawns nothing and have
     /// no way to tell that from the feature being broken.
@@ -539,14 +766,14 @@ mod tests {
     #[test]
     fn world_markers_are_off_until_the_player_asks_for_them() {
         assert_eq!(DEFAULT_MARKER_FXR_ID, 0);
-        assert_eq!(parse(DEFAULT_CONFIG_TOML).marker_fxr_id, 0);
+        assert!(parse(DEFAULT_CONFIG_TOML).marker_fxr_ids.is_empty());
     }
 
     /// A zero spacing would ask the resampler for a marker every zero metres.
     #[test]
     fn a_zero_spacing_is_floored_rather_than_obeyed() {
         let edited = DEFAULT_CONFIG_TOML
-            .replace("marker_spacing_meters = 4.0", "marker_spacing_meters = 0.0");
+            .replace("marker_spacing_meters = 8.0", "marker_spacing_meters = 0.0");
         assert_ne!(
             edited, DEFAULT_CONFIG_TOML,
             "the fixture must actually differ"

@@ -96,12 +96,44 @@ const CONTAINER_BYTES: usize = 0x40;
 /// Multiplier the engine applies to the agent radius when filling `params+0x00`, from
 /// `140c38fe0: MULSS XMM0, dword ptr [0x14329e684]` (2.0).
 const AGENT_RADIUS_MULTIPLIER: f32 = 2.0;
-/// `params+0x20`, from `CS::CSAiFunc`'s `param_2->field12_0x20 = 0x43160000`.
-const PARAMS_MAX_RANGE: f32 = 150.0;
-/// `params+0x24`, the search's iteration budget. 800 is the ceiling `CSAiFunc` uses for its
-/// highest-priority searches; a lower budget gives up early on long routes, which would show up
-/// as "no path" for a host who is merely far away.
-const PARAMS_SEARCH_BUDGET: i32 = 800;
+/// How hard the engine is allowed to look. Both values come from the config, already clamped.
+///
+/// `params+0x20` is the range, where a NEGATIVE value is the engine's own "unlimited", and
+/// `params+0x24` is the iteration budget.
+///
+/// Both used to be hard-coded here as `150.0` and `800`, copied from `CS::CSAiFunc` -- and
+/// copying from `CSAiFunc` was the mistake. That is an NPC working out how to walk at something
+/// it can already see, budgeted to run once per character per frame. This runs once per target
+/// every half second, for a player who wants an answer. The engine's own initialiser
+/// `FUN_140be4840` sets `-1.0f` and `100000`.
+///
+/// The difference is the whole bug behind "it fails on downward corkscrews": a spiral descent has
+/// an enormous path length inside a tiny footprint, built from many small navmesh faces, so an
+/// NPC-sized iteration budget is spent going round and round before it reaches the bottom. The
+/// search then reports no route, which is indistinguishable from there being none.
+///
+/// Measured live 2026-08-25 at the old values: the boot self-check returned "no route" to a map
+/// character **28 m** away -- a fifth of the supposed 150 m range -- while `routes_found` sat
+/// frozen at 19 and `arrows` climbed past 970. Range was never the binding constraint.
+
+#[derive(Clone, Copy)]
+pub(crate) struct SearchLimits {
+    /// `params+0x20`. Negative is the engine's own "unlimited".
+    pub(crate) range: f32,
+    /// `params+0x24`, iterations.
+    pub(crate) budget: i32,
+}
+
+impl SearchLimits {
+    /// Carry an already-sanitised pair from the config.
+    ///
+    /// The clamping lives in [`crate::config`], not here: this module is `#[cfg(windows)]` and so
+    /// is never compiled by `cargo test`, and a rule about which values are safe to hand the
+    /// engine is exactly the kind of thing that must be tested on the host.
+    pub(crate) fn new(range: f32, budget: i32) -> Self {
+        Self { range, budget }
+    }
+}
 
 /// The most waypoints a route may contain before it is treated as a corrupt read rather than a
 /// long walk. A real navmesh route across a whole map is a few hundred points.
@@ -227,6 +259,7 @@ fn hk_ai_world() -> Result<usize, RequestRefusal> {
 unsafe fn build_params(
     chr_ins: usize,
     field_ins_handle: u64,
+    limits: SearchLimits,
     params: &mut [u8; PARAMS_BYTES],
     agent: &mut AgentDescriptor,
 ) -> Option<()> {
@@ -260,8 +293,8 @@ unsafe fn build_params(
     write_f32(params, 0x00, radius * AGENT_RADIUS_MULTIPLIER);
     write_usize(params, 0x08, std::ptr::from_mut(agent) as usize);
     write_usize(params, 0x18, cost_table);
-    write_f32(params, 0x20, PARAMS_MAX_RANGE);
-    write_i32(params, 0x24, PARAMS_SEARCH_BUDGET);
+    write_f32(params, 0x20, limits.range);
+    write_i32(params, 0x24, limits.budget);
     // `+0x2e` enables the agent descriptor at `+0x08`; the engine only ever sets the two
     // together, and `FUN_1402ec2f0` tests them as a pair.
     params[0x2e] = 1;
@@ -315,6 +348,7 @@ pub(crate) struct PendingRequest {
 pub(crate) unsafe fn request(
     chr_ins: usize,
     field_ins_handle: u64,
+    limits: SearchLimits,
     from: [f32; 3],
     to: [f32; 3],
 ) -> Result<PendingRequest, RequestRefusal> {
@@ -330,7 +364,7 @@ pub(crate) unsafe fn request(
         _padding: [0; 3],
     };
     // SAFETY: caller guarantees `chr_ins` is live.
-    unsafe { build_params(chr_ins, field_ins_handle, &mut params, &mut agent) }
+    unsafe { build_params(chr_ins, field_ins_handle, limits, &mut params, &mut agent) }
         .ok_or(RequestRefusal::AiWorldAbsent)?;
 
     let resolve: ResolvePointFn = unsafe {
@@ -618,6 +652,10 @@ unsafe fn read_waypoints(container: *const u8) -> Option<Vec<[f32; 3]>> {
 mod tests {
     use super::*;
 
+    /// What `FUN_140be4840` writes, i.e. what leaving the block alone would give.
+    const ENGINE_DEFAULT_RANGE: f32 = -1.0;
+    const ENGINE_DEFAULT_BUDGET: i32 = 100_000;
+
     #[test]
     fn the_agent_descriptor_matches_the_layout_the_engine_reads() {
         // `FUN_140bdd570` reads a flag byte at `+0x14`; a descriptor shorter than that is the
@@ -644,22 +682,24 @@ mod tests {
     #[test]
     fn writing_a_param_field_lands_where_the_engine_reads_it() {
         let mut params = [0u8; PARAMS_BYTES];
-        write_f32(&mut params, 0x20, PARAMS_MAX_RANGE);
-        write_i32(&mut params, 0x24, PARAMS_SEARCH_BUDGET);
+        write_f32(&mut params, 0x20, ENGINE_DEFAULT_RANGE);
+        write_i32(&mut params, 0x24, ENGINE_DEFAULT_BUDGET);
         write_usize(&mut params, 0x18, 0x1234_5678_9abc_def0);
         assert_eq!(
             f32::from_le_bytes(params[0x20..0x24].try_into().expect("four bytes")),
-            PARAMS_MAX_RANGE
+            ENGINE_DEFAULT_RANGE
         );
         assert_eq!(
             i32::from_le_bytes(params[0x24..0x28].try_into().expect("four bytes")),
-            PARAMS_SEARCH_BUDGET
+            ENGINE_DEFAULT_BUDGET
         );
         assert_eq!(
             u64::from_le_bytes(params[0x18..0x20].try_into().expect("eight bytes")),
             0x1234_5678_9abc_def0
         );
         // `0x43160000` is the literal `CS::CSAiFunc` stores in this field.
-        assert_eq!(PARAMS_MAX_RANGE.to_bits(), 0x4316_0000);
+        // 0x43160000 is 150.0f -- what CS::CSAiFunc writes, and what this crate used to copy
+        // from it before a live run showed an NPC-sized budget failing at 28 m.
+        assert_eq!(150.0f32.to_bits(), 0x4316_0000);
     }
 }
