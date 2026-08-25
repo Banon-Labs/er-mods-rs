@@ -40,11 +40,20 @@ const CONFIG_FILE_NAME: &str = "er-invasion-path.toml";
 /// that reports collisions at runtime rather than a cleverer guess here.
 pub(crate) const DEFAULT_TOGGLE_KEY_NAME: &str = "semicolon";
 
-/// Below this separation, in metres, a target with clear line of sight gets no path at all.
+/// Below this separation, in metres, a target gets no path at all.
 ///
-/// The rule the feature was asked for: if you can see them and they are close, a line on the
-/// ground is clutter over the fight you are already in.
-pub(crate) const DEFAULT_NEAR_SUPPRESS_METERS: f32 = 10.0;
+/// `30.0` is the game's own number: `MenuCommonParam` row 0's `compassEnemyHostInnerDistance` at
+/// `+0xa4`, the distance inside which an invader's compass marker for the host disappears. The
+/// engine squares it at runtime in `FUN_140775f30`.
+///
+/// Two deliberate departures from that rule:
+///
+/// * **This compares in 3D; the compass compares in 2D.** Its `dx`/`dy` are map-plane components
+///   with no vertical term, so a player five metres away and forty metres straight down reads as
+///   five metres and loses their marker. That is exactly when a route is worth drawing.
+/// * **No line-of-sight test.** The compass path has none, and the one this crate used was its
+///   own stricter invention.
+pub(crate) const DEFAULT_NEAR_SUPPRESS_METERS: f32 = 30.0;
 
 /// How many remote players get a path. Six covers a full Seamless session's worth of phantoms;
 /// past that the screen is more line than game.
@@ -54,7 +63,7 @@ pub(crate) const DEFAULT_MAX_TARGETS: usize = 6;
 pub(crate) const DEFAULT_ARROW_METERS: f32 = 3.0;
 
 /// Metres between markers along a route.
-pub(crate) const DEFAULT_MARKER_SPACING_METERS: f32 = 8.0;
+pub(crate) const DEFAULT_MARKER_SPACING_METERS: f32 = 2.7;
 
 /// Most markers a single route's trail may hold.
 pub(crate) const DEFAULT_MAX_MARKERS: usize = 144;
@@ -108,9 +117,14 @@ toggle_key = "semicolon"
 # and leaves the key as the only way in. Example: 2110 is Furlcalling Finger Remedy.
 trigger_item_id = 0
 
-# Players closer than this many metres WITH a clear line of sight to you get no path drawn: you
-# can already see them. Blocked line of sight still draws, however close they are.
-near_suppress_meters = 10.0
+# Players closer than this many metres get no path drawn. 30 is the game's own figure -- it is
+# MenuCommonParam's compassEnemyHostInnerDistance, the range inside which an invader's compass
+# marker for the host disappears.
+#
+# Measured in 3D, unlike the compass, which compares on the map plane only: someone five metres
+# away and forty metres below you reads as five metres to the compass and loses their marker,
+# which is the exact case where the walk down is the thing you needed drawing.
+near_suppress_meters = 30.0
 
 # A path at or inside this distance is drawn at full width and opacity.
 bold_at_meters = 20.0
@@ -160,9 +174,18 @@ marker_fxr_id = 0
 #
 #   marker_fxr_ids = 302022
 
+# The three spare arguments the spawn passes to the engine's effect-parameter builder. -1 is
+# "unset", which is what the game itself passes for a one-shot. NOTHING here is known to change an
+# effect's appearance -- they are exposed because they are the only per-instance inputs the spawn
+# has, so they are the place to look for a solid colour instead of the Rainbow Stone's own cycling.
+# Sweep them one at a time; the file is re-read every second.
+marker_variant_a = -1
+marker_variant_b = -1
+marker_variant_c = -1
+
 # Metres between markers along the route. Markers are spaced evenly along the PATH, not placed at
 # navmesh corners, or a doorway would get six of them and open ground none.
-marker_spacing_meters = 8.0
+marker_spacing_meters = 2.7
 
 # Most markers one route's trail may hold.
 max_markers = 144
@@ -226,6 +249,8 @@ pub(crate) struct PathConfig {
     pub(crate) marker_keep_behind_meters: f32,
     /// Effects by palette slot. Empty means markers are off.
     pub(crate) marker_fxr_ids: Vec<u32>,
+    /// The three spare spawn arguments, a lead on effect variants. See `sfx::SpawnVariant`.
+    pub(crate) marker_variant: (i16, i16, i32),
 }
 
 /// The parsed config, plus the exact text it was parsed from.
@@ -395,6 +420,17 @@ fn parse_config(text: &str, path: PathBuf) -> PathConfig {
         search_range_meters: search_range(text),
         search_budget: search_budget(text),
         marker_fxr_ids: marker_fxr_ids(text),
+        marker_variant: (
+            setting(text, "marker_variant_a")
+                .and_then(|v| v.parse::<i16>().ok())
+                .unwrap_or(-1),
+            setting(text, "marker_variant_b")
+                .and_then(|v| v.parse::<i16>().ok())
+                .unwrap_or(-1),
+            setting(text, "marker_variant_c")
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(-1),
+        ),
         marker_keep_behind_meters: positive_float(
             text,
             "marker_keep_behind_meters",
@@ -797,8 +833,12 @@ mod tests {
     /// A zero spacing would ask the resampler for a marker every zero metres.
     #[test]
     fn a_zero_spacing_is_floored_rather_than_obeyed() {
-        let edited = DEFAULT_CONFIG_TOML
-            .replace("marker_spacing_meters = 8.0", "marker_spacing_meters = 0.0");
+        // Keyed off the constant rather than a literal: a fixture that names the old default
+        // silently stops testing anything the moment the default moves.
+        let edited = DEFAULT_CONFIG_TOML.replace(
+            &format!("marker_spacing_meters = {DEFAULT_MARKER_SPACING_METERS}"),
+            "marker_spacing_meters = 0.0",
+        );
         assert_ne!(
             edited, DEFAULT_CONFIG_TOML,
             "the fixture must actually differ"
@@ -821,9 +861,12 @@ mod tests {
 
     #[test]
     fn the_shipped_defaults_match_the_prose_in_the_shipped_file() {
-        // The comment block promises 10 metres and one path per player; a default that drifted
-        // from its own documentation is a bug report waiting to happen.
-        assert!(DEFAULT_CONFIG_TOML.contains("near_suppress_meters = 10.0"));
+        // Keyed off the constants, not literals: a fixture naming the old default stops testing
+        // anything the moment the default moves, which is how this test survived a 10 -> 30 change
+        // by failing rather than by checking.
+        assert!(DEFAULT_CONFIG_TOML.contains(&format!(
+            "near_suppress_meters = {DEFAULT_NEAR_SUPPRESS_METERS}"
+        )));
         assert!(
             DEFAULT_CONFIG_TOML.contains(&format!("toggle_key = \"{DEFAULT_TOGGLE_KEY_NAME}\""))
         );

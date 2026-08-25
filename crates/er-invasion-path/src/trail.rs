@@ -120,13 +120,18 @@ impl Trail {
     /// # Safety
     ///
     /// Must be called on the game thread.
-    pub(crate) unsafe fn lay_next(&mut self, fxr_id: u32, batch: usize) -> usize {
+    pub(crate) unsafe fn lay_next(
+        &mut self,
+        fxr_id: u32,
+        variant: crate::sfx::SpawnVariant,
+        batch: usize,
+    ) -> usize {
         let (from, to) = self.batch_bounds(batch);
         let mut placed = 0;
         for index in from..to {
             let at = self.spots[index];
             // SAFETY: game thread, as this function's own contract requires.
-            let Some(handle) = (unsafe { crate::sfx::spawn_tracked(fxr_id, at) }) else {
+            let Some(handle) = (unsafe { crate::sfx::spawn_tracked(fxr_id, at, variant) }) else {
                 // The SFX manager is not up. Leave the cursor where it is and try again next
                 // pass rather than marking these positions laid when nothing was.
                 break;

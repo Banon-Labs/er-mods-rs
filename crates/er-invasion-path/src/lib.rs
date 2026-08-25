@@ -451,9 +451,18 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
 
     let mut snapshot = Snapshot::default();
     for remote in &roster.remotes {
-        // The rule this feature was asked for: close AND visible means you already know where
-        // they are, so a line on the ground is clutter over the fight you are in.
-        if remote.distance_meters < config.near_suppress_meters && remote.in_sight {
+        // Matches the game's own compass rule -- `MenuCommonParam` row 0
+        // `compassEnemyHostInnerDistance` at `+0xa4` is 30.0 m, squared at runtime in
+        // `FUN_140775f30` -- with the one deliberate difference that matters:
+        //
+        // The compass compares in 2D. Its `dx`/`dy` are the map-plane components and there is no
+        // vertical term, so a player five metres away and forty metres straight down reads as
+        // five metres and loses their marker. That is the case where you most need a route: the
+        // walk down is long, and whether one exists at all is the question. This compares in 3D.
+        //
+        // There is no line-of-sight test, because the compass has none either. It was a stricter
+        // rule of this crate's own invention.
+        if remote.distance_meters < config.near_suppress_meters {
             SUPPRESSED.fetch_add(1, Ordering::Relaxed);
             // The site that would have hurt most: a target crossing INTO the suppression
             // distance is the normal course of a fight, and it happens with a request in flight
@@ -533,6 +542,11 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
                     // Retargeting first is what stops the pile-up: a route that has not moved
                     // keeps the trail it already has instead of laying a second one over it. A
                     // route that HAS moved tears its old stones down before laying new ones.
+                    let marker_variant = sfx::SpawnVariant {
+                        a: config.marker_variant.0,
+                        b: config.marker_variant.1,
+                        c: config.marker_variant.2,
+                    };
                     let spots = geometry::resample(
                         points,
                         config.marker_spacing_meters,
@@ -554,8 +568,13 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
                     MARKERS_REMOVED.fetch_add(behind, Ordering::Relaxed);
                     if !target.trail.finished() {
                         // SAFETY: as above.
-                        let placed =
-                            unsafe { target.trail.lay_next(marker_fxr, config.markers_per_pass) };
+                        let placed = unsafe {
+                            target.trail.lay_next(
+                                marker_fxr,
+                                marker_variant,
+                                config.markers_per_pass,
+                            )
+                        };
                         MARKERS_SPAWNED.fetch_add(placed, Ordering::Relaxed);
                     }
                 }
@@ -697,11 +716,29 @@ unsafe fn marker_selfcheck(config: &config::PathConfig) {
     let Some(at) = (unsafe { game::local_position() }) else {
         return;
     };
+    let variant = sfx::SpawnVariant {
+        a: config.marker_variant.0,
+        b: config.marker_variant.1,
+        c: config.marker_variant.2,
+    };
+    // The settings the DLL ACTUALLY read, printed where they can be checked against the file.
+    // Two rounds of "that setting did not take effect" were spent comparing the toml on disk
+    // against what the DLL was believed to have loaded, which is a comparison nobody can make
+    // from the outside.
     path_log(format_args!(
-        "marker-selfcheck: spawning fxr {fxr_id} at the player"
+        "marker-selfcheck: spawning fxr {fxr_id} variant=({},{},{}) spacing={}m per_pass={} \
+         keep_behind={}m max={} effects={:?} at the player",
+        variant.a,
+        variant.b,
+        variant.c,
+        config.marker_spacing_meters,
+        config.markers_per_pass,
+        config.marker_keep_behind_meters,
+        config.max_markers,
+        config.marker_fxr_ids
     ));
     // SAFETY: game thread.
-    let Some(marker) = (unsafe { sfx::spawn_tracked(fxr_id, at) }) else {
+    let Some(marker) = (unsafe { sfx::spawn_tracked(fxr_id, at, variant) }) else {
         path_log(format_args!(
             "marker-selfcheck: REFUSED -- the SFX manager is not up, nothing was spawned"
         ));

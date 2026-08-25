@@ -10,7 +10,7 @@ Press the key (default `;`) during an invasion:
 | the navmesh can walk you there | a coloured line from your feet to theirs, along the terrain |
 | the navmesh cannot | a glowing arrow out of your body, pointing exactly at them |
 | N players | N routes, N colours, each colour stuck to one player |
-| they are closer than 10 m **and** you can see them | nothing -- you already know where they are |
+| they are closer than 30 m | nothing -- the game's own compass hides its marker there too |
 
 The closer a player is, the bolder and more opaque their route. A route that is merely far away
 still draws at its faintest weight rather than vanishing, so "distant" and "unreachable" never
@@ -64,17 +64,18 @@ The ones worth knowing:
 |---|---|---|
 | `toggle_key` | `"semicolon"` | key that switches the overlay on and off, **by name** (`"]"`, `"KP_Plus"`, `"Insert"`) |
 | `trigger_item_id` | `0` | `EquipParamGoods` row whose USE also toggles it; `0` leaves the key as the only way in |
-| `near_suppress_meters` | `10.0` | closer than this **with clear line of sight** draws nothing |
+| `near_suppress_meters` | `30.0` | closer than this draws nothing. The game's own figure, measured in **3D** |
 | `bold_at_meters` | `20.0` | at or inside this, full width and opacity |
 | `faint_at_meters` | `150.0` | at this distance, the faintest a route is drawn |
 | `max_targets` | `6` | most players drawn at once |
 | `arrow_meters` | `3.0` | length of the no-route arrow |
 | `start_enabled` | `false` | begin with the overlay already on |
 | `marker_fxr_id` | `0` | spawn the game's OWN effects along the route; `302022` is the Rainbow Stone's lingering coloured stone. `0` is off, and off is the only setting here that leaves the game untouched |
-| `marker_fxr_ids` | *(unset)* | one effect **per player**, in tracking order — overrides `marker_fxr_id`. e.g. `302022, 302020, 302021, 302023` |
-| `marker_spacing_meters` | `8.0` | metres between markers, measured along the path |
+| `marker_fxr_ids` | *(unset)* | one effect **per player**, in tracking order — overrides `marker_fxr_id`. Every id must LINGER |
+| `marker_variant_a/b/c` | `-1` | the three spare spawn arguments, unset by default. An unproven lead on effect variants |
+| `marker_spacing_meters` | `2.7` | metres between markers, measured along the path |
 | `marker_keep_behind_meters` | `12.0` | how much already-walked trail is kept behind you before those stones are removed |
-| `max_markers` | `48` | most markers one trail may hold |
+| `max_markers` | `144` | most markers one trail may hold |
 | `markers_per_pass` | `3` | markers placed per pass (~6 passes a second), so the trail creeps out from your feet rather than appearing whole |
 | `search_range_meters` | `0.0` | how far the navmesh search may range; `0` = unlimited, the engine's own default |
 | `search_budget` | `100000` | iterations the search may spend — the engine's own default. `CS::CSAiFunc` uses `800`, which fails on spiral descents |
@@ -82,6 +83,49 @@ The ones worth knowing:
 ## Pick a key no other mod in your profile reads
 
 The default was `F7` until a live 15-DLL run found `er-invasion-warp` polling `VK_F7` every frame in the same process: the key warped the player instead of drawing anything, and nothing warned about it. "Elden Ring binds nothing to it" is not the question -- the mods loaded beside you are, and a default cannot know them. `;` is clear of everything this workspace's shells poll, which makes it a better default rather than a safe one.
+
+## When a route is NOT drawn
+
+Closer than `near_suppress_meters` and you get nothing, because you already know where they are.
+
+That number is the game's own. `MenuCommonParam` row 0 carries three of them, one per phantom
+relationship, and only one is non-zero:
+
+| field | offset | value |
+|---|---|---|
+| `compassEnemyHostInnerDistance` | `+0xa4` | **30.0** — an invader's marker for the host, hidden inside this |
+| `compassFriendHostInnerDistance` | `+0xa0` | `0.0` — never hidden |
+| `compassFriendGuestInnerDistance` | `+0xa8` | `0.0` — never hidden |
+
+`FUN_140775f30` squares it at runtime and compares. Two deliberate departures from that rule:
+
+- **This compares in 3D. The compass compares in 2D.** Its `dx`/`dy` are map-plane components with
+  no vertical term, so a player five metres away and forty metres straight down reads as five
+  metres and loses their marker. That is exactly when the walk down is the thing worth drawing,
+  and whether one exists at all is the question.
+- **No line-of-sight test.** The compass path has none. The one this crate used to apply -- close
+  AND visible -- was its own stricter invention, and it is gone along with the raycast that
+  served it.
+
+## Colour, and why the stones do not have one
+
+The route colours were the point of the original feature: N players, N colours. The imgui line does
+that by generating a hue per palette slot. The stones cannot.
+
+An FXR carries no tint the spawn can set -- `SpawnFfxInstance`'s spare arguments feed
+`FUN_140d94af0`, which builds a parameter table out of time-of-day and weather. And `302022` is the
+**Rainbow** Stone's lingering stone: cycling colour is what that effect *is*, so every trail looks
+the same and none of them holds still.
+
+Telling players apart therefore means a different EFFECT per player, not a different shade of one --
+and every id in `marker_fxr_ids` must LINGER. `302020` (held), `302021` (projectile) and `302023`
+(burst) are momentary Rainbow Stone stages: they flash once and vanish. Shipping those three as
+defaults gave one player a trail and everyone else nothing, which read as the colours changing.
+
+The open lead is runtime FXR patching -- replacing an effect's definition in memory so new
+instances use recoloured bytes. All four Rainbow Stone ids live in `sfxbnd_commoneffects` and are
+therefore always loaded and always patchable, and three of them are useless as markers anyway, so
+they are four free colour slots that need no new ids invented.
 
 ## How the route is found
 

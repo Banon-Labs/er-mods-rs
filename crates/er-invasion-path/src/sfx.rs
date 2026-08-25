@@ -137,6 +137,28 @@ type CtrlPushFn = unsafe extern "C" fn(*mut u8, *mut u8, i32, usize) -> u64;
 type CtrlAliveFn = unsafe extern "C" fn(*mut u8) -> u64;
 type CtrlVoidFn = unsafe extern "C" fn(*mut u8);
 
+/// The three trailing arguments `SpawnFfxInstance` forwards to `FUN_140d94af0`, which builds the
+/// FXR's external parameter block.
+///
+/// The engine's own one-shot call site passes `-1, -1, -1` -- unset -- and that is what this used.
+/// They are exposed because they are the only per-instance inputs the spawn has, and something in
+/// them is the most likely lever for an effect's variant: `FUN_140d94af0` turns the SECOND short
+/// into a float (`param_5 < 0 ? 0.0 : (float)param_5`) and feeds it into the parameter table
+/// beside time-of-day and weather.
+///
+/// `-1` in all three is what the engine passes for a one-shot -- unset -- and remains the
+/// default.
+///
+/// This is a LEAD, not a finding. Nothing here has been shown to change an effect's appearance.
+/// They are configurable and hot-reloadable so the values can be swept live in a second each,
+/// which is the cheapest way to find out and needs no rebuild.
+#[derive(Clone, Copy)]
+pub(crate) struct SpawnVariant {
+    pub(crate) a: i16,
+    pub(crate) b: i16,
+    pub(crate) c: i32,
+}
+
 /// A spawned effect, kept so it can be removed again.
 ///
 /// The control block is boxed and 16-byte aligned: the engine writes a `FloatMatrix4x4` worth of
@@ -166,7 +188,11 @@ const _: () = {
 /// # Safety
 ///
 /// Must be called on the game thread.
-pub(crate) unsafe fn spawn_tracked(fxr_id: u32, position: [f32; 3]) -> Option<Marker> {
+pub(crate) unsafe fn spawn_tracked(
+    fxr_id: u32,
+    position: [f32; 3],
+    variant: SpawnVariant,
+) -> Option<Marker> {
     if fxr_id == 0 || !position.iter().all(|axis| axis.is_finite()) {
         return None;
     }
@@ -191,9 +217,9 @@ pub(crate) unsafe fn spawn_tracked(fxr_id: u32, position: [f32; 3]) -> Option<Ma
             &raw const transform,
             0,
             8,
-            -1,
-            -1,
-            -1,
+            variant.a,
+            variant.b,
+            variant.c,
         );
     }
     Some(marker)

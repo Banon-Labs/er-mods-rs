@@ -8,20 +8,12 @@
 
 #![cfg(windows)]
 
-use eldenring::cs::{CSCamera, CSHavokMan, ChrIns, ChrSet, PlayerIns, WorldChrMan};
-use eldenring::position::{HavokPosition, PositionDelta};
+use eldenring::cs::{CSCamera, ChrIns, ChrSet, PlayerIns, WorldChrMan};
+use eldenring::position::HavokPosition;
 use fromsoftware_shared::FromStatic;
 
 use crate::census::{Census, NPC_CHR_TYPE, is_named_player_kind, is_player_kind};
 use crate::geometry::{self, Camera};
-
-/// Height above a character's physics origin that the sight ray leaves from and arrives at.
-///
-/// The physics position is at the character's FEET. A ray between two pairs of feet clips every
-/// pebble and low step between them and reports "blocked" across an open field, which would keep
-/// the near-suppression rule from ever firing. Chest height is what a player means by "I can see
-/// them".
-const SIGHT_HEIGHT_METERS: f32 = 1.2;
 
 /// Height above the physics origin that the "no route" arrow leaves the body at, so it emerges
 /// from the character rather than from the dirt they are standing on.
@@ -33,12 +25,6 @@ const ARROW_ORIGIN_HEIGHT_METERS: f32 = 1.1;
 /// ground it is describing. A few centimetres reads as painted on the ground; more reads as
 /// hovering above it.
 const PATH_LIFT_METERS: f32 = 0.06;
-
-/// Ray filter the game itself passes when it casts against world geometry for a player --
-/// `1403fba04: MOV EDX, 0x2000058`, the call site immediately above
-/// `CS::CSPhysWorld::CastRay`. Reusing the engine's own mask is what makes "blocked" mean the
-/// same thing here as it does to the game.
-const SIGHT_RAY_FILTER: u32 = 0x0200_0058;
 
 /// One other player in the session, reduced to what the overlay needs.
 ///
@@ -54,8 +40,6 @@ pub(crate) struct RemotePlayer {
     pub(crate) position: [f32; 3],
     /// Straight-line distance from the local player, in metres.
     pub(crate) distance_meters: f32,
-    /// True when a ray from your chest to theirs reaches them unobstructed.
-    pub(crate) in_sight: bool,
 }
 
 /// The local player, and everyone else worth drawing a path to.
@@ -259,12 +243,6 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
     });
     remotes.truncate(max_targets);
 
-    for remote in &mut remotes {
-        // SAFETY: game thread; both positions came from live physics modules.
-        remote.in_sight =
-            unsafe { has_line_of_sight(main_player, local_position, remote.position) };
-    }
-
     Some(Roster {
         local_chr_ins,
         local_field_ins_handle: handle_bits(&main_player.chr_ins),
@@ -327,9 +305,6 @@ fn collect(
         field_ins_handle: handle_bits(chr_ins),
         position,
         distance_meters: geometry::length(geometry::sub(position, local_position)),
-        // Filled by the caller: the raycast needs the main player as its owner, and casting here
-        // would hold a borrow of the ChrSet across a game call.
-        in_sight: false,
     });
 }
 
@@ -385,49 +360,6 @@ pub(crate) unsafe fn npc_probe_target(local_position: [f32; 3]) -> Option<([f32;
 
 /// Closest an NPC may be and still be worth asking the navmesh to route to.
 const MIN_PROBE_DISTANCE_METERS: f32 = 8.0;
-
-/// Can a ray from `from` reach `to` without hitting world geometry?
-///
-/// Both ends are lifted to [`SIGHT_HEIGHT_METERS`]. A cast that reports no hit is clear sight; a
-/// cast that hits something *past* the target is also clear sight, because the engine's raycast
-/// reports the first hit along the whole extent rather than stopping at a distance.
-///
-/// # Safety
-///
-/// Must be called on the game thread with a live `PlayerIns`.
-unsafe fn has_line_of_sight(owner: &PlayerIns, from: [f32; 3], to: [f32; 3]) -> bool {
-    // SAFETY: singleton access on the game thread.
-    let Ok(havok_man) = (unsafe { CSHavokMan::instance() }) else {
-        // With no physics world there is no evidence of a wall, and claiming sight would suppress
-        // the path. Claiming NO sight draws it, which is the harmless direction to be wrong in.
-        return false;
-    };
-    let eye = [from[0], from[1] + SIGHT_HEIGHT_METERS, from[2]];
-    let target = [to[0], to[1] + SIGHT_HEIGHT_METERS, to[2]];
-    let delta = geometry::sub(target, eye);
-    let span = geometry::length(delta);
-    if span <= f32::EPSILON {
-        return true;
-    }
-    let origin = HavokPosition(eye[0], eye[1], eye[2], 0.0);
-    // SAFETY: a query into the physics world; it writes only the caller's out-parameter.
-    let hit = havok_man.phys_world.cast_ray(
-        SIGHT_RAY_FILTER,
-        &origin,
-        PositionDelta(delta[0], delta[1], delta[2]),
-        owner,
-    );
-    match hit {
-        None => true,
-        Some(point) => {
-            // Anything struck within the span blocks; the target's own body sits at the far end,
-            // so a small tolerance keeps a hit ON the target from reading as a wall.
-            const TARGET_TOLERANCE_METERS: f32 = 0.75;
-            let struck = geometry::length(geometry::sub([point.0, point.1, point.2], eye));
-            struck >= span - TARGET_TOLERANCE_METERS
-        }
-    }
-}
 
 /// The live camera, in the form [`crate::geometry`] projects with.
 ///
