@@ -13,7 +13,9 @@ Signal: vanilla ER should boot and SIT at the title screen alive for the full wi
 """
 import json, os, signal, subprocess, sys, time, glob
 
-# argv[1] = artifact label (subdir); argv[2:] = launch.sh flags ([] = DLL profile, ['-v'] = vanilla).
+# argv[1] = artifact label (subdir); argv[2:] = launch.sh flags (['-o'] = DLL profile without
+# Seamless, ['-v'] = vanilla). Pass the flag explicitly: since 2026-08-24 launch.sh includes
+# ersc.dll by default, so NO flag now means a Seamless run -- not the DLL-only control arm.
 LABEL = sys.argv[1] if len(sys.argv) > 1 else 'boot-ab'
 LAUNCH_ARGS = sys.argv[2:]
 ART = f"/home/banon/projects/er-effects-rs/target/runtime-probe/{LABEL}"

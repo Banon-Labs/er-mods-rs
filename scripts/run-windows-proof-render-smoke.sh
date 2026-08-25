@@ -149,7 +149,7 @@ printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
   ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
-  "$PRODUCT_LAUNCHER" > "$ARTIFACT_DIR/product-launch.out" 2> "$ARTIFACT_DIR/product-launch.err" & echo $! > "$PID_FILE"
+  "$PRODUCT_LAUNCHER" -o > "$ARTIFACT_DIR/product-launch.out" 2> "$ARTIFACT_DIR/product-launch.err" & echo $! > "$PID_FILE"
 )
 
 watcher_status=0
