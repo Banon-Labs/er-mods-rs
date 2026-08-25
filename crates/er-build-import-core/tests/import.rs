@@ -7,15 +7,15 @@
 
 mod fixture_catalog;
 
-use er_build_import::catalog::{Catalog, Kind};
-use er_build_import::plan::{
+use er_build_import_core::catalog::{Catalog, Kind};
+use er_build_import_core::plan::{
     GEM_ITEM_CATEGORY, NO_SKILL, armament_item_id, equipped_armament_skills, plan,
 };
-use er_build_import::{model, share_id_from_url};
+use er_build_import_core::{model, share_id_from_url};
 
 const BUILD: &str = include_str!("fixtures/build-af97a9da874151.json");
 
-fn planned() -> (model::BuildDoc, er_build_import::Plan) {
+fn planned() -> (model::BuildDoc, er_build_import_core::Plan) {
     let doc = model::parse(BUILD).expect("fixture parses");
     let result = plan(&doc, &fixture_catalog::catalog());
     (doc, result)
@@ -132,7 +132,7 @@ fn name_collisions_across_categories_stay_distinct() {
     // `Golden Vow` is a spell, an ash of war and a consumable. A flat map would
     // grant whichever happened to be inserted last.
     let catalog = fixture_catalog::catalog();
-    use er_build_import::Catalog;
+    use er_build_import_core::Catalog;
     let spell = catalog.lookup(Kind::Spell, "Golden Vow");
     let ash = catalog.lookup(Kind::AshOfWar, "Golden Vow");
     if let (Some(spell), Some(ash)) = (spell, ash) {
@@ -142,9 +142,9 @@ fn name_collisions_across_categories_stay_distinct() {
 
 // ---------------------------------------------------------------- equipping
 
-use er_build_import::equip::{Capacity, PHYSICK_SLOTS, QUICKBAR_SLOTS, equip_plan};
+use er_build_import_core::equip::{Capacity, PHYSICK_SLOTS, QUICKBAR_SLOTS, equip_plan};
 
-fn equipped() -> er_build_import::EquipPlan {
+fn equipped() -> er_build_import_core::EquipPlan {
     let doc = model::parse(BUILD).expect("fixture parses");
     equip_plan(&doc, &fixture_catalog::catalog(), Capacity::default())
 }
@@ -323,7 +323,7 @@ fn the_untouched_product_config_configures_no_build() {
     // Every `build_url` in the shipped file is commented out, so a player who never edited it must
     // get "nothing to import" -- not the example link, which is not their build.
     assert_eq!(
-        er_build_import::build_url_from_config(PRODUCT_BOILERPLATE),
+        er_build_import_core::build_url_from_config(PRODUCT_BOILERPLATE),
         None
     );
 }
@@ -341,7 +341,7 @@ fn a_configured_build_url_is_read_in_every_spelling_the_file_allows() {
     ] {
         let contents = format!("{PRODUCT_BOILERPLATE}{line}\n");
         assert_eq!(
-            er_build_import::build_url_from_config(&contents),
+            er_build_import_core::build_url_from_config(&contents),
             Some(expected),
             "{line:?}"
         );
@@ -357,7 +357,7 @@ fn an_empty_or_absent_value_imports_nothing_rather_than_an_empty_build() {
         "",
     ] {
         assert_eq!(
-            er_build_import::build_url_from_config(contents),
+            er_build_import_core::build_url_from_config(contents),
             None,
             "{contents:?}"
         );
@@ -369,17 +369,17 @@ fn an_empty_or_absent_value_imports_nothing_rather_than_an_empty_build() {
 #[test]
 fn the_configured_url_feeds_the_share_id_extractor() {
     let contents = "build_url = 'https://er-build-planner.example/?b=af97a9da874151'\n";
-    let url = er_build_import::build_url_from_config(contents).expect("configured");
+    let url = er_build_import_core::build_url_from_config(contents).expect("configured");
     assert_eq!(share_id_from_url(url), Some("af97a9da874151"));
 
     let self_contained = "build_url = 'https://er-build-planner.example/?i=eyJ2IjoxfQ'\n";
-    let url = er_build_import::build_url_from_config(self_contained).expect("configured");
+    let url = er_build_import_core::build_url_from_config(self_contained).expect("configured");
     assert_eq!(share_id_from_url(url), None);
 }
 
 // ------------------------------------------------------------------ in-game URL entry
 
-use er_build_import::{BUILD_URL_PREFIX, UrlRejection, validate_build_url};
+use er_build_import_core::{BUILD_URL_PREFIX, UrlRejection, validate_build_url};
 
 /// The editor opens pre-filled with the prefix, so the untouched field must REFUSE. If it did not,
 /// pressing Accept without typing would start a fetch for a build id that is the empty string.
@@ -468,7 +468,7 @@ fn acceptance_agrees_with_the_share_id_the_fetch_will_use() {
 
 #[test]
 fn every_affinity_the_importer_adds_the_exporter_can_subtract() {
-    use er_build_import::plan::{
+    use er_build_import_core::plan::{
         INFUSION_STEP, infusion_names, infusion_offset, split_armament_id,
     };
 
@@ -489,7 +489,7 @@ fn every_affinity_the_importer_adds_the_exporter_can_subtract() {
 
 #[test]
 fn an_id_carrying_no_recognisable_affinity_is_taken_whole() {
-    use er_build_import::plan::split_armament_id;
+    use er_build_import_core::plan::split_armament_id;
 
     // Offset 1300 is past the last affinity (Occult, 1200). Subtracting an invented amount would
     // silently rename the weapon, so the id is left alone and reported as having no affinity.
@@ -498,7 +498,9 @@ fn an_id_carrying_no_recognisable_affinity_is_taken_whole() {
 
 #[test]
 fn the_armament_hand_map_is_a_bijection_in_both_directions() {
-    use er_build_import::equip::{ARMAMENT_CHR_ASM_SLOTS, armament_planner_index, armament_slot};
+    use er_build_import_core::equip::{
+        ARMAMENT_CHR_ASM_SLOTS, armament_planner_index, armament_slot,
+    };
 
     // Six planner indices onto six distinct ChrAsm slots, and back again.
     let mut seen = ARMAMENT_CHR_ASM_SLOTS;
@@ -539,7 +541,7 @@ fn the_armament_hand_map_is_a_bijection_in_both_directions() {
 
 #[test]
 fn the_armour_slots_are_consecutive_from_protector_head() {
-    use er_build_import::equip::{CHR_ASM_SLOT_PROTECTOR_HEAD, PROTECTOR_PARTS};
+    use er_build_import_core::equip::{CHR_ASM_SLOT_PROTECTOR_HEAD, PROTECTOR_PARTS};
 
     // `ProtectorIndexToChrAsmSlot` is literally `index + ProtectorHead`, so the four planner keys
     // must be in that order -- the exporter walks them by offset and would mislabel armour if the
@@ -550,11 +552,11 @@ fn the_armour_slots_are_consecutive_from_protector_head() {
 
 // ------------------------------------------------- the plan is the denominator
 
-use er_build_import::equip::{EquipLedger, PositionKind, PositionResult};
+use er_build_import_core::equip::{EquipLedger, PositionKind, PositionResult};
 
 /// The synthetic build behind the accounting tests: two quickbar tools and two pouch tools on
 /// top of the fixture's gear, i.e. exactly the family that used to leave the denominator.
-fn with_tools() -> er_build_import::EquipPlan {
+fn with_tools() -> er_build_import_core::EquipPlan {
     let doc = model::parse(
         r#"{"items":{"tools":{"slots":[
              {"name":"Fingerprint Nostrum","equipIndex":0},
@@ -820,7 +822,7 @@ fn sets_build() -> model::BuildDoc {
     model::parse(SETS_BUILD).expect("sets fixture parses")
 }
 
-fn armament_names(plan: &er_build_import::EquipPlan) -> Vec<Option<&str>> {
+fn armament_names(plan: &er_build_import_core::EquipPlan) -> Vec<Option<&str>> {
     plan.armaments
         .iter()
         .map(|slot| slot.as_ref().map(|item| item.name.as_str()))

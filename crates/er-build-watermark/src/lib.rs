@@ -43,7 +43,7 @@ fn log_path() -> std::path::PathBuf {
 
 #[cfg(windows)]
 fn watermark_log(args: std::fmt::Arguments<'_>) {
-    er_game_base::log::append_line(&log_path(), format_args!("er-build-watermark-dll: {args}"));
+    er_game_base::log::append_line(&log_path(), format_args!("er-build-watermark: {args}"));
 }
 
 #[cfg(windows)]
@@ -76,7 +76,8 @@ pub unsafe extern "system" fn DllMain(
                     // at 3840x2160 in the same process, so there was no context to yield.
                     // hudhook tolerates being installed before the swapchain exists; it hooks
                     // `Present` and waits for the game to call it.
-                    let owned = er_build_watermark::install_if_owner(module_base, watermark_log);
+                    let owned =
+                        er_build_watermark_core::install_if_owner(module_base, watermark_log);
                     watermark_log(format_args!(
                         "overlay claim -> owner={owned} (false means another module already owns \
                          it and is expected to carry the rows itself)"
@@ -92,6 +93,6 @@ pub unsafe extern "system" fn DllMain(
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_build_watermark_dll_host_stub() -> i32 {
+pub extern "C" fn er_build_watermark_host_stub() -> i32 {
     1
 }

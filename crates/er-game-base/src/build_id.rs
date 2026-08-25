@@ -3,7 +3,7 @@
 //! # The failure this exists to end
 //!
 //! A tester's log arrives with a symptom in it and the first question is always the same:
-//! which build is that? On 2026-08-24 an `er-invasion-warp-dll` log had to be dated by
+//! which build is that? On 2026-08-24 an `er-invasion-warp` log had to be dated by
 //! string-matching its own format literals against the repo's source, because its opening
 //! line was `loaded module_base=0x…` and nothing else -- no commit, no build time, no file
 //! name. The alternative on offer was asking a human to courier DLLs across so a machine
@@ -21,7 +21,7 @@
 //! days apart (the ordinary case -- `er-crash-modules.txt` from 2026-08-23 carried a
 //! bugfixes DLL from the 21st beside a crash logger from the 5th) shows that divergence
 //! instead of hiding it behind one workspace-wide sha. It is also the SAME field
-//! `er-crash-logging` prints for every loaded module, so a feature log and a crash dump can
+//! `er-crash-logging-core` prints for every loaded module, so a feature log and a crash dump can
 //! be joined on it without anyone hashing anything.
 
 /// Commit this crate was compiled from: a 12-hex-digit sha, `+dirty`-suffixed when tracked
@@ -260,7 +260,7 @@ pub extern "C" fn er_build_identity_v1() -> *const u8 {
 /// What one loaded module answered when asked its identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModIdentity {
-    /// The DLL's own file name, e.g. `er_invasion_warp_dll.dll`.
+    /// The DLL's own file name, e.g. `er_invasion_warp.dll`.
     pub module: String,
     /// The commit it was built from, `+dirty`-suffixed when the tree was not clean.
     pub sha: String,
@@ -533,9 +533,9 @@ mod tests {
     /// the one that encoded it -- there is no shared type to keep them honest, only this test.
     #[test]
     fn an_identity_round_trips_through_its_wire_form() {
-        let parsed = parse_identity("er_invasion_warp_dll.dll|c57b5c1bf04a+dirty|1787368671")
+        let parsed = parse_identity("er_invasion_warp.dll|c57b5c1bf04a+dirty|1787368671")
             .expect("well-formed triple");
-        assert_eq!(parsed.module, "er_invasion_warp_dll.dll");
+        assert_eq!(parsed.module, "er_invasion_warp.dll");
         assert_eq!(parsed.sha, "c57b5c1bf04a+dirty");
         assert_eq!(parsed.pe_timestamp, 1_787_368_671);
     }

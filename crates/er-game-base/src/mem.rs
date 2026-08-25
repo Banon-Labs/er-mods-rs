@@ -2,7 +2,7 @@
 //!
 //! Implemented over raw `#[link(name = "kernel32")]` externs so this stays a
 //! zero-dependency leaf that all three DLLs (product, reload-trace, input-harness)
-//! and er-telemetry can sit on without re-implementing `ReadProcessMemory` reads.
+//! and er-telemetry-core can sit on without re-implementing `ReadProcessMemory` reads.
 //! Ported from the product's `experiments/mem.rs` (single source of truth now).
 
 use core::ffi::c_void;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail the build when a telemetry counter is READ but never WRITTEN.
 
-WHY THIS GATE EXISTS. A counter in `er-telemetry` that is defined, re-exported and read once to
+WHY THIS GATE EXISTS. A counter in `er-telemetry-core` that is defined, re-exported and read once to
 emit an oracle -- but never written -- reports 0/false forever. Nothing downstream can tell that
 apart from "the feature ran and did nothing", so the oracle does not merely fail to inform, it
 actively misinforms. That is not hypothetical: on 2026-07-31 an agent cited
@@ -42,7 +42,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Definitions are collected from EVERY crate file, not just er-telemetry/src/counters.rs. That file
+# Definitions are collected from EVERY crate file, not just er-telemetry-core/src/counters.rs. That file
 # holds ~1295 atomic statics but a further ~960 live in 84 other files (constants/autoload_state.rs,
 # constants/system_quit.rs, the sibling DLL crates, ...), and auditing only the central file would
 # give false assurance for more than a third of them.

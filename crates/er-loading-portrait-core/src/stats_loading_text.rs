@@ -226,10 +226,10 @@ struct StatsTextScreenCache {
 }
 static STATS_TEXT_SCREEN_CACHE: std::sync::Mutex<Option<StatsTextScreenCache>> =
     std::sync::Mutex::new(None);
-pub use er_telemetry::counters::STATS_TEXT_SCREEN_VERSION;
+pub use er_telemetry_core::counters::STATS_TEXT_SCREEN_VERSION;
 
 /// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
-pub use er_telemetry::counters::STATS_TEXT_BUILT;
+pub use er_telemetry_core::counters::STATS_TEXT_BUILT;
 /// `(name, level, live)` of the last logged build -- gates the debug log so repeat builds of the same
 /// identity don't spam it, while identity changes (new character, record->live upgrade) still log.
 static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =

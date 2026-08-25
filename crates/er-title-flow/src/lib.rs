@@ -13,7 +13,7 @@
 // The unsafe fns here read live game memory and each needs a real `# Safety` section.
 #![allow(clippy::missing_safety_doc)]
 // WINDOWS-ONLY BY CONSTRUCTION, AND THE RUST SIDE HAS TO SAY SO. Cargo already pulls the game
-// bindings (`eldenring`, `fromsoftware-shared`, `er-hook`, `er-loading-portrait`, `er-save-loader`,
+// bindings (`eldenring`, `fromsoftware-shared`, `er-hook`, `er-loading-portrait-core`, `er-save-loader`,
 // `er-tpf`, `windows`) only under `[target.'cfg(windows)'.dependencies]`; until 2026-08-23 the
 // source imported them unconditionally, so a HOST `cargo test -p er-effects-rs --lib` died with 31
 // unresolved-import errors that read like the caller's own change had broken something. `check.sh`

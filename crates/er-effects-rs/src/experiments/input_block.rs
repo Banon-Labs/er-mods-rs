@@ -41,43 +41,43 @@ use super::*;
 /// `enforce_input_block`): DInput8 keyboard (state zeroed by the `InputBlocker` hook) AND XInput
 /// gamepad (this module's hook). The MOUSE is never blocked and the cursor is never confined. Read by
 /// `xinput_get_state_hook` each poll so the block is authoritative regardless of window focus.
-pub(crate) use er_telemetry::counters::BLOCK_INPUT_ACTIVE;
+pub(crate) use er_telemetry_core::counters::BLOCK_INPUT_ACTIVE;
 const BLOCK_INPUT_ON: usize = 1;
 /// Cached ER main window HWND for WM keyboard injection (0 = not found yet). Native ER does NOT read
 /// keyboard via DInput (proven 2026-07-17: dinput_kb_fires==0) nor route fabricated XInput to menu
 /// actions, so the self-drive posts real WM_KEYDOWN/WM_KEYUP to this window (ER reads keyboard via
 /// window messages / RawInput; PostMessageW reaches it without foreground).
-pub(crate) use er_telemetry::counters::SQ_REPRO_ER_HWND;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_ER_HWND;
 /// The VK currently "held" by the WM key driver (0 = none), so we post one clean KEYDOWN on press and
 /// one KEYUP on release instead of spamming per frame.
-pub(crate) use er_telemetry::counters::SQ_REPRO_HELD_VK;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_HELD_VK;
 /// Original `XInputGetCapabilities` (minhook trampoline). 0 until the hook installs. The game uses
 /// this to ENUMERATE which pad slots exist; with no controller it returns DEVICE_NOT_CONNECTED and
 /// the game then never polls `XInputGetState(0)`. The harness forces slot 0 connected here too.
-pub(crate) use er_telemetry::counters::XINPUT_GET_CAPABILITIES_ORIG;
+pub(crate) use er_telemetry_core::counters::XINPUT_GET_CAPABILITIES_ORIG;
 /// Original `XInputGetState` (minhook trampoline). 0 until the hook installs.
-pub(crate) use er_telemetry::counters::XINPUT_GET_STATE_ORIG;
+pub(crate) use er_telemetry_core::counters::XINPUT_GET_STATE_ORIG;
 /// Monotonic `dwPacketNumber` for the no-controller "connected idle pad" keepalive the
 /// `xinput_get_state_hook` presents on slot 0 while an XInput harness is armed (see the hook doc).
 /// Private to the keepalive so it never perturbs the fabrication cadence in `INJECT_NAV_FRAME`.
-pub(crate) use er_telemetry::counters::XINPUT_KEEPALIVE_PACKET;
+pub(crate) use er_telemetry_core::counters::XINPUT_KEEPALIVE_PACKET;
 /// DIAGNOSTIC: total `XInputGetCapabilities(user_index==0)` calls (the ENUMERATION probe). Non-zero
 /// means the game re-enumerated slot 0 after our hook installed (so forcing "connected" there can
 /// convince it slot 0 exists); 0 means it enumerated once at startup and cached the result.
-pub(crate) use er_telemetry::counters::XINPUT_SLOT0_CAPS_QUERIES;
+pub(crate) use er_telemetry_core::counters::XINPUT_SLOT0_CAPS_QUERIES;
 /// DIAGNOSTIC: times we wrote a NON-ZERO fabricated button into a slot-0 poll (so the log can show
 /// the game both polled slot 0 AND received a real button edge from us).
-pub(crate) use er_telemetry::counters::XINPUT_SLOT0_FABRICATED_BUTTONS;
+pub(crate) use er_telemetry_core::counters::XINPUT_SLOT0_FABRICATED_BUTTONS;
 /// DIAGNOSTIC: total `XInputGetState(user_index==0)` calls the game makes (the poll counter). If this
 /// stays 0 while the sq-repro harness holds at OPEN_MENU, native ER is NOT polling slot 0 (cached
 /// "no controller" from a pre-hook enumeration -> our button fabrication can never land, and a device
 /// re-scan is required). If it climbs but the menu still does not open, ER polls but ignores the
 /// fabricated buttons (a different problem). Read/logged from `system_quit_repro_tick`.
-pub(crate) use er_telemetry::counters::XINPUT_SLOT0_POLLS;
+pub(crate) use er_telemetry_core::counters::XINPUT_SLOT0_POLLS;
 
-pub(crate) use er_telemetry::counters::SQ_REPRO_BEST_AREA;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_BEST_AREA;
 /// Best (largest-area) candidate window + its area, tracked across the EnumWindows callback.
-pub(crate) use er_telemetry::counters::SQ_REPRO_BEST_HWND;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_BEST_HWND;
 
 pub(crate) const SAVE_PICKER_NAV_LEFT_MASK: usize = 1 << 0;
 pub(crate) const SAVE_PICKER_NAV_RIGHT_MASK: usize = 1 << 1;
@@ -415,7 +415,7 @@ pub(crate) fn game_main_window() -> HWND {
     HWND(SQ_REPRO_ER_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void)
 }
 
-pub(crate) use er_telemetry::counters::SQ_REPRO_IS_FOREGROUND;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_IS_FOREGROUND;
 
 /// FOCUS SEMAPHORE (2026-07-21, focus-controlled A/B): is the OS foreground window owned by THIS (the
 /// game) process? Computed FRESH each call (independent of the sq-repro forcing, which stands down in
@@ -1057,19 +1057,19 @@ pub(crate) fn ensure_rawinput_counter_installed() {
 /// (the camera-only-control bug), but that drop was removed (bd input-blocking-only-in-harness-during-
 /// driving-never-in-product-never-outside-window-2026-07-23) -- the user's keyboard is never dropped, so
 /// this stays 0. MOUSE events were never dropped either.
-pub(crate) use er_telemetry::counters::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS;
+pub(crate) use er_telemetry_core::counters::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS;
 /// Total GetRawInputData calls the game made (any command). If this is 0 the game is NOT routing input
 /// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
 /// oracle is live and a 0 event count is a genuine "no user input this run".
-pub(crate) use er_telemetry::counters::RAWINPUT_HOOK_CALLS;
-pub(crate) use er_telemetry::counters::RAWINPUT_KEY_EVENTS;
-pub(crate) use er_telemetry::counters::RAWINPUT_MOUSE_BUTTON_EVENTS;
+pub(crate) use er_telemetry_core::counters::RAWINPUT_HOOK_CALLS;
+pub(crate) use er_telemetry_core::counters::RAWINPUT_KEY_EVENTS;
+pub(crate) use er_telemetry_core::counters::RAWINPUT_MOUSE_BUTTON_EVENTS;
 /// GetRawInputData reception counters (user 2026-07-20): the oracle must RECORD whether the GAME is
 /// RECEIVING user mouse/keyboard input, at the OS boundary. ER reads gameplay+menu input via RawInput;
 /// the input-harness injects via the direct-memory inputmgr, NOT RawInput -- so every RawInput event
 /// counted here is USER input the game received (contamination during an agent-owned run). Emitted as
 /// oracle_rawinput_* and consumed by the verdict emitter.
-pub(crate) use er_telemetry::counters::RAWINPUT_MOUSE_MOVE_EVENTS;
+pub(crate) use er_telemetry_core::counters::RAWINPUT_MOUSE_MOVE_EVENTS;
 static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
 // REMOVED (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
@@ -1196,8 +1196,8 @@ unsafe fn install_rawinput_counter() {
 }
 
 /// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
-pub(crate) use er_telemetry::counters::DINPUT_BLOCK_INSTALLED;
-pub(crate) use er_telemetry::counters::MISSING_SAVE_INPUT_RELEASE_LOGGED;
+pub(crate) use er_telemetry_core::counters::DINPUT_BLOCK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::MISSING_SAVE_INPUT_RELEASE_LOGGED;
 
 /// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can
 /// run from EITHER the game task OR the render loop -- critical because under the offline

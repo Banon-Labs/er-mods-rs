@@ -104,7 +104,7 @@ impl Slot {
     /// (`equipSet = [equipIndex]`) makes of such a row the moment sets appear.
     ///
     /// ```
-    /// use er_build_import::model;
+    /// use er_build_import_core::model;
     /// let doc = model::parse(
     ///     r#"{"inventory":{"slots":[{"name":"Shamshir","equipSet":[null,2]}]}}"#,
     /// )

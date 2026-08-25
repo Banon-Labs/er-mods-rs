@@ -22,7 +22,7 @@
 //! opacity" is not expressible through it at all -- the first cut of this watermark had to paint
 //! an opaque dark panel and call it faint. Real alpha through that path would have meant either a
 //! per-frame backbuffer readback (a fence stall inside `Present`) or a blend pipeline with its
-//! own shaders. `er-net-effects-dll` already runs a hudhook/imgui DX12 overlay in this same
+//! own shaders. `er-net-effects` already runs a hudhook/imgui DX12 overlay in this same
 //! process, alongside the product's own `Present` hook, and `DrawList::add_text` takes a float
 //! alpha imgui blends for free. Reusing it costs one dependency and no stall.
 

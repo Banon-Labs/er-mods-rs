@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if the save-suppression crates compile with warnings on their SHIPPING target.
 
-Covers the standalone `er-save-disable-dll` AND the shared `er-save-suppress` core it
+Covers the standalone `er-save-disable` AND the shared `er-save-suppress` core it
 (and the product DLL) link -- the suppression logic moved into that rlib for the
 save-game-flow integration, and it is exactly the "crate whose job is stopping saves"
 this gate exists for.
@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CRATES = ["er-save-disable-dll", "er-save-suppress"]
+CRATES = ["er-save-disable", "er-save-suppress"]
 TARGET = "x86_64-pc-windows-msvc"
 
 # Lints that indicate rot in a crate whose job is to suppress saving.

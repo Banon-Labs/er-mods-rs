@@ -17,7 +17,7 @@
 /// Game task thread. Every read is fault-closed; nothing is written and nothing is called.
 #[cfg(windows)]
 pub(crate) unsafe fn sample_invade_destination() {
-    use er_invasion_warp::seamless_invade_probe::{
+    use er_invasion_warp_core::seamless_invade_probe::{
         InvadeDestinationWatcher, read_invade_destination,
     };
 

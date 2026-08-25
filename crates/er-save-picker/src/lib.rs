@@ -1,7 +1,7 @@
 //! Standalone ME3-loadable shell for product (A), the DLL-drawn boot save picker.
 //!
 //! This DLL is deliberately separate from the product `er_effects_rs.dll`, following the
-//! `er-loading-bar-dll` / `er-loading-portrait-dll` shape: the feature crate owns the picker
+//! `er-loading-bar` / `er-loading-portrait` shape: the feature crate owns the picker
 //! logic, this thin shell installs a standalone host seam and arms the boot picker when loaded
 //! by ME3.
 //!
@@ -29,7 +29,7 @@ use windows::core::PCSTR;
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
-const LOG_FILE_NAME: &str = "er-save-picker-dll.log";
+const LOG_FILE_NAME: &str = "er-save-picker.log";
 
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
@@ -50,7 +50,7 @@ fn log_dir() -> PathBuf {
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     er_game_base::log::append_line(
         &dir.join(LOG_FILE_NAME),
-        format_args!("er-save-picker-dll: {args}"),
+        format_args!("er-save-picker: {args}"),
     );
 }
 
@@ -58,13 +58,13 @@ fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
 /// completion callback validates/plans the pick and releases this DLL's own picker latch instead of
 /// claiming it activated autoload.
 fn install_standalone_host() -> bool {
-    er_save_picker::install_host(er_save_picker::SavePickerHost {
+    er_save_picker_core::install_host(er_save_picker_core::SavePickerHost {
         append_autoload_debug: standalone_log,
         missing_save_selection_pending: standalone_missing_save_selection_pending,
         complete_missing_save_selection_from_picker: standalone_complete_missing_save_selection,
         picker_start_dir: standalone_picker_start_dir,
         remember_picker_dir: standalone_remember_picker_dir,
-        ..er_save_picker::SavePickerHost::defaults()
+        ..er_save_picker_core::SavePickerHost::defaults()
     })
 }
 
@@ -78,8 +78,8 @@ fn standalone_missing_save_selection_pending() -> bool {
 
 fn standalone_complete_missing_save_selection(
     path: &Path,
-) -> er_save_picker::MissingSaveSelectionOutcome {
-    use er_save_picker::MissingSaveSelectionOutcome;
+) -> er_save_picker_core::MissingSaveSelectionOutcome {
+    use er_save_picker_core::MissingSaveSelectionOutcome;
     let validated = match er_save_redirect::validate_save_file_path(path.to_path_buf()) {
         Ok(validated) => validated,
         Err(err) => {
@@ -104,26 +104,28 @@ fn standalone_complete_missing_save_selection(
 
 fn standalone_rejection_message(
     err: er_save_redirect::SaveSourceRejection,
-) -> er_save_picker::PickerStatusMessage {
+) -> er_save_picker_core::PickerStatusMessage {
     match err {
         er_save_redirect::SaveSourceRejection::MissingOrNotFile => {
-            er_save_picker::PickerStatusMessage::new(
+            er_save_picker_core::PickerStatusMessage::new(
                 "SAVE NOT FOUND",
                 "The selected path is missing or is not a file.",
             )
         }
         er_save_redirect::SaveSourceRejection::WrongSize { len, expected } => {
-            er_save_picker::PickerStatusMessage::new(
+            er_save_picker_core::PickerStatusMessage::new(
                 "WRONG SAVE SIZE",
                 format!("Expected {expected} bytes, but this file is {len} bytes."),
             )
         }
-        er_save_redirect::SaveSourceRejection::NotBnd4 => er_save_picker::PickerStatusMessage::new(
-            "NOT AN ELDEN RING SAVE",
-            "The file is not a readable BND4 save container.",
-        ),
+        er_save_redirect::SaveSourceRejection::NotBnd4 => {
+            er_save_picker_core::PickerStatusMessage::new(
+                "NOT AN ELDEN RING SAVE",
+                "The file is not a readable BND4 save container.",
+            )
+        }
         er_save_redirect::SaveSourceRejection::Unreadable => {
-            er_save_picker::PickerStatusMessage::new(
+            er_save_picker_core::PickerStatusMessage::new(
                 "SAVE UNREADABLE",
                 "The save exists, but could not be read.",
             )
@@ -183,8 +185,8 @@ pub unsafe extern "system" fn DllMain(
 
             let host_installed = install_standalone_host();
             STANDALONE_MISSING_SAVE_PENDING.store(true, Ordering::SeqCst);
-            let armed = er_save_picker::overlay::arm_boot_picker();
-            er_save_picker::overlay::ensure_save_picker_keyboard_hook();
+            let armed = er_save_picker_core::overlay::arm_boot_picker();
+            er_save_picker_core::overlay::ensure_save_picker_keyboard_hook();
             append_log(
                 &log_dir(),
                 format_args!(
@@ -199,7 +201,7 @@ pub unsafe extern "system" fn DllMain(
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_save_picker_dll_host_stub() -> i32 {
+pub extern "C" fn er_save_picker_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
@@ -215,7 +217,7 @@ mod tests {
         assert!(standalone_missing_save_selection_pending());
         assert!(matches!(
             standalone_complete_missing_save_selection(Path::new("Z:\\saves\\ER0000.sl2")),
-            er_save_picker::MissingSaveSelectionOutcome::Rejected(_)
+            er_save_picker_core::MissingSaveSelectionOutcome::Rejected(_)
         ));
         assert!(standalone_missing_save_selection_pending());
     }

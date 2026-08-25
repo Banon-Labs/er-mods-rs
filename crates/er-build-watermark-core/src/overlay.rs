@@ -124,7 +124,7 @@ pub fn visible_rows() -> usize {
 /// Claim process-wide ownership of the hudhook overlay, returning whether THIS call won.
 ///
 /// Split out from [`install_if_owner`] because a second overlay in this workspace --
-/// `er-net-effects-dll` -- installs hudhook for its own bar, and two `Hudhook::apply()` calls in
+/// `er-net-effects` -- installs hudhook for its own bar, and two `Hudhook::apply()` calls in
 /// one process double-hook `Present`. Whichever module intends to install hudhook calls this
 /// first; the loser draws nothing of its own, and (for the watermark) simply lets the winner's
 /// render loop carry the rows via [`draw_rows`].

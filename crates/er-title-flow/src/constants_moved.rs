@@ -19,7 +19,7 @@ use std::sync::{
 // stays host-visible, which is what keeps `boot_hold`'s tests runnable by a host `cargo test`.
 #[cfg(windows)]
 use eldenring::cs::{GameDataMan, GameMan};
-use er_telemetry::counters::*;
+use er_telemetry_core::counters::*;
 #[cfg(windows)]
 use fromsoftware_shared::F32Vector4;
 
@@ -127,11 +127,11 @@ pub const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
 /// it cannot corrupt the SM. This is the call CS::TitleTopDialog::update's input-skip branch makes to
 /// move FadeIn->Loop on a button press. bd fadein-* RE 2026-06-24.
 /// NOT an FD4 SetState: 0x7499e0 is a Scaleform **frame-label goto** on a SceneObjProxy
-/// (er-loading-portrait names it correctly as SCALEFORM_LABEL_GOTO_RVA and this now derives
+/// (er-loading-portrait-core names it correctly as SCALEFORM_LABEL_GOTO_RVA and this now derives
 /// from it, 2026-08-01). Its operands are frame LABELS, not StateDescs. The old name is kept
 /// for its call sites in title_load_step_hooks.rs.
 #[cfg(windows)]
-pub const TITLE_FD4_SETSTATE_RVA: usize = er_loading_portrait::SCALEFORM_LABEL_GOTO_RVA;
+pub const TITLE_FD4_SETSTATE_RVA: usize = er_loading_portrait_core::SCALEFORM_LABEL_GOTO_RVA;
 
 /// One-shot latch: the zero-input FadeIn->Loop transition has fired.
 pub static TITLE_FADEIN_SKIP_FIRED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -144,7 +144,7 @@ pub const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend
 /// CSMenuProfModelRend instances and writes DAT_143d6d8d0 before the refresh/feed pass below.
 #[cfg(windows)]
 pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize =
-    er_loading_portrait::PROFILE_TABLE_BUILDER_RVA;
+    er_loading_portrait_core::PROFILE_TABLE_BUILDER_RVA;
 
 /// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
 /// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
@@ -152,7 +152,7 @@ pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize =
 /// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
 #[cfg(windows)]
 pub const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize =
-    er_loading_portrait::PROFILE_RENDERER_REFRESH_RVA;
+    er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA;
 
 pub static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize = AtomicUsize::new(0);
 

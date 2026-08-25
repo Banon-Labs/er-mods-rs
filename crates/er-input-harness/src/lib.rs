@@ -1,6 +1,6 @@
-//! er-input-harness-dll -- standalone Elden Ring INPUT SELF-DRIVE HARNESS.
+//! er-input-harness -- standalone Elden Ring INPUT SELF-DRIVE HARNESS.
 //!
-//! A separate cdylib (`er_input_harness_dll.dll`), loaded as its own `[[natives]]` entry in the ME3
+//! A separate cdylib (`er_input_harness.dll`), loaded as its own `[[natives]]` entry in the ME3
 //! profile ALONGSIDE the product (or with the telemetry-only DLL for a vanilla capture). Its mere
 //! PRESENCE enables it (DEFAULT-ON, no env/marker gate); omit it from the profile for production.
 //!
@@ -10,7 +10,7 @@
 //! DEAD path and is not carried over.
 //!
 //! TITLE-ACTIVE HOOK (2026-07-22): the per-frame callback is a `CSTaskImp` `FrameBegin` recurring task
-//! (same registration as er-telemetry-dll), which fires at the TITLE and boot screens AND in-world --
+//! (same registration as er-telemetry), which fires at the TITLE and boot screens AND in-world --
 //! unlike the previous in-world-only union MinHook anchor, which never ran at the title and so could not
 //! drive PRESS ANY BUTTON / Continue. This lets the harness drive the FULL native boot+reload standalone
 //! (bd USER-chose-build-harness-title-drive-cstaskimp-hook-accept-byte-2026-07-22).
@@ -78,7 +78,7 @@ fn install() {
     reset_log_file();
     reset_phases_file();
     harness_log!(
-        "er-input-harness-dll attach: TITLE-ACTIVE CSTaskImp FrameBegin self-drive (fires at title + in-world); direct input-memory injection (keystate bitmap + DLUID + accept byte); no SendInput/XInput"
+        "er-input-harness attach: TITLE-ACTIVE CSTaskImp FrameBegin self-drive (fires at title + in-world); direct input-memory injection (keystate bitmap + DLUID + accept byte); no SendInput/XInput"
     );
     // Wait for the game's task manager (no sleep: yield + re-poll, the product's wait pattern).
     let task = loop {
@@ -93,10 +93,7 @@ fn install() {
     // (inputmgr+0x90 is OUTPUT in-world; the menu reads the pad device). Title/boot still use the accept
     // byte from the CSTaskImp task below.
     pad_inject::install_pad_poll_hook(base);
-    harness_log!(
-        "er-input-harness-dll install complete {}",
-        game_mem::snapshot()
-    );
+    harness_log!("er-input-harness install complete {}", game_mem::snapshot());
     task.run_recurring(
         |_data: &FD4TaskData| {
             let base = resolve_base();
@@ -130,6 +127,6 @@ pub unsafe extern "system" fn DllMain(
 // Non-windows: keep the crate buildable for host tooling / workspace resolution.
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_input_harness_dll_host_stub() -> i32 {
+pub extern "C" fn er_input_harness_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }

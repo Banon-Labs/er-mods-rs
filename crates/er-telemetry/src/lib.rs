@@ -1,13 +1,13 @@
-//! er-telemetry-dll: a thin standalone telemetry cdylib.
+//! er-telemetry: a thin standalone telemetry cdylib.
 //!
-//! Modeled on er-reload-trace-dll's shape: a `DllMain` that, on
+//! Modeled on er-reload-trace's shape: a `DllMain` that, on
 //! `DLL_PROCESS_ATTACH`, spawns an install thread which waits for the game's
 //! task manager and registers a game-thread `FrameBegin` recurring tick. The
-//! tick runs ONLY er-telemetry's read-side oracles (game-RAM/PE reads that need
+//! tick runs ONLY er-telemetry-core's read-side oracles (game-RAM/PE reads that need
 //! no product hooks) and writes `er-telemetry-standalone.json`.
 //!
 //! Runnable alone (telemetry-only me3 profile) or alongside the product DLL as an
-//! additional `[[natives]]` entry. All reusable logic lives in the er-telemetry
+//! additional `[[natives]]` entry. All reusable logic lives in the er-telemetry-core
 //! LIB; this crate is only the DllMain + task-registration shell.
 
 #[cfg(windows)]
@@ -94,9 +94,9 @@ unsafe extern "system" fn telemetry_create_window_hook(
     instance: usize,
     param: usize,
 ) -> usize {
-    er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_CALLS
+    er_telemetry_core::counters::WINRECONFIG_CREATE_WINDOW_CALLS
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let orig = er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_ORIG
+    let orig = er_telemetry_core::counters::WINRECONFIG_CREATE_WINDOW_ORIG
         .load(std::sync::atomic::Ordering::SeqCst);
     let f: CreateWindowExWFn = unsafe { std::mem::transmute(orig) };
     unsafe {
@@ -120,13 +120,13 @@ unsafe extern "system" fn telemetry_set_window_pos_hook(
     flags: u32,
 ) -> i32 {
     let _ = (insert_after, x, y);
-    er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_CALLS
+    er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_POS_CALLS
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    er_telemetry::counters::WINRECONFIG_LAST_SET_POS_SIZE
+    er_telemetry_core::counters::WINRECONFIG_LAST_SET_POS_SIZE
         .store(pack_size(cx, cy), std::sync::atomic::Ordering::SeqCst);
-    er_telemetry::counters::WINRECONFIG_LAST_SET_POS_FLAGS
+    er_telemetry_core::counters::WINRECONFIG_LAST_SET_POS_FLAGS
         .store(flags as usize, std::sync::atomic::Ordering::SeqCst);
-    let orig = er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_ORIG
+    let orig = er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_POS_ORIG
         .load(std::sync::atomic::Ordering::SeqCst);
     let f: SetWindowPosFn = unsafe { std::mem::transmute(orig) };
     unsafe { f(hwnd, insert_after, x, y, cx, cy, flags) }
@@ -141,9 +141,9 @@ unsafe extern "system" fn telemetry_set_window_long_hook(
     index: i32,
     value: isize,
 ) -> isize {
-    er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS
+    er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_LONG_CALLS
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let orig = er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG
+    let orig = er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG
         .load(std::sync::atomic::Ordering::SeqCst);
     let f: SetWindowLongPtrWFn = unsafe { std::mem::transmute(orig) };
     unsafe { f(hwnd, index, value) }
@@ -162,11 +162,11 @@ unsafe extern "system" fn telemetry_move_window_hook(
     repaint: i32,
 ) -> i32 {
     let _ = (x, y);
-    er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_CALLS
+    er_telemetry_core::counters::WINRECONFIG_MOVE_WINDOW_CALLS
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    er_telemetry::counters::WINRECONFIG_LAST_MOVE_SIZE
+    er_telemetry_core::counters::WINRECONFIG_LAST_MOVE_SIZE
         .store(pack_size(w, h), std::sync::atomic::Ordering::SeqCst);
-    let orig = er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_ORIG
+    let orig = er_telemetry_core::counters::WINRECONFIG_MOVE_WINDOW_ORIG
         .load(std::sync::atomic::Ordering::SeqCst);
     let f: MoveWindowFn = unsafe { std::mem::transmute(orig) };
     unsafe { f(hwnd, x, y, w, h, repaint) }
@@ -183,7 +183,7 @@ unsafe extern "system" fn telemetry_change_display_hook(
     flags: u32,
     param: usize,
 ) -> i32 {
-    er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS
+    er_telemetry_core::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     if devmode != 0 {
         let (pels_w, pels_h) = unsafe {
@@ -192,14 +192,14 @@ unsafe extern "system" fn telemetry_change_display_hook(
                 *((devmode + DEVMODEW_PELS_HEIGHT_OFFSET) as *const u32),
             )
         };
-        er_telemetry::counters::WINRECONFIG_LAST_CHANGE_DISPLAY_SIZE.store(
+        er_telemetry_core::counters::WINRECONFIG_LAST_CHANGE_DISPLAY_SIZE.store(
             pack_u32_size(pels_w, pels_h),
             std::sync::atomic::Ordering::SeqCst,
         );
     }
-    er_telemetry::counters::WINRECONFIG_LAST_CHANGE_DISPLAY_FLAGS
+    er_telemetry_core::counters::WINRECONFIG_LAST_CHANGE_DISPLAY_FLAGS
         .store(flags as usize, std::sync::atomic::Ordering::SeqCst);
-    let orig = er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG
+    let orig = er_telemetry_core::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG
         .load(std::sync::atomic::Ordering::SeqCst);
     let f: ChangeDisplaySettingsExWFn = unsafe { std::mem::transmute(orig) };
     unsafe { f(devname, devmode, hwnd, flags, param) }
@@ -213,8 +213,8 @@ fn install_window_reconfig_hooks() {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
-            er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT.store(8, Ordering::SeqCst);
-            er_telemetry::counters::WINRECONFIG_EARLY_APPLY_MS
+            er_telemetry_core::counters::WINRECONFIG_EARLY_APPLY_RESULT.store(8, Ordering::SeqCst);
+            er_telemetry_core::counters::WINRECONFIG_EARLY_APPLY_MS
                 .store(status as usize, Ordering::SeqCst);
             return;
         }
@@ -224,27 +224,27 @@ fn install_window_reconfig_hooks() {
         (
             b"CreateWindowExW\0",
             telemetry_create_window_hook as *mut c_void,
-            &er_telemetry::counters::WINRECONFIG_CREATE_WINDOW_ORIG,
+            &er_telemetry_core::counters::WINRECONFIG_CREATE_WINDOW_ORIG,
         ),
         (
             b"SetWindowPos\0",
             telemetry_set_window_pos_hook as *mut c_void,
-            &er_telemetry::counters::WINRECONFIG_SET_WINDOW_POS_ORIG,
+            &er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_POS_ORIG,
         ),
         (
             b"SetWindowLongPtrW\0",
             telemetry_set_window_long_hook as *mut c_void,
-            &er_telemetry::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG,
+            &er_telemetry_core::counters::WINRECONFIG_SET_WINDOW_LONG_ORIG,
         ),
         (
             b"MoveWindow\0",
             telemetry_move_window_hook as *mut c_void,
-            &er_telemetry::counters::WINRECONFIG_MOVE_WINDOW_ORIG,
+            &er_telemetry_core::counters::WINRECONFIG_MOVE_WINDOW_ORIG,
         ),
         (
             b"ChangeDisplaySettingsExW\0",
             telemetry_change_display_hook as *mut c_void,
-            &er_telemetry::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG,
+            &er_telemetry_core::counters::WINRECONFIG_CHANGE_DISPLAY_ORIG,
         ),
     ];
     let mut hooks = Vec::new();
@@ -261,7 +261,7 @@ fn install_window_reconfig_hooks() {
         }
     }
     let _ = unsafe { MH_ApplyQueued() };
-    er_telemetry::counters::WINRECONFIG_EARLY_APPLY_RESULT.store(7, Ordering::SeqCst);
+    er_telemetry_core::counters::WINRECONFIG_EARLY_APPLY_RESULT.store(7, Ordering::SeqCst);
     std::mem::forget(hooks);
 }
 
@@ -299,7 +299,7 @@ pub unsafe extern "system" fn DllMain(
                     task.run_recurring(
                         |_data: &FD4TaskData| {
                             // Standalone oracles + telemetry-owned diagnostic hook counters; no EffectsState.
-                            er_telemetry::standalone_tick();
+                            er_telemetry_core::standalone_tick();
                         },
                         CSTaskGroupIndex::FrameBegin,
                     );
@@ -313,6 +313,6 @@ pub unsafe extern "system" fn DllMain(
 // A cdylib with no DllMain is valid; the game entry only exists on windows.
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_telemetry_dll_host_stub() -> i32 {
+pub extern "C" fn er_telemetry_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }

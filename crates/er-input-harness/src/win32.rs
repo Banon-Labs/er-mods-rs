@@ -1,6 +1,6 @@
 //! Zero-dependency Win32 FFI surface for the input-harness DLL.
 //!
-//! Mirrors the raw-`extern`/`#[link]` style of `er-reload-trace-dll` (no `windows`-crate
+//! Mirrors the raw-`extern`/`#[link]` style of `er-reload-trace` (no `windows`-crate
 //! dependency, so nothing extra crosses the cargo-xwin cross-compile boundary). Only the calls the
 //! DIRECT-input-memory self-drive uses are declared: module resolution (find the game image),
 //! timing/log helpers, and `ReadProcessMemory` for fault-safe
@@ -84,7 +84,7 @@ pub fn send_key_up(vk: u8) {
 
 /// Read a pointer-sized value from this process's own address space. Uses `ReadProcessMemory` on the
 /// pseudo-handle (never faults on an unmapped/garbage pointer, unlike a raw deref) -- the same passive
-/// read idiom `er-reload-trace-dll` uses.
+/// read idiom `er-reload-trace` uses.
 pub unsafe fn read_usize(addr: usize) -> Option<usize> {
     let mut value = 0usize;
     let mut read = 0usize;

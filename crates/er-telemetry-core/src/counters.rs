@@ -4,7 +4,7 @@
 //! OWNERSHIP INVERSION (in progress): today these atomics are DEFINED in the
 //! product and telemetry merely mirrors them through `crate::*` glob imports.
 //! The target state is that they are DEFINED here (`pub` statics) and the
-//! product write-sites reference `er_telemetry::counters::X`, so telemetry never
+//! product write-sites reference `er_telemetry_core::counters::X`, so telemetry never
 //! reaches up into product for state.
 //!
 //! This module currently holds only the counters that the standalone read-side
@@ -139,7 +139,7 @@ pub static LOADGAME_BUILDER_SLOT_OVERRIDES: AtomicUsize = AtomicUsize::new(0);
 pub static LOADGAME_BUILDER_LAST_NATIVE_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// The slot THIS loading-screen window committed its portrait to, +1 (0 == not yet committed).
 /// Latched at the window's first slot resolution and held until the window closes, so the face on
-/// screen cannot change character mid-load. See `er_loading_portrait::portrait_window_target_slot`.
+/// screen cannot change character mid-load. See `er_loading_portrait_core::portrait_window_target_slot`.
 pub static PORTRAIT_WINDOW_TARGET_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// Times the freshly-resolved target DISAGREED with what this window already committed to, i.e.
 /// retargets that were suppressed. Each one is a mid-load face change the user did not see.
@@ -1599,7 +1599,7 @@ pub static PORTRAIT_CROP_MAXY: AtomicUsize = AtomicUsize::new(0);
 /// and its value useless: a live run read 324 against a seed window of 40, so the one question the
 /// counter exists to answer -- "is the envelope frozen yet?" -- could not be answered from it at
 /// all. Saturating makes `== PORTRAIT_CROP_SEED_N` mean FROZEN and `< N` mean still seeding, which
-/// is what every reader already assumed it meant. Written by `er_loading_portrait::portrait_onto`;
+/// is what every reader already assumed it meant. Written by `er_loading_portrait_core::portrait_onto`;
 /// read by `oracle_portrait_crop_seed_frames`; reset per portrait window alongside the four bounds.
 pub static PORTRAIT_CROP_SEED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Times a seeding frame actually MOVED one of the four crop bounds outward, i.e. the number of
@@ -1610,13 +1610,13 @@ pub static PORTRAIT_CROP_SEED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// before settling". Apparent head size is `dst_h / crop_h` (`crop_w` cancels out of the scale), so
 /// every growth event is one visible size step, and the count is how many steps the settle took.
 /// 1 means the envelope was right from the first frame and never moved; a large count means the
-/// head shrank repeatedly on screen. Written by `er_loading_portrait::portrait_onto` next to the
+/// head shrank repeatedly on screen. Written by `er_loading_portrait_core::portrait_onto` next to the
 /// `portrait-crop[..]` log lines that carry the per-event detail; read by
 /// `oracle_portrait_crop_growth_events`; reset per portrait window with the bounds.
 pub static PORTRAIT_CROP_GROWTH_EVENTS: AtomicUsize = AtomicUsize::new(0);
 /// Frames the portrait compositor REFUSED to draw because the source frame was not depth-keyed --
 /// every pixel opaque, i.e. the mask cut nothing. Written by the mask gate in
-/// `er_loading_portrait::portrait_onto`; read by `oracle_portrait_draw_refused_unmasked`.
+/// `er_loading_portrait_core::portrait_onto`; read by `oracle_portrait_draw_refused_unmasked`.
 ///
 /// WHY the gate needs it (2026-08-21): a live run measured `oracle_portrait_alpha_cover_pct = 99`
 /// against `oracle_depth_key_bg_pct = 76`. Those cannot both describe a keyed frame -- 99% coverage

@@ -12,7 +12,7 @@
 use er_gfx::Movie;
 use er_gfx::profile_05_010_layout::Profile05_010Layout;
 use er_gfx::raster::RasterFont;
-use er_loading_portrait::profile_row_label::{RowHeaderValues, row_header_label};
+use er_loading_portrait_core::profile_row_label::{RowHeaderValues, row_header_label};
 use std::path::PathBuf;
 
 /// Elden Ring caps a character name at 16 UTF-16 units.

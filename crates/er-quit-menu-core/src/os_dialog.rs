@@ -1,14 +1,14 @@
 //! System>Quit OS common-file-dialog entrypoints.
 //!
-//! The reusable comdlg32 mechanism lives in `er-save-picker`; these entrypoints belong to
+//! The reusable comdlg32 mechanism lives in `er-save-picker-core`; these entrypoints belong to
 //! product (B), because they stage System>Quit rows/save-flow state and own the dim cover.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-use er_save_picker::os_dialog::{OsPickAbort, os_pick_validated};
-use er_save_picker::{PickerCover, PickerIntent};
-use er_telemetry::counters::{
+use er_save_picker_core::os_dialog::{OsPickAbort, os_pick_validated};
+use er_save_picker_core::{PickerCover, PickerIntent};
+use er_telemetry_core::counters::{
     SAVE_DEST_COMMIT_COUNT, SAVE_DEST_COMMIT_PENDING, SAVE_DEST_CONFIRM_PENDING,
     SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT, SAVE_DEST_PICKER_OPEN_COUNT,
     SAVE_DEST_TARGET_EXISTING_COUNT, SAVE_DEST_TARGET_NEW_COUNT, SAVE_PICKER_ACTION_OBJ,

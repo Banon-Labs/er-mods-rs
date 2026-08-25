@@ -1,11 +1,11 @@
 [package]
-name = "er-build-import-dll"
+name = "er-build-import"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Thin ME3-loadable shell around `er-build-import-runtime`, same split as er-loading-portrait /
-# er-loading-portrait-dll. Everything worth testing lives in the host crate `er-build-import` and is
+# Thin ME3-loadable shell around `er-build-import-runtime`, same split as er-loading-portrait-core /
+# er-loading-portrait. Everything worth testing lives in the host crate `er-build-import-core` and is
 # proven by `cargo test`; everything that touches the game lives in the runtime crate and is shared
 # with the product DLL. This shell exists only to trigger a ONE-SHOT import of the configured build
 # at character load, without the product's System>Quit menu.

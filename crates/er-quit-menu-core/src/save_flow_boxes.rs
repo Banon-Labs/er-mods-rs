@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_telemetry::counters::SAVE_FLOW_BOX_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_BOX_COUNT;
 
 /// No confirm box (also the `SAVE_FLOW_BOX_EXPECTED` "not expecting a build" sentinel).
 pub const SAVE_FLOW_BOX_NONE: usize = 0;

@@ -8,24 +8,24 @@
 # the `CSAutoInvadePoint` singleton, which is a plain coordinate table.
 #
 # Product state crosses the seam through `host::install_host` function pointers (the
-# `er-loading-portrait` / `er-quit-menu` pattern). This crate must NOT depend on the root
+# `er-loading-portrait-core` / `er-quit-menu-core` pattern). This crate must NOT depend on the root
 # `er-effects-rs` crate.
 #
 # Most of the crate is deliberately platform-independent so the catalog, the block grouping,
 # the on-disk `.aip` decoder and the coordinate/yaw math are provable by `cargo test` on the
 # host with no game running -- that testability is the point of the crate split.
 [package]
-name = "er-invasion-warp"
+name = "er-invasion-warp-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_invasion_warp"
+name = "er_invasion_warp_core"
 
 [dependencies]
 # Shared cross-platform telemetry counters (the oracle_* fields the feature will write).
-er-telemetry = { path = "../er-telemetry" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 # Shared zero-dependency content fingerprint owner.
 er-game-base = { path = "../er-game-base" }
 

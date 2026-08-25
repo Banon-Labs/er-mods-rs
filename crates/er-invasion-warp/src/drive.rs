@@ -4,7 +4,7 @@
 //! # The hotkeys no longer move the player
 //!
 //! Invasion locations are map markers, not fast-travel destinations
-//! ([`er_invasion_warp::warp::WarpPolicy::MarkersOnly`]), so F7/F8/F9 are refused along with the
+//! ([`er_invasion_warp_core::warp::WarpPolicy::MarkersOnly`]), so F7/F8/F9 are refused along with the
 //! world map's own confirm. The refusal is taken HERE, at the top of the press handler, rather than
 //! left to the warp call at the bottom: reaching that call means decoding the whole invasion
 //! catalog and resolving thousands of candidate coordinates, and doing all of that on every press
@@ -41,21 +41,21 @@
 //!
 //! Not "the DLL loaded", not "no crash", and not "the hotkey fired". A warp counts only when
 //! the player is READ BACK in the destination block within
-//! [`er_invasion_warp::oracles::INVASION_WARP_POSITION_TOLERANCE_METRES`] of the requested
+//! [`er_invasion_warp_core::oracles::INVASION_WARP_POSITION_TOLERANCE_METRES`] of the requested
 //! point ([`WarpArrival::Arrived`]). Landing in the right block at the wrong place is the
 //! signature of the explicit-spawn slot not taking -- the engine falls back to the block's
 //! default spawn -- and is reported as [`WarpArrival::Mislanded`], a FAILURE.
 
-use er_invasion_warp::warp::{WARP_ARRIVAL_TICK_BUDGET, WarpArrival, WarpOutcome};
+use er_invasion_warp_core::warp::{WARP_ARRIVAL_TICK_BUDGET, WarpArrival, WarpOutcome};
 
 #[cfg(windows)]
-use er_invasion_warp::invasion_warp::InvasionWarpTarget;
+use er_invasion_warp_core::invasion_warp::InvasionWarpTarget;
 #[cfg(windows)]
-use er_invasion_warp::select::{
+use er_invasion_warp_core::select::{
     ResolvedTarget, first_in_other_area, nearest_from, next_target_from,
 };
 #[cfg(windows)]
-use er_invasion_warp::warp::classify_arrival;
+use er_invasion_warp_core::warp::classify_arrival;
 
 /// `VK_F7`: warp to the nearest invasion spawn point that is not the one under our feet.
 pub const VK_WARP_NEAREST: i32 = 0x76;
@@ -272,7 +272,7 @@ impl InvasionWarpDrive {
     ///
     /// Must run on the game task thread with the runtime singletons resolved.
     pub unsafe fn tick(&mut self, log: fn(std::fmt::Arguments<'_>), publish: fn(&str)) {
-        if !er_invasion_warp::host::invasion_warp_enabled() {
+        if !er_invasion_warp_core::host::invasion_warp_enabled() {
             return;
         }
         let Ok(base) = er_game_base::mem::game_module_base() else {
@@ -309,7 +309,7 @@ impl InvasionWarpDrive {
             *ticks_waited = ticks_waited.saturating_add(1);
             let settled = unsafe { settled_reading(base) };
             let expected = unsafe {
-                er_invasion_warp::warp::resolve_target(base, &outcome.target)
+                er_invasion_warp_core::warp::resolve_target(base, &outcome.target)
                     .map(|resolved| resolved.world_position)
             };
             let arrival = classify_arrival(outcome, *ticks_waited, settled, expected);
@@ -371,12 +371,12 @@ impl InvasionWarpDrive {
             // the red one -- the difference between "the icon did not change" and "the icon
             // could not be installed", which is otherwise a question only a screenshot answers.
             let (_, map_movies, red_served, red_failures) = crate::map_gfx::gfx_tallies();
-            let player = unsafe { er_invasion_warp::warp::player_physics_position(base) };
+            let player = unsafe { er_invasion_warp_core::warp::player_physics_position(base) };
             // WHICH BLOCK the player is in. The position alone cannot answer "did the warp move
             // me": it is BLOCK-LOCAL, so arriving in a different block can read as a similar
             // triple, and on 2026-08-04 a whole run's worth of heartbeats could not distinguish
             // a warp that worked from one that did nothing. The block id can.
-            let block = unsafe { er_invasion_warp::warp::current_block_id(base) };
+            let block = unsafe { er_invasion_warp_core::warp::current_block_id(base) };
             // MSB invasion-point coverage: (points, maps read). The `.aip` table cannot describe
             // any legacy dungeon, so `msb[0/0]` while standing in one means the second source is
             // not running -- a distinct failure from "running but nothing placed".
@@ -441,20 +441,20 @@ impl InvasionWarpDrive {
         // -- but only after ~7000 targets had been collected and, for F7, run through coordinate
         // conversion. Declining early costs the player nothing; declining late costs a frame hitch
         // on every press.
-        if er_invasion_warp::warp::invasion_warp_policy()
-            == er_invasion_warp::warp::WarpPolicy::MarkersOnly
+        if er_invasion_warp_core::warp::invasion_warp_policy()
+            == er_invasion_warp_core::warp::WarpPolicy::MarkersOnly
         {
             self.warps_refused_by_policy = self.warps_refused_by_policy.saturating_add(1);
             log(format_args!(
                 "invasion-warp: hotkey ignored -- {}. Cancel the search, or let it finish, and the \
                  key works again; the map's pins un-dim at the same moment",
-                er_invasion_warp::warp::WarpError::NotAWarpDestination
+                er_invasion_warp_core::warp::WarpError::NotAWarpDestination
             ));
             return;
         }
 
         let Some(player_position) =
-            (unsafe { er_invasion_warp::warp::player_physics_position(base) })
+            (unsafe { er_invasion_warp_core::warp::player_physics_position(base) })
         else {
             log(format_args!(
                 "invasion-warp: hotkey ignored -- no local player yet (load into the world first)"
@@ -471,16 +471,17 @@ impl InvasionWarpDrive {
         // only blocks in the player's currently resident area -- silently made every OTHER area
         // unreachable. A live run showed it as "2591 of 7073 targets converted" while standing
         // in the DLC: exactly the dlc02 count, with the whole base game excluded.
-        let catalog =
-            match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() } {
-                Ok(catalog) => catalog,
-                Err(error) => {
-                    log(format_args!(
-                        "invasion-warp: hotkey ignored -- catalog unavailable: {error}"
-                    ));
-                    return;
-                }
-            };
+        let catalog = match unsafe {
+            er_invasion_warp_core::invasion_warp::collect_invasion_warp_catalog()
+        } {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                log(format_args!(
+                    "invasion-warp: hotkey ignored -- catalog unavailable: {error}"
+                ));
+                return;
+            }
+        };
         let targets = catalog.targets();
         if targets.is_empty() {
             log(format_args!(
@@ -509,8 +510,10 @@ impl InvasionWarpDrive {
                 None => return,
             }
         } else {
-            let current_area = unsafe { er_invasion_warp::warp::current_block_id(base) }
-                .map(|block| er_invasion_warp::invasion_warp::BlockKey::from_raw(block).area());
+            let current_area =
+                unsafe { er_invasion_warp_core::warp::current_block_id(base) }.map(|block| {
+                    er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block).area()
+                });
             let Some(current_area) = current_area else {
                 log(format_args!(
                     "invasion-warp: hotkey ignored -- current block id unavailable, so 'other \
@@ -536,7 +539,7 @@ impl InvasionWarpDrive {
             }
         };
 
-        match unsafe { er_invasion_warp::warp::request_invasion_warp(&target) } {
+        match unsafe { er_invasion_warp_core::warp::request_invasion_warp(&target) } {
             Ok(outcome) => {
                 self.warps_issued = self.warps_issued.saturating_add(1);
                 self.last_target_id = Some(target.stable_id());
@@ -586,8 +589,8 @@ impl InvasionWarpDrive {
 ///
 /// Game task thread.
 unsafe fn settled_reading(base: usize) -> Option<(u32, [f32; 3])> {
-    let block = unsafe { er_invasion_warp::warp::current_block_id(base) }?;
-    let position = unsafe { er_invasion_warp::warp::player_physics_position(base) }?;
+    let block = unsafe { er_invasion_warp_core::warp::current_block_id(base) }?;
+    let position = unsafe { er_invasion_warp_core::warp::player_physics_position(base) }?;
     Some((block, position))
 }
 
@@ -599,16 +602,16 @@ unsafe fn settled_reading(base: usize) -> Option<(u32, [f32; 3])> {
 ///
 /// Game task thread.
 unsafe fn resolve_catalog(base: usize, log: fn(std::fmt::Arguments<'_>)) -> Vec<ResolvedTarget> {
-    let catalog = match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() }
-    {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            log(format_args!(
-                "invasion-warp: catalog unavailable at hotkey time: {error}"
-            ));
-            return Vec::new();
-        }
-    };
+    let catalog =
+        match unsafe { er_invasion_warp_core::invasion_warp::collect_invasion_warp_catalog() } {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                log(format_args!(
+                    "invasion-warp: catalog unavailable at hotkey time: {error}"
+                ));
+                return Vec::new();
+            }
+        };
     let targets: &[InvasionWarpTarget] = catalog.targets();
     let considered = targets.len().min(MAX_TARGETS_TO_RESOLVE);
     if targets.len() > considered {
@@ -620,7 +623,7 @@ unsafe fn resolve_catalog(base: usize, log: fn(std::fmt::Arguments<'_>)) -> Vec<
     }
     let mut resolved = Vec::with_capacity(considered);
     for target in &targets[..considered] {
-        if let Some(entry) = unsafe { er_invasion_warp::warp::resolve_target(base, target) } {
+        if let Some(entry) = unsafe { er_invasion_warp_core::warp::resolve_target(base, target) } {
             resolved.push(entry);
         }
     }
@@ -671,7 +674,7 @@ pub fn describe_arrival(outcome: &WarpOutcome, arrival: &WarpArrival) -> String 
     }
 }
 
-/// The warp oracle document, using the names `er_invasion_warp::oracles` reserved for them.
+/// The warp oracle document, using the names `er_invasion_warp_core::oracles` reserved for them.
 #[must_use]
 pub fn warp_oracle_json(
     outcome: &WarpOutcome,
@@ -680,7 +683,7 @@ pub fn warp_oracle_json(
     warps_issued: u32,
     warps_arrived: u32,
 ) -> String {
-    use er_invasion_warp::oracles::{
+    use er_invasion_warp_core::oracles::{
         ORACLE_INVASION_WARP_FINAL_BLOCK, ORACLE_INVASION_WARP_FINAL_POSITION,
         ORACLE_INVASION_WARP_REQUESTED_BLOCK, ORACLE_INVASION_WARP_REQUESTED_POSITION,
         ORACLE_INVASION_WARP_REQUESTED_YAW, ORACLE_INVASION_WARP_SELECTED_ID,
@@ -755,7 +758,7 @@ mod tests {
     use super::*;
     // Imported here rather than relying on the module-level import, which is cfg(windows):
     // these tests are the host-side coverage of the arrival verdicts and must build on Linux.
-    use er_invasion_warp::invasion_warp::{BlockKey, InvasionWarpTarget};
+    use er_invasion_warp_core::invasion_warp::{BlockKey, InvasionWarpTarget};
 
     fn outcome() -> WarpOutcome {
         WarpOutcome {
@@ -772,7 +775,7 @@ mod tests {
             spawn_position: [10.0, 20.0, 30.0],
             spawn_yaw: -1.25,
             session_touches: 1,
-            session_gate: er_invasion_warp::warp::SessionGate::Entered,
+            session_gate: er_invasion_warp_core::warp::SessionGate::Entered,
         }
     }
 

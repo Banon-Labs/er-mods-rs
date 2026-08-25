@@ -1,6 +1,6 @@
 //! The dependency-injection seam between this feature crate and its host DLL.
 //!
-//! Same pattern as `er_loading_portrait::host` and `er_quit_menu::host`: function pointers
+//! Same pattern as `er_loading_portrait_core::host` and `er_quit_menu_core::host`: function pointers
 //! installed once at DLL attach, neutral defaults until then, crate-internal wrappers
 //! bearing the names the feature code calls. Until a host installs, every seam answers a
 //! neutral default (logging is a no-op, the feature gate is off), so the crate is INERT

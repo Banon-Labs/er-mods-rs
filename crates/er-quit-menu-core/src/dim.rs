@@ -10,7 +10,7 @@
 // every other per-frame game path are all frozen for the dialog's entire lifetime. An overlay that
 // can ANIMATE while that is true must live on a thread WE own, in a window WE own.
 //
-// WHY GDI AND NOT A SECOND D3D12 DEVICE. `er-loading-portrait`'s `native_overlay` proves the window
+// WHY GDI AND NOT A SECOND D3D12 DEVICE. `er-loading-portrait-core`'s `native_overlay` proves the window
 // half of this shape (topmost borderless, own swapchain), but it brings up a whole D3D12 device. Two
 // reasons not to copy that here. First, an opaque swapchain cannot DIM -- it can only replace, and
 // the user asked to still see the game underneath. A layered window with per-pixel alpha composites
@@ -90,38 +90,38 @@ pub mod picker_dim {
     };
     use windows::core::w;
 
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ALIVE_MS;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_MS;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_ARMED;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FRAMES;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FRAMES_AT_ARM;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_HWND;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_SELFTEST;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_STAGE;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_TEARDOWN_REASON;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_UPDATE_FAILS;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_FOREIGN;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_GAME;
-    pub(crate) use er_telemetry::counters::SAVE_PICKER_DIM_Z_SELF;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_ALIVE_MS;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_COUNT;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_WAIT_MS;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_ARMED;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_DISARM_COUNT;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_FRAMES;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_FRAMES_AT_ARM;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_FULL_PUSHES;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_GAME_HWND;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_HWND;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_OWNER_READBACK;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_OWNER_SET;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_REANCHOR_COUNT;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_SELFTEST;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_STAGE;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_TEARDOWN_REASON;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_UPDATE_FAILS;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_FOREIGN;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_GAME;
+    pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DIM_Z_SELF;
 
     /// How dark the cover is, as the layer's base alpha (0 = invisible, 255 = opaque black).
     ///

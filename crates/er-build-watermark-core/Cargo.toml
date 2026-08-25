@@ -1,11 +1,11 @@
 [package]
-name = "er-build-watermark"
+name = "er-build-watermark-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_build_watermark"
+name = "er_build_watermark_core"
 
 # The layout half is host-testable and dependency-free; only the DRAW half needs hudhook, so the
 # geometry below is proven by `cargo test` rather than by launching a game and squinting.

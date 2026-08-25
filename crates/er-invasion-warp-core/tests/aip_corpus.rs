@@ -3,7 +3,7 @@
 //! Game-derived bytes are never versioned in this repo, so this test reads the local
 //! extraction corpus and SKIPs when it is absent (same contract as
 //! `crates/er-gfx/tests/common/mod.rs`). What it proves when the corpus IS present is that
-//! `er_invasion_warp::aip` decodes every one of the 365 shipped `.aip` files -- 7073 points --
+//! `er_invasion_warp_core::aip` decodes every one of the 365 shipped `.aip` files -- 7073 points --
 //! exactly, and that the fingerprints compiled into the crate still describe those bytes.
 //!
 //! Roots (both overridable, because an extraction path embeds its own timestamp):
@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use er_game_base::fnv1a::fnv1a64;
-use er_invasion_warp::{
+use er_invasion_warp_core::{
     AIP_FINGERPRINT_BASE, AIP_FINGERPRINT_DLC02, AipContainerFingerprint, BlockKey, parse_aip,
 };
 

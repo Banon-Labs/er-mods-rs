@@ -58,24 +58,24 @@
 //! # The OS-native surface is a REQUIREMENT, not an option
 //!
 //! We never force a user onto an in-game picker we built (user principle 2026-07-30).
-//! Both places that draw one -- this crate's boot picker and `er-quit-menu`'s in-game
+//! Both places that draw one -- this crate's boot picker and `er-quit-menu-core`'s in-game
 //! browse rows -- must offer the OS-native dialog as a selectable surface. That is why the
 //! comdlg32 mechanism and the `os_native_save_picker` config key live HERE, in the crate
-//! both products depend on, rather than being duplicated: `er-quit-menu` gets the fallback
+//! both products depend on, rather than being duplicated: `er-quit-menu-core` gets the fallback
 //! surface through its one-way dependency on this crate.
 //!
 //! # Linking this crate is not arming it
 //!
-//! `er-quit-menu` statically links this crate, so a profile containing ONLY the standalone
+//! `er-quit-menu-core` statically links this crate, so a profile containing ONLY the standalone
 //! product-(B) DLL still offers the OS-native surface. It must NOT thereby acquire (A)'s
 //! boot missing-save behavior. Two mechanisms, and only the second is a guarantee:
 //!
-//! 1. the `boot-flow` cargo feature, which `er-quit-menu` turns off. This isolates the
+//! 1. the `boot-flow` cargo feature, which `er-quit-menu-core` turns off. This isolates the
 //!    standalone-(B) build, but cargo UNIFIES features across a build graph, so in the
-//!    product DLL -- which wants `boot-flow` -- `er-quit-menu` gets it too. A feature alone
+//!    product DLL -- which wants `boot-flow` -- `er-quit-menu-core` gets it too. A feature alone
 //!    therefore cannot carry the requirement.
 //! 2. an explicit arm entry point. Nothing in the boot flow installs a hook, spawns a
-//!    thread or arms a model until a host calls it; `er-quit-menu` never does. This holds
+//!    thread or arms a model until a host calls it; `er-quit-menu-core` never does. This holds
 //!    in every build, feature unification included, and is the real guarantee.
 //!
 //! # Product state crosses the seam as injected function pointers

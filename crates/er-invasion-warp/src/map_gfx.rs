@@ -25,7 +25,7 @@
 //! recognises the VANILLA world-map movie and nothing else, so a player running another menu
 //! mod that replaces `02_120_worldmap.gfx` gets THEIR movie untouched. They lose the red icon
 //! (the pins fall back to a vanilla frame -- see
-//! [`er_invasion_warp::param_row::invasion_pin_icon_id`]) and keep their mod, which is the right
+//! [`er_invasion_warp_core::param_row::invasion_pin_icon_id`]) and keep their mod, which is the right
 //! way round.
 //!
 //! # Fail-closed
@@ -426,7 +426,7 @@ mod tests {
     fn the_pin_icon_falls_back_when_no_swap_was_served() {
         // The safety property: an un-swapped movie must never leave pins pointing at an empty
         // frame, because an empty frame draws nothing at all.
-        use er_invasion_warp::param_row::{
+        use er_invasion_warp_core::param_row::{
             FALLBACK_INVASION_PIN_ICON_ID, RED_INVASION_PIN_FRAME, invasion_pin_icon_id,
         };
         assert_eq!(invasion_pin_icon_id(false), FALLBACK_INVASION_PIN_ICON_ID);

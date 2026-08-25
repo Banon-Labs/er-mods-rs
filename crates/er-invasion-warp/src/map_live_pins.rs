@@ -136,7 +136,7 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
         decline!("no injected row registry is published")
     }
     // SAFETY: leaked at injection time, never freed or mutated.
-    let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
+    let registry: &er_invasion_warp_core::map_surface::InvasionRowRegistry =
         unsafe { &*(registry_ptr as *const _) };
     let installed = crate::map_gfx::red_pin_frame_installed();
     let (mut examined, mut rewritten, mut foreign) = (0_usize, 0_usize, 0_usize);
@@ -159,7 +159,7 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
     //
     // Only the CLAIMED prefix of the dormant span is walked. The rest are still blank rows with a
     // zero layer mask; they are not drawn and have no tier to show.
-    let dormant_rows: Vec<usize> = er_invasion_warp::map_surface::claimed_dormant_span(
+    let dormant_rows: Vec<usize> = er_invasion_warp_core::map_surface::claimed_dormant_span(
         DORMANT_SPAN_BEGIN.load(Ordering::SeqCst),
         DORMANT_NEXT_SLOT.load(Ordering::SeqCst),
         PIN_ROW_STRIDE,
@@ -195,10 +195,10 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
             // its own marker unchanged.
             .or_else(|| super::map_hooks::top_up_target_for_entity_id(entity_id))
             .map(|target| target.block.raw());
-        let desired = er_invasion_warp::param_row::invasion_pin_icon_id_for(
+        let desired = er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
             crate::local_invasion_filter::pin_appearance_for(block),
             installed,
-            er_invasion_warp::warp::invasion_attempt_in_flight(),
+            er_invasion_warp_core::warp::invasion_attempt_in_flight(),
         );
         let current = unsafe { read_row_icon(row) };
         if current == Some(u32::from(desired)) {
@@ -219,7 +219,7 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
                 .filter(|param| *param != 0)
                 .and_then(|param| unsafe {
                     er_game_base::mem::safe_read_u16(
-                        param + er_invasion_warp::param_row::PARAM_ICON_ID_OFFSET,
+                        param + er_invasion_warp_core::param_row::PARAM_ICON_ID_OFFSET,
                     )
                 });
         if param_icon != Some(desired) {
@@ -325,7 +325,7 @@ fn clear_refusal_latch() {
 /// Game task thread. Refuses unless the engine's own slots say it is safe.
 #[cfg(windows)]
 pub unsafe fn top_up_live_pins() -> usize {
-    use er_invasion_warp::param_row::{
+    use er_invasion_warp_core::param_row::{
         PARAM_CATEGORY_BITS_OFFSET, PARAM_ENTITY_ID_OFFSET, PARAM_ICON_ID_OFFSET,
         PARAM_LABEL_TEXT_ID_BASE, SYNTHETIC_PARAM_ROW_LEN,
     };
@@ -384,7 +384,7 @@ pub unsafe fn top_up_live_pins() -> usize {
         return refuse("no injected row registry is published, so nothing has been injected yet");
     }
     // SAFETY: leaked at injection time, never freed.
-    let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
+    let registry: &er_invasion_warp_core::map_surface::InvasionRowRegistry =
         unsafe { &*(registry_ptr as *const _) };
     let Some(slab) = param_slab_bounds() else {
         return refuse("the synthetic param slab bounds are not published");
@@ -416,8 +416,10 @@ pub unsafe fn top_up_live_pins() -> usize {
     // Likewise for points this ViewModel cannot place: re-deriving the same refusal every frame
     // costs a full harvest read and a projection per point and changes nothing.
     injected_points.extend(super::map_hooks::top_up_refused_points());
-    let fresh =
-        er_invasion_warp::map_surface::points_not_yet_shown(&msb_block_targets(), &injected_points);
+    let fresh = er_invasion_warp_core::map_surface::points_not_yet_shown(
+        &msb_block_targets(),
+        &injected_points,
+    );
     if fresh.is_empty() {
         return refuse(
             "nothing new to show: every point the MSB harvest knows about already has an injected \
@@ -502,13 +504,13 @@ pub unsafe fn top_up_live_pins() -> usize {
             super::map_hooks::record_top_up_refusal(target.block.raw(), target.point_index);
             continue;
         }
-        let entity_id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE
+        let entity_id = er_invasion_warp_core::map_surface::INVASION_ENTITY_ID_BASE
             + (registry.len() + claimed) as i32;
         let appearance = crate::local_invasion_filter::pin_appearance_for(Some(target.block.raw()));
-        let icon = er_invasion_warp::param_row::invasion_pin_icon_id_for(
+        let icon = er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
             appearance,
             installed,
-            er_invasion_warp::warp::invasion_attempt_in_flight(),
+            er_invasion_warp_core::warp::invasion_attempt_in_flight(),
         );
 
         // SAFETY: the slab is ours, leaked, never freed, and sized to include this index.

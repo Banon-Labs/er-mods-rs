@@ -55,7 +55,7 @@ pub(crate) use crate::stats_loading_text::*;
 
 // --- telemetry counters whose canonical product re-export stays in er-effects-rs ----
 #[cfg(windows)]
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::{
     PROFILE_SPARE_ORPHAN, SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT,
 };
 

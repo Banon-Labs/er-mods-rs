@@ -1,7 +1,7 @@
 //! Standalone ME3-loadable loading-portrait DLL shell.
 //!
 //! This is deliberately separate from the product `er-effects-rs` DLL (same pattern as
-//! `er-loading-bar-dll`): it proves the `er-loading-portrait` feature crate can be built
+//! `er-loading-bar`): it proves the `er-loading-portrait-core` feature crate can be built
 //! and loaded as its own native DLL without dragging product hooks, autoload, save
 //! picking, or product runtime state along. On attach it installs a standalone host seam
 //! (own log file, portrait gates ON, everything else neutral), the crate's now-loading
@@ -32,9 +32,9 @@ use std::{
 #[cfg(windows)]
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
-const LOG_FILE_NAME: &str = "er-loading-portrait-dll.log";
+const LOG_FILE_NAME: &str = "er-loading-portrait.log";
 #[cfg(windows)]
-const CRASH_LOG_FILE_NAME: &str = "er-loading-portrait-dll-crash-log.txt";
+const CRASH_LOG_FILE_NAME: &str = "er-loading-portrait-crash-log.txt";
 
 #[cfg(windows)]
 const VECTORED_FIRST_HANDLER: u32 = 1;
@@ -121,8 +121,8 @@ pub unsafe extern "system" fn DllMain(
             // The capture pipeline's observation points: the now-loading helper observer
             // hooks (loading-screen lifecycle) and the tip suppression (our stats text
             // owns the tip region). Both log-and-degrade if the game module is absent.
-            er_loading_portrait::install_now_loading_helper_observer_hooks();
-            er_loading_portrait::install_tip_suppression_hook();
+            er_loading_portrait_core::install_now_loading_helper_observer_hooks();
+            er_loading_portrait_core::install_tip_suppression_hook();
             if is_wine() {
                 // Wine/Proton: composite in-swapchain via the shared Present compositor.
                 er_d3d12_compositor::set_log_sink(append_compositor_log);
@@ -131,7 +131,7 @@ pub unsafe extern "system" fn DllMain(
             } else {
                 // Native Windows: the isolated overlay window (own device/swapchain); it
                 // pulls frames through the host seam's boot_view_render_frame.
-                er_loading_portrait::install_native_overlay();
+                er_loading_portrait_core::install_native_overlay();
             }
         });
     }
@@ -140,7 +140,7 @@ pub unsafe extern "system" fn DllMain(
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_loading_portrait_dll_host_stub() -> i32 {
+pub extern "C" fn er_loading_portrait_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
@@ -191,14 +191,15 @@ fn gate_on() -> bool {
 /// gates ON (this shell exists to show the portrait+stats overlay), everything else the
 /// crate's neutral defaults (no product slot resolution / repro harness / save picker).
 fn install_standalone_host() {
-    let installed = er_loading_portrait::install_host(er_loading_portrait::PortraitHost {
-        append_autoload_debug: append_dll_log,
-        portrait_overlay_enabled: gate_on,
-        portrait_render_drive_enabled: gate_on,
-        portrait_real_pixels_enabled: gate_on,
-        boot_view_render_frame: portrait_stats_boot_view_frame,
-        ..er_loading_portrait::PortraitHost::defaults()
-    });
+    let installed =
+        er_loading_portrait_core::install_host(er_loading_portrait_core::PortraitHost {
+            append_autoload_debug: append_dll_log,
+            portrait_overlay_enabled: gate_on,
+            portrait_render_drive_enabled: gate_on,
+            portrait_real_pixels_enabled: gate_on,
+            boot_view_render_frame: portrait_stats_boot_view_frame,
+            ..er_loading_portrait_core::PortraitHost::defaults()
+        });
     if !installed {
         append_dll_log(format_args!(
             "install_host returned false (a host was already installed?)"
@@ -209,8 +210,8 @@ fn install_standalone_host() {
 /// Portrait+stats-only frame for the native isolated overlay: a black full-screen canvas
 /// with the captured character head (bottom-anchored, 80% height) and the stats text
 /// composited on top. Empty (zero-sized) when the pipeline has published nothing yet.
-fn portrait_stats_boot_view_frame(bw: usize, bh: usize) -> er_loading_portrait::BootViewFrame {
-    let empty = || er_loading_portrait::BootViewFrame {
+fn portrait_stats_boot_view_frame(bw: usize, bh: usize) -> er_loading_portrait_core::BootViewFrame {
+    let empty = || er_loading_portrait_core::BootViewFrame {
         rgba: Vec::new(),
         w: 0,
         h: 0,
@@ -223,7 +224,7 @@ fn portrait_stats_boot_view_frame(bw: usize, bh: usize) -> er_loading_portrait::
     let Some(rgba) = compose_portrait_stats_rgba(bw, bh) else {
         return empty();
     };
-    er_loading_portrait::BootViewFrame {
+    er_loading_portrait_core::BootViewFrame {
         rgba,
         w: bw,
         h: bh,
@@ -241,9 +242,9 @@ fn compose_portrait_stats_rgba(bw: usize, bh: usize) -> Option<Vec<u8>> {
     for px in rgba.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
-    let drew_portrait = er_loading_portrait::portrait_onto(&mut rgba, bw, bh);
+    let drew_portrait = er_loading_portrait_core::portrait_onto(&mut rgba, bw, bh);
     #[cfg(windows)]
-    let drew_stats = er_loading_portrait::overlay_stats_onto(&mut rgba, bw, bh);
+    let drew_stats = er_loading_portrait_core::overlay_stats_onto(&mut rgba, bw, bh);
     #[cfg(not(windows))]
     let drew_stats = false;
     if drew_portrait || drew_stats {
@@ -272,7 +273,7 @@ fn portrait_stats_compositor_frame(
         ));
     }
     er_d3d12_compositor::CompositorFrame {
-        rgba: er_loading_bar::RgbaFrame {
+        rgba: er_loading_bar_core::RgbaFrame {
             width: backbuffer_width,
             height: backbuffer_height,
             pixels,
@@ -436,7 +437,7 @@ mod tests {
             px[0] = 255;
             px[3] = if edge { 0 } else { 255 };
         }
-        if let Ok(mut g) = er_loading_portrait::LOADING_BG_PORTRAIT_RGBA.lock() {
+        if let Ok(mut g) = er_loading_portrait_core::LOADING_BG_PORTRAIT_RGBA.lock() {
             *g = Some((sw, sh, src));
         }
         let (bw, bh) = (64usize, 48usize);
@@ -456,7 +457,7 @@ mod tests {
         );
 
         // Clearing the bridge hides the frame again (CompositorFrame::hidden path).
-        if let Ok(mut g) = er_loading_portrait::LOADING_BG_PORTRAIT_RGBA.lock() {
+        if let Ok(mut g) = er_loading_portrait_core::LOADING_BG_PORTRAIT_RGBA.lock() {
             *g = None;
         }
         assert!(compose_portrait_stats_rgba(bw, bh).is_none());

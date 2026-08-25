@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Decide whether a Seamless session state's dwell is a FRAME COUNT, a WALL CLOCK, or neither.
 
-Reads `er-invasion-warp-dll.log` and looks at the transition lines the DLL emits:
+Reads `er-invasion-warp.log` and looks at the transition lines the DLL emits:
 
     local-invasion: session state 0x0e (unreversed) -> 0x11 (unreversed) -- held 612 ticks / 10203ms (~59 fps)
 
@@ -283,7 +283,7 @@ def selftest() -> int:
 
     # The parser must survive the real line shape, including the unreversed-state annotations.
     line = (
-        "er-invasion-warp-dll: local-invasion: session state 0x0e (unreversed) -> 0x11 "
+        "er-invasion-warp: local-invasion: session state 0x0e (unreversed) -> 0x11 "
         "(unreversed) -- held 612 ticks / 10203ms (~59 fps)"
     )
     parsed = parse(line)
@@ -314,7 +314,7 @@ def selftest() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("log", nargs="?", help="path to er-invasion-warp-dll.log")
+    ap.add_argument("log", nargs="?", help="path to er-invasion-warp.log")
     ap.add_argument("--state", default="0x11", help="session state to analyse (default: 0x11)")
     ap.add_argument("--selftest", action="store_true", help="verify the verdict logic and exit")
     args = ap.parse_args()

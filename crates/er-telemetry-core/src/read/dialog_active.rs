@@ -7,7 +7,7 @@
 //! currently blocking the product path. This reader inspects live dialog objects directly,
 //! installed late (from the recurring game task, gated by online-disable/product
 //! autoload). Any dialog built before that install -- or in a run where the product
-//! hook never arms (telemetry-only, or the standalone er-telemetry-dll which has no
+//! hook never arms (telemetry-only, or the standalone er-telemetry which has no
 //! product hooks at all) -- is never counted, so the counter reports 0 even while a
 //! box is on screen (the observed FALSE NEGATIVE, bd
 //! msgbox-oracle-false-negative-boot-session-dialog-masked-by-cover-user-image-2026-07-24).
@@ -89,7 +89,7 @@ const CS_MENU_MAN_DIALOG_FLAG_104_OFFSET: usize = 0x104;
 /// grid) dialog layout. Build-time flag; clear semantics unverified.
 const CS_MENU_MAN_DIALOG_FLAG_340_OFFSET: usize = 0x340;
 
-// --- owner-scan tuning (ported from title_binding.rs / er-input-harness-dll
+// --- owner-scan tuning (ported from title_binding.rs / er-input-harness
 // title_scan.rs). ---
 /// One `ReadProcessMemory` per 64 KiB keeps the address-space walk fast.
 const SCAN_CHUNK: usize = 0x10000;

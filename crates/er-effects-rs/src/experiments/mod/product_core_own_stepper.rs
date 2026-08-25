@@ -4,49 +4,49 @@ use super::*;
 mod fallback_drives;
 use fallback_drives::own_stepper_idx10_fallbacks;
 
-pub(crate) use er_telemetry::counters::COLD_CHAR_MOUNT_FILE_ARMED;
+pub(crate) use er_telemetry_core::counters::COLD_CHAR_MOUNT_FILE_ARMED;
 /// Module-level mirror of cold_char_mount_drive's internal MOUNT_PHASE, stored as `phase + 1`
 /// (0 = the cold mount never ran; 5 = PHASE_DONE = terminal, evidence collected). Exposed in
 /// telemetry as `oracle_cold_char_mount_phase` so the readiness watcher can tear the game down the
 /// instant the b80 outcome is observed instead of idling to the wall-clock cap.
-pub(crate) use er_telemetry::counters::COLD_CHAR_MOUNT_PHASE_PUB;
+pub(crate) use er_telemetry_core::counters::COLD_CHAR_MOUNT_PHASE_PUB;
 /// Armed from the reliable autoload-file channel (`own_dispatch=1` in er-effects-autoload.txt) so the
 /// OWN-LOAD m28 direct-enqueue lever (`AddDefaultFileLoadProcess`) runs without depending on env-var
 /// propagation through Proton. Defaults OFF; the lever ALSO requires `OWN_LOAD_CONTINUE_FIRED` at fire
 /// time, so arming this alone cannot dispatch on a vanilla native menu load. Touches only world-asset
 /// file-load streaming -- no save IO, cannot autosave.
-pub(crate) use er_telemetry::counters::OWN_DISPATCH_FILE_ARMED;
+pub(crate) use er_telemetry_core::counters::OWN_DISPATCH_FILE_ARMED;
 /// Armed from the reliable autoload-file channel (`own_load_continue=1` in er-effects-autoload.txt)
 /// so the FINAL guarded `continue_confirm`/`SetState5` world-stream step (after the verify-only
 /// `own_load_drive` parse) runs without depending on env-var propagation through Proton.
 /// SAVE-WRITING when it fires -- gated hard on a REAL c30 + char fingerprint inside `own_load_drive`.
-pub(crate) use er_telemetry::counters::OWN_LOAD_CONTINUE_FILE_ARMED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_CONTINUE_FILE_ARMED;
 /// Armed from the reliable autoload-file channel (`own_load=1` in er-effects-autoload.txt) so the
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed probe (`own_load_drive`) runs without depending on
 /// env-var propagation through Proton.
-pub(crate) use er_telemetry::counters::OWN_LOAD_FILE_ARMED;
-pub(crate) use er_telemetry::counters::OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_FILE_ARMED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS;
 /// Armed from the reliable autoload-file channel (`own_load_install_job=1` in er-effects-autoload.txt)
 /// so the menu-free LoadGame-JOB INSTALL lever runs without depending on env-var propagation through
 /// Proton. Defaults OFF. When armed (and `own_load` is armed so `own_load_drive` runs), the verify-only
 /// parse is followed by BUILD (`FUN_140826510`) + INSTALL (`FUN_1407a9560`) of the LoadGame
 /// MenuJobWithContext into `owner+0x130` -- INSTEAD of the guarded continue_confirm/SetState5. SAVE-SAFE
 /// (build + first-tick deser only READ the save; no SetState5, no autosave, no save write).
-pub(crate) use er_telemetry::counters::OWN_LOAD_INSTALL_JOB_FILE_ARMED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_INSTALL_JOB_FILE_ARMED;
 /// Monotonic count of LoadGame-JOB install-lever fires (build + install into owner+0x130). Exposed in
 /// telemetry as `oracle_own_load_install_job_fired` so a probe can confirm the lever actually ran.
-pub(crate) use er_telemetry::counters::OWN_LOAD_INSTALL_JOB_FIRED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_INSTALL_JOB_FIRED;
 /// Module-level mirror of `own_load_drive`'s internal phase, stored as `phase + 1` (0 = the probe
 /// never ran; PHASE_DONE+1 = terminal, evidence collected). Exposed in telemetry as
 /// `oracle_own_load_phase` so the readiness watcher can tear the game down the instant the verify
 /// outcome is observed instead of idling to the wall-clock cap.
-pub(crate) use er_telemetry::counters::OWN_LOAD_PHASE_PUB;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_PHASE_PUB;
 /// Armed from the reliable autoload-file channel (`own_stepper=1` / `cold_char_mount=1` in
 /// er-effects-autoload.txt) so the menu-free own-stepper + cold-char-mount paths can be enabled
 /// without depending on env-var propagation through Proton or game_directory_path() trigger files.
-pub(crate) use er_telemetry::counters::OWN_STEPPER_FILE_ARMED;
-pub(crate) use er_telemetry::counters::PRODUCT_AUTOLOAD_ARMED;
-pub(crate) use er_telemetry::counters::TFC_FORCED_CONTINUE_HANDOFF_MS;
+pub(crate) use er_telemetry_core::counters::OWN_STEPPER_FILE_ARMED;
+pub(crate) use er_telemetry_core::counters::PRODUCT_AUTOLOAD_ARMED;
+pub(crate) use er_telemetry_core::counters::TFC_FORCED_CONTINUE_HANDOFF_MS;
 /// Sentinel for an unreadable / not-yet-sampled world-load telemetry field (distinguishes
 /// "the chain pointer was null / RPM faulted" from a genuine 0). Chosen well outside any real
 /// state/count value so the readiness watcher and the agent can tell "frozen at a real value"
@@ -93,7 +93,7 @@ pub(crate) static OWN_LOAD_STREAM_C30: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
 /// Monotonic count of frames the per-frame stall telemetry has sampled (since own_load armed). Pairs
 /// with the values above: if frames climb but every value is frozen, that is a genuine stall.
-pub(crate) use er_telemetry::counters::OWN_LOAD_STREAM_FRAMES;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_STREAM_FRAMES;
 /// Whether the local player (WorldChrMan/PlayerIns) has resolved during the world-stream observe
 /// window. 1 == present (the world spawned), 0 == absent (still on the loading screen), UNREAD
 /// (i64::MIN) == not yet observed. The recurring observer publishes this so a probe can see the
@@ -145,11 +145,11 @@ pub(crate) fn mark_tfc_forced_continue_handoff() {
 /// InGameStep = *(owner+TITLE_OWNER_JOB_OFFSET), cached at fire time. It was already non-null at
 /// frame 0 (observed 0x7fff21e09a40) so caching it then captures a stable handle the recurring
 /// observer can walk to MoveMapStep even after the title task stops running. 0 == not cached.
-pub(crate) use er_telemetry::counters::OWN_LOAD_INGAMESTEP_CACHED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_INGAMESTEP_CACHED;
 /// The SetState-able TITLE owner threaded into continue_confirm, cached at fire time so the recurring
 /// observer reads the world-stream from the SAME object the load was kicked on (NOT a fresh
 /// own_stepper owner, which stops being supplied once the title task dies). 0 == not cached.
-pub(crate) use er_telemetry::counters::OWN_LOAD_OWNER_CACHED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_OWNER_CACHED;
 /// PATH B (own_load_pump). Armed from the reliable autoload-file channel (`own_load_pump=1` in
 /// er-effects-autoload.txt). Defaults OFF. When armed (and `own_load` is armed so `own_load_drive`
 /// runs the verify-only parse), the parse is followed by BUILD of the LoadGame `MenuJobWithContext`
@@ -158,15 +158,15 @@ pub(crate) use er_telemetry::counters::OWN_LOAD_OWNER_CACHED;
 /// CSMenuMan dialog stack. After the pumped job reaches `state==Success`, the guarded SetState5
 /// transition fires ONCE to drive title->ingame. Takes precedence over own_load_install_job /
 /// own_load_continue. (autoload-world-load-coupled-to-csmenuman-dialog-verdict-2026-06-22)
-pub(crate) use er_telemetry::counters::OWN_LOAD_PUMP_FILE_ARMED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_PUMP_FILE_ARMED;
 /// The built LoadGame job pointer the recurring task pumps each frame. 0 == not built / not armed.
 /// Set once by `own_load_pump_fire`; read+ticked by the recurring observer's sibling pump.
-pub(crate) use er_telemetry::counters::OWN_LOAD_PUMP_JOB;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_PUMP_JOB;
 /// Monotonic frame counter for the RECURRING world-stream observer (advances every game-task frame
 /// the observer is active). Distinct from OWN_LOAD_STREAM_FRAMES (which the old own_stepper-sited
 /// telemetry also bumps): this is the "frame=N" the recurring observer's debug line prints so the
 /// trend across the loading screen is visible.
-pub(crate) use er_telemetry::counters::OWN_LOAD_STREAM_RECUR_FRAMES;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_STREAM_RECUR_FRAMES;
 /// The MenuJobState the last `Run` pump returned (result+0x0): 1=Continue (still working), 2=Success
 /// (done OK), 3=Failed. `i64::MIN` (UNREAD) before the first pump. Exposed as `oracle_own_load_pump_state`.
 pub(crate) static OWN_LOAD_PUMP_STATE: std::sync::atomic::AtomicI64 =
@@ -177,32 +177,32 @@ pub(crate) static OWN_LOAD_PUMP_SUBCODE: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
 /// Monotonic count of `Run` pumps fired (each frame the job is ticked). 0 == the pump never ran.
 /// Exposed as `oracle_own_load_pump_fired` so a probe can confirm the per-frame pump is actually ticking.
-pub(crate) use er_telemetry::counters::OWN_LOAD_PUMP_FIRED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_PUMP_FIRED;
 /// Set true once the pumped job reached a terminal state (Success/Failed) AND the one-shot transition
 /// was handled, so we never re-pump or re-transition. Exposed as `oracle_own_load_pump_done`.
 pub(crate) static OWN_LOAD_PUMP_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_AUTOLOAD_TICKS;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_BASE_OK_TICKS;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_LAST_SLOT;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_CALLSITE_TICKS;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_LAST_TITLE_IN_LOOP;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_LAST_TITLE_IN_TEXTFADEOUT;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_OWNER_TICKS;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_READY_BLOCKS;
-pub(crate) use er_telemetry::counters::PRODUCT_CORE_READY_SUCCESSES;
-pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_ATTEMPTS;
-pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_LAST_STATE_BITS;
-pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_STATE_REJECTS;
-pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_TABLE_REJECTS;
-pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_VTABLE_HITS;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_AUTOLOAD_TICKS;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_CALLSITE_BASE_OK_TICKS;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_CALLSITE_LAST_SLOT;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_CALLSITE_TICKS;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_LAST_TITLE_IN_LOOP;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_LAST_TITLE_IN_TEXTFADEOUT;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_OWNER_TICKS;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_READY_BLOCKS;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CORE_READY_SUCCESSES;
+pub(crate) use er_telemetry_core::counters::TITLE_OWNER_SCAN_ATTEMPTS;
+pub(crate) use er_telemetry_core::counters::TITLE_OWNER_SCAN_LAST_STATE_BITS;
+pub(crate) use er_telemetry_core::counters::TITLE_OWNER_SCAN_STATE_REJECTS;
+pub(crate) use er_telemetry_core::counters::TITLE_OWNER_SCAN_TABLE_REJECTS;
+pub(crate) use er_telemetry_core::counters::TITLE_OWNER_SCAN_VTABLE_HITS;
 pub(crate) static MENU_CONTINUE_ENTRY: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_CTOR_HITS;
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_CTOR_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS;
 pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_VT: AtomicUsize =
@@ -213,8 +213,8 @@ pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS;
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS;
 pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ITEM: AtomicUsize =
@@ -229,8 +229,8 @@ pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS;
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_IDLE_CTOR_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_IDLE_CTOR_HITS;
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM: AtomicUsize =
@@ -241,7 +241,7 @@ pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::MENU_CONTINUE_IDLE_INSERT_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_CONTINUE_IDLE_INSERT_HITS;
 pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_ARG0: AtomicUsize =
@@ -254,7 +254,7 @@ pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TASK_ENQUEUE_GENERIC_HITS;
+pub(crate) use er_telemetry_core::counters::TASK_ENQUEUE_GENERIC_HITS;
 pub(crate) static TASK_ENQUEUE_GENERIC_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TASK_ENQUEUE_GENERIC_LAST_ARG0: AtomicUsize =
@@ -285,7 +285,7 @@ pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE1_ARG1: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE1_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS;
+pub(crate) use er_telemetry_core::counters::TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS;
 pub(crate) static TASK_ENQUEUE_GENERIC_IDLE_ITEM_LAST_MATCH_KIND: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_LAST_CALLER_RVA: AtomicUsize =
@@ -300,8 +300,8 @@ pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::MENU_ITEM_UPDATE_HITS;
-pub(crate) use er_telemetry::counters::MENU_ITEM_UPDATE_SEMANTIC_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_ITEM_UPDATE_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_ITEM_UPDATE_SEMANTIC_HITS;
 pub(crate) static MENU_ITEM_UPDATE_LAST_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_ITEM_UPDATE_LAST_VT: AtomicUsize =
@@ -314,14 +314,14 @@ pub(crate) static MENU_ITEM_UPDATE_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_CANDIDATE_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES;
-pub(crate) use er_telemetry::counters::MENU_CONTINUE_CANDIDATE_HITS;
-pub(crate) use er_telemetry::counters::MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS;
-pub(crate) use er_telemetry::counters::MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS;
-pub(crate) use er_telemetry::counters::MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES;
+pub(crate) use er_telemetry_core::counters::MENU_CONTINUE_CANDIDATE_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS;
+pub(crate) use er_telemetry_core::counters::MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS;
 pub(crate) static MENU_CONTINUE_CANDIDATE_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TITLE_NATIVE_READY_PREDICATE_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_READY_PREDICATE_HITS;
 pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_THIS: AtomicUsize =
@@ -332,9 +332,9 @@ pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_GETTER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS;
-pub(crate) use er_telemetry::counters::TITLE_NATIVE_READY_PREDICATE_LAST_MASKED;
-pub(crate) use er_telemetry::counters::TITLE_NATIVE_READY_PREDICATE_LAST_RET;
+pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS;
+pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_READY_PREDICATE_LAST_MASKED;
+pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_READY_PREDICATE_LAST_RET;
 pub(crate) static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
@@ -365,14 +365,14 @@ pub(crate) const PROFILE_LOAD_SELECTOR_TICK_RVA: usize =
     ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
 
 /// One-shot guard for the autonomous open-menu (`maybe_auto_open_menu`).
-pub(crate) use er_telemetry::counters::TFC_AUTO_MENU_OPENED;
+pub(crate) use er_telemetry_core::counters::TFC_AUTO_MENU_OPENED;
 /// One-shot guard for `maybe_fire_tfc_continue` (0 = not yet fired).
-pub(crate) use er_telemetry::counters::TFC_CONTINUE_FIRED;
+pub(crate) use er_telemetry_core::counters::TFC_CONTINUE_FIRED;
 /// Throttle counter for the dialog+0x50 load-vector readiness gate in `maybe_fire_tfc_continue`
 /// (logs the count value occasionally while waiting for it to become a valid has-room vector).
-pub(crate) use er_telemetry::counters::TFC_LOAD_VEC_WAIT_TICKS;
+pub(crate) use er_telemetry_core::counters::TFC_LOAD_VEC_WAIT_TICKS;
 /// Trampoline for the hooked TitleTopDialog::update (`title_update_detour` -> original). 0 = not hooked.
-pub(crate) use er_telemetry::counters::TITLE_UPDATE_ORIG;
+pub(crate) use er_telemetry_core::counters::TITLE_UPDATE_ORIG;
 
 /// Detour for CS::TitleTopDialog::update (0x1409aac10, vtable slot 2). Runs IN THE PUMP'S FRAME with
 /// the LIVE dialog (rcx) -- the in-context timing our recurring-game-task build lacked. Calls the
@@ -416,7 +416,7 @@ pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f
 // (skipped bookkeeping -> crash). bd press-any-button-golden-lever-job1e8-readiness-2026-06-23.
 
 /// Trampoline to the original PAB node-update. 0 = not hooked.
-pub(crate) use er_telemetry::counters::PAB_ADVANCE_ORIG;
+pub(crate) use er_telemetry_core::counters::PAB_ADVANCE_ORIG;
 
 /// Detour for the press-any-button node-update 0x1407ad1c0. Calls the original (builds/updates the job
 /// at `[step+0x130]`) then runs the gated, fail-closed, one-shot readiness advance. Pass-through return.

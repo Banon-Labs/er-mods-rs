@@ -438,7 +438,7 @@ pub mod loading_screen {
 /// Live `CS::LoadingScreenData` pointer, published by whoever already has it.
 ///
 /// This DLL deliberately does NOT hook the loading-screen update to obtain it. That prologue
-/// (`LOADING_SCREEN_UPDATE_RVA` = 0x90a6b0) is already detoured by `er-loading-portrait`, which
+/// (`LOADING_SCREEN_UPDATE_RVA` = 0x90a6b0) is already detoured by `er-loading-portrait-core`, which
 /// the product links, and a second MinHook instance on one prologue is the documented
 /// trampoline-corruption conflict this repo tracks in `scripts/me3-dll-conflicts.toml`. So the
 /// witness consumes a pointer instead of competing for the hook: zero when nobody publishes one,

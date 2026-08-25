@@ -31,7 +31,7 @@ The known over-triggers are pinned as test cases rather than left to be rediscov
 ## What "byte-identical" had to be defined as
 
 Two clean builds of **identical source** are not byte-identical. Measured on
-`crates/er-crash-logging-dll` (`scripts/probe-dll-build-determinism.sh`):
+`crates/er-crash-logging` (`scripts/probe-dll-build-determinism.sh`):
 
 ```
 A vs B (identical source, two clean builds): 10 differing bytes

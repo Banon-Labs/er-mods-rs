@@ -3,7 +3,7 @@
 //! Required product behavior is statically linked into the single shipped
 //! `er_effects_rs.dll`; its product profile never requires this shell. The harness exists
 //! for isolated/coexistence tests, logs its attach, and installs a standalone host seam.
-//! It arms nothing yet because `er-quit-menu` still has no moved code to arm.
+//! It arms nothing yet because `er-quit-menu-core` still has no moved code to arm.
 //!
 //! An explicit coexistence test may load this harness alongside the product or companions.
 //! It contends on game addresses the product also hooks, so its detours go through the
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
-const LOG_FILE_NAME: &str = "er-quit-menu-dll.log";
+const LOG_FILE_NAME: &str = "er-quit-menu.log";
 
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
@@ -40,7 +40,7 @@ fn log_dir() -> PathBuf {
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     er_game_base::log::append_line(
         &dir.join(LOG_FILE_NAME),
-        format_args!("er-quit-menu-dll: {args}"),
+        format_args!("er-quit-menu: {args}"),
     );
 }
 
@@ -48,10 +48,10 @@ fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
 /// answer stays at its neutral default -- including the save-write bypass, which must stay
 /// refused so a product-less load can never push a write past `er-save-suppress`.
 fn install_standalone_host() {
-    let _ = er_quit_menu::install_host(er_quit_menu::QuitMenuHost {
+    let _ = er_quit_menu_core::install_host(er_quit_menu_core::QuitMenuHost {
         append_autoload_debug: standalone_log,
         append_crash_log: standalone_log,
-        ..er_quit_menu::QuitMenuHost::defaults()
+        ..er_quit_menu_core::QuitMenuHost::defaults()
     });
 }
 
@@ -95,10 +95,10 @@ mod tests {
     }
 
     fn install_host_once() -> bool {
-        er_quit_menu::install_host(er_quit_menu::QuitMenuHost {
+        er_quit_menu_core::install_host(er_quit_menu_core::QuitMenuHost {
             append_autoload_debug: standalone_log,
             append_crash_log: standalone_log,
-            ..er_quit_menu::QuitMenuHost::defaults()
+            ..er_quit_menu_core::QuitMenuHost::defaults()
         })
     }
 }

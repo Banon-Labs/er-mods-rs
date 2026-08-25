@@ -1,7 +1,7 @@
 // IS THE DESTINATION THE LOADED SAVE? -- identity, path normalization and all-or-nothing writes
 // for the save-destination commit.
 //
-// Extracted into `er-quit-menu` in S7. The product DLL keeps a root shim that re-exports this
+// Extracted into `er-quit-menu-core` in S7. The product DLL keeps a root shim that re-exports this
 // module's pure path/identity/write helpers while native runtime ownership remains in the product.
 //
 // # Why a string compare is not an answer

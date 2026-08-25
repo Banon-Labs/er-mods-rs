@@ -1,10 +1,10 @@
 //! The dependency-injection seam between this feature crate and its host DLL.
 //!
-//! Same pattern as `er_loading_portrait::host`: function pointers installed once at DLL
+//! Same pattern as `er_loading_portrait_core::host`: function pointers installed once at DLL
 //! attach, neutral defaults until then, crate-internal wrappers bearing the EXACT names
 //! the moved code already calls.
 //!
-//! This seam is larger than `er-save-picker`'s because the quit menu genuinely shares
+//! This seam is larger than `er-save-picker-core`'s because the quit menu genuinely shares
 //! state with the rest of the product: the ProfileSummary save-swap ledger is read by the
 //! loading-cover slot resolution, the portrait slot is read by the loading-screen
 //! pipeline, and the save-suppression bypass belongs to `er-save-suppress`. Every field

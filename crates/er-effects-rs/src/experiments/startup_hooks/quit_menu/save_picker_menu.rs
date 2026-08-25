@@ -22,36 +22,36 @@ use super::*;
 
 /// Action object of the "Load Character from File" row; `system_quit_open_profile_load_dialog` derives
 /// the System dialog (action+0x8), submit queue and window list from it on every (re)submit.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_ACTION_OBJ;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_CANCEL_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_ACTION_OBJ;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_CANCEL_COUNT;
 /// 1 while the live picker is the save-DESTINATION chooser (save-game-flow WP3) instead of the
 /// load-source browser: `[ new ]` is the initial selection (row 1 when drives occupy row 0), and
 /// activation feeds the save flow.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DEST_MODE;
 /// 1 while the live `05_010_ProfileSelect` window is OUR file-picker (rows = directory listing).
 /// 0 when it is the normal character-slot view.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_MODE_ACTIVE;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_MODE_ACTIVE;
 /// Diagnostics / telemetry oracles.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OPEN_COUNT;
 /// 1 = a file was ingested from the picker; the menu-pump Run hook must resubmit `05_010` as the
 /// NORMAL slot view (picker mode already cleared) so the user picks a character slot next.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_PICK_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_PICK_REJECT_COUNT;
 /// Dialog whose row list must be rebuilt in menu-pump ownership (0 = none). Set by a
 /// navigation/cell activation after restaging records; consumed by the Run hook.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
 /// 1 = the picker window was closed for a directory/page change; the menu-pump Run hook must
 /// resubmit a fresh `05_010` job (records already restaged) instead of restoring the System UI.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGED_ROW_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REOPEN_PENDING;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REPOPULATE_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_RESUBMIT_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_STAGED_ROW_COUNT;
 /// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
 /// through it (the destination picker is opened by the save flow, which has no row action object).
 /// Do not use this as the live `05_010_ProfileSelect` dialog: cursor/rebuild work uses
 /// `SYSTEM_QUIT_PROFILE_SELECT_WINDOW`, which is populated from the `05_010` MenuWindowJob owner.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_SYSTEM_DIALOG;
 
 /// Windows-form (`Z:\...`) string for a possibly Linux-form absolute path; drive-prefixed paths
 /// pass through with separators normalized. String twin of `system_quit_path_for_windows`.
@@ -489,7 +489,7 @@ pub(crate) unsafe fn save_dest_handle_picked_target(
                 // free name; the refusal is counted so a run can tell it from a decline.
                 if !save_flow_box_recipe_available() {
                     SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.fetch_add(1, Ordering::SeqCst);
-                    save_picker_set_visible_status(er_save_picker::PickerStatusMessage::new(
+                    save_picker_set_visible_status(er_save_picker_core::PickerStatusMessage::new(
                         "CANNOT CONFIRM OVERWRITE",
                         "This build cannot show the overwrite prompt; choose a new file instead.",
                     ));
@@ -605,7 +605,7 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
                     PickerActivation::Ignored
                 }
             } else if model.drive_strip_focus()
-                == Some(er_save_picker::DriveStripFocus::CurrentPath)
+                == Some(er_save_picker_core::DriveStripFocus::CurrentPath)
             {
                 open_path_editor = true;
                 PickerActivation::Ignored
@@ -670,7 +670,7 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             let Some(path_str) = path.to_str() else {
                 SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
                 save_picker_set_visible_status(
-                    er_save_picker::PickRejection::PathNotUtf8.status_message("SL2"),
+                    er_save_picker_core::PickRejection::PathNotUtf8.status_message("SL2"),
                 );
                 return 0;
             };
@@ -776,8 +776,9 @@ const PROFILE_SELECT_MOVIE_HEIGHT_PX: f32 = 1080.0;
 const DRIVE_STRIP_HIT_LEFT_PX: f32 = er_gfx::title_05_010::DRIVE_CELL_FIRST_X_PX - 4.0;
 const DRIVE_STRIP_CELL_PITCH_PX: f32 = er_gfx::title_05_010::DRIVE_CELL_PITCH_PX;
 const DRIVE_STRIP_CELL_HIT_WIDTH_PX: f32 = DRIVE_STRIP_CELL_PITCH_PX;
-const _: () =
-    assert!(er_save_picker::DRIVE_STRIP_MAX_CELLS <= er_gfx::title_05_010::DRIVE_CELL_CAPACITY);
+const _: () = assert!(
+    er_save_picker_core::DRIVE_STRIP_MAX_CELLS <= er_gfx::title_05_010::DRIVE_CELL_CAPACITY
+);
 /// Live `05_010_ProfileSelect` cursor values are already staged model-row indices. The old +2
 /// observation came from reading the parent System/Quit dialog, not the live ProfileSelect dialog.
 const PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET: i32 = 0;
@@ -1091,7 +1092,7 @@ fn save_picker_drive_strip_cell_from_x(x: f32, cell_count: usize) -> Option<usiz
 #[cfg(test)]
 mod drive_strip_hit_tests {
     use super::*;
-    use er_save_picker::DRIVE_STRIP_MAX_CELLS;
+    use er_save_picker_core::DRIVE_STRIP_MAX_CELLS;
 
     #[test]
     fn every_possible_drive_cell_lives_in_the_clickable_player_name_band() {
@@ -2437,7 +2438,7 @@ fn save_picker_html_utf16_color_size(text: &str, color: &str, font_height: i32) 
     s.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
-pub(crate) fn save_picker_set_visible_status(message: er_save_picker::PickerStatusMessage) {
+pub(crate) fn save_picker_set_visible_status(message: er_save_picker_core::PickerStatusMessage) {
     if let Some(model) = crate::experiments::save_picker::active_save_picker_lock().as_mut() {
         model.set_status_message(message);
     }
@@ -2593,7 +2594,7 @@ pub(crate) struct RowSlotInfo {
     /// visible status message temporarily owns its field band.
     pub(crate) drive_cell_count: usize,
     /// Focus target whose geometry the row's native animated Cursor must follow.
-    pub(crate) drive_strip_focus: Option<er_save_picker::DriveStripFocus>,
+    pub(crate) drive_strip_focus: Option<er_save_picker_core::DriveStripFocus>,
 }
 
 /// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.

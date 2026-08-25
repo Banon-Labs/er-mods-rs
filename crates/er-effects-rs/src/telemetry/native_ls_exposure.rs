@@ -47,7 +47,7 @@ const NATIVE_LS_LIVE_FRESH_MS: u64 = 250;
 ///
 /// `base` is the game module base, used only by the post-release MIRROR path below.
 pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         BOOT_VIEW_STOP_REASON, LOADING_SCREEN_UPDATE_LAST_MS, NATIVE_LS_COVERED_FRAMES,
         NATIVE_LS_EXPOSURE_BY_GATE, NATIVE_LS_EXPOSURE_CUR_RUN, NATIVE_LS_EXPOSURE_FIRST_MS,
         NATIVE_LS_EXPOSURE_FRAMES, NATIVE_LS_EXPOSURE_LAST_GATE, NATIVE_LS_EXPOSURE_LAST_MS,
@@ -105,7 +105,7 @@ pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
 }
 
 pub(crate) fn native_ls_gate_name(gate: usize) -> &'static str {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         NATIVE_LS_GATE_COVER_STOPPED, NATIVE_LS_GATE_DREW, NATIVE_LS_GATE_EPOCH_WORLD_LIVE,
         NATIVE_LS_GATE_NATIVE_SUPPRESSED, NATIVE_LS_GATE_OVERLAY_DISABLED,
     };
@@ -121,7 +121,7 @@ pub(crate) fn native_ls_gate_name(gate: usize) -> &'static str {
 
 /// Emit the exposure oracles. Called from the telemetry writer.
 pub(crate) fn native_ls_exposure_write(body: &mut String) {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         NATIVE_LS_COVERED_FRAMES, NATIVE_LS_EXPOSURE_BY_GATE, NATIVE_LS_EXPOSURE_FIRST_MS,
         NATIVE_LS_EXPOSURE_FRAMES, NATIVE_LS_EXPOSURE_LAST_GATE, NATIVE_LS_EXPOSURE_LAST_MS,
         NATIVE_LS_EXPOSURE_LAST_STOP_REASON, NATIVE_LS_EXPOSURE_MAX_RUN, NATIVE_LS_GATE_COUNT,

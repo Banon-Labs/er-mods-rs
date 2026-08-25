@@ -5,7 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="x86_64-pc-windows-msvc"
 PROFILE_NAME="save-picker-dll-standalone.me3"
 ARTIFACT_DIR="$REPO_ROOT/target/runtime-probe/save-picker-dll-standalone-$(date -u +%Y%m%d-%H%M%S)"
-DLL_PATH="$REPO_ROOT/target/$TARGET/release/er_save_picker_dll.dll"
+DLL_PATH="$REPO_ROOT/target/$TARGET/release/er_save_picker.dll"
 BUILD=1
 LAUNCH=0
 
@@ -13,7 +13,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/smoke-save-picker-dll.sh [options]
 
-Builds/prepares a standalone ME3 profile for er_save_picker_dll.dll. By default it builds the DLL
+Builds/prepares a standalone ME3 profile for er_save_picker.dll. By default it builds the DLL
 and writes artifacts only; pass --launch to run the approved ME3/offline Elden Ring path.
 This is a surface/staging smoke: the standalone DLL validates/plans a picked save through
 `er-save-redirect` and releases its own picker latch, but it does not install the product
@@ -21,7 +21,7 @@ save-redirect hooks or prove standalone autoload.
 
 Options:
   --artifact-dir DIR   Artifact directory to create/use
-  --dll PATH           Existing er_save_picker_dll.dll path, or build output path override
+  --dll PATH           Existing er_save_picker.dll path, or build output path override
   --skip-build         Do not run cargo xwin build; --dll must point at an existing DLL
   --prepare-only       Build/write profile but do not launch (default)
   --launch             Launch Elden Ring through scripts/me3-launch-lib.sh after preflight
@@ -51,13 +51,13 @@ SUMMARY="$ARTIFACT_DIR/summary.txt"
 PROFILE_PATH="$ARTIFACT_DIR/$PROFILE_NAME"
 
 if [[ "$BUILD" -eq 1 ]]; then
-  cargo xwin build --release --target "$TARGET" -p er-save-picker-dll
+  cargo xwin build --release --target "$TARGET" -p er-save-picker
 fi
 
 DLL_PATH="$(realpath "$DLL_PATH")"
 [[ -f "$DLL_PATH" ]] || { echo "standalone save-picker DLL not found: $DLL_PATH" >&2; exit 2; }
-[[ "$(basename "$DLL_PATH")" == "er_save_picker_dll.dll" ]] || {
-  echo "expected er_save_picker_dll.dll, got: $DLL_PATH" >&2
+[[ "$(basename "$DLL_PATH")" == "er_save_picker.dll" ]] || {
+  echo "expected er_save_picker.dll, got: $DLL_PATH" >&2
   exit 2
 }
 
@@ -77,7 +77,7 @@ EOF_PROFILE
   echo "profile=$PROFILE_PATH"
   echo "dll=$DLL_PATH"
   echo "launch=$LAUNCH"
-  echo "expected_log=Game/er-save-picker-dll.log"
+  echo "expected_log=Game/er-save-picker.log"
 } > "$SUMMARY"
 
 if [[ "$LAUNCH" -eq 0 ]]; then
@@ -99,5 +99,5 @@ GAME_DIR="$ME3_STEAM_DIR/steamapps/common/ELDEN RING/Game"
 me3_require_no_lazyloader "$GAME_DIR"
 cd "$GAME_DIR"
 
-echo "Launching standalone er_save_picker_dll smoke via ME3; profile=$PROFILE_PATH" | tee -a "$SUMMARY"
+echo "Launching standalone er_save_picker smoke via ME3; profile=$PROFILE_PATH" | tee -a "$SUMMARY"
 me3_launch "$PROFILE_PATH"

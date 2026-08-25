@@ -4,7 +4,7 @@
 //! need are reproduced, so the repository does not carry a copy of the whole
 //! third-party dataset.
 
-use er_build_import::catalog::{Entry, Kind, MapCatalog};
+use er_build_import_core::catalog::{Entry, Kind, MapCatalog};
 
 /// Build the fixture catalog.
 pub fn catalog() -> MapCatalog {

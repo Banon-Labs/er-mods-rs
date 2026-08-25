@@ -2,10 +2,10 @@ use super::*;
 
 // POSITIVE row identity for the five-row System -> Quit dialog.
 //
-// S7 moved the pure row-decision core to `er-quit-menu::rows`. This product-side shim keeps the
+// S7 moved the pure row-decision core to `er-quit-menu-core::rows`. This product-side shim keeps the
 // live memory capture/telemetry functions in the root DLL until the hooked surfaces move in S8.
 
-pub(crate) use er_quit_menu::rows::{
+pub(crate) use er_quit_menu_core::rows::{
     PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
     QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitInputKind, QuitRow, QuitRowFacts,
     QuitRowLabel, QuitRowTable, QuitRowVerdict,
@@ -26,7 +26,7 @@ pub(crate) fn system_quit_row_table_reset(dialog: usize) {
     // is pointing at a dead `MenuJobQueue`. This is the only moment that is reliably true, which is
     // why the editor's reset hangs off the row table's rather than having a lifecycle of its own.
     reset_build_url_editor_state();
-    set_build_url_row_help(er_build_import::BUILD_URL_ROW_HELP);
+    set_build_url_row_help(er_build_import_core::BUILD_URL_ROW_HELP);
     // The export machine hangs off the same moment for the same reason: a rebuilt dialog means any
     // request latched against the previous one belongs to a row that no longer exists. Its worker,
     // if one is running, is unaffected -- it holds a document, not a dialog -- and will simply find

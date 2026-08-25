@@ -612,7 +612,7 @@ pub unsafe extern "system" fn child_done_query_override_detour(
         // steady-state divergence). 180 frames (~3s) is well past load completion, so no premature-teardown
         // risk (the stranding it guards against happens in the first ~1s of the reload).
         const WORLD_STABLE_RELEASE_FRAMES: usize = 180;
-        if er_telemetry::counters::WORLD_LIVE_STABLE_FRAMES.load(Ordering::SeqCst)
+        if er_telemetry_core::counters::WORLD_LIVE_STABLE_FRAMES.load(Ordering::SeqCst)
             >= WORLD_STABLE_RELEASE_FRAMES
         {
             return false;
@@ -687,7 +687,7 @@ pub const LOADLIST_INIT_RVA: usize = er_game_base::rva::STEP_MOVEMAP_LOADLIST_IN
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
 pub static LOADLIST_INIT_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static LOADLIST_INIT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::LOADLIST_INIT_CALLS;
+pub(crate) use er_telemetry_core::counters::LOADLIST_INIT_CALLS;
 
 pub unsafe extern "system" fn loadlist_init_capture_detour(
     ingamestep: usize,

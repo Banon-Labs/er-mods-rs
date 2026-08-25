@@ -101,9 +101,9 @@ pub const ARMAMENT_CHR_ASM_SLOTS: [i32; 6] = [1, 3, 5, 0, 2, 4];
 /// Map a planner armament index (0..6) to its `ChrAsmSlot`.
 ///
 /// ```
-/// assert_eq!(er_build_import::equip::armament_slot(0), Some(1)); // right hand, first
-/// assert_eq!(er_build_import::equip::armament_slot(3), Some(0)); // left hand, first
-/// assert_eq!(er_build_import::equip::armament_slot(6), None);
+/// assert_eq!(er_build_import_core::equip::armament_slot(0), Some(1)); // right hand, first
+/// assert_eq!(er_build_import_core::equip::armament_slot(3), Some(0)); // left hand, first
+/// assert_eq!(er_build_import_core::equip::armament_slot(6), None);
 /// ```
 pub fn armament_slot(planner_index: u32) -> Option<i32> {
     ARMAMENT_CHR_ASM_SLOTS
@@ -114,9 +114,9 @@ pub fn armament_slot(planner_index: u32) -> Option<i32> {
 /// Map a `ChrAsmSlot` back to the planner armament index that owns it.
 ///
 /// ```
-/// assert_eq!(er_build_import::equip::armament_planner_index(1), Some(0));
-/// assert_eq!(er_build_import::equip::armament_planner_index(0), Some(3));
-/// assert_eq!(er_build_import::equip::armament_planner_index(9), None);
+/// assert_eq!(er_build_import_core::equip::armament_planner_index(1), Some(0));
+/// assert_eq!(er_build_import_core::equip::armament_planner_index(0), Some(3));
+/// assert_eq!(er_build_import_core::equip::armament_planner_index(9), None);
 /// ```
 pub fn armament_planner_index(slot: i32) -> Option<u32> {
     ARMAMENT_CHR_ASM_SLOTS

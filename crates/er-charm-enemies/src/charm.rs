@@ -18,7 +18,7 @@
 //! a `ChrIns` therefore does precisely what the thrown item does to whatever it lands on.
 //!
 //! Note the game's own null check on `specialEffect`. It is load-bearing -- an unguarded read of
-//! that container is a live crash this repo has already captured (`er-seamless-bugfixes-dll`'s
+//! that container is a live crash this repo has already captured (`er-seamless-bugfixes`'s
 //! `null_special_effect` guard) -- so this sweep makes the same check before touching a character.
 
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -59,15 +59,15 @@ pub(crate) const FULLREAD_PHASE_DRAIN: usize = 1;
 pub(crate) const FULLREAD_PHASE_DESER: usize = 2;
 pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
 pub(crate) use er_title_flow::FULLREAD_PHASE;
-pub(crate) use er_telemetry::counters::FULLREAD_DRAIN_WAITS;
+pub(crate) use er_telemetry_core::counters::FULLREAD_DRAIN_WAITS;
 /// Terminal non-commit disarm counters for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms
 /// the native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`); the in-game
 /// save manager services any >=0 request on the first frames after world arrival, running a second
 /// full deserialize into the live world (CSGaitemImp free-queue exhaustion, AV at live 0x67141a).
 /// Every DONE exit that does not hand off to the native confirm chain must clear the register; these
 /// count the clears and record the slot value the last clear removed (u32-packed i32; !0 == none).
-pub(crate) use er_telemetry::counters::FULLREAD_REQ_DISARM_COUNT;
-pub(crate) use er_telemetry::counters::FULLREAD_REQ_DISARM_LAST_PREV_SLOT;
+pub(crate) use er_telemetry_core::counters::FULLREAD_REQ_DISARM_COUNT;
+pub(crate) use er_telemetry_core::counters::FULLREAD_REQ_DISARM_LAST_PREV_SLOT;
 /// LATCHED peak-load semaphore (bd er-effects-rs-ns4n follow-up). The live `oracle_char_*` fields read
 /// PlayerGameData directly, so a quit-to-title tears the character down and a final telemetry snapshot
 /// reads them empty even on a fully-successful run -- the load proof lived only in the mid-run
@@ -76,10 +76,10 @@ pub(crate) use er_telemetry::counters::FULLREAD_REQ_DISARM_LAST_PREV_SLOT;
 /// name), so `oracle_load_correctness_seen > 0` proves a real char reached the world regardless of a
 /// later quit. Process-lifetime (never reset within a session): it attests "a real character loaded at
 /// some point this run", which a quit or a later System->Quit switch cannot falsify.
-pub(crate) use er_telemetry::counters::LOADED_PEAK_SEEN_COUNT;
-pub(crate) use er_telemetry::counters::LOADED_PEAK_LEVEL;
-pub(crate) use er_telemetry::counters::LOADED_PEAK_C30;
-pub(crate) use er_telemetry::counters::LOADED_PEAK_NAME_LEN;
+pub(crate) use er_telemetry_core::counters::LOADED_PEAK_SEEN_COUNT;
+pub(crate) use er_telemetry_core::counters::LOADED_PEAK_LEVEL;
+pub(crate) use er_telemetry_core::counters::LOADED_PEAK_C30;
+pub(crate) use er_telemetry_core::counters::LOADED_PEAK_NAME_LEN;
 pub(crate) static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 
@@ -298,7 +298,7 @@ include!(concat!(
 pub(crate) static MENU_JOB_EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) const MENU_JOB_EMIT_RESULT_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_JOB_EMIT_RESULT_INSTALLED_YES: usize = 1;
-pub(crate) use er_telemetry::counters::MENU_JOB_EMIT_RESULT_INSTALLED;
+pub(crate) use er_telemetry_core::counters::MENU_JOB_EMIT_RESULT_INSTALLED;
 /// SaveRetryDialog fade gate the OK-handler (0x78e030) reads: it commits/closes only when
 /// fade_current (+0x1278) <= fade_target (+0x2300). Writing fade_current = fade_target bits makes it
 /// commit on the first frame (no fade-in animation = no visible flash) instead of ~20 frames.
@@ -312,14 +312,14 @@ pub(crate) const AUTO_ACCEPT_LOG_INTERVAL: usize = 30;
 /// Original finished-poll getter trampoline (0 until the hook installs).
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static MSGBOX_FINISHED_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::AUTO_ACCEPT_INSTALLED;
+pub(crate) use er_telemetry_core::counters::AUTO_ACCEPT_INSTALLED;
 pub(crate) const AUTO_ACCEPT_NOT_INSTALLED: usize = 0;
 pub(crate) const AUTO_ACCEPT_INSTALLED_YES: usize = 1;
 /// Set once when the local player first exists in-world; gates the auto-accept OFF so in-game
 /// MessageBoxDialogs (which need real choices) are never force-accepted.
-pub(crate) use er_telemetry::counters::IN_WORLD_REACHED;
-pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_LAST_NATIVE_SLOT;
-pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_SLOT_OVERRIDES;
+pub(crate) use er_telemetry_core::counters::IN_WORLD_REACHED;
+pub(crate) use er_telemetry_core::counters::LOADGAME_BUILDER_LAST_NATIVE_SLOT;
+pub(crate) use er_telemetry_core::counters::LOADGAME_BUILDER_SLOT_OVERRIDES;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
 pub(crate) use er_title_flow::IN_WORLD_REACHED_YES;
@@ -329,14 +329,14 @@ pub(crate) use er_title_flow::IN_WORLD_REACHED_YES;
 /// (load2+) becomes playable -- `IN_WORLD_REACHED` above is a stale latch that never re-arms during a
 /// switch, so it cannot stop the readback in-world (bd
 /// fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2). `usize::MAX` = none.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_EPOCH_WORLD_LIVE;
 /// FPS BAIL for own-menu reloads whose handoff signals never fire: when load2 stalls at the finalize
 /// (frozen), it builds no NEW loadscreen table and its play_time never advances, so NEITHER
 /// `loading_handoff` NOR `world_handoff` becomes true and the per-frame GPU readback runs forever
 /// (~20fps). The loading bar itself DOES fill (present=True/mms18 = world resident) so a permille + time
 /// bail reliably stops the readback regardless of the handoff signals. Per-epoch composite clock.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_EPOCH;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_FIRST_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_COMPOSITE_EPOCH;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_COMPOSITE_FIRST_MS;
 // BOOT_VIEW_EPOCH_BAIL_PERMILLE removed 2026-07-31 (er-effects-rs-drb7) along with the FPS bail's
 // permille arm: "the bar reads ~full" is a progress reading, not the freeze predicate the bail
 // needs, and it fired ~1.3s into every healthy switch. BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS is now the
@@ -371,7 +371,7 @@ pub(crate) static POLICY_TOS_SELECTOR_WRAPPER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static POLICY_TOS_SELECTOR_CTOR_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::POLICY_TOS_TITLE_HOOK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::POLICY_TOS_TITLE_HOOK_INSTALLED;
 pub(crate) const POLICY_TOS_TITLE_HOOK_NOT_INSTALLED: usize = 0;
 pub(crate) const POLICY_TOS_TITLE_HOOK_INSTALLED_YES: usize = 1;
 pub(crate) static POLICY_TOS_TITLE_TOTAL_BUILDS: AtomicUsize =
@@ -380,7 +380,7 @@ pub(crate) static POLICY_TOS_TITLE_TOTAL_BUILDS: AtomicUsize =
 /// suppression). Non-zero only when `policy_tos_suppress_enabled()` is on; the
 /// suppressed build returns null, mimicking the wrapper's native allocation-failure
 /// path so the unnecessary startup ToS modal is never constructed.
-pub(crate) use er_telemetry::counters::POLICY_TOS_TITLE_SUPPRESSED_BUILDS;
+pub(crate) use er_telemetry_core::counters::POLICY_TOS_TITLE_SUPPRESSED_BUILDS;
 /// Return value our suppressed ToS-modal wrapper hands back: 0 (null), identical to the
 /// native wrapper's allocation-failure return, a path the caller already tolerates.
 pub(crate) const POLICY_TOS_MODAL_SUPPRESSED_RETURN: usize = 0;
@@ -515,7 +515,7 @@ pub(crate) const SERVER_STATUS_LOGGING_IN_TEXT_ID: usize = 401_150;
 pub(crate) const SERVER_STATUS_RETRIEVING_DATA_TEXT_ID: usize = 401_160;
 pub(crate) const SERVER_STATUS_SAVING_DATA_TEXT_ID: usize = 401_165;
 pub(crate) static SERVER_STATUS_FORMATTER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SERVER_STATUS_HOOK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SERVER_STATUS_HOOK_INSTALLED;
 pub(crate) const SERVER_STATUS_HOOK_NOT_INSTALLED: usize = 0;
 pub(crate) const SERVER_STATUS_HOOK_INSTALLED_YES: usize = 1;
 pub(crate) static SERVER_STATUS_TOTAL_SEEN: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
@@ -536,13 +536,13 @@ pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
 /// (bd live-dialog-probe6-factory-fires-returns-dialog-rdx-not-menuwindow-2026).
 pub(crate) const SCENE_OBJ_PROXY_CTOR_RVA: u32 = 0x74a700;
 /// Trampoline for the SceneObjProxy-ctor latch hook (0 = unset).
-pub(crate) use er_telemetry::counters::SCENE_OBJ_PROXY_CTOR_ORIG;
+pub(crate) use er_telemetry_core::counters::SCENE_OBJ_PROXY_CTOR_ORIG;
 /// The host MenuWindow* latched from the SceneObjProxy ctor (incoming rdx) at title build. 0 until
 /// the title builds. Updated on every VALID (vtable-checked) call. Read by
 /// `locate_live_loadgame_node` (SeqCst); fail-closed when still 0.
-pub(crate) use er_telemetry::counters::LATCHED_MENU_WINDOW;
+pub(crate) use er_telemetry_core::counters::LATCHED_MENU_WINDOW;
 /// One-shot install guard for the MenuWindow-latch factory hook (mirrors AUTO_ACCEPT_INSTALLED).
-pub(crate) use er_telemetry::counters::MENU_WINDOW_LATCH_INSTALLED;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_LATCH_INSTALLED;
 pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
@@ -637,7 +637,7 @@ pub(crate) const SAVE_REQUEST_RETRACT_B73_RVA: u32 = 0x678710;
 //
 // The row press goes STRAIGHT TO THE DESTINATION LIST (stage 3). It asks nothing first: the only
 // question in the flow is the overwrite confirm (stage 4), and it is asked about a file the user
-// has already pointed at. Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`.
+// has already pointed at. Full stage map lives on `er_telemetry_core::counters::SAVE_FLOW_STAGE`.
 //
 // STAGE IDS 1 AND 2 ARE RETIRED, NOT REUSED. They were the two up-front confirms. Leaving the gap
 // keeps every existing log line and `oracle_save_flow_stage` value in the archive meaning what it
@@ -671,25 +671,25 @@ pub(crate) const SAVE_BYPASS_WATCHDOG_TICKS: usize = 900;
 pub(crate) const CS_MENU_MAN_SAVE_GATE_SUB_80_OFFSET: usize = 0x80;
 pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_290_OFFSET: usize = 0x290;
 pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_298_OFFSET: usize = 0x298;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_COMPLETE_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_DIALOG;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_ROW_PRESS_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_CALLS_AT_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_JOB_START_TICK;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_WATCHDOG_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_B72_BEFORE_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_B73_BEFORE_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_FLAG_UNREAD;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_REQUEST_RETRACTIONS;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_RETRACT_DECLINED;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_COMMIT_COMPLETE_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_DIALOG;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_ROW_PRESS_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_DISPATCH_CALLS_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_COMMIT_JOB_START_TICK;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_COMMIT_WATCHDOG_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_B72_BEFORE_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_B73_BEFORE_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_FLAG_UNREAD;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_REQUEST_RETRACTIONS;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_RETRACT_DECLINED;
 /// Game-task ticks stage 8 waits for the fired save request to actually REACH the writer (an SL
 /// save enqueue arriving at the suppressor) before declaring the fire failed. ~3 s at 60 ticks/s,
 /// the same budget the confirm-box build and destination-browser open timeouts use.
@@ -699,36 +699,36 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_RETRACT_DECLINED;
 /// froze every subsequent press for ~15-30 s (user-reported 2026-07-28). A write that IS in
 /// flight still gets the full watchdog -- only the never-enqueued case bails early.
 pub(crate) const SAVE_FLOW_ENQUEUE_GRACE_TICKS: usize = 180;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE_TICKS;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_STAGE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_STAGE_TICKS;
 // ---- SAVE-FLOW confirm box (save-game-flow WP2, 2026-07-28; one box since 2026-07-31) ----
 // The Save Game row does not commit on press and does not ask on press: it opens the destination
 // list. The flow's ONE confirm ("Are you sure you want to overwrite this file?", default No) is
 // built through the GAME's own `CS::MessageBoxBuilder` recipe (RVAs below) and submitted to a
 // MenuJob queue, so it is localized, skinned and input-routed exactly like the native quit
 // confirm. See `save_flow_boxes.rs` for the recipe.
-pub(crate) use er_telemetry::counters::SAVE_FLOW_ABORT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_DIALOG;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EXPECTED;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_DIALOG;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_STATE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_IDENTITY_LOST_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_NO_COUNTS;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_OPEN_COUNTS;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_RESULT_BASELINE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_UNDECIDABLE_COUNTS;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_YES_COUNTS;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_RECIPE_UNAVAILABLE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_ABORT_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_DIALOG;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_EXPECTED;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_EMIT_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_EMIT_DIALOG;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_EMIT_STATE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_IDENTITY_LOST_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_NO_COUNTS;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_OPEN_COUNTS;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_RESULT_BASELINE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_UNDECIDABLE_COUNTS;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_YES_COUNTS;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_RECIPE_UNAVAILABLE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;
 /// Game-task ticks a submitted confirm box may go without its `CS::MessageBoxDialog` build
 /// reaching the builder hook (~3 s at 60 ticks/s). Exceeding it means the recipe produced no
 /// visible box, so the flow aborts back to the world instead of waiting on a box that will
 /// never appear. There is deliberately NO timeout on the user's DECISION.
 pub(crate) const SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS: usize = 180;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_BOX_HOST_DIALOG;
 // ---- SAVE-DESTINATION browser (save-game-flow WP3, 2026-07-28) ----
 // The Save Game row press opens the shipping `05_010` picker REPURPOSED as a save-destination
 // chooser (`[ new ]` is the initial selection, below the always-first drive row when present), and
@@ -739,8 +739,8 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
 // way a user overwrites their own save, so the filesystem-identity check is load-bearing.
 /// 1 = an OS Save-As chose an existing file and the Box3 overwrite confirm is owed. Consumed by
 /// the save-flow tick, which owns every `SAVE_FLOW_STAGE` transition on the OS path.
-pub(crate) use er_telemetry::counters::SAVE_DEST_CONFIRM_PENDING;
-pub(crate) use er_telemetry::counters::SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_CONFIRM_PENDING;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT;
 /// Game-task ticks the save flow waits for the destination browser to actually appear after the
 /// open was staged for the menu pump (~3 s at 60 ticks/s, same budget as a confirm-box build).
 /// Exceeding it aborts back to the world with nothing written.
@@ -750,19 +750,19 @@ pub(crate) const SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS: usize = 180;
 // could not establish. They exist because the previous shape of this flow could destroy the loaded
 // save while its log read "restored pre-fire snapshot ok=true": a decision it got wrong had no
 // name, so no run could report it.
-pub(crate) use er_telemetry::counters::SAVE_DEST_DISARM_DEFERRED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_DISARM_UNPROVEN;
-pub(crate) use er_telemetry::counters::SAVE_DEST_FOREIGN_OPEN_PASSED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_IDENTITY_UNKNOWN_ABORT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_STAT_UNREADABLE;
-pub(crate) use er_telemetry::counters::SAVE_DEST_NO_WRITER_OBSERVER_ABORT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_RESTORE_FAILED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_RESTORE_SUPPRESSED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_SELF_REDIRECT_BLOCKED;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_COMPLETE_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_FIRE;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_DISARM_DEFERRED;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_DISARM_UNPROVEN;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_FOREIGN_OPEN_PASSED;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_IDENTITY_UNKNOWN_ABORT;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_LIVE_STAT_UNREADABLE;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_NO_WRITER_OBSERVER_ABORT;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_RESTORE_FAILED;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_RESTORE_SUPPRESSED;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_SELF_REDIRECT_BLOCKED;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_DEGRADED_COMPLETE_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_DEGRADED_FIRE;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE;
 /// Extra game-task ticks past `SAVE_BYPASS_WATCHDOG_TICKS` that a destination commit will hold its
 /// redirect window open when the bypass token was CONSUMED but no save-job body ever started
 /// (~60 s at 60 ticks/s).
@@ -918,12 +918,12 @@ pub(crate) static SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NOOP_ACTION_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED;
-pub(crate) use er_telemetry::counters::PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_DUPLICATE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_NOOP_ACTION_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED;
+pub(crate) use er_telemetry_core::counters::PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED: usize = 0;
@@ -936,37 +936,37 @@ pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES: usize = 1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_DUPLICATE_COUNT;
 /// Native first Quit-tab row action object (label is replaced to Save Game by our text hook). Captured
 /// from the row table immediately after the native first AddCancelButton call returns.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT;
 /// Native second Quit-tab row action object (Return to Desktop). The patched 4-slot GameEnd GFx can
 /// still dispatch this native object for the lower visual buttons; the action hook disambiguates those
 /// by the live dialog cursor so row 2/3 become Load Character / Load Character from File instead of showing
 /// the native desktop confirmation.
 pub(crate) static SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT: AtomicUsize =
     AtomicUsize::new(0);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NOOP_SELECTION_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_NOOP_SELECTION_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES;
 /// Recorded cloned action implementation object for the quick-load row; only this action is routed.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT;
 /// Recorded `PropertyNewButtonController` for the quick-load row. This is the authoritative click
 /// dispatch identity when the GFx/native bridge bypasses the action-object thunk.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT;
 /// Recorded cloned action implementation object for the save-folder row; only this action opens the
 /// env-provided save directory.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT;
 /// Recorded `PropertyNewButtonController` for the save-folder row. This is the authoritative click
 /// dispatch identity when the GFx/native bridge bypasses the action-object thunk.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT;
 /// Recorded cloned action object / `PropertyNewButtonController` for the "Load Build from URL" row,
 /// plus its press / request / refusal / async-failure / import counters.
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::{
     SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_LAST_OBJECT,
     SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT,
     SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT,
@@ -978,7 +978,7 @@ pub(crate) use er_telemetry::counters::{
 /// The "Generate Build Link" row: its cloned action/controller pair, and one counter for each stage
 /// that can independently fail -- press, claim, refusal, stale-latch recovery, encode, clipboard,
 /// browser, async failure.
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::{
     SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_COUNT,
     SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT,
     SYSTEM_QUIT_GENERATE_BUILD_LINK_CLIPBOARD_COUNT,
@@ -988,20 +988,20 @@ pub(crate) use er_telemetry::counters::{
     SYSTEM_QUIT_GENERATE_BUILD_LINK_REFUSED_COUNT, SYSTEM_QUIT_GENERATE_BUILD_LINK_REQUEST_COUNT,
     SYSTEM_QUIT_GENERATE_BUILD_LINK_STALE_LATCH_COUNT,
 };
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
 // ---- System->Quit ROW IDENTITY table + resolution oracles (see system_quit_row_identity.rs) ----
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_TABLE_DIALOG;
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_ROW_TABLE_DIALOG;
+pub(crate) use er_telemetry_core::counters::{
     SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS, SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT,
     SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT, SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT,
     SYSTEM_QUIT_ROW_LAST_AMBIGUITY, SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND,
@@ -1014,10 +1014,10 @@ pub(crate) use er_telemetry::counters::{
 /// Legacy fallback latch for older confirmation-based Save Game routing. The product Save Game row
 /// now requests save + closes menus directly and clears this latch so it never reaches the native
 /// Quit Game / return-title action.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG;
 /// Stable qword slot passed to the native `05_010_ProfileSelect` wrapper. The wrapper writes the
 /// MenuWindowJob pointer here and captures this slot for its later ProfileLoadDialog factory call.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT;
 /// Live/deobf native `05_010_ProfileSelect` wrapper (`FUN_14081f7e0` dump -> live `0x14081f6f0`).
 pub(crate) const PROFILE_SELECT_WRAPPER_RVA: u32 = 0x81f6f0;
 pub(crate) use er_title_flow::MENU_JOB_SUBMIT_RVA;
@@ -1053,7 +1053,7 @@ pub(crate) const SCALEFORM_HANDLER_CTOR_RVA: usize = 0x11a8870;
 pub(crate) const SCALEFORM_HANDLER_DTOR_RVA: usize = 0x11a8900;
 pub(crate) static SCALEFORM_HANDLER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SCALEFORM_HANDLER_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_TRACE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SCALEFORM_HANDLER_TRACE_INSTALLED;
 /// Live handler-object addresses (ctor'd, not yet dtor'd). Linear-scanned Vec -- volume is a few
 /// dozen menu handlers, not a hot per-frame path. Capped so a genuine leak can't grow it unbounded.
 pub(crate) static SCALEFORM_HANDLER_LIVE: std::sync::Mutex<Vec<usize>> =
@@ -1061,10 +1061,10 @@ pub(crate) static SCALEFORM_HANDLER_LIVE: std::sync::Mutex<Vec<usize>> =
 pub(crate) const SCALEFORM_HANDLER_LIVE_CAP: usize = 8192;
 /// Oracles: total ctors/dtors seen, double-frees detected+skipped, and the last skipped object +
 /// its container/parent for correlation with the switch timeline.
-pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_CTORS;
-pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_DTORS;
-pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_DOUBLE_FREES;
-pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
+pub(crate) use er_telemetry_core::counters::SCALEFORM_HANDLER_CTORS;
+pub(crate) use er_telemetry_core::counters::SCALEFORM_HANDLER_DTORS;
+pub(crate) use er_telemetry_core::counters::SCALEFORM_HANDLER_DOUBLE_FREES;
+pub(crate) use er_telemetry_core::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 
 /// ~MenuWindowJob DOOMED-WINDOW GUARD (er-effects-rs-j74t, return-to-title crash rva 0x7ada87 AND
 /// 0x7adb28). Root of the whack-a-mole: `CS::MenuWindowJob::~MenuWindowJob` (deobf 0x1407ac720) calls
@@ -1198,29 +1198,29 @@ pub(crate) const MENU_WINDOW_LIST_REMOVE_RVA: usize = 0x733d70;
 pub(crate) const MENU_WINDOW_LIST_COUNT_48_OFFSET: usize = 0x48;
 pub(crate) const MENU_WINDOW_LIST_SANE_MAX_COUNT: i32 = 64;
 pub(crate) static MENU_WINDOW_JOB_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED;
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS;
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS;
+pub(crate) use er_telemetry_core::counters::{
     MENU_WINDOW_JOB_FINALIZE_GUARDS, MENU_WINDOW_JOB_FINALIZE_INSTALLED,
     MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW, MENU_WINDOW_JOB_FINALIZE_ORIG,
 };
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::{
     MSB_PARSE_TRACE_CALLS, MSB_PARSE_TRACE_INSTALLED, MSB_PARSE_TRACE_NULL_RESULTS,
     MSB_PARSE_TRACE_ORIG,
 };
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::{
     LOADLIST_WAIT_TRACE_CALLS, LOADLIST_WAIT_TRACE_INSTALLED, LOADLIST_WAIT_TRACE_LAST_VERDICT,
     LOADLIST_WAIT_TRACE_ORIG, LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE,
 };
-pub(crate) use er_telemetry::counters::{
+pub(crate) use er_telemetry_core::counters::{
     DLC_ROOTS_BLANK_CALLS, DLC_ROOTS_BLANK_ORIG, DLC_ROOTS_REFILL_CALLS, DLC_ROOTS_REFILL_ORIG,
     DLC_ROOTS_TRACE_INSTALLED,
 };
-pub(crate) use er_telemetry::counters::{DLC_ROOTS_JOB_CALLS, DLC_ROOTS_JOB_ORIG};
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
-pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES;
+pub(crate) use er_telemetry_core::counters::{DLC_ROOTS_JOB_CALLS, DLC_ROOTS_JOB_ORIG};
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
+pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES;
 /// Upper bound (exclusive) of a MAPPED menu id: the 1.16.2 finalize's own flag-clear guard is
 /// `if (*menu_id < 0x47) GLOBAL_CSMenuMan->field99_0x90[*menu_id] = 0;` and the sibling
 /// `MenuWindowJob::Run` bounds the same index identically, so `< 0x47` is the game's own definition
@@ -1259,8 +1259,8 @@ pub(crate) const GET_PARAM_RESCAP_RVA: usize = 0xd4cc50;
 pub(crate) const MENU_OFFSCR_REND_PARAM_TYPE: u32 = 0x4e;
 pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED;
-pub(crate) use er_telemetry::counters::QUIT_TO_DESKTOP_CLEAN_KILLS;
+pub(crate) use er_telemetry_core::counters::MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED;
+pub(crate) use er_telemetry_core::counters::QUIT_TO_DESKTOP_CLEAN_KILLS;
 
 // === Game-Options pane VISIBILITY oracle (READ-ONLY, `oracle_optionsetting_pane_*`) ===============
 // Detects the "blank Game Options pane" bug on OptionSetting menu re-entry: the tab strip + footer
@@ -1311,46 +1311,46 @@ pub(crate) const OPTIONSETTING_PANE_NAMES: [&str; 8] = [
     "PadSetting\0",
 ];
 /// Total pane-visibility samples taken (one per OptionSetting `MenuWindowJob::Run` with a live owner).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_SAMPLE_COUNT;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_SAMPLE_COUNT;
 /// Last sample: whether the `WindowList` container resolved (0/1).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED;
 /// Last sample: whether the `WindowList` container's DisplayInfo.Visible was set (0/1).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_WINDOWLIST_VISIBLE;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_LAST_WINDOWLIST_VISIBLE;
 /// Last sample: bitmask (bit N = pane N of `OPTIONSETTING_PANE_NAMES`) of panes that resolved.
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_RESOLVED_MASK;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_LAST_RESOLVED_MASK;
 /// Last sample: bitmask of panes whose DisplayInfo.Visible was set.
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_VISIBLE_MASK;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_LAST_VISIBLE_MASK;
 /// Last sample: the `WindowList` child's raw dataType (for gate diagnosis).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_LAST_DATATYPE;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_LAST_DATATYPE;
 /// Count of vcalls skipped fail-closed because objectInterface/vtable/getfn were not game-image-live.
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_GUARD_SKIPS;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_GUARD_SKIPS;
 /// Last sample: whether the composite sub-dialog job slot was bound (0/1).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_COMPOSITE_BOUND;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_COMPOSITE_BOUND;
 /// Count of samples where the blank-pane signature fired (`WindowList` resolved but NOT visible).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_BLANK_DETECTED_COUNT;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_BLANK_DETECTED_COUNT;
 /// The REAL row-pane signal: the current tab dialog (`*(composite+0xb8)`) and the DisplayInfo.Visible of
 /// its embedded pane proxy at `dialog+0x1200` -- the object the game's own tab-select SetVisibles. The 8
 /// named WindowList children are always Visible=0 and are NOT the signal (they made blank_detected fire
 /// before the user could even reproduce). `actively_shown` = CSMenuMan flag bit 0x4 (drawn this frame).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_DIALOG;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_PANE_VISIBLE;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_PANE_DATATYPE;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVELY_SHOWN;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_LAST_FLAG;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_CURRENT_DIALOG;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_CURRENT_PANE_VISIBLE;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_CURRENT_PANE_DATATYPE;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVELY_SHOWN;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_LAST_FLAG;
 /// Latch: the current pane was seen VISIBLE at least once (a healthy Game Options open). The teardown
 /// oracle `..._REAL_BLANK_DETECTED_COUNT` only fires AFTER this latch, so a boot/preload state (pane
 /// never yet shown) can never be mistaken for the bug -- the bug is healthy(visible)->blank(hidden).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE;
 /// Run-stopping oracle: healthy pane was seen, THEN the actively-shown current pane went hidden.
-pub(crate) use er_telemetry::counters::OPTIONSETTING_REAL_BLANK_DETECTED_COUNT;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_REAL_BLANK_DETECTED_COUNT;
 /// The selected tab index the user is on (`*(*(window+0x1870+0x10)+0xd4)`) at the last sample, and the
 /// cache slot the current pane dialog matches -- to identify WHICH tab is blank (e.g. the Quit/Exit tab
 /// where our injected Load-Profile rows live vs the Game tab).
-pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_CURRENT_TAB;
 /// The System/OptionSetting Quit tab index. The custom Load Character / Load Character from File rows are
 /// children of this tab, so Back from their ProfileSelect child must restore this tab as the parent.
 pub(crate) const OPTIONSETTING_QUIT_TAB_INDEX: usize = 8;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB_AT_BLANK;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_CURRENT_TAB_AT_BLANK;
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB: AtomicUsize =
@@ -1359,28 +1359,28 @@ pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT: Ato
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT;
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Count of times the fix forced the actively-shown current tab's pane back visible (via SetVisible on
 /// dialog+0x1200 -- the same proxy/call the game's own tab-select uses). Nonzero = the blank was caught
 /// and corrected; the pane draws again.
-pub(crate) use er_telemetry::counters::OPTIONSETTING_PANE_FIX_APPLIED;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_PANE_FIX_APPLIED;
 /// Active OptionSetting row-table sampler: read-only row/action classification for the currently
 /// visible tab dialog. This is the product-proof oracle for the Game Options/Quit contamination class:
 /// tab 0 must not contain cloned quick-load/open-profile actions; Quit tab should contain them once the
 /// feature is injected.
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_SAMPLE_COUNT;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_DIALOG;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_TAB;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_COUNT;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_CLONED_MASK;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_NATIVE_SAVE_MASK;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_ACTION_HASH;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_LABEL_HASH;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_ACTIVE_ROW_QUIT_LABEL_MASK;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_GAME_OPTIONS_CLONED_ROW_HITS;
-pub(crate) use er_telemetry::counters::OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_SAMPLE_COUNT;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_DIALOG;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_TAB;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_COUNT;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_CLONED_MASK;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_NATIVE_SAVE_MASK;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_ACTION_HASH;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_LABEL_HASH;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ACTIVE_ROW_QUIT_LABEL_MASK;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_GAME_OPTIONS_CLONED_ROW_HITS;
+pub(crate) use er_telemetry_core::counters::OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS;
 /// window -> SettingTabControl (+0x1870), -> tab view (+0x10), -> selected index (view+0xd4).
 pub(crate) const OPTIONSETTING_TAB_CONTROL_OFFSET: usize = 0x1870;
 pub(crate) const OPTIONSETTING_TAB_VIEW_OFFSET: usize = 0x10;
@@ -1410,13 +1410,13 @@ pub(crate) const GX_CMD_QUEUE_COUNT_OFFSET: usize = 0x30;
 pub(crate) const GX_CMD_QUEUE_CAP_OFFSET: usize = 0x34;
 pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED;
+pub(crate) use er_telemetry_core::counters::GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED;
 /// Cumulative occupancy high-water, per-switch high-water (reset by `sq_repro_begin_switch`), the
 /// observed capacity, and total reserve calls.
-pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_MAX_FILL;
-pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_SWITCH_MAX_FILL;
-pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_CAP_SEEN;
-pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_SUBMITS;
+pub(crate) use er_telemetry_core::counters::GX_CMD_QUEUE_MAX_FILL;
+pub(crate) use er_telemetry_core::counters::GX_CMD_QUEUE_SWITCH_MAX_FILL;
+pub(crate) use er_telemetry_core::counters::GX_CMD_QUEUE_CAP_SEEN;
+pub(crate) use er_telemetry_core::counters::GX_CMD_QUEUE_SUBMITS;
 /// Producer histogram: open-addressed key -> count. Key = first game-.text return address (as RVA)
 /// above the reserve/add_command_list wrapper band, with `GX_CMD_QUEUE_SELF_TAG` ORed in when any
 /// stack frame lies inside our own DLL (attributes submissions our pipeline caused vs pure-native).
@@ -1430,12 +1430,12 @@ pub(crate) static GX_CMD_QUEUE_HIST_KEYS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS]
     [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
 pub(crate) static GX_CMD_QUEUE_HIST_COUNTS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
     [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
-pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_HIST_DROPPED;
+pub(crate) use er_telemetry_core::counters::GX_CMD_QUEUE_HIST_DROPPED;
 /// Near-full evidence: hits with count >= cap - margin, and a log throttle so the dump lands BEFORE
 /// the crash frame without spamming (one line per 64 near-full reserves).
 pub(crate) const GX_CMD_QUEUE_NEARFULL_MARGIN: usize = 24;
 pub(crate) const GX_CMD_QUEUE_NEARFULL_LOG_EVERY: usize = 64;
-pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_NEARFULL_HITS;
+pub(crate) use er_telemetry_core::counters::GX_CMD_QUEUE_NEARFULL_HITS;
 /// BUCKET-TABLE instrument (names the RETAINER class the producer histogram cannot: run 10d proved
 /// the drain pump FUN_141b3bdc0 dominates reserves by RESUBMITTING its context list each frame, so
 /// the leak is list membership). The pump's context (its param_1; latched by a thin entry hook at
@@ -1445,8 +1445,8 @@ pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_NEARFULL_HITS;
 /// bucket's submissions grow toward the 192 cap.
 pub(crate) const GX_CMD_PUMP_RVA: usize = 0x1b3bda0;
 pub(crate) static GX_CMD_PUMP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::GX_CMD_PUMP_INSTALLED;
-pub(crate) use er_telemetry::counters::GX_CMD_PUMP_CTX;
+pub(crate) use er_telemetry_core::counters::GX_CMD_PUMP_INSTALLED;
+pub(crate) use er_telemetry_core::counters::GX_CMD_PUMP_CTX;
 pub(crate) const GX_CMD_QUEUE_BUCKET_COUNT: usize = 0x6d;
 pub(crate) const GX_CMD_QUEUE_BUCKET_BEGIN_OFFSET: usize = 0x30;
 pub(crate) const GX_CMD_QUEUE_BUCKET_END_OFFSET: usize = 0x34;
@@ -1461,7 +1461,7 @@ pub(crate) const GX_CMD_QUEUE_BUCKET_WIDTH_SANE_MAX: i32 = 192;
 /// grown by >= STEP since the last snapshot, so every switch's peak-frame composition is diffable.
 pub(crate) const GX_CMD_QUEUE_PEAK_LOG_MIN: usize = 80;
 pub(crate) const GX_CMD_QUEUE_PEAK_LOG_STEP: usize = 8;
-pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_PEAK_LAST_LOGGED;
+pub(crate) use er_telemetry_core::counters::GX_CMD_QUEUE_PEAK_LAST_LOGGED;
 /// COMMAND-BYTE ARENA fill (user-reported render corruption during switch #3's return-title window,
 /// 2026-07-03): `reserve_command_queue_slot` allocates command BYTES from a bump arena at
 /// queue+0x40 (FUN_141c48e80: alloc counter at arena+0x14, limit at +0x20, cursor at +0x28;
@@ -1475,8 +1475,8 @@ pub(crate) const GX_CMD_ARENA_ALLOC_COUNT_OFFSET: usize = 0x14;
 pub(crate) const GX_CMD_ARENA_LIMIT_OFFSET: usize = 0x20;
 pub(crate) const GX_CMD_ARENA_CURSOR_OFFSET: usize = 0x28;
 /// Low-water sentinel: usize::MAX until the first sample lands.
-pub(crate) use er_telemetry::counters::GX_CMD_ARENA_MIN_REMAINING;
-pub(crate) use er_telemetry::counters::GX_CMD_ARENA_SWITCH_MIN_REMAINING;
+pub(crate) use er_telemetry_core::counters::GX_CMD_ARENA_MIN_REMAINING;
+pub(crate) use er_telemetry_core::counters::GX_CMD_ARENA_SWITCH_MIN_REMAINING;
 /// CSDelayDeleteMan PENDING-COUNT read (repeated-switch GX overflow root-cause probe, 2026-07-03).
 /// The profile-renderer teardown (`FUN_1409b2f00`) does NOT destroy the 10 old CSMenuProfModelRend
 /// per switch -- it hands each to CSDelayDeleteMan (`FUN_140e77540`) and nulls the table slot. The
@@ -1511,6 +1511,6 @@ pub(crate) const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe77490;
 /// ~switch #4). The reset now MOVES the pointer here (render thread, a plain store); the game-thread
 /// teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (thread-correct,
 /// same thread the native teardown runs on).
-pub(crate) use er_telemetry::counters::PROFILE_SPARE_ORPHAN;
+pub(crate) use er_telemetry_core::counters::PROFILE_SPARE_ORPHAN;
 /// Count of leaked spared renderers reclaimed via the native delete path (repeated-switch GX fix).
-pub(crate) use er_telemetry::counters::PROFILE_SPARE_ORPHANS_DELETED;
+pub(crate) use er_telemetry_core::counters::PROFILE_SPARE_ORPHANS_DELETED;

@@ -1433,7 +1433,7 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
 ) {
     const HEAP_LO: usize = 0x10000;
     const MAX_ROWS: usize = 16;
-    pub(crate) use er_telemetry::counters::OPTIONSETTING_ROW_LAST_LOG_KEY;
+    pub(crate) use er_telemetry_core::counters::OPTIONSETTING_ROW_LAST_LOG_KEY;
     if !actively_shown || current_dialog < HEAP_LO {
         return;
     }
@@ -1549,7 +1549,7 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
 /// entry so stale Quit-tab rows cannot remain cross-populated under the vanilla Game Options tab.
 /// Runs on the menu/game thread (the `MenuWindowJob::Run` hook) as required for GFx vcalls.
 pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize) {
-    pub(crate) use er_telemetry::counters::OPTIONSETTING_LAST_ACTIVE_TAB;
+    pub(crate) use er_telemetry_core::counters::OPTIONSETTING_LAST_ACTIVE_TAB;
     if option_window == 0 || option_window < OPTIONSETTING_WINDOW_MIN_PTR {
         return;
     }
@@ -1862,7 +1862,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 // web-UI edit may be applied from the async FrameBegin path or has to wait for the
                 // in-band row populate. Stamped here because this hook IS the per-frame run of that
                 // window's MenuWindowJob; nothing else in the process is that direct about it.
-                er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
+                er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
                     .fetch_add(1, Ordering::SeqCst);
                 SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
             }

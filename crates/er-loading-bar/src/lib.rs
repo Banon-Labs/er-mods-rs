@@ -4,7 +4,7 @@
 //! the loading-bar crate can be built and loaded as its own native DLL without
 //! dragging product hooks, autoload, save picking, portrait replacement, or
 //! product runtime state into the reusable crate. The D3D12 Present compositor
-//! lives in `er-loading-bar` for this validation slice; once proven, it can move
+//! lives in `er-loading-bar-core` for this validation slice; once proven, it can move
 //! behind a smaller shared compositor crate seam.
 
 use std::{
@@ -22,10 +22,10 @@ use std::{
 #[cfg(windows)]
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
-const LOG_FILE_NAME: &str = "er-loading-bar-dll.log";
+const LOG_FILE_NAME: &str = "er-loading-bar.log";
 #[cfg(windows)]
-const CRASH_LOG_FILE_NAME: &str = "er-loading-bar-dll-crash-log.txt";
-const FRAME_FILE_NAME: &str = "er-loading-bar-dll-frame.rgba";
+const CRASH_LOG_FILE_NAME: &str = "er-loading-bar-crash-log.txt";
+const FRAME_FILE_NAME: &str = "er-loading-bar-frame.rgba";
 const FRAME_MAGIC: &[u8; 8] = b"ERLBFR01";
 
 #[cfg(windows)]
@@ -108,14 +108,14 @@ pub unsafe extern "system" fn DllMain(
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_loading_bar_dll_host_stub() -> i32 {
+pub extern "C" fn er_loading_bar_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
 #[cfg(windows)]
 fn spawn_loading_bar_task(module_base: usize) {
     let _ = std::thread::Builder::new()
-        .name("er-loading-bar-dll".to_owned())
+        .name("er-loading-bar".to_owned())
         .spawn(move || publish_load_artifacts(module_base));
 }
 
@@ -125,7 +125,7 @@ fn publish_load_artifacts(module_base: usize) {
         &dir,
         format_args!(
             "loaded module_base=0x{module_base:x}; phase_count={}; renderer=d3d12-present-compositor; onscreen=1; artifact_frame=1",
-            er_loading_bar::PHASE_COUNT
+            er_loading_bar_core::PHASE_COUNT
         ),
     );
     if let Err(err) = write_smoke_frame(&dir) {
@@ -158,7 +158,7 @@ fn standalone_validation_frame(
 
     let loop_frame = present_frame_index % LOOP_FRAMES;
     let progress = MIN_PERMILLE + loop_frame * (MAX_PERMILLE - MIN_PERMILLE) / LOOP_FRAMES;
-    let phase = (present_frame_index / PHASE_FRAMES) % er_loading_bar::PHASE_COUNT;
+    let phase = (present_frame_index / PHASE_FRAMES) % er_loading_bar_core::PHASE_COUNT;
     let log_index = STANDALONE_FRAME_LOGS.fetch_add(1, Ordering::SeqCst);
     if log_index < 8 || log_index.is_power_of_two() {
         append_compositor_log(format_args!(
@@ -168,22 +168,22 @@ fn standalone_validation_frame(
     }
 
     let mut text = String::new();
-    er_loading_bar::LoadingLabel::new(
-        er_loading_bar::phase_label(phase),
+    er_loading_bar_core::LoadingLabel::new(
+        er_loading_bar_core::phase_label(phase),
         phase + 1,
-        er_loading_bar::PHASE_COUNT,
+        er_loading_bar_core::PHASE_COUNT,
         "STANDALONE D3D12 SMOKE",
         loop_frame + 1,
         LOOP_FRAMES,
     )
     .write_text(&mut text);
     let frame_width = (backbuffer_width.saturating_mul(9) / 10).max(1);
-    let rgba = er_loading_bar::render_label_bar_frame(
+    let rgba = er_loading_bar_core::render_label_bar_frame(
         frame_width,
         2,
         &text,
         progress,
-        er_loading_bar::BarStyle::default(),
+        er_loading_bar_core::BarStyle::default(),
     );
     let bottom_margin = (backbuffer_height / 24).clamp(12, 48);
     let dst_x = backbuffer_width.saturating_sub(rgba.width) / 2;
@@ -294,11 +294,17 @@ fn address_tag(addr: usize) -> String {
     format!("0x{addr:x}")
 }
 
-fn smoke_frame() -> er_loading_bar::RgbaFrame {
-    let label = er_loading_bar::LoadingLabel::new("STARTING UP", 0, 11, "DLL LOADED", 1, 1);
+fn smoke_frame() -> er_loading_bar_core::RgbaFrame {
+    let label = er_loading_bar_core::LoadingLabel::new("STARTING UP", 0, 11, "DLL LOADED", 1, 1);
     let mut text = String::new();
     label.write_text(&mut text);
-    er_loading_bar::render_label_bar_frame(640, 2, &text, 250, er_loading_bar::BarStyle::default())
+    er_loading_bar_core::render_label_bar_frame(
+        640,
+        2,
+        &text,
+        250,
+        er_loading_bar_core::BarStyle::default(),
+    )
 }
 
 fn write_smoke_frame(dir: &std::path::Path) -> std::io::Result<()> {
@@ -322,12 +328,12 @@ mod tests {
         assert_eq!(frame.width, 640);
         assert_eq!(
             frame.pixels.len(),
-            frame.width * frame.height * er_loading_bar::RGBA8_BPP
+            frame.width * frame.height * er_loading_bar_core::RGBA8_BPP
         );
         assert!(
             frame
                 .pixels
-                .as_chunks::<{ er_loading_bar::RGBA8_BPP }>()
+                .as_chunks::<{ er_loading_bar_core::RGBA8_BPP }>()
                 .0
                 .contains(&[226, 223, 214, 255])
         );

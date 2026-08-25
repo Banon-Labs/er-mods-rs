@@ -24,7 +24,7 @@
 //! * `os_entry` -- the two System>Quit entrypoints in the product shim
 //!   `startup_hooks/save_picker/save_picker_os_dialog.rs` (`os_open_save_picker_load`,
 //!   `os_open_save_dest_picker`). The comdlg32 mechanism they call now lives in
-//!   `er-save-picker::os_dialog`; this crate supplies the dim as its cover.
+//!   `er-save-picker-core::os_dialog`; this crate supplies the dim as its cover.
 //! * `save_flow` -- `startup_hooks/save_flow_boxes.rs` (790), `save_dest_identity.rs`
 //!   (465), `save_dest_commit.rs` (1286), and the `save_flow_tick` stage machine currently
 //!   at `experiments/lifecycle.rs`.
@@ -41,7 +41,7 @@
 //!
 //! "The Save Game menu row and the flow it drives" is this crate. "Save suppression and
 //! save-redirect internals" is NOT: `er-save-suppress` is already its own crate with its
-//! own standalone `er-save-disable-dll`, and `experiments/save_redirect/*` stays in the
+//! own standalone `er-save-disable`, and `experiments/save_redirect/*` stays in the
 //! product. This crate only asks, through the seam, for the one-shot bypass that makes the
 //! Save Game row the single path that really writes.
 //!

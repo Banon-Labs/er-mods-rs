@@ -127,12 +127,12 @@ EOF
 }
 
 # me3_write_telemetry_only_profile PROFILE_PATH TELEMETRY_DLL_PATH
-# Writes a v1 ModProfile that loads ONLY the standalone er_telemetry_dll.dll (the
-# read-side telemetry-only DLL from crates/er-telemetry-dll). Runs alone -- no
+# Writes a v1 ModProfile that loads ONLY the standalone er_telemetry.dll (the
+# read-side telemetry-only DLL from crates/er-telemetry). Runs alone -- no
 # product DLL, no hooks -- so it emits er-telemetry-standalone.json from RAM/PE
 # reads only. Build the DLL with:
-#   cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll
-# -> target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll
+#   cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry
+# -> target/x86_64-pc-windows-msvc/release/er_telemetry.dll
 me3_write_telemetry_only_profile() {
   local profile_path="$1" telemetry_dll="$2"
   cat > "$profile_path" <<EOF
@@ -148,7 +148,7 @@ EOF
 
 # me3_append_native PROFILE_PATH DLL_PATH
 # Appends one additional [[natives]] block to an existing profile. Used to add the
-# standalone er_telemetry_dll.dll as a 4th native alongside the product +
+# standalone er_telemetry.dll as a 4th native alongside the product +
 # reload-trace + input-harness DLLs (companion DLLs are enabled purely by presence
 # in the profile; product must be listed FIRST so its er_effects_union_register
 # export is mapped before companions resolve it).

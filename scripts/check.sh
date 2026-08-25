@@ -50,7 +50,7 @@ python3 "$repo_root/scripts/check-env-gate-comments.py"
 python3 "$repo_root/scripts/test-env-gate-comments.py"
 python3 "$repo_root/scripts/check-marker-file-gates.py"
 python3 "$repo_root/scripts/test-marker-file-gates.py"
-python3 "$repo_root/scripts/check-reload-trace-dll-policy.py" --audit
+python3 "$repo_root/scripts/check-reload-trace-policy.py" --audit
 python3 "$repo_root/scripts/check-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render-smoke-verdict.py"
@@ -134,7 +134,7 @@ python3 "$repo_root/scripts/check-rva-alias-drift.py"
 # Keep its typed definition in er-game-base and reject copied numeric offsets/formulas elsewhere.
 python3 "$repo_root/scripts/check-profile-summary-layout.py" --selftest
 python3 "$repo_root/scripts/check-profile-summary-layout.py"
-# A log describes exactly ONE process run. er-invasion-warp-dll appended to a fixed filename, so
+# A log describes exactly ONE process run. er-invasion-warp appended to a fixed filename, so
 # twelve launches became one 565KB file and a count over it read as one run's behaviour. Every
 # appending opener must route through er-game-base's one-shot truncation. Selftest first, so the
 # gate is never trusted on its own say-so.
@@ -214,11 +214,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-loader
 # 120,959-tick churn shape and requires exactly one resolver call plus zero repeated rejections.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-redirect --lib
 
-# er-loading-portrait's host-portable stats-line layer: proves the UNIFIED loading-screen
+# er-loading-portrait-core's host-portable stats-line layer: proves the UNIFIED loading-screen
 # stats layout (one five-line panel whether the values came from the save slot or live
 # PlayerGameData, bd er-effects-rs-qic7). The bitmap-geometry test is corpus-gated on the
 # extracted menu font (ER_FONT_GFX_PATH overridable) and skips when absent.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait-core
 
 # The save-picker crate split (docs/plans/save-picker-crate-extraction.md). The row model
 # and the quit-row resolver are pure logic, so the HOST run is their real coverage -- the
@@ -226,7 +226,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
 # become `cargo test`-able. The DLL shells' tests prove the host seam installs exactly
 # once. `check-rust-build.sh` keeps all four building for the shipping target.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
-	-p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll
+	-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu
 
 # The world-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). The
 # catalog, the block grouping, the BlockId disk/memory byte-order conversion and the on-disk
@@ -235,23 +235,23 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # `.aip` files skips when the local extraction is absent (game-derived bytes are never
 # versioned). `check-rust-build.sh` keeps both crates building for the shipping target.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
-	-p er-invasion-warp -p er-invasion-warp-dll
+	-p er-invasion-warp-core -p er-invasion-warp
 
 # The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
 # grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
 # it had 23 tests, so the whole mapping could regress silently -- the game-side crates
-# (er-build-import-runtime, er-build-import-dll) are windows-only and prove none of it. There is
+# (er-build-import-runtime, er-build-import) are windows-only and prove none of it. There is
 # nothing to run here for those two: `check-rust-build.sh` keeps them building for the shipping
 # target, and the DLL half is proven in game.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
 
-# er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
+# er-telemetry-core's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count
 # consistency logic is pure integer arithmetic with no platform semantics, so the host run is the
 # real coverage; the cross-compile check in check-rust-build.sh keeps it building for the shipping
 # target too.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 
 # HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
 # in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game

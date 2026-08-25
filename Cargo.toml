@@ -4,65 +4,65 @@ members = [
   "crates/er-hook",
   "crates/er-game-base",
   "crates/er-boot-profiler",
-  "crates/er-telemetry",
+  "crates/er-telemetry-core",
   "crates/er-title-flow",
-  "crates/er-telemetry-dll",
+  "crates/er-telemetry",
+  "crates/er-crash-logging-core",
   "crates/er-crash-logging",
-  "crates/er-crash-logging-dll",
-  "crates/er-reload-trace-dll",
-  "crates/er-input-harness-dll",
+  "crates/er-reload-trace",
+  "crates/er-input-harness",
   "crates/er-ags-stub",
-  "crates/er-inventory-sort-dll",
-  "crates/er-better-refills-dll",
+  "crates/er-inventory-sort",
+  "crates/er-better-refills",
   "crates/er-armament-icons",
-  "crates/er-net-effects-dll",
+  "crates/er-net-effects",
   # Hotkey toggle that keeps every loaded enemy under the Charming Branch SpEffect. Standalone
   # shell with no product dependency: a DirectInput keyboard read and a FrameBegin sweep.
-  "crates/er-charm-enemies-dll",
-  "crates/er-player-name-filter-dll",
-  "crates/er-save-disable-dll",
+  "crates/er-charm-enemies",
+  "crates/er-player-name-filter",
+  "crates/er-save-disable",
   "crates/er-save-suppress",
   "crates/mushroom-man-runtime",
-  "crates/er-death-persist-dll",
+  "crates/er-death-persist",
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-scaleform-hooks",
-  "crates/er-loading-bar",
+  "crates/er-loading-bar-core",
   "crates/er-d3d12-compositor",
-  "crates/er-loading-bar-dll",
+  "crates/er-loading-bar",
+  "crates/er-loading-portrait-core",
   "crates/er-loading-portrait",
-  "crates/er-loading-portrait-dll",
   # Save-picker crate extraction (docs/plans/save-picker-crate-extraction.md).
   # (A) the DLL-drawn boot picker + the shared row model + the OS-native dialog surface;
   # (B) the customized System>Quit menu, which depends on (A) one way. The product links
-  # er-quit-menu into er_effects_rs.dll; er-quit-menu-dll is an optional harness only.
+  # er-quit-menu-core into er_effects_rs.dll; er-quit-menu is an optional harness only.
+  "crates/er-save-picker-core",
   "crates/er-save-picker",
-  "crates/er-save-picker-dll",
   "crates/er-save-redirect",
+  "crates/er-quit-menu-core",
   "crates/er-quit-menu",
-  "crates/er-quit-menu-dll",
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
   # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
-  # split as er-loading-portrait / er-loading-portrait-dll.
+  # split as er-loading-portrait-core / er-loading-portrait.
   # The build watermark every profile draws in the top-right: which mods are loaded, and whether
   # any of them is an older PUBLISHED release than main's tip.
+  "crates/er-build-watermark-core",
   "crates/er-build-watermark",
-  "crates/er-build-watermark-dll",
+  "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
-  "crates/er-invasion-warp-dll",
   # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
   # no product dependency: every guard is a null-container intercept on a vanilla function.
-  "crates/er-seamless-bugfixes-dll",
+  "crates/er-seamless-bugfixes",
   # Import a build from an er-build-planner share link: pure host-side data
   # transformation (planner JSON -> item grants), no game or network deps.
-  "crates/er-build-import",
+  "crates/er-build-import-core",
   # Game-side half of the importer (catalogue/grant/equip/stats + the WinHTTP fetch), shared by the
   # standalone shell below and the product DLL's System>Quit "Load Build from URL" row.
   "crates/er-build-import-runtime",
-  "crates/er-build-import-dll",
+  "crates/er-build-import",
   # The other direction: WRITE an er-build-planner `?i=` share link from a character
   # document. Self-contained links carry the whole build, so producing one needs no account
-  # and no network -- pure host-side data transformation, same as er-build-import.
+  # and no network -- pure host-side data transformation, same as er-build-import-core.
   "crates/er-build-export",
   "crates/er-safe-input",
   "crates/er-save-loader",

@@ -10,7 +10,7 @@
 //! It resolves the TitleStep owner via its OWN vtable-gated address-space scan
 //! cached in a module static (ported from `find_title_owner_by_vtable`
 //! experiments/title/profile_select_flow.rs:717 and the already-decoupled port
-//! er-input-harness-dll/src/title_scan.rs) -- it does NOT read the product's
+//! er-input-harness/src/title_scan.rs) -- it does NOT read the product's
 //! `TITLE_OWNER_PTR`/`PRODUCT_CORE_LAST_TITLE_DIALOG`. All field reads are
 //! fault-safe `safe_read_*`; NO vtable function is ever called.
 
@@ -22,14 +22,14 @@ use er_game_base::mem::{safe_read_i32, safe_read_u8, safe_read_usize, vtable_in_
 // --- RVAs / offsets off the game image base (0x140000000). Sources cited inline. ---
 /// TitleStep owner vtable RVA -- `[owner+0x00] == base+this`. Source:
 /// constants/anti_debug.rs `TitleSessionRva::TitleOwnerVtable` (== the value the
-/// decoupled er-input-harness-dll/src/title_scan.rs:31 also pins).
+/// decoupled er-input-harness/src/title_scan.rs:31 also pins).
 const TITLE_OWNER_VTABLE_RVA: usize = 0x2b63bb0;
 /// Per-instance state-dispatch table RVA -- `[owner+0x10] == base+this`; the
 /// discriminator that rejects stray `.data` matches on the vtable value alone.
-/// Source: er-input-harness-dll/src/title_scan.rs:34.
+/// Source: er-input-harness/src/title_scan.rs:34.
 const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d71580;
 /// Live title state (`owner+0x48`, i32): 10 = MenuJobWait (PAB + menu), 11 =
-/// Finish, 6 = in-world. Source: er-input-harness-dll/src/title_scan.rs:36.
+/// Finish, 6 = in-world. Source: er-input-harness/src/title_scan.rs:36.
 const TITLE_OWNER_STATE_48_OFFSET: usize = 0x48;
 /// State-table pointer slot within the owner (`owner+0x10`). Source:
 /// constants/anti_debug.rs `TITLE_OWNER_INSTANCE_TABLE_OFFSET`.
@@ -73,7 +73,7 @@ const TFC_NOT_RELEASE_FLAG_18C_OFFSET: usize = 0x18c;
 /// (own_load/loaders.rs:677).
 const TITLE_OWNER_MENUJOB_130_OFFSET: usize = 0x130;
 
-// --- owner-scan tuning (ported from er-input-harness-dll/src/title_scan.rs) ---
+// --- owner-scan tuning (ported from er-input-harness/src/title_scan.rs) ---
 /// One `ReadProcessMemory` per 64 KiB keeps the address-space walk fast.
 const SCAN_CHUNK: usize = 0x10000;
 /// Upper scan bound (top of the 47-bit user address space).

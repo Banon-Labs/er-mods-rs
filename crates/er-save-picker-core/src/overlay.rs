@@ -2,7 +2,7 @@
 //
 // Moved from `er-effects-rs/src/experiments/gpu_readback/save_picker_overlay.rs` as S4 of
 // the save-picker extraction. Product/game state crosses through `host.rs`; raster primitives
-// come from `er-loading-bar`, matching the boot bar's glyphs and rectangles.
+// come from `er-loading-bar-core`, matching the boot bar's glyphs and rectangles.
 
 // The keyboard hook, the OS input polling and the window geometry reads below are
 // `#[cfg(windows)]`, so a HOST build compiles their helpers, key constants and imports with
@@ -32,44 +32,44 @@ use crate::model::{self, PickerActivation, PickerStatusMessage, SavePickerModel}
 use crate::slots::{SaveSlotInfo, parse_save_character_slots};
 
 const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
-const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar::GLYPH_ADV;
-const BOOT_VIEW_GLYPH_H: usize = er_loading_bar::GLYPH_H;
+const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar_core::GLYPH_ADV;
+const BOOT_VIEW_GLYPH_H: usize = er_loading_bar_core::GLYPH_H;
 
 // The boot view's text and rects ARE the shared raster primitives -- these local names are
 // aliases, not wrappers, so the picker and the boot bar cannot drift apart visually. Aliasing
 // rather than forwarding also keeps the upstream arity out of this crate's own signatures.
-use er_loading_bar::draw_text_rgb as boot_draw_text_rgb;
-use er_loading_bar::fill_rect_rgb as boot_fill_rect;
+use er_loading_bar_core::draw_text_rgb as boot_draw_text_rgb;
+use er_loading_bar_core::fill_rect_rgb as boot_fill_rect;
 
 /// Cached `user32!GetAsyncKeyState` / `xinput!XInputGetState` resolutions (0 = unresolved, !0 = tried-and-absent).
-pub use er_telemetry::counters::GET_ASYNC_KEY_STATE_PROC;
+pub use er_telemetry_core::counters::GET_ASYNC_KEY_STATE_PROC;
 /// 1 once the startup overlay picker has opened its model for this pending no-save boot. Distinct
 /// from `SAVE_PICKER_MODE_ACTIVE` (the in-world System>Quit native-window picker).
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_ARMED;
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_DRAW_HITS;
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_HELD_POLLS;
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_INPUT_HITS;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_ARMED;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_DRAW_HITS;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_HELD_POLLS;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_INPUT_HITS;
 /// Telemetry oracles.
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_OPEN_COUNT;
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_PICK_COUNT;
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_OPEN_COUNT;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_PICK_COUNT;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT;
 /// Diagnostics for the "inputs eaten during load" report: total input polls the dedicated thread ran
 /// (proves the thread is alive and at cadence, independent of the ~4 fps Present redraw), and polls
 /// where ANY navigation key/button was down (proves the background thread can actually READ OS input
 /// under Wine/Proton -- if this stays ~0 while the user mashes, a background thread cannot see the
 /// keys and input must move back to a pumped thread).
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_POLL_COUNT;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_POLL_COUNT;
 /// Previous frame's pressed-action bitmask (edge detection; see `PickerAction`).
-pub use er_telemetry::counters::SAVE_PICKER_OVERLAY_PREV_ACTIONS;
-pub use er_telemetry::counters::XINPUT_GET_STATE_PROC;
+pub use er_telemetry_core::counters::SAVE_PICKER_OVERLAY_PREV_ACTIONS;
+pub use er_telemetry_core::counters::XINPUT_GET_STATE_PROC;
 
 /// The autoload slot the character sub-picker chose (`usize::MAX` = none yet). The product-core
 /// callsite reads this as the load target when no slot is configured.
-pub use er_telemetry::counters::MISSING_SAVE_PICKER_SELECTED_SLOT;
+pub use er_telemetry_core::counters::MISSING_SAVE_PICKER_SELECTED_SLOT;
 /// Highlighted row in the character sub-picker.
-pub use er_telemetry::counters::SAVE_PICKER_CHAR_CURSOR;
+pub use er_telemetry_core::counters::SAVE_PICKER_CHAR_CURSOR;
 /// Overlay stage: 0 = browsing files, 1 = choosing a character (save slot) from the picked file.
-pub use er_telemetry::counters::SAVE_PICKER_STAGE_CHARS;
+pub use er_telemetry_core::counters::SAVE_PICKER_STAGE_CHARS;
 
 /// The picked save awaiting a character selection: its path and the active character slots parsed
 /// from its bytes.
@@ -704,7 +704,7 @@ static SAVE_PICKER_KBD_HOOK_ACTIVE: std::sync::atomic::AtomicBool =
 static SAVE_PICKER_KBD_HOOK_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Telemetry: key-down events the LL hook applied (proves event-driven capture fires under Wine).
-pub use er_telemetry::counters::SAVE_PICKER_KBD_HOOK_HITS;
+pub use er_telemetry_core::counters::SAVE_PICKER_KBD_HOOK_HITS;
 
 /// WH_KEYBOARD_LL callback: every keystroke arrives here as an OS event, independent of the game's
 /// ~4fps boot Present/task rate, so no press is lost or collapsed. Applies one action per physical

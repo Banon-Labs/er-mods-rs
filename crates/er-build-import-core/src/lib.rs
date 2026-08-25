@@ -11,7 +11,7 @@
 //! dependencies, so the whole mapping is provable with `cargo test`.
 //!
 //! ```
-//! use er_build_import::{catalog::{entry, Kind, MapCatalog}, model, plan::plan};
+//! use er_build_import_core::{catalog::{entry, Kind, MapCatalog}, model, plan::plan};
 //!
 //! let doc = model::parse(r#"{
 //!     "name": "example", "weaponUpgrade": 25,
@@ -70,10 +70,10 @@ pub const BUILD_URL_KEY: &str = "build_url";
 ///
 /// ```
 /// assert_eq!(
-///     er_build_import::build_url_from_config("# comment\nbuild_url = 'x?b=abc'\n"),
+///     er_build_import_core::build_url_from_config("# comment\nbuild_url = 'x?b=abc'\n"),
 ///     Some("x?b=abc"),
 /// );
-/// assert_eq!(er_build_import::build_url_from_config("slot = 0\n"), None);
+/// assert_eq!(er_build_import_core::build_url_from_config("slot = 0\n"), None);
 /// ```
 pub fn build_url_from_config(contents: &str) -> Option<&str> {
     for line in contents.lines() {
@@ -160,7 +160,7 @@ impl UrlRejection {
 /// trailing space is a slip, not a different link.
 ///
 /// ```
-/// use er_build_import::{validate_build_url, UrlRejection};
+/// use er_build_import_core::{validate_build_url, UrlRejection};
 /// assert_eq!(validate_build_url("https://p/?b=af97a9da874151"), Ok("af97a9da874151"));
 /// assert_eq!(validate_build_url("https://p/?i=eyJ2IjoxfQ"), Err(UrlRejection::SelfContained));
 /// assert_eq!(validate_build_url("https://p/?b="), Err(UrlRejection::MalformedShareId));

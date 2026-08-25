@@ -4,7 +4,7 @@
 //! a first-chance vectored exception handler, fresh-per-process crash log files,
 //! fault-time register/stack/module snapshots, and low-frequency breadcrumbs.
 //! Feature DLLs can depend on this crate and mark phases/breadcrumbs; the sibling
-//! `er-crash-logging-dll` crate is a tiny standalone ME3-loadable shell.
+//! `er-crash-logging` crate is a tiny standalone ME3-loadable shell.
 
 use std::{fmt, path::PathBuf, sync::OnceLock};
 

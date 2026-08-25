@@ -29,8 +29,8 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         START.call_once(|| {
-            er_crash_logging::install(
-                er_crash_logging::CrashLogConfig {
+            er_crash_logging_core::install(
+                er_crash_logging_core::CrashLogConfig {
                     log_file_name: "er-crash-log.txt",
                     latest_file_name: "er-crash-latest.txt",
                     breadcrumb_file_name: "er-crash-breadcrumb-latest.txt",
@@ -39,22 +39,25 @@ pub unsafe extern "system" fn DllMain(
                     hang_report_file_name: "er-crash-hang-latest.txt",
                     hang_minidump_file_name: "er-crash-hang-minidump.dmp",
                     hang_stall_seconds: HANG_STALL_SECONDS,
-                    module_label: "er-crash-logging-dll",
+                    module_label: "er-crash-logging",
                 },
                 module as usize,
             );
-            er_crash_logging::write_breadcrumb("dll-attach", format_args!("standalone loaded"));
+            er_crash_logging_core::write_breadcrumb(
+                "dll-attach",
+                format_args!("standalone loaded"),
+            );
         });
     }
     if reason == DLL_PROCESS_DETACH {
         // Distinguishes an orderly shutdown from a process that died where it stood.
-        er_crash_logging::note_process_detach();
+        er_crash_logging_core::note_process_detach();
     }
     DLL_MAIN_SUCCESS
 }
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_crash_logging_dll_host_stub() -> i32 {
+pub extern "C" fn er_crash_logging_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }

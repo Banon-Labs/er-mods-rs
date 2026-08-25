@@ -3,7 +3,7 @@
 //! constants/gaitem_restore.rs, experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs,
 //! experiments/startup_hooks/title_resources_stats_text.rs) in the portrait crate split.
 //! Values are byte-identical to the product originals; the product re-imports them
-//! through the `er_loading_portrait::*` shims.
+//! through the `er_loading_portrait_core::*` shims.
 
 use crate::prelude::*;
 
@@ -42,9 +42,9 @@ pub const NOW_LOADING_HELPER_CTOR_RVA: usize = 0x2a2020;
 pub const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
 pub static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub use er_telemetry::counters::NOW_LOADING_HELPER_CTOR_HITS;
-pub use er_telemetry::counters::NOW_LOADING_HELPER_HOOKS_INSTALLED;
-pub use er_telemetry::counters::NOW_LOADING_HELPER_UPDATE_HITS;
+pub use er_telemetry_core::counters::NOW_LOADING_HELPER_CTOR_HITS;
+pub use er_telemetry_core::counters::NOW_LOADING_HELPER_HOOKS_INSTALLED;
+pub use er_telemetry_core::counters::NOW_LOADING_HELPER_UPDATE_HITS;
 pub static NOW_LOADING_HELPER_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub static NOW_LOADING_HELPER_LAST_MENU_INDEX: AtomicUsize =
@@ -62,9 +62,9 @@ pub static NOW_LOADING_HELPER_LAST_FLAGS: AtomicUsize =
 /// visible loading bar reaching 100%, later and more exact than TimeAct/world-ready.
 pub const LOADING_SCREEN_UPDATE_RVA: usize = 0x90a6b0;
 pub static LOADING_SCREEN_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub use er_telemetry::counters::LOADING_SCREEN_UPDATE_HITS;
-pub use er_telemetry::counters::LOADING_SCREEN_UPDATE_HOOK_INSTALLED;
-pub use er_telemetry::counters::LOADING_SCREEN_UPDATE_LAST_MS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_UPDATE_HITS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_UPDATE_HOOK_INSTALLED;
+pub use er_telemetry_core::counters::LOADING_SCREEN_UPDATE_LAST_MS;
 /// Generic Scaleform label transition wrapper (deobf/live `0x1407499e0`, RVA `0x7499e0`).
 /// Loading GFx RE (2026-07-25) proved the final native loading fadeout is authored as a
 /// top-level black-plate alpha ramp in the movie timeline. Hook the generic label transition and
@@ -74,10 +74,10 @@ pub const SCALEFORM_LABEL_GOTO_RVA: usize = 0x7499e0;
 pub static SCALEFORM_LABEL_GOTO_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub const LOADING_SCREEN_GFX_FADEOUT_RVA: usize = 0x90a0a0;
 pub static LOADING_SCREEN_GFX_FADEOUT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_FIRST_MS;
-pub use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_HITS;
-pub use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED;
-pub use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_FIRST_MS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_HITS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED;
+pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
 /// `CS::KnowledgeLoadingScreen` tip-refresh (dump `FUN_14090a3f0` -> deobf/live `0x14090a300`, RVA
 /// 0x90a300). `fn(this)` -- picks the next tip msg id and SetTexts the title (`this+0xb28`) + body
 /// (`this+0xb88`). er-effects-rs-jsm PIVOT: we NO-OP it (skip the original) so the native tip title/body
@@ -85,8 +85,8 @@ pub use er_telemetry::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
 /// the widget ctor so even the ctor's one-shot initial tip is suppressed.
 pub const KNOWLEDGE_TIP_REFRESH_RVA: usize = 0x90a300;
 pub static KNOWLEDGE_TIP_REFRESH_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub use er_telemetry::counters::KNOWLEDGE_TIP_REFRESH_INSTALLED;
-pub use er_telemetry::counters::KNOWLEDGE_TIP_SUPPRESSED_HITS;
+pub use er_telemetry_core::counters::KNOWLEDGE_TIP_REFRESH_INSTALLED;
+pub use er_telemetry_core::counters::KNOWLEDGE_TIP_SUPPRESSED_HITS;
 /// `CS::KnowledgeLoadingScreen` tip-text SetText handles (CSScaleformValue): title `this+0xb28`
 /// ('Main/Knowledge/IetmName/Text_0'), body `this+0xb88` ('Main/Knowledge/ItemInfo/Text_0'). The
 /// suppression detour SetTexts both to empty after the original runs. (bd loading-tip-text-pipeline-RE.)
@@ -104,22 +104,22 @@ pub const KNOWLEDGE_TIP_BODY_HANDLE_OFFSET: usize = 0xb88;
 /// (bd loading-keyguide-and-tip-advance-RE-2026-07-06.)
 pub const KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA: usize = 0x90a0c0;
 pub static KNOWLEDGE_TIP_ADVANCE_ENABLED_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub use er_telemetry::counters::KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED;
-pub use er_telemetry::counters::KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS;
+pub use er_telemetry_core::counters::KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED;
+pub use er_telemetry_core::counters::KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS;
 
 pub static LOADING_SCREEN_LAST_THIS: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub static LOADING_SCREEN_LAST_DATA: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub use er_telemetry::counters::LOADING_SCREEN_BAR_CURRENT_FRAME;
-pub use er_telemetry::counters::LOADING_SCREEN_BAR_ENABLED;
-pub use er_telemetry::counters::LOADING_SCREEN_BAR_FINAL_HITS;
-pub use er_telemetry::counters::LOADING_SCREEN_BAR_MAX_FRAME;
-pub use er_telemetry::counters::LOADING_SCREEN_BAR_PROGRESS_PERMILLE;
+pub use er_telemetry_core::counters::LOADING_SCREEN_BAR_CURRENT_FRAME;
+pub use er_telemetry_core::counters::LOADING_SCREEN_BAR_ENABLED;
+pub use er_telemetry_core::counters::LOADING_SCREEN_BAR_FINAL_HITS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_BAR_MAX_FRAME;
+pub use er_telemetry_core::counters::LOADING_SCREEN_BAR_PROGRESS_PERMILLE;
 /// `CS::LoadingScreen::Update` sets this byte after the post-100%-bar countdown elapses, calls the
 /// owning MenuWindow result callback, and resets the `LoadingScreenData`. This is later than Gauge_3's
 /// terminal frame and matches the native loading-screen close handoff more closely than "bar is full".
-pub use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT;
-pub use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT_FIRST_MS;
-pub use er_telemetry::counters::LOADING_SCREEN_CLOSE_SENT_HITS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_CLOSE_SENT;
+pub use er_telemetry_core::counters::LOADING_SCREEN_CLOSE_SENT_FIRST_MS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_CLOSE_SENT_HITS;
 pub const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
 pub const LOADING_SCREEN_FINISH_SENT_OFFSET: usize = 0xa44;
 pub const LOADING_SCREEN_GAUGE_COMPONENT_OFFSET: usize = 0xa48;

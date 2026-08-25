@@ -341,7 +341,7 @@ static PROFILE_OFFSCREEN_SETTLE_INNERS: [AtomicUsize; 4] = [
     AtomicUsize::new(0),
     AtomicUsize::new(0),
 ];
-pub use er_telemetry::counters::PROFILE_OFFSCREEN_SETTLE_COUNT;
+pub use er_telemetry_core::counters::PROFILE_OFFSCREEN_SETTLE_COUNT;
 
 unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -423,10 +423,10 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // FPS-ROOT-...-2026-07-22: portrait scan 8x on load1 vs ~3400x on reloads). Switch epochs
     // (cur != 0) keep the per-epoch stop exactly as merged.
     {
-        let cur = er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+        let cur = er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
             .load(Ordering::SeqCst);
         if cur != 0
-            && er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
+            && er_telemetry_core::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
         {
             PROFILE_LOOKAT_REALTIME.store(false, Ordering::SeqCst);
             return;
@@ -571,7 +571,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 // an idle title screen. This stamps the exact completion so the theory is measured,
                 // not inferred.
                 {
-                    pub use er_telemetry::counters::MODEL_WAS_LIVE;
+                    pub use er_telemetry_core::counters::MODEL_WAS_LIVE;
                     let m = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
                         .unwrap_or(0);
                     let live_now = (m != 0 && m != null) as usize;

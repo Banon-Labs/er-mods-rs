@@ -24,7 +24,7 @@ use crate::prelude::*;
 /// the isolated overlay -- distinct from `STATS_TEXT_BUILT` (lines built on the game thread). NOTE per the
 /// behavioral-feature-proof rule: this proves the composite RAN, not that the pixels look right; visual
 /// acceptability is the user's call from the captured frame.
-pub use er_telemetry::counters::OVERLAY_STATS_DRAW_HITS;
+pub use er_telemetry_core::counters::OVERLAY_STATS_DRAW_HITS;
 
 /// True when the overlay should composite the loading-screen stats block: whenever a stats bitmap exists
 /// (the game thread has built readable lines), EXCEPT while the save picker owns the screen (the picker

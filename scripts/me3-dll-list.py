@@ -17,7 +17,7 @@ Modes:
     --pairs        ->  er-effects-rs:er_effects_rs ...   (one per line)
 
 Note the artifact name is NOT the package name with dashes swapped for
-underscores -- four crates override `[lib] name` (er-better-refills-dll produces
+underscores -- four crates override `[lib] name` (er-better-refills produces
 er_better_refills.dll, and so on), which is why the array stores both halves.
 """
 

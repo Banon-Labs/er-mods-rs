@@ -63,7 +63,7 @@
 //! That distinction is the point: ersc is Themida-protected and an inline patch there is
 //! unproven-safe, whereas Steam's own interface is ordinary code this DLL already calls into.
 
-use er_invasion_warp::invasion_warp::BlockKey;
+use er_invasion_warp_core::invasion_warp::BlockKey;
 
 /// The lobby key this DLL publishes the host's current map under.
 ///
@@ -290,7 +290,7 @@ mod live {
         REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR, USER_GET_STEAM_ID_SLOT,
         hunt_filter_value, hunt_refusal, pending_publish,
     };
-    use er_invasion_warp::invasion_warp::BlockKey;
+    use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -361,7 +361,7 @@ mod live {
 
     fn current_block() -> Option<BlockKey> {
         let base = er_game_base::mem::game_module_base().ok()?;
-        let raw = unsafe { er_invasion_warp::warp::current_block_id(base) }?;
+        let raw = unsafe { er_invasion_warp_core::warp::current_block_id(base) }?;
         Some(BlockKey::from_raw(raw))
     }
 
@@ -710,7 +710,7 @@ mod live {
         }
         let config = crate::local_invasion_filter::current_config_snapshot()?;
         let pooled =
-            er_invasion_warp::lobby_pool::pooled_lobby_key(config.dll_users_only, original)?;
+            er_invasion_warp_core::lobby_pool::pooled_lobby_key(config.dll_users_only, original)?;
         if !POOL_ANNOUNCED.swap(true, Ordering::SeqCst) {
             crate::standalone_log(format_args!(
                 "lobby-pool: dll_users_only is ON -- Seamless's match key {} becomes {}. You will \
@@ -771,7 +771,7 @@ mod live {
             return;
         };
         let value = if wanted {
-            match er_invasion_warp::lobby_pool::pooled_lobby_key(true, &vanilla) {
+            match er_invasion_warp_core::lobby_pool::pooled_lobby_key(true, &vanilla) {
                 Some(pooled) => pooled,
                 None => return,
             }

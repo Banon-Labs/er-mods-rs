@@ -12,7 +12,7 @@ use crate::{duration_filter::PermanentEffects, log::net_effects_log, stacked_con
 
 const CONFIG_FILE_NAME: &str = "er-net-effects.toml";
 const DEFAULT_CONFIG_TOML: &str = r#"# er-net-effects standalone DLL configuration.
-# The DLL is optional; include er_net_effects_dll.dll as its own ME3 native when
+# The DLL is optional; include er_net_effects.dll as its own ME3 native when
 # you want keyboard-controlled network-synced SpEffect application.
 network_sync = true
 # Start with the visible selector overlay shown. Press Alt+Numpad0,

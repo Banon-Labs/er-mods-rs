@@ -143,12 +143,12 @@ mod tests {
     fn a_behind_row_is_hoisted_above_the_quiet_ones() {
         let identities = [
             identity("er_effects_rs.dll", "ba46f81cc930"),
-            identity("er_invasion_warp_dll.dll", "c1adc6c89a49"),
-            identity("er_quit_menu_dll.dll", "ba46f81cc930+dirty"),
+            identity("er_invasion_warp.dll", "c1adc6c89a49"),
+            identity("er_quit_menu.dll", "ba46f81cc930+dirty"),
         ];
         let rows = rows(&identities, &published());
         assert!(
-            rows[0].text.starts_with("er_invasion_warp_dll.dll"),
+            rows[0].text.starts_with("er_invasion_warp.dll"),
             "the behind row was not hoisted: {:?}",
             rows[0].text
         );

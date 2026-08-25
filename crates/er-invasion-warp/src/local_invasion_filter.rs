@@ -67,12 +67,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
-use er_invasion_warp::local_invasion::{
+use er_invasion_warp_core::local_invasion::{
     InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocalInvasionMode, LocationChoice,
     RejectReason, Verdict,
 };
-use er_invasion_warp::local_invasion_config::{CONFIG_FILE_NAME, DEFAULT_CONFIG_TOML, HotConfig};
-use er_invasion_warp::param_row::PinAppearance;
+use er_invasion_warp_core::local_invasion_config::{
+    CONFIG_FILE_NAME, DEFAULT_CONFIG_TOML, HotConfig,
+};
+use er_invasion_warp_core::param_row::PinAppearance;
 
 /// ERSC RVAs and their opening bytes, read out of the shipped `ersc.dll` (Seamless Co-op v1.9.9,
 /// image base `0x180000000`) on 2026-08-05 -- not copied from a decompile listing. Every one is
@@ -217,8 +219,8 @@ static LAST_TRANSITION_TICK: AtomicU64 = AtomicU64::new(0);
 static LAST_TRANSITION_MS: AtomicU64 = AtomicU64::new(0);
 /// Decides which rejections are worth announcing. Behind a mutex because the decision reads and
 /// updates "what did we last say" together.
-static REJECT_NOTICE: Mutex<er_invasion_warp::reject_notice::RejectNotice> =
-    Mutex::new(er_invasion_warp::reject_notice::RejectNotice::new());
+static REJECT_NOTICE: Mutex<er_invasion_warp_core::reject_notice::RejectNotice> =
+    Mutex::new(er_invasion_warp_core::reject_notice::RejectNotice::new());
 /// Set once the banner has failed, so a missing notice is reported one time instead of every 20
 /// seconds for the rest of the session.
 static NOTICE_FAILED: AtomicBool = AtomicBool::new(false);
@@ -304,8 +306,8 @@ fn refresh_config() {
                 outcome.config.blocked_blocks.len(),
                 // Which keys are actually live. Without this a mistyped name that happened to parse
                 // into a DIFFERENT valid key looks exactly like the feature not working.
-                er_invasion_warp::keybind::key_name(outcome.config.mark_key),
-                er_invasion_warp::keybind::key_name(outcome.config.unmark_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.mark_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
             ));
         }
         // SAY THAT THE TYPED NAMES DO NOTHING YET. `named_locations` is parsed and stored but never
@@ -1042,7 +1044,7 @@ pub fn advertisement_lobby_id() -> Option<u64> {
 #[cfg(windows)]
 fn current_anchor() -> Option<InvasionAnchor> {
     let base = er_game_base::mem::game_module_base().ok()?;
-    let block = unsafe { er_invasion_warp::warp::current_block_id(base) }?;
+    let block = unsafe { er_invasion_warp_core::warp::current_block_id(base) }?;
     // Place names are resolved from the injected pin registry, which carries the `PlaceName` text
     // id each synthetic row was labelled with. When the map has not been opened this session the
     // registry is empty and the anchor simply has no names -- which is correct rather than
@@ -1101,7 +1103,7 @@ pub fn pin_choice_signature() -> usize {
         hash = fnv1a64_mix(hash, value);
     };
     mix(u64::from(
-        er_invasion_warp::warp::invasion_attempt_in_flight(),
+        er_invasion_warp_core::warp::invasion_attempt_in_flight(),
     ));
     let Some(config) = current_config() else {
         return hash as usize;
@@ -1296,7 +1298,7 @@ pub fn judge_incoming_match(join_data: usize) {
 }
 
 /// Host-side stub: there is no game to show a banner in, and the decision half is tested directly
-/// against [`er_invasion_warp::reject_notice`] rather than through this.
+/// against [`er_invasion_warp_core::reject_notice`] rather than through this.
 #[cfg(not(windows))]
 fn announce_rejection(_enabled: bool, _destination: u32, _reason: RejectReason) {}
 
@@ -1334,7 +1336,7 @@ fn announce_arrival(enabled: bool, destination: u32) {
     }
 }
 
-/// Host-side stub; the decision half is tested against [`er_invasion_warp::reject_notice`].
+/// Host-side stub; the decision half is tested against [`er_invasion_warp_core::reject_notice`].
 #[cfg(not(windows))]
 fn announce_success(_enabled: bool, _destination: u32) {}
 
@@ -1372,7 +1374,7 @@ fn announce_success(enabled: bool, destination: u32) {
 
 /// Put a rejection on the game's system-message banner, if the player asked for that.
 ///
-/// The decision of WHETHER to speak lives in [`er_invasion_warp::reject_notice`] and is unit-tested
+/// The decision of WHETHER to speak lives in [`er_invasion_warp_core::reject_notice`] and is unit-tested
 /// on the host; this only carries the answer to the screen. The notice is fed even when the option
 /// is off so that turning it on mid-session does not announce a place the player was rejected from
 /// minutes ago as though it had just happened.
@@ -1690,7 +1692,7 @@ fn watch_for_stall(session: SeamlessSession) {
 fn publish_invasion_attempt_state(session: usize) {
     let in_flight =
         read_session_state(session).is_some_and(|state| state != ersc::SESSION_STATE_IDLE);
-    er_invasion_warp::warp::set_invasion_attempt_in_flight(in_flight);
+    er_invasion_warp_core::warp::set_invasion_attempt_in_flight(in_flight);
 }
 
 /// True once the session has settled back to idle after a cancel.
@@ -1816,8 +1818,8 @@ fn install_join_hook() -> usize {
 fn mark_keys_in_force() -> (i32, i32) {
     current_config().map_or(
         (
-            er_invasion_warp::keybind::VK_INSERT,
-            er_invasion_warp::keybind::VK_DELETE,
+            er_invasion_warp_core::keybind::VK_INSERT,
+            er_invasion_warp_core::keybind::VK_DELETE,
         ),
         |config| (config.mark_key, config.unmark_key),
     )
@@ -2029,7 +2031,7 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
         // No session means no attempt, which is a DEFINITE answer rather than a failure to read
         // one: with Seamless absent or not yet up there is nothing to be mid-invasion of. Publish
         // it, so a session that goes away cannot strand the map dimmed and the warp refused.
-        er_invasion_warp::warp::set_invasion_attempt_in_flight(false);
+        er_invasion_warp_core::warp::set_invasion_attempt_in_flight(false);
         return;
     };
     publish_invasion_attempt_state(session.session);
@@ -2066,7 +2068,7 @@ fn trace_join_progress(ersc_state: Option<u32>) {
     // `Client` and nothing else. `call_for_warp` is tempting and WRONG: `WarpNextStageKick_` runs
     // for every warp including a plain fast travel, so latching on it would mark an ordinary grace
     // warp as an invasion.
-    if progress.lobby_state == er_invasion_warp::join_progress::lobby_state::CLIENT
+    if progress.lobby_state == er_invasion_warp_core::join_progress::lobby_state::CLIENT
         && !INVASION_ACTUALLY_HAPPENED.swap(true, Ordering::SeqCst)
     {
         // The join landed. THIS is the moment "Invasion successful" is true -- measured at
@@ -2087,7 +2089,7 @@ fn trace_join_progress(ersc_state: Option<u32>) {
     // Only an attempt ERSC actually claims can be a stalled one. An unresolvable session is not
     // evidence of anything, so it never counts.
     let ersc_claims_attempt = ersc_state.is_some_and(|state| state != ersc::SESSION_STATE_IDLE);
-    if verdict == er_invasion_warp::join_progress::Verdict::Idle && ersc_claims_attempt {
+    if verdict == er_invasion_warp_core::join_progress::Verdict::Idle && ersc_claims_attempt {
         JOIN_PROGRESS_IDLE_SAMPLES.fetch_add(1, Ordering::Relaxed);
     }
     if JOIN_PROGRESS_LAST.swap(packed, Ordering::SeqCst) == packed {
@@ -2108,9 +2110,9 @@ fn trace_join_progress(ersc_state: Option<u32>) {
 
 /// One fault-closed sample of the engine-side join fields.
 #[cfg(windows)]
-fn read_join_progress() -> Option<er_invasion_warp::join_progress::JoinProgress> {
-    use er_invasion_warp::join_progress as jp;
-    use er_invasion_warp::warp::{
+fn read_join_progress() -> Option<er_invasion_warp_core::join_progress::JoinProgress> {
+    use er_invasion_warp_core::join_progress as jp;
+    use er_invasion_warp_core::warp::{
         SESSION_LOBBY_STATE_OFFSET, SESSION_MANAGER_GLOBAL_RVA, SESSION_PROTOCOL_STATE_OFFSET,
     };
 
@@ -2287,7 +2289,7 @@ mod tests {
     /// forgetting the log line fails HERE instead of silently on someone's live run.
     #[test]
     fn every_behaviour_changing_option_is_named_in_the_config_line() {
-        let config_source = include_str!("../../er-invasion-warp/src/local_invasion.rs");
+        let config_source = include_str!("../../er-invasion-warp-core/src/local_invasion.rs");
         let start = config_source
             .find("pub struct LocalInvasionConfig")
             .expect("the config struct");
@@ -2379,7 +2381,7 @@ mod tests {
 
     #[test]
     fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_keys() {
-        let defaults = er_invasion_warp::local_invasion::LocalInvasionConfig::default();
+        let defaults = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
         assert_eq!(defaults.mark_key, 0x2d, "VK_INSERT");
         assert_eq!(defaults.unmark_key, 0x2e, "VK_DELETE");
         // Sharing a key with the warp driver would make the two pollers eat each other's
@@ -2402,13 +2404,13 @@ mod tests {
     /// some other valid key is indistinguishable from the feature being broken.
     #[test]
     fn the_configured_keys_render_names_a_player_would_recognise() {
-        let defaults = er_invasion_warp::local_invasion::LocalInvasionConfig::default();
+        let defaults = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
         assert_eq!(
-            er_invasion_warp::keybind::key_name(defaults.mark_key),
+            er_invasion_warp_core::keybind::key_name(defaults.mark_key),
             "Insert"
         );
         assert_eq!(
-            er_invasion_warp::keybind::key_name(defaults.unmark_key),
+            er_invasion_warp_core::keybind::key_name(defaults.unmark_key),
             "Delete"
         );
     }
@@ -2802,14 +2804,14 @@ mod tests {
         //
         // Restores the latch afterwards: it is process-global and every other test in this binary
         // reads it through the same accessor.
-        let restore = er_invasion_warp::warp::invasion_attempt_in_flight();
-        er_invasion_warp::warp::set_invasion_attempt_in_flight(false);
+        let restore = er_invasion_warp_core::warp::invasion_attempt_in_flight();
+        er_invasion_warp_core::warp::set_invasion_attempt_in_flight(false);
         let idle = pin_choice_signature();
-        er_invasion_warp::warp::set_invasion_attempt_in_flight(true);
+        er_invasion_warp_core::warp::set_invasion_attempt_in_flight(true);
         let searching = pin_choice_signature();
-        er_invasion_warp::warp::set_invasion_attempt_in_flight(false);
+        er_invasion_warp_core::warp::set_invasion_attempt_in_flight(false);
         let idle_again = pin_choice_signature();
-        er_invasion_warp::warp::set_invasion_attempt_in_flight(restore);
+        er_invasion_warp_core::warp::set_invasion_attempt_in_flight(restore);
         assert_ne!(
             idle, searching,
             "an attempt starting must invalidate the pin cache or the live map never dims"

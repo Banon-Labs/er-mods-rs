@@ -1,5 +1,5 @@
 param(
-  [string]$Destination = "X:\Documents\me3 profiles\er_net_effects_dll.dll",
+  [string]$Destination = "X:\Documents\me3 profiles\er_net_effects.dll",
   [string]$Profile = "X:\Documents\me3 profiles\er_effects_rs.me3",
   [string]$GameDir = "C:\SteamLibrary\steamapps\common\ELDEN RING\Game",
   [string]$SeamlessCoopDllPath = "C:\SteamLibrary\steamapps\common\ELDEN RING\Game\SeamlessCoop\ersc.dll",
@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$source = Join-Path $repoRoot "target\x86_64-pc-windows-msvc\release\er_net_effects_dll.dll"
+$source = Join-Path $repoRoot "target\x86_64-pc-windows-msvc\release\er_net_effects.dll"
 
 if (-not (Test-Path -LiteralPath $source)) {
   throw "missing built DLL: $source"
@@ -31,18 +31,18 @@ if ($ClearCrashTelemetry) {
 }
 
 $content = Get-Content -LiteralPath $Profile -Raw
-$expectedLine = "path = 'X:\Documents\me3 profiles\er_net_effects_dll.dll'"
+$expectedLine = "path = 'X:\Documents\me3 profiles\er_net_effects.dll'"
 $expectedSeamlessLine = "path = '$SeamlessCoopDllPath'"
 if (-not $content.Contains($expectedSeamlessLine)) {
   throw "profile is missing quoted game-installed Seamless Co-op native entry: $Profile"
 }
 if (-not $content.Contains($expectedLine)) {
-  throw "profile is missing quoted er_net_effects_dll native entry: $Profile"
+  throw "profile is missing quoted er_net_effects native entry: $Profile"
 }
 $seamlessItem = Get-Item -LiteralPath $SeamlessCoopDllPath
 $item = Get-Item -LiteralPath $Destination
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $Destination
-$count = ([regex]::Matches($content, [regex]::Escape('er_net_effects_dll.dll'))).Count
+$count = ([regex]::Matches($content, [regex]::Escape('er_net_effects.dll'))).Count
 $seamlessCount = ([regex]::Matches($content, [regex]::Escape('ersc.dll'))).Count
 Write-Output "source=$source"
 Write-Output "destination=$($item.FullName)"

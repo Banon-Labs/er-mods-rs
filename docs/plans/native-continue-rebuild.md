@@ -139,7 +139,7 @@ offered for the movable window.
    usable kill switch). Note: disabling this also disables load1's commit, so the rebuild must
    provide load1's native commit too (§3).
 2. **Keep harness scaffolding intact** (all gated on `harness_dll_present()` =
-   `GetModuleHandleA("er_input_harness_dll.dll")`, env_flags.rs:514 — a presence gate, not
+   `GetModuleHandleA("er_input_harness.dll")`, env_flags.rs:514 — a presence gate, not
    env/marker). Untouched:
    - `experiments/can_move_probe.rs` — the whole movability proof (pad-poll inject, focus
      override, epoch reset, verdict latch).
@@ -148,7 +148,7 @@ offered for the movable window.
    - `experiments/input_block.rs` — `enforce_kbmouse_game_input_disable` (:991), RawInput
      contamination counter (:750-913), DInput/XInput block + can-move XInput lane.
    - `experiments/gating/env_flags.rs:469-529` — the harness gates.
-   - `crates/er-input-harness-dll/` — the separate self-drive DLL (drives ER's OWN input memory
+   - `crates/er-input-harness/` — the separate self-drive DLL (drives ER's OWN input memory
      `inputmgr+0x90+eventId` + `DLUID+0x88d`, not SendInput/XInput).
    - `telemetry/runtime_oracles/write_oracle.rs` movement + presence emitters.
    - **CONSTRAINT:** the load-epoch clock `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT`

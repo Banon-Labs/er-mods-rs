@@ -10,7 +10,7 @@
 //! # Shared core, one host DLL per process
 //!
 //! This crate is the suppression core linked by BOTH the standalone
-//! `er-save-disable-dll` (census/proof DLL) and the product `er-effects-rs` cdylib
+//! `er-save-disable` (census/proof DLL) and the product `er-effects-rs` cdylib
 //! (save-game-flow WP1). The host DLL wires the seams before `install`:
 //!
 //! - [`set_log_sink`]: where human-readable lines go (the standalone's

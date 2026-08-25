@@ -4,7 +4,7 @@
 //! read the product DLL's `SYSTEM_QUIT_INGAME_TOP_WINDOW` / `SYSTEM_QUIT_QUICKLOAD_PHASE` /
 //! menu-window latches (those live in `er_effects_rs.dll`'s image). Those product statics are
 //! themselves derived from GAME memory, so the harness re-derives what it needs the same way
-//! `er-reload-trace-dll` reads the game: `GetModuleHandleA(NULL)` for the image base, then
+//! `er-reload-trace` reads the game: `GetModuleHandleA(NULL)` for the image base, then
 //! fault-safe `ReadProcessMemory` walks of the known singletons.
 //!
 //! Coarse vs precise (honest limit): the product's window latches are populated by NATIVE menu-window
@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use crate::win32::{GetModuleHandleA, read_usize};
 
 // RVAs/offsets ported verbatim from the product's constant tree (image base 0x140000000):
-//   GAME_DATA_MAN_GLOBAL_RVA / +0x08 PlayerGameData -- er-reload-trace-dll src/lib.rs
+//   GAME_DATA_MAN_GLOBAL_RVA / +0x08 PlayerGameData -- er-reload-trace src/lib.rs
 //   CS_MENU_MAN_GLOBAL_RVA / CS_MENU_MAN_MENU_DATA_OFFSET -- crates/er-effects-rs/src/constants/*
 // They are plain integer literals (addresses the DLL reads), not shared statics.
 const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;

@@ -25,14 +25,14 @@ import sys
 DLLS = {
     "amd_ags_x64.dll": "er-ags-stub",
     "er_armament_icons.dll": "er-armament-icons",
-    "er_better_refills.dll": "er-better-refills-dll",
+    "er_better_refills.dll": "er-better-refills",
     "er_effects_rs.dll": "er-effects-rs",
-    "er_input_harness_dll.dll": "er-input-harness-dll",
-    "er_inventory_sort.dll": "er-inventory-sort-dll",
-    "er_invasion_warp_dll.dll": "er-invasion-warp-dll",
-    "er_net_effects_dll.dll": "er-net-effects-dll",
-    "er_reload_trace_dll.dll": "er-reload-trace-dll",
-    "er_telemetry_dll.dll": "er-telemetry-dll",
+    "er_input_harness.dll": "er-input-harness",
+    "er_inventory_sort.dll": "er-inventory-sort",
+    "er_invasion_warp.dll": "er-invasion-warp",
+    "er_net_effects.dll": "er-net-effects",
+    "er_reload_trace.dll": "er-reload-trace",
+    "er_telemetry.dll": "er-telemetry",
     "mushroom_man.dll": "mushroom-man-runtime",
 }
 

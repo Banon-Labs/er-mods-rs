@@ -1,7 +1,7 @@
 //! Standalone keyboard-controlled network effect DLL.
 //!
 //! This crate owns the effect selector/hotkey feature that used to live inside
-//! the product `er-effects-rs` DLL. It is shipped as `er_net_effects_dll.dll`
+//! the product `er-effects-rs` DLL. It is shipped as `er_net_effects.dll`
 //! and can be listed as its own ME3 `[[natives]]` entry without pulling in the
 //! product autoload/save/portrait/rendering dependencies.
 
@@ -157,6 +157,6 @@ pub unsafe extern "system" fn DllMain(
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_net_effects_dll_host_stub() -> i32 {
+pub extern "C" fn er_net_effects_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }

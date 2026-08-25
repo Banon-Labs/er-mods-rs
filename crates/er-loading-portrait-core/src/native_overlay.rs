@@ -61,12 +61,12 @@ use windows::core::{Interface, w};
 /// 0 = HIDE (release to gameplay). Starts SHOWN so the boot black gap is covered immediately.
 pub static NATIVE_OVERLAY_SHOW: AtomicUsize = AtomicUsize::new(1);
 /// Frames presented (RAM oracle: the overlay is live + presenting).
-pub use er_telemetry::counters::NATIVE_OVERLAY_FRAMES;
+pub use er_telemetry_core::counters::NATIVE_OVERLAY_FRAMES;
 /// One-shot install latch.
-pub use er_telemetry::counters::NATIVE_OVERLAY_INSTALLED;
+pub use er_telemetry_core::counters::NATIVE_OVERLAY_INSTALLED;
 /// Last init stage reached (RAM oracle for diagnosis): 1=thread, 2=class, 3=window, 4=factory, 5=device,
 /// 6=queue, 7=swapchain, 8=rtv-heap, 9=cmd-objects, 10=render-loop-entered.
-pub use er_telemetry::counters::NATIVE_OVERLAY_STAGE;
+pub use er_telemetry_core::counters::NATIVE_OVERLAY_STAGE;
 
 /// Install the native-Windows loading overlay (idempotent). Spawns a dedicated thread that owns the
 /// window + our D3D12 device and runs the render loop. Safe to call unconditionally at attach; the caller

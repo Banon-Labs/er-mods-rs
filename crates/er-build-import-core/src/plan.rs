@@ -156,7 +156,7 @@ pub fn infusion_offset(infusion: Option<&str>) -> Option<u32> {
 /// against every hand-authored build.
 ///
 /// ```
-/// use er_build_import::plan::{infusion_offset, split_armament_id};
+/// use er_build_import_core::plan::{infusion_offset, split_armament_id};
 /// // Misericorde + Occult, the pair the importer builds as 1_070_000 + 1200.
 /// assert_eq!(split_armament_id(1_071_200), (1_070_000, Some("Occult")));
 /// assert_eq!(split_armament_id(1_070_000), (1_070_000, None));
@@ -208,7 +208,7 @@ pub fn infusion_names() -> impl Iterator<Item = &'static str> {
 /// not exist.
 ///
 /// ```
-/// use er_build_import::plan::armament_item_id;
+/// use er_build_import_core::plan::armament_item_id;
 /// // Great Stars + Blood, +25.
 /// assert_eq!(armament_item_id(12181200, 25), 12181225);
 /// // A somber armament, clamped to +10 by the caller.

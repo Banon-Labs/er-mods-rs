@@ -1,13 +1,13 @@
 //! The dependency-injection seam between this feature crate and its host DLL.
 //!
-//! Same pattern as `er_loading_portrait::host`: function pointers installed once at DLL
+//! Same pattern as `er_loading_portrait_core::host`: function pointers installed once at DLL
 //! attach, neutral defaults until then (so the crate is inert rather than wrong), and
 //! crate-internal wrappers bearing the EXACT names the moved code already calls.
 //!
 //! Every field below is one MEASURED outbound reference from the files this crate will
 //! own into the rest of `er-effects-rs`. Nothing else leaves the crate: drawing goes
-//! through `er-loading-bar`, save-container parsing through `er-save-loader`, counters
-//! through `er-telemetry`.
+//! through `er-loading-bar-core`, save-container parsing through `er-save-loader`, counters
+//! through `er-telemetry-core`.
 
 // `PickerCover::owner_hwnd` is an HWND read in exactly one place: `os_dialog::os_dialog_owner`
 // (via the `PickerCover::owner_hwnd` method path, which is why a grep for `owner_hwnd()` finds
@@ -30,7 +30,7 @@ use crate::model::PickerStatusMessage;
 ///
 /// The dim overlay belongs to product (B) and must NOT dim the boot missing-save dialog
 /// (user decision 2026-07-30), so this crate never constructs one -- it only accepts a
-/// caller-supplied guard and drops it when the dialog interaction ends. `er-quit-menu`
+/// caller-supplied guard and drops it when the dialog interaction ends. `er-quit-menu-core`
 /// passes a factory that arms its dim; the boot flow passes none.
 ///
 /// The guard drops BEFORE the dialog claim, and spans the WHOLE reopen loop rather than

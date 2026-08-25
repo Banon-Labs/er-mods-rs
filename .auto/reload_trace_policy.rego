@@ -1,4 +1,4 @@
-package auto.reload_trace_dll
+package auto.reload_trace
 
 import rego.v1
 
@@ -8,12 +8,12 @@ default allow := false
 # RE work. The DLL may install native trampolines and write a log file only. It must
 # not add runtime env gates, drive input, redirect or swap saves, call product autoload
 # code, or directly write game memory. The companion checker builds the input facts by
-# scanning crates/er-reload-trace-dll.
+# scanning crates/er-reload-trace.
 
 minimum_hook_count := 32
 
 allow if {
-	input.crate_path == "crates/er-reload-trace-dll"
+	input.crate_path == "crates/er-reload-trace"
 	input.cdylib == true
 	input.has_dllmain == true
 	input.has_minhook == true

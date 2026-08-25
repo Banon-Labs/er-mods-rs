@@ -273,7 +273,7 @@ fn exception_report(site: &ExceptionSite) -> String {
     let _ = writeln!(out, "thread_id={thread_id}");
     let _ = writeln!(out, "dll_module_base=0x{module_base:x}");
     let _ = writeln!(out, "dll_module_size=0x{module_size:x}");
-    let _ = writeln!(out, "exception_ip_in_er_net_effects_dll={exception_in_dll}");
+    let _ = writeln!(out, "exception_ip_in_er_net_effects={exception_in_dll}");
     let _ = writeln!(out, "phase_id={phase}");
     let _ = writeln!(out, "phase={}", phase_label(phase));
     let _ = writeln!(

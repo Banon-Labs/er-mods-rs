@@ -14,35 +14,35 @@ use crate::prelude::*;
 /// Cumulative count of overlay frames where the portrait actually blended onto the backbuffer (telemetry
 /// `oracle_portrait_onto_draw_hits`). RAM proof the captured head reached the isolated overlay; distinct
 /// from the readback/publish counters (which prove the head was CAPTURED, not displayed).
-pub use er_telemetry::counters::PORTRAIT_ONTO_DRAW_HITS;
+pub use er_telemetry_core::counters::PORTRAIT_ONTO_DRAW_HITS;
 
 /// Last measured alpha-coverage of the captured portrait, in percent of the full source area (telemetry
 /// `oracle_portrait_alpha_cover_pct`). The captured head sits in a central region of the square source with
 /// transparent padding around it; this is how much of that square the head's bounding box actually fills, so
 /// a low value confirms most of the source is margin (why scaling the padded square did not enlarge the head).
-pub use er_telemetry::counters::PORTRAIT_ALPHA_COVER_PCT;
+pub use er_telemetry_core::counters::PORTRAIT_ALPHA_COVER_PCT;
 
 /// How many seeding frames actually MOVED one of the four bounds below -- i.e. how many visible size
 /// steps the head took while the envelope settled. Its companion `PORTRAIT_CROP_SEED_FRAMES` counts the
 /// folds; this counts the ones that changed anything. The per-event detail (which bound, by how much,
 /// resulting `crop_h`) goes to the autoload debug log as the `portrait-crop[..]` lines below.
-pub use er_telemetry::counters::PORTRAIT_CROP_GROWTH_EVENTS;
-pub use er_telemetry::counters::PORTRAIT_CROP_MAXX;
-pub use er_telemetry::counters::PORTRAIT_CROP_MAXY;
+pub use er_telemetry_core::counters::PORTRAIT_CROP_GROWTH_EVENTS;
+pub use er_telemetry_core::counters::PORTRAIT_CROP_MAXX;
+pub use er_telemetry_core::counters::PORTRAIT_CROP_MAXY;
 /// Stable crop envelope: the union of the head's alpha bounding box over the first `PORTRAIT_CROP_SEED_N`
 /// frames, then FROZEN. Re-cropping to a fresh per-frame bounding box made the rect chase the swaying head,
 /// which showed as horizontal jitter and cancelled the real idle animation. Freezing the envelope lets the
 /// head's actual sway play WITHIN a fixed rect. Single render thread, so plain atomics need no ordering care.
-pub use er_telemetry::counters::PORTRAIT_CROP_MINX;
-pub use er_telemetry::counters::PORTRAIT_CROP_MINY;
-pub use er_telemetry::counters::PORTRAIT_CROP_SEED_FRAMES;
+pub use er_telemetry_core::counters::PORTRAIT_CROP_MINX;
+pub use er_telemetry_core::counters::PORTRAIT_CROP_MINY;
+pub use er_telemetry_core::counters::PORTRAIT_CROP_SEED_FRAMES;
 
 /// Unmasked-frame refusal counters. Incremented by the mask gate in `portrait_onto` below and by the
 /// two publish-side gates (`save_swap_profile_table.rs`, `dlstring_lookat_math.rs`), and read by
 /// `oracle_portrait_draw_refused_unmasked` / `oracle_portrait_bake_publish_refused_unmasked`. See the
-/// counters' own docs in er-telemetry for what each refusal means.
-pub use er_telemetry::counters::PORTRAIT_BAKE_PUBLISH_REFUSED_UNMASKED;
-pub use er_telemetry::counters::PORTRAIT_DRAW_REFUSED_UNMASKED;
+/// counters' own docs in er-telemetry-core for what each refusal means.
+pub use er_telemetry_core::counters::PORTRAIT_BAKE_PUBLISH_REFUSED_UNMASKED;
+pub use er_telemetry_core::counters::PORTRAIT_DRAW_REFUSED_UNMASKED;
 const PORTRAIT_CROP_SEED_N: usize = 40;
 
 /// True when the overlay should composite the captured character portrait: a published head exists and the
@@ -68,7 +68,7 @@ const PORTRAIT_CROP_SEED_N: usize = 40;
 ///
 /// Both display hosts reach the refusal because both go through `portrait_onto`: the product boot view
 /// (`boot_progress.rs` -> `boot_view_rasterize`, which also feeds the native isolated overlay and the
-/// Wine in-swapchain compositor) and the standalone `er-loading-portrait-dll` compositor.
+/// Wine in-swapchain compositor) and the standalone `er-loading-portrait` compositor.
 pub fn portrait_overlay_active() -> bool {
     if save_picker_overlay_active() {
         return false;

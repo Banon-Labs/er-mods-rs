@@ -1,7 +1,7 @@
 // ============================================================================================
 /// XInput poll counter, incremented each XInputGetState call while inject-nav is active and the
 /// menu is open. The schedule below is in these poll-frames.
-pub(crate) use er_telemetry::counters::INJECT_NAV_FRAME;
+pub(crate) use er_telemetry_core::counters::INJECT_NAV_FRAME;
 pub(crate) use er_title_flow::XINPUT_GAMEPAD_DPAD_DOWN;
 /// XINPUT_GAMEPAD.wButtons bits for the System->Quit repro autopilot's controller sequence
 /// (D-pad Up, Start, Left-Shoulder/LB, A). D-pad Down is XINPUT_GAMEPAD_DPAD_DOWN above.
@@ -20,18 +20,18 @@ pub(crate) const XINPUT_GAMEPAD_B: u16 = 0x2000;
 /// Current game-task tick's synthesized gamepad wButtons for the System->Quit repro autopilot,
 /// written by `system_quit_repro_tick` and READ by the XInput poll hook (the stage the game reads a
 /// gamepad from). 0 = no button. Distinct from INJECT_NAV_CUR_BUTTONS (own_stepper title nav).
-pub(crate) use er_telemetry::counters::SQ_REPRO_XINPUT_BUTTONS;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_XINPUT_BUTTONS;
 /// ProfileSelect cursor index captured on entry to TO_SLOT (the current/most-recent save the cursor
 /// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
 /// usize::MAX = not yet captured (reset on entry to TO_SLOT).
-pub(crate) use er_telemetry::counters::SQ_REPRO_INITIAL_CURSOR;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_INITIAL_CURSOR;
 /// Throttle the per-tap log.
-pub(crate) use er_telemetry::counters::INJECT_NAV_LOG_COUNT;
+pub(crate) use er_telemetry_core::counters::INJECT_NAV_LOG_COUNT;
 pub(crate) const INJECT_NAV_LOG_FIRST: usize = 20;
 /// The current frame's synthesized gamepad wButtons, computed by the per-frame schedule in
 /// own_stepper idx10 and READ by the XInput hook (so the schedule lives in one place that runs
 /// every frame, instead of the XInput hook which the game may never poll). 0 = no input.
-pub(crate) use er_telemetry::counters::INJECT_NAV_CUR_BUTTONS;
+pub(crate) use er_telemetry_core::counters::INJECT_NAV_CUR_BUTTONS;
 // ---- CAN-MOVE probe (2026-07-18, user-directed readiness gate) ----
 // "render-ready" answers "can the user SEE the character"; CAN-MOVE answers "does INPUT MOVE the
 // character" -- the second half of the readiness the earlier automated capture lacked. When
@@ -63,20 +63,20 @@ pub(crate) static FRAME_TIME_EMA_US: std::sync::atomic::AtomicU32 =
 pub(crate) static FRAME_TIME_WORST_US: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 /// Load epoch the worst-frame-time window is scoped to (reset the worst tracker when the epoch changes).
-pub(crate) use er_telemetry::counters::FRAME_TIME_WORST_EPOCH;
+pub(crate) use er_telemetry_core::counters::FRAME_TIME_WORST_EPOCH;
 /// Current consecutive-moved-frame count of the in-flight move probe (for the oracle/report).
-pub(crate) use er_telemetry::counters::MOVE_PROBE_MOVED_FRAMES;
+pub(crate) use er_telemetry_core::counters::MOVE_PROBE_MOVED_FRAMES;
 /// SEMAPHORE SPLIT (user 2026-07-19, bd three-semaphores-can-move-did-move-supplied-input): count of
 /// frames the probe actually WROTE the forward stick into a live pad device (`SUPPLIED_MOVEMENT_INPUT`
 /// = did WE inject). Distinct from CAN_MOVE (capability) and DID_MOVE (real displacement): if supplied
 /// climbs but DID_MOVE stays 0, the injection layer is wrong/ignored (e.g. pad stick vs kb+mouse WASD).
-pub(crate) use er_telemetry::counters::SUPPLIED_MOVEMENT_INPUT_FRAMES;
+pub(crate) use er_telemetry_core::counters::SUPPLIED_MOVEMENT_INPUT_FRAMES;
 /// CUMULATIVE count of frames with real havok displacement >= threshold WHILE supplying input
 /// (`DID_MOVE` = did the character actually move). Unlike MOVE_PROBE_MOVED_FRAMES it does NOT reset on a
 /// non-moving frame, so `DID_MOVE > 0` means "moved at least once under our input". Reset per load epoch.
-pub(crate) use er_telemetry::counters::DID_MOVE_FRAMES;
+pub(crate) use er_telemetry_core::counters::DID_MOVE_FRAMES;
 /// The load epoch (fresh_deser_count) the current probe is bound to, so it resets per load.
-pub(crate) use er_telemetry::counters::MOVE_PROBE_EPOCH;
+pub(crate) use er_telemetry_core::counters::MOVE_PROBE_EPOCH;
 /// Forward stick deflection the probe injects (near full), the per-FRAME horizontal displacement (world
 /// units) that counts as "moving" (a static/frozen char repeats its position exactly, delta ~0; a walk
 /// clears this easily), and the sustained consecutive-frame count that PROVES movement (user: 60/load).
@@ -159,7 +159,7 @@ pub(crate) const SQ_REPRO_TAB_RETURN_DWELL_TICKS: usize = 180;
 pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
 /// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
 /// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.
-pub(crate) use er_telemetry::counters::SQ_REPRO_SWITCH_INDEX;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_SWITCH_INDEX;
 /// How many back-to-back harness-driven switches to drive. Bounded by `SQ_REPRO_TARGET_SLOTS.len()`.
 ///
 /// The Save Game row repro is always-on when the repro harness itself is enabled; it no longer needs
@@ -173,14 +173,14 @@ pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
 /// Exact ProfileSelect Back repro latches. `DONE` means the self-drive opened System->Quit's cloned
 /// Load Profile row, observed ProfileSelect, sent B/Back, observed restore, returned to Game Options,
 /// and did not arm a profile load.
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_OPENED;
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_DONE;
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE;
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_RESTORE_COUNT;
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_FINAL_TAB;
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_BASELINE_MASK;
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_VERIFY_MASK;
-pub(crate) use er_telemetry::counters::SQ_REPRO_PROFILE_BACK_MISMATCH_MASK;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_OPENED;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_DONE;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_RESTORE_COUNT;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_FINAL_TAB;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_BASELINE_MASK;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_VERIFY_MASK;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_MISMATCH_MASK;
 pub(crate) static SQ_REPRO_PROFILE_BACK_BASELINE_HASHES: [AtomicUsize; 10] =
     [const { AtomicUsize::new(0) }; 10];
 pub(crate) static SQ_REPRO_PROFILE_BACK_BASELINE_COUNTS: [AtomicUsize; 10] =
@@ -205,21 +205,21 @@ pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0; 10];
 /// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
 /// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
-pub(crate) use er_telemetry::counters::SQ_REPRO_CONFIRM_BASELINE;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_CONFIRM_BASELINE;
 /// Game-task tick counter within the current repro state (reset to 0 on each state transition). The
 /// per-phase edge index is `tick / INJECT_NAV_CYCLE`; the injected edge hold/gap timing REUSES the
 /// RE-grounded own_stepper nav constants (edge-triggered menu nav needs a multi-frame hold to
 /// register one step; a 1-frame tap is missed -- bd keyboard-dik-down-injection-works-cursor-moves-
 /// 2026). No sq-repro-specific timing value is invented.
-pub(crate) use er_telemetry::counters::SQ_REPRO_STATE_TICK;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_STATE_TICK;
 /// Latches "waiting-for-transition self-reported" for the current state so it logs exactly once
 /// (0 = not yet); reset on each state transition. Not a tap budget -- a boolean.
-pub(crate) use er_telemetry::counters::SQ_REPRO_STATE_TAPS;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_STATE_TAPS;
 /// Frames spent in WAIT_RELOAD with a failing gate (reset per switch via `sq_repro_begin_switch`).
 /// The observed er-effects-rs-qwj stall sat here with switch #1 stable and fresh-deser == expected,
 /// so one of the gates was lying; the periodic gate dump (every `SQ_REPRO_WAIT_RELOAD_LOG_EVERY`
 /// frames) names the culprit with data instead of a single opaque waiting line.
-pub(crate) use er_telemetry::counters::SQ_REPRO_WAIT_RELOAD_FRAMES;
+pub(crate) use er_telemetry_core::counters::SQ_REPRO_WAIT_RELOAD_FRAMES;
 /// WAIT_RELOAD gate-dump period in frames (~8.5s at 60fps): frequent enough to bound a stall fast,
 /// sparse enough to never spam the debug log across a full reload (~10-15s).
 pub(crate) const SQ_REPRO_WAIT_RELOAD_LOG_EVERY: usize = 512;
@@ -400,10 +400,10 @@ pub(crate) static START_PROFILE_SELECT_TABLE_DIAG: Once = Once::new();
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
-pub(crate) use er_telemetry::counters::BOOT_FIRST_FRAME_LOGGED;
+pub(crate) use er_telemetry_core::counters::BOOT_FIRST_FRAME_LOGGED;
 pub(crate) static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize =
     AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
-pub(crate) use er_telemetry::counters::SAFE_INPUT_CONFIRM_FRAMES_REMAINING;
+pub(crate) use er_telemetry_core::counters::SAFE_INPUT_CONFIRM_FRAMES_REMAINING;
 
 pub(crate) static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize =
@@ -595,12 +595,12 @@ pub(crate) static B80_FULL_LOAD_INITIATOR_ORIG: AtomicUsize = AtomicUsize::new(H
 pub(crate) static B80_POLL_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static B80_DESERIALIZE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static C30_WRITER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::GET_ASYNC_KEY_STATE_ORIG;
-pub(crate) use er_telemetry::counters::GET_KEY_STATE_ORIG;
-pub(crate) use er_telemetry::counters::DIRECT_INPUT8_CREATE_ORIG;
-pub(crate) use er_telemetry::counters::DIRECT_INPUT_CREATE_DEVICE_ORIG;
-pub(crate) use er_telemetry::counters::DIRECT_INPUT_GET_DEVICE_STATE_ORIG;
-pub(crate) use er_telemetry::counters::TITLE_HANDOFF_COMPLETE;
+pub(crate) use er_telemetry_core::counters::GET_ASYNC_KEY_STATE_ORIG;
+pub(crate) use er_telemetry_core::counters::GET_KEY_STATE_ORIG;
+pub(crate) use er_telemetry_core::counters::DIRECT_INPUT8_CREATE_ORIG;
+pub(crate) use er_telemetry_core::counters::DIRECT_INPUT_CREATE_DEVICE_ORIG;
+pub(crate) use er_telemetry_core::counters::DIRECT_INPUT_GET_DEVICE_STATE_ORIG;
+pub(crate) use er_telemetry_core::counters::TITLE_HANDOFF_COMPLETE;
 pub(crate) use er_title_flow::TITLE_OWNER_PTR;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
@@ -608,7 +608,7 @@ pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
 /// Last owner (TitleStep) pointer seen by the SetState trace detour. The detour fires from the
 /// FIRST title transition (~+12s), long before the TITLE_OWNER_PTR scan caches it (~+31s), so the
 /// gm-snap session-liveness sampler falls back to this to cover the BOOT load window.
-pub(crate) use er_telemetry::counters::TITLE_SETSTATE_TRACE_LAST_OWNER;
+pub(crate) use er_telemetry_core::counters::TITLE_SETSTATE_TRACE_LAST_OWNER;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
@@ -641,12 +641,12 @@ pub(crate) static ORIGINAL_RTL_EXIT_USER_PROCESS: AtomicUsize =
 pub(crate) static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static ORIGINAL_ASSERT_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::ASSERT_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry_core::counters::ASSERT_LOG_LINES_WRITTEN;
 pub(crate) static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-pub(crate) use er_telemetry::counters::AV_LOG_LINES_WRITTEN;
-pub(crate) use er_telemetry::counters::FATAL_EXCEPTION_LOG_LINES_WRITTEN;
-pub(crate) use er_telemetry::counters::OTHER_EXCEPTION_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry_core::counters::AV_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry_core::counters::FATAL_EXCEPTION_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry_core::counters::OTHER_EXCEPTION_LOG_LINES_WRITTEN;
 /// Base address (HINSTANCE) of THIS injected DLL, captured from `DllMain`'s hmodule at
 /// `DLL_PROCESS_ATTACH`. Under Wine/Proton the DLL is relocated far from the game module
 /// (observed ~0x6ffe_xxxx_xxxx), so a crash whose faulting RIP / return addresses land in
@@ -656,7 +656,7 @@ pub(crate) use er_telemetry::counters::OTHER_EXCEPTION_LOG_LINES_WRITTEN;
 pub(crate) static SELF_DLL_BASE: AtomicUsize = AtomicUsize::new(NULL_MODULE_BASE);
 /// `SizeOfImage` of this DLL (PE optional-header field read from `SELF_DLL_BASE`), so the AV
 /// handler can bound-check an address to `[base, base+size)` before treating it as `self+RVA`.
-pub(crate) use er_telemetry::counters::SELF_DLL_SIZE;
+pub(crate) use er_telemetry_core::counters::SELF_DLL_SIZE;
 pub(crate) static CRASH_LOGGER_INSTALLED: std::sync::Once = std::sync::Once::new();
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =

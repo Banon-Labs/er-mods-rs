@@ -1,23 +1,23 @@
 [package]
-name = "er-telemetry-dll"
+name = "er-telemetry"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_telemetry_dll"
+name = "er_telemetry"
 crate-type = ["cdylib"]
 
-# Thin standalone telemetry DLL: a DllMain shell that drives er-telemetry's
+# Thin standalone telemetry DLL: a DllMain shell that drives er-telemetry-core's
 # read-side oracles on a game-thread FrameBegin tick. Loads as its own me3
 # [[natives]] entry (telemetry-only profile, or as a 4th native alongside the
-# product DLL). All reusable logic lives in the er-telemetry LIB; a cdylib
+# product DLL). All reusable logic lives in the er-telemetry-core LIB; a cdylib
 # cannot be depended on as a lib, which is why this is a separate shell.
 #
 # Owns standalone telemetry hooks; product DLL should not need diagnostic/logging hooks.
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
-er-telemetry = { path = "../er-telemetry" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 windows = { version = "0.62", features = [

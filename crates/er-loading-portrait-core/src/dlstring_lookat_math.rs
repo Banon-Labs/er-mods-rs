@@ -361,13 +361,14 @@ fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
             Ordering::SeqCst,
         );
     }
-    let after_cover_stop = er_telemetry::counters::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0;
+    let after_cover_stop =
+        er_telemetry_core::counters::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0;
     if after_cover_stop || hits <= 8 || hits.is_power_of_two() {
         append_autoload_debug(format_args!(
             "loading-bar: observed Scaleform FadeOut label via {source} (hits={hits}, this=0x{this:x}, label=0x{label:x}, now_ms={now_ms}, close_hits={}, after_cover_stop={}, cover_stop_ms={})",
             LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
             after_cover_stop as u8,
-            er_telemetry::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst),
         ));
     }
 }

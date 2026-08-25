@@ -1,7 +1,7 @@
-# Thin standalone ME3-loadable shell for the `er-save-picker` feature crate (product A):
+# Thin standalone ME3-loadable shell for the `er-save-picker-core` feature crate (product A):
 # own DllMain, own log file, individually shippable.
 #
-# UNLIKE `er-loading-portrait-dll`, this DLL is designed to COEXIST conservatively
+# UNLIKE `er-loading-portrait`, this DLL is designed to COEXIST conservatively
 # in the S6-safe subset. The user requirement (2026-07-30) is that a profile may list
 # either new DLL, both, neither, and combinations with the product and other companions;
 # S6 only proves the standalone shell and product-already-present stand-down case.
@@ -16,19 +16,19 @@
 #      `MhHook::new`, so one MinHook instance owns each address and handlers chain.
 # See docs/plans/save-picker-crate-extraction.md, "Hook-ownership election".
 [package]
-name = "er-save-picker-dll"
+name = "er-save-picker"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_save_picker_dll"
+name = "er_save_picker"
 # `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
 # host without pulling game deps into the test graph.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-er-save-picker = { path = "../er-save-picker" }
+er-save-picker-core = { path = "../er-save-picker-core" }
 er-save-redirect = { path = "../er-save-redirect" }
 # Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
 # shell's log describes exactly one run instead of accumulating across launches.

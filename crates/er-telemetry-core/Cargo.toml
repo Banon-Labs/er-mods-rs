@@ -1,13 +1,13 @@
 [package]
-name = "er-telemetry"
+name = "er-telemetry-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_telemetry"
+name = "er_telemetry_core"
 
-# er-telemetry is the telemetry subsystem lifted out of the product DLL. It
+# er-telemetry-core is the telemetry subsystem lifted out of the product DLL. It
 # depends ONLY on er-game-base + upstream/sibling game libs, NEVER on product
 # (er-effects-rs) code. Product depends on THIS crate, not the reverse.
 [target.'cfg(windows)'.dependencies]
@@ -23,7 +23,7 @@ er-game-base = { path = "../er-game-base" }
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy
 # lint set, denied. This crate is at zero violations on its shipping target
-# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc -p er-telemetry --all-targets`)
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc -p er-telemetry-core --all-targets`)
 # and on the host build, so the deny carries no `# DEBT:` allows.
 [lints]
 workspace = true

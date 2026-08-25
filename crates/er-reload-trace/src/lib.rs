@@ -902,7 +902,7 @@ fn resolve_union_register() -> Option<UnionRegisterFn> {
 fn install_hooks() {
     reset_log_file();
     log_line(format_args!(
-        "er-reload-trace-dll attach: trampoline/log-only build; no input, save redirect, autoload, game task, or game-state writes"
+        "er-reload-trace attach: trampoline/log-only build; no input, save redirect, autoload, game task, or game-state writes"
     ));
     let Some(base) = game_base() else {
         log_line(format_args!("install abort: game module base unresolved"));

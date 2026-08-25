@@ -11,7 +11,7 @@ unsafe extern "system" {
 fn main() {
     let dll_path = std::env::args()
         .nth(1)
-        .expect("usage: load_and_crash.exe <path-to-er_crash_logging_dll.dll>");
+        .expect("usage: load_and_crash.exe <path-to-er_crash_logging.dll>");
     let dll_path = CString::new(dll_path).expect("DLL path contains NUL");
     let module = unsafe { LoadLibraryA(dll_path.as_ptr().cast()) };
     assert!(!module.is_null(), "LoadLibraryA failed");

@@ -40,14 +40,14 @@ pub(super) static OWN_LOAD_GATE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Trampoline to the original 0x67b100 (set on hook install).
 static READ_67B100_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_LEN;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_BODY_LEN;
 /// The sliced plaintext slot body the hook feeds: a leaked `&'static [u8]`, exposed to the detour
 /// as (ptr, len) atomics so the game-thread detour reads it lock-free. Set BEFORE arming the gate.
-pub(crate) use er_telemetry::counters::OWN_LOAD_BODY_PTR;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_BODY_PTR;
 /// Count of bytes the gated hook fed into the engine buffer on the latched call (verify telemetry).
-pub(crate) use er_telemetry::counters::OWN_LOAD_FED_BYTES;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_FED_BYTES;
 /// One-shot install guard for the 0x67b100 detour.
-pub(crate) use er_telemetry::counters::OWN_LOAD_HOOK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_HOOK_INSTALLED;
 
 /// Destination handed to the pass-through consumer call in [`run_native_load_consumer`].
 ///
@@ -231,17 +231,17 @@ const WBR_GATE_2F_OFFSET: usize = 0x2f;
 
 /// Max phase byte ([this+0x35]) seen across all observed calls. <0xa across the stall == the block's
 /// resource-stream never reached residency.
-pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_MAX_PHASE;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_WBR_MAX_PHASE;
 /// Total calls to `WorldBlockRes::Update` observed via the detour (per-block-per-frame; 0 == the
 /// FieldArea update loop never ticked our block on this path).
-pub(crate) use er_telemetry::counters::OWN_LOAD_WBR_UPDATE_CALLS;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_WBR_UPDATE_CALLS;
 /// Whether ANY observed block had its FD4 completion gate ([this+0x2f]) set non-zero. false across the
 /// stall == the FD4 file-load never completed for any block (the IO/CSFile gap).
 pub(crate) static OWN_LOAD_WBR_ANY_GATE_SET: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Count of successful OWN-LOAD m28 `AddDefaultFileLoadProcess` dispatch calls (one per cap, one-shot
 /// per cap pointer). 0 == the lever never fired. Exposed as telemetry `oracle_own_m28_dispatch_fired`.
-pub(crate) use er_telemetry::counters::OWN_LOAD_M28_DISPATCH_FIRED;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_M28_DISPATCH_FIRED;
 /// One-shot guard: FD4FileCap pointers we already dispatched `AddDefaultFileLoadProcess` for.
 /// `AppendFileLoadProcessor` does NOT early-out on an already-present processor, so a double-call
 /// would append a second processor -- this set makes each cap fire exactly once. Const-constructible
@@ -254,11 +254,11 @@ static WBR_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// from the engine) is at the stuck phase 2, dump its candidate cap fields READ-ONLY so we locate the
 /// FD4FileCap on the authoritative object instead of reconstructing it from the resmgr container.
 /// Throttled to the first few sightings (the hook fires ~500k times).
-pub(crate) use er_telemetry::counters::WBR_PHASE2_DIAG_CALLS;
+pub(crate) use er_telemetry_core::counters::WBR_PHASE2_DIAG_CALLS;
 const WBR_PHASE2_DIAG_MAX: usize = 24;
 const WBR_STUCK_PHASE: u8 = 2;
 /// One-shot install guard for the `WorldBlockRes::Update` diagnostic detour.
-pub(crate) use er_telemetry::counters::WBR_UPDATE_HOOK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::WBR_UPDATE_HOOK_INSTALLED;
 
 /// `__fastcall WorldBlockRes::Update(this)` diagnostic detour. `rcx` = WorldBlockRes* (`this`).
 /// OBSERVE-ONLY: increments the call counter, fault-tolerantly reads [this+0x35] (phase) and
@@ -439,7 +439,7 @@ static COMMON_FINALIZE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET)
 /// `__fastcall _Common_Finalize(rcx=InGameStep*)` observe-only detour. Increments the teardown oracle,
 /// then calls the original UNCHANGED (void return). Nothing in `param_1` is read or written by us.
 pub(crate) unsafe extern "system" fn common_finalize_hook(ingame: usize) {
-    er_telemetry::counters::COMMON_FINALIZE_CALLS.fetch_add(1, Ordering::SeqCst);
+    er_telemetry_core::counters::COMMON_FINALIZE_CALLS.fetch_add(1, Ordering::SeqCst);
     let orig = COMMON_FINALIZE_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         return;
@@ -452,7 +452,7 @@ pub(crate) unsafe extern "system" fn common_finalize_hook(ingame: usize) {
 /// queue_enable + MH_ApplyQueued), mirroring `install_wbr_update_hook`. Idempotent. Pure pass-through, so
 /// installing it unconditionally at attach never changes teardown behavior and works on any run (A/B safe).
 pub(crate) fn install_common_finalize_hook() -> bool {
-    if er_telemetry::counters::COMMON_FINALIZE_HOOK_INSTALLED.load(Ordering::SeqCst)
+    if er_telemetry_core::counters::COMMON_FINALIZE_HOOK_INSTALLED.load(Ordering::SeqCst)
         == OWN_STEPPER_CALL_INC
     {
         return true;
@@ -484,7 +484,7 @@ pub(crate) fn install_common_finalize_hook() -> bool {
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
                     crate::mh::leak_installed_hook(hook);
-                    er_telemetry::counters::COMMON_FINALIZE_HOOK_INSTALLED
+                    er_telemetry_core::counters::COMMON_FINALIZE_HOOK_INSTALLED
                         .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "common-finalize: hooked 0x{addr:x} (OBSERVE-ONLY teardown oracle; pure pass-through)"
@@ -529,20 +529,20 @@ static REQUEST_MOVE_MAP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET
 /// disarm-on-first-call consumed the arm on a benign valid call (title/early RequestMoveMap) and missed
 /// the actual load's stale `-1` call a few calls later, leaving WorldResWait stuck (bug found runtime
 /// 2026-07-18, run boot-fix-validate-155035: calls=2 fixups=0, boot stuck at mms 3 for 66s).
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_ARM_COUNTDOWN;
+pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_ARM_COUNTDOWN;
 /// One-shot install guard.
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_HOOK_INSTALLED;
 /// How many RequestMoveMap calls after a load trigger stay eligible for the fixup. Generous enough to
 /// skip benign intervening calls but bounded so the arm never leaks into unrelated later transitions.
 const REQUEST_MOVE_MAP_ARM_WINDOW: usize = 8;
 /// Times we substituted a valid c30 BlockId into an invalid `*param_2`
 /// (telemetry oracle_request_move_map_hook_fixups). >=1 == the fix fired.
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_FIXUPS;
+pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_FIXUPS;
 /// Total RequestMoveMap calls seen (telemetry oracle_request_move_map_hook_calls).
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_HOOK_CALLS;
+pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_HOOK_CALLS;
 /// Last (param_2-before, c30-substituted) pair, for telemetry/diagnosis.
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_BEFORE;
-pub(crate) use er_telemetry::counters::REQUEST_MOVE_MAP_LAST_C30;
+pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_LAST_BEFORE;
+pub(crate) use er_telemetry_core::counters::REQUEST_MOVE_MAP_LAST_C30;
 
 /// Arm the RequestMoveMap BlockId fixup for the next load. Call this at a load trigger (own-load
 /// continue / boot autoload SetState5) AFTER the saved map is deserialized into GameMan+0xc30, so the
@@ -727,7 +727,7 @@ const WORLDRESWAIT_HOLD_WAIT_MAX: usize = 900;
 /// Lowest plausible heap pointer -- filters null / freed CSWorldGeomMan singleton slots.
 const WORLDRESWAIT_GEOM_HEAP_LO: usize = 0x10000;
 /// CS::CSWorldGeomMan::Update field offsets (GHIDRA-CONFIRMED @0x1406d31f0; version-stable dump==live;
-/// the exact fields crates/er-telemetry stream_overlap.rs samples). `+0xd0`(u8)=did-work-this-frame,
+/// the exact fields crates/er-telemetry-core stream_overlap.rs samples). `+0xd0`(u8)=did-work-this-frame,
 /// `+0xf0/0xf4/0xf8/0x100`(i32)=per-frame work accumulators, `+0x108/0x109`(u8)=all-blocks-ready flags.
 /// (`+0x104` registered-block count is NONZERO at rest -- deliberately NOT gated on.)
 const GEOM_DID_WORK_D0_OFFSET: usize = 0xd0;
@@ -771,9 +771,11 @@ fn worldreswait_geom_settled_once() -> bool {
 /// are inside a genuine in-world System->Quit switch reload. On boot/load1 (phase IDLE, nothing armed) or
 /// a spurious title-phase self-reload (player was absent at arm) this is false -> pure passthrough.
 fn worldreswait_hold_armed_and_scoped() -> bool {
-    er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+    er_telemetry_core::counters::WORLDRESWAIT_HOLD_ARMED.load(Ordering::SeqCst)
+        == OWN_STEPPER_CALL_INC
         && crate::experiments::gating::switch_reload_active()
-        && er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) == 0
+        && er_telemetry_core::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst)
+            == 0
 }
 
 /// Call the original `FUN_140624bd0(rcx=FieldArea*, xmm1=f32) -> AL` (residency gate). Returns 0 if the
@@ -802,7 +804,7 @@ pub(crate) unsafe extern "system" fn worldreswait_gate_hook(
     field_area: usize,
     load_delta: f32,
 ) -> u8 {
-    er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_GATE_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
     // Fast path: not an armed/scoped switch reload -> behave EXACTLY as the original (load1/boot safe).
     if !worldreswait_hold_armed_and_scoped() {
         return unsafe { worldreswait_gate_call_orig(field_area, load_delta) };
@@ -810,50 +812,52 @@ pub(crate) unsafe extern "system" fn worldreswait_gate_hook(
     // Armed. Until residency is SEEN, run the real gate every frame so maintenance runs + residency
     // progresses (native-identical), and the gate's one-shot FUN_14066d610 residency-pop fires exactly
     // once (on the frame residency is first reached).
-    if er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.load(Ordering::SeqCst) == 0 {
+    if er_telemetry_core::counters::WORLDRESWAIT_RESIDENCY_SEEN.load(Ordering::SeqCst) == 0 {
         let real = unsafe { worldreswait_gate_call_orig(field_area, load_delta) };
         if real == 0 {
             return 0; // not resident yet -- identical to native (STEP keeps loading)
         }
         // Residency just reached (the ONE legit pop happened inside the original). Begin the hold; do NOT
         // call the original again on subsequent frames (that would repeat the non-idempotent pop).
-        er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(1, Ordering::SeqCst);
-        er_telemetry::counters::WORLDRESWAIT_HOLD_ENGAGED.store(1, Ordering::SeqCst);
-        er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
-        er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+        er_telemetry_core::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(1, Ordering::SeqCst);
+        er_telemetry_core::counters::WORLDRESWAIT_HOLD_ENGAGED.store(1, Ordering::SeqCst);
+        er_telemetry_core::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
+        er_telemetry_core::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "worldreswait-hold: RESIDENCY reached while armed -- deferring STEP_WorldResWait warp+advance until CSWorldGeomMan settles (fieldArea=0x{field_area:x}); loading cover held (native _CheckEternityLoading pumps)"
         ));
         // fall through to the hold decision this same frame (defer immediately)
     }
     // Holding: decide release-on-settle / fail-soft / keep-holding. Never call the original here.
-    let waited =
-        er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    let waited = er_telemetry_core::counters::WORLDRESWAIT_HOLD_WAIT_TICKS
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
     if worldreswait_geom_settled_once() {
-        let streak =
-            er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+        let streak = er_telemetry_core::counters::WORLDRESWAIT_SETTLE_STREAK
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
         if streak >= WORLDRESWAIT_HOLD_SETTLE_FRAMES {
-            er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
-            er_telemetry::counters::WORLDRESWAIT_RELEASED_ON_SETTLE.store(1, Ordering::SeqCst);
+            er_telemetry_core::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
+            er_telemetry_core::counters::WORLDRESWAIT_RELEASED_ON_SETTLE.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "worldreswait-hold: RELEASE on settle (streak={streak} held_frames_total={} waited={waited}) -- CSWorldGeomMan settled; STEP_WorldResWait warps+advances now (movability begins at genuine world-stable)",
-                er_telemetry::counters::WORLDRESWAIT_HELD_FRAMES.load(Ordering::SeqCst)
+                er_telemetry_core::counters::WORLDRESWAIT_HELD_FRAMES.load(Ordering::SeqCst)
             ));
             return 1; // release: STEP_WorldResWait ready branch (warp + advance) runs once
         }
     } else {
-        er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+        er_telemetry_core::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
     }
     if waited >= WORLDRESWAIT_HOLD_WAIT_MAX {
-        er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
-        er_telemetry::counters::WORLDRESWAIT_RELEASED_ON_FAILSOFT.store(1, Ordering::SeqCst);
+        er_telemetry_core::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
+        er_telemetry_core::counters::WORLDRESWAIT_RELEASED_ON_FAILSOFT.store(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "worldreswait-hold: FAIL-SOFT release after {waited} frames without CSWorldGeomMan settle (held_frames_total={}) -- falling back to today's in-place release; no softlock, no regression",
-            er_telemetry::counters::WORLDRESWAIT_HELD_FRAMES.load(Ordering::SeqCst)
+            er_telemetry_core::counters::WORLDRESWAIT_HELD_FRAMES.load(Ordering::SeqCst)
         ));
         return 1; // fail-soft release (today's behavior; STEP warps+advances)
     }
-    er_telemetry::counters::WORLDRESWAIT_HELD_FRAMES.fetch_add(1, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_HELD_FRAMES.fetch_add(1, Ordering::SeqCst);
     0 // hold: STEP_WorldResWait takes its native not-ready branch (_CheckEternityLoading; no warp/advance)
 }
 
@@ -868,13 +872,14 @@ pub(crate) fn arm_worldreswait_hold() {
     if !crate::experiments::gating::switch_reload_active() {
         return;
     }
-    if er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) != 0 {
+    if er_telemetry_core::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT.load(Ordering::SeqCst) != 0 {
         return;
     }
-    er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(0, Ordering::SeqCst);
-    er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
-    er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
-    er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_HOLD_ARMED
+        .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "worldreswait-hold: ARMED for switch reload (marker on, in-world switch) -- STEP_WorldResWait release will defer until CSWorldGeomMan settles (cap {WORLDRESWAIT_HOLD_WAIT_MAX} frames, K={WORLDRESWAIT_HOLD_SETTLE_FRAMES})"
     ));
@@ -884,10 +889,10 @@ pub(crate) fn arm_worldreswait_hold() {
 /// `reset_switch_reload_latches` on every switch arm. The run-cumulative outcome counters (ENGAGED,
 /// HELD_FRAMES, RELEASED_ON_*) are deliberately NOT reset here so a run's outcome stays attributable.
 pub(crate) fn reset_worldreswait_hold_latches() {
-    er_telemetry::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
-    er_telemetry::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(0, Ordering::SeqCst);
-    er_telemetry::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
-    er_telemetry::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_HOLD_ARMED.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_RESIDENCY_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_HOLD_WAIT_TICKS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::WORLDRESWAIT_SETTLE_STREAK.store(0, Ordering::SeqCst);
 }
 
 /// Install the STEP_WorldResWait gate defer-release detour (MhHook + MH_Initialize + queue_enable +
@@ -895,7 +900,7 @@ pub(crate) fn reset_worldreswait_hold_latches() {
 /// switch reload is ARMED + scoped, so installing it unconditionally (product default) never affects
 /// normal gameplay map transitions, boot, or load1.
 pub(crate) fn install_worldreswait_gate_hook() -> bool {
-    if er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_INSTALLED.load(Ordering::SeqCst)
+    if er_telemetry_core::counters::WORLDRESWAIT_GATE_HOOK_INSTALLED.load(Ordering::SeqCst)
         == OWN_STEPPER_CALL_INC
     {
         return true;
@@ -927,7 +932,7 @@ pub(crate) fn install_worldreswait_gate_hook() -> bool {
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
                     crate::mh::leak_installed_hook(hook);
-                    er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_INSTALLED
+                    er_telemetry_core::counters::WORLDRESWAIT_GATE_HOOK_INSTALLED
                         .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "worldreswait-gate: hooked 0x{addr:x} (armed-only STEP_WorldResWait defer-release; passthrough otherwise)"
@@ -1371,7 +1376,7 @@ pub(crate) unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_own
 }
 
 /// Diagnostic throttle for `own_load_m28_dispatch`: log the first HEAD entries, then every INTERVALth.
-pub(crate) use er_telemetry::counters::OWN_LOAD_M28_DISPATCH_DIAG_CALLS;
+pub(crate) use er_telemetry_core::counters::OWN_LOAD_M28_DISPATCH_DIAG_CALLS;
 const OWN_LOAD_M28_DISPATCH_DIAG_HEAD: usize = 8;
 const OWN_LOAD_M28_DISPATCH_DIAG_INTERVAL: usize = 600;
 

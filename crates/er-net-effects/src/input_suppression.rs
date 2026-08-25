@@ -454,7 +454,7 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
     }
 
     // THROUGH A UNION REGISTRAR, NEVER A BARE `MhHook`. `er-effects-rs` (its input blocker) and
-    // `er-charm-enemies-dll` (its hotkey) detour this same `GetDeviceState` slot, and two
+    // `er-charm-enemies` (its hotkey) detour this same `GetDeviceState` slot, and two
     // separately linked MinHook instances on one prologue overwrite each other's trampolines --
     // the loser reports installed and never runs. See the [[shared]] row for this pair in
     // scripts/me3-dll-conflicts.toml.

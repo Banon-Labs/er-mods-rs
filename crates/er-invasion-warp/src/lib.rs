@@ -7,7 +7,7 @@
 //! # What it does today: ORACLE 1 only
 //!
 //! It registers ONE recurring game task (`CSTaskImp` / `FrameBegin`, the same registration
-//! `er-telemetry-dll` uses) which drives `er_invasion_warp::sampler`: a fail-closed read of the
+//! `er-telemetry` uses) which drives `er_invasion_warp_core::sampler`: a fail-closed read of the
 //! live `CSAutoInvadePoint` coordinate table, re-taken until the totals settle, published as
 //! `oracle_invasion_warp_catalog_targets` / `_blocks` / `_areas` into
 //! `er-invasion-warp-telemetry.json` and this DLL's log next to the executable.
@@ -18,7 +18,7 @@
 //! Nothing here can start, fake or spoof invasion/multiplayer/session state -- the feature
 //! reads one coordinate table.
 //!
-//! Unlike `er-loading-portrait-dll` this DLL is safe to load ALONGSIDE `er_effects_rs.dll`:
+//! Unlike `er-loading-portrait` this DLL is safe to load ALONGSIDE `er_effects_rs.dll`:
 //! it owns no Present detour and no MinHook instance. That stays true only while it installs
 //! nothing; the first detour it adds must go through the `er-hook` union.
 
@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
-const LOG_FILE_NAME: &str = "er-invasion-warp-dll.log";
+const LOG_FILE_NAME: &str = "er-invasion-warp.log";
 /// Rewritten (not appended) on every publish, so the file always holds the CURRENT oracle
 /// values rather than a history a reader has to scroll to the end of.
 const TELEMETRY_FILE_NAME: &str = "er-invasion-warp-telemetry.json";
@@ -78,7 +78,7 @@ fn log_dir() -> PathBuf {
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     er_game_base::log::append_line(
         &dir.join(LOG_FILE_NAME),
-        format_args!("er-invasion-warp-dll: {args}"),
+        format_args!("er-invasion-warp: {args}"),
     );
 }
 
@@ -110,7 +110,7 @@ fn gate_on() -> bool {
 /// Install the standalone host seam: log sink -> this DLL's own log file, telemetry sink ->
 /// this DLL's own JSON document, feature gate ON.
 fn install_standalone_host() -> bool {
-    er_invasion_warp::install_host(er_invasion_warp::InvasionWarpHost {
+    er_invasion_warp_core::install_host(er_invasion_warp_core::InvasionWarpHost {
         append_autoload_debug: standalone_log,
         invasion_warp_enabled: gate_on,
         publish_oracle_json: standalone_publish_oracle_json,
@@ -120,7 +120,7 @@ fn install_standalone_host() -> bool {
 /// Wait for the game's task manager, then register the oracle-1 sampler as a recurring
 /// `FrameBegin` game task.
 ///
-/// This is the `er-telemetry-dll` pattern rather than a private thread on purpose: the catalog
+/// This is the `er-telemetry` pattern rather than a private thread on purpose: the catalog
 /// read must happen on the game thread, where the singleton is stable, and it must RETRY
 /// (the `.aipbnd` containers mount asynchronously during boot) rather than read once and give
 /// up. The sampler itself stops reading the moment the totals settle, so a latched run costs
@@ -132,13 +132,13 @@ fn spawn_catalog_task() {
     use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
     let _ = std::thread::Builder::new()
-        .name("er-invasion-warp-dll".to_owned())
+        .name("er-invasion-warp".to_owned())
         .spawn(|| {
             let task = loop {
                 match unsafe { CSTaskImp::instance() } {
                     Ok(task) => break task,
                     // No sleep (banned by scripts/check-no-timeouts.py): yield to the game
-                    // threads and re-poll, exactly as er-telemetry-dll and the product's
+                    // threads and re-poll, exactly as er-telemetry and the product's
                     // wait_for_task_instance do.
                     Err(_) => std::thread::yield_now(),
                 }
@@ -176,8 +176,8 @@ fn spawn_catalog_task() {
                     unsafe { crate::seamless_probe::sample_invade_destination() };
                     // SAFETY: this closure runs on the game task thread, after CSTaskImp
                     // resolved -- exactly the context the tick's contract requires. The read
-                    // itself is fault-closed (er_invasion_warp::live_read).
-                    unsafe { er_invasion_warp::sampler::invasion_warp_catalog_tick() };
+                    // itself is fault-closed (er_invasion_warp_core::live_read).
+                    unsafe { er_invasion_warp_core::sampler::invasion_warp_catalog_tick() };
                     // SAFETY: same game-task context. Reads hotkeys, and on a press runs the
                     // engine's own warp sequence; every native call is byte-checked and every
                     // pointer read is fault-closed.
@@ -242,15 +242,15 @@ fn spawn_catalog_task() {
                     // never landed is indistinguishable from an empty world. Four atomic loads.
                     {
                         let (publishes, refusals) = crate::lobby_publish::tally();
-                        er_invasion_warp::oracles::publish_lobby_oracles(publishes, refusals);
+                        er_invasion_warp_core::oracles::publish_lobby_oracles(publishes, refusals);
                         let (hooked, filters) = crate::lobby_publish::hunt_tally();
-                        er_invasion_warp::oracles::publish_hunt_oracles(hooked, filters);
+                        er_invasion_warp_core::oracles::publish_hunt_oracles(hooked, filters);
                         // Writing the counters is not the same as PUBLISHING them: the telemetry
                         // document is otherwise only written by the catalog sampler, which stops
                         // once the totals latch -- seconds into a run, and long before anyone
                         // hunts. Without this the file freezes at zero while the counters climb.
                         // Gated on a change, so a steady run costs four comparisons and no I/O.
-                        er_invasion_warp::oracles::republish_if_location_matchmaking_changed();
+                        er_invasion_warp_core::oracles::republish_if_location_matchmaking_changed();
                     }
                     // Re-colour pins that already exist. Gated internally on the user's lists
                     // actually having changed, so the steady-state cost is one atomic compare.
@@ -310,7 +310,7 @@ pub unsafe extern "system" fn DllMain(
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_invasion_warp_dll_host_stub() -> i32 {
+pub extern "C" fn er_invasion_warp_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
@@ -321,12 +321,12 @@ mod tests {
     #[test]
     fn the_standalone_host_installs_exactly_once_and_turns_the_gate_on() {
         // Before install the crate is inert; after install this shell's gate answers yes.
-        assert!(!er_invasion_warp::invasion_warp_enabled());
+        assert!(!er_invasion_warp_core::invasion_warp_enabled());
         assert!(install_standalone_host());
-        assert!(er_invasion_warp::invasion_warp_enabled());
+        assert!(er_invasion_warp_core::invasion_warp_enabled());
         // A second install must change nothing -- DllMain's Once is belt, this is braces.
         assert!(!install_standalone_host());
-        assert!(er_invasion_warp::invasion_warp_enabled());
+        assert!(er_invasion_warp_core::invasion_warp_enabled());
     }
 
     #[test]
@@ -345,10 +345,10 @@ mod tests {
 
     #[test]
     fn the_telemetry_sink_writes_the_document_verbatim_and_replaces_the_previous_one() {
-        let dir = std::env::temp_dir().join("er-invasion-warp-dll-telemetry-test");
+        let dir = std::env::temp_dir().join("er-invasion-warp-telemetry-test");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(TELEMETRY_FILE_NAME);
-        let long = er_invasion_warp::catalog_oracle_json("sampling", "first");
+        let long = er_invasion_warp_core::catalog_oracle_json("sampling", "first");
         std::fs::write(&path, long.as_bytes()).expect("write");
         let short = "{}";
         std::fs::write(&path, short.as_bytes()).expect("rewrite");

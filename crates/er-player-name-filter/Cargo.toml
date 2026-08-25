@@ -1,5 +1,5 @@
 [package]
-name = "er-player-name-filter-dll"
+name = "er-player-name-filter"
 version = "0.1.0"
 edition = "2024"
 publish = false

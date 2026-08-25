@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Validate that er-reload-trace-dll remains trampoline/log-only.
+"""Validate that er-reload-trace remains trampoline/log-only.
 
 The policy is intentionally narrow: this diagnostic DLL is for a manual vanilla-flow
 probe (Continue -> System/Quit -> Load Profile -> same character) and must not grow
 runtime env gates, input drivers, save redirection, product autoload code, or direct
 game-memory writes. The declarative contract lives in
-.auto/reload_trace_dll_policy.rego; this script supplies source-scanned facts to OPA.
+.auto/reload_trace_policy.rego; this script supplies source-scanned facts to OPA.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CRATE_PATH = REPO_ROOT / "crates" / "er-reload-trace-dll"
-POLICY_PATH = REPO_ROOT / ".auto" / "reload_trace_dll_policy.rego"
+CRATE_PATH = REPO_ROOT / "crates" / "er-reload-trace"
+POLICY_PATH = REPO_ROOT / ".auto" / "reload_trace_policy.rego"
 OPA_TIMEOUT_SECONDS = 10
 
 ENV_GATE_SNIPPETS = ("std::env::var", "ER_EFFECTS_")
@@ -80,7 +80,7 @@ def build_input() -> dict[str, object]:
     source_paths = crate_sources()
     source_text = "\n".join(read_text(path) for path in source_paths)
     return {
-        "crate_path": "crates/er-reload-trace-dll",
+        "crate_path": "crates/er-reload-trace",
         "cdylib": cargo_cdylib(),
         "has_dllmain": "fn DllMain" in source_text,
         "has_minhook": "MH_CreateHook" in source_text
@@ -109,7 +109,7 @@ def opa_eval(facts: dict[str, object]) -> tuple[bool, list[str]]:
             "--stdin-input",
             "--data",
             str(POLICY_PATH),
-            "data.auto.reload_trace_dll",
+            "data.auto.reload_trace",
         ],
         input=json.dumps(facts),
         text=True,

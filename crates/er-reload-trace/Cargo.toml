@@ -1,11 +1,11 @@
 [package]
-name = "er-reload-trace-dll"
+name = "er-reload-trace"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_reload_trace_dll"
+name = "er_reload_trace"
 crate-type = ["cdylib"]
 
 # Shared MinHook FFI (compiles the vendored MinHook C once; this crate uses only the raw MH_* externs

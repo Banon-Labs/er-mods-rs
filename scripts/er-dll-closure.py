@@ -24,7 +24,7 @@ changes the code inside DLLs whose own directories were never touched, so "the c
 edited" systematically under-reports. The walk is therefore over reverse dependencies.
 
 That same fan-out is why the conflict table exists: a wide closure will happily propose
-loading the product next to `er_loading_portrait_dll.dll`, which is documented in-tree as
+loading the product next to `er_loading_portrait.dll`, which is documented in-tree as
 a double-Present-hook corruption.
 
 WHY CONFLICTS ARE RESOLVED LOUDLY RATHER THAN REFUSED OUTRIGHT

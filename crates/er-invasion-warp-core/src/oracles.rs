@@ -63,7 +63,7 @@
 //!   cannot tell those apart. What DOES carry evidence today is the absence of any such call in
 //!   a crate whose only unsafe engine surface is one read -- reviewable, but not a semaphore.
 //! * MSGBOX_BUILDS needs either a detour on the `CS::MessageBoxDialog` builder (`0x1409275b0`)
-//!   or the passive full-address-space vtable scan `er_telemetry::read::dialog_active` runs.
+//!   or the passive full-address-space vtable scan `er_telemetry_core::read::dialog_active` runs.
 //!   The DLL that hosts this crate installs no detours at all, and the passive scan answers
 //!   "a box is on screen", not "THIS feature built one" -- so it could not attribute a hit
 //!   even if it were cheap enough to run every tick.

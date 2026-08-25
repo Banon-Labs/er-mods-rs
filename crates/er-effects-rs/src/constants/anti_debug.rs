@@ -38,7 +38,7 @@ pub(crate) const PE_SECTION_VADDR_OFFSET: usize = 0xc;
 /// The executable section name we scan/patch.
 pub(crate) const PE_TEXT_SECTION_NAME: &[u8] = b".text";
 /// Once-guard for the anti-anti-debug patch (0 = not yet applied).
-pub(crate) use er_telemetry::counters::ANTI_ANTIDEBUG_APPLIED;
+pub(crate) use er_telemetry_core::counters::ANTI_ANTIDEBUG_APPLIED;
 pub(crate) const ANTI_ANTIDEBUG_NOT_APPLIED: usize = 0;
 pub(crate) const ANTI_ANTIDEBUG_STEP: usize = 1;
 pub(crate) const ANTI_ANTIDEBUG_COUNT_INIT: usize = 0;
@@ -200,7 +200,7 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED);
-pub(crate) use er_telemetry::counters::TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS;
+pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS;
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT: AtomicUsize =
@@ -220,8 +220,8 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_PAB_INFORMATION_VISUAL_INSTALLED;
-pub(crate) use er_telemetry::counters::TITLE_PAB_INFORMATION_VISUAL_BUILDS;
+pub(crate) use er_telemetry_core::counters::TITLE_PAB_INFORMATION_VISUAL_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_PAB_INFORMATION_VISUAL_BUILDS;
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW: AtomicUsize =
@@ -295,15 +295,15 @@ pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_SYSTEX_TARGET;
 pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS;
-pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS;
-pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS;
+pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS;
+pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_BLACK_BUILDS;
+pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_BLACK_BUILDS;
 pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_JOB: AtomicUsize =
@@ -317,12 +317,12 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
 pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
-pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_CALLS;
+pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
+pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_CALLS;
 /// PAB detour -> system_quit_menu_window_run_post call count. Confirms the deterministic-winner wiring
 /// (2026-07-15 install-race fix) is live at runtime: >0 means PAB is driving run_post on MenuWindowJob::Run
 /// passes, so the hide + slot-activation-gate latches get written regardless of the MinHook race.
-pub(crate) use er_telemetry::counters::PAB_RUN_POST_CALLS;
+pub(crate) use er_telemetry_core::counters::PAB_RUN_POST_CALLS;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -340,12 +340,12 @@ pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
 
 // Mechanism and its version-anchored Scaleform identities live in `er-scaleform-hooks` (R8).
 // The product retains only the telemetry readers used by its runtime-oracle writer.
-pub(crate) use er_telemetry::counters::SCALEFORM_DESC_ADVANCE_INSTALLED;
-pub(crate) use er_telemetry::counters::SCALEFORM_DESC_PROVIDER_NULL_HITS;
+pub(crate) use er_telemetry_core::counters::SCALEFORM_DESC_ADVANCE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SCALEFORM_DESC_PROVIDER_NULL_HITS;
 /// Read-only latch of the native CSFakeLoadingScreen singleton visible during the black/progress
 /// loading UI. Sampled from telemetry writes; no hooks or native calls.
-pub(crate) use er_telemetry::counters::FAKE_LOADING_SCREEN_SAMPLE_COUNT;
-pub(crate) use er_telemetry::counters::FAKE_LOADING_SCREEN_VISIBLE_SAMPLES;
+pub(crate) use er_telemetry_core::counters::FAKE_LOADING_SCREEN_SAMPLE_COUNT;
+pub(crate) use er_telemetry_core::counters::FAKE_LOADING_SCREEN_VISIBLE_SAMPLES;
 pub(crate) static FAKE_LOADING_SCREEN_LAST_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static FAKE_LOADING_SCREEN_LAST_VISIBLE: AtomicUsize =
@@ -354,20 +354,20 @@ pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_C: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_10: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_SAMPLE_COUNT;
-pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_NONNULL_SAMPLES;
+pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_SAMPLE_COUNT;
+pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_NONNULL_SAMPLES;
 pub(crate) static RENDER_LOADING_LAYER_LAST_RENDMAN: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_CSGRAPHICS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_LAST_SLOTS_MASK;
-pub(crate) use er_telemetry::counters::RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK;
+pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_LAST_SLOTS_MASK;
+pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK;
 /// RAM oracle (`oracle_loading_cover_suppress_writes`): frames the loading-cover experiment actually
 /// cleared `CSFakeLoadingScreenImp.visible`. >0 means the clamp engaged during at least one map load; 0
 /// with the gate on means the cover object never resolved / was never raised (nothing was suppressed).
-pub(crate) use er_telemetry::counters::LOADING_COVER_SUPPRESS_WRITES;
+pub(crate) use er_telemetry_core::counters::LOADING_COVER_SUPPRESS_WRITES;
 /// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover PLATE the game draws during a map load to
 /// HIDE the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
 /// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
@@ -459,9 +459,9 @@ pub(crate) const TPF_FILE_CAP_ALLOC_ALIGN: usize = 8;
 pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7451c0;
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED;
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_BIND_OBSERVER_HITS;
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_BIND_OBSERVER_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS;
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR: AtomicUsize =
@@ -474,7 +474,7 @@ pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
 /// SYSTEX profile texture normally targets `MENU_DummyProfileFace_01`; rewrite slot0 to the
 /// visibly placed `MENU_FL_40135_Profile` surface and expose it as a distinct oracle.
 pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Profile";
-pub(crate) use er_telemetry::counters::TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES;
+pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES;
 pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR: AtomicUsize =

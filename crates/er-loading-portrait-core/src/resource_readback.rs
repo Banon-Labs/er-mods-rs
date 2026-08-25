@@ -189,12 +189,12 @@ pub unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
 // handle -- avoids the stale-cache dangling-handle bug that killed `readback_cached_content_rgba8`.
 /// Pinned depth-sibling candidate pointer (0 = unpinned); latched when a depth readback yields a mask
 /// with clean bg/head separation, so the alpha cutout can't sample a foreign slot's depth buffer.
-pub use er_telemetry::counters::PROFILE_DEPTH_PIN;
+pub use er_telemetry_core::counters::PROFILE_DEPTH_PIN;
 /// Pinned content-RT candidate object pointer (0 = unpinned). `oracle_portrait_rt_pin`.
-pub use er_telemetry::counters::PROFILE_RT_PIN;
+pub use er_telemetry_core::counters::PROFILE_RT_PIN;
 /// Times the pin moved to a DIFFERENT candidate after first latch (`oracle_portrait_rt_pin_switches`).
 /// >0 on a single load window means the content source was unstable -- the swap-bug tripwire.
-pub use er_telemetry::counters::PROFILE_RT_PIN_SWITCHES;
+pub use er_telemetry_core::counters::PROFILE_RT_PIN_SWITCHES;
 // COLOR/DEPTH SOURCE PROVENANCE (green-face wrong-buffer fix, 2026-07-03). The offscreen nest holds
 // same-size same-format non-final render targets (material/G-buffer: flat-green face, saturated
 // orange emissive -- user screenshot), and the whole-nest "largest texture" scan can pick one when
@@ -202,16 +202,16 @@ pub use er_telemetry::counters::PROFILE_RT_PIN_SWITCHES;
 // where each tick's color/depth came from; the strict publish gate displays ONLY bundle-provenance
 // color (identity-proven by construction), and scan-resolved frames hold the bridge instead.
 /// Cumulative ticks whose color resolved from the scene bundle vs the scan fallback.
-pub use er_telemetry::counters::PROFILE_COLOR_FROM_BUNDLE;
-pub use er_telemetry::counters::PROFILE_COLOR_FROM_SCAN;
+pub use er_telemetry_core::counters::PROFILE_COLOR_FROM_BUNDLE;
+pub use er_telemetry_core::counters::PROFILE_COLOR_FROM_SCAN;
 /// Per-tick color provenance: 1 = scene-bundle RTV (identity-proven), 0 = whole-nest scan fallback.
 /// Written by the readback, consumed immediately by the same-thread draw tick.
-pub use er_telemetry::counters::PROFILE_COLOR_SRC_BUNDLE_LAST;
-pub use er_telemetry::counters::PROFILE_DEPTH_FROM_BFS;
+pub use er_telemetry_core::counters::PROFILE_COLOR_SRC_BUNDLE_LAST;
+pub use er_telemetry_core::counters::PROFILE_DEPTH_FROM_BFS;
 /// Cumulative depth resolutions via the deterministic bundle chain vs the heuristic BFS fallback.
-pub use er_telemetry::counters::PROFILE_DEPTH_FROM_CHAIN;
+pub use er_telemetry_core::counters::PROFILE_DEPTH_FROM_CHAIN;
 /// Keyed+clean frames NOT displayed because their color was scan-resolved (no bundle provenance).
-pub use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
+pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
 
 // Static-RE'd offscreen scene-target member chain (Ghidra dump decompiles, 2026-07-03 -- the
 // black-background-on-reload root fix). The CSEzOffscreenRend stores its GXSgCompositeScene facade
@@ -232,7 +232,7 @@ const TARGET_BUNDLE_DSV_VIEW_OFFSET: usize = 0x40;
 /// resolving BOTH from one bundle guarantees the color and depth are the same render pass's siblings.
 const TARGET_BUNDLE_RTV_VIEW_OFFSET: usize = 0x30;
 /// One-shot diagnostic latch for the deterministic depth-view chain (first resolve + first miss).
-pub use er_telemetry::counters::DEPTH_CHAIN_DIAG;
+pub use er_telemetry_core::counters::DEPTH_CHAIN_DIAG;
 
 /// Find the offscreen scene's DEPTH-STENCIL resource (same-size sibling of the color RT, observed
 /// format 19 = R32G8X24_TYPELESS). Used for the depth-key transparent background: background =
@@ -466,9 +466,10 @@ pub unsafe fn find_d3d12_resource_ex(
     // bd FPS-ROOT-...-2026-07-22); the reload fps protection (cur != 0) is unchanged.
     {
         use std::sync::atomic::Ordering as RbOrd;
-        let cur = er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+        let cur = er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
             .load(RbOrd::SeqCst);
-        if cur != 0 && er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(RbOrd::SeqCst) == cur
+        if cur != 0
+            && er_telemetry_core::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(RbOrd::SeqCst) == cur
         {
             return None;
         }

@@ -4,8 +4,8 @@
 //! reported "10/10" from a call counter while the character wore nothing, so no number in
 //! this module is derived from a call having been made.
 
-use er_build_import::BuildDoc;
-use er_build_import::equip::EquipRef;
+use er_build_import_core::BuildDoc;
+use er_build_import_core::equip::EquipRef;
 // Declared once in `er-game-base::rva`; the exporter reads the same two spell getters.
 use er_game_base::rva::{
     GET_EQUIP_MAGIC_ID_RVA as GET_EQUIP_MAGIC_ID,

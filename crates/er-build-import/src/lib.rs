@@ -49,7 +49,7 @@ fn register_task() {
         match unsafe { CSTaskImp::instance() } {
             Ok(task) => break task,
             // No sleep (banned by scripts/check-no-timeouts.py): yield and re-poll, the same shape
-            // er-invasion-warp-dll and er-telemetry-dll use.
+            // er-invasion-warp and er-telemetry use.
             Err(_) => std::thread::yield_now(),
         }
     };

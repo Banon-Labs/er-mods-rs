@@ -71,21 +71,21 @@ use crate::{
     model::{PickerIntent, PickerStatusMessage, save_picker_accepts},
 };
 
-use er_telemetry::counters::SAVE_PICKER_OS_CANCEL_COUNT;
-use er_telemetry::counters::SAVE_PICKER_OS_CLOSED_WITH_PATH;
-use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;
-use er_telemetry::counters::SAVE_PICKER_OS_ERROR_COUNT;
-use er_telemetry::counters::SAVE_PICKER_OS_LAST_ERROR;
-use er_telemetry::counters::SAVE_PICKER_OS_LAST_REJECT_REASON;
-use er_telemetry::counters::SAVE_PICKER_OS_OPEN_COUNT;
-use er_telemetry::counters::SAVE_PICKER_OS_OWNER_HWND;
-use er_telemetry::counters::SAVE_PICKER_OS_OWNER_IS_COVER;
-use er_telemetry::counters::SAVE_PICKER_OS_REJECT_COUNT;
-use er_telemetry::counters::SAVE_PICKER_OS_REOPEN_COUNT;
-use er_telemetry::counters::SAVE_PICKER_OS_REOPEN_EXHAUSTED;
-use er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS;
-use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
-use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_OS_CANCEL_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_OS_CLOSED_WITH_PATH;
+use er_telemetry_core::counters::SAVE_PICKER_OS_DIALOG_OPEN;
+use er_telemetry_core::counters::SAVE_PICKER_OS_ERROR_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_OS_LAST_ERROR;
+use er_telemetry_core::counters::SAVE_PICKER_OS_LAST_REJECT_REASON;
+use er_telemetry_core::counters::SAVE_PICKER_OS_OPEN_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_OS_OWNER_HWND;
+use er_telemetry_core::counters::SAVE_PICKER_OS_OWNER_IS_COVER;
+use er_telemetry_core::counters::SAVE_PICKER_OS_REJECT_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_OS_REOPEN_COUNT;
+use er_telemetry_core::counters::SAVE_PICKER_OS_REOPEN_EXHAUSTED;
+use er_telemetry_core::counters::SAVE_PICKER_OS_SAVELIKE_OPENS;
+use er_telemetry_core::counters::SAVE_PICKER_OS_TICKS_FROZEN;
+use er_telemetry_core::counters::SAVE_PICKER_PICK_REJECT_COUNT;
 
 /// Path buffer handed to comdlg32. `MAX_PATH` is not the limit for an explorer-style dialog; the
 /// recovered code used 1024 wide units and a Wine `Z:\...` spelling of a deep Linux path can be
@@ -417,15 +417,16 @@ fn os_dialog_run(
         } else if SAVE_PICKER_OS_OWNER_IS_COVER.load(Ordering::SeqCst) == 1 {
             format!(
                 " (owner=the dim COVER, itself owned by ER window 0x{:x}: attach={} readback=0x{:x}; game < cover < dialog)",
-                er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst),
-                er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
-                er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
+                er_telemetry_core::counters::SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst),
+                er_telemetry_core::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
+                er_telemetry_core::counters::SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
             )
         } else {
             format!(
                 " (owner=the GAME window; no cover was up for this open -- dim_armed={} arm_wait_timeouts={})",
-                er_telemetry::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
-                er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
+                er_telemetry_core::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
+                er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS
+                    .load(Ordering::SeqCst),
             )
         },
         system_quit_windows_path_for_log(start_dir),

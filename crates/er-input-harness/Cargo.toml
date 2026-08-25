@@ -1,11 +1,11 @@
 [package]
-name = "er-input-harness-dll"
+name = "er-input-harness"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_input_harness_dll"
+name = "er_input_harness"
 crate-type = ["cdylib"]
 
 # The self-drive runs from a CSTaskImp FrameBegin task (title accept byte, Continue), PLUS MinHooks on

@@ -34,8 +34,8 @@
 
 // Everything below the crate docs is the install path, and the install path is `cfg(windows)`: on
 // the host there is no game to hook, so the registry rows, their stubs, and the logging they feed
-// have no caller. That is a cfg artifact, not dead code -- the same reason `er-invasion-warp-dll`
-// carries this attribute. Without it `cargo test -p er-seamless-bugfixes-dll` cannot even build,
+// have no caller. That is a cfg artifact, not dead code -- the same reason `er-invasion-warp`
+// carries this attribute. Without it `cargo test -p er-seamless-bugfixes` cannot even build,
 // which is how the crate's own host tests came to be unrunnable.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 

@@ -109,7 +109,7 @@ def main() -> int:
     if not any(pair.startswith("er-effects-rs:") for pair in pairs):
         failures.append("me3-dll-list omitted the product crate er-effects-rs")
     # The four crates that override [lib] name must keep both halves distinct.
-    overrides = {"er-better-refills-dll": "er_better_refills", "mushroom-man-runtime": "mushroom_man"}
+    overrides = {"er-better-refills": "er_better_refills", "mushroom-man-runtime": "mushroom_man"}
     for package, artifact in overrides.items():
         if f"{package}:{artifact}" not in pairs:
             failures.append(f"me3-dll-list lost the [lib] name override {package} -> {artifact}")

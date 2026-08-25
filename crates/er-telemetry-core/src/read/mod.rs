@@ -1,4 +1,4 @@
-//! Read-side, PASSIVE RAM oracle modules for the standalone `er-telemetry-dll`.
+//! Read-side, PASSIVE RAM oracle modules for the standalone `er-telemetry`.
 //!
 //! Each oracle is a self-contained, independently marker-gated module that does
 //! ONLY fault-safe `ReadProcessMemory` reads (via `er_game_base::mem::safe_read_*`)

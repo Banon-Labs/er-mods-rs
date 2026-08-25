@@ -135,7 +135,7 @@ pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reaso
     // so "has anything published yet" is only meaningful against the CURRENT window. Snapshot it
     // here, at the one place a new portrait window begins, or every warm-up reject from switch 2
     // onward would be misfiled as a post-publish fault.
-    er_telemetry::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.store(
+    er_telemetry_core::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.store(
         LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );

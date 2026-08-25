@@ -1,4 +1,4 @@
-//! er-telemetry: the telemetry subsystem lifted out of the product DLL.
+//! er-telemetry-core: the telemetry subsystem lifted out of the product DLL.
 //!
 //! STATUS: skeleton + shared log/oracle scaffolding. The full body of the 8
 //! telemetry source files (write_telemetry / write_game_module_oracles /
@@ -41,7 +41,7 @@ fn standalone_json_path() -> PathBuf {
         .join(STANDALONE_JSON)
 }
 
-/// Read-side-only telemetry tick for the standalone `er-telemetry-dll`.
+/// Read-side-only telemetry tick for the standalone `er-telemetry`.
 ///
 /// Emits exactly the subset of oracle_* fields derivable from game RAM/PE alone
 /// (no product hooks, no `EffectsState`): the game module base and the three

@@ -1,4 +1,4 @@
-//! Fresh-per-run debug log, modeled on `er-reload-trace-dll`'s log helper. The harness leaves a
+//! Fresh-per-run debug log, modeled on `er-reload-trace`'s log helper. The harness leaves a
 //! diagnosable evidence trail (default runtime research mode is telemetry/non-fatal per AGENTS.md)
 //! without a `bd` memory or a screenshot -- those are separate oracles.
 //!

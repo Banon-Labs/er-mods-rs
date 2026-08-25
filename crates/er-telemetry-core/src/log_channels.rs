@@ -9,7 +9,7 @@
 //! per-line logging cost. Each channel reads ONLY its own marker, never a product-feature gate, so
 //! logging is fully decoupled from product behavior.
 //!
-//! This module lives in er-telemetry (NO product dependency); the product reroutes its own diagnostic
+//! This module lives in er-telemetry-core (NO product dependency); the product reroutes its own diagnostic
 //! call sites through these channels as they migrate (the firehose->channel migration is Phase D).
 //! ONE channel is defined now: [`TITLE_REBUILD`].
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -112,7 +112,7 @@ pub fn write_channel(chan: &Channel, args: std::fmt::Arguments<'_>) {
         *guard = er_game_base::log::open_truncated_with_header(&path, |file| {
             let _ = writeln!(
                 file,
-                "===== er-telemetry log channel {name} opened; [+Nms] = elapsed since this channel's first line ====="
+                "===== er-telemetry-core log channel {name} opened; [+Nms] = elapsed since this channel's first line ====="
             );
         });
     }
@@ -126,7 +126,7 @@ pub fn write_channel(_chan: &Channel, _args: std::fmt::Arguments<'_>) {}
 
 /// Log one formatted line to a channel IFF the channel's marker is present. ZERO file I/O (a single
 /// cached atomic marker check, then return) when the marker is absent, so a plain A/B-baseline run
-/// pays nothing. Usage: `er_telemetry::log_channel!(er_telemetry::log_channels::TITLE_REBUILD,
+/// pays nothing. Usage: `er_telemetry_core::log_channel!(er_telemetry_core::log_channels::TITLE_REBUILD,
 /// "rebuilt slot {slot} epoch={epoch}");`.
 #[macro_export]
 macro_rules! log_channel {

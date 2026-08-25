@@ -12,20 +12,20 @@
 #   * the dim overlay that covers the game while an OS dialog is up -- the IN-GAME
 #     quit-menu case ONLY (user decision 2026-07-30).
 #
-# DEPENDENCY DIRECTION IS ONE-WAY: er-quit-menu -> er-save-picker. This crate borrows the
+# DEPENDENCY DIRECTION IS ONE-WAY: er-quit-menu-core -> er-save-picker-core. This crate borrows the
 # shared row model and the comdlg32 mechanism from (A) and supplies its own dim as the
 # cover. (A) never references the dim, which is what keeps the direction acyclic.
 #
 # Product state crosses the seam as injected function pointers: see `host::install_host`.
 # This crate must NOT depend on the root crate.
 [package]
-name = "er-quit-menu"
+name = "er-quit-menu-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_quit_menu"
+name = "er_quit_menu_core"
 
 [dependencies]
 # The shared row model, the picker config keys and the comdlg32 dialog mechanism
@@ -34,14 +34,14 @@ name = "er_quit_menu"
 # that cargo unifies features across a build graph, so this isolation is real only in a
 # build where (A)'s own DLL / the product are absent -- the runtime guarantee is that (A)'s
 # boot flow arms only from an explicit entry point that this crate never calls.
-er-save-picker = { path = "../er-save-picker", default-features = false, features = [
+er-save-picker-core = { path = "../er-save-picker-core", default-features = false, features = [
   "os-dialog",
 ] }
 # BND4 slot walk + PlayerGameData reads for the ProfileSummary preview of a foreign save.
 er-save-loader = { path = "../er-save-loader" }
 # Shared cross-platform telemetry counters (the oracle_system_quit_* / save_flow_* /
 # save_dest_* / save_picker_* fields).
-er-telemetry = { path = "../er-telemetry" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

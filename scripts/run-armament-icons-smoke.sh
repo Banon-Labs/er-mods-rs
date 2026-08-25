@@ -14,8 +14,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/armament-icons-smoke-$(date +%Y%m%d-%H%M%S)}"
-HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness_dll.dll"
-TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.dll"
+TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
 BADGE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_armament_icons.dll"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 300)"
 # Settle window after the decisive semaphore before teardown (user 2026-07-23: ~3s teardown).
@@ -89,8 +89,8 @@ mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
 
 # --- stage the 3 DLLs + profile ---
-HARNESS_GAMEDIR="$GAME_DIR/er_input_harness_dll.dll"
-TELEM_GAMEDIR="$GAME_DIR/er_telemetry_dll.dll"
+HARNESS_GAMEDIR="$GAME_DIR/er_input_harness.dll"
+TELEM_GAMEDIR="$GAME_DIR/er_telemetry.dll"
 BADGE_GAMEDIR="$GAME_DIR/er_armament_icons.dll"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
 cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
@@ -238,7 +238,7 @@ rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-i
 [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-	for d in er_input_harness_dll.dll er_telemetry_dll.dll er_armament_icons.dll; do
+	for d in er_input_harness.dll er_telemetry.dll er_armament_icons.dll; do
 		f="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/$d"
 		[[ -f "$f" ]] && echo "$d: mtime=$(date -r "$f" +%Y%m%d-%H%M%S) sha=$(sha256sum "$f" | cut -c1-16)"
 	done

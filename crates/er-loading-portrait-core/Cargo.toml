@@ -2,19 +2,19 @@
 # extracted from the root er-effects-rs DLL (portrait crate split, docs/plans/
 # portrait-stats-crate-split.md). Product state crosses the seam through
 # `host::install_host` function pointers (the `set_frame_provider` pattern); this crate
-# must NOT depend on the root crate, er-loading-bar, or er-d3d12-compositor.
+# must NOT depend on the root crate, er-loading-bar-core, or er-d3d12-compositor.
 [package]
-name = "er-loading-portrait"
+name = "er-loading-portrait-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_loading_portrait"
+name = "er_loading_portrait_core"
 
 [dependencies]
 # Shared cross-platform telemetry counters (the oracle_* fields the pipeline writes).
-er-telemetry = { path = "../er-telemetry" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 # GFX (Scaleform SWF-variant) parser + glyph raster (pure-Rust, host-testable): the
 # stats text renders with the game's own menu font captured at runtime from the
 # Scaleform file-open. Cross-platform so the unified stats-line layout + raster

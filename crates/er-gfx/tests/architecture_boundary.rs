@@ -131,8 +131,8 @@ fn the_direct_codec_consumers_match_the_decision_evidence() {
     let mut expected = BTreeSet::from([
         "er-armament-icons".to_owned(),
         "er-effects-rs".to_owned(),
-        "er-invasion-warp-dll".to_owned(),
-        "er-loading-portrait".to_owned(),
+        "er-invasion-warp".to_owned(),
+        "er-loading-portrait-core".to_owned(),
     ]);
     if workspace_root()
         .join("crates/er-scaleform-hooks/Cargo.toml")
@@ -154,9 +154,9 @@ fn codec_stays_below_the_native_hook_layer() {
         "eldenring",
         "er-effects-rs",
         "er-hook",
-        "er-loading-portrait",
+        "er-loading-portrait-core",
         "er-scaleform-hooks",
-        "er-telemetry",
+        "er-telemetry-core",
         "er-title-flow",
         "fromsoftware-shared",
         "windows",
@@ -174,18 +174,18 @@ fn codec_stays_below_the_native_hook_layer() {
 #[test]
 fn the_counterfactual_deepening_edge_would_close_a_cycle() {
     let title_flow = dependency_names(&manifest("er-title-flow"));
-    let portrait = dependency_names(&manifest("er-loading-portrait"));
+    let portrait = dependency_names(&manifest("er-loading-portrait-core"));
     assert!(
-        title_flow.contains("er-loading-portrait"),
-        "D2 cycle evidence changed: expected er-title-flow -> er-loading-portrait"
+        title_flow.contains("er-loading-portrait-core"),
+        "D2 cycle evidence changed: expected er-title-flow -> er-loading-portrait-core"
     );
     assert!(
         portrait.contains("er-gfx"),
-        "D2 cycle evidence changed: expected er-loading-portrait -> er-gfx"
+        "D2 cycle evidence changed: expected er-loading-portrait-core -> er-gfx"
     );
     assert!(
         !dependency_names(&manifest("er-gfx")).contains("er-title-flow"),
-        "er-gfx -> er-title-flow closes er-gfx -> er-title-flow -> er-loading-portrait -> er-gfx"
+        "er-gfx -> er-title-flow closes er-gfx -> er-title-flow -> er-loading-portrait-core -> er-gfx"
     );
 }
 
@@ -206,7 +206,7 @@ fn the_selected_sibling_owner_points_toward_the_codec_when_present() {
         "er-game-base".to_owned(),
         "er-gfx".to_owned(),
         "er-hook".to_owned(),
-        "er-telemetry".to_owned(),
+        "er-telemetry-core".to_owned(),
     ]);
     assert!(
         required.is_subset(&dependencies),
@@ -216,7 +216,7 @@ fn the_selected_sibling_owner_points_toward_the_codec_when_present() {
 
     let forbidden = [
         "er-effects-rs",
-        "er-loading-portrait",
+        "er-loading-portrait-core",
         "er-scaleform-hooks",
         "er-title-flow",
     ];

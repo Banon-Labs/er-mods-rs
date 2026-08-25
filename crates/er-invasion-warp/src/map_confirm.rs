@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(crate) static ORIG_WARP_JOB_ASSEMBLER: AtomicUsize = AtomicUsize::new(0);
 /// Confirms recognised as ours, and how many of those issued a warp.
 ///
-/// Under the current [`er_invasion_warp::warp::WarpPolicy`] the second is expected to stay at
+/// Under the current [`er_invasion_warp_core::warp::WarpPolicy`] the second is expected to stay at
 /// **zero forever** -- invasion locations are markers, so every confirm is refused. `intercepted`
 /// rising with `warped` flat is the CORRECT signature, not a regression. It is still counted
 /// because a non-zero value would mean the policy gate was bypassed, which is worth being able to
@@ -28,7 +28,7 @@ static CONFIRMS_WARPED: AtomicUsize = AtomicUsize::new(0);
 /// `CSLuaEventManImp::CallLua_Warp`; Lua cannot resolve it, the stage transition never completes,
 /// and the game hangs on the loading screen. That is exactly what a live run did.
 ///
-/// On recognising one of ours we ask [`er_invasion_warp::warp::request_invasion_warp`] and return a
+/// On recognising one of ours we ask [`er_invasion_warp_core::warp::request_invasion_warp`] and return a
 /// NULL job. Swallowing is safe: the callers' `Clone` (0x1407a7b60) and enqueue (0x1407a9250) both
 /// NULL-check, and the engine itself returns a NULL job on its own no-SpecialEffect path -- so a
 /// NULL out-slot is a state the callers already handle.
@@ -38,7 +38,7 @@ static CONFIRMS_WARPED: AtomicUsize = AtomicUsize::new(0);
 /// These are two independent things and conflating them would be a real bug. The swallow exists
 /// because a synthetic id reaching `CallLua_Warp` HANGS THE GAME, and it must keep happening
 /// whatever the warp policy is. Separately, `request_invasion_warp` now always answers
-/// [`er_invasion_warp::warp::WarpError::NotAWarpDestination`] -- invasion locations are markers,
+/// [`er_invasion_warp_core::warp::WarpError::NotAWarpDestination`] -- invasion locations are markers,
 /// not fast-travel points -- so the ordinary outcome here is the refusal branch below: the map
 /// stays open and the player does not move. The `Ok` branch is retained rather than deleted
 /// because the swallow, not the warp, is what this hook is FOR.
@@ -74,11 +74,11 @@ pub(crate) unsafe extern "system" fn warp_job_assembler_hook(
     // user's frozen game. Refusing the warp and returning a NULL job leaves the map open and the
     // player in control, which is the strictly better failure.
     if let Some(entity_id) = entity_id
-        && er_invasion_warp::map_surface::is_invasion_entity_id(entity_id)
+        && er_invasion_warp_core::map_surface::is_invasion_entity_id(entity_id)
     {
         let target = if registry_ptr != 0 {
             // SAFETY: the registry was leaked at injection time and is never freed or mutated.
-            let registry: &er_invasion_warp::map_surface::InvasionRowRegistry =
+            let registry: &er_invasion_warp_core::map_surface::InvasionRowRegistry =
                 unsafe { &*(registry_ptr as *const _) };
             registry.target_for_entity_id(entity_id).copied()
         } else {
@@ -90,7 +90,7 @@ pub(crate) unsafe extern "system" fn warp_job_assembler_hook(
         .or_else(|| crate::map_hooks::top_up_target_for_entity_id(entity_id));
         if let Some(target) = target {
             CONFIRMS_INTERCEPTED.fetch_add(1, Ordering::SeqCst);
-            match unsafe { er_invasion_warp::warp::request_invasion_warp(&target) } {
+            match unsafe { er_invasion_warp_core::warp::request_invasion_warp(&target) } {
                 Ok(outcome) => {
                     CONFIRMS_WARPED.fetch_add(1, Ordering::SeqCst);
                     crate::standalone_log(format_args!(

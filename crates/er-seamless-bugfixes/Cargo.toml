@@ -1,5 +1,5 @@
 [package]
-name = "er-seamless-bugfixes-dll"
+name = "er-seamless-bugfixes"
 version = "0.1.0"
 edition = "2024"
 publish = false

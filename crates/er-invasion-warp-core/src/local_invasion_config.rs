@@ -1,4 +1,4 @@
-//! Loading [`LocalInvasionConfig`] from `er-invasion-warp.toml`, and RELOADING it while the game
+//! Loading [`LocalInvasionConfig`] from `er-invasion-warp-core.toml`, and RELOADING it while the game
 //! runs.
 //!
 //! # Hot reload, and why it is mtime-polled rather than event-driven
@@ -36,7 +36,7 @@ pub const SECTION_NAME: &str = "local_invasion";
 
 /// The default file written when none exists. Documented in place, because the person who needs
 /// to understand these options is reading this file, not the source.
-pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp -- local invasion filter.
+pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp-core -- local invasion filter.
 #
 # Seamless decides WHERE an invasion sends you, server-side, and tells the client. This filter
 # reads that destination the moment it arrives -- before you have moved -- and cancels matches that
@@ -177,7 +177,7 @@ pub struct ParsedConfig {
     pub issues: Vec<ConfigIssue>,
 }
 
-/// Parse `er-invasion-warp.toml` text.
+/// Parse `er-invasion-warp-core.toml` text.
 ///
 /// Accepts the schema at top level OR inside a `[local_invasion]` section, so the same function
 /// serves the standalone file and the embedded-in-a-shared-TOML case. Sections other than

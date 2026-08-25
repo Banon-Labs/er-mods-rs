@@ -1,6 +1,6 @@
 //! The `?i=` document -- the planner's character object, written rather than read.
 //!
-//! [`crate::model`] is the mirror image of `er_build_import::model`: that one models the
+//! [`crate::model`] is the mirror image of `er_build_import_core::model`: that one models the
 //! *subset* a reader needs and ignores everything else, because an upstream field addition
 //! must not fail a parse. A writer cannot afford the same laxity. The planner's
 //! `importState` merges the incoming object into the live character with a helper that sets
@@ -79,7 +79,7 @@ pub struct BuildExportDoc {
     ///
     /// The one key here that `makeDefault()` does **not** write, and it is still required.
     /// The stored payload carries it at the top level (verified on build `af97a9da874151`,
-    /// where it is `null`), `er_build_import::model::BuildDoc` reads it, and the planner reads
+    /// where it is `null`), `er_build_import_core::model::BuildDoc` reads it, and the planner reads
     /// it as `this.character.greatRune && tools.get(...)` -- a guarded read, so absent is
     /// safe. Exporting without the key at all would silently drop the equipped rune on the
     /// way back into the game, which is why it is modelled; `null` would merely be noise,
@@ -274,7 +274,7 @@ impl Default for Sorting {
 /// The optional fields are skipped when `None` rather than written as `null`, because the
 /// planner distinguishes them: a *carried but unequipped* armament has no `equipIndex` key at
 /// all, so `Some(i)` means equipped and `None` means carried. Writing `equipIndex: null`
-/// would be a third state neither the planner nor `er-build-import` reads.
+/// would be a third state neither the planner nor `er-build-import-core` reads.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct Slot {
     /// The item's display name -- the only identifier the payload carries.

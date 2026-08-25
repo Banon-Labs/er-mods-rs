@@ -493,7 +493,7 @@ pub(crate) fn param_slab_bounds() -> Option<(usize, usize)> {
     }
     Some((
         begin,
-        begin + len * er_invasion_warp::param_row::SYNTHETIC_PARAM_ROW_LEN,
+        begin + len * er_invasion_warp_core::param_row::SYNTHETIC_PARAM_ROW_LEN,
     ))
 }
 
@@ -506,14 +506,14 @@ pub(crate) fn row_is_verifiably_ours(row: usize, slab: (usize, usize)) -> Option
     if param < slab.0 || param >= slab.1 {
         return None;
     }
-    if !(param - slab.0).is_multiple_of(er_invasion_warp::param_row::SYNTHETIC_PARAM_ROW_LEN) {
+    if !(param - slab.0).is_multiple_of(er_invasion_warp_core::param_row::SYNTHETIC_PARAM_ROW_LEN) {
         return None;
     }
     let id = unsafe { er_game_base::mem::safe_read_i32(row + ROW_ID_OFFSET) }?;
     if !id_is_our_stamp(id) {
         return None;
     }
-    Some((param - slab.0) / er_invasion_warp::param_row::SYNTHETIC_PARAM_ROW_LEN)
+    Some((param - slab.0) / er_invasion_warp_core::param_row::SYNTHETIC_PARAM_ROW_LEN)
 }
 
 /// Whether a `+0x08` id is one this module stamped. Split out so the range rule is testable
@@ -622,7 +622,7 @@ static CATALOG_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 /// changing how many there are -- counting alone would call an ersc-rewritten table identical to
 /// the vanilla one and keep serving stale pins. This is not a cryptographic digest and does not
 /// need to be; it needs to change when the data changes.
-fn catalog_signature(registry: &er_invasion_warp::map_surface::InvasionRowRegistry) -> usize {
+fn catalog_signature(registry: &er_invasion_warp_core::map_surface::InvasionRowRegistry) -> usize {
     let mut hash = fnv1a64(b"");
     let mut mix = |value: u64| {
         hash = fnv1a64_mix(hash, value);
@@ -665,7 +665,7 @@ fn catalog_signature(registry: &er_invasion_warp::map_surface::InvasionRowRegist
 /// Game thread; `begin` must point at a constructed row.
 #[cfg(windows)]
 unsafe fn sample_donor(begin: usize, row_count: usize) -> Option<DonorParamFields> {
-    use er_invasion_warp::param_row::{
+    use er_invasion_warp_core::param_row::{
         CATEGORY_BITS_MASK, PARAM_CATEGORY_BITS_OFFSET, PARAM_ICON_ID_OFFSET,
         PARAM_LABEL_TEXT_ID_BASE, PARAM_SUBCATEGORY_ID_OFFSET,
     };
@@ -777,7 +777,7 @@ pub(crate) unsafe fn project_to_map(
 #[must_use]
 unsafe fn legacy_map_regions_for_view(
     view_model: usize,
-) -> Vec<er_invasion_warp::legacy_map_regions::LegacyMapRegion> {
+) -> Vec<er_invasion_warp_core::legacy_map_regions::LegacyMapRegion> {
     let Some(count) =
         (unsafe { er_game_base::mem::safe_read_usize(view_model + AREA_CONVERTER_COUNT_OFFSET) })
     else {
@@ -790,15 +790,15 @@ unsafe fn legacy_map_regions_for_view(
     for index in 0..count {
         let converter = view_model + AREA_CONVERTERS_OFFSET + index * AREA_CONVERTER_STRIDE;
         let walked = unsafe {
-            er_invasion_warp::legacy_map_regions::legacy_regions_for_converter(converter)
+            er_invasion_warp_core::legacy_map_regions::legacy_regions_for_converter(converter)
         };
         // The container keeps its own count, so the walk can be checked against the engine
         // rather than against nothing. Bounded by the same guard the walk uses, so a garbage
         // read cannot turn into a huge claimed figure.
         let says = unsafe {
-            er_invasion_warp::legacy_map_regions::legacy_entry_count_for_converter(converter)
+            er_invasion_warp_core::legacy_map_regions::legacy_entry_count_for_converter(converter)
         }
-        .filter(|n| *n <= er_invasion_warp::legacy_map_regions::MAX_TREE_NODES)
+        .filter(|n| *n <= er_invasion_warp_core::legacy_map_regions::MAX_TREE_NODES)
         .unwrap_or(0);
         if says != walked.len() {
             crate::standalone_log(format_args!(
@@ -826,7 +826,7 @@ unsafe fn legacy_map_regions_for_view(
 #[must_use]
 unsafe fn legacy_map_regions_for_view(
     _view_model: usize,
-) -> Vec<er_invasion_warp::legacy_map_regions::LegacyMapRegion> {
+) -> Vec<er_invasion_warp_core::legacy_map_regions::LegacyMapRegion> {
     Vec::new()
 }
 
@@ -871,14 +871,14 @@ pub(crate) fn layer_bit_for_converter(
     // mapId = 1`), and it is mirrored rather than skipped so the mapping stays right if a catalog
     // ever does contain area-12 points. The shipped one does not, which is why the underground
     // map honestly has no invasion pins.
-    if layer_id == 0 && block_area == er_invasion_warp::param_row::AREA_UNDERGROUND {
+    if layer_id == 0 && block_area == er_invasion_warp_core::param_row::AREA_UNDERGROUND {
         layer_id = 1;
     }
     // `FUN_140887e90`: layer 0 -> bit 0, 1 -> bit 1, 10 -> bit 2, anything else -> invisible.
     match layer_id {
-        0 => Some(er_invasion_warp::param_row::LAYER_BIT_SURFACE),
-        1 => Some(er_invasion_warp::param_row::LAYER_BIT_UNDERGROUND),
-        10 => Some(er_invasion_warp::param_row::LAYER_BIT_SHADOW_LANDS),
+        0 => Some(er_invasion_warp_core::param_row::LAYER_BIT_SURFACE),
+        1 => Some(er_invasion_warp_core::param_row::LAYER_BIT_UNDERGROUND),
+        10 => Some(er_invasion_warp_core::param_row::LAYER_BIT_SHADOW_LANDS),
         _ => None,
     }
 }
@@ -941,7 +941,7 @@ unsafe fn nearest_place_name_in_area(
     area: Option<u8>,
     coords: MapCoordinates,
 ) -> Option<i32> {
-    use er_invasion_warp::param_row::{PARAM_LABEL_KIND_BASE, PARAM_LABEL_TEXT_ID_BASE};
+    use er_invasion_warp_core::param_row::{PARAM_LABEL_KIND_BASE, PARAM_LABEL_TEXT_ID_BASE};
 
     let mut best_text_id = None;
     let mut best_distance = f32::INFINITY;
@@ -1004,8 +1004,8 @@ pub const fn block_area(block_id: u32) -> u8 {
 /// Game task thread, immediately after the original ctor returned.
 #[cfg(windows)]
 unsafe fn inject_pins(base: usize, view_model: usize) {
-    use er_invasion_warp::map_surface::{InvasionRowRegistry, PinGranularity};
-    use er_invasion_warp::param_row::{SYNTHETIC_PARAM_ROW_LEN, SyntheticParamSpec};
+    use er_invasion_warp_core::map_surface::{InvasionRowRegistry, PinGranularity};
+    use er_invasion_warp_core::param_row::{SYNTHETIC_PARAM_ROW_LEN, SyntheticParamSpec};
 
     let Some(before) = (unsafe { read_pin_list(view_model) }) else {
         INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
@@ -1041,7 +1041,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // Enumerate the icon ids the shipped rows actually use, so a distinct one can be chosen
     // from what the game has rather than guessed at.
     {
-        use er_invasion_warp::param_row::PARAM_ICON_ID_OFFSET;
+        use er_invasion_warp_core::param_row::PARAM_ICON_ID_OFFSET;
         let mut seen: Vec<u16> = Vec::new();
         for index in 0..existing_rows.min(MAX_DONOR_SCAN_ROWS) {
             let row = before.begin + index * PIN_ROW_STRIDE;
@@ -1062,23 +1062,23 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         }
         seen.sort_unstable();
         let red_installed = crate::map_gfx::red_pin_frame_installed();
-        let dimmed = er_invasion_warp::warp::invasion_attempt_in_flight();
+        let dimmed = er_invasion_warp_core::warp::invasion_attempt_in_flight();
         crate::standalone_log(format_args!(
             "map-inject: shipped rows use icon frames {seen:?}; invasion pins will use frames \
              chosen={} untouched={} excluded={} (markers installed: {red_installed}, invasion \
              attempt in flight: {dimmed} -- pins are drawn DIMMED and refuse to warp while it is)",
-            er_invasion_warp::param_row::invasion_pin_icon_id_for(
-                er_invasion_warp::param_row::PinAppearance::Chosen,
+            er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
+                er_invasion_warp_core::param_row::PinAppearance::Chosen,
                 red_installed,
                 dimmed
             ),
-            er_invasion_warp::param_row::invasion_pin_icon_id_for(
-                er_invasion_warp::param_row::PinAppearance::Eligible,
+            er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
+                er_invasion_warp_core::param_row::PinAppearance::Eligible,
                 red_installed,
                 dimmed
             ),
-            er_invasion_warp::param_row::invasion_pin_icon_id_for(
-                er_invasion_warp::param_row::PinAppearance::Rejected,
+            er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
+                er_invasion_warp_core::param_row::PinAppearance::Rejected,
                 red_installed,
                 dimmed
             ),
@@ -1109,18 +1109,18 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // genuine change re-leaks, and injection runs per WORLD LOAD (the ViewModel is built in
     // `MoveMapStep`), not per frame and not per map open -- so the walk sits inside a load the
     // player is already waiting through.
-    let catalog = match unsafe { er_invasion_warp::invasion_warp::collect_invasion_warp_catalog() }
-    {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
-            crate::standalone_log(format_args!(
-                "map-inject: invasion catalog unavailable at ViewModel ctor time ({error}); no \
+    let catalog =
+        match unsafe { er_invasion_warp_core::invasion_warp::collect_invasion_warp_catalog() } {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
+                crate::standalone_log(format_args!(
+                    "map-inject: invasion catalog unavailable at ViewModel ctor time ({error}); no \
                  pins injected"
-            ));
-            return;
-        }
-    };
+                ));
+                return;
+            }
+        };
     // Is this the shipped table, or has a mod rewritten it in memory?
     //
     // The count oracle cannot tell: Seamless Co-op modifies invasion locations at runtime, and a
@@ -1135,8 +1135,8 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             .iter()
             .map(|target| (target.block, target.position, target.yaw))
             .collect();
-        let digest = er_invasion_warp::aip::catalog_content_digest(&content);
-        let vanilla = er_invasion_warp::aip::AIP_CATALOG_CONTENT_DIGEST_VANILLA;
+        let digest = er_invasion_warp_core::aip::catalog_content_digest(&content);
+        let vanilla = er_invasion_warp_core::aip::AIP_CATALOG_CONTENT_DIGEST_VANILLA;
         crate::standalone_log(format_args!(
             "map-inject: live spawn table digest {digest:#018x} vs vanilla on-disk \
              {vanilla:#018x} -> {}",
@@ -1224,7 +1224,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             true
         })
         .map(|region| {
-            er_invasion_warp::invasion_warp::InvasionWarpTarget::provisional(region.block)
+            er_invasion_warp_core::invasion_warp::InvasionWarpTarget::provisional(region.block)
         })
         .collect();
     let provisional_pins = provisional.len();
@@ -1368,9 +1368,9 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     .map(|target| target.block.raw()),
             );
             match appearance {
-                er_invasion_warp::param_row::PinAppearance::Chosen => tier_chosen += 1,
-                er_invasion_warp::param_row::PinAppearance::Eligible => tier_untouched += 1,
-                er_invasion_warp::param_row::PinAppearance::Rejected => tier_excluded += 1,
+                er_invasion_warp_core::param_row::PinAppearance::Chosen => tier_chosen += 1,
+                er_invasion_warp_core::param_row::PinAppearance::Eligible => tier_untouched += 1,
+                er_invasion_warp_core::param_row::PinAppearance::Rejected => tier_excluded += 1,
             }
             rows.push(
                 SyntheticParamSpec {
@@ -1378,10 +1378,10 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     subcategory_id: donor.subcategory_id,
                     // Deliberately NOT the donor's icon: the donor is a grace, and the id is a
                     // GFx frame number, so copying it draws a Site of Grace.
-                    icon_id: er_invasion_warp::param_row::invasion_pin_icon_id_for(
+                    icon_id: er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
                         appearance,
                         crate::map_gfx::red_pin_frame_installed(),
-                        er_invasion_warp::warp::invasion_attempt_in_flight(),
+                        er_invasion_warp_core::warp::invasion_attempt_in_flight(),
                     ),
                     // NOT the donor's bits, and NOT all three. These are per-map-layer
                     // visibility bits over a row that holds ONE coordinate, so all-three drew
@@ -1395,7 +1395,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             );
         }
         {
-            use er_invasion_warp::param_row::PARAM_LABEL_TEXT_ID_BASE;
+            use er_invasion_warp_core::param_row::PARAM_LABEL_TEXT_ID_BASE;
             let named = rows
                 .iter()
                 .filter(|row| {
@@ -1438,10 +1438,10 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 SyntheticParamSpec {
                     entity_id: 0,
                     subcategory_id: donor.subcategory_id,
-                    icon_id: er_invasion_warp::param_row::invasion_pin_icon_id_for(
-                        er_invasion_warp::param_row::PinAppearance::Eligible,
+                    icon_id: er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
+                        er_invasion_warp_core::param_row::PinAppearance::Eligible,
                         crate::map_gfx::red_pin_frame_installed(),
-                        er_invasion_warp::warp::invasion_attempt_in_flight(),
+                        er_invasion_warp_core::warp::invasion_attempt_in_flight(),
                     ),
                     category_bits: 0,
                     place_name_text_id: -1,
@@ -1504,21 +1504,21 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                         .map(|target| target.block.raw()),
                 );
                 match appearance {
-                    er_invasion_warp::param_row::PinAppearance::Chosen => chosen += 1,
-                    er_invasion_warp::param_row::PinAppearance::Eligible => untouched += 1,
-                    er_invasion_warp::param_row::PinAppearance::Rejected => excluded += 1,
+                    er_invasion_warp_core::param_row::PinAppearance::Chosen => chosen += 1,
+                    er_invasion_warp_core::param_row::PinAppearance::Eligible => untouched += 1,
+                    er_invasion_warp_core::param_row::PinAppearance::Rejected => excluded += 1,
                 }
-                let desired = er_invasion_warp::param_row::invasion_pin_icon_id_for(
+                let desired = er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
                     appearance,
                     installed,
-                    er_invasion_warp::warp::invasion_attempt_in_flight(),
+                    er_invasion_warp_core::warp::invasion_attempt_in_flight(),
                 );
                 // ALL FOUR icon slots, via the one stamper. Writing only `+0x1c` here -- which is
                 // what this line used to do -- left the other three holding the icon from the FIRST
                 // build, and the engine reads whichever descriptor its own event-flag predicate
                 // selects. That is why marking a location changed every count in the log and
                 // nothing on the map.
-                er_invasion_warp::param_row::stamp_icon_id(row, desired);
+                er_invasion_warp_core::param_row::stamp_icon_id(row, desired);
             }
             crate::standalone_log(format_args!(
                 "map-inject: re-stamped {} param rows -- chosen={chosen} untouched={untouched} \
@@ -1623,7 +1623,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         // them to disagree as well as doubling 365 native calls inside a world load.
         let is_legacy = !matches!(
             block_area(target.block.raw()),
-            er_invasion_warp::param_row::AREA_SHADOW_LANDS | 60
+            er_invasion_warp_core::param_row::AREA_SHADOW_LANDS | 60
         );
         if is_legacy {
             legacy_seen += 1;
@@ -1665,7 +1665,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             continue;
         }
         let target_area = block_area(target.block.raw());
-        if target_area == er_invasion_warp::param_row::AREA_SHADOW_LANDS {
+        if target_area == er_invasion_warp_core::param_row::AREA_SHADOW_LANDS {
             per_area[1] += 1;
         } else {
             per_area[0] += 1;
@@ -1679,7 +1679,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         let legacy_remap_expected = is_legacy
             && matches!(
                 converter_area,
-                60 | er_invasion_warp::param_row::AREA_SHADOW_LANDS
+                60 | er_invasion_warp_core::param_row::AREA_SHADOW_LANDS
             );
         if converter_area != target_area && !legacy_remap_expected {
             // The converter that accepted this point belongs to a DIFFERENT area, so the map
@@ -1765,7 +1765,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             // Measured here, over rows that actually landed, so the number cannot be inflated by
             // targets that were dropped before they became pins.
             {
-                use er_invasion_warp::param_row::PARAM_LABEL_TEXT_ID_BASE;
+                use er_invasion_warp_core::param_row::PARAM_LABEL_TEXT_ID_BASE;
                 if i32::from_le_bytes(
                     param_row[PARAM_LABEL_TEXT_ID_BASE..PARAM_LABEL_TEXT_ID_BASE + 4]
                         .try_into()
@@ -1873,8 +1873,8 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // The legacy line is emitted unconditionally, INCLUDING when the count is zero. A silent
     // absence would read as "legacy dungeons are handled" when the truth is "no dungeon map has
     // been resident yet, so none were even offered".
-    er_invasion_warp::oracles::publish_legacy_pin_oracles(legacy_seen, legacy_placed);
-    er_invasion_warp::oracles::publish_undrawable_pin_count(undrawable);
+    er_invasion_warp_core::oracles::publish_legacy_pin_oracles(legacy_seen, legacy_placed);
+    er_invasion_warp_core::oracles::publish_undrawable_pin_count(undrawable);
     if undrawable > 0 {
         crate::standalone_log(format_args!(
             "map-inject: {undrawable} APPENDED pin(s) carry -1 on all eight labels and therefore \
@@ -1933,8 +1933,9 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
 /// Session-scoped and only ever grown. It is NOT reset when the catalog signature changes: a mod
 /// rewriting the `.aip` table says nothing about MSB region data, and throwing away coverage the
 /// player has already walked past would make the surface worse for no reason.
-static MSB_CATALOG: std::sync::Mutex<er_invasion_warp::msb_invasion_points::MsbInvasionCatalog> =
-    std::sync::Mutex::new(er_invasion_warp::msb_invasion_points::MsbInvasionCatalog::new());
+static MSB_CATALOG: std::sync::Mutex<
+    er_invasion_warp_core::msb_invasion_points::MsbInvasionCatalog,
+> = std::sync::Mutex::new(er_invasion_warp_core::msb_invasion_points::MsbInvasionCatalog::new());
 
 /// Read every resident map's `InvasionPoint` regions into [`MSB_CATALOG`].
 ///
@@ -1945,7 +1946,7 @@ static MSB_CATALOG: std::sync::Mutex<er_invasion_warp::msb_invasion_points::MsbI
 /// Game task thread, with the world up.
 #[cfg(windows)]
 pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
-    use er_invasion_warp::msb_invasion_points::{read_map_invasion_points, resident_blocks};
+    use er_invasion_warp_core::msb_invasion_points::{read_map_invasion_points, resident_blocks};
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return (0, 0);
     };
@@ -1999,7 +2000,7 @@ pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
 /// invasion points at all". Only the first deserves a provisional marker; the second would be a
 /// marker promising an invasion spawn that does not exist.
 #[cfg(windows)]
-fn msb_has_observed(block: er_invasion_warp::invasion_warp::BlockKey) -> bool {
+fn msb_has_observed(block: er_invasion_warp_core::invasion_warp::BlockKey) -> bool {
     let catalog = match MSB_CATALOG.lock() {
         Ok(catalog) => catalog,
         Err(poisoned) => poisoned.into_inner(),
@@ -2008,13 +2009,13 @@ fn msb_has_observed(block: er_invasion_warp::invasion_warp::BlockKey) -> bool {
 }
 
 #[cfg(not(windows))]
-fn msb_has_observed(_block: er_invasion_warp::invasion_warp::BlockKey) -> bool {
+fn msb_has_observed(_block: er_invasion_warp_core::invasion_warp::BlockKey) -> bool {
     false
 }
 
 #[cfg(windows)]
 fn msb_pending_block_count() -> usize {
-    use er_invasion_warp::msb_invasion_points::resident_blocks;
+    use er_invasion_warp_core::msb_invasion_points::resident_blocks;
     let catalog = match MSB_CATALOG.lock() {
         Ok(catalog) => catalog,
         Err(poisoned) => poisoned.into_inner(),
@@ -2034,7 +2035,7 @@ fn msb_pending_block_count() -> usize {
 /// points; a block that leaves it by gaining points was a mistimed read caught in the act.
 #[cfg(windows)]
 fn msb_confirming_block_count() -> usize {
-    use er_invasion_warp::msb_invasion_points::resident_blocks;
+    use er_invasion_warp_core::msb_invasion_points::resident_blocks;
     let catalog = match MSB_CATALOG.lock() {
         Ok(catalog) => catalog,
         Err(poisoned) => poisoned.into_inner(),
@@ -2091,7 +2092,7 @@ const MSB_HARVEST_FRAME_STRIDE: u64 = 60;
 /// lines rather than one per second.
 #[cfg(windows)]
 unsafe fn log_msb_cap_census() {
-    use er_invasion_warp::msb_invasion_points::resident_blocks;
+    use er_invasion_warp_core::msb_invasion_points::resident_blocks;
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return;
     };
@@ -2101,7 +2102,7 @@ unsafe fn log_msb_cap_census() {
     let live = blocks
         .iter()
         .filter(|(_, cap)| unsafe {
-            er_invasion_warp::msb_invasion_points::msb_res_cap_looks_live(base, *cap)
+            er_invasion_warp_core::msb_invasion_points::msb_res_cap_looks_live(base, *cap)
         })
         .count();
 
@@ -2130,8 +2131,9 @@ unsafe fn log_msb_cap_census() {
             format!("player block {raw:#010x} is NOT IN the world block list at all")
         }
         (Some(raw), Some(cap)) => {
-            let live =
-                unsafe { er_invasion_warp::msb_invasion_points::msb_res_cap_looks_live(base, cap) };
+            let live = unsafe {
+                er_invasion_warp_core::msb_invasion_points::msb_res_cap_looks_live(base, cap)
+            };
             format!("player block {raw:#010x} listed with cap {cap:#x} live={live}")
         }
     };
@@ -2148,7 +2150,7 @@ unsafe fn log_msb_cap_census() {}
 #[cfg(windows)]
 unsafe fn current_player_block() -> Option<u32> {
     let base = er_game_base::mem::game_module_base().ok()?;
-    unsafe { er_invasion_warp::warp::current_block_id(base) }
+    unsafe { er_invasion_warp_core::warp::current_block_id(base) }
 }
 
 #[cfg(not(windows))]
@@ -2187,7 +2189,7 @@ pub(crate) unsafe fn harvest_resident_msb_points(frame: u64) {
 /// Per-map rather than per-point deliberately: a legacy dungeon is a single place on the world
 /// map, and 285 catacomb points would stack 285 markers on one icon. This matches the
 /// `PinGranularity::PerBlock` the `.aip` side already uses.
-pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::InvasionWarpTarget> {
+pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp_core::invasion_warp::InvasionWarpTarget> {
     let catalog = match MSB_CATALOG.lock() {
         Ok(catalog) => catalog,
         Err(poisoned) => poisoned.into_inner(),
@@ -2211,7 +2213,7 @@ pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::Invasi
         .into_iter()
         .filter(|point| !block_area_is_legacy(point.block.raw()))
         .map(|point| {
-            er_invasion_warp::invasion_warp::InvasionWarpTarget::new(
+            er_invasion_warp_core::invasion_warp::InvasionWarpTarget::new(
                 point.block,
                 point.index,
                 point.position,
@@ -2241,13 +2243,13 @@ pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::Invasi
     let legacy_raw: usize = legacy_points.values().map(Vec::len).sum();
     let mut legacy_merged = 0_usize;
     for points in legacy_points.values() {
-        let merged = er_invasion_warp::msb_invasion_points::merge_coincident_points(
+        let merged = er_invasion_warp_core::msb_invasion_points::merge_coincident_points(
             points,
-            er_invasion_warp::msb_invasion_points::MARKER_MERGE_RADIUS_METRES,
+            er_invasion_warp_core::msb_invasion_points::MARKER_MERGE_RADIUS_METRES,
         );
         legacy_merged += merged.len();
         targets.extend(merged.into_iter().map(|point| {
-            er_invasion_warp::invasion_warp::InvasionWarpTarget::new(
+            er_invasion_warp_core::invasion_warp::InvasionWarpTarget::new(
                 point.block,
                 point.index,
                 point.position,
@@ -2267,7 +2269,7 @@ pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::Invasi
              metres and discards height, so points nearer than that cannot draw as separate icons \
              -- injecting them anyway would stack rows on the same pixel, not add markers.",
             legacy_points.len(),
-            er_invasion_warp::msb_invasion_points::MARKER_MERGE_RADIUS_METRES
+            er_invasion_warp_core::msb_invasion_points::MARKER_MERGE_RADIUS_METRES
         ));
     }
     targets
@@ -2280,7 +2282,7 @@ pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp::invasion_warp::Invasi
 #[must_use]
 pub const fn block_area_is_legacy(block_id: u32) -> bool {
     let area = block_area(block_id);
-    area != 60 && area != er_invasion_warp::param_row::AREA_SHADOW_LANDS
+    area != 60 && area != er_invasion_warp_core::param_row::AREA_SHADOW_LANDS
 }
 
 /// MSB invasion-point coverage so far: `(points, maps read)`.
@@ -2378,13 +2380,16 @@ static MERGE_REPORTED: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomi
 /// what the registry's length does afterwards. Cleared wherever the dormant span is re-established,
 /// because that is the moment every claim it describes stops existing.
 pub(crate) static TOP_UP_TARGETS: Mutex<
-    Vec<(i32, er_invasion_warp::invasion_warp::InvasionWarpTarget)>,
+    Vec<(
+        i32,
+        er_invasion_warp_core::invasion_warp::InvasionWarpTarget,
+    )>,
 > = Mutex::new(Vec::new());
 
 /// Remember what a topped-up row's synthetic entity id must warp to.
 pub(crate) fn record_top_up_target(
     entity_id: i32,
-    target: er_invasion_warp::invasion_warp::InvasionWarpTarget,
+    target: er_invasion_warp_core::invasion_warp::InvasionWarpTarget,
 ) {
     let mut table = match TOP_UP_TARGETS.lock() {
         Ok(table) => table,
@@ -2400,7 +2405,7 @@ pub(crate) fn record_top_up_target(
 /// The destination for a synthetic id the registry could not resolve, if a top-up claimed it.
 pub(crate) fn top_up_target_for_entity_id(
     entity_id: i32,
-) -> Option<er_invasion_warp::invasion_warp::InvasionWarpTarget> {
+) -> Option<er_invasion_warp_core::invasion_warp::InvasionWarpTarget> {
     let table = match TOP_UP_TARGETS.lock() {
         Ok(table) => table,
         Err(poisoned) => poisoned.into_inner(),
@@ -2790,9 +2795,9 @@ unsafe fn install_confirm_interceptor() -> usize {
 mod tests {
     use super::*;
 
-    fn target(block: u32, point: u32) -> er_invasion_warp::invasion_warp::InvasionWarpTarget {
-        er_invasion_warp::invasion_warp::InvasionWarpTarget {
-            block: er_invasion_warp::invasion_warp::BlockKey::from_raw(block),
+    fn target(block: u32, point: u32) -> er_invasion_warp_core::invasion_warp::InvasionWarpTarget {
+        er_invasion_warp_core::invasion_warp::InvasionWarpTarget {
+            block: er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block),
             point_index: point,
             position: [1.0, 2.0, 3.0],
             yaw: 0.0,
@@ -2805,7 +2810,7 @@ mod tests {
     #[test]
     fn an_id_past_the_registrys_range_is_still_resolvable_after_a_top_up_records_it() {
         clear_top_up_targets();
-        let id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE + 4_000;
+        let id = er_invasion_warp_core::map_surface::INVASION_ENTITY_ID_BASE + 4_000;
         assert_eq!(top_up_target_for_entity_id(id), None);
         record_top_up_target(id, target(0x2800_0000, 7));
         assert_eq!(
@@ -2819,7 +2824,7 @@ mod tests {
     #[test]
     fn recording_the_same_id_twice_replaces_the_destination() {
         clear_top_up_targets();
-        let id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE + 4_001;
+        let id = er_invasion_warp_core::map_surface::INVASION_ENTITY_ID_BASE + 4_001;
         record_top_up_target(id, target(0x2800_0000, 1));
         record_top_up_target(id, target(0x2900_0000, 2));
         assert_eq!(
@@ -2834,7 +2839,7 @@ mod tests {
     #[test]
     fn clearing_forgets_every_claim_so_a_rebuilt_span_cannot_inherit_a_stale_destination() {
         clear_top_up_targets();
-        let id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE + 4_002;
+        let id = er_invasion_warp_core::map_surface::INVASION_ENTITY_ID_BASE + 4_002;
         record_top_up_target(id, target(0x2800_0000, 3));
         clear_top_up_targets();
         assert_eq!(top_up_target_for_entity_id(id), None);

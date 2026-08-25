@@ -20,7 +20,7 @@ cd "$REPO" || exit 2
 TARGET_TRIPLE="${TARGET_TRIPLE:-x86_64-pc-windows-msvc}"
 OUT_DIR="${OUT_DIR:-$REPO/target/save-census}"
 DLL="$REPO/target/$TARGET_TRIPLE/release/er_save_disable.dll"
-HARNESS_DLL="$REPO/target/$TARGET_TRIPLE/release/er_input_harness_dll.dll"
+HARNESS_DLL="$REPO/target/$TARGET_TRIPLE/release/er_input_harness.dll"
 PROFILE="$OUT_DIR/save-census.me3"
 
 # WITH_INPUT_HARNESS=1 adds the self-drive harness so the run reaches save moments the
@@ -30,8 +30,8 @@ PROFILE="$OUT_DIR/save-census.me3"
 # The product DLL is still deliberately absent either way.
 WITH_INPUT_HARNESS="${WITH_INPUT_HARNESS:-0}"
 
-PACKAGES=(-p er-save-disable-dll)
-[[ "$WITH_INPUT_HARNESS" == "1" ]] && PACKAGES+=(-p er-input-harness-dll)
+PACKAGES=(-p er-save-disable)
+[[ "$WITH_INPUT_HARNESS" == "1" ]] && PACKAGES+=(-p er-input-harness)
 
 if [[ "$WITH_INPUT_HARNESS" == "1" ]]; then
 	echo "== building save-disable + input-harness (release, $TARGET_TRIPLE) =="
