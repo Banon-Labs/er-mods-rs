@@ -433,7 +433,11 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
              counts all of them, so holding any one counts as holding the item",
             collisions.len()
         ));
-        for (kind, name, ids) in collisions.iter().take(24) {
+        // NO CAP. The first cut printed 24 of 101, sorted by (kind, name) -- which put a wall of
+        // `[error]`-named placeholder rows first and cut off everything real, including the one
+        // item under investigation. A truncated report is worse than none: it was read as
+        // "this item does not collide" and nearly retracted a correct diagnosis.
+        for (kind, name, ids) in &collisions {
             let rendered: Vec<String> = ids.iter().map(|id| format!("0x{id:08X}")).collect();
             log_line(&format!(
                 "[build-import]   COLLIDING NAME [{}] {:?} -> {}",
