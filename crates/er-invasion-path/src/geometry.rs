@@ -90,6 +90,61 @@ pub fn normalize(a: [f32; 3]) -> Option<[f32; 3]> {
     Some([a[0] / len, a[1] / len, a[2] / len])
 }
 
+/// Walk a route and return a point every `spacing` metres along it, start and end included.
+///
+/// This is where the markers go. Placing one at every navmesh waypoint instead would clump them:
+/// the engine emits waypoints where the mesh geometry demands a turn, so a route across open
+/// ground is a handful of points tens of metres apart while a doorway is half a dozen inside two
+/// metres. Even spacing is what reads as a trail rather than as debris.
+///
+/// The end point is always included even when it does not land on the spacing grid, because the
+/// last marker is the one that says "here", and dropping it because the route length was not a
+/// multiple of the spacing is the one omission a player would notice.
+///
+/// Returns at most `max` points; a route longer than `max * spacing` is truncated rather than
+/// thinned, so the markers nearest you -- the ones you are about to walk past -- stay put.
+pub fn resample(points: &[[f32; 3]], spacing: f32, max: usize) -> Vec<[f32; 3]> {
+    if points.len() < 2 || !spacing.is_finite() || spacing <= 0.0 || max == 0 {
+        return points.iter().copied().take(max).collect();
+    }
+    let mut out = vec![points[0]];
+    // Distance already walked past the last emitted marker.
+    let mut carried = 0.0f32;
+    for pair in points.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let segment = sub(to, from);
+        let span = length(segment);
+        if !span.is_finite() || span <= f32::EPSILON {
+            continue;
+        }
+        let Some(direction) = normalize(segment) else {
+            continue;
+        };
+        let mut travelled = spacing - carried;
+        while travelled <= span {
+            if out.len() >= max {
+                return out;
+            }
+            out.push(add_scaled(from, direction, travelled));
+            travelled += spacing;
+        }
+        carried = span - (travelled - spacing);
+    }
+    let last = points[points.len() - 1];
+    // Skipped only when a marker is ALREADY on the destination, which happens when the route
+    // length is a whole multiple of the spacing. The threshold is a few centimetres rather than
+    // a fraction of the spacing: half a spacing looks like a sensible "close enough" and quietly
+    // deletes a real destination marker that merely fell one metre short of the grid.
+    const COINCIDENT_METERS: f32 = 0.05;
+    let duplicate = out
+        .last()
+        .is_some_and(|previous| length(sub(last, *previous)) <= COINCIDENT_METERS);
+    if !duplicate && out.len() < max {
+        out.push(last);
+    }
+    out
+}
+
 #[must_use]
 pub fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
@@ -436,6 +491,70 @@ mod tests {
                 "colour {index} is too close to colour 0: {other:?}"
             );
         }
+    }
+
+    /// Markers must be EVENLY spaced, not one per navmesh waypoint: the engine emits waypoints
+    /// where the mesh turns, so a doorway gets six inside two metres and open ground gets none
+    /// for forty.
+    #[test]
+    fn markers_land_at_an_even_spacing_along_a_straight_run() {
+        let route = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]];
+        let points = resample(&route, 2.5, 64);
+        assert_eq!(points.len(), 5);
+        for (index, point) in points.iter().enumerate() {
+            assert!((point[0] - index as f32 * 2.5).abs() < 1e-3, "{point:?}");
+        }
+    }
+
+    /// Spacing is measured along the ROUTE, so a corner does not swallow a marker.
+    #[test]
+    fn spacing_carries_across_a_corner_rather_than_restarting() {
+        let route = [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [3.0, 0.0, 3.0]];
+        let points = resample(&route, 2.0, 64);
+        for pair in points.windows(2) {
+            let step = length(sub(pair[1], pair[0]));
+            assert!(step <= 2.0 + 1e-3, "markers {step} apart");
+        }
+        assert!(points.len() >= 3);
+    }
+
+    /// The last marker is the one that says "here". Dropping it because the route length was not
+    /// a multiple of the spacing is the omission a player would actually notice.
+    #[test]
+    fn the_destination_always_gets_a_marker() {
+        let route = [[0.0, 0.0, 0.0], [7.0, 0.0, 0.0]];
+        let points = resample(&route, 3.0, 64);
+        let last = points.last().copied().expect("at least one");
+        assert!(length(sub(last, [7.0, 0.0, 0.0])) < 1e-3, "{last:?}");
+    }
+
+    /// ...but not stacked on top of a marker that is already there.
+    #[test]
+    fn a_destination_on_the_grid_is_not_marked_twice() {
+        let route = [[0.0, 0.0, 0.0], [6.0, 0.0, 0.0]];
+        let points = resample(&route, 3.0, 64);
+        assert_eq!(points.len(), 3);
+    }
+
+    /// A long route truncates rather than thinning, so the markers nearest you -- the ones you
+    /// are about to walk past -- keep their spacing.
+    #[test]
+    fn a_long_route_is_capped_from_the_far_end() {
+        let route = [[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0]];
+        let points = resample(&route, 1.0, 8);
+        assert_eq!(points.len(), 8);
+        assert!((points[7][0] - 7.0).abs() < 1e-3);
+    }
+
+    /// Degenerate input must not spin: a zero-length route, a zero spacing, a NaN.
+    #[test]
+    fn degenerate_routes_terminate_and_return_something_sane() {
+        assert!(resample(&[], 1.0, 8).is_empty());
+        assert_eq!(resample(&[[1.0, 2.0, 3.0]], 1.0, 8).len(), 1);
+        let repeated = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+        assert!(resample(&repeated, 1.0, 8).len() <= 2);
+        assert_eq!(resample(&[[0.0; 3], [5.0, 0.0, 0.0]], 0.0, 8).len(), 2);
+        assert_eq!(resample(&[[0.0; 3], [5.0, 0.0, 0.0]], f32::NAN, 8).len(), 2);
     }
 
     #[test]

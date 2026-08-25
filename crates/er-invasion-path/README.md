@@ -144,9 +144,25 @@ DLL, and names the type it failed on.
 
 ## What it does to the game
 
-Nothing. No detours, no memory writes, no param edits (patching params is what breaks Seamless
-invasions), no input injection, no network traffic. It reads the roster, asks the navmesh a
-question, casts one sight ray per player, and draws.
+With `marker_fxr_id = 0`, the shipped default: **nothing**. No detours, no memory writes, no param
+edits (patching params is what breaks Seamless invasions), no input injection, no network traffic.
+It reads the roster, asks the navmesh a question, casts one sight ray per player, and draws.
+
+Set `marker_fxr_id` and that stops being true in exactly one way: the DLL spawns real engine
+effects in the world, through the game's own SFX manager, at the positions along your route. Still
+no detours and no writes to game memory — but these are real objects with real lifetimes, and
+"this mod only reads" is no longer an accurate description of it. That is why it is opt-in.
+
+**They are yours alone.** Measured live on 2026-08-25 with a second player present: the markers
+appear on the spawning client and on no other. A trail pointing at an invader does not point back
+at you, and nothing about your position reaches their game.
+
+**They are not yet removed.** The effects are spawned through the engine's fire-and-forget wrapper,
+which discards the control struct, so nothing here holds a handle to despawn them. A trail is no
+longer re-laid over itself, and laying stops the moment a route changes — but the stones from a
+route you have already left behind stay until the effect expires on its own. Fixing that means
+spawning through `CS::CSSfxImp::SpawnFfxInstance` directly and keeping the `FXHGSfxCtrl`, the way
+`CS::SosSignMan` does for summon signs.
 
 The drawing goes through `er_build_watermark_core::overlay_host`: if another module in this
 workspace already hosts the process's imgui context, this DLL registers as a guest and draws

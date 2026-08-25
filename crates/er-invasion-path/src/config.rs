@@ -53,6 +53,31 @@ pub(crate) const DEFAULT_MAX_TARGETS: usize = 6;
 /// Length of the "no walkable route" arrow, in metres of world space.
 pub(crate) const DEFAULT_ARROW_METERS: f32 = 3.0;
 
+/// FXR spawned at each point along a route when world markers are switched on.
+///
+/// `302022` is the Rainbow Stone's LINGERING coloured stone -- the one that stays on the ground
+/// after the throw, which is the whole reason it is the right effect for a trail. Its siblings
+/// are `302020` (held in hand), `302021` (the projectile in flight) and `302023` (the burst on
+/// impact); all three are momentary, so a trail built from them would flash once and vanish.
+///
+/// Zero means "no world markers", and that is the shipped default. Spawning these is the only
+/// thing this DLL does that changes the game, so it is opt-in rather than opt-out.
+pub(crate) const DEFAULT_MARKER_FXR_ID: u32 = 0;
+
+/// Metres between markers along a route.
+pub(crate) const DEFAULT_MARKER_SPACING_METERS: f32 = 4.0;
+
+/// Most markers a single route's trail may hold.
+pub(crate) const DEFAULT_MAX_MARKERS: usize = 48;
+
+/// Markers spawned per roster pass, i.e. per ~sixth of a second.
+///
+/// This is the "small delay as it goes". Three per pass lays a full 48-marker trail over about
+/// two and a half seconds, from your feet outwards -- fast enough to read as a trail appearing,
+/// slow enough that a route to somebody who is moving stops being laid long before it reaches
+/// where they used to be.
+pub(crate) const DEFAULT_MARKERS_PER_PASS: usize = 3;
+
 /// Item whose USE toggles the overlay, when `trigger_item_id` is set.
 ///
 /// Zero means "no item trigger, hotkey only". There is no default item: silently binding a real
@@ -100,6 +125,39 @@ arrow_meters = 3.0
 
 # Start with the overlay already on, instead of waiting for the first toggle.
 start_enabled = false
+
+# ---------------------------------------------------------------------------
+# World markers: the game's OWN effects, spawned along the route on the ground.
+#
+# The imgui line above is drawn over the finished frame, so it does not go behind a hill and it
+# never looks like part of the game. These are real engine effects: correct depth, correct light.
+#
+# 0 = off, and off is the default. This is the ONLY setting here that changes the game rather
+# than just reading it, and it is unknown whether other players in a Seamless session can see
+# the effects you spawn -- if they can, a trail pointing at an invader points back at you.
+#
+# Rainbow Stone effect ids, if you want a trail of the coloured stones:
+#   302022  lingering coloured stone   <- the one you want; it stays on the ground
+#   302020  held in hand
+#   302021  projectile in flight
+#   302023  burst on impact            (the last three are momentary: they flash and vanish)
+#
+# This file is re-read about once a second, so you can change the id with the game running and
+# watch the difference immediately.
+marker_fxr_id = 0
+
+# Metres between markers along the route. Markers are spaced evenly along the PATH, not placed at
+# navmesh corners, or a doorway would get six of them and open ground none.
+marker_spacing_meters = 4.0
+
+# Most markers one route's trail may hold.
+max_markers = 48
+
+# Markers placed per pass (about six passes a second). The trail is laid from your feet outwards
+# a few at a time rather than all at once, and laying STOPS the moment the route changes -- the
+# far end of a route to somebody who is moving was never going to be where they are by the time
+# you got there. Raise it for a trail that appears faster, lower it for one that creeps.
+markers_per_pass = 3
 "#;
 
 #[derive(Clone, Debug)]
@@ -114,6 +172,10 @@ pub(crate) struct PathConfig {
     pub(crate) max_targets: usize,
     pub(crate) arrow_meters: f32,
     pub(crate) start_enabled: bool,
+    pub(crate) marker_fxr_id: u32,
+    pub(crate) marker_spacing_meters: f32,
+    pub(crate) max_markers: usize,
+    pub(crate) markers_per_pass: usize,
 }
 
 /// The parsed config, plus the exact text it was parsed from.
@@ -217,6 +279,26 @@ fn parse_config(text: &str, path: PathBuf) -> PathConfig {
             .unwrap_or(DEFAULT_MAX_TARGETS),
         arrow_meters: positive_float(text, "arrow_meters", DEFAULT_ARROW_METERS),
         start_enabled: setting(text, "start_enabled").is_some_and(|value| value == "true"),
+        marker_fxr_id: setting(text, "marker_fxr_id")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_MARKER_FXR_ID),
+        // A spacing of zero would ask for a marker every zero metres, so it is floored rather
+        // than accepted: the resampler refuses it anyway, and a silent no-markers is worse than
+        // a sane one.
+        marker_spacing_meters: positive_float(
+            text,
+            "marker_spacing_meters",
+            DEFAULT_MARKER_SPACING_METERS,
+        )
+        .max(0.5),
+        max_markers: setting(text, "max_markers")
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(DEFAULT_MAX_MARKERS),
+        markers_per_pass: setting(text, "markers_per_pass")
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(DEFAULT_MARKERS_PER_PASS),
     }
 }
 
@@ -435,6 +517,41 @@ mod tests {
             parsed.toggle_key,
             parse_key(DEFAULT_TOGGLE_KEY_NAME).expect("the built-in default parses")
         );
+    }
+
+    /// The Rainbow Stone's lingering coloured stone -- the id the generated file tells the
+    /// player to try. It lives here rather than beside the other defaults because nothing in the
+    /// shipping build consumes it: its whole job is to keep the comment honest.
+    const RAINBOW_STONE_LINGERING_FXR_ID: u32 = 302_022;
+
+    /// The generated file tells the player which id to try, and a comment that drifts from the
+    /// constant is worse than no comment: they would paste a number that spawns nothing and have
+    /// no way to tell that from the feature being broken.
+    #[test]
+    fn the_shipped_file_quotes_the_lingering_stone_id_the_code_names() {
+        assert!(
+            DEFAULT_CONFIG_TOML.contains(&RAINBOW_STONE_LINGERING_FXR_ID.to_string()),
+            "the generated config must name {RAINBOW_STONE_LINGERING_FXR_ID}"
+        );
+    }
+
+    /// World markers change the game, so they must be off until asked for.
+    #[test]
+    fn world_markers_are_off_until_the_player_asks_for_them() {
+        assert_eq!(DEFAULT_MARKER_FXR_ID, 0);
+        assert_eq!(parse(DEFAULT_CONFIG_TOML).marker_fxr_id, 0);
+    }
+
+    /// A zero spacing would ask the resampler for a marker every zero metres.
+    #[test]
+    fn a_zero_spacing_is_floored_rather_than_obeyed() {
+        let edited = DEFAULT_CONFIG_TOML
+            .replace("marker_spacing_meters = 4.0", "marker_spacing_meters = 0.0");
+        assert_ne!(
+            edited, DEFAULT_CONFIG_TOML,
+            "the fixture must actually differ"
+        );
+        assert!(parse(&edited).marker_spacing_meters >= 0.5);
     }
 
     #[test]

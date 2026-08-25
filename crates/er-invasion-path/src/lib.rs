@@ -26,6 +26,7 @@ mod config;
 mod geometry;
 mod log;
 mod routes;
+mod trail;
 
 #[cfg(windows)]
 mod game;
@@ -33,6 +34,8 @@ mod game;
 mod navpath;
 #[cfg(windows)]
 mod render;
+#[cfg(windows)]
+mod sfx;
 
 #[cfg(windows)]
 use std::sync::{
@@ -54,6 +57,7 @@ use windows::Win32::{Foundation::HINSTANCE, System::SystemServices::DLL_PROCESS_
 use crate::{
     log::{path_log, reset_log_file},
     routes::{Palette, Route, RouteShape, Snapshot},
+    trail::Trail,
 };
 
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -102,6 +106,9 @@ static ARROWS_DRAWN: AtomicUsize = AtomicUsize::new(0);
 /// Targets suppressed by the close-and-visible rule.
 #[cfg(windows)]
 static SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+/// World-marker effects actually handed to the engine.
+#[cfg(windows)]
+static MARKERS_SPAWNED: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(windows)]
 unsafe extern "system" {
@@ -170,6 +177,8 @@ struct TargetState {
     computed_at: usize,
     /// True when the navmesh has said there is no way to walk there.
     unreachable: bool,
+    /// The world-marker trail being laid for this target, if any.
+    trail: Trail,
 }
 
 #[cfg(windows)]
@@ -180,6 +189,7 @@ impl Default for TargetState {
             route: None,
             computed_at: 0,
             unreachable: true,
+            trail: Trail::default(),
         }
     }
 }
@@ -355,7 +365,7 @@ fn tick(state: &mut TaskState) {
     if ticks.is_multiple_of(STATUS_LOG_TICKS) {
         path_log(format_args!(
             "status: enabled={} overlay_installed={} draws={} last_segments={} tracked_targets={} \
-             routes_found={} arrows={} suppressed={} draining={}",
+             routes_found={} arrows={} suppressed={} draining={} markers={}",
             ENABLED.load(Ordering::SeqCst),
             render::installed(),
             render::draws(),
@@ -368,6 +378,7 @@ fn tick(state: &mut TaskState) {
             // climbing, requests are being abandoned faster than the engine answers them, and
             // the world's shared request ring is the thing at risk -- not this overlay.
             state.draining.len(),
+            MARKERS_SPAWNED.load(Ordering::Relaxed),
         ));
     }
 }
@@ -484,7 +495,28 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
 
         let slot = state.palette.slot_for(remote.field_ins_handle);
         let shape = match target.route.as_ref() {
-            Some(points) if points.len() >= 2 => RouteShape::Walk(points.clone()),
+            Some(points) if points.len() >= 2 => {
+                // The game's own effects along the route, if the player asked for them. Only from
+                // a route that actually exists -- an arrow gets no trail, because there is no
+                // walkable line to lay one along.
+                if config.marker_fxr_id > 0 {
+                    // Retargeting first is what stops the pile-up: a route that has not moved
+                    // keeps the trail it already has instead of laying a second one over it.
+                    target.trail.retarget(geometry::resample(
+                        points,
+                        config.marker_spacing_meters,
+                        config.max_markers,
+                    ));
+                    if !target.trail.finished() {
+                        let batch = target.trail.next_batch(config.markers_per_pass);
+                        // SAFETY: the task runs on the game thread, which is where the engine
+                        // expects its SFX work; the spawn screens the singleton before calling.
+                        let placed = unsafe { sfx::spawn_markers(config.marker_fxr_id, batch) };
+                        MARKERS_SPAWNED.fetch_add(placed, Ordering::Relaxed);
+                    }
+                }
+                RouteShape::Walk(points.clone())
+            }
             _ => {
                 ARROWS_DRAWN.fetch_add(1, Ordering::Relaxed);
                 let origin = game::arrow_origin(roster.local_position);
@@ -502,13 +534,21 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
                 RouteShape::Arrow(arrow)
             }
         };
-        snapshot.routes.push(Route::new(
-            shape,
-            slot,
-            remote.distance_meters,
-            config.bold_at_meters,
-            config.faint_at_meters,
-        ));
+        // With world markers on, the route is already drawn -- in the world, by the engine. The
+        // imgui line on top of it is a second drawing of the same thing, which is what the first
+        // live run looked like. The ARROW still draws either way: there is no trail for a target
+        // the navmesh cannot reach, so suppressing it would leave nothing at all.
+        let markers_own_this_route =
+            config.marker_fxr_id > 0 && matches!(shape, RouteShape::Walk(_));
+        if !markers_own_this_route {
+            snapshot.routes.push(Route::new(
+                shape,
+                slot,
+                remote.distance_meters,
+                config.bold_at_meters,
+                config.faint_at_meters,
+            ));
+        }
     }
     render::publish(snapshot);
 }
