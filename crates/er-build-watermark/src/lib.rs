@@ -68,12 +68,21 @@ pub unsafe extern "system" fn DllMain(
             let spawned = std::thread::Builder::new()
                 .name("er-build-watermark-install".to_string())
                 .spawn(move || {
-                    // No wait before claiming, and none is needed. The first cut slept six
-                    // seconds to let a module with a richer UI claim the imgui context first --
-                    // a sleep used as synchronization, which `scripts/check-no-timeouts.py`
-                    // rightly rejects. The live run on 2026-08-25 also made it pointless: this
-                    // shell's overlay and `er-net-effects`' bar both installed and both rendered
-                    // at 3840x2160 in the same process, so there was no context to yield.
+                    // Claim immediately, and let load order fall where it may. The first cut
+                    // slept six seconds to yield the imgui context to a module with a richer UI;
+                    // that sleep was removed for being synchronization, which
+                    // `scripts/check-no-timeouts.py` rightly rejects, on the strength of a
+                    // measurement that said both overlays rendered side by side. THAT
+                    // MEASUREMENT WAS WRONG. On 2026-08-25 the user's live session had this
+                    // shell logging `first render display_width=3840 rows=14` while
+                    // `er-net-effects` sat at `hudhook_render_count = 0` -- installed, never
+                    // rendered, no error logged anywhere -- and their interactive bar had been
+                    // invisible since #336 added this shell. Two `Hudhook::apply()` calls in one
+                    // process really do double-hook `Present`, and the second one loses.
+                    //
+                    // Neither the sleep nor the eager claim is needed now: `overlay_host` makes
+                    // whoever arrives first the HOST and everyone else a GUEST that draws through
+                    // it, so the outcome no longer depends on which DLL me3 mapped first.
                     // hudhook tolerates being installed before the swapchain exists; it hooks
                     // `Present` and waits for the game to call it.
                     let owned =
@@ -96,3 +105,8 @@ pub unsafe extern "system" fn DllMain(
 pub extern "C" fn er_build_watermark_host_stub() -> i32 {
     1
 }
+
+// Same reason as every other overlay module: if THIS shell wins the context, guests have to be
+// able to find it by name.
+#[cfg(windows)]
+er_build_watermark_core::export_overlay_host!();

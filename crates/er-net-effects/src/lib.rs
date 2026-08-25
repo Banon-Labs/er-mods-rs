@@ -160,3 +160,9 @@ pub unsafe extern "system" fn DllMain(
 pub extern "C" fn er_net_effects_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
+
+// This module may HOST the process's only imgui context, so it must be findable by any other
+// overlay module wanting to draw. Without this export a guest walks every loaded module, finds
+// nobody who answers, and silently draws nothing.
+#[cfg(windows)]
+er_build_watermark_core::export_overlay_host!();

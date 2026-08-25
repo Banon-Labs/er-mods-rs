@@ -80,6 +80,13 @@ const NEVER_GRANT: &[&str] = &["Flask of Crimson Tears", "Flask of Cerulean Tear
 pub struct Grant {
     /// Category-tagged item id with any affinity offset already applied.
     pub item_id: u32,
+    /// Other ids the same NAME resolved to, if the game has more than one row under it.
+    ///
+    /// The grant path must treat all of these as "this item" when it asks whether the player
+    /// already holds one. Checking only `item_id` is how a build import handed out a second
+    /// Flask of Wondrous Physick: the catalog had resolved the name to one row, the player's
+    /// existing flask was the other, the held-count came back zero, and a duplicate was granted.
+    pub also_known_as: Vec<u32>,
     /// How many to give.
     pub quantity: u32,
     /// Upgrade level, as its own field.
@@ -265,6 +272,7 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
                 out.equip_spells.push(found.param_id());
                 out.grants.push(Grant {
                     item_id: found.full_item_id,
+                    also_known_as: catalog.alternates(Kind::Spell, &slot.name),
                     quantity: 1,
                     reinforce_lv: 0,
                     weapon_skill: NO_SKILL,
@@ -366,6 +374,13 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
 
     out.grants.push(Grant {
         item_id: found.full_item_id + offset,
+        // An armament's id already carries affinity and upgrade, so a shared name means genuinely
+        // distinct rows; they are offset the same way to stay comparable with `item_id`.
+        also_known_as: catalog
+            .alternates(Kind::Weapon, &slot.name)
+            .into_iter()
+            .map(|id| id + offset)
+            .collect(),
         quantity: 1,
         reinforce_lv,
         weapon_skill,
@@ -378,6 +393,7 @@ fn push_simple(catalog: &dyn Catalog, kind: Kind, slot: &Slot, quantity: u32, ou
     match catalog.lookup(kind, &slot.name) {
         Some(found) => out.grants.push(Grant {
             item_id: found.full_item_id,
+            also_known_as: catalog.alternates(kind, &slot.name),
             quantity,
             reinforce_lv: 0,
             weapon_skill: NO_SKILL,

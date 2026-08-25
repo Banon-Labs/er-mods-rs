@@ -253,8 +253,14 @@ def resolve_conflicts(
     return kept, excluded, unresolvable
 
 
-def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
+def compute(
+    base_ref: str,
+    fetch: bool,
+    pinned: set[str] | None = None,
+    dropped: set[str] | None = None,
+) -> dict:
     pinned = pinned or set()
+    dropped = dropped or set()
     merge_base, head = resolve_base(base_ref, fetch)
     changed = changed_paths(merge_base)
     seeds, outside = owning_packages(changed)
@@ -270,6 +276,26 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
         raise ClosureError(
             f"--with names packages that are not ME3-loadable shells: {', '.join(sorted(unknown))}"
         )
+    unknown = dropped - shipped
+    if unknown:
+        raise ClosureError(
+            f"--without names packages that are not ME3-loadable shells: "
+            f"{', '.join(sorted(unknown))}"
+        )
+    # Asking for a DLL and refusing it in the same breath has no correct reading, and guessing
+    # one would silently do the opposite of half the request.
+    both = pinned & dropped
+    if both:
+        raise ClosureError(
+            f"named by BOTH --with and --without: {', '.join(sorted(both))}"
+        )
+    # Excluding the product leaves a profile with nothing to express conflicts against, and
+    # every companion chains onto its hook union. That is not a run worth staging.
+    if PRODUCT_PACKAGE in dropped:
+        raise ClosureError(
+            f"--without cannot drop {PRODUCT_PACKAGE}: it is the baseline every conflict is "
+            f"ranked against and the owner of the hook union the companions chain onto"
+        )
 
     candidates = set(affected & shipped) | pinned
     fallback = None
@@ -283,6 +309,23 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
     with CONFLICTS_TOML.open("rb") as handle:
         table = tomllib.load(handle)
     kept, excluded, unresolvable = resolve_conflicts(candidates, table, pinned)
+
+    # `--without` is applied LAST, after conflict ranking, so an exclusion cannot be undone by a
+    # later rule -- and it is recorded in `excluded` with the same shape as a conflict drop, so
+    # the run block SAYS which DLL was withheld. A silent omission is how an A/B turns into two
+    # runs nobody can tell apart. Its use case is the param-patching class: any DLL that mutates
+    # a param row at runtime moves the Seamless lobby-key fingerprint and drops the player out
+    # of matchmaking, and the only way to prove which one is to re-run without it.
+    for name in sorted(dropped & kept):
+        kept.discard(name)
+        excluded.append(
+            {
+                "package": name,
+                "kind": "withheld",
+                "because": "excluded by --without on the command line",
+                "evidence": "caller request",
+            }
+        )
 
     # PRODUCT FIRST, then the rest alphabetically. me3 loads natives in profile order, and the
     # companions resolve the product's `er_effects_union_register` export to chain onto prologues it
@@ -306,6 +349,7 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
         "seed_crates": sorted(seeds),
         "affected_crates": sorted(affected),
         "pinned": sorted(pinned),
+        "withheld": sorted(dropped),
         "packages": selected,
         "artifacts": [f"{artifact_of[p]}.dll" for p in selected],
         "excluded": [
@@ -453,6 +497,51 @@ def selftest() -> int:
         "a change to er-game-base reaches the product DLL",
     )
 
+    # --- --without: an exclusion that is recorded, not silent ---------------------------
+    # These call compute() through its argument-validation path only (no git), so they prove the
+    # refusals without needing a repo state. The keep/record behaviour is proven on the same
+    # resolve_conflicts + drop sequence compute() runs.
+    live_shipped_pairs = shipped_pairs()
+    a_real_shell = next(
+        package for package, _ in live_shipped_pairs if package != PRODUCT_PACKAGE
+    )
+
+    def refuses(**kwargs) -> str:
+        try:
+            compute("origin/main", fetch=False, **kwargs)
+        except ClosureError as err:
+            return str(err)
+        return ""
+
+    check(
+        "not ME3-loadable shells" in refuses(dropped={"no-such-crate"}),
+        "--without refuses a package that is not a shipped shell",
+    )
+    check(
+        "BOTH --with and --without" in refuses(
+            pinned={a_real_shell}, dropped={a_real_shell}
+        ),
+        "naming one DLL with both --with and --without refuses instead of guessing",
+    )
+    check(
+        "cannot drop" in refuses(dropped={PRODUCT_PACKAGE}),
+        "--without refuses to drop the product DLL",
+    )
+
+    # And the drop itself: withheld comes out of `kept` and lands in `excluded` with a reason,
+    # so an A/B pair is distinguishable in the run block rather than being two identical-looking
+    # runs. This mirrors the sequence compute() applies after conflict ranking.
+    kept_ab, excluded_ab, _ = resolve_conflicts({PRODUCT_PACKAGE, a_real_shell}, {}, set())
+    for name in sorted({a_real_shell} & kept_ab):
+        kept_ab.discard(name)
+        excluded_ab.append({"package": name, "kind": "withheld", "because": "x", "evidence": "y"})
+    check(
+        a_real_shell not in kept_ab
+        and any(e["kind"] == "withheld" for e in excluded_ab)
+        and PRODUCT_PACKAGE in kept_ab,
+        "a withheld DLL leaves `kept` and is RECORDED in `excluded`, product untouched",
+    )
+
     # --- opt-in-only: co-loadable, but consent is required ------------------------------
     opt_table = {"opt_in_only": {"mush": "wears a costume nobody asked for"}}
     kept, excluded, unresolvable = resolve_conflicts({PRODUCT_PACKAGE, "mush"}, opt_table, set())
@@ -507,6 +596,15 @@ def main() -> int:
         metavar="PACKAGE",
         help="force-include a shell (repeatable); refuses rather than excluding it on conflict",
     )
+    parser.add_argument(
+        "--without",
+        dest="dropped",
+        action="append",
+        default=[],
+        metavar="PACKAGE",
+        help="force-EXCLUDE a shell (repeatable); applied after conflict ranking and reported "
+        "in the excluded list, so the run block says what was withheld",
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -515,7 +613,12 @@ def main() -> int:
         return selftest()
 
     try:
-        result = compute(args.base, fetch=not args.no_fetch, pinned=set(args.pinned))
+        result = compute(
+            args.base,
+            fetch=not args.no_fetch,
+            pinned=set(args.pinned),
+            dropped=set(args.dropped),
+        )
     except ClosureError as err:
         print(f"er-dll-closure: {err}", file=sys.stderr)
         return EXIT_ERROR

@@ -17,6 +17,10 @@ er-hook = { path = "../er-hook" }
 # crash-telemetry log each describe exactly one run.
 er-game-base = { path = "../er-game-base" }
 hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+# The overlay host/guest registry, and the build watermark rows this module draws when it
+# hosts the imgui context. Pinned to the SAME hudhook as above -- the `ui` pointer crosses a
+# DLL boundary, and `OVERLAY_ABI_TAG` refuses the pair if they ever diverge.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Direct3D",
