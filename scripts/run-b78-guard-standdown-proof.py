@@ -346,7 +346,10 @@ def main() -> int:
 
     t0 = time.time()
     proc = subprocess.Popen(
-        ["bash", str(LAUNCHER)],
+        # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
+        # (2026-08-24); this probe predates that and wants the plain quicksave profile
+        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        ["bash", str(LAUNCHER), "-o"],
         cwd=str(LAUNCHER.parent),
         stdout=open(art / "launcher.log", "w"),
         stderr=subprocess.STDOUT,
