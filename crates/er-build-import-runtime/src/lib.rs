@@ -300,22 +300,55 @@ fn fetch_inner(share_id: &str) {
         doc.items.tools.slots.len()
     ));
 
-    // For every starting class the eight attributes sum to level + 79, so a payload failing this is
-    // internally inconsistent and must not be imported.
-    let attrs: i64 = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"]
-        .iter()
-        .filter_map(|key| doc.stats.get(*key))
-        .sum();
-    let level = doc.stats.get("rl").copied().unwrap_or_default();
-    if level != attrs - 79 {
+    // THE EIGHT ATTRIBUTES ARE THE BUILD. The payload's `rl` is not: nothing downstream reads it,
+    // every stat this importer applies comes from the attributes themselves, and for every
+    // starting class the eight sum to level + 79 -- so the level is DERIVED here rather than
+    // trusted, and a planner that disagrees with its own numbers is reported, not obeyed.
+    //
+    // This used to be a hard refusal, and it rejected a real build over one point: a payload
+    // carrying `rl: 150` beside attributes summing to 228 (= level 149) failed with "internally
+    // inconsistent" and imported nothing at all. The observation was correct and the response was
+    // not -- the gear, spells, talismans and the attributes were all perfectly well-formed.
+    const ATTRIBUTE_KEYS: [&str; 8] = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"];
+    /// Every starting class satisfies `stat_sum - level == 79`; it is a property of the game, not
+    /// of any one class, so the level follows from the attributes alone.
+    const CLASS_INVARIANT: i64 = 79;
+    /// All eight attributes at 99.
+    const MAX_LEVEL: i64 = 8 * 99 - CLASS_INVARIANT;
+
+    // A MISSING attribute is the failure that actually matters, and it used to be invisible:
+    // `filter_map` skipped absent keys, so a payload short one attribute summed low, derived a
+    // lower level, and imported a character quietly missing points nobody would notice.
+    let mut attrs: i64 = 0;
+    for key in ATTRIBUTE_KEYS {
+        match doc.stats.get(key) {
+            Some(value) => attrs += value,
+            None => {
+                return set_error(format!(
+                    "the payload has no `{key}` attribute; refusing to import a build whose \
+                     stats cannot be read in full"
+                ));
+            }
+        }
+    }
+    let level = attrs - CLASS_INVARIANT;
+    if !(1..=MAX_LEVEL).contains(&level) {
         return set_error(format!(
-            "level {level} != sum(attrs) {attrs} - 79 = {}; the payload is internally inconsistent",
-            attrs - 79
+            "attributes sum to {attrs}, which is level {level} -- outside 1..={MAX_LEVEL}, so \
+             the stat block is not a real character"
         ));
     }
-    log_line(&format!(
-        "[build-import] level check: {attrs} - 79 = {level} -> CONSISTENT"
-    ));
+    match doc.stats.get("rl").copied() {
+        Some(claimed) if claimed != level => log_line(&format!(
+            "[build-import] level: attributes sum to {attrs}, so RL {level}. The payload CLAIMS \
+             RL {claimed}, which disagrees with its own stat block by {}. Importing the \
+             attributes, which are what actually get applied.",
+            (claimed - level).abs()
+        )),
+        _ => log_line(&format!(
+            "[build-import] level: {attrs} - {CLASS_INVARIANT} = {level}, matches the payload"
+        )),
+    }
 
     match DOC.lock() {
         Ok(mut slot) => {
@@ -388,6 +421,29 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         stats.named, stats.unnamed, stats.spell_rows, stats.iconless_ashes
     ));
 
+    // NAMES THAT RESOLVE TO MORE THAN ONE ROW. Reported at build time rather than discovered
+    // later as a duplicated item: an id that cannot be told apart from its siblings by name is
+    // exactly the shape that granted a second Flask of Wondrous Physick.
+    let collisions = catalog.collisions();
+    if collisions.is_empty() {
+        log_line("[build-import] catalog: every name resolves to exactly one id");
+    } else {
+        log_line(&format!(
+            "[build-import] catalog: {} name(s) resolve to MORE THAN ONE id -- the grant check \
+             counts all of them, so holding any one counts as holding the item",
+            collisions.len()
+        ));
+        for (kind, name, ids) in collisions.iter().take(24) {
+            let rendered: Vec<String> = ids.iter().map(|id| format!("0x{id:08X}")).collect();
+            log_line(&format!(
+                "[build-import]   COLLIDING NAME [{}] {:?} -> {}",
+                kind.label(),
+                name,
+                rendered.join(", ")
+            ));
+        }
+    }
+
     let planned = plan(doc, &catalog);
     let equips = equip_plan(doc, &catalog, Capacity::default());
     log_line(&format!(
@@ -446,10 +502,12 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     let outcome = unsafe { grant::grant_all(module_base, &planned.grants) };
     report.granted = (outcome.confirmed, outcome.attempted);
     log_line(&format!(
-        "[build-import] GRANTED: {}/{} confirmed present in the inventory ({} missing)",
+        "[build-import] GRANTED: {}/{} confirmed present in the inventory ({} missing, {} \
+         already held and left alone)",
         outcome.confirmed,
         outcome.attempted,
-        outcome.missing.len()
+        outcome.missing.len(),
+        outcome.already_held
     ));
     for id in outcome.missing.iter().take(12) {
         log_line(&format!("[build-import]   MISSING item id 0x{id:08X}"));

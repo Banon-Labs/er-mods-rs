@@ -170,6 +170,11 @@ pub struct GrantOutcome {
     pub confirmed: usize,
     /// Item ids that were requested but could not be found afterwards.
     pub missing: Vec<u32>,
+    /// Grants skipped because the character already had at least the quantity asked for.
+    ///
+    /// Counted rather than inferred: this is the difference between "the build was already
+    /// satisfied here" and "the grant silently did nothing", which the report must not blur.
+    pub already_held: usize,
     /// Per-armament read-back, in grant order.
     pub armaments: Vec<ArmamentOutcome>,
 }
@@ -307,6 +312,19 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
     // or every armament reports missing.
     let mut confirm_ids: Vec<u32> = Vec::with_capacity(grants.len());
 
+    // Read the inventory BEFORE granting, so a grant can ask what is already held.
+    //
+    // A build says "this character HAS these items", not "add these items". Those read the same
+    // on an empty character and differently on every other one: importing twice, or importing
+    // onto a character that already owns something, used to add a second copy every time. For a
+    // stackable that merely inflates a count; for the Flask of Wondrous Physick -- unique, one
+    // per character -- the player ends up carrying two flasks, which is what surfaced this.
+    //
+    // A zero here is not fatal: it means the quantity cannot be measured, and granting
+    // unconditionally is the old behaviour, which is wrong less often than granting nothing.
+    // Safety: game thread, live EquipGameData.
+    let inventory_before = unsafe { get_inventory(egd) };
+
     for grant in grants {
         if is_armament(grant) {
             // Safety: same context; the armament path is documented on the helper.
@@ -329,11 +347,56 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         };
         confirm_ids.push(full_id);
         let id = full_id as i32;
+        // RECONCILE TO THE TARGET rather than adding to whatever is there. The build names a
+        // quantity the character should end up with, so only the shortfall is granted, and an
+        // item already held in sufficient number is left completely alone.
+        // COUNT EVERY ID THE NAME RESOLVES TO, not just the one the catalog happened to pick.
+        //
+        // Elden Ring gives each upgrade level of a flask its own goods row, and every row carries
+        // the same name -- so "Flask of Wondrous Physick" is several ids. Asking about one of them
+        // and getting zero does NOT mean the player has no physick; it means they have a
+        // different row of it. That is what handed out a second flask beside the one already in
+        // the inventory, and the same collision made the Crimson and Cerulean flasks report "not
+        // in the inventory" while sitting in the player's belt.
+        let shortfall: u32 = if inventory_before == 0 {
+            grant.quantity
+        } else {
+            let mut held: i32 = 0;
+            for candidate in std::iter::once(full_id).chain(grant.also_known_as.iter().copied()) {
+                let candidate = candidate as i32;
+                // Safety: engine-owned inventory pointer, read only; the id outlives the call.
+                // A negative answer means "cannot say", not "owns a negative number".
+                held = held.saturating_add(
+                    unsafe { get_quantity(inventory_before, &raw const candidate) }.max(0),
+                );
+            }
+            grant.quantity.saturating_sub(held.unsigned_abs())
+        };
+        if shortfall == 0 {
+            // Say so. A skipped grant and a grant that never ran look identical in a log that
+            // only records what it added, and "why do I have two flasks" is exactly the question
+            // that needs this line to answer it.
+            outcome.already_held += 1;
+            crate::log_line(&format!(
+                "[build-import]   ALREADY HELD, not granted: item 0x{full_id:08X}{} \
+                 (build wants {}, character has at least that many)",
+                if grant.also_known_as.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " (+{} id(s) under the same name)",
+                        grant.also_known_as.len()
+                    )
+                },
+                grant.quantity
+            ));
+            continue;
+        }
         // `updateTrophyStats` and `updateAutoEquip` both true: the same arguments the engine's
         // own pickup path uses, so achievements and auto-equip behave as if the item were
         // found in the world.
         // Safety: game thread, live EquipGameData, and `id` outlives the call.
-        unsafe { add(egd, &raw const id, grant.quantity, true, true) };
+        unsafe { add(egd, &raw const id, shortfall, true, true) };
     }
 
     // Safety: same context; the inventory pointer is engine-owned and only read.
