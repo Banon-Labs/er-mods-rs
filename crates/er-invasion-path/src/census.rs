@@ -34,9 +34,52 @@ const NON_PLAYER_CHR_TYPES: [i32; 7] = [
 /// `ChrType::Npc`, the ordinary map character.
 pub(crate) const NPC_CHR_TYPE: i32 = 5;
 
-/// Is this character kind one a route should be drawn to?
+/// Is this character kind one a route should be drawn to, GIVEN that it was found in
+/// `player_chr_set`?
+///
+/// Membership in the player set is itself the evidence. The engine puts players there, so a type
+/// this build does not recognise, found in that set, is far more likely to be a session kind
+/// nobody here has seen than a mistake -- hence the exclusion list, which fails towards drawing.
 pub(crate) fn is_player_kind(chr_type: i32) -> bool {
     !NON_PLAYER_CHR_TYPES.contains(&chr_type)
+}
+
+/// `ChrType` values the engine NAMES as a real person: the local kind, the phantom kinds, the
+/// invader kinds, the arena kind.
+///
+/// `WhiteSummonNpc` (19), `BloodyFingerNpc` (20) and `RecusantNpc` (21) are absent on purpose --
+/// they are the NPC invaders, which are characters the game spawns, not people in the session.
+const NAMED_PLAYER_CHR_TYPES: [i32; 9] = [
+    0,  // Local
+    1,  // WhitePhantom
+    2,  // Duelist
+    8,  // GrayPhantom
+    13, // Arena
+    15, // BloodyFinger
+    16, // Recusant
+    17, // BluePhantom
+    18, // FesteringBloodyFinger
+];
+
+/// Is this character kind one a route should be drawn to, given that it was found by sweeping
+/// EVERY ChrSet in the world?
+///
+/// Strictly an allow-list, and the asymmetry with [`is_player_kind`] is the whole point. The wide
+/// sweep exists only as a fallback for a session that puts players somewhere unexpected, and it
+/// walks the map's own character sets -- hundreds of them -- where an unfamiliar type is evidence
+/// of nothing except that the map contains something this build has not catalogued.
+///
+/// Measured live on 2026-08-25, in a Seamless session, outside any invasion: the sweep saw
+/// `types=[0:1 5:582 7:1]` every tick. `ChrType 7` is `Unk7`, one of the enum's unnamed values;
+/// exactly one exists, it sits among the map's NPCs rather than in `player_chr_set`, and it
+/// persists whether or not anyone else is in the session. Under the exclusion list it read as a
+/// player and was drawn a "no walkable route" arrow out of the player's body -- permanently,
+/// outside any invasion. That same run also showed the real people arriving exactly where the
+/// engine documents (`sets=1 widened=false types=[2:1 0:3]`, a Duelist and three Locals in
+/// `player_chr_set`), which is what makes fail-closed affordable here: the fallback keeps its
+/// reason to exist, and stops inventing players out of map furniture.
+pub(crate) fn is_named_player_kind(chr_type: i32) -> bool {
+    NAMED_PLAYER_CHR_TYPES.contains(&chr_type)
 }
 
 /// Distinct `chr_type` values the census will name before it stops adding new ones.
@@ -147,6 +190,47 @@ mod tests {
     fn the_local_type_is_not_excluded_because_the_local_player_is_rejected_by_address() {
         const LOCAL: i32 = 0;
         assert!(is_player_kind(LOCAL));
+    }
+
+    /// The live regression, named after what it did: outside any invasion, the wide sweep saw
+    /// `types=[0:1 5:582 7:1]` and drew a permanent arrow at the one `Unk7` character sitting
+    /// among the map's NPCs.
+    #[test]
+    fn the_unnamed_chr_types_are_not_players_when_found_by_the_wide_sweep() {
+        for kind in [6, 7, 9, 12, 22, 23, 99, i32::MAX] {
+            assert!(
+                !is_named_player_kind(kind),
+                "wide-sweep chr_type {kind} must not be drawn to"
+            );
+        }
+    }
+
+    #[test]
+    fn every_named_player_kind_survives_the_wide_sweep() {
+        for kind in PLAYER_KINDS {
+            assert!(
+                is_named_player_kind(kind),
+                "wide-sweep chr_type {kind} should be a target"
+            );
+        }
+    }
+
+    /// The NPC invaders wear invader-shaped types but are characters the game spawns, not people.
+    #[test]
+    fn npc_invaders_are_not_swept_up_as_players() {
+        for kind in [19, 20, 21] {
+            assert!(!is_named_player_kind(kind));
+        }
+    }
+
+    /// The asymmetry is the fix. An unknown type is trusted where the engine keeps players and
+    /// refused where the map keeps its own characters; collapsing the two either re-opens the
+    /// false arrow or throws away the fallback's reason to exist.
+    #[test]
+    fn an_unknown_type_is_trusted_in_the_player_set_and_refused_in_the_wide_sweep() {
+        const UNKNOWN: i32 = 7;
+        assert!(is_player_kind(UNKNOWN));
+        assert!(!is_named_player_kind(UNKNOWN));
     }
 
     #[test]

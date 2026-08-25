@@ -12,7 +12,7 @@ use eldenring::cs::{CSCamera, CSHavokMan, ChrIns, ChrSet, PlayerIns, WorldChrMan
 use eldenring::position::{HavokPosition, PositionDelta};
 use fromsoftware_shared::FromStatic;
 
-use crate::census::{Census, NPC_CHR_TYPE, is_player_kind};
+use crate::census::{Census, NPC_CHR_TYPE, is_named_player_kind, is_player_kind};
 use crate::geometry::{self, Camera};
 
 /// Height above a character's physics origin that the sight ray leaves from and arrives at.
@@ -192,6 +192,7 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
             &player.chr_ins,
             local_chr_ins,
             local_position,
+            Origin::PlayerSet,
             &mut census,
             &mut remotes,
         );
@@ -230,6 +231,7 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
                     chr_ins,
                     local_chr_ins,
                     local_position,
+                    Origin::WideSweep,
                     &mut census,
                     &mut remotes,
                 );
@@ -261,6 +263,31 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
     })
 }
 
+/// Where a character was found, which decides how much its `chr_type` is trusted.
+///
+/// The two are deliberately asymmetric. See [`crate::census::is_named_player_kind`] for the live
+/// measurement that forced the split: a single `ChrType 7` sitting among the map's NPCs was drawn
+/// a permanent arrow outside any invasion, while the actual people in the session turned up in
+/// `player_chr_set` exactly where the engine documents.
+#[derive(Clone, Copy)]
+enum Origin {
+    /// `WorldChrMan::player_chr_set`. Membership is the evidence; an unfamiliar type here is
+    /// accepted, because a session kind this build has not seen is likelier than a mistake.
+    PlayerSet,
+    /// Every other ChrSet in the world, walked only when the player set came back empty. An
+    /// unfamiliar type here is map furniture, so only NAMED player kinds are accepted.
+    WideSweep,
+}
+
+impl Origin {
+    fn accepts(self, chr_type: i32) -> bool {
+        match self {
+            Self::PlayerSet => is_player_kind(chr_type),
+            Self::WideSweep => is_named_player_kind(chr_type),
+        }
+    }
+}
+
 /// Consider one character for the roster, counting it either way.
 ///
 /// Every rejection is counted before it is made, which is the point: the census is what turns "no
@@ -269,6 +296,7 @@ fn collect(
     chr_ins: &ChrIns,
     local_chr_ins: usize,
     local_position: [f32; 3],
+    origin: Origin,
     census: &mut Census,
     remotes: &mut Vec<RemotePlayer>,
 ) {
@@ -278,7 +306,7 @@ fn collect(
     if std::ptr::from_ref(chr_ins) as usize == local_chr_ins {
         return;
     }
-    if !is_player_kind(chr_type) || !is_live(chr_ins) {
+    if !origin.accepts(chr_type) || !is_live(chr_ins) {
         return;
     }
     let Some(position) = physics_position(chr_ins) else {
