@@ -435,12 +435,13 @@ pub fn roster_line(published: &[String]) -> String {
     line
 }
 
-/// Ask every loaded module for its identity; the ones that answer are this workspace's DLLs.
+/// Every module handle the loader currently has mapped.
 ///
-/// A module that does not export the symbol is not one of ours and is skipped silently -- the
-/// game's own DLLs, Seamless, Steam and the CRT all fall out here without a list to maintain.
+/// Split out of [`loaded_mod_identities`] because asking "which modules export X" is a question
+/// with more than one X: the identity symbol answers "which of these are ours", and the overlay
+/// host registration asks a different one of the same list.
 #[cfg(windows)]
-pub fn loaded_mod_identities() -> Vec<ModIdentity> {
+pub fn loaded_module_handles() -> Vec<usize> {
     const MAX_MODULES: usize = 512;
     let mut modules = [0usize; MAX_MODULES];
     let mut needed: u32 = 0;
@@ -457,8 +458,37 @@ pub fn loaded_mod_identities() -> Vec<ModIdentity> {
         return Vec::new();
     }
     let count = (needed as usize / std::mem::size_of::<usize>()).min(MAX_MODULES);
+    modules[..count].to_vec()
+}
+
+#[cfg(not(windows))]
+pub fn loaded_module_handles() -> Vec<usize> {
+    Vec::new()
+}
+
+/// Resolve an exported symbol in a module handle from [`loaded_module_handles`].
+///
+/// Returns the raw address, or `None` when the module does not export that name.
+///
+/// # Safety
+///
+/// `name` must be NUL-terminated. The caller is responsible for the signature it transmutes the
+/// returned address to.
+#[cfg(windows)]
+pub unsafe fn module_export(module: usize, name: &[u8]) -> Option<usize> {
+    // SAFETY: `module` is a loader handle and `name` is NUL-terminated by contract.
+    let symbol = unsafe { GetProcAddress(module, name.as_ptr().cast()) };
+    (symbol != 0).then_some(symbol)
+}
+
+/// Ask every loaded module for its identity; the ones that answer are this workspace's DLLs.
+///
+/// A module that does not export the symbol is not one of ours and is skipped silently -- the
+/// game's own DLLs, Seamless, Steam and the CRT all fall out here without a list to maintain.
+#[cfg(windows)]
+pub fn loaded_mod_identities() -> Vec<ModIdentity> {
     let mut found = Vec::new();
-    for &module in &modules[..count] {
+    for module in loaded_module_handles() {
         // SAFETY: `module` is a handle the enumeration just returned.
         let symbol = unsafe { GetProcAddress(module, c"er_build_identity_v1".as_ptr().cast()) };
         if symbol == 0 {

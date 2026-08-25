@@ -3016,6 +3016,7 @@ name = "er-net-effects"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-build-watermark-core",
  "er-effects-data",
  "er-game-base",
  "er-hook",

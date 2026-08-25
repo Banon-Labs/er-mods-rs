@@ -81,6 +81,11 @@ impl ImguiRenderLoop for WatermarkOverlay {
             self.rebuild();
         }
         self.renders = self.renders.wrapping_add(1);
+        // Guests FIRST, and before any early return. This module hosts the only imgui context in
+        // the process, so an early return here is not "the watermark drew nothing" -- it is every
+        // other overlay in the process drawing nothing, which is exactly the failure that made
+        // er-net-effects' bar vanish.
+        crate::overlay_host::dispatch_guests(ui);
         if self.rows.is_empty() {
             VISIBLE_ROWS.store(0, Ordering::Relaxed);
             return;
@@ -144,7 +149,13 @@ pub fn claim_owner() -> bool {
     // ERROR_ALREADY_EXISTS means the mutex was created by an earlier caller and this call merely
     // opened it -- so somebody else is the owner.
     let last = unsafe { GetLastError() };
-    last != ERROR_ALREADY_EXISTS
+    let won = last != ERROR_ALREADY_EXISTS;
+    if won {
+        // Synchronously, before any install is attempted: a guest asking "who hosts this?" during
+        // the gap between claiming and applying must get an answer, or it concludes nobody does.
+        crate::overlay_host::designate_host();
+    }
+    won
 }
 
 /// Draw the watermark rows onto an EXISTING imgui frame.
@@ -201,8 +212,12 @@ pub fn install_if_owner(hmodule_raw: usize, log: fn(std::fmt::Arguments<'_>)) ->
         .apply();
     match result {
         Ok(()) => {
+            // Only now: a module that claimed the mutex but failed to apply must not advertise
+            // itself as the host, or every guest registers with a loop that will never run.
+            crate::overlay_host::become_host();
             log(format_args!(
-                "build-watermark: hudhook dx12 overlay installed (this module owns the watermark)"
+                "build-watermark: hudhook dx12 overlay installed (this module hosts the imgui \
+                 context; guests draw through it)"
             ));
             true
         }

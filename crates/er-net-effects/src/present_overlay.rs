@@ -1,5 +1,6 @@
 use std::{
     ffi::c_void,
+    sync::Mutex,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
@@ -22,6 +23,11 @@ static HUDHOOK_RENDER_HITS: AtomicUsize = AtomicUsize::new(0);
 static HUDHOOK_VISIBLE_HITS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_COLLAPSED: AtomicBool = AtomicBool::new(START_COLLAPSED);
 static OVERLAY_TOGGLE_CLICKS: AtomicUsize = AtomicUsize::new(0);
+/// The button the last frame committed to, shared rather than owned by the render-loop struct.
+///
+/// When this module is a GUEST there is no `NetEffectsOverlay` instance -- the host owns the only
+/// render loop -- so the state the draw needs between frames cannot live in `self`.
+static TOGGLE_RECT: Mutex<Option<Rect>> = Mutex::new(None);
 
 /// The bar starts minimized to its button and stays out of the way until it is asked for.
 const START_COLLAPSED: bool = true;
@@ -43,21 +49,69 @@ const BUTTON_BORDER_HOVER_COLOR: [f32; 4] = [0.98, 0.92, 0.72, 1.0];
 const TITLE_COLOR: [f32; 4] = [0.95, 0.90, 0.78, 1.0];
 const LINE_COLOR: [f32; 4] = [0.96, 0.94, 0.88, 1.0];
 
+/// Draw the bar into a host module's frame.
+///
+/// # Safety
+///
+/// `ui` is a live `&Ui` supplied by the overlay host for the duration of this call.
+unsafe extern "C" fn guest_draw(frame: *const er_build_watermark_core::overlay_host::OverlayFrame) {
+    // Adopt the host's imgui context and allocators BEFORE touching `ui`. Without this the
+    // context global in THIS DLL is null and `ui.io()` faults on the first field read.
+    // SAFETY: `frame` is the pointer the host just handed us, live for this call.
+    let Some(ui) = (unsafe { er_build_watermark_core::overlay_host::adopt_frame(frame) }) else {
+        return;
+    };
+    draw_bar(ui);
+}
+
+/// Put the bar on screen, hosting the imgui context or joining whoever already does.
+///
+/// BOTH paths draw the identical bar. Which one is taken is decided by load order, and load
+/// order is not something this crate gets to choose: me3 loads natives in profile order, so
+/// `er_build_watermark.dll` (b) is mapped before `er_net_effects.dll` (n) and would otherwise
+/// win the swapchain by alphabet. Before this, losing that race meant the bar was installed,
+/// never rendered, and never logged an error -- the user simply found it gone.
 pub(crate) fn install_present_overlay_hook(hmodule_raw: usize) {
     if HUDHOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
+
+    // Try to join an existing host before claiming anything. A guest costs no `Present` hook at
+    // all, which is strictly better than a second one.
+    if er_build_watermark_core::overlay_host::register_with_host(guest_draw) {
+        crash_telemetry::hudhook_apply_ok();
+        net_effects_log(format_args!(
+            "present-overlay: another module hosts the imgui context; registered as a GUEST \
+             (no second Present hook)"
+        ));
+        return;
+    }
+
+    // Nobody hosts one yet, so this module will. The mutex is what stops a module loaded after
+    // this one from installing a second hook behind our back.
+    if !er_build_watermark_core::claim_owner() {
+        crash_telemetry::hudhook_apply_failed();
+        net_effects_log(format_args!(
+            "present-overlay: a module owns the overlay but did not accept a guest -- the bar \
+             cannot be drawn. It is almost certainly built against a different hudhook/imgui \
+             than this DLL; rebuild the whole profile from one tree."
+        ));
+        return;
+    }
+
     let hmodule = hudhook::windows::Win32::Foundation::HINSTANCE(hmodule_raw as *mut c_void);
     let result = hudhook::Hudhook::builder()
-        .with::<ImguiDx12Hooks>(NetEffectsOverlay::default())
+        .with::<ImguiDx12Hooks>(NetEffectsOverlay)
         .with_hmodule(hmodule)
         .build()
         .apply();
     match result {
         Ok(()) => {
+            er_build_watermark_core::overlay_host::become_host();
             crash_telemetry::hudhook_apply_ok();
             net_effects_log(format_args!(
-                "present-overlay: hudhook dx12 overlay installed"
+                "present-overlay: hudhook dx12 overlay installed (this module HOSTS the imgui \
+                 context; the watermark and any other overlay draw through it)"
             ));
         }
         Err(error) => {
@@ -80,25 +134,9 @@ pub(crate) fn overlay_toggle_clicks() -> usize {
     OVERLAY_TOGGLE_CLICKS.load(Ordering::Relaxed)
 }
 
-struct NetEffectsOverlay {
-    initialized: bool,
-    collapsed: bool,
-    /// The button drawn by the last frame, or `None` when the bar is not on screen.
-    ///
-    /// `message_filter` runs on the window-procedure side and cannot lay anything out, so the
-    /// rectangle it hit-tests is the one the renderer last committed to.
-    toggle_rect: Option<Rect>,
-}
-
-impl Default for NetEffectsOverlay {
-    fn default() -> Self {
-        Self {
-            initialized: false,
-            collapsed: START_COLLAPSED,
-            toggle_rect: None,
-        }
-    }
-}
+/// The host-side render loop. Carries no state of its own: everything the draw needs between
+/// frames lives in the statics above, because the GUEST path has no instance to hold it.
+struct NetEffectsOverlay;
 
 impl ImguiRenderLoop for NetEffectsOverlay {
     fn initialize<'a>(&'a mut self, ctx: &mut Context, _render_context: &'a mut dyn RenderContext) {
@@ -116,9 +154,11 @@ impl ImguiRenderLoop for NetEffectsOverlay {
     }
 
     fn render(&mut self, ui: &mut Ui) {
-        crash_telemetry::hudhook_render_enter();
-        self.render_inner(ui);
-        crash_telemetry::hudhook_render_exit();
+        draw_bar(ui);
+        // This module hosts the context, so every other overlay in the process draws here or
+        // nowhere. Dispatched after our own bar so the watermark stays on top of it.
+        er_build_watermark_core::overlay_host::dispatch_guests(ui);
+        er_build_watermark_core::draw_rows(ui, net_effects_log);
     }
 
     /// Keep the click that hits our own button away from the game.
@@ -128,68 +168,93 @@ impl ImguiRenderLoop for NetEffectsOverlay {
     /// left button in the DirectInput state for that. This closes the legacy-message half of the
     /// same hole, and only while the pointer is inside the button.
     fn message_filter(&self, io: &Io) -> MessageFilter {
-        match self.toggle_rect {
+        match TOGGLE_RECT.lock().ok().and_then(|rect| *rect) {
             Some(rect) if rect_contains(rect, io.mouse_pos) => MessageFilter::InputMouse,
             _ => MessageFilter::empty(),
         }
     }
 }
 
-impl NetEffectsOverlay {
-    fn render_inner(&mut self, ui: &mut Ui) {
-        if !self.initialized {
-            self.initialized = true;
+/// Draw the bar. The ONLY drawing path, taken identically whether this module hosts the imgui
+/// context or is a guest inside another module's render loop -- so the two cannot drift and a
+/// bug can never be "only in the guest case".
+fn draw_bar(ui: &Ui) {
+    // Counted HERE, not in the host `render()`, because the guest path does not go through it.
+    // Keeping the counters on the host path made `hudhook_render_count` read 0 for a bar that was
+    // drawing perfectly well as a guest -- an oracle that reports the old bug's exact signature
+    // for a working feature is worse than no oracle.
+    crash_telemetry::hudhook_render_enter();
+    let _guard = RenderExitGuard;
+    {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
             crash_telemetry::hudhook_initialize();
             net_effects_log(format_args!(
                 "present-overlay: hudhook render loop initialized"
             ));
-        }
-        let hits = HUDHOOK_RENDER_HITS.fetch_add(1, Ordering::SeqCst) + 1;
-        let display = ui.io().display_size;
-        if hits == 1 {
-            net_effects_log(format_args!(
-                "present-overlay: hudhook first render display={:.0}x{:.0}",
-                display[0], display[1]
-            ));
-        }
-        let selector_text = effect_selector_text();
-        if selector_text.trim().is_empty() {
-            // Nothing on screen owns the pointer, so nothing may swallow a click.
-            self.forget_button();
-            return;
-        }
-        let visible_hits = HUDHOOK_VISIBLE_HITS.fetch_add(1, Ordering::SeqCst) + 1;
-        crash_telemetry::hudhook_render_visible();
-        if visible_hits == 1 {
-            net_effects_log(format_args!(
-                "present-overlay: hudhook first visible selector display={:.0}x{:.0} text='{selector_text}'",
-                display[0], display[1]
-            ));
-        }
-
-        let toggle = draw_foreground_selector(ui, display, &selector_text, self.collapsed);
-        let hovered = rect_contains(toggle, ui.io().mouse_pos);
-        if hovered && ui.is_mouse_clicked(MouseButton::Left) {
-            self.collapsed = !self.collapsed;
-            OVERLAY_COLLAPSED.store(self.collapsed, Ordering::Relaxed);
-            OVERLAY_TOGGLE_CLICKS.fetch_add(1, Ordering::Relaxed);
-            net_effects_log(format_args!(
-                "present-overlay: bar {} by mouse click",
-                if self.collapsed {
-                    "minimized"
-                } else {
-                    "maximized"
-                }
-            ));
-        }
-        self.toggle_rect = Some(toggle);
-        input_suppression::set_pointer_over_overlay(hovered);
+        });
+    }
+    let hits = HUDHOOK_RENDER_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    let display = ui.io().display_size;
+    if hits == 1 {
+        net_effects_log(format_args!(
+            "present-overlay: hudhook first render display={:.0}x{:.0}",
+            display[0], display[1]
+        ));
+    }
+    let selector_text = effect_selector_text();
+    if selector_text.trim().is_empty() {
+        // Nothing on screen owns the pointer, so nothing may swallow a click.
+        forget_button();
+        return;
+    }
+    let visible_hits = HUDHOOK_VISIBLE_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    crash_telemetry::hudhook_render_visible();
+    if visible_hits == 1 {
+        net_effects_log(format_args!(
+            "present-overlay: hudhook first visible selector display={:.0}x{:.0} text='{selector_text}'",
+            display[0], display[1]
+        ));
     }
 
-    fn forget_button(&mut self) {
-        self.toggle_rect = None;
-        input_suppression::set_pointer_over_overlay(false);
+    let collapsed = OVERLAY_COLLAPSED.load(Ordering::Relaxed);
+    let toggle = draw_foreground_selector(ui, display, &selector_text, collapsed);
+    let hovered = rect_contains(toggle, ui.io().mouse_pos);
+    if hovered && ui.is_mouse_clicked(MouseButton::Left) {
+        let now_collapsed = !collapsed;
+        OVERLAY_COLLAPSED.store(now_collapsed, Ordering::Relaxed);
+        OVERLAY_TOGGLE_CLICKS.fetch_add(1, Ordering::Relaxed);
+        net_effects_log(format_args!(
+            "present-overlay: bar {} by mouse click",
+            if now_collapsed {
+                "minimized"
+            } else {
+                "maximized"
+            }
+        ));
     }
+    if let Ok(mut rect) = TOGGLE_RECT.lock() {
+        *rect = Some(toggle);
+    }
+    input_suppression::set_pointer_over_overlay(hovered);
+}
+
+/// Closes the render window however `draw_bar` leaves -- including its early return when the
+/// selector text is empty, which a plain call at the end of the function would skip.
+struct RenderExitGuard;
+
+impl Drop for RenderExitGuard {
+    fn drop(&mut self) {
+        crash_telemetry::hudhook_render_exit();
+    }
+}
+
+/// The bar is off screen: it owns no pointer, so it may not swallow a click.
+fn forget_button() {
+    if let Ok(mut rect) = TOGGLE_RECT.lock() {
+        *rect = None;
+    }
+    input_suppression::set_pointer_over_overlay(false);
 }
 
 /// Draw the bar and return the rectangle that minimizes/maximizes it.
