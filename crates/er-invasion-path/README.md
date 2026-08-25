@@ -70,6 +70,10 @@ The ones worth knowing:
 | `max_targets` | `6` | most players drawn at once |
 | `arrow_meters` | `3.0` | length of the no-route arrow |
 | `start_enabled` | `false` | begin with the overlay already on |
+| `marker_fxr_id` | `0` | spawn the game's OWN effects along the route; `302022` is the Rainbow Stone's lingering coloured stone. `0` is off, and off is the only setting here that leaves the game untouched |
+| `marker_spacing_meters` | `4.0` | metres between markers, measured along the path |
+| `max_markers` | `48` | most markers one trail may hold |
+| `markers_per_pass` | `3` | markers placed per pass (~6 passes a second), so the trail creeps out from your feet rather than appearing whole |
 
 ## Pick a key no other mod in your profile reads
 
@@ -96,11 +100,20 @@ overlay keeps the previous route on screen while the next one is computed instea
 route computed here instead would be a second opinion about walkability, and it would be wrong
 exactly where being wrong costs you the invasion: the ledge that looks crossable and is not.
 
-**Runtime status:** every address and structure offset is from static RE of ER 1.16.2 (dump VA ==
-deobf VA == runtime VA, shift 0), cross-checked against two independent call sites. It has not yet
-been run against a live game. The container walk validates everything it reads -- capacity a power
-of two, count bounded, every element pointer non-null, every coordinate finite -- and refuses
-rather than trusting, and a refusal degrades to the arrow.
+**Runtime status: the chain runs.** Every address and structure offset is from static RE of ER
+1.16.2 (dump VA == deobf VA == runtime VA, shift 0), cross-checked against two independent call
+sites -- and on 2026-08-25 a live run answered `selfcheck: PASS -- 13 waypoints over 9m`, which is
+all eleven function pointers, the async poll and the container walk executing for real. The
+container walk validates everything it reads -- capacity a power of two, count bounded, every
+element pointer non-null, every coordinate finite -- and refuses rather than trusting, and a
+refusal degrades to the arrow.
+
+**A request is never dropped, only drained.** Each one occupies a slot in a fixed ring on the
+`CSHkAiWorld` -- measured live at **128 slots** -- and the ONLY thing that frees a slot is the
+fetch in `poll`. There is no cancel. That ring belongs to the world, so filling it stops the
+game's own NPCs pathfinding; at six targets refreshing six times a second, dropping instead of
+draining would exhaust all 128 in under four seconds. Giving up on an answer moves the request to
+a drain list that is polled every frame, on or off.
 
 ### Proving the route works without a second player
 
@@ -130,17 +143,25 @@ kind instead, because this workspace's own enemy sweep already hedges that a co-
 other players somewhere else, and a roster that trusts one set and finds nobody looks exactly like
 a navmesh that found no route.
 
-The kind test is an **exclusion** list -- map characters and the four ghost kinds -- not an allow-list
-of the phantom types this build knows about. A type nobody here has seen draws a line; an
-allow-list would have drawn nothing and said nothing. Every walk logs what it saw:
+How much an unfamiliar `chr_type` is trusted depends on **where the character was found**, and the
+asymmetry is deliberate:
+
+| found in | rule | why |
+|---|---|---|
+| `player_chr_set` | exclusion list, fails **open** | membership is the evidence; an unfamiliar type there is likelier a session kind this build has not catalogued than a mistake |
+| the wide sweep | allow-list of **named** player kinds, fails **closed** | those are the map's own ChrSets, where an unfamiliar type is scenery |
+
+That split was forced by a live run. With the exclusion list applied everywhere, a single
+`ChrType 7` sitting among 582 map NPCs read as a player and was drawn a permanent arrow, outside
+any invasion. The same run showed the real people arriving exactly where the engine documents:
 
 ```
-roster: remotes=0 sets=1 characters=1 widened=false types=[0:1]
-roster: remotes=2 sets=1 characters=3 widened=false types=[0:1 15:2]
+roster: remotes=1 sets=3 characters=584 widened=true types=[0:1 5:582 7:1]   <- the false arrow
+roster: remotes=3 sets=1 characters=4 widened=false types=[2:1 0:3]          <- a Duelist and three Locals
 ```
 
-`remotes=0 characters=1` is "you are alone". `remotes=0` with a fat `types=[...]` is a bug in this
-DLL, and names the type it failed on.
+`remotes=0` with a small `characters` count is "you are alone". `remotes=0` with a fat
+`types=[...]` is a bug in this DLL, and names the type it failed on.
 
 ## What it does to the game
 
