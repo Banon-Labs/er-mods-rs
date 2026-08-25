@@ -29,6 +29,12 @@ python3 "$repo_root/scripts/test-detect-proc.py"
 python3 "$repo_root/scripts/test-semaphore-watchdog.py"
 python3 "$repo_root/scripts/test-input-harness-static.py"
 python3 "$repo_root/scripts/test-wall-of-text-classifier.py"
+# The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
+# At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
+# with a 2 KB preview -- so the priming content never reached the agent while still costing
+# a large slice of every session, PreCompact included. Size is the whole feature, so it is a
+# gate: this drives the real generator against a synthetic 6000-memory store.
+python3 "$repo_root/scripts/test-beads-prime-size.py"
 python3 "$repo_root/scripts/check-retired-button-labels.py"
 python3 "$repo_root/scripts/check-autoload-happy-path.py"
 python3 "$repo_root/scripts/test-autoload-happy-path.py"
@@ -163,6 +169,7 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+shellcheck "$repo_root/scripts/beads-prime.sh"
 shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 
 # The stale-run sentinel kills a live game when an edit feeds a DLL that run loaded, so BOTH
