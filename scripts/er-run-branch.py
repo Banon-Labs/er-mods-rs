@@ -371,6 +371,8 @@ def preflight(args) -> tuple[dict, dict | None]:
         closure_args.append("--no-fetch")
     for package in args.pinned:
         closure_args += ["--with", package]
+    for package in getattr(args, "dropped", []):
+        closure_args += ["--without", package]
     code, out, err = run_script("er-dll-closure.py", *closure_args)
     if code == 2:
         raise RuntimeError(f"the changed DLLs cannot share one profile:\n{out or err}")
@@ -959,6 +961,17 @@ def main() -> int:
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
     parser.add_argument("--with", dest="pinned", action="append", default=[], metavar="PACKAGE")
+    parser.add_argument(
+        "--without",
+        dest="dropped",
+        action="append",
+        default=[],
+        metavar="PACKAGE",
+        help="exclude a shell the closure would otherwise load (repeatable). The run block "
+        "lists it under EXCLUDED with reason `withheld`, so an A/B pair cannot be confused "
+        "for two identical runs. Needed for the param-patching class: any DLL that mutates a "
+        "param row moves the Seamless lobby key and silently drops you out of matchmaking.",
+    )
     parser.add_argument("--no-fetch", action="store_true", help="skip refreshing origin/main")
     parser.add_argument("--skip-steam-check", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="stage everything, launch nothing")
