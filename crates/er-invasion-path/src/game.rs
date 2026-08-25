@@ -8,10 +8,11 @@
 
 #![cfg(windows)]
 
-use eldenring::cs::{CSCamera, CSHavokMan, ChrIns, PlayerIns, WorldChrMan};
+use eldenring::cs::{CSCamera, CSHavokMan, ChrIns, ChrSet, PlayerIns, WorldChrMan};
 use eldenring::position::{HavokPosition, PositionDelta};
 use fromsoftware_shared::FromStatic;
 
+use crate::census::{Census, NPC_CHR_TYPE, is_player_kind};
 use crate::geometry::{self, Camera};
 
 /// Height above a character's physics origin that the sight ray leaves from and arrives at.
@@ -63,6 +64,8 @@ pub(crate) struct Roster {
     pub(crate) local_field_ins_handle: u64,
     pub(crate) local_position: [f32; 3],
     pub(crate) remotes: Vec<RemotePlayer>,
+    /// What the walk saw on its way to `remotes`, for the log.
+    pub(crate) census: Census,
 }
 
 fn to_array(position: HavokPosition) -> [f32; 3] {
@@ -97,6 +100,18 @@ fn physics_position(chr_ins: &ChrIns) -> Option<[f32; 3]> {
 fn is_live(chr_ins: &ChrIns) -> bool {
     // Dead players are still in the ChrSet with a valid position; a path to a corpse is noise.
     chr_ins.modules.data.hp > 0
+}
+
+/// `ChrIns::chr_type`, read as the raw `i32` the field actually holds.
+///
+/// Deliberately NOT read as the `ChrType` enum. That enum names 0..=22 and `-1`, and constructing
+/// one from a value outside that set is undefined behaviour -- which is exactly the risk here,
+/// because the whole reason this function exists is that a Seamless session may type a character
+/// in a way the vanilla enum never anticipated. Reading the raw integer can be surprised; it
+/// cannot be unsound.
+fn chr_type_raw(chr_ins: &ChrIns) -> i32 {
+    // SAFETY: reads one `i32` field through a pointer to that same field.
+    unsafe { *((&raw const chr_ins.chr_type).cast::<i32>()) }
 }
 
 /// The live local player, or `None` until one really exists.
@@ -166,29 +181,60 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
     let local_position = physics_position(&main_player.chr_ins)?;
     let local_chr_ins = std::ptr::from_ref(&main_player.chr_ins) as usize;
 
+    let mut census = Census::default();
     let mut remotes = Vec::new();
+
+    // The documented home of the players, and where a vanilla session keeps them.
+    census.sets += 1;
     for player in world_chr_man.player_chr_set.characters() {
         let player: &PlayerIns = player;
-        let chr_ins = &player.chr_ins;
-        // The local player is in this ChrSet too, and a path from yourself to yourself is a dot.
-        if std::ptr::from_ref(chr_ins) as usize == local_chr_ins {
-            continue;
+        collect(
+            &player.chr_ins,
+            local_chr_ins,
+            local_position,
+            &mut census,
+            &mut remotes,
+        );
+    }
+
+    // ...but "documented" is not "verified for a session Seamless is running". This workspace's
+    // own enemy sweep already hedges that a co-op session may put other players in a set that is
+    // not `player_chr_set` (`er-charm-enemies`), and a roster that trusts one set and finds
+    // nobody looks exactly like a navmesh that found no route. So when the player set comes back
+    // empty, walk every ChrSet the world holds and pick characters by KIND instead.
+    //
+    // The wide walk is the fallback rather than the default because it is the expensive one: the
+    // per-block sets are where the map's hundreds of enemies live, and paying for that sweep six
+    // times a second to re-derive an answer the player set already gave would be waste.
+    if remotes.is_empty() {
+        census.widened = true;
+        let inline_sets = [
+            (&raw const world_chr_man.player_chr_set) as usize,
+            (&raw const world_chr_man.ghost_chr_set) as usize,
+            (&raw const world_chr_man.summon_buddy_chr_set) as usize,
+            (&raw const world_chr_man.debug_chr_set) as usize,
+        ];
+        let mut walked: Vec<usize> = Vec::with_capacity(16);
+        for chr_set in world_chr_man.chr_sets.iter().flatten() {
+            let address = chr_set.as_ptr() as usize;
+            if inline_sets.contains(&address) || walked.contains(&address) {
+                continue;
+            }
+            walked.push(address);
+            census.sets += 1;
+            // SAFETY: an address the world itself stores in `chr_sets`, typed as the game types
+            // it. This is the same walk `er-charm-enemies` performs every sweep.
+            let chr_set = unsafe { &*(address as *const ChrSet<ChrIns>) };
+            for chr_ins in chr_set.characters() {
+                collect(
+                    chr_ins,
+                    local_chr_ins,
+                    local_position,
+                    &mut census,
+                    &mut remotes,
+                );
+            }
         }
-        if !is_live(chr_ins) {
-            continue;
-        }
-        let Some(position) = physics_position(chr_ins) else {
-            continue;
-        };
-        let distance_meters = geometry::length(geometry::sub(position, local_position));
-        remotes.push(RemotePlayer {
-            field_ins_handle: handle_bits(chr_ins),
-            position,
-            distance_meters,
-            // Filled below: the raycast needs the main player as its owner, and doing it here
-            // would hold a borrow of the ChrSet across a game call.
-            in_sight: false,
-        });
     }
 
     // Nearest first, so the cap keeps the players who matter rather than whichever slot the
@@ -211,8 +257,95 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
         local_field_ins_handle: handle_bits(&main_player.chr_ins),
         local_position,
         remotes,
+        census,
     })
 }
+
+/// Consider one character for the roster, counting it either way.
+///
+/// Every rejection is counted before it is made, which is the point: the census is what turns "no
+/// line appeared" into "there were eleven characters and all eleven were type 5".
+fn collect(
+    chr_ins: &ChrIns,
+    local_chr_ins: usize,
+    local_position: [f32; 3],
+    census: &mut Census,
+    remotes: &mut Vec<RemotePlayer>,
+) {
+    let chr_type = chr_type_raw(chr_ins);
+    census.count(chr_type);
+    // The local player is in the player ChrSet too, and a path from yourself to yourself is a dot.
+    if std::ptr::from_ref(chr_ins) as usize == local_chr_ins {
+        return;
+    }
+    if !is_player_kind(chr_type) || !is_live(chr_ins) {
+        return;
+    }
+    let Some(position) = physics_position(chr_ins) else {
+        return;
+    };
+    remotes.push(RemotePlayer {
+        field_ins_handle: handle_bits(chr_ins),
+        position,
+        distance_meters: geometry::length(geometry::sub(position, local_position)),
+        // Filled by the caller: the raycast needs the main player as its owner, and casting here
+        // would hold a borrow of the ChrSet across a game call.
+        in_sight: false,
+    });
+}
+
+/// The nearest ordinary map character, as a destination to ask the navmesh about.
+///
+/// This exists so the navmesh call chain can be PROVEN without a second player. Every address in
+/// [`crate::navpath`] is byte-verified static RE, and none of it had ever executed: the request is
+/// only ever issued for a remote player, so the first time eleven raw function pointers and a
+/// container walk ran for real would have been in the middle of an invasion, where an access
+/// violation costs the session it was meant to prove.
+///
+/// An `Npc` is the right destination precisely because it is not a player: the map authored it
+/// standing on the navmesh, so a route to one exercises the whole chain -- resolve, refine,
+/// enqueue, poll, fetch, walk the returned container, release it -- rather than stopping at a
+/// refusal. Nothing is drawn from it; the result goes to the log and nowhere else.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+pub(crate) unsafe fn npc_probe_target(local_position: [f32; 3]) -> Option<([f32; 3], f32)> {
+    // SAFETY: singleton access on the game thread; `Err` before the world is up.
+    let world_chr_man = unsafe { WorldChrMan::instance() }.ok()?;
+    let mut best: Option<([f32; 3], f32)> = None;
+    let mut consider = |chr_ins: &ChrIns| {
+        if chr_type_raw(chr_ins) != NPC_CHR_TYPE || !is_live(chr_ins) {
+            return;
+        }
+        let Some(position) = physics_position(chr_ins) else {
+            return;
+        };
+        let distance = geometry::length(geometry::sub(position, local_position));
+        // Far enough that the route has to be planned rather than answered by the two endpoints
+        // landing in the same navmesh face, which would exercise none of the search.
+        if distance < MIN_PROBE_DISTANCE_METERS {
+            return;
+        }
+        if best.is_none_or(|(_, closest)| distance < closest) {
+            best = Some((position, distance));
+        }
+    };
+    for chr_ins in world_chr_man.open_field_chr_set.base.characters() {
+        consider(chr_ins);
+    }
+    for chr_set in world_chr_man.chr_sets.iter().flatten() {
+        // SAFETY: an address the world itself stores in `chr_sets`, typed as the game types it.
+        let chr_set = unsafe { &*(chr_set.as_ptr() as *const ChrSet<ChrIns>) };
+        for chr_ins in chr_set.characters() {
+            consider(chr_ins);
+        }
+    }
+    best
+}
+
+/// Closest an NPC may be and still be worth asking the navmesh to route to.
+const MIN_PROBE_DISTANCE_METERS: f32 = 8.0;
 
 /// Can a ray from `from` reach `to` without hitting world geometry?
 ///

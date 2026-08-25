@@ -1,14 +1,22 @@
-//! `er-invasion-path.toml`, read once at attach.
+//! `er-invasion-path.toml`, re-read while the game runs.
 //!
 //! Hand-parsed rather than pulled through a TOML crate, matching every other standalone shell in
 //! this workspace: a handful of scalars does not justify a dependency in a DLL that is
 //! cross-compiled into the game process.
+//!
+//! The file is live. Editing it -- the toggle key most of all -- takes effect within about a
+//! second, without restarting the game, which is the difference between finding a free key in one
+//! sitting and finding one across four launches.
 
 // Windows-only in practice; kept portable so the parser below is covered by `cargo test` on the
 // host, where the windows-gated modules that consume it are compiled out.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use er_invasion_warp_core::keybind::{VirtualKey, key_name, parse_key};
 
@@ -108,7 +116,19 @@ pub(crate) struct PathConfig {
     pub(crate) start_enabled: bool,
 }
 
-static CONFIG: OnceLock<PathConfig> = OnceLock::new();
+/// The parsed config, plus the exact text it was parsed from.
+///
+/// The text is kept so a reload can decide whether anything actually changed by COMPARING
+/// CONTENT rather than by trusting a timestamp. `mtime` has one-second granularity on several
+/// filesystems, so an edit saved within the same second as the previous read is invisible to it
+/// -- and "I changed the key and nothing happened" is exactly the bug this is meant to prevent.
+/// The file is a kilobyte; reading it once a second is cheaper than being wrong about it.
+struct Loaded {
+    config: Arc<PathConfig>,
+    text: String,
+}
+
+static CONFIG: RwLock<Option<Loaded>> = RwLock::new(None);
 
 fn config_path() -> PathBuf {
     PathBuf::from(CONFIG_FILE_NAME)
@@ -200,23 +220,132 @@ fn parse_config(text: &str, path: PathBuf) -> PathConfig {
     }
 }
 
-/// Read the config, writing the commented default file when there is not one yet.
-pub(crate) fn init_config() -> &'static PathConfig {
-    CONFIG.get_or_init(|| {
-        let path = config_path();
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(_) => {
-                let _ = fs::write(&path, DEFAULT_CONFIG_TOML);
-                DEFAULT_CONFIG_TOML.to_owned()
-            }
-        };
-        parse_config(&text, path)
-    })
+/// Read the file, writing the commented default when there is not one yet.
+///
+/// A file that exists but cannot be read (locked, mid-save by the editor) returns `None` rather
+/// than the default text: overwriting a config the player is editing, or silently reverting them
+/// to defaults for one unlucky second, are both worse than skipping this reload.
+fn read_source(path: &PathBuf) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let _ = fs::write(path, DEFAULT_CONFIG_TOML);
+            Some(DEFAULT_CONFIG_TOML.to_owned())
+        }
+        Err(_) => None,
+    }
 }
 
-pub(crate) fn config() -> &'static PathConfig {
-    init_config()
+/// Read the config, writing the commented default file when there is not one yet.
+pub(crate) fn init_config() -> Arc<PathConfig> {
+    config()
+}
+
+/// The config as it stands right now.
+///
+/// Returns an `Arc` rather than a reference because the config is no longer immortal: a frame
+/// takes one snapshot and uses it consistently, while a reload on another tick swaps in a new one
+/// without disturbing anything already holding the old.
+pub(crate) fn config() -> Arc<PathConfig> {
+    if let Some(loaded) = CONFIG
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+    {
+        return Arc::clone(&loaded.config);
+    }
+    let path = config_path();
+    let text = read_source(&path).unwrap_or_else(|| DEFAULT_CONFIG_TOML.to_owned());
+    let config = Arc::new(parse_config(&text, path));
+    let mut slot = CONFIG.write().unwrap_or_else(|error| error.into_inner());
+    // Another thread may have won the race; keep whatever is already there so two callers in the
+    // same instant cannot end up holding configs that disagree.
+    let loaded = slot.get_or_insert(Loaded {
+        config: Arc::clone(&config),
+        text,
+    });
+    Arc::clone(&loaded.config)
+}
+
+/// What a re-read of the file means, given what was already loaded.
+///
+/// Split out from [`reload_if_changed`] so it can be tested without a filesystem or a global: the
+/// lock handling around it is mechanical, and this is the part that can be wrong.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReloadOutcome {
+    /// Byte-identical to what is loaded. The overwhelmingly common case.
+    Unchanged,
+    /// Something in the file changed. `previous_key_text` is `Some` only when the BINDING is what
+    /// changed, because that is the one change with state attached to it -- the edge detector has
+    /// to forget whichever key was held.
+    Changed { previous_key_text: Option<String> },
+}
+
+fn classify(
+    previous_text: Option<&str>,
+    previous_key_text: Option<&str>,
+    text: &str,
+    new_key_text: &str,
+) -> ReloadOutcome {
+    if previous_text == Some(text) {
+        return ReloadOutcome::Unchanged;
+    }
+    ReloadOutcome::Changed {
+        previous_key_text: previous_key_text
+            .filter(|previous| *previous != new_key_text)
+            .map(str::to_owned),
+    }
+}
+
+/// What a reload did, so the caller can log it and react to a changed binding.
+pub(crate) struct Reloaded {
+    pub(crate) config: Arc<PathConfig>,
+    /// The key that WAS bound, when the binding is what changed.
+    pub(crate) previous_key_text: Option<String>,
+}
+
+/// Re-read the config file and swap it in if its contents changed.
+///
+/// This is what makes the settings editable while the game is running: change the key in the toml,
+/// save, and the next call picks it up. Returns `None` when nothing changed, which is the case on
+/// almost every call.
+///
+/// A file that is unreadable this instant, or whose text is byte-identical to what is already
+/// loaded, is not a change. A file whose `toggle_key` is malformed is a change -- to a config that
+/// keeps working -- because [`parse_config`] falls back to the built-in default and says so rather
+/// than leaving the feature unbindable.
+pub(crate) fn reload_if_changed() -> Option<Reloaded> {
+    let path = config_path();
+    let text = read_source(&path)?;
+    // Cheap path first: hold the read lock only long enough to compare, and parse nothing at all
+    // when the file has not been touched -- which is every call but the one that matters.
+    {
+        let slot = CONFIG.read().unwrap_or_else(|error| error.into_inner());
+        if slot.as_ref().is_some_and(|loaded| loaded.text == text) {
+            return None;
+        }
+    }
+    let config = Arc::new(parse_config(&text, path));
+    let mut slot = CONFIG.write().unwrap_or_else(|error| error.into_inner());
+    let outcome = classify(
+        slot.as_ref().map(|loaded| loaded.text.as_str()),
+        slot.as_ref()
+            .map(|loaded| loaded.config.toggle_key_text.as_str()),
+        &text,
+        &config.toggle_key_text,
+    );
+    let ReloadOutcome::Changed { previous_key_text } = outcome else {
+        // Another thread reloaded the identical text between the two locks.
+        return None;
+    };
+    *slot = Some(Loaded {
+        config: Arc::clone(&config),
+        text,
+    });
+    Some(Reloaded {
+        config,
+        previous_key_text,
+    })
 }
 
 #[cfg(test)]
@@ -225,6 +354,87 @@ mod tests {
 
     fn parse(text: &str) -> PathConfig {
         parse_config(text, PathBuf::from("test.toml"))
+    }
+
+    /// The common case, and the one that must not churn: the file is re-read every second, and a
+    /// reload that re-parses and re-logs on every one of those reads would fill the log with
+    /// nothing and reset the edge detector sixty times a minute.
+    #[test]
+    fn an_untouched_file_is_not_a_reload() {
+        assert_eq!(
+            classify(
+                Some(DEFAULT_CONFIG_TOML),
+                Some("semicolon"),
+                DEFAULT_CONFIG_TOML,
+                "semicolon"
+            ),
+            ReloadOutcome::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_changed_binding_reports_what_it_was_bound_to_before() {
+        let edited = DEFAULT_CONFIG_TOML.replace("semicolon", "F9");
+        assert_eq!(
+            classify(Some(DEFAULT_CONFIG_TOML), Some("semicolon"), &edited, "F9"),
+            ReloadOutcome::Changed {
+                previous_key_text: Some("semicolon".to_owned())
+            }
+        );
+    }
+
+    /// Editing some OTHER setting is still a reload -- the new value has to take effect -- but it
+    /// is not a binding change, so the edge detector must be left alone.
+    #[test]
+    fn changing_a_setting_other_than_the_key_is_not_a_binding_change() {
+        let edited = DEFAULT_CONFIG_TOML.replace("max_targets = 6", "max_targets = 3");
+        assert_ne!(
+            edited, DEFAULT_CONFIG_TOML,
+            "the fixture must actually differ"
+        );
+        assert_eq!(
+            classify(
+                Some(DEFAULT_CONFIG_TOML),
+                Some("semicolon"),
+                &edited,
+                "semicolon"
+            ),
+            ReloadOutcome::Changed {
+                previous_key_text: None
+            }
+        );
+    }
+
+    /// The first read has nothing to compare against and must not be mistaken for "unchanged",
+    /// which would leave the config empty.
+    #[test]
+    fn the_very_first_read_counts_as_a_change() {
+        assert_eq!(
+            classify(None, None, DEFAULT_CONFIG_TOML, "semicolon"),
+            ReloadOutcome::Changed {
+                previous_key_text: None
+            }
+        );
+    }
+
+    /// A mistyped key must leave the feature BOUND to something the player can press, not
+    /// unbound. Reloading is when this matters most: the player is editing live, and a typo that
+    /// silently killed the toggle would look exactly like the DLL crashing.
+    #[test]
+    fn a_malformed_key_reloads_to_the_default_rather_than_to_nothing() {
+        let edited = DEFAULT_CONFIG_TOML.replace(
+            "toggle_key = \"semicolon\"",
+            "toggle_key = \"not-a-key-at-all\"",
+        );
+        assert_ne!(
+            edited, DEFAULT_CONFIG_TOML,
+            "the fixture must actually differ"
+        );
+        let parsed = parse(&edited);
+        assert_eq!(
+            parsed.toggle_key,
+            parse_key(DEFAULT_TOGGLE_KEY_NAME).expect("the built-in default parses")
+        );
     }
 
     #[test]

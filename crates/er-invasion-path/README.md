@@ -44,7 +44,21 @@ On first run it writes a commented `er-invasion-path.toml` beside the game execu
 
 ## Configuration
 
-Every setting lives in that generated file. The ones worth knowing:
+Every setting lives in that generated file, and **every one of them is editable while the game is
+running**. Change the key, save the file, press the new key -- no restart, no reload command. The
+DLL re-reads the file about once a second and logs what it picked up:
+
+```
+config: reloaded -- toggle key semicolon -> F9
+```
+
+It compares the file's **contents**, not its timestamp, because `mtime` has one-second granularity
+on several filesystems and would silently miss an edit saved in the same second as the previous
+read. When the binding changes, the key-press detector is reset, so a key you happen to be holding
+at that moment is not counted as a press of the new binding. A key name it cannot parse falls back
+to the built-in default and says so -- a typo never leaves the feature unbindable.
+
+The ones worth knowing:
 
 | key | default | what it does |
 |---|---|---|
@@ -59,7 +73,7 @@ Every setting lives in that generated file. The ones worth knowing:
 
 ## Pick a key no other mod in your profile reads
 
-The default was `F7` until a live 15-DLL run found `er-invasion-warp` polling `VK_F7` every frame in the same process: the key warped the player instead of drawing anything, and nothing warned about it. "Elden Ring binds nothing to it" is not the question — the mods loaded beside you are, and a default cannot know them. `;` is clear of everything this workspace's shells poll, which makes it a better default rather than a safe one.
+The default was `F7` until a live 15-DLL run found `er-invasion-warp` polling `VK_F7` every frame in the same process: the key warped the player instead of drawing anything, and nothing warned about it. "Elden Ring binds nothing to it" is not the question -- the mods loaded beside you are, and a default cannot know them. `;` is clear of everything this workspace's shells poll, which makes it a better default rather than a safe one.
 
 ## How the route is found
 
@@ -87,6 +101,46 @@ deobf VA == runtime VA, shift 0), cross-checked against two independent call sit
 been run against a live game. The container walk validates everything it reads -- capacity a power
 of two, count bounded, every element pointer non-null, every coordinate finite -- and refuses
 rather than trusting, and a refusal degrades to the arrow.
+
+### Proving the route works without a second player
+
+The chain above only ever ran for a remote player, which meant the first real execution of eleven
+raw function pointers and a container walk would have been mid-invasion -- where an access
+violation costs the session it was meant to prove, and a silent refusal is indistinguishable from
+"the navmesh says there is no way to walk to them".
+
+So the first time the overlay is switched on, it asks for one route to the nearest ordinary map
+character -- an `Npc` stands on the navmesh by construction -- and writes the answer to the log.
+Nothing is drawn from it. Switch the overlay on anywhere with enemies in it, solo, and read one
+line:
+
+```
+selfcheck: PASS -- 14 waypoints over 23m       navmesh chain works end to end
+selfcheck: no route to a map character 23m away -- the chain ran and answered
+selfcheck: REFUSED at 23m -- <reason>          globals resolved, endpoint snap said no
+```
+
+Toggling off re-arms it, because the answer is a property of where you are standing.
+
+### Finding the other players at all
+
+The roster reads `WorldChrMan::player_chr_set`, which the engine documents as the set holding the
+players. If that comes back empty it walks **every** ChrSet the world holds and picks characters by
+kind instead, because this workspace's own enemy sweep already hedges that a co-op session may put
+other players somewhere else, and a roster that trusts one set and finds nobody looks exactly like
+a navmesh that found no route.
+
+The kind test is an **exclusion** list -- map characters and the four ghost kinds -- not an allow-list
+of the phantom types this build knows about. A type nobody here has seen draws a line; an
+allow-list would have drawn nothing and said nothing. Every walk logs what it saw:
+
+```
+roster: remotes=0 sets=1 characters=1 widened=false types=[0:1]
+roster: remotes=2 sets=1 characters=3 widened=false types=[0:1 15:2]
+```
+
+`remotes=0 characters=1` is "you are alone". `remotes=0` with a fat `types=[...]` is a bug in this
+DLL, and names the type it failed on.
 
 ## What it does to the game
 

@@ -282,6 +282,24 @@ fn write_usize(block: &mut [u8; PARAMS_BYTES], offset: usize, value: usize) {
 }
 
 /// A route search that has been handed to the AI world and not yet collected.
+///
+/// # Dropping one is not free
+///
+/// This type looks like a plain handle and is not. Each request occupies a slot in a
+/// **fixed-size ring that belongs to the world, shared with every NPC in the map** --
+/// `world+0x130` is the slot array (stride `0x68`), `world+0x138` its capacity, `world+0x13c` the
+/// round-robin cursor, and `slot+0x40` holds the request id, doubling as the busy flag.
+/// `FUN_140be1bb0` walks that ring for a slot whose `+0x40` is zero and **returns 0 when every
+/// slot is taken**.
+///
+/// Exactly one function clears a slot: `FUN_140bf3320`, reachable only from the fetch in
+/// [`PendingRequest::fetch`]. It `hkUnref`s the Havok path at `slot+0x38`, deallocates the two
+/// heap buffers at `slot+0x50` and `slot+0x58`, and zeroes `slot+0x40`. **There is no cancel.**
+///
+/// So dropping a `PendingRequest` without polling it to an answer holds its slot, its Havok
+/// reference and its allocations for the rest of the process -- and because the ring is the
+/// world's, filling it stops the GAME'S OWN characters pathfinding. Giving up on the answer is
+/// fine; giving up on the request is not. `crate::abandon` is how the caller does the former.
 pub(crate) struct PendingRequest {
     world: usize,
     request_id: i32,
