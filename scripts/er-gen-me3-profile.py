@@ -281,7 +281,7 @@ def selftest() -> int:
         "artifacts": ["er_effects_rs.dll"],
         "excluded": [
             {
-                "artifact": "er_loading_portrait_dll.dll",
+                "artifact": "er_loading_portrait.dll",
                 "kind": "present-compositor",
                 "because": "double D3D12 Present hook",
             }
@@ -308,7 +308,7 @@ def selftest() -> int:
         check("--seed 4242" in text, "the header carries the seed needed to reproduce the pick")
         check("WORKING TREE DIRTY" in text, "a dirty tree is stated, not silently filed under a SHA")
         check(
-            "er_loading_portrait_dll.dll" in text and "EXCLUDED" in text,
+            "er_loading_portrait.dll" in text and "EXCLUDED" in text,
             "excluded DLLs are named in the profile as stated non-results",
         )
         check("NOT release/autoload product proof" in text, "the evidence class is on the artifact")

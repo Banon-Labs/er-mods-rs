@@ -151,18 +151,18 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
 // behavior in own_load_switch_reload_fire (the boot native-fullread SUBMIT -> DRAIN(b80==RESIDENT) ->
 // COMMIT sequence), replacing the old resource-less one-shot. No marker/env gate.
 
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
+pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_COMMITTED;
+pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
 /// Phase machine state for the reload FD4-IO SUBMIT/DRAIN (own_load_switch_reload_fire), persisted
 /// across the caller's per-frame retries. 0=IDLE (do SUBMIT once), 1=DRAIN (tick until b80==3),
 /// 2=COMMIT (fall through to feed+continue_confirm).
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE;
-// The phase VALUES moved next to the atomic in er-telemetry (2026-07-31, bd er-effects-rs-9jbe):
+pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_PHASE;
+// The phase VALUES moved next to the atomic in er-telemetry-core (2026-07-31, bd er-effects-rs-9jbe):
 // er-title-flow's b78 guard now reads this phase to detect that fd4io owns GameMan+0xb78, and that
 // crate must not depend on the root crate. This file remains the only WRITER of the phase machine.
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMIT;
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_DRAIN;
-pub(crate) use er_telemetry::counters::SWITCH_RELOAD_FD4IO_IDLE;
+pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_COMMIT;
+pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_DRAIN;
+pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_IDLE;
 /// Bound the reload drain far below the boot's FULLREAD_DRAIN_MAX (1200): the b80 2->3 save-file read
 /// residency is fast (~17 ticks at boot); if it does not resident within this many frames the read is
 /// not draining at the clean-title timing -> fall through to COMMIT without residency (fail-soft to the
@@ -204,13 +204,13 @@ pub(crate) fn reset_switch_reload_latches() {
     reset_switch_reload_fd4io_phase();
     // Snapshot the finalize baseline for THIS switch + clear the per-switch teardown latches, so the reload
     // gate detects the OUTGOING world's `_Common_Finalize` (COMMON_FINALIZE_CALLS crossing the baseline).
-    er_telemetry::counters::OUTGOING_TEARDOWN_BASELINE.store(
-        er_telemetry::counters::COMMON_FINALIZE_CALLS.load(Ordering::SeqCst),
+    er_telemetry_core::counters::OUTGOING_TEARDOWN_BASELINE.store(
+        er_telemetry_core::counters::COMMON_FINALIZE_CALLS.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
-    er_telemetry::counters::OUTGOING_TEARDOWN_DONE.store(0, Ordering::SeqCst);
-    er_telemetry::counters::OUTGOING_TEARDOWN_WAIT_TICKS.store(0, Ordering::SeqCst);
-    er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::OUTGOING_TEARDOWN_DONE.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::OUTGOING_TEARDOWN_WAIT_TICKS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::OUTGOING_TEARDOWN_FAILSOFT.store(0, Ordering::SeqCst);
     // Per-switch WorldResWait defer-release hold latches: clear ARMED + residency/hold state so each
     // switch gets a fresh hold and a stale ARMED can never leak into a later load (bd reload-overlap-fix-
     // design-worldreswait-defer-release-on-streaming-settle-2026-07-24).
@@ -308,22 +308,23 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     // stalled teardown can never softlock. Once DONE/FAILSOFT latches, this gate is skipped for the switch.
     if crate::experiments::gating::outgoing_teardown_enabled()
         && crate::experiments::gating::switch_reload_active()
-        && er_telemetry::counters::OUTGOING_TEARDOWN_DONE.load(Ordering::SeqCst) == 0
-        && er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
+        && er_telemetry_core::counters::OUTGOING_TEARDOWN_DONE.load(Ordering::SeqCst) == 0
+        && er_telemetry_core::counters::OUTGOING_TEARDOWN_FAILSOFT.load(Ordering::SeqCst) == 0
     {
-        let baseline = er_telemetry::counters::OUTGOING_TEARDOWN_BASELINE.load(Ordering::SeqCst);
-        let calls = er_telemetry::counters::COMMON_FINALIZE_CALLS.load(Ordering::SeqCst);
+        let baseline =
+            er_telemetry_core::counters::OUTGOING_TEARDOWN_BASELINE.load(Ordering::SeqCst);
+        let calls = er_telemetry_core::counters::COMMON_FINALIZE_CALLS.load(Ordering::SeqCst);
         if calls > baseline {
-            er_telemetry::counters::OUTGOING_TEARDOWN_DONE.store(1, Ordering::SeqCst);
+            er_telemetry_core::counters::OUTGOING_TEARDOWN_DONE.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "outgoing-teardown: OBSERVED _Common_Finalize (calls={calls} > baseline={baseline}) -- OUTGOING world released; reload rebuilds FRESH (in-place holds stay disabled) (#{n})"
             ));
         } else {
-            let waited = er_telemetry::counters::OUTGOING_TEARDOWN_WAIT_TICKS
+            let waited = er_telemetry_core::counters::OUTGOING_TEARDOWN_WAIT_TICKS
                 .fetch_add(1, Ordering::SeqCst)
                 + 1;
             if waited >= OUTGOING_TEARDOWN_WAIT_MAX {
-                er_telemetry::counters::OUTGOING_TEARDOWN_FAILSOFT.store(1, Ordering::SeqCst);
+                er_telemetry_core::counters::OUTGOING_TEARDOWN_FAILSOFT.store(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "outgoing-teardown: FAIL-SOFT after {waited} frames without _Common_Finalize (calls={calls} baseline={baseline}) -- falling back to OLD in-place reload; the two holds re-engage (#{n})"
                 ));
@@ -422,7 +423,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     // Record WHICH slot's deserialize completed (slot+1). The published-vs-loaded portrait oracle
     // compares against this, not `GameMan.save_slot` -- ac0 is written by our own `set_save_slot`
     // above and by the game's own selector, so it does not answer "which character loaded".
-    er_telemetry::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+    er_telemetry_core::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
         .store((picked + 1) as usize, Ordering::SeqCst);
     // (f) Re-read the freshly-mounted c30 + fingerprint and fire the GUARDED native continue_confirm
     // (own_load_continue_fire re-guards c30_real && fp_real && owner+0x284==0 internally -- the only

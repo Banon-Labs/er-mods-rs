@@ -1,0 +1,16 @@
+[package]
+name = "er-build-watermark"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_build_watermark"
+crate-type = ["cdylib"]
+
+[target.'cfg(windows)'.dependencies]
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

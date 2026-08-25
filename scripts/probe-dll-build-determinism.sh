@@ -6,7 +6,7 @@
 # This exists to answer, with evidence rather than intuition, whether a CI gate of
 # the form "refactor branches must produce byte-identical DLLs" is implementable.
 #
-# Three builds of crates/er-crash-logging-dll (the smallest cdylib shell):
+# Three builds of crates/er-crash-logging (the smallest cdylib shell):
 #   A  clean + build, source unchanged            -- baseline
 #   B  clean + build, source unchanged            -- reproducible run-to-run?
 #   C  clean + build, after a pure code move      -- does a no-op refactor move bytes?
@@ -18,9 +18,9 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 out="${OUT_DIR:-/tmp/er-dll-determinism}"
 mkdir -p "$out"
-pkg=er-crash-logging-dll
+pkg=er-crash-logging
 target=x86_64-pc-windows-msvc
-dll="$root/target/$target/release/er_crash_logging_dll.dll"
+dll="$root/target/$target/release/er_crash_logging.dll"
 src="$root/crates/$pkg/src/lib.rs"
 moved_src="$root/crates/$pkg/src/dllmain.rs"
 cd "$root"

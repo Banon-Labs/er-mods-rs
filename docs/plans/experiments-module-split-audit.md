@@ -57,7 +57,7 @@ completeness critic over the whole tree.
 
 ## 1. Stalled work, not new ideas
 
-`crates/er-save-picker` (297 lines) and `crates/er-quit-menu` (318 lines) are **scaffolding
+`crates/er-save-picker-core` (297 lines) and `crates/er-quit-menu-core` (318 lines) are **scaffolding
 only** -- `lib.rs` + `host.rs`, both headers stating "nothing has been moved yet".
 `docs/plans/save-picker-crate-extraction.md` specifies slices S1-S10; **all ten are not
 started**, and ~14,000 lines of the code they name is still in `experiments/`.
@@ -133,7 +133,7 @@ and the P1 bug filed for `DirectTraceSequence` calling the save writer as a load
 **Also landed:** the four singleton globals above now have **exactly one literal definition
 each**, in `er-game-base/src/rva.rs` (down from 5 / 4 / 5 / 2 across the workspace). This
 finishes a consolidation that crate's own header already described as its purpose. It
-required giving `er-input-harness-dll`, `er-reload-trace-dll` and `er-save-loader` an
+required giving `er-input-harness`, `er-reload-trace` and `er-save-loader` an
 `er-game-base` dependency -- which is not a new coupling but the one the crate was designed
 for: its manifest says "Tier A (default) is ZERO external deps ... mirroring the zero-dep
 mini-DLLs", so a default-features dep adds no transitive weight.
@@ -219,7 +219,7 @@ The known genuinely-material work is small: the `er-save-loader` save-writer cal
   resolver with a field-for-field identical swapchain desc and a byte-identical
   `dummy_wndproc`. The product already links the crate.
 - **`er-game-base`** -- three `mem.rs` UTF-16 helpers; moving them breaks a real cycle through
-  `er-loading-portrait`. The two patch stubs are *not* free (that crate is deliberately
+  `er-loading-portrait-core`. The two patch stubs are *not* free (that crate is deliberately
   zero-external-dep).
 - **`er-hook`** -- `mh_install_hook_once`. Caveat: 200 `MhHook::new` sites vs 12
   `register_union_hook` repo-wide, so the union is the exception, not the rule; promoting the
@@ -241,7 +241,7 @@ survive.
   job into a file move plus a `pub(crate)` audit.
 - **A save-flow module out of `lifecycle.rs`** -- band `101-1370` plus its test module is
   1,486 lines, zero foreign items, and a one-symbol/one-call-site outbound surface.
-- **`loading_cover_save_slot.rs` -> 4** -- it is four concerns, and `er-save-picker`'s
+- **`loading_cover_save_slot.rs` -> 4** -- it is four concerns, and `er-save-picker-core`'s
   `SaveSlotInfo` / `parse_save_character_slots` are wedged inside the quit-menu swap ledger.
 - **`er-loading-cover`** -- bd candidate, blocked on the `constants_moved.rs` layering (the
   same blocker as the load-drive crate). `boot_progress.rs` has five layer seams, none on a
@@ -262,7 +262,7 @@ Dependencies here are real; several steps undo each other out of sequence.
 5. **`loading_cover_save_slot.rs` 4-way split** -- unblocks three things at once.
 6. **`experiments/save_picker/` + the save-flow module** -- preconditions for the crate slices.
 7. **`constants_moved.rs` layering** -- the blocker shared by `er-loading-cover` and load-drive.
-8. **The er-save-picker / er-quit-menu slices**, with the SS1 corrections applied first.
+8. **The er-save-picker-core / er-quit-menu-core slices**, with the SS1 corrections applied first.
 
 ## 6. Open questions -- decisions, not analysis
 
@@ -271,7 +271,7 @@ Dependencies here are real; several steps undo each other out of sequence.
   the ruling.
 - Is the `missing_save_selection_pending()` disjunct reachable at boot? Needs one RAM-oracle
   run; the static corroboration collapsed under verification.
-- Does the product bundle `er-quit-menu`, or is it listed-only? Plan SS6.2. This silently
+- Does the product bundle `er-quit-menu-core`, or is it listed-only? Plan SS6.2. This silently
   determines whether the browse-row text renderer and the CreateFileW->crate call are legal.
 - Should the sanctioned marker-file diagnostic carve-out survive? Both checkers pass with it
   today by design. Policy call, not a defect.

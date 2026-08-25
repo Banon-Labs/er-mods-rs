@@ -281,8 +281,8 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             if unsafe { own_load_feed_deserialize(base, gm, picked as i32) } {
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
                 // Which slot's deserialize completed (slot+1) -- ground truth for the
-                // published-vs-loaded portrait oracle. See er_telemetry counters.
-                er_telemetry::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+                // published-vs-loaded portrait oracle. See er_telemetry_core counters.
+                er_telemetry_core::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
                     .store(picked + 1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "native-fullread: DESER-path FEED of picked slot {picked} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams (FRESH_DESER_DONE=1, no double-feed)"
@@ -540,7 +540,7 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
 }
 // Character identity now belongs to the loading-portrait feature crate, which already owns the
 // PlayerGameData layout and GameDataMan host seam. Preserve the historical flat product name.
-pub(crate) use er_loading_portrait::char_fingerprint;
+pub(crate) use er_loading_portrait_core::char_fingerprint;
 /// Read the load-correctness invariants at the in-world transition and log a single greppable
 /// `LOAD-CORRECTNESS` record: GameMan c30/ac0/name_is_empty + the CS::PlayerGameData
 /// (`[base+0x4588268]`) character fingerprint (name, level, runes, rune-memory, chr_type,

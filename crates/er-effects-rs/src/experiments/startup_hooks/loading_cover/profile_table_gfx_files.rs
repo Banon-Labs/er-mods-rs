@@ -5,6 +5,12 @@ static TEXT_INPUT_02_990_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 static TEXT_INPUT_02_990_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
 static TEXT_INPUT_02_990_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static TEXT_INPUT_02_990_CANONICAL_URL: &[u8] = b"data0:/menu/win/02_990_textinput.gfx\0";
+// SECOND derivation of the SAME canonical payload, for the System>Quit link field. Separate cache
+// because the two derivations differ: the picker's hides the movie's chrome, this one keeps and
+// widens it.
+static BUILD_URL_02_990_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+static BUILD_URL_02_990_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
+static BUILD_URL_02_990_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn install_profile_select_table_diag_hook() {
     if PROFILE_SELECT_TABLE_DIAG_INSTALLED.load(Ordering::SeqCst) != 0 {
@@ -575,15 +581,31 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
     true
 }
 
-/// Inline `02_990_textinput` over the save picker's CurrentPath field. Gated by the active native
-/// path-editor job at the file-open observer, so ordinary game text inputs retain vanilla geometry.
-pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) -> bool {
+/// Where one 02_990 derivation's cache, counters, log tag and transform live together.
+///
+/// TWO cache keys now reach this file (`02_990_TextInput_PathEditor` and
+/// `02_990_TextInput_BuildUrl`), each redirected to the same canonical vanilla payload and each
+/// deriving a DIFFERENT movie from it. Sharing one derivation is what put an unstyled link field in
+/// the corner of the screen, so the two are kept apart by construction rather than by a flag.
+struct TextInput02990Derivation {
+    cache: &'static OnceLock<Vec<u8>>,
+    serves: &'static AtomicUsize,
+    failures: &'static AtomicUsize,
+    tag: &'static str,
+    derive: fn(&[u8]) -> Result<Vec<u8>, String>,
+}
+
+/// Derive-and-swap one 02_990 MemoryFile in place, fail-closed onto the untouched native payload.
+unsafe fn text_input_02_990_swap(
+    base: usize,
+    file: usize,
+    derivation: &TextInput02990Derivation,
+) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let tag = derivation.tag;
     let fail = |reason: core::fmt::Arguments<'_>| {
-        TEXT_INPUT_02_990_RUNTIME_FAILURES.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-picker-path: 02_990 inline GFX edit FAIL-CLOSED: {reason}"
-        ));
+        derivation.failures.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!("{tag}: 02_990 GFX edit FAIL-CLOSED: {reason}"));
         false
     };
     if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
@@ -593,7 +615,7 @@ pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) 
     if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
         return fail(format_args!("unexpected MemoryFile vtable 0x{vtable:x}"));
     }
-    let edited = match TEXT_INPUT_02_990_RUNTIME_EDITED.get() {
+    let edited = match derivation.cache.get() {
         Some(edited) => edited,
         None => {
             let data =
@@ -606,15 +628,15 @@ pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) 
                 ));
             }
             let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len as usize) };
-            match er_gfx::text_input_02_990::inline_current_path_editor(vanilla) {
+            match (derivation.derive)(vanilla) {
                 Ok(edited) => {
                     append_autoload_debug(format_args!(
-                        "save-picker-path: derived inline 02_990 GFX in={} out={} fnv=0x{:016x}",
+                        "{tag}: derived 02_990 GFX in={} out={} fnv=0x{:016x}",
                         vanilla.len(),
                         edited.len(),
                         er_gfx::title_05_000::fnv1a64(&edited)
                     ));
-                    TEXT_INPUT_02_990_RUNTIME_EDITED.get_or_init(|| edited)
+                    derivation.cache.get_or_init(|| edited)
                 }
                 Err(error) => return fail(format_args!("{error}")),
             }
@@ -631,23 +653,65 @@ pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) 
         );
         core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
     }
-    TEXT_INPUT_02_990_RUNTIME_SERVES.fetch_add(1, Ordering::SeqCst);
+    derivation.serves.fetch_add(1, Ordering::SeqCst);
     true
 }
 
-/// Four-button `02_040_optionsetting` runtime edit for System->Quit. This mirrors the 05_000/05_010
+/// Inline `02_990_textinput` over the save picker's CurrentPath field. Gated by the path editor's
+/// own cache key at the file-open observer, so ordinary game text inputs retain vanilla geometry.
+pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) -> bool {
+    unsafe {
+        text_input_02_990_swap(
+            base,
+            file,
+            &TextInput02990Derivation {
+                cache: &TEXT_INPUT_02_990_RUNTIME_EDITED,
+                serves: &TEXT_INPUT_02_990_RUNTIME_SERVES,
+                failures: &TEXT_INPUT_02_990_RUNTIME_FAILURES,
+                tag: "save-picker-path",
+                derive: |vanilla| {
+                    er_gfx::text_input_02_990::inline_current_path_editor(vanilla)
+                        .map_err(|error| error.to_string())
+                },
+            },
+        )
+    }
+}
+
+/// Centre `02_990_textinput` over the Quit tab for the **Load Build from URL** link field, with the
+/// movie's own backing plate and frame art kept and widened to hold a planner link.
+pub(crate) unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usize) -> bool {
+    unsafe {
+        text_input_02_990_swap(
+            base,
+            file,
+            &TextInput02990Derivation {
+                cache: &BUILD_URL_02_990_RUNTIME_EDITED,
+                serves: &BUILD_URL_02_990_RUNTIME_SERVES,
+                failures: &BUILD_URL_02_990_RUNTIME_FAILURES,
+                tag: "system-quit-build-url",
+                derive: |vanilla| {
+                    er_gfx::build_url_02_990::centered_build_url_editor(vanilla)
+                        .map_err(|error| error.to_string())
+                },
+            },
+        )
+    }
+}
+
+/// Five-button `02_040_optionsetting` runtime edit for System->Quit. This mirrors the 05_000/05_010
 /// MemoryFile swap path, but deliberately has no env/file-backed diagnostic input: the product must not
 /// ship or depend on an external GFx. The derived movie is built from the game's own vanilla payload and
 /// cached for process lifetime so the native MemoryFile's data pointer remains valid.
-pub(crate) unsafe fn options_02_040_quit4_swap_to_edited(base: usize, file: usize) -> bool {
+pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
         return false;
     }
     let fail = |reason: core::fmt::Arguments<'_>| {
-        OPTIONS_02_040_QUIT4_RUNTIME_FAILURES.fetch_add(1, Ordering::SeqCst);
+        OPTIONS_02_040_QUIT6_RUNTIME_FAILURES.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-gfx: 02_040 quit4 runtime edit FAIL-CLOSED (serving native vanilla): {reason}"
+            "system-quit-gfx: 02_040 quit6 runtime edit FAIL-CLOSED (serving native vanilla): {reason}"
         ));
         false
     };
@@ -658,7 +722,7 @@ pub(crate) unsafe fn options_02_040_quit4_swap_to_edited(base: usize, file: usiz
             base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
         ));
     }
-    let edited = match OPTIONS_02_040_QUIT4_RUNTIME_EDITED.get() {
+    let edited = match OPTIONS_02_040_QUIT6_RUNTIME_EDITED.get() {
         Some(cached) => cached,
         None => {
             let data =
@@ -682,14 +746,14 @@ pub(crate) unsafe fn options_02_040_quit4_swap_to_edited(base: usize, file: usiz
             }
             let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
             let known = er_gfx::options_02_040::is_known_vanilla_win(vanilla);
-            match er_gfx::options_02_040::quit4(vanilla) {
+            match er_gfx::options_02_040::quit6(vanilla) {
                 Ok(out) => {
                     let out_fnv = er_gfx::title_05_000::fnv1a64(&out);
                     append_autoload_debug(format_args!(
-                        "system-quit-gfx: 02_040 quit4 runtime edit derived in={len} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
+                        "system-quit-gfx: 02_040 quit6 runtime edit derived in={len} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
                         out.len()
                     ));
-                    OPTIONS_02_040_QUIT4_RUNTIME_EDITED.get_or_init(|| out)
+                    OPTIONS_02_040_QUIT6_RUNTIME_EDITED.get_or_init(|| out)
                 }
                 Err(err) => {
                     return fail(format_args!("in={len} known_vanilla={known}: {err}"));
@@ -708,15 +772,25 @@ pub(crate) unsafe fn options_02_040_quit4_swap_to_edited(base: usize, file: usiz
         );
         core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
     }
-    OPTIONS_02_040_QUIT4_RUNTIME_SERVES.fetch_add(1, Ordering::SeqCst);
+    OPTIONS_02_040_QUIT6_RUNTIME_SERVES.fetch_add(1, Ordering::SeqCst);
     true
 }
 
+/// UNION-SHAPED, not game-shaped (2026-08-23). This prologue is detoured by `er-armament-icons`
+/// too, and two MinHook instances on one prologue overwrite each other's trampolines -- measured:
+/// the product reported `installed = true` with ZERO hits for a whole session while every GFx swap
+/// it owns went silently vanilla. Both DLLs now chain through THIS DLL's single instance via the
+/// `er_effects_union_register` export, whose handler ABI is four `usize` args. The game passes
+/// three, so the fourth register is ignored; `flags` is narrowed straight back to the `u32` the
+/// game really passed, so neither the log nor the forwarded call sees a register whose high half
+/// is undefined.
 pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     loader: usize,
     url: usize,
-    flags: u32,
+    flags_reg: usize,
+    _unused: usize,
 ) -> usize {
+    let flags = flags_reg as u32;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let hit = TITLE_SCALEFORM_FILE_OPEN_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     let caller_rva = trace_first_game_caller_rva();
@@ -732,6 +806,10 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     let is_path_editor_02_990 =
         unsafe { bounded_ascii_contains(url, b"02_990_textinput_patheditor") }
             || unsafe { bounded_ascii_contains(url, b"02_990_TextInput_PathEditor") };
+    // The System>Quit link field's own key. Same canonical payload, different derivation: the
+    // picker's hides the movie's chrome, this one keeps it and centres the box.
+    let is_build_url_02_990 = unsafe { bounded_ascii_contains(url, b"02_990_textinput_buildurl") }
+        || unsafe { bounded_ascii_contains(url, b"02_990_TextInput_BuildUrl") };
 
     let base = game_module_base().unwrap_or(null);
     let mut memory_replacement = false;
@@ -748,22 +826,27 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         "02_040_optionsetting"
     } else if is_path_editor_02_990 {
         "02_990_textinput_patheditor"
+    } else if is_build_url_02_990 {
+        "02_990_textinput_buildurl"
     } else {
         ""
     };
     let orig = TITLE_SCALEFORM_FILE_OPEN_ORIG.load(Ordering::SeqCst);
     let ret = if base != null {
         if orig != null && orig != HOOK_ORIGINAL_UNSET {
-            let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
-                unsafe { std::mem::transmute(orig) };
+            // Called through the UNION signature on purpose: under the chain this slot holds
+            // either the game trampoline (3 args, extra register harmlessly ignored) or the NEXT
+            // handler, which is 4-arg. Calling a chained handler with the game's narrower
+            // signature would leave its 4th register undefined.
+            let f: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };
             // A custom cache key forces a fresh Scaleform load. Redirect only that key's file-open
             // to the canonical native movie; the game's shared 02_990 cache entry stays untouched.
-            let open_url = if is_path_editor_02_990 {
+            let open_url = if is_path_editor_02_990 || is_build_url_02_990 {
                 TEXT_INPUT_02_990_CANONICAL_URL.as_ptr() as usize
             } else {
                 url
             };
-            let native = unsafe { f(loader, open_url, flags) };
+            let native = unsafe { f(loader, open_url, flags as usize, 0) };
             // Product-default runtime strip (er-effects-rs-h7x): derive the stripped title
             // movie from the native file's own vanilla payload and swap it in place. On any
             // failure the untouched native file is returned (vanilla title UI, fail-closed).
@@ -776,19 +859,21 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             }
             // System->Quit four-button GFx edit: product-default, no external asset dependency.
             if is_options_02_040 {
-                memory_replacement = unsafe { options_02_040_quit4_swap_to_edited(base, native) };
+                memory_replacement = unsafe { options_02_040_quit6_swap_to_edited(base, native) };
             }
             if is_path_editor_02_990 {
                 memory_replacement = unsafe { text_input_02_990_swap_to_inline(base, native) };
+            }
+            if is_build_url_02_990 {
+                memory_replacement = unsafe { text_input_02_990_swap_to_build_url(base, native) };
             }
             native
         } else {
             null
         }
     } else if orig != null && orig != HOOK_ORIGINAL_UNSET {
-        let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
-            unsafe { std::mem::transmute(orig) };
-        unsafe { f(loader, url, flags) }
+        let f: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };
+        unsafe { f(loader, url, flags as usize, 0) }
     } else {
         null
     };
@@ -814,6 +899,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         || is_profile_05_010
         || is_options_02_040
         || is_path_editor_02_990
+        || is_build_url_02_990
     {
         let logo_hit = if is_title_logo {
             TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS.fetch_add(1, Ordering::SeqCst) + 1
@@ -824,7 +910,8 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         let name_len = unsafe { copy_ascii_preview(url, &mut name) };
         let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
         append_autoload_debug(format_args!(
-            "title-resource-observer: Scaleform file-open title-memory label={memory_label} logo_hit={logo_hit} total={hit} loader=0x{loader:x} url=0x{url:x} '{name}' redirected_to_canonical_02_990={is_path_editor_02_990} flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x} memory_replacement={memory_replacement}"
+            "title-resource-observer: Scaleform file-open title-memory label={memory_label} logo_hit={logo_hit} total={hit} loader=0x{loader:x} url=0x{url:x} '{name}' redirected_to_canonical_02_990={} flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x} memory_replacement={memory_replacement}",
+            is_path_editor_02_990 || is_build_url_02_990
         ));
     } else if hit <= 24 {
         let mut name = [0u8; 96];

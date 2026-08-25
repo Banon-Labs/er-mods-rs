@@ -188,9 +188,9 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
     const LOG_INTERVAL: usize = 30;
     const WAIT_INC: usize = 1;
     static MOUNT_PHASE: AtomicUsize = AtomicUsize::new(PHASE_INIT);
-    pub(crate) use er_telemetry::counters::MOUNT_WAITS;
+    pub(crate) use er_telemetry_core::counters::MOUNT_WAITS;
     // Fire the warm FD4 worker-kick (0x67b4e0) at most once per process.
-    pub(crate) use er_telemetry::counters::WARM_KICK_FIRED;
+    pub(crate) use er_telemetry_core::counters::WARM_KICK_FIRED;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if gm == null {
         return;

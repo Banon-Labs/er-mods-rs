@@ -57,21 +57,28 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             }
         }
     }
+    // THE ONE PROLOGUE THIS DLL SHARES WITH ANOTHER ME3 NATIVE (2026-08-23). `er-armament-icons`
+    // detours this same Scaleform file-open wrapper, and the bare `MhHook` that used to be here is
+    // exactly what let whichever DLL installed second overwrite the other's trampoline: measured,
+    // the product reported `file_open_observer_installed = true` with `file_open_hits = 0` for an
+    // entire session while every GFx swap it owns rendered vanilla, and nothing crashed or logged.
+    // Registering through the union makes install order irrelevant -- the first registrant creates
+    // the dispatcher and owns the real trampoline, every later one CHAINS -- and the companion
+    // reaches this same union from its own image through the `er_effects_union_register` export.
+    // The union enables its hook immediately rather than through MinHook's queue, so this
+    // deliberately sits outside the `MH_ApplyQueued` batch the other two observers share.
     if TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) == 0 {
         match unsafe {
-            MhHook::new(
-                file_open_addr as *mut c_void,
-                title_scaleform_file_open_observer_hook as *mut c_void,
+            crate::mh::register_union_hook(
+                file_open_addr,
+                title_scaleform_file_open_observer_hook,
+                &TITLE_SCALEFORM_FILE_OPEN_ORIG,
             )
         } {
-            Ok(hook) => {
-                TITLE_SCALEFORM_FILE_OPEN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
-                crate::mh::leak_installed_hook(hook);
-            }
+            Ok(()) => TITLE_SCALEFORM_FILE_OPEN_INSTALLED.store(1, Ordering::SeqCst),
             Err(status) => {
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: Scaleform file-open MhHook::new failed: {status:?}"
+                    "title-resource-observer: Scaleform file-open union register failed: {status:?}"
                 ));
                 ok = false;
             }
@@ -104,7 +111,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
             TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
-            TITLE_SCALEFORM_FILE_OPEN_INSTALLED.store(1, Ordering::SeqCst);
+            // file-open is NOT set here: the union already enabled and flagged it above.
             TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "title-resource-observer: hooked AcquireMenuResource 0x{addr:x}, Scaleform file-open 0x{file_open_addr:x}, resource-ctor 0x{resource_ctor_addr:x}; observe-only"
@@ -149,7 +156,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     if stats_panel_enabled()
         && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") }
         && let Some(slot) = unsafe { systex_profile_target_slot(target_ptr) }
-        && let Some(key) = er_loading_portrait::stats_panel_registered_systex_key(
+        && let Some(key) = er_loading_portrait_core::stats_panel_registered_systex_key(
             slot,
             STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst),
         )
@@ -659,8 +666,8 @@ pub(crate) fn profile_slot_weapon_level(slot: i32) -> Option<u8> {
         .matchmaking_weapon_level
 }
 
-/// The merged row header's value bag (see `er_loading_portrait::profile_row_label`).
-pub(crate) use er_loading_portrait::profile_row_label::RowHeaderValues as ProfileRowHeaderValues;
+/// The merged row header's value bag (see `er_loading_portrait_core::profile_row_label`).
+pub(crate) use er_loading_portrait_core::profile_row_label::RowHeaderValues as ProfileRowHeaderValues;
 
 /// The character name of save `slot`, or `None` when the slot is empty or the save is unreadable.
 /// This is cached from the same `.sl2` read as [`profile_slot_attributes`]. Native ProfileSelect
@@ -721,7 +728,7 @@ pub(crate) fn build_loaded_char_name() -> Option<String> {
 /// together or not at all.
 pub(crate) fn build_loaded_char_level() -> Option<i32> {
     let pgd = loaded_player_game_data_ptr()?;
-    unsafe { safe_read_i32(pgd + er_loading_portrait::pgd_layout::PGD_LEVEL_68_OFFSET) }
+    unsafe { safe_read_i32(pgd + er_loading_portrait_core::pgd_layout::PGD_LEVEL_68_OFFSET) }
 }
 
 /// The LOADED character's highest weapon upgrade level, off the same live `PlayerGameData` the name
@@ -729,7 +736,9 @@ pub(crate) fn build_loaded_char_level() -> Option<i32> {
 pub(crate) fn build_loaded_char_weapon_level() -> Option<u8> {
     let pgd = loaded_player_game_data_ptr()?;
     let word = unsafe {
-        safe_read_i32(pgd + er_loading_portrait::pgd_layout::PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET)
+        safe_read_i32(
+            pgd + er_loading_portrait_core::pgd_layout::PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET,
+        )
     }?;
     u8::try_from(word & 0xff).ok()
 }
@@ -932,9 +941,9 @@ pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> 
 }
 
 /// Build the ProfileSelect stats line for `attributes[start..end]` as a NUL-terminated UTF-16
-/// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait`;
+/// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait-core`;
 /// this compatibility name keeps the startup-hook callsite stable.
-pub(crate) use er_loading_portrait::build_title_stats_compact_html_utf16 as build_stats_compact_html_utf16;
+pub(crate) use er_loading_portrait_core::build_title_stats_compact_html_utf16 as build_stats_compact_html_utf16;
 
 fn decode_scaleform_html_line(line: &[u16]) -> Option<String> {
     let body = line.strip_suffix(&[0]).unwrap_or(line);
@@ -1644,8 +1653,8 @@ pub(crate) unsafe fn set_row_field_visible(
 }
 
 /// Which of a row's per-slot info fields should be on screen. Pure row-visibility decision ownership
-/// lives in `er-loading-portrait`; this compatibility name keeps the startup-hook callsite stable.
-pub(crate) use er_loading_portrait::RowSlotFieldVisibility;
+/// lives in `er-loading-portrait-core`; this compatibility name keeps the startup-hook callsite stable.
+pub(crate) use er_loading_portrait_core::RowSlotFieldVisibility;
 
 /// Apply a row's field visibility through the game's own wrapper.
 ///
@@ -1922,7 +1931,7 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         if let Some(wl) = weapon_level {
             values = values.with_weapon_level(i32::from(wl));
         }
-        let header = er_loading_portrait::profile_row_label::row_header_label(&values);
+        let header = er_loading_portrait_core::profile_row_label::row_header_label(&values);
         let merged = values.rune_level.is_some();
         let header_utf16 = nul_terminated_utf16(&header);
         PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
@@ -2018,7 +2027,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // one visual line.
     let mut staged_player_name: Option<(usize, Vec<u16>)> = None;
     let mut staged_location: Option<(usize, Vec<u16>)> = None;
-    let mut drive_strip_focus: Option<er_save_picker::DriveStripFocus> = None;
+    let mut drive_strip_focus: Option<er_save_picker_core::DriveStripFocus> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -2115,7 +2124,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     if let Some(wl) = weapon_level {
                         values = values.with_weapon_level(i32::from(wl));
                     }
-                    er_loading_portrait::profile_row_label::row_header_label(&values)
+                    er_loading_portrait_core::profile_row_label::row_header_label(&values)
                 })
             } else {
                 None

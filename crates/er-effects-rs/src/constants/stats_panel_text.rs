@@ -87,31 +87,31 @@ pub(crate) const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x1198e50;
 pub(crate) const GFX_TEXT_FIELD_SELECTION_END: i64 = i64::MAX;
 /// Re-entrancy guard for the row-populate hook's `ErStats` push (its resolve re-enters the named-child
 /// binder hook): skip the push block while set.
-pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_IN_PROGRESS;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_IN_PROGRESS;
 /// Count of row populates observed (PlayerName trigger fired) while the stats panel is on (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_STATS_ROW_POPULATES;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_ROW_POPULATES;
 /// Count of successful ErStats pushes (assign resolved an editable field and SetText accepted) (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_STATS_SETTEXT_SUBS;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_SETTEXT_SUBS;
 /// Count of push attempts that failed (field missing -- e.g. GFX edit not served -- or SetText
 /// rejected the value) (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_FAILURES;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_FAILURES;
 /// Count of native `PlayerName` SetText attempts made from the per-slot save-name cache.
-pub(crate) use er_telemetry::counters::PROFILE_PLAYER_NAME_PUSH_ATTEMPTS;
+pub(crate) use er_telemetry_core::counters::PROFILE_PLAYER_NAME_PUSH_ATTEMPTS;
 /// Count of successful native `PlayerName` SetText pushes.
-pub(crate) use er_telemetry::counters::PROFILE_PLAYER_NAME_SETTEXT_SUBS;
+pub(crate) use er_telemetry_core::counters::PROFILE_PLAYER_NAME_SETTEXT_SUBS;
 /// Count of rejected native `PlayerName` SetText pushes.
-pub(crate) use er_telemetry::counters::PROFILE_PLAYER_NAME_PUSH_FAILURES;
+pub(crate) use er_telemetry_core::counters::PROFILE_PLAYER_NAME_PUSH_FAILURES;
 /// Count of slot names decoded from the live `.sl2` cache.
-pub(crate) use er_telemetry::counters::PROFILE_SLOT_NAMES_DECODED;
+pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_NAMES_DECODED;
 /// Count of pushes SKIPPED fail-closed because the resolved component at proxy+0x8 was not a live
 /// image-vtabled object (er-effects-rs-7e7: a stale/garbage-vt component here crashed the native
 /// SetText wrapper's unvalidated `call *0x8(vt)` dispatch). Distinct from PUSH_FAILURES so telemetry
 /// separates "field missing / SetText rejected" from "component stale -- crash avoided" (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_STALE_SKIPS;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_SKIPS;
 /// Last stale component pointer observed by the fail-closed guard (diagnostic for 7e7 root-cause).
-pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_STALE_LAST_COMP;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_COMP;
 /// Last stale component's vtable pointer observed by the fail-closed guard.
-pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// Row-populate template `FUN_1408758d0` (deobf/live 0x8757e0; dump 0x1408758d0 -> shift -0xf0,
 /// content-unique). `longlong(rowModel* rcx, SceneObjProxy* rdx, undefined8 r8, undefined8 r9)`. The
 /// only writer of the per-row PlayerName/Level/Location/PlayTime fields, invoked once per visible
@@ -237,10 +237,10 @@ pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET: usize = 0xc8;
 /// Count of rows whose `PlayTime` was replaced with the file's last-saved timestamp (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_ROW_LAST_SAVED_ROWS;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_ROWS;
 /// Count of rows where the last-saved text could not be staged into the row model (the model field
 /// was unreadable), so the row kept the native playtime string (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_ROW_LAST_SAVED_STAGE_FAILURES;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_LAST_SAVED_STAGE_FAILURES;
 /// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the visibility setter `FUN_140d844d0` requires:
 /// it returns without doing anything unless the resolved value is a DISPLAY OBJECT (10). Recorded
 /// per call as an oracle so "the fields are still visible in game" is diagnosable from telemetry
@@ -292,24 +292,24 @@ pub(crate) fn dispatch_target_is_purecall(target: usize, base: usize) -> bool {
 /// was called for at least one of the three fields; pair it with `_NON_DISPLAY` below to know the
 /// call took effect (oracle). Also the latch that arms the symmetric re-show: until it is non-zero
 /// nothing was ever driven, so the vanilla path stays completely untouched.
-pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS;
 /// Count of rows the re-show was driven on (oracle). Row clips are reused across rows and across
 /// windows, so every row that KEEPS its slot info re-asserts visibility.
-pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_SHOWN_ROWS;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_SHOWN_ROWS;
 /// Count of per-field visibility calls skipped fail-closed: the child did not resolve, or the out
 /// proxy did not carry the game's own `CS::SceneObjProxy` vtable (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_VIS_SKIPS;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_VIS_SKIPS;
 /// Count of per-field visibility calls whose resolved value was NOT a display object, i.e. calls the
 /// native setter ignored (oracle). Non-zero means this lever does not reach that field.
-pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_NON_DISPLAY;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_NON_DISPLAY;
 /// Last GFx value type observed by the visibility path (diagnostic companion to the counter above).
-pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_LAST_DATATYPE;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_SLOT_INFO_LAST_DATATYPE;
 /// Count of summary populates handed back to the game untouched because the row is not ours (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_FOREIGN_SUMMARY_ROWS;
+pub(crate) use er_telemetry_core::counters::PROFILE_FOREIGN_SUMMARY_ROWS;
 /// Count of summary populates on our own edited ProfileSelect row template (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_OWN_SUMMARY_ROWS;
+pub(crate) use er_telemetry_core::counters::PROFILE_OWN_SUMMARY_ROWS;
 /// Count of text pushes refused because the movie has no child by that name (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_MISSING_FIELD;
+pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_MISSING_FIELD;
 pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Trampoline for [`PROFILE_ROW_MODEL_BUILD_RVA`], and its one-shot install latch.
 pub(crate) static PROFILE_ROW_MODEL_BUILD_ORIG: AtomicUsize =
@@ -319,7 +319,7 @@ pub(crate) static PROFILE_ROW_MODEL_BUILD_INSTALLED: AtomicUsize = AtomicUsize::
 pub(crate) static PROFILE_ROW_PLACE_NAME_REPAIRS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_CURRENT_ROW_POPULATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::PROFILE_ROW_POPULATE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::PROFILE_ROW_POPULATE_INSTALLED;
 /// `PlayerGameData::GetName`-style native getter used by System/Quit and the current ProfileSelect
 /// summary builder. Static RE of 1.16.2 `FUN_14025f8e0`: it reads the word-checked string at
 /// `PlayerGameData + 0x8e8`, which can hold the shortened display name (`Madd`) even while the raw PGD
@@ -332,14 +332,14 @@ pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_INSTALLED: AtomicUsize = AtomicUs
 pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
-pub(crate) use er_telemetry::counters::PROFILE_SLOT_STATS_CACHE_STATE;
+pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_STATS_CACHE_STATE;
 /// Count of per-slot cache drops on a save swap (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_SLOT_CACHE_INVALIDATIONS;
+pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_INVALIDATIONS;
 /// Count of per-slot cache refills from picker-held bytes (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS;
+pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS;
 /// Count of save slots that decoded to a real character in the per-slot stats cache (oracle).
-pub(crate) use er_telemetry::counters::PROFILE_SLOT_STATS_DECODED;
-pub(crate) use er_telemetry::counters::TITLE_PRESS_START_BIND_HITS;
+pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_STATS_DECODED;
+pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_BIND_HITS;
 pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PRESS_START_BIND_LAST_OUT: AtomicUsize =
@@ -348,8 +348,8 @@ pub(crate) static TITLE_PRESS_START_BIND_LAST_NAME: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PRESS_START_BIND_LAST_CONTEXT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TITLE_PRESS_START_BIND_HIDE_CALLS;
-pub(crate) use er_telemetry::counters::TITLE_PRESS_START_GFX_HIDE_CALLS;
+pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_BIND_HIDE_CALLS;
+pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_GFX_HIDE_CALLS;
 pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
 pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_NAME;
 pub(crate) use er_title_flow::TITLE_LOGO_RESOURCE_NAME;
@@ -387,10 +387,10 @@ pub(crate) static TITLE_TOP_START_LOGIN_HIDE_ORIG: AtomicUsize =
 pub(crate) static TITLE_TOP_START_LOGIN_HIDE_INSTALLED: AtomicUsize =
     AtomicUsize::new(TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED);
 pub(crate) static TITLE_LOGO_SET_VISIBLE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_LOGO_SET_VISIBLE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_LOGO_SET_VISIBLE_INSTALLED;
 pub(crate) static TITLE_LOGO_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_LOGO_CTOR_INSTALLED;
-pub(crate) use er_telemetry::counters::TITLE_LOGO_GFX_HIDE_CALLS;
+pub(crate) use er_telemetry_core::counters::TITLE_LOGO_CTOR_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_LOGO_GFX_HIDE_CALLS;
 pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_DIALOG;
 pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_LOGO;
 pub(crate) use er_title_flow::TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE;
@@ -405,16 +405,16 @@ pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE: AtomicUsize =
 pub(crate) const TITLE_MENU_RESOURCE_ACQUIRE_RVA: usize = 0xd78630;
 pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED;
-pub(crate) use er_telemetry::counters::TITLE_MENU_RESOURCE_ACQUIRE_HITS;
-pub(crate) use er_telemetry::counters::TITLE_MENU_RESOURCE_ACQUIRE_LOGO_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_MENU_RESOURCE_ACQUIRE_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_MENU_RESOURCE_ACQUIRE_LOGO_HITS;
 pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_LOAD_PARAMS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_FILENAME_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TITLE_MENU_RESOURCE_ACQUIRE_LAST_PARAM3;
+pub(crate) use er_telemetry_core::counters::TITLE_MENU_RESOURCE_ACQUIRE_LAST_PARAM3;
 pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_CALLER_RVA: AtomicUsize =
@@ -426,14 +426,14 @@ pub(crate) const TITLE_SCALEFORM_FILE_OPEN_RVA: usize =
     er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;
 pub(crate) static TITLE_SCALEFORM_FILE_OPEN_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_FILE_OPEN_INSTALLED;
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_FILE_OPEN_HITS;
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_FILE_OPEN_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_FILE_OPEN_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS;
 pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_LOADER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_URL_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS;
 pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE: AtomicUsize =
@@ -455,11 +455,11 @@ pub(crate) const SCALEFORM_MEMORY_FILE_NAME_OFFSET: usize = 0x10;
 pub(crate) const SCALEFORM_MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCALEFORM_MEMORY_FILE_VALID_OFFSET: usize = 0x28;
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS;
 /// 05_000_title-only slice of `TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS` (which aggregates both the
 /// 05_001 logo and 05_000 title slots): the product-strip proof oracle must show the STRIPPED TITLE
 /// movie was served on every title visit (cold boot + each System-Quit reload), unambiguously.
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS;
 pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
@@ -469,7 +469,7 @@ pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
 /// `er_gfx::title_05_000::strip` -- 18 content-addressed tag edits, all-or-nothing, byte-identical
 /// to the previously-embedded `TITLE_05_000_TEXT_SUPPRESSED_GFX` for the known vanilla input
 /// (fixture-gated proof in `crates/er-gfx/tests/title_strip.rs`). 0 = disarmed, 1 = armed.
-pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_ARMED;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_ARMED;
 
 /// Wwise post-event core (`AK::SoundEngine::PostEvent` shared numeric-id backend):
 /// Ghidra dump `FUN_14223a120`, deobf/live `0x14223a130` (`dump-deobf-shift.py`, content-unique).
@@ -477,41 +477,41 @@ pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_ARMED;
 /// including the audible startup/title-logo music that has no visible-only oracle.
 pub(crate) const SOUND_POST_EVENT_CORE_RVA: usize = 0x223a130;
 pub(crate) static SOUND_POST_EVENT_CORE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_CORE_INSTALLED;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_HITS;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_MUTED_HITS;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_FORWARDED_HITS;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_FIRST_ID;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_LAST_ID;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_FIRST_MUTED_ID;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_LAST_MUTED_ID;
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_LAST_PLAYING_ID;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_CORE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_HITS;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_MUTED_HITS;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_FORWARDED_HITS;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_FIRST_ID;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_LAST_ID;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_FIRST_MUTED_ID;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_LAST_MUTED_ID;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_LAST_PLAYING_ID;
 pub(crate) static SOUND_POST_EVENT_LAST_GAME_OBJECT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::SOUND_POST_EVENT_LAST_FLAGS;
+pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_LAST_FLAGS;
 pub(crate) static SOUND_POST_EVENT_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
 /// Successful runtime-strip serves (native MemoryFile data/len swapped to the derived movie).
-pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_SERVES;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_SERVES;
 /// Runtime-strip failures (unexpected file vtable, unreadable payload, parse/edit/write error).
 /// Every failure falls closed to the untouched native file (vanilla title UI).
-pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_FAILURES;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_FAILURES;
 /// Observed native 05_000 payload length at first successful read (0 until then).
-pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_LEN;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_LEN;
 /// Derived stripped movie length (0 until derived).
-pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN;
 /// Input provenance: 0 = not yet classified, 1 = known vanilla (output proven byte-identical to
 /// the validated asset), 2 = unknown input (game update / other mod; edits applied all-or-nothing).
 /// NOTE (run 20260702-203258): the LIVE repository payload is 12,176 bytes vs the 12,174-byte
 /// extracted corpus file -- 2 trailing bytes after the root End tag -- so class 2 is the expected
 /// steady state on the current game build; the output still derived byte-identical.
-pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS;
 /// Whether the derived output matches the validated-asset fingerprint (len 11707 +
 /// FNV 0x17906a0e91ce5374): 0 = not derived yet, 1 = byte-identical to the validated v2 asset,
 /// 2 = clean all-or-nothing edit result with a DIFFERENT fingerprint (expected only after a game
 /// update changes untouched tags; not an error, but the proof of visual equivalence is then open).
-pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED;
+pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED;
 
 /// Stats-panel 05_010_ProfileSelect runtime edit armed (mirrors the 05_000 runtime strip): the
 /// Scaleform file-open hook reads the game's own vanilla `05_010_profileselect.gfx` payload out of
@@ -519,24 +519,24 @@ pub(crate) use er_telemetry::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDAT
 /// edits (face box removed, `ErStats` field added, left column reflowed), all-or-nothing, output
 /// fingerprint-verified for the known vanilla input (`crates/er-gfx/tests/profile_stats.rs`).
 /// 0 = disarmed, 1 = armed. Armed with the stats panel itself (product lever, no new env gates).
-pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_ARMED;
+pub(crate) use er_telemetry_core::counters::PROFILE_05_010_RUNTIME_EDIT_ARMED;
 /// Successful 05_010 runtime-edit serves (native MemoryFile data/len swapped to the derived movie).
-pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_SERVES;
+pub(crate) use er_telemetry_core::counters::PROFILE_05_010_RUNTIME_EDIT_SERVES;
 /// 05_010 runtime-edit failures (unexpected vtable, unreadable payload, parse/edit/write error).
 /// Every failure falls closed to the untouched native file (vanilla ProfileSelect rows).
-pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_FAILURES;
+pub(crate) use er_telemetry_core::counters::PROFILE_05_010_RUNTIME_EDIT_FAILURES;
 /// Observed native 05_010 payload length at first successful read (0 until then).
-pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_INPUT_LEN;
+pub(crate) use er_telemetry_core::counters::PROFILE_05_010_RUNTIME_EDIT_INPUT_LEN;
 /// Derived edited movie length (0 until derived).
-pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN;
+pub(crate) use er_telemetry_core::counters::PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN;
 /// Input provenance: 0 = unclassified, 1 = known vanilla, 2 = unknown input (the live repository
 /// payload may carry trailing bytes after the root End tag, as observed for 05_000).
-pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS;
+pub(crate) use er_telemetry_core::counters::PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS;
 /// Whether the derived output matches the generated-asset fingerprint
 /// (`er_gfx::title_05_010::EDITED_LEN` + `EDITED_FNV1A64`, the single source of truth): 0 = not derived
 /// yet, 1 = byte-identical, 2 = clean all-or-nothing edit with a different fingerprint (expected after a
 /// game update changes untouched tags).
-pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED;
+pub(crate) use er_telemetry_core::counters::PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED;
 
 /// Scaleform GFx resource/movie constructor (`dump 0x14116a930 -> deobf/live 0x14116a910`).
 /// Signature from dump: `resource = f(out_resource, loader_data, file_type, char* url, file_obj,
@@ -544,9 +544,9 @@ pub(crate) use er_telemetry::counters::PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDA
 pub(crate) const TITLE_SCALEFORM_RESOURCE_CTOR_RVA: usize = 0x116a910;
 pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED;
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_RESOURCE_CTOR_HITS;
-pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_RESOURCE_CTOR_LOGO_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_RESOURCE_CTOR_HITS;
+pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_RESOURCE_CTOR_LOGO_HITS;
 pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_OUT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_URL_PTR: AtomicUsize =

@@ -48,6 +48,15 @@ const PARSE_SIG: &str =
 
 /// File-open observer (logs the `.gfx` open sequence AND provides a live loader to resolve
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
+///
+/// SHARED WITH THE PRODUCT DLL. `er-effects-rs` detours this same prologue for its title / stats /
+/// System>Quit / text-input GFx swaps. Because a statically linked crate's statics are per-DLL,
+/// each of us owns a SEPARATE MinHook instance, and two instances on one prologue overwrite each
+/// other's trampolines: the loser reports installed, never fires, and its whole feature looks
+/// unimplemented. Measured 2026-08-23 -- in an eleven-native profile the product logged
+/// `file_open_hits = 0` for a full session (113 when loaded alone). So this hook is registered
+/// through [`er_hook::register_shared_hook`], which routes it into the product's single union when
+/// the product is co-loaded and into ours when it is not.
 const FILE_OPEN_RVA: usize = er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;
 
 /// Which badge movie does this open URL name, if any?
@@ -532,7 +541,18 @@ unsafe fn try_install_openfile_hook(loader: usize) {
 
 /// File-open observer: logs the `.gfx` open sequence AND, on first fire, resolves+hooks the
 /// loader's `FileOpener::OpenFile` (the single point covering header + async tag opens).
-unsafe extern "system" fn file_open_hook(loader: usize, url: usize, flags: u32) -> usize {
+///
+/// UNION-SHAPED, not game-shaped: this prologue is shared with the product DLL (see
+/// [`FILE_OPEN_RVA`]) and the union's handler ABI is four `usize` args. The game passes three, so
+/// the fourth register is ignored, and `flags` is narrowed straight back to the `u32` the game
+/// really passed rather than carrying a register whose high half is undefined.
+unsafe extern "system" fn file_open_hook(
+    loader: usize,
+    url: usize,
+    flags_reg: usize,
+    _unused: usize,
+) -> usize {
+    let flags = flags_reg as u32;
     // Lazily resolve+install the FileOpener::OpenFile hook from a live loader (before the
     // 02_011 preload open, which is ~#37, so it is armed in time).
     if OPENFILE_STATE.load(Ordering::SeqCst) == 0 && loader != 0 {
@@ -540,9 +560,12 @@ unsafe extern "system" fn file_open_hook(loader: usize, url: usize, flags: u32) 
     }
     let orig = FILE_OPEN_ORIG.load(Ordering::SeqCst);
     let native = if orig != ORIG_UNSET {
-        let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
-            unsafe { std::mem::transmute(orig) };
-        unsafe { f(loader, url, flags) }
+        // Called through the UNION signature on purpose: this slot holds either the game
+        // trampoline (3 args -- the extra register is harmlessly ignored) or the NEXT handler in
+        // the chain, which IS 4-arg. Calling a chained handler with the game's narrower signature
+        // would leave its fourth register undefined.
+        let f: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+        unsafe { f(loader, url, flags as usize, 0) }
     } else {
         0
     };
@@ -601,15 +624,10 @@ pub(crate) fn install(base: usize) {
         true
     };
 
-    // Diagnostic file-open observer (optional; non-fatal if it fails).
-    let _ = queue(
-        base + FILE_OPEN_RVA,
-        file_open_hook as *mut c_void,
-        &FILE_OPEN_ORIG,
-        "file_open",
-    );
-
-    // Reach hook: locate the GFx parse fn by unique AOB in the live .text, fail-closed.
+    // Reach hook FIRST: locate the GFx parse fn by unique AOB in the live .text, fail-closed. It
+    // is the load-bearing hook (it performs the badge swap), it sits on an address no other DLL
+    // claims, and it must reach the boot preload's first parse -- so it is never made to wait
+    // behind the SHARED file-open registration below, which may briefly poll for the product DLL.
     let parse_armed = 'parse: {
         let (start, len) = match er_game_base::mem::module_text_range() {
             Some((s, l)) if (0x1000..=0x0800_0000).contains(&l) => (s, l),
@@ -645,8 +663,7 @@ pub(crate) fn install(base: usize) {
         MH_STATUS::MH_OK => {
             HOOK_ACTIVE.store(1, Ordering::SeqCst);
             log_message(format_args!(
-                "gfx-equip: hooks ACTIVE -- file_open@0x{:x} (diag); parse reach {}",
-                base + FILE_OPEN_RVA,
+                "gfx-equip: parse reach {}",
                 if parse_armed {
                     "ARMED (equip/inventory/itembox ArtsBadge reaches the parse)"
                 } else {
@@ -655,5 +672,25 @@ pub(crate) fn install(base: usize) {
             ));
         }
         status => log_message(format_args!("gfx-equip: MH_ApplyQueued failed: {status:?}")),
+    }
+
+    // SHARED prologue -- never a bare MhHook here. `register_shared_hook` chains us into the
+    // product DLL's single MinHook instance when `er_effects_rs.dll` is co-loaded, and falls back
+    // to our own union when it is not, so a standalone run of this DLL is unchanged. Which route
+    // it took is logged, because "LOCAL while the product is present" is precisely the state that
+    // used to silently break both DLLs.
+    match unsafe {
+        er_hook::register_shared_hook(base + FILE_OPEN_RVA, file_open_hook, &FILE_OPEN_ORIG)
+    } {
+        Ok(route) => log_message(format_args!(
+            "gfx-equip: file-open observer @0x{:x} registered via {route:?} \
+             (shared prologue with er_effects_rs.dll)",
+            base + FILE_OPEN_RVA
+        )),
+        Err(status) => log_message(format_args!(
+            "gfx-equip: file-open observer @0x{:x} register FAILED: {status:?} -- \
+             FileOpener::OpenFile stays unarmed (async tag-dict swap off; no crash)",
+            base + FILE_OPEN_RVA
+        )),
     }
 }

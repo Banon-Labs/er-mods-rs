@@ -4,11 +4,11 @@ use std::{
 };
 
 use er_save_loader::{SaveLoadMethod, SaveLoadRequest};
-use er_save_picker::{
+use er_save_picker_core::{
     AUTOUPDATE_PICKER_DIR_KEY, OS_NATIVE_SAVE_PICKER_KEY, PREFERRED_PICKER_DIR_KEY,
     SavePickerRuntimeConfig, boilerplate_picker_block, os_native_save_picker_from,
 };
-use er_telemetry::counters::SAVE_PICKER_SURFACE;
+use er_telemetry_core::counters::SAVE_PICKER_SURFACE;
 use windows::Win32::{
     Foundation::{HINSTANCE, HMODULE},
     System::LibraryLoader::GetModuleFileNameW,
@@ -252,6 +252,11 @@ fn boilerplate_config(picker_assignment: Option<&str>) -> String {
 # method = \"...\"                         # autoload method override
 # boot_background_image = 'C:\\path\\to\\background.png'
 # save_suppression_enabled = false        # opt-in only: suppresses native saves except the Save Game one-shot bypass
+# build_url = 'https://er-build-planner.example/?b=af97a9da874151'
+# The er-build-planner share link the System>Quit \"Load Build from URL\" row imports onto the
+# character you are playing: items granted, gear worn, spells memorised, level and attributes
+# matched. Only the ?b=<id> form works -- the self-contained ?i= form carries the build in the URL
+# and is not fetched. Pressing the row with no build_url set does nothing but say so in the log.
 {picker_block}
 "
     )

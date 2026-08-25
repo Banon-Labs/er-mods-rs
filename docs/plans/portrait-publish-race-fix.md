@@ -65,7 +65,7 @@ today). Identity mismatch keeps today's full clear -- this preserves the
 ### Phase 4 -- runtime validation (agent-owned)
 Rebuild release DLL (`cargo xwin build --release --target
 x86_64-pc-windows-msvc`, plus companions if missing:
-`-p er-reload-trace-dll -p er-input-harness-dll -p er-telemetry-dll`).
+`-p er-reload-trace -p er-input-harness -p er-telemetry`).
 Run `bash scripts/run-samechar-3x-threedll.sh` (Steam preflight is built-in;
 loud pre-launch notice; ONLY when a `/proc` scan shows no live
 `eldenring.exe`/`me3-launcher.ex` -- never two game instances). Success bar:

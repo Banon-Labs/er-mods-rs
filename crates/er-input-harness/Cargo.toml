@@ -1,0 +1,41 @@
+[package]
+name = "er-input-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_input_harness"
+crate-type = ["cdylib"]
+
+# The self-drive runs from a CSTaskImp FrameBegin task (title accept byte, Continue), PLUS MinHooks on
+# the DLUID virtual-key builders/writer (0x240e70/0x241130/0x26634a0) and a fault-safe per-frame stamp
+# into the CSInGamePad source+0x88 array for IN-WORLD menu drive. inputmgr+0x90 is OUTPUT, not input
+# (bd ROOTCAUSE-plus90-is-OUTPUT-not-input). er-hook provides the shared MinHook FFI.
+[dependencies]
+er-hook = { path = "../er-hook" }
+# Tier A only (default features = zero external deps): shared singleton RVA table.
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_SystemServices",
+  # Title-owner scan (title_scan.rs): VirtualQuery + ReadProcessMemory over this process's own address
+  # space to find the TITLE state machine's owner object and read its PAB/menu semaphores.
+  "Win32_System_Memory",
+  "Win32_System_Diagnostics_Debug",
+] }
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. Zero violations on the shipping target
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
+# build, so the deny carries no `# DEBT:` allows. The single crate-root
+# `cfg_attr(not(windows), allow(dead_code, unused_imports))` is a cfg artifact of the HOST
+# build -- every consumer in this shell is `DllMain` and the `#[cfg(windows)]` hooks/tasks it
+# installs, so a host compile cfg's the callers out -- not shipping-target debt. See the
+# comment beside it in `src/lib.rs`.
+[lints]
+workspace = true

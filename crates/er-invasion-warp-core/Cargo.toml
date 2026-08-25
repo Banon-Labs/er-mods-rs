@@ -1,0 +1,43 @@
+# World-map invasion-spawn WARP-TARGET feature crate (bd er-effects-rs-5es).
+#
+# A LOCAL exploration surface: the fixed auto-invasion spawn points the engine already loads
+# from `other:/AutoInvadePoint.aipbnd` become selectable world-map warp targets, warped to by
+# BlockId/position/yaw exactly like a Site of Grace. It does NOT fake an invasion, does NOT
+# start or spoof multiplayer/session state, and does NOT read or write anything under
+# CSNetMan / QuickmatchManager / CSBreakInPointManager. The only engine data it consumes is
+# the `CSAutoInvadePoint` singleton, which is a plain coordinate table.
+#
+# Product state crosses the seam through `host::install_host` function pointers (the
+# `er-loading-portrait-core` / `er-quit-menu-core` pattern). This crate must NOT depend on the root
+# `er-effects-rs` crate.
+#
+# Most of the crate is deliberately platform-independent so the catalog, the block grouping,
+# the on-disk `.aip` decoder and the coordinate/yaw math are provable by `cargo test` on the
+# host with no game running -- that testability is the point of the crate split.
+[package]
+name = "er-invasion-warp-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_invasion_warp_core"
+
+[dependencies]
+# Shared cross-platform telemetry counters (the oracle_* fields the feature will write).
+er-telemetry-core = { path = "../er-telemetry-core" }
+# Shared zero-dependency content fingerprint owner.
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# `er-game-base` remains Tier A only (zero external deps): on Windows this also supplies the
+# fault-tolerant `ReadProcessMemory` primitive used by the live `CSAutoInvadePoint` walk.
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. Zero violations on the shipping target
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
+# build, so the deny carries no `# DEBT:` allows.
+[lints]
+workspace = true

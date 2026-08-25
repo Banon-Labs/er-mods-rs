@@ -5,7 +5,7 @@
 #   - er_effects_rs.dll        (PRODUCT, being tuned): boot autoload = load1; sq-repro XInput autopilot
 #                              drives 2 same-slot reloads (load2 = freeze, load3 = recovery), with the
 #                              load-2 freeze force-advanced to load3 by the DLL's freeze-recovery deadline.
-#   - er_reload_trace_dll.dll  (COMPANION, log-only): routes every native load/menu hook through the
+#   - er_reload_trace.dll  (COMPANION, log-only): routes every native load/menu hook through the
 #                              product's er_effects_union_register export and logs the pipeline.
 # The capture watcher OBSERVES per-load RAM oracles + captures the mandatory loading-screen-portrait.
 #
@@ -20,7 +20,7 @@ TARGET_SLOTS="${TARGET_SLOTS:-0,0,0}" # same-slot (angrE) x3
 SWITCHES="${SWITCHES:-3}"             # 3 reloads after autoload = 4 loads total
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/samechar-3x-$(date +%Y%m%d-%H%M%S)}"
 PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
-TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace_dll.dll"
+TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace.dll"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)"
 
 fail() {
@@ -59,7 +59,7 @@ win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[
 
 # --- stage BOTH DLLs to GAME_DIR + a TWO-native me3 profile (trace first, product second) ---
 PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
-TRACE_GAMEDIR="$GAME_DIR/er_reload_trace_dll.dll"
+TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
 cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 PROFILE="$ARTIFACT_DIR/samechar-3x.me3"

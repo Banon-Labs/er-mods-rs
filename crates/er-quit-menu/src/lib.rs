@@ -1,73 +1,104 @@
-//! Product (B): the customized post-autoload vanilla System>Quit menu.
+//! Optional ME3-loadable harness for product (B), the customized System>Quit menu.
 //!
-//! S7 has moved the pure decision core for rows, save-destination identity/commit helper
-//! decisions, and save-flow confirm-box decisions into this crate. Runtime-native hook surfaces
-//! still live in `er-effects-rs` shims until S8/S9.
+//! Required product behavior is statically linked into the single shipped
+//! `er_effects_rs.dll`; its product profile never requires this shell. The harness exists
+//! for isolated/coexistence tests, logs its attach, and installs a standalone host seam.
+//! It arms nothing yet because `er-quit-menu-core` still has no moved code to arm.
 //!
-//! Planned contents, moved from the root DLL in slices (line counts are from the extraction plan,
-//! and the per-file product/diagnostic split is in the plan doc -- several of these files move
-//! only in part):
-//! * `rows` -- `startup_hooks/quit_menu/system_quit_row_identity.rs` (921, ~100% product): the
-//!   `QuitRow`/`QuitRowFacts`/`QuitRowVerdict` resolver and the single gate on the
-//!   irreversible `ExitProcess(0)`. Fully host-testable; the cleanest thing here.
-//! * `dialog_handlers` -- `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` (1601): the
-//!   AddCancelButton row CLONER, the row ROUTER (which is also what suppresses the native
-//!   Return-to-Desktop action), the Save Game label substitution and its save calls, the
-//!   ProfileSelect submit, and the PR-#103 Scaleform ctor/dtor double-free skip.
-//! * `browse` -- `startup_hooks/quit_menu/save_picker_menu.rs` (944): the in-game
-//!   `05_010_ProfileSelect` browse surface (row staging, activation, menu-pump rebuild and
-//!   resubmit, browse stats lines, the list-builder re-stage hook).
-//! * `surface` -- `startup_hooks/save_picker/save_picker_surface.rs` (222): THE one place that decides
-//!   which picker surface opens, plus the destination decisions both surfaces share.
-//! * `dim` -- `startup_hooks/quit_menu/save_picker_dim_overlay.rs` (876): the layered GDI window
-//!   that covers the game while an OS dialog is up. IN-GAME QUIT-MENU CASE ONLY.
-//! * `os_entry` -- the two System>Quit entrypoints in the product shim
-//!   `startup_hooks/save_picker/save_picker_os_dialog.rs` (`os_open_save_picker_load`,
-//!   `os_open_save_dest_picker`). The comdlg32 mechanism they call now lives in
-//!   `er-save-picker::os_dialog`; this crate supplies the dim as its cover.
-//! * `save_flow` -- `startup_hooks/save_flow_boxes.rs` (790), `save_dest_identity.rs`
-//!   (465), `save_dest_commit.rs` (1286), and the `save_flow_tick` stage machine currently
-//!   at `experiments/lifecycle.rs`.
-//! * `profile_preview` -- the quit-menu half of
-//!   `startup_hooks/quit_menu/save_swap_profile_table.rs` (1050): the foreign-save ProfileSummary
-//!   preview, the swap/restore, and the recommit after the return-title save. Its
-//!   `force_profile_render_tick` half is PRODUCT (the loading-screen profile-model render
-//!   drive, called from the task registration and the title tick) and stays behind.
-//! * `install` -- `install_system_quit_duplicate_button_hook`, today in
-//!   `startup_hooks/diagnostics/layout_global_hooks.rs`: the single entry point that installs the
-//!   whole feature.
-//!
-//! # Boundary this crate does NOT cross: save suppression
-//!
-//! "The Save Game menu row and the flow it drives" is this crate. "Save suppression and
-//! save-redirect internals" is NOT: `er-save-suppress` is already its own crate with its
-//! own standalone `er-save-disable-dll`, and `experiments/save_redirect/*` stays in the
-//! product. This crate only asks, through the seam, for the one-shot bypass that makes the
-//! Save Game row the single path that really writes.
-//!
-//! Product state crosses the seam as injected function pointers: see
-//! [`host::install_host`]. This crate must not depend on the root crate.
+//! An explicit coexistence test may load this harness alongside the product or companions.
+//! It contends on game addresses the product also hooks, so its detours go through the
+//! `er-hook` union -- never a bare `MhHook::new` -- and the union owner is elected at load
+//! time rather than assumed to be `er_effects_rs.dll`.
 
-pub mod host;
-pub use host::*;
+// A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
+// `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
+// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The SHIPPING
+// target (x86_64-pc-windows-msvc) carries the full deny with no allows.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
-// S7 decision-core modules moved from the product DLL. Product callsites keep
-// stable shim names until the hooked surfaces move in S8.
-pub mod rows;
-pub mod save_dest_commit;
-pub mod save_dest_identity;
-pub mod save_flow_boxes;
+use std::path::{Path, PathBuf};
+
+const DLL_PROCESS_ATTACH: u32 = 1;
+const DLL_MAIN_SUCCESS: i32 = 1;
+const LOG_FILE_NAME: &str = "er-quit-menu.log";
 
 #[cfg(windows)]
-pub mod dim;
-#[cfg(windows)]
-pub use dim::*;
-#[cfg(windows)]
-pub mod os_dialog;
-#[cfg(windows)]
-pub use os_dialog::*;
+static START: std::sync::Once = std::sync::Once::new();
 
-pub use rows::*;
-pub use save_dest_commit::*;
-pub use save_dest_identity::*;
-pub use save_flow_boxes::*;
+/// Where the standalone log lands: next to the executable, falling back to the CWD.
+fn log_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Fresh per process: the first line of a run truncates the file (rotating the previous
+/// run's aside as `.log.prev`), later lines append. No log in this repo accumulates across
+/// runs -- mixing evidence from builds that no longer exist is how a count over one file
+/// gets read as one run's behaviour.
+fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
+    er_game_base::log::append_line(
+        &dir.join(LOG_FILE_NAME),
+        format_args!("er-quit-menu: {args}"),
+    );
+}
+
+/// The standalone host seam: this DLL has no product behind it, so every product-owned
+/// answer stays at its neutral default -- including the save-write bypass, which must stay
+/// refused so a product-less load can never push a write past `er-save-suppress`.
+fn install_standalone_host() {
+    let _ = er_quit_menu_core::install_host(er_quit_menu_core::QuitMenuHost {
+        append_autoload_debug: standalone_log,
+        append_crash_log: standalone_log,
+        ..er_quit_menu_core::QuitMenuHost::defaults()
+    });
+}
+
+fn standalone_log(args: std::fmt::Arguments<'_>) {
+    append_log(&log_dir(), args);
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Called by the Windows loader. Do not call directly.
+pub unsafe extern "system" fn DllMain(
+    module: *mut core::ffi::c_void,
+    reason: u32,
+    _reserved: *mut core::ffi::c_void,
+) -> i32 {
+    if reason == DLL_PROCESS_ATTACH {
+        let module_base = module as usize;
+        START.call_once(|| {
+            install_standalone_host();
+            append_log(
+                &log_dir(),
+                format_args!(
+                    "loaded module_base=0x{module_base:x}; standalone quit-menu shell (scaffolding: nothing armed yet)"
+                ),
+            );
+        });
+    }
+    DLL_MAIN_SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_standalone_host_installs_exactly_once() {
+        assert!(install_host_once());
+        assert!(!install_host_once());
+    }
+
+    fn install_host_once() -> bool {
+        er_quit_menu_core::install_host(er_quit_menu_core::QuitMenuHost {
+            append_autoload_debug: standalone_log,
+            append_crash_log: standalone_log,
+            ..er_quit_menu_core::QuitMenuHost::defaults()
+        })
+    }
+}

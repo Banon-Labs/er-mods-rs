@@ -1,10 +1,10 @@
 use super::*;
 
-// Product-side surface router. The pure picker surface/outcome decisions live in `er-save-picker`;
+// Product-side surface router. The pure picker surface/outcome decisions live in `er-save-picker-core`;
 // this root shim keeps the compatibility names and owns the runtime hook glue, root config latch,
 // and System>Quit state staging.
 
-pub(crate) use er_save_picker::{
+pub(crate) use er_save_picker_core::{
     DestRoute, PickerOpenOutcome, PickerOpenRequest, PickerSurface, SaveDestOrigin,
     open_taken_over_outcome, picker_surface_for, save_dest_route_picked_target,
 };
@@ -21,7 +21,7 @@ pub(crate) fn os_native_picker_active() -> bool {
 
 /// Open the picker this request's surface calls for, and report what the request did.
 ///
-/// The shape of the request/outcome is owned by `er-save-picker`; this function is deliberately the
+/// The shape of the request/outcome is owned by `er-save-picker-core`; this function is deliberately the
 /// root-owned glue that calls native menu hooks, root save-flow staging, and boot-thread OS dialog
 /// code.
 pub(crate) unsafe fn open_picker_for_intent(request: PickerOpenRequest) -> PickerOpenOutcome {

@@ -100,22 +100,22 @@ use super::*;
 //    -- itself a whole-container write over the user's loaded save -- now requires positive
 //    evidence of a CONTENT change: an unreadable stat is reported as unreadable, not as mutation.
 
-pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_COMMIT_FAIL;
 /// Flow latches: the menu-pump open request, and the "a destination is chosen, commit once the
 /// picker has torn down" hand-off from the picker's activation hook to the save-flow tick.
-pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
-pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_BAK_MUTATED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_OVERWRITE_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_COMMIT_PENDING;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_LIVE_BAK_MUTATED;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_LIVE_FILE_MUTATED;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_LIVE_OVERWRITE_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING;
 /// 1 while the scoped write-open redirect is armed. Read by the `CreateFileW` detour BEFORE it
 /// touches any lock, so an unarmed process pays one relaxed-ordering atomic load per open.
-pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
-pub(crate) use er_telemetry::counters::SAVE_DEST_SEED_FAIL_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_SEEDED_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_STRUCTURE_OK;
-pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_REDIRECT_ARMED;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_REDIRECT_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_SEED_FAIL_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_SEEDED_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_TARGET_STRUCTURE_OK;
+pub(crate) use er_telemetry_core::counters::SAVE_DEST_TARGET_WRITTEN_OK;
 // The destination-commit SAFETY oracles this file raises -- every refusal, deferral and
 // undecidable fact -- are re-exported with the rest of the save-flow counters in
 // `constants::autoload_state`, which is in scope here.
@@ -258,12 +258,12 @@ pub(crate) fn save_dest_reset(reason: &str) {
 /// ASCII-lowercase leaf (file name) of a wide Windows path, or `None` when the path ends in a
 /// separator / is empty.
 pub(crate) fn save_dest_wide_leaf_lower(path: &[u16]) -> Option<Vec<u16>> {
-    er_quit_menu::save_dest_commit::save_dest_wide_leaf_lower(path)
+    er_quit_menu_core::save_dest_commit::save_dest_wide_leaf_lower(path)
 }
 
 /// The live save's leaf plus its counterpart-extension twin, ASCII-lowercased UTF-16.
 pub(crate) fn save_dest_accepted_leaves(live_path: &Path) -> Vec<Vec<u16>> {
-    er_quit_menu::save_dest_commit::save_dest_accepted_leaves(live_path)
+    er_quit_menu_core::save_dest_commit::save_dest_accepted_leaves(live_path)
 }
 
 /// Every directory whose `ER0000.{sl2,co2}` write-open IS the loaded save's.
@@ -274,7 +274,7 @@ pub(crate) fn save_dest_accepted_leaves(live_path: &Path) -> Vec<Vec<u16>> {
 /// moment after this one declines it -- so that game-side folder counts too. Leaf-only matching
 /// used to cover this case by accident; a full-path match has to name it.
 pub(crate) fn save_dest_accepted_dirs(live_path: &Path) -> Vec<PathBuf> {
-    er_quit_menu::save_dest_commit::save_dest_accepted_dirs_for(
+    er_quit_menu_core::save_dest_commit::save_dest_accepted_dirs_for(
         live_path,
         save_redirect_native_source_dir(),
     )
@@ -283,7 +283,7 @@ pub(crate) fn save_dest_accepted_dirs(live_path: &Path) -> Vec<PathBuf> {
 /// Normalized full paths that ARE the loaded save's container: every accepted leaf in every
 /// accepted directory.
 pub(crate) fn save_dest_accepted_paths(live_path: &Path) -> Vec<String> {
-    er_quit_menu::save_dest_commit::save_dest_accepted_paths_for(
+    er_quit_menu_core::save_dest_commit::save_dest_accepted_paths_for(
         live_path,
         save_redirect_native_source_dir(),
     )
@@ -302,7 +302,7 @@ pub(crate) fn save_dest_file_stamp(path: &Path) -> Option<(u64, u128)> {
 
 /// The `.bak` twin the native backup step (`FUN_142410830`) copies a saved container to.
 pub(crate) fn save_dest_bak_path(path: &Path) -> PathBuf {
-    er_quit_menu::save_dest_commit::save_dest_bak_path(path)
+    er_quit_menu_core::save_dest_commit::save_dest_bak_path(path)
 }
 
 /// End offset of the last BND4 entry, i.e. the length a STRUCTURALLY COMPLETE container must have.
@@ -311,7 +311,7 @@ pub(crate) fn save_dest_bak_path(path: &Path) -> PathBuf {
 /// the in-place writer left had no `BND4` header at all, and even a container that parses is only
 /// complete when its own index accounts for every byte up to EOF.
 pub(crate) fn save_dest_container_end(bytes: &[u8]) -> Option<usize> {
-    er_quit_menu::save_dest_commit::save_dest_container_end(bytes)
+    er_quit_menu_core::save_dest_commit::save_dest_container_end(bytes)
 }
 
 /// Record that this commit's destination IS the loaded save, and say so BEFORE the write happens.
@@ -326,7 +326,7 @@ pub(crate) fn save_dest_arm_live_overwrite(live_path: &Path, reason: &'static st
     SAVE_DEST_LIVE_OVERWRITE_COUNT.fetch_add(1, Ordering::SeqCst);
     // THIS commit's verdict starts blank. Without it the previous commit's `target_written_ok` is
     // still 1 while this one is scored, so a failure exports as the success that came before it.
-    er_telemetry::counters::save_dest_reset_commit_verdicts();
+    er_telemetry_core::counters::save_dest_reset_commit_verdicts();
     save_dest_reset_defer_report();
     append_autoload_debug(format_args!(
         "save-dest: this commit's destination IS THE LOADED SAVE '{}' (reason={reason} len={}) -- the native writer will REWRITE it and copy it over its .bak; this is the sanctioned overwrite the user confirmed, and it is the ONLY way this flow writes the loaded save",
@@ -419,7 +419,7 @@ pub(crate) fn save_dest_arm_redirect(live_path: &Path, target_path: &Path) -> bo
     // THIS commit's verdict starts blank -- the redirect hit count and every 0/1 verdict oracle
     // together, from one list, so the reset can never drift out of step with what is exported as
     // this commit's result.
-    er_telemetry::counters::save_dest_reset_commit_verdicts();
+    er_telemetry_core::counters::save_dest_reset_commit_verdicts();
     save_dest_reset_defer_report();
     let live_bak_before = save_dest_file_stamp(&save_dest_bak_path(live_path));
     let matched = accepted_paths.join(", ");
@@ -458,7 +458,7 @@ pub(crate) fn save_dest_commit_window_armed() -> bool {
 
 /// True when `access` is a write open (the only opens the redirect may divert).
 pub(crate) fn save_dest_is_write_access(access: u32) -> bool {
-    er_quit_menu::save_dest_commit::save_dest_is_write_access(access)
+    er_quit_menu_core::save_dest_commit::save_dest_is_write_access(access)
 }
 
 /// One "the teardown is waiting for the writer" line per commit, not one per tick.
@@ -777,7 +777,7 @@ pub(crate) fn save_dest_score_live_file(
     SAVE_DEST_LIVE_FILE_MUTATED.store(1, Ordering::SeqCst);
     // The per-commit flag above is cleared at the next arm; this count is not, so the worst thing
     // this flow can do to a save cannot be erased by the commit that follows it.
-    er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.fetch_add(1, Ordering::SeqCst);
+    er_telemetry_core::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.fetch_add(1, Ordering::SeqCst);
     // Defence in depth for the self-redirect: if the destination IS this file, its new content is
     // the user's save, and the "leaked write" is the save itself. Writing the snapshot back would
     // destroy exactly what the commit just achieved.
@@ -887,7 +887,7 @@ mod save_dest_commit_tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         SAVE_DEST_LIVE_BAK_MUTATED, SAVE_DEST_LIVE_FILE_MUTATED, SAVE_DEST_LIVE_STAT_UNREADABLE,
         SAVE_DEST_REDIRECT_HITS, SAVE_DEST_TARGET_STRUCTURE_OK, SAVE_DEST_TARGET_WRITTEN_OK,
     };
@@ -1174,7 +1174,7 @@ mod save_dest_commit_tests {
     /// this compares by address rather than by value and cannot be perturbed by a parallel test.
     #[test]
     fn every_per_commit_verdict_oracle_is_reset_at_arm_time() {
-        let reset_set = er_telemetry::counters::save_dest_commit_verdict_oracles();
+        let reset_set = er_telemetry_core::counters::save_dest_commit_verdict_oracles();
         let address = |oracle: &'static AtomicUsize| oracle as *const AtomicUsize as usize;
         for verdict in [
             &SAVE_DEST_REDIRECT_HITS,
@@ -1199,7 +1199,7 @@ mod save_dest_commit_tests {
     #[test]
     fn the_cumulative_leak_count_outlives_the_per_commit_reset() {
         let before =
-            er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst);
+            er_telemetry_core::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst);
         let dir = save_dest_test_dir("leak-total");
         let live = dir.join("ER0000.sl2");
         let target = dir.join("elsewhere.sl2");
@@ -1213,13 +1213,13 @@ mod save_dest_commit_tests {
             SaveDestLiveState::Changed
         ));
         assert!(
-            er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst)
+            er_telemetry_core::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst)
                 > before
         );
-        er_telemetry::counters::save_dest_reset_commit_verdicts();
+        er_telemetry_core::counters::save_dest_reset_commit_verdicts();
         assert_eq!(SAVE_DEST_LIVE_FILE_MUTATED.load(Ordering::SeqCst), 0);
         assert!(
-            er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst)
+            er_telemetry_core::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst)
                 > before
         );
         let _ = fs::remove_dir_all(&dir);

@@ -16,7 +16,7 @@ name: refactor-byte-identical
 # bytes. rustc embeds the crate-relative source path and line number of every
 # panic site (core::panic::Location) and derives symbol hashes from module paths,
 # so relocating a function rewrites .rdata with identical behaviour. Measured on
-# crates/er-crash-logging-dll: moving one fn verbatim into a submodule changed
+# crates/er-crash-logging: moving one fn verbatim into a submodule changed
 # 41,038 bytes -- 17% of the image -- while .text size and the export table were
 # unchanged. scripts/probe-dll-build-determinism.sh reproduces that measurement.
 # So this gate passes for PRs that only touch comments, docs, tests, formatting,

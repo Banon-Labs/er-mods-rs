@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize er-reload-trace-dll logs for same-character reload diagnosis."""
+"""Summarize er-reload-trace logs for same-character reload diagnosis."""
 
 from __future__ import annotations
 

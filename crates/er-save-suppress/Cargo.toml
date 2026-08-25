@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Save-write suppression CORE, shared by the standalone `er-save-disable-dll` and the
+# Save-write suppression CORE, shared by the standalone `er-save-disable` and the
 # product `er-effects-rs` cdylib. Plain rlib: it never ships as its own DLL -- exactly one
 # host DLL links it per process, wires the log/publish sinks, and calls `install`.
 #

@@ -1768,8 +1768,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // evidence is a "kept gm_b78=-1" 650ms AFTER the fd4io COMMIT. COMMIT is therefore the exact
     // and only window where the finalize owns b78 as the warp target and this guard must not touch
     // it; DRAIN keeps the pre-existing behavior.
-    let fd4io_owns_b78 = er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst)
-        == er_telemetry::counters::SWITCH_RELOAD_FD4IO_COMMIT;
+    let fd4io_owns_b78 = er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst)
+        == er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_COMMIT;
     if b78_guard_window_open && fd4io_owns_b78 {
         // ENGAGEMENT SEMAPHORE. Count every frame the guard would have forced b78=-1 and now does
         // not. `> 0` == a real fd4io COMMIT overlap was survived.
@@ -1786,13 +1786,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // prove this engaged: healthy runs are non-regression evidence only, and `> 0` will only
         // ever be seen on a run that was heading for the black screen. Do not read 0 as broken,
         // and do not read a clean run as proof. bd er-effects-rs-9jbe.
-        let n = er_telemetry::counters::SWITCH_RELOAD_B78_GUARD_STANDDOWNS
+        let n = er_telemetry_core::counters::SWITCH_RELOAD_B78_GUARD_STANDDOWNS
             .fetch_add(1, Ordering::SeqCst)
             + 1;
         if n <= 5 || n.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: b78 guard STOOD DOWN #{n} -- fd4io reload phase={} (COMMIT) owns GameMan+0xb78 as the warp target through finalize; not forcing -1 (phase={} slot={slot} bc4=0x{return_title_job_predicate_bc4:x})",
-                er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst),
+                er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
         }

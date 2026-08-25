@@ -1,0 +1,20 @@
+[package]
+name = "er-build-export"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Host-buildable, game-free and network-free on purpose, exactly like `er-build-import-core`:
+# producing a planner share link is pure data transformation (character document -> URL), so
+# every stage of it is provable by `cargo test` on Linux with no Elden Ring and no HTTP.
+#
+# No base64 or compression crate either. The two codecs this needs are ~60 lines each and are
+# pinned to the planner's exact dialect (padded standard base64; the LZ-UTF8 stream format), so
+# a dependency would buy nothing and would have to be audited against the site's decoder anyway.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

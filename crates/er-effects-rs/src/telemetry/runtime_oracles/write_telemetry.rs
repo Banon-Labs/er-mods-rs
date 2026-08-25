@@ -381,7 +381,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_allow_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_job_post_return_title_fired\": {},\n  \"system_quit_quickload_phase\": {},\n  \"system_quit_quickload_selected_slot\": {},\n  \"system_quit_quickload_return_title_request_count\": {},\n  \"system_quit_return_title_final_functor_call_count\": {},\n  \"system_quit_quickload_native_quit_action_count\": {},\n  \"system_quit_direct_return_title_chain_submit_count\": {},\n  \"system_quit_direct_return_title_chain_ready_block_count\": {},\n  \"system_quit_direct_return_title_chain_last_dialog\": {},\n  \"system_quit_direct_return_title_chain_last_queue_ready\": {},\n  \"system_quit_skip_restore_after_quickload_count\": {},\n  \"system_quit_quickload_title_owner_seen_count\": {},\n  \"system_quit_quickload_autoload_handoff_count\": {},\n  \"system_quit_quickload_last_title_owner\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n  \"system_quit_profileselect_native_close_count\": {},\n  \"system_quit_save_game_text_substitution_count\": {},\n  \"system_quit_save_game_action_count\": {},\n  \"system_quit_save_game_confirm_count\": {},\n  \"system_quit_save_game_close_count\": {},\n  \"system_quit_open_save_dir_action_count\": {},\n  \"system_quit_open_save_dir_success_count\": {},\n  \"system_quit_open_save_dir_failure_count\": {},\n  \"system_quit_save_game_armed_dialog\": {},\n  \"system_quit_request_load_slot_block_count\": {},\n  \"system_quit_request_load_slot_allow_count\": {},\n  \"system_quit_inworld_load_skip_count\": {},\n",
+        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_allow_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_job_post_return_title_fired\": {},\n  \"system_quit_quickload_phase\": {},\n  \"system_quit_quickload_selected_slot\": {},\n  \"system_quit_quickload_return_title_request_count\": {},\n  \"system_quit_return_title_final_functor_call_count\": {},\n  \"system_quit_quickload_native_quit_action_count\": {},\n  \"system_quit_direct_return_title_chain_submit_count\": {},\n  \"system_quit_direct_return_title_chain_ready_block_count\": {},\n  \"system_quit_direct_return_title_chain_last_dialog\": {},\n  \"system_quit_direct_return_title_chain_last_queue_ready\": {},\n  \"system_quit_skip_restore_after_quickload_count\": {},\n  \"system_quit_quickload_title_owner_seen_count\": {},\n  \"system_quit_quickload_autoload_handoff_count\": {},\n  \"system_quit_quickload_last_title_owner\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n  \"system_quit_profileselect_native_close_count\": {},\n  \"system_quit_save_game_text_substitution_count\": {},\n  \"system_quit_save_game_action_count\": {},\n  \"system_quit_save_game_confirm_count\": {},\n  \"system_quit_save_game_close_count\": {},\n  \"system_quit_open_save_dir_action_count\": {},\n  \"system_quit_open_save_dir_success_count\": {},\n  \"system_quit_open_save_dir_failure_count\": {},\n  \"system_quit_load_build_url_action_count\": {},\n  \"system_quit_load_build_url_request_count\": {},\n  \"system_quit_load_build_url_refused_count\": {},\n  \"system_quit_load_build_url_failed_count\": {},\n  \"system_quit_load_build_url_imported_count\": {},\n  \"system_quit_load_build_url_editor_open_count\": {},\n  \"system_quit_load_build_url_accepted_count\": {},\n  \"system_quit_load_build_url_rejected_count\": {},\n  \"system_quit_load_build_url_cancelled_count\": {},\n  \"system_quit_load_build_url_last_rejection\": {},\n  \"system_quit_generate_build_link_action_count\": {},\n  \"system_quit_generate_build_link_request_count\": {},\n  \"system_quit_generate_build_link_refused_count\": {},\n  \"system_quit_generate_build_link_stale_latch_count\": {},\n  \"system_quit_generate_build_link_encoded_count\": {},\n  \"system_quit_generate_build_link_last_url_len\": {},\n  \"system_quit_generate_build_link_clipboard_count\": {},\n  \"system_quit_generate_build_link_opened_count\": {},\n  \"system_quit_generate_build_link_failed_count\": {},\n  \"system_quit_save_game_armed_dialog\": {},\n  \"system_quit_request_load_slot_block_count\": {},\n  \"system_quit_request_load_slot_allow_count\": {},\n  \"system_quit_inworld_load_skip_count\": {},\n",
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
@@ -415,6 +415,29 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_IMPORTED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_EDITOR_OPEN_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_ACCEPTED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_LOAD_BUILD_URL_LAST_REJECTION.load(Ordering::SeqCst),
+        // Generate Build Link. `encoded` counts URLs BUILT, `clipboard`/`opened` count the two
+        // things that can independently fail afterwards, and `stale_latch` counts presses that
+        // recovered a latch nothing owned -- so "the row did nothing" always has a number
+        // distinguishing which of those it was.
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_REQUEST_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_REFUSED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_STALE_LATCH_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_ENCODED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_LAST_URL_LEN.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_CLIPBOARD_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_OPENED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GENERATE_BUILD_LINK_FAILED_COUNT.load(Ordering::SeqCst),
         format_scan_ptr(SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.load(Ordering::SeqCst)),
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.load(Ordering::SeqCst),
@@ -431,11 +454,14 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // not be named; `..._refused_disagreement_count` counts the subset where the captured row table
     // and the label read live at the cursor CONTRADICTED each other, so the row ran nothing.
     // `oracle_system_quit_grid_*` is the navigability evidence read live off the dialog's
-    // `CS::GridControl`: all four rows are reachable only when `navigable_cells >= 4` (the bound of
-    // the native mouse hit-test loop), `item_count == 4` (the cursor bound) and `rows >= 2` (what
-    // enables the up/down axis at all).
+    // `CS::GridControl`. The tab now has SIX rows in a 2x3 grid, and the three numbers must agree:
+    // `navigable_cells == 6` (the bound of the native mouse hit-test loop, i.e. `cols * rows`),
+    // `item_count == 6` (the cursor bound, set through `GridControl::SetItemCount`) and `rows >= 2`
+    // (what enables the up/down axis at all). `navigable_cells > item_count` used to be the NORMAL
+    // state -- five rows in a six-cell grid left a ragged corner -- so a run where they now differ
+    // means a row failed to build, not that the geometry is merely uneven.
     body.push_str(&format!(
-        "  \"oracle_system_quit_row_table_dialog\": {},\n  \"oracle_system_quit_row_index_save_game\": {},\n  \"oracle_system_quit_row_index_return_desktop\": {},\n  \"oracle_system_quit_row_index_load_profile\": {},\n  \"oracle_system_quit_row_index_load_save_profiles\": {},\n  \"oracle_system_quit_row_resolve_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_row_count\": {},\n  \"oracle_system_quit_row_ambiguous_count\": {},\n  \"oracle_system_quit_row_refused_disagreement_count\": {},\n  \"oracle_system_quit_grid_cols\": {},\n  \"oracle_system_quit_grid_rows\": {},\n  \"oracle_system_quit_grid_navigable_cells\": {},\n  \"oracle_system_quit_grid_item_count\": {},\n  \"oracle_system_quit_row_last_discriminator\": {},\n  \"oracle_system_quit_row_last_resolved_row\": {},\n  \"oracle_system_quit_row_last_ambiguity\": {},\n  \"oracle_system_quit_row_last_cursor\": {},\n  \"oracle_system_quit_row_last_cursor_label_kind\": {},\n  \"oracle_system_quit_row_last_input_kind\": {},\n  \"oracle_system_quit_quit_refused_ambiguous_row_count\": {},\n  \"oracle_system_quit_quit_authorized_count\": {},\n  \"oracle_system_quit_action_alias_false_quit_claims\": {},\n",
+        "  \"oracle_system_quit_row_table_dialog\": {},\n  \"oracle_system_quit_row_index_save_game\": {},\n  \"oracle_system_quit_row_index_return_desktop\": {},\n  \"oracle_system_quit_row_index_load_profile\": {},\n  \"oracle_system_quit_row_index_load_save_profiles\": {},\n  \"oracle_system_quit_row_index_load_build_url\": {},\n  \"oracle_system_quit_row_index_generate_build_link\": {},\n  \"oracle_system_quit_row_resolve_count\": {},\n  \"oracle_system_quit_row_resolved_by_cursor_row_count\": {},\n  \"oracle_system_quit_row_ambiguous_count\": {},\n  \"oracle_system_quit_row_refused_disagreement_count\": {},\n  \"oracle_system_quit_grid_cols\": {},\n  \"oracle_system_quit_grid_rows\": {},\n  \"oracle_system_quit_grid_navigable_cells\": {},\n  \"oracle_system_quit_grid_item_count\": {},\n  \"oracle_system_quit_row_last_discriminator\": {},\n  \"oracle_system_quit_row_last_resolved_row\": {},\n  \"oracle_system_quit_row_last_ambiguity\": {},\n  \"oracle_system_quit_row_last_cursor\": {},\n  \"oracle_system_quit_row_last_cursor_label_kind\": {},\n  \"oracle_system_quit_row_last_input_kind\": {},\n  \"oracle_system_quit_quit_refused_ambiguous_row_count\": {},\n  \"oracle_system_quit_quit_authorized_count\": {},\n  \"oracle_system_quit_action_alias_false_quit_claims\": {},\n",
         format_scan_ptr(SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst)),
         SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1
             .load(Ordering::SeqCst)
@@ -447,6 +473,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             .load(Ordering::SeqCst)
             .wrapping_sub(1) as isize,
         SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1
+            .load(Ordering::SeqCst)
+            .wrapping_sub(1) as isize,
+        SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1
             .load(Ordering::SeqCst)
             .wrapping_sub(1) as isize,
         SYSTEM_QUIT_ROW_RESOLVE_COUNT.load(Ordering::SeqCst),
@@ -502,20 +534,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // different window entirely.
     body.push_str(&format!(
         "  \"oracle_save_picker_os_dialog_open\": {},\n  \"oracle_save_picker_os_open_count\": {},\n  \"oracle_save_picker_os_closed_with_path\": {},\n  \"oracle_save_picker_os_cancel_count\": {},\n  \"oracle_save_picker_os_error_count\": {},\n  \"oracle_save_picker_os_last_error\": {},\n  \"oracle_save_picker_os_reject_count\": {},\n  \"oracle_save_picker_os_last_reject_reason\": {},\n  \"oracle_save_picker_os_reopen_count\": {},\n  \"oracle_save_picker_os_reopen_exhausted\": {},\n  \"oracle_save_picker_os_ticks_frozen\": {},\n  \"oracle_save_picker_os_owner_hwnd\": {},\n  \"oracle_save_picker_os_owner_is_cover\": {},\n  \"oracle_save_picker_os_savelike_opens\": {},\n  \"oracle_save_dest_confirm_pending\": {},\n",
-        er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_OPEN_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_CLOSED_WITH_PATH.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_CANCEL_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_ERROR_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_LAST_ERROR.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_REJECT_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_LAST_REJECT_REASON.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_REOPEN_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_REOPEN_EXHAUSTED.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_OWNER_HWND.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_OWNER_IS_COVER.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_OPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_CLOSED_WITH_PATH.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_CANCEL_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_ERROR_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_LAST_ERROR.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_REJECT_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_LAST_REJECT_REASON.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_REOPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_REOPEN_EXHAUSTED.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_TICKS_FROZEN.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_OWNER_HWND.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_OWNER_IS_COVER.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
         SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
     // The OS dialog at the MISSING-SAVE BOOT. Separate from the fields above because that intent's
@@ -542,17 +574,17 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // failed boot.
     body.push_str(&format!(
         "  \"oracle_save_picker_os_boot_state\": {},\n  \"oracle_save_picker_os_boot_open_count\": {},\n  \"oracle_save_picker_os_boot_pick_count\": {},\n  \"oracle_save_picker_os_boot_cancel_exit_count\": {},\n  \"oracle_save_picker_os_boot_exit_performed\": {},\n  \"oracle_save_picker_boot_telemetry_flushed\": {},\n  \"oracle_save_picker_boot_game_ticks_at_open\": {},\n  \"oracle_save_picker_boot_game_ticks_at_answer\": {},\n  \"oracle_game_task_ticks_total\": {},\n  \"oracle_save_picker_os_boot_fallback_count\": {},\n  \"oracle_save_picker_os_boot_defer_ticks\": {},\n",
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_STATE.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_OPEN_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_PICK_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PERFORMED.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_BOOT_TELEMETRY_FLUSHED.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER.load(Ordering::SeqCst),
-        er_telemetry::counters::GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_FALLBACK_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_OS_BOOT_DEFER_TICKS.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_STATE.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_OPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_PICK_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_EXIT_PERFORMED.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_BOOT_TELEMETRY_FLUSHED.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER.load(Ordering::SeqCst),
+        er_telemetry_core::counters::GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_FALLBACK_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_DEFER_TICKS.load(Ordering::SeqCst)
     ));
     // The screen dim raised over the game while an OS dialog is blocking the menu thread.
     //
@@ -566,27 +598,27 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // without anyone looking at a screenshot.
     body.push_str(&format!(
         "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n  \"oracle_save_picker_dim_owner_set\": {},\n  \"oracle_save_picker_dim_owner_readback\": {},\n  \"oracle_save_picker_dim_arm_wait_ms\": {},\n  \"oracle_save_picker_dim_arm_wait_timeouts\": {},\n  \"oracle_save_picker_dim_reanchor_count\": {},\n",
-        er_telemetry::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_ARM_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_DISARM_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_FRAMES.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_ALIVE_MS.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_TEARDOWN_REASON.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_STAGE.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_SELFTEST.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_HWND.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_UPDATE_FAILS.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_SELF.load(Ordering::SeqCst) as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_GAME.load(Ordering::SeqCst) as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_FOREIGN.load(Ordering::SeqCst) as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_FULL_PUSHES.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_MS.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_REANCHOR_COUNT.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_ARMED.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_DISARM_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_FRAMES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_ALIVE_MS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_TEARDOWN_REASON.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_STAGE.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_SELFTEST.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_HWND.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_GAME_HWND.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_UPDATE_FAILS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_SELF.load(Ordering::SeqCst) as isize,
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_GAME.load(Ordering::SeqCst) as isize,
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_FOREIGN.load(Ordering::SeqCst) as isize,
+        er_telemetry_core::counters::SAVE_PICKER_DIM_FULL_PUSHES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_FOREIGN_FG_HWND.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_OWNER_SET.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_OWNER_READBACK.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_WAIT_MS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_REANCHOR_COUNT.load(Ordering::SeqCst)
     ));
     // THE Z-ORDER VERDICT, AND IT IS TWO VERDICTS, NOT ONE (er-effects-rs-mc1d). These replace the
     // single fused `oracle_save_picker_dim_z_violations`, which scored "the cover is behind the
@@ -605,23 +637,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // separates a bring-up transient the compositor settles from a stacking that never took.
     body.push_str(&format!(
         "  \"oracle_save_picker_dim_z_behind_game\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_self\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_game\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_foreign\": {},\n  \"oracle_save_picker_dim_z_behind_game_first_ms\": {},\n  \"oracle_save_picker_dim_z_covering_dialog\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_self\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_game\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_foreign\": {},\n  \"oracle_save_picker_dim_z_covering_dialog_first_ms\": {},\n",
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_SELF.load(Ordering::SeqCst)
             as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_GAME.load(Ordering::SeqCst)
             as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_FOREIGN.load(Ordering::SeqCst)
             as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_BEHIND_GAME_FIRST_MS.load(Ordering::SeqCst)
             as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_SELF.load(Ordering::SeqCst)
             as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_GAME.load(Ordering::SeqCst)
             as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_FOREIGN
             .load(Ordering::SeqCst) as isize,
-        er_telemetry::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS.load(Ordering::SeqCst)
+        er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS.load(Ordering::SeqCst)
             as isize
     ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
@@ -652,8 +684,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // guard working: each one is a crash that did not happen.
     body.push_str(&format!(
         "  \"oracle_profile_select_window_run_ticks\": {},\n  \"oracle_profile_editor_deferred_applies\": {},\n",
-        er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
-        er_telemetry::counters::PROFILE_EDITOR_DEFERRED_APPLIES.load(Ordering::SeqCst)
+        er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_EDITOR_DEFERRED_APPLIES.load(Ordering::SeqCst)
     ));
     // DO THE ROWS DESCRIBE THE SAVE ON SCREEN? The per-slot name/attribute caches were a
     // process-lifetime latch, so a session's first save described every row forever. `_reloads`
@@ -662,8 +694,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // describing a save the user is no longer looking at.
     body.push_str(&format!(
         "  \"oracle_profile_slot_cache_preview_reloads\": {},\n  \"oracle_profile_slot_cache_invalidations\": {},\n",
-        er_telemetry::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS.load(Ordering::SeqCst),
-        er_telemetry::counters::PROFILE_SLOT_CACHE_INVALIDATIONS.load(Ordering::SeqCst)
+        er_telemetry_core::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_SLOT_CACHE_INVALIDATIONS.load(Ordering::SeqCst)
     ));
     // Save-file rows showing when the file was last written in place of the native playtime.
     // `_rows` > 0 proves the row model carried our text into the native populate; `_stage_failures`
@@ -702,9 +734,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // every witness side by side so the composition never has to be reconstructed by hand again; and
     // `oracle_load_count_mismatches` is nonzero the moment those witnesses contradict each other, so
     // a future run reports the contradiction itself instead of waiting to be noticed.
-    // See er_telemetry::load_count for the decomposition and why the epoch is an INDEX, not a count.
+    // See er_telemetry_core::load_count for the decomposition and why the epoch is an INDEX, not a count.
     {
-        let witnesses = er_telemetry::load_count::LoadCountWitnesses {
+        let witnesses = er_telemetry_core::load_count::LoadCountWitnesses {
             continue_confirm_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT
                 .load(Ordering::SeqCst),
             switch_reload_commits: SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
@@ -723,7 +755,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             picker_repopulates: SAVE_PICKER_REPOPULATE_COUNT.load(Ordering::SeqCst),
         };
         let mismatches = witnesses.mismatches();
-        er_telemetry::counters::LOAD_COUNT_MISMATCH_BITS
+        er_telemetry_core::counters::LOAD_COUNT_MISMATCH_BITS
             .store(mismatches.bits() as usize, Ordering::SeqCst);
         body.push_str(&format!(
             "  \"oracle_total_world_loads\": {},\n  \"oracle_current_load_index\": {},\n  \"oracle_load_count_mismatches\": {},\n  \"oracle_load_count_mismatch_bits\": {},\n  \"oracle_load_count_mismatch_names\": \"{}\",\n  \"oracle_load_count_witness_signature\": \"{}\",\n",
@@ -1063,13 +1095,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // PER-COMMIT vs CUMULATIVE, because reading one as the other is how a failed save reads as a
     // successful one. `redirect_hits`, `target_written_ok`, `target_structure_ok`,
     // `live_file_mutated`, `live_bak_mutated` and `live_stat_unreadable` describe THE COMMIT THAT
-    // ARMED LAST and nothing before it -- `er_telemetry::counters::save_dest_reset_commit_verdicts`
+    // ARMED LAST and nothing before it -- `er_telemetry_core::counters::save_dest_reset_commit_verdicts`
     // clears all six at every arm. The process-wide history is in the `*_count` /`commit_fail` /
     // `restore_*` counters and in `live_file_mutated_total`, none of which are ever cleared.
     body.push_str(&format!(
         "  \"oracle_save_dest_picker_open_count\": {},\n  \"oracle_save_dest_picker_open_retry_count\": {},\n  \"oracle_save_dest_target_existing_count\": {},\n  \"oracle_save_dest_target_new_count\": {},\n  \"oracle_save_dest_commit_count\": {},\n  \"oracle_save_dest_cancel_count\": {},\n  \"oracle_save_dest_redirect_armed\": {},\n  \"oracle_save_dest_redirect_hits\": {},\n  \"oracle_save_dest_seeded_count\": {},\n  \"oracle_save_dest_seed_fail_count\": {},\n  \"oracle_save_dest_target_written_ok\": {},\n  \"oracle_save_dest_target_structure_ok\": {},\n  \"oracle_save_dest_commit_fail\": {},\n  \"oracle_save_dest_live_file_mutated\": {},\n  \"oracle_save_dest_live_file_mutated_total\": {},\n  \"oracle_save_dest_live_bak_mutated\": {},\n  \"oracle_save_dest_live_overwrite_count\": {},\n",
         SAVE_DEST_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_TARGET_EXISTING_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_TARGET_NEW_COUNT.load(Ordering::SeqCst),
         SAVE_DEST_COMMIT_COUNT.load(Ordering::SeqCst),
@@ -1082,7 +1114,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_DEST_TARGET_STRUCTURE_OK.load(Ordering::SeqCst),
         SAVE_DEST_COMMIT_FAIL.load(Ordering::SeqCst),
         SAVE_DEST_LIVE_FILE_MUTATED.load(Ordering::SeqCst),
-        er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_DEST_LIVE_FILE_MUTATED_TOTAL.load(Ordering::SeqCst),
         SAVE_DEST_LIVE_BAK_MUTATED.load(Ordering::SeqCst),
         SAVE_DEST_LIVE_OVERWRITE_COUNT.load(Ordering::SeqCst),
     ));

@@ -12,19 +12,46 @@
 // WHOLE crate, so this crate's reported zero rests on it rather than on written contracts.
 // The unsafe fns here read live game memory and each needs a real `# Safety` section.
 #![allow(clippy::missing_safety_doc)]
+// WINDOWS-ONLY BY CONSTRUCTION, AND THE RUST SIDE HAS TO SAY SO. Cargo already pulls the game
+// bindings (`eldenring`, `fromsoftware-shared`, `er-hook`, `er-loading-portrait-core`, `er-save-loader`,
+// `er-tpf`, `windows`) only under `[target.'cfg(windows)'.dependencies]`; until 2026-08-23 the
+// source imported them unconditionally, so a HOST `cargo test -p er-effects-rs --lib` died with 31
+// unresolved-import errors that read like the caller's own change had broken something. `check.sh`
+// runs this suite through `cargo xwin test --target x86_64-pc-windows-msvc`, so the shipping target
+// always satisfied the imports and nothing ever went red. `boot_hold` and the constant table stay
+// host-visible on purpose -- they are pure predicates/data and carry this crate's host-runnable
+// tests.
+//
+// NOTE the absence of the sibling shells' `#![cfg_attr(not(windows), allow(dead_code,
+// unused_imports))]` (er-armament-icons et al). Those crates need it because a host build compiles
+// their shell with its only callers cfg'd out; here the host build is `boot_hold` plus the plain
+// constant table, every item `pub`, and it is warning-CLEAN under the workspace
+// `[workspace.lints.rust] warnings = "deny"` (verified 2026-08-23). Adding the allow anyway would
+// hide nothing today and real host debt tomorrow, so it is deliberately not here.
 
 pub mod boot_hold;
+#[cfg(windows)]
 pub mod compat;
 pub mod constants_moved;
+#[cfg(windows)]
 pub mod host;
 
 pub use constants_moved::*;
+#[cfg(windows)]
 pub use host::{TitleFlowHost, install_host};
 
+// Every include! below reads or patches live game memory through the windows-only bindings above.
+#[cfg(windows)]
 include!("product_autoload_gates.rs");
+#[cfg(windows)]
 include!("title_load_step_hooks.rs");
+#[cfg(windows)]
 include!("title_tick_cover.rs");
+#[cfg(windows)]
 include!("switch_slot_control.rs");
+#[cfg(windows)]
 include!("profile_select_flow.rs");
+#[cfg(windows)]
 include!("native_title_job.rs");
+#[cfg(windows)]
 include!("dlc_roots_self_heal.rs");

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_loading_portrait::TITLE_PROFILE_SLOT_COUNT;
+use er_loading_portrait_core::TITLE_PROFILE_SLOT_COUNT;
 
 use crate::experiments::trace::native_result_map_hooks::menu_item_action_summary;
 use crate::{

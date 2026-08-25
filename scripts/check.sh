@@ -29,6 +29,12 @@ python3 "$repo_root/scripts/test-detect-proc.py"
 python3 "$repo_root/scripts/test-semaphore-watchdog.py"
 python3 "$repo_root/scripts/test-input-harness-static.py"
 python3 "$repo_root/scripts/test-wall-of-text-classifier.py"
+# The SessionStart/PreCompact prime hook must stay small enough that the harness INLINES it.
+# At 2452 memories it emitted 157.4 KB, which Claude Code persisted to a file and replaced
+# with a 2 KB preview -- so the priming content never reached the agent while still costing
+# a large slice of every session, PreCompact included. Size is the whole feature, so it is a
+# gate: this drives the real generator against a synthetic 6000-memory store.
+python3 "$repo_root/scripts/test-beads-prime-size.py"
 python3 "$repo_root/scripts/check-retired-button-labels.py"
 python3 "$repo_root/scripts/check-autoload-happy-path.py"
 python3 "$repo_root/scripts/test-autoload-happy-path.py"
@@ -44,7 +50,7 @@ python3 "$repo_root/scripts/check-env-gate-comments.py"
 python3 "$repo_root/scripts/test-env-gate-comments.py"
 python3 "$repo_root/scripts/check-marker-file-gates.py"
 python3 "$repo_root/scripts/test-marker-file-gates.py"
-python3 "$repo_root/scripts/check-reload-trace-dll-policy.py" --audit
+python3 "$repo_root/scripts/check-reload-trace-policy.py" --audit
 python3 "$repo_root/scripts/check-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render.py"
 python3 "$repo_root/scripts/test-windows-proof-render-smoke-verdict.py"
@@ -77,6 +83,12 @@ python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
 # printed to the user, and it fires after the answer is already on screen, so halting buys a third
 # reading instead of saving one) and its correction must come back on the invisible
 # additionalContext channel.
+# Third gate: a permission mode cupcake does not recognise must not silently disable every guard.
+# cupcake 0.5.2 exits 1 on `permission_mode: "auto"`, which Claude Code now sends -- so on
+# 2026-08-24 every hook in this repo failed and every policy went inert for a whole session, with
+# this suite green throughout. scripts/cupcake-hook.sh normalises the mode and pins the log level;
+# this proves a denial still denies through it.
+python3 "$repo_root/scripts/test-cupcake-hook-shim.py"
 python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
@@ -122,7 +134,7 @@ python3 "$repo_root/scripts/check-rva-alias-drift.py"
 # Keep its typed definition in er-game-base and reject copied numeric offsets/formulas elsewhere.
 python3 "$repo_root/scripts/check-profile-summary-layout.py" --selftest
 python3 "$repo_root/scripts/check-profile-summary-layout.py"
-# A log describes exactly ONE process run. er-invasion-warp-dll appended to a fixed filename, so
+# A log describes exactly ONE process run. er-invasion-warp appended to a fixed filename, so
 # twelve launches became one 565KB file and a count over it read as one run's behaviour. Every
 # appending opener must route through er-game-base's one-shot truncation. Selftest first, so the
 # gate is never trusted on its own say-so.
@@ -157,6 +169,7 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+shellcheck "$repo_root/scripts/beads-prime.sh"
 shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 
 # The stale-run sentinel kills a live game when an edit feeds a DLL that run loaded, so BOTH
@@ -201,11 +214,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-loader
 # 120,959-tick churn shape and requires exactly one resolver call plus zero repeated rejections.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-redirect --lib
 
-# er-loading-portrait's host-portable stats-line layer: proves the UNIFIED loading-screen
+# er-loading-portrait-core's host-portable stats-line layer: proves the UNIFIED loading-screen
 # stats layout (one five-line panel whether the values came from the save slot or live
 # PlayerGameData, bd er-effects-rs-qic7). The bitmap-geometry test is corpus-gated on the
 # extracted menu font (ER_FONT_GFX_PATH overridable) and skips when absent.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait-core
 
 # The save-picker crate split (docs/plans/save-picker-crate-extraction.md). The row model
 # and the quit-row resolver are pure logic, so the HOST run is their real coverage -- the
@@ -213,7 +226,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait
 # become `cargo test`-able. The DLL shells' tests prove the host seam installs exactly
 # once. `check-rust-build.sh` keeps all four building for the shipping target.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
-	-p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll
+	-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu
 
 # The world-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). The
 # catalog, the block grouping, the BlockId disk/memory byte-order conversion and the on-disk
@@ -222,23 +235,45 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # `.aip` files skips when the local extraction is absent (game-derived bytes are never
 # versioned). `check-rust-build.sh` keeps both crates building for the shipping target.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
-	-p er-invasion-warp -p er-invasion-warp-dll
+	-p er-invasion-warp-core -p er-invasion-warp
 
-# er-net-effects-dll's host-portable modules. Five of them are ungated with a comment saying
+# er-net-effects's host-portable modules. Six of them are ungated with a comment saying
 # "so its tests run on the host" -- and until this line existed NOTHING ran them: the workspace
 # pins `default-members` to er-effects-rs, so a bare `cargo test` never selects this crate and the
 # windows-target `cargo xwin test --lib` in check-rust-build.sh selects er-effects-rs only. 42
 # tests sat inert. The load-bearing one now is `selector_gate`: it decides whether this DLL may
 # take the player's arrow keys away from the game, which is not a claim to leave to review.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects-dll --lib
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 
-# er-telemetry's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
+# The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
+# grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
+# it had 23 tests, so the whole mapping could regress silently -- the game-side crates
+# (er-build-import-runtime, er-build-import) are windows-only and prove none of it. There is
+# nothing to run here for those two: `check-rust-build.sh` keeps them building for the shipping
+# target, and the DLL half is proven in game.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
+
+# er-telemetry-core's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count
 # consistency logic is pure integer arithmetic with no platform semantics, so the host run is the
 # real coverage; the cross-compile check in check-rust-build.sh keeps it building for the shipping
 # target too.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
+
+# HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
+# in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game
+# bindings always resolve -- so a `use windows::...` / `use eldenring::...` written WITHOUT a
+# `#[cfg(windows)]` gate is invisible to every gate here while breaking a plain host
+# `cargo test`. er-title-flow shipped exactly that: 31 unresolved-import errors on the host
+# (measured 2026-08-23), and the cost was misdirection -- an agent or human reaching for a host
+# `cargo test` saw a wall of errors that looked like their own change.
+#
+# `-p er-effects-rs --lib` is the reproducer itself: the crate's host build is a single stub fn,
+# so this compiles nothing but the dependency graph, which is the surface that rots.
+# `-p er-title-flow --lib` additionally RUNS boot_hold's predicates -- the crate's only
+# host-portable logic, and untestable at all until the gates landed.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-effects-rs -p er-title-flow --lib
 
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
@@ -251,7 +286,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 
-# Knowing every shell exists is not knowing which of them can share a process. Five pairs
+# Knowing every shell exists is not knowing which of them can share a process. Several pairs
 # corrupt each other -- two MinHook instances on one prologue, two D3D12 Present compositors,
 # a harness that drives input every frame -- and that knowledge used to live only as prose in
 # a hand-written ~/Elden/*.me3. scripts/er-dll-closure.py now reads it as data to decide what a
@@ -259,6 +294,16 @@ python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 # classified is exactly the one a dependency-closure walk auto-includes.
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
+
+# ...and the table only helps if it still matches the CODE. This scans every cdylib for the hook
+# targets it claims and fails on any address two of them claim without a [[conflict]] or [[shared]]
+# row -- then proves each [[shared]] row's mechanism, so neither side can quietly revert to a
+# private MinHook instance. That reversion is the failure this pair of gates exists for: two
+# instances on one prologue overwrite each other's trampolines, the loser reports installed and
+# never runs, nothing crashes, and the feature merely looks unimplemented. It cost a full day on
+# 2026-08-23 before an A/B against a one-DLL profile named it.
+python3 "$repo_root/scripts/check-shared-hook-rvas.py" --selftest
+python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 
 # The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
 # selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with

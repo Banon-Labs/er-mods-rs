@@ -1,4 +1,4 @@
-//! er-armament-icons-dll -- armament tile Ash-of-War badge (bd er-effects-rs-pe98).
+//! er-armament-icons -- armament tile Ash-of-War badge (bd er-effects-rs-pe98).
 //!
 //! GOAL: every non-empty highlightable armament/ranged/catalyst/shield tile, in every
 //! menu that renders the shared tile widget, gets the weapon's skill (Ash of War) icon

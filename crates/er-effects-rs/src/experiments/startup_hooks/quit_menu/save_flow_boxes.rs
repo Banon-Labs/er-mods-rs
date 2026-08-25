@@ -49,10 +49,10 @@ use er_game_base::fnv1a::fnv1a64_mix;
 // game's own ctor, the same pattern the shipping Save Game row label uses). Button labels are
 // the game's, so no `MenuJobResult` enum literal is needed anywhere in this file.
 
-// S7 moved the pure box ids, button order and resolved-answer enums to `er-quit-menu`. This file
+// S7 moved the pure box ids, button order and resolved-answer enums to `er-quit-menu-core`. This file
 // keeps the native MessageBoxBuilder/queue integration in the product DLL until the hooked surfaces
 // move in S8.
-pub(crate) use er_quit_menu::save_flow_boxes::{
+pub(crate) use er_quit_menu_core::save_flow_boxes::{
     SAVE_FLOW_BOX_NONE, SaveFlowBoxRecipe, SaveFlowButton, SaveFlowDecision,
     save_flow_box_add_order, save_flow_box_counter_bump, save_flow_box_label, save_flow_box_prompt,
     save_flow_decision_label, save_flow_yes_button_desc,

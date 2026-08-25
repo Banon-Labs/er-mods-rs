@@ -2,7 +2,7 @@
 //!
 //! Implemented over raw `#[link(name = "kernel32")]` externs so this stays a
 //! zero-dependency leaf that all three DLLs (product, reload-trace, input-harness)
-//! and er-telemetry can sit on without re-implementing `ReadProcessMemory` reads.
+//! and er-telemetry-core can sit on without re-implementing `ReadProcessMemory` reads.
 //! Ported from the product's `experiments/mem.rs` (single source of truth now).
 
 use core::ffi::c_void;
@@ -325,5 +325,166 @@ pub unsafe fn safe_read_u16(addr: usize) -> Option<u16> {
         Some(value)
     } else {
         None
+    }
+}
+
+/// Page granularity for [`safe_read_cstr`]'s walk. Mapping is per-page, so a page is either
+/// readable in full or not at all -- which is what makes a page-bounded chunk the largest read
+/// that cannot fail merely because of where the string happens to sit.
+const PAGE_SIZE: usize = 0x1000;
+
+/// Fault-safe, LENGTH-BOUNDED read of a NUL-terminated C string.
+///
+/// This exists because `CStr::from_ptr` on a pointer that came from outside our own code is a
+/// crash waiting for the right afternoon: it calls `strlen`, `strlen` dereferences, and a
+/// non-null-but-garbage pointer takes the process down. A null check does not help -- the
+/// pointers that actually killed Elden Ring on two testers on 2026-08-23 were
+/// `0x011000010e05acda` and `0x0110000107be5e2c`, both very much non-null (bd
+/// `ersc-steam-garbage-key-ptr-crashes-lobby-publish-2026-08-24`).
+///
+/// Returns the bytes BEFORE the NUL, or `None` if the string is unreadable, if `addr` is null,
+/// or if no NUL appears within `max_len`. That last case is deliberately a failure and not a
+/// truncation: a readable region with no terminator in range is not a string we have any reason
+/// to trust, and silently returning `max_len` bytes of it would launder junk into a value the
+/// caller goes on to use.
+///
+/// # Safety
+///
+/// `addr` has NO precondition -- see [`safe_read_usize`]. Every read goes through
+/// `ReadProcessMemory`, which fails closed on an unmapped page instead of faulting. The reads
+/// are page-bounded so a legitimate string ending in the last mapped page of a region is not
+/// rejected just because the next page is absent.
+///
+/// The caller still owns the MEANING of the bytes: a successful read proves only that they were
+/// mapped at that instant.
+pub unsafe fn safe_read_cstr(addr: usize, max_len: usize) -> Option<Vec<u8>> {
+    cstr_walk(addr, max_len, &mut |at, out| unsafe { read_bytes(at, out) })
+}
+
+/// The page-bounded walk behind [`safe_read_cstr`], with the actual read injected.
+///
+/// Split out for one reason: `ReadProcessMemory` does not exist on the host, so a test that
+/// called [`safe_read_cstr`] would not link, and the guard would ship with its logic unexercised
+/// -- which is how the bug it exists to prevent got out in the first place. `read` stands in for
+/// the kernel: it returns `false` for a range that is not fully readable, exactly as
+/// [`read_bytes`] does.
+fn cstr_walk(
+    addr: usize,
+    max_len: usize,
+    read: &mut dyn FnMut(usize, &mut [u8]) -> bool,
+) -> Option<Vec<u8>> {
+    if addr == ZERO || max_len == ZERO {
+        return None;
+    }
+    let mut out: Vec<u8> = Vec::new();
+    let mut cursor = addr;
+    while out.len() < max_len {
+        // Never let one read span a page boundary. `ReadProcessMemory` is all-or-nothing, so a
+        // read that ran on into an unmapped neighbouring page would report failure for a string
+        // that is entirely present in the page it started in.
+        let to_page_end = PAGE_SIZE - (cursor & (PAGE_SIZE - 1));
+        let want = to_page_end.min(max_len - out.len());
+        let mut chunk = vec![0u8; want];
+        if !read(cursor, &mut chunk) {
+            return None;
+        }
+        if let Some(nul) = chunk.iter().position(|&byte| byte == 0) {
+            out.extend_from_slice(&chunk[..nul]);
+            return Some(out);
+        }
+        out.extend_from_slice(&chunk);
+        cursor = cursor.checked_add(want)?;
+    }
+    None
+}
+
+#[cfg(test)]
+mod cstr_tests {
+    use super::{PAGE_SIZE, cstr_walk};
+
+    /// The two pointers that actually took Elden Ring down on 2026-08-23. Both non-null, which is
+    /// the entire point: the guard they defeated was a null check.
+    const CRASH_POINTERS: [usize; 2] = [0x0110_0001_0e05_acda, 0x0110_0001_07be_5e2c];
+
+    /// A reader that models ONE mapped page at `base` whose contents start with `bytes`;
+    /// everything outside that page is unmapped. The page is a full [`PAGE_SIZE`] because that is
+    /// what mapping granularity means -- a stub page shorter than that would reject the
+    /// page-bounded chunk the walk legitimately asks for, and test the stub rather than the code.
+    fn one_page(base: usize, bytes: &[u8]) -> impl FnMut(usize, &mut [u8]) -> bool {
+        let mut page = vec![0xffu8; PAGE_SIZE];
+        page[..bytes.len()].copy_from_slice(bytes);
+        move |at, out| {
+            let Some(start) = at.checked_sub(base) else {
+                return false;
+            };
+            let Some(end) = start.checked_add(out.len()) else {
+                return false;
+            };
+            if end > page.len() {
+                return false;
+            }
+            out.copy_from_slice(&page[start..end]);
+            true
+        }
+    }
+
+    #[test]
+    fn an_unreadable_pointer_is_refused_rather_than_dereferenced() {
+        for bad in CRASH_POINTERS {
+            let mut never = |_: usize, _: &mut [u8]| false;
+            assert_eq!(
+                cstr_walk(bad, 255, &mut never),
+                None,
+                "a garbage non-null pointer must fail closed, not walk memory"
+            );
+        }
+    }
+
+    #[test]
+    fn null_is_refused_before_any_read_is_attempted() {
+        let mut reads = 0usize;
+        let mut counting = |_: usize, _: &mut [u8]| {
+            reads += 1;
+            true
+        };
+        assert_eq!(cstr_walk(0, 255, &mut counting), None);
+        assert_eq!(reads, 0, "null must short-circuit, not reach the reader");
+    }
+
+    #[test]
+    fn a_terminated_string_comes_back_without_its_nul() {
+        let page = b"lobby_key\0trailing junk".to_vec();
+        let mut read = one_page(0x1_0000, &page);
+        assert_eq!(
+            cstr_walk(0x1_0000, 255, &mut read).as_deref(),
+            Some(&b"lobby_key"[..])
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_terminator_in_range_is_refused_not_truncated() {
+        // one_page pads with 0xff, so nothing in range is a NUL.
+        let mut read = one_page(0x1_0000, &[b'A'; 512]);
+        assert_eq!(
+            cstr_walk(0x1_0000, 64, &mut read),
+            None,
+            "no NUL within max_len is junk, and truncating it would launder junk into a value"
+        );
+    }
+
+    #[test]
+    fn a_string_at_the_end_of_a_mapped_page_survives_the_unmapped_neighbour() {
+        // The string sits in the last bytes of the page, so a read that ran past the page end
+        // would fail. Page-bounded chunking is what keeps this case readable.
+        let tail = b"lobby_key\0";
+        let mut page = vec![b'.'; PAGE_SIZE];
+        page[PAGE_SIZE - tail.len()..].copy_from_slice(tail);
+        let base = 0x1_0000;
+        let mut read = one_page(base, &page);
+        let at = base + PAGE_SIZE - tail.len();
+        assert_eq!(
+            cstr_walk(at, 255, &mut read).as_deref(),
+            Some(&b"lobby_key"[..])
+        );
     }
 }

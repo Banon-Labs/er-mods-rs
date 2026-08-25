@@ -248,8 +248,8 @@ def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float)
     sidecar was read, and the caller must not claim that it does.
 
     Matching is by mtime rather than by a DLL-name -> log-name table on purpose: those names do
-    not follow a convention (`er_net_effects_dll.dll` writes `er-net-effects.log`,
-    `er_invasion_warp_dll.dll` writes `er-invasion-warp-dll.log`), so a table would be a second
+    not follow a convention (`er_net_effects.dll` writes `er-net-effects.log`,
+    `er_invasion_warp.dll` writes `er-invasion-warp.log`), so a table would be a second
     source of truth that silently rots every time a shell is added.
     """
     deadline = time.monotonic() + TESTIMONY_BUDGET_SECONDS
@@ -371,6 +371,8 @@ def preflight(args) -> tuple[dict, dict | None]:
         closure_args.append("--no-fetch")
     for package in args.pinned:
         closure_args += ["--with", package]
+    for package in getattr(args, "dropped", []):
+        closure_args += ["--without", package]
     code, out, err = run_script("er-dll-closure.py", *closure_args)
     if code == 2:
         raise RuntimeError(f"the changed DLLs cannot share one profile:\n{out or err}")
@@ -509,7 +511,10 @@ def launch(args) -> int:
     # Monotonic-free on purpose: compared against file mtimes, which are wall clock.
     launched_at = time.time()
     process = subprocess.Popen(
-        ["bash", str(LAUNCHER)],
+        # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
+        # (2026-08-24); this probe predates that and wants the plain quicksave profile
+        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        ["bash", str(LAUNCHER), "-o"],
         env={**os.environ, "ME3_PROFILE": staged["profile"]},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -740,7 +745,7 @@ def selftest() -> int:
             "dirty": False,
             "dlls": [("er_effects_rs.dll", "c" * 64)],
             "ersc": "/game/ersc.dll",
-            "excluded": [{"artifact": "er_loading_bar_dll.dll", "kind": "present-compositor"}],
+            "excluded": [{"artifact": "er_loading_bar.dll", "kind": "present-compositor"}],
             "save": {
                 "name": "Bonky Bean",
                 "level": 139,
@@ -759,7 +764,7 @@ def selftest() -> int:
     check("ELDEN RING IS RUNNING" in block, "the block announces the run")
     check("Bonky Bean" in block and "RL139" in block, "the block names the decoded character")
     check("--seed 7" in block, "the block carries the seed to reproduce the pick")
-    check("EXCLUDED er_loading_bar_dll.dll" in block, "the block names excluded DLLs")
+    check("EXCLUDED er_loading_bar.dll" in block, "the block names excluded DLLs")
     check(
         "NOT claimed" in block and "world loaded" in block,
         "the block states what it does NOT claim, so it cannot be over-read",
@@ -811,7 +816,7 @@ def selftest() -> int:
         weak_dir.mkdir()
         launched = time.time()
         # A log that predates the launch must NOT count: it is last run's evidence.
-        stale = weak_dir / "er-invasion-warp-dll.log"
+        stale = weak_dir / "er-invasion-warp.log"
         stale.write_text("from a previous run\n", encoding="utf-8")
         os.utime(stale, (launched - 600, launched - 600))
         fresh_written = threading.Event()
@@ -840,7 +845,7 @@ def selftest() -> int:
             {
                 "run_id": "r-weak", "pid": 1, "started": "now", "branch": "b",
                 "head": "a" * 40, "merge_base": "b" * 40, "base_ref": "origin/main",
-                "dirty": False, "dlls": [("er_invasion_warp_dll.dll", "c" * 64)],
+                "dirty": False, "dlls": [("er_invasion_warp.dll", "c" * 64)],
                 "ersc": None, "excluded": [], "save": None, "profile": "/p.me3",
                 "sidecar": "/s.toml", "evidence_class": "x",
                 "testimony": "er-net-effects.log written after launch", "witness": "weak",
@@ -956,6 +961,17 @@ def main() -> int:
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
     parser.add_argument("--with", dest="pinned", action="append", default=[], metavar="PACKAGE")
+    parser.add_argument(
+        "--without",
+        dest="dropped",
+        action="append",
+        default=[],
+        metavar="PACKAGE",
+        help="exclude a shell the closure would otherwise load (repeatable). The run block "
+        "lists it under EXCLUDED with reason `withheld`, so an A/B pair cannot be confused "
+        "for two identical runs. Needed for the param-patching class: any DLL that mutates a "
+        "param row moves the Seamless lobby key and silently drops you out of matchmaking.",
+    )
     parser.add_argument("--no-fetch", action="store_true", help="skip refreshing origin/main")
     parser.add_argument("--skip-steam-check", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="stage everything, launch nothing")

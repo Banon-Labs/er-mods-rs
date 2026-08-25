@@ -1,0 +1,14 @@
+[package]
+name = "er-crash-logging-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_crash_logging_core"
+
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

@@ -96,7 +96,7 @@ use crate::telemetry::append_autoload_debug;
 const FD4_PAD_DEVICE_POLL_RVA: u32 = 0x1f6bad0;
 const PAD_STICK_LX_OFFSET: usize = 0x89c; // f32 in [-1.0, 1.0]
 const PAD_STICK_LY_OFFSET: usize = 0x8a0; // f32 in [-1.0, 1.0]; +1.0 = full forward
-pub(crate) use er_telemetry::counters::ORIG_PAD_POLL;
+pub(crate) use er_telemetry_core::counters::ORIG_PAD_POLL;
 
 unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usize) -> usize {
     let orig = ORIG_PAD_POLL.load(Ordering::SeqCst);
@@ -317,11 +317,11 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // PROOF-ONLY: runs only when the input-harness DLL is present (prove_movement_enabled =
     // GetModuleHandle check, not a marker/env gate); never fires in a normal user session.
     static PROOF_GATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-    pub(crate) use er_telemetry::counters::OFF_TAIL_MOVED;
-    pub(crate) use er_telemetry::counters::OFF_TAIL_TOTAL;
-    pub(crate) use er_telemetry::counters::ON_MOVED;
-    pub(crate) use er_telemetry::counters::ON_TOTAL;
-    pub(crate) use er_telemetry::counters::PHASE_FRAME;
+    pub(crate) use er_telemetry_core::counters::OFF_TAIL_MOVED;
+    pub(crate) use er_telemetry_core::counters::OFF_TAIL_TOTAL;
+    pub(crate) use er_telemetry_core::counters::ON_MOVED;
+    pub(crate) use er_telemetry_core::counters::ON_TOTAL;
+    pub(crate) use er_telemetry_core::counters::PHASE_FRAME;
 
     let gate = PROOF_GATE.load(Ordering::Relaxed);
     let enabled = if gate == 0 {

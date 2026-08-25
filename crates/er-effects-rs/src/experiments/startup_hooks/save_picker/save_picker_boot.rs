@@ -110,22 +110,22 @@ use super::*;
 // bootstrap-event channel, ATTEMPTS the telemetry flush with `try_lock` (a frozen task holding the
 // state mutex costs a stale file, never a hung quit), and exits. No hand-off, no 5s wait.
 
-pub(crate) use er_save_picker::{
+pub(crate) use er_save_picker_core::{
     BOOT_PICKER_CANCEL_EXIT, BOOT_PICKER_FELL_BACK, BOOT_PICKER_IDLE, BOOT_PICKER_OPEN,
     BOOT_PICKER_PICKED, BootAbortAction, boot_abort_action,
 };
 
-pub(crate) use er_telemetry::counters::GAME_TASK_TICKS_TOTAL;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_BOOT_TELEMETRY_FLUSHED;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_DEFER_TICKS;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_EXIT_PERFORMED;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_FALLBACK_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_OPEN_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_PICK_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_BOOT_STATE;
+pub(crate) use er_telemetry_core::counters::GAME_TASK_TICKS_TOTAL;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_ANSWER;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_BOOT_GAME_TICKS_AT_OPEN;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_BOOT_TELEMETRY_FLUSHED;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_DEFER_TICKS;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_EXIT_PERFORMED;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_FALLBACK_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_OPEN_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_PICK_COUNT;
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_BOOT_STATE;
 
 /// Flush attempts the picker thread makes before quitting with a stale file.
 ///
@@ -262,7 +262,7 @@ pub(crate) fn boot_os_picker_thread() {
         start_dir,
         "",
         extensions,
-        &er_save_picker::PickerIntent::LoadSource,
+        &er_save_picker_core::PickerIntent::LoadSource,
         no_picker_cover,
         str::to_owned,
     );

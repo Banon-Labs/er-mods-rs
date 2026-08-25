@@ -90,9 +90,9 @@ unsafe fn system_dialog_from_action_obj_usize(action_obj: usize) -> usize {
     unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }.unwrap_or(0)
 }
 
-fn save_dest_start_dir_for_quit_menu() -> Option<er_quit_menu::SaveDestOrigin> {
+fn save_dest_start_dir_for_quit_menu() -> Option<er_quit_menu_core::SaveDestOrigin> {
     let origin = save_dest_start_dir()?;
-    Some(er_quit_menu::SaveDestOrigin {
+    Some(er_quit_menu_core::SaveDestOrigin {
         start_dir: origin.start_dir,
         loaded_file_name: origin.loaded_file_name,
         loaded_path: origin.loaded_path,
@@ -111,10 +111,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // the exact sink the union used before it moved into the er-hook crate. Installed here, before any
     // hook is registered, so no union-chain or collision line is ever missed.
     er_hook::set_hook_logger(crate::telemetry::append_autoload_debug);
-    // Portrait crate split: wire the er-loading-portrait seam to the real product fns
+    // Portrait crate split: wire the er-loading-portrait-core seam to the real product fns
     // BEFORE any hook install or task spawn can execute moved code (the crate's neutral
     // defaults would otherwise gate the whole pipeline off). Pure fn-pointer writes.
-    er_loading_portrait::install_host(er_loading_portrait::PortraitHost {
+    er_loading_portrait_core::install_host(er_loading_portrait_core::PortraitHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         note_ls_portrait_capture: crate::telemetry::note_ls_portrait_capture,
         game_directory_path: crate::telemetry::game_directory_path,
@@ -143,7 +143,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // Save-picker crate split: wire product (A)'s seam before any hook install or task spawn can
     // execute moved picker code. Pure fn-pointer writes; linking the crate still arms nothing by
     // itself.
-    er_save_picker::install_host(er_save_picker::SavePickerHost {
+    er_save_picker_core::install_host(er_save_picker_core::SavePickerHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
         complete_missing_save_selection_from_picker:
@@ -160,7 +160,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // Quit-menu crate split: wire product (B)'s seam before its moved hook code can run.
     // This slice moves the OS-dialog dim overlay; the rest of the seam stays on neutral
     // defaults until the corresponding hooked surfaces move.
-    er_quit_menu::install_host(er_quit_menu::QuitMenuHost {
+    er_quit_menu_core::install_host(er_quit_menu_core::QuitMenuHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         append_crash_log: crate::telemetry::append_crash_log,
         game_main_window: game_main_window_handle_usize,
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         save_dest_set_target: crate::experiments::save_dest_set_target,
         save_flow_box_recipe_available: crate::experiments::save_flow_box_recipe_available,
         save_flow_box_clear: crate::experiments::save_flow_box_clear,
-        ..er_quit_menu::QuitMenuHost::defaults()
+        ..er_quit_menu_core::QuitMenuHost::defaults()
     });
     // Title-flow crate split: wire the er-title-flow seam to the real product fns, same
     // rules as the portrait seam above (installed before any hook install or task spawn
@@ -260,7 +260,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // tick already runs degraded fail-open and fires native saves without a bypass token.
     // Spawned on its own thread (no hook work inside DllMain); when enabled, the attach-time
     // spawn beats the boot-time system-slot save (proven by the standalone
-    // er-save-disable-dll's validated run). No product code hooks 0xe6fb50/0xe6e430/0x67a980
+    // er-save-disable's validated run). No product code hooks 0xe6fb50/0xe6e430/0x67a980
     // elsewhere, so there is no ordering constraint; the product only *calls* 0xe6f200 as a
     // finalizer, which is compatible. GraphicsConfig.xml is untouched: suppression sits on
     // the SL container funnel only. NEVER load er_save_disable.dll together with this DLL in
@@ -432,7 +432,7 @@ fn spawn_save_suppress_install() {
             er_save_suppress::set_log_sink(crate::telemetry::append_autoload_debug);
             er_save_suppress::set_publish_sink(|| {});
             // Spin until the game module resolves (same loop shape as the standalone
-            // er-save-disable-dll installer): MinHook and the prologue verification need
+            // er-save-disable installer): MinHook and the prologue verification need
             // the image mapped before install can bind anything.
             let mut attempts = 0_u64;
             loop {

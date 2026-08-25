@@ -11,7 +11,7 @@ name = "er_scaleform_hooks"
 [dependencies]
 er-game-base = { path = "../er-game-base" }
 er-gfx = { path = "../er-gfx" }
-er-telemetry = { path = "../er-telemetry" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }

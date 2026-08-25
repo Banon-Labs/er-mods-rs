@@ -45,32 +45,32 @@ pub(crate) const IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET: usize = 0xb8;
 /// `EzChildStepBase::stepper` (the owned child step object) at wrapper+0x8; the finish latch byte
 /// is wrapper+0x10 and the CSSetFinishHelper pointer wrapper+0x18 (dump 0x140eb5590 decompile).
 pub(crate) const EZ_CHILD_STEP_STEPPER_OFFSET: usize = 0x8;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT;
 pub(crate) use er_title_flow::SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT;
 /// Count of quick-load handoffs that invoked the original native Quit Game row action trampoline
 /// instead of the low-level accepted callback alone. This is an experiment to test whether the full
 /// native return-title menu-job chain is the missing teardown boundary.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT;
 pub(crate) use er_title_flow::SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT;
 /// Count of frames we cleared a stale `CSMenuMan->disableSaveMenu` during an active switch (the switch-2
 /// quit-save gate; see [`CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET`]). Non-zero on a switch == that switch's
 /// quit-save was being blocked and we unblocked it (the runtime semaphore for this fix).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT;
 /// Rate-limit counter for the switch-2 save-gate diagnostic (which of the save orchestrator
 /// `FUN_140afb970`'s three gates -- force latch `0x143d856a0`, `save_state`, or the CSMenuMan menu gate
 /// `FUN_14080d660` -- is blocking the quit-save so `bc4` freezes at 1).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT;
 /// SWITCH-OUTCOME ORACLE (2026-07-16, user-mandated reliable semaphore). Read-only per-frame classifier of
 /// a switch/load outcome so the state is ALWAYS knowable from telemetry, never from eyeballing. `_TICK` is
 /// the frame counter since a switch was picked (if it STOPS advancing the game task froze = FROZE). `_STABLE`
 /// is consecutive frames the game's own stable-in-world condition holds (player present + requestCode==2 +
 /// in-game menu job CSMenuMan+0x798 != 0): climbing high == LOADED_STABLE; resetting to 0 after climbing ==
 /// the world dropped (BOUNCED/reload). `_MAX_STABLE` latches the peak so a later drop is still visible.
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_TICK;
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_STABLE_FRAMES;
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MAX_STABLE_FRAMES;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_TICK;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_STABLE_FRAMES;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_MAX_STABLE_FRAMES;
 /// InGameStep requestCode (`InGameStep + 0xd8`) values. 1 = a MoveMap (load) request is pending/in
 /// progress; 2 = STABLE IN-WORLD (the load handoff completed, the world is settled -- player present,
 /// in-game menu job populated). STEP_MoveMap_Update drains 1 -> 2 once the child finishes.
@@ -94,7 +94,7 @@ pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
 /// Finish, so requestCode stays 1 forever. So the true stall is INSIDE the MoveMapStep child's
 /// world-load. This oracle publishes the child's current internal step so the stuck point is a RAM
 /// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_STEP;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_MMS_STEP;
 pub(crate) use er_title_flow::SWITCH_ORACLE_REQUEST_CODE;
 /// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19,
 /// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` @0x140aec810 loads the destination block
@@ -132,8 +132,8 @@ pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
     }
 }
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_PLAYER_PRESENT;
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MENU_JOB_PRESENT;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_PLAYER_PRESENT;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_MENU_JOB_PRESENT;
 /// MoveMapStep internal step index -> name. Order from the InGameStep-analogue registrar labels
 /// (`u_MoveMapStep::STEP_*` at dump 0x142b5eb30..) and VALIDATED for 0..3 by the observed
 /// `mms_state 1 MsbLoad -> 2 MsbLoadWait -> 3 WorldResWait` progression (own_stepper idx6 watch).
@@ -221,8 +221,8 @@ pub(crate) fn movemapstep_finalize_substate_name(v: i32) -> &'static str {
 }
 /// MoveMapStep child edge-hook counters (STEP_MoveMap_Init fires when the child is created; Finish
 /// fires when the load completes). On the softlock INIT fires but FINISH never does = the semaphore.
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_INIT_HITS;
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_FINISH_HITS;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_MMS_INIT_HITS;
+pub(crate) use er_telemetry_core::counters::SWITCH_ORACLE_MMS_FINISH_HITS;
 pub(crate) use er_title_flow::MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
 pub(crate) use er_title_flow::MOVEMAPSTEP_COUNTDOWN_100_OFFSET;
 /// MoveMapStep+0x244 is the native completion bit consumed by InGameStep/TitleStep
@@ -242,7 +242,7 @@ pub(crate) const MOVEMAPSTEP_TITLE_DONE_244_OFFSET: usize = 0x244;
 /// cleared every frame (FUN_140679010 reads bc4), once the new character is fully streamed (b7c1=1,
 /// blocks>0) and parked at STEP_MoveMap with the final functor already fired, we clear bc4->0 so it
 /// advances 18->19->20 and the world enters. `_FINALIZE_CLEAR_COUNT` = those incoming-world bc4->0 clears.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_BC4_FORCE_READY_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_BC4_FORCE_READY_COUNT;
 pub(crate) use er_title_flow::GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET;
 pub(crate) use er_title_flow::FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET;
 /// PopulateLists' per-area block-res source-builder (deobf 0x0066bb10, dump 0x14066bc00). The ONLY caller
@@ -387,24 +387,24 @@ pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG: AtomicUsize
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_QUEUE_READY: AtomicUsize =
     AtomicUsize::new(usize::MAX);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
     AtomicUsize::new(usize::MAX);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_LIST;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_LIST;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG;
 pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_LIST;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_LIST;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID;
 /// `PropertyEditDialog`/System dialog embedded `SceneObjProxy` used by the Quit tab builder for child binds.
 pub(crate) const SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET: usize = 0x1200;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER;
 pub(crate) static START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK: Once = Once::new();
 /// One-shot spawn guard for the save-source redirect hook install (CreateFileW/CopyFileW path
 /// redirect). Armed at process attach only when `enforce_save_override_or_abort` resolved a valid
@@ -414,13 +414,13 @@ pub(crate) static START_SAVE_REDIRECT: Once = Once::new();
 /// MENU_WINDOW_LATCH_INSTALLED). Installed unconditionally at process attach; the
 /// hook is a pure passthrough that logs the c30-write gate, c30 before/after, and a
 /// window of the resident save buffer to diagnose why GameMan+0xc30 stays default.
-pub(crate) use er_telemetry::counters::C30_WRITER_HOOK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::C30_WRITER_HOOK_INSTALLED;
 pub(crate) const C30_WRITER_HOOK_NOT_INSTALLED: usize = 0;
 pub(crate) const C30_WRITER_HOOK_INSTALLED_YES: usize = 1;
 pub(crate) static START_C30_WRITER_HOOK: Once = Once::new();
 /// Rate limit for the c30-writer diagnostic log: only the first few calls are logged
 /// (the cold deserialize drives a small bounded number of c30-writer entries).
-pub(crate) use er_telemetry::counters::C30_WRITER_LOG_COUNT;
+pub(crate) use er_telemetry_core::counters::C30_WRITER_LOG_COUNT;
 pub(crate) const C30_WRITER_LOG_MAX: usize = 8;
 /// Bytes of the resident save buffer (rdx) to dump as hex from the c30-writer ENTER,
 /// so the real target map record can be spotted offline. Read-only header window.
@@ -442,7 +442,7 @@ pub(crate) static MSGBOX_LAST_ARG_R8: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MSGBOX_LAST_ARG_R9: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) use er_telemetry::counters::DISMISS_WRITE_LOG;
+pub(crate) use er_telemetry_core::counters::DISMISS_WRITE_LOG;
 /// The dialog pointer OnDecide was last fired on, so we press OK exactly ONCE per dialog instead
 /// of every frame (re-dispatching every frame keeps the dialog stuck "deciding" and it never
 /// closes). A newly-built dialog has a different pointer, so it gets its own single OK.

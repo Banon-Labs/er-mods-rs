@@ -13,7 +13,7 @@
 //! the process that owns it; keeping an older run means copying the file aside
 //! yourself, not letting it accumulate.
 //!
-//! The concrete failure that set the rule: `er-invasion-warp-dll` opened its log
+//! The concrete failure that set the rule: `er-invasion-warp` opened its log
 //! with a plain `append(true)` on a fixed name next to the game executable. Twelve
 //! separate launches piled into one 565 KB file, so a count taken over it ("37
 //! confirms") read as ONE run doing something 37 times when it was really twelve
@@ -117,11 +117,27 @@ pub fn begin_fresh_run(path: &Path) {
     if path.exists() {
         let _ = fs::rename(path, &previous);
     }
-    let _ = fs::OpenOptions::new()
+    if let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(path);
+        .open(path)
+    {
+        // THE FIRST LINE OF EVERY LOG SAYS WHICH BINARY WROTE IT.
+        //
+        // Placed here, in the one-shot every sanctioned opener already routes through, because
+        // the alternative -- asking each DLL to log its own identity at boot -- is a rule that
+        // holds until someone adds the twentieth shell and forgets. `er-invasion-warp` is
+        // the worked example: its opening line was `loaded module_base=0x…`, and dating a
+        // tester's log on 2026-08-24 meant string-matching its format literals against the
+        // repo, which could only prove "not older than 2026-08-18" because no later commit
+        // happened to change a line it prints.
+        //
+        // Failure is ignored for the same reason every other write here ignores it: a
+        // read-only game directory must degrade to fewer lines, never to a panic on the game
+        // thread.
+        let _ = writeln!(file, "{}", crate::build_id::identity_line());
+    }
 }
 
 /// THE sanctioned way to open a log for append in this repo.
@@ -161,10 +177,13 @@ pub fn open_truncated_with_header(
     header: impl FnOnce(&mut fs::File),
 ) -> Option<fs::File> {
     begin_fresh_run(path);
+    // APPEND, not truncate. `begin_fresh_run` has already emptied the file and written the
+    // identity line into it; opening with `.truncate(true)` here would delete that line and
+    // leave exactly the logs that most need identifying -- the ones with a persistent handle
+    // and a banner -- as the only ones without it.
     let mut file = fs::OpenOptions::new()
         .create(true)
-        .write(true)
-        .truncate(true)
+        .append(true)
         .open(path)
         .ok()?;
     header(&mut file);
@@ -192,9 +211,21 @@ mod tests {
         append_line(&path, format_args!("second"));
 
         let body = fs::read_to_string(&path).expect("log written");
+        // The identity line is written by the truncating open, so the run's own first line is
+        // the SECOND line of the file. Asserted as a suffix rather than by index so a future
+        // header change cannot quietly turn this into a test of nothing.
+        assert!(
+            body.starts_with("build git="),
+            "a fresh log did not open with its identity: {body:?}"
+        );
+        assert!(
+            body.ends_with("first\nsecond\n"),
+            "stale run survived, or a line was lost: {body:?}"
+        );
         assert_eq!(
-            body, "first\nsecond\n",
-            "stale run survived, or a line was lost"
+            body.lines().count(),
+            3,
+            "expected identity + two lines: {body:?}"
         );
 
         let previous = fs::read_to_string(dir.join("one-run.log.prev")).expect("rotated aside");
@@ -219,9 +250,10 @@ mod tests {
 
         append_line(&path, format_args!("only line"));
 
-        assert_eq!(
-            fs::read_to_string(&path).expect("log written"),
-            "only line\n"
+        let body = fs::read_to_string(&path).expect("log written");
+        assert!(
+            body.starts_with("build git=") && body.ends_with("only line\n"),
+            "expected an identity line then the run's line: {body:?}"
         );
         assert!(
             !dir.join("cleared.log.prev").exists(),

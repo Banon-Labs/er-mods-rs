@@ -1,4 +1,4 @@
-pub(crate) use er_telemetry::counters::AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT;
+pub(crate) use er_telemetry_core::counters::AUTOLOAD_HANDOFF_PARENT_STATE_FIX_COUNT;
 
 fn poll_cached_mms18_ending_request_advancer() {
     // Native full deserialize owns GameMan::warp_requested and MoveMapStep::CheckReturnToTitle
@@ -102,7 +102,7 @@ fn poll_autoload_handoff_parent_state_guard() {
 struct GameTaskTimer(std::time::Instant);
 impl Drop for GameTaskTimer {
     fn drop(&mut self) {
-        er_telemetry::counters::GAME_TASK_LAST_US
+        er_telemetry_core::counters::GAME_TASK_LAST_US
             .store(self.0.elapsed().as_micros() as usize, Ordering::SeqCst);
     }
 }
@@ -132,7 +132,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // cannot answer "is this task still running" for anyone else. Any thread can read
                 // this one, which is what lets the boot picker record whether the game was alive
                 // across a dialog that blocked for half a minute.
-                er_telemetry::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
+                er_telemetry_core::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
                 // Boot-phase marker: first frame our recurring task actually ticks.
                 if er_boot_profiler::profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
@@ -580,6 +580,34 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
             CSTaskGroupIndex::FrameBegin,
         );
+        // BUILD IMPORT (System>Quit "Load Build from URL"). FrameBegin is the game thread, which is
+        // what every step of the import needs -- it mutates the inventory, `CSGaitemImp`,
+        // `PlayerGameData` and the equipment slots through the game's own functions. Registered
+        // unconditionally and from boot because it is inert until a row press queues a build: the
+        // runtime's tick returns immediately unless its phase is `Ready`, so the cost of an idle
+        // frame is one atomic load.
+        cs_task.run_recurring(
+            move |_task_data: &FD4TaskData| {
+                // Safety: FrameBegin runs on the game task thread, the context the runtime requires;
+                // every step inside it is individually precondition-checked (params streamed,
+                // character present).
+                unsafe { system_quit_build_import_tick() };
+            },
+            CSTaskGroupIndex::FrameBegin,
+        );
+        // BUILD EXPORT (System>Quit "Generate Build Link"). Same thread and the same reason, from
+        // the other direction: this one READS `PlayerGameData`, the equipment slots and the message
+        // repository, none of which may be touched off the game thread. Also inert until pressed --
+        // and it deliberately ticks even when idle, because its tick counter is the witness the
+        // stale-latch check measures against (see `er_build_import_runtime::export`).
+        cs_task.run_recurring(
+            move |_task_data: &FD4TaskData| {
+                // Safety: FrameBegin runs on the game task thread; every step inside is
+                // precondition-checked (params streamed, character present).
+                unsafe { system_quit_build_export_tick() };
+            },
+            CSTaskGroupIndex::FrameBegin,
+        );
         // BUILD-OWN LIVE-RENDER DRIVER (gated, FrameBegin = GAME thread, ticks EVERY frame incl. the
         // loading screen). force_profile_render_tick's only other call sites are menu-phase-only (they
         // `return` before Continue), so maybe_build_profile_table_for_loading + the mark/refresh feed never
@@ -605,7 +633,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         };
                     }
                 }
-                er_telemetry::counters::BUILD_DRIVER_LAST_US
+                er_telemetry_core::counters::BUILD_DRIVER_LAST_US
                     .store(_bt.elapsed().as_micros() as usize, Ordering::SeqCst);
             },
             CSTaskGroupIndex::FrameBegin,

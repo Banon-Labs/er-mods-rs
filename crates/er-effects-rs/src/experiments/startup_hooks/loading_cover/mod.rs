@@ -4,9 +4,9 @@ use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use crate::*;
 use crate::{crashlog::*, hooks::*, telemetry::*};
 use eldenring::cs::PlayerIns;
-use er_quit_menu::save_flow_boxes::{SAVE_FLOW_BOX_NONE, save_flow_box_label};
-use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_FAILURES;
-use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_SERVES;
+use er_quit_menu_core::save_flow_boxes::{SAVE_FLOW_BOX_NONE, save_flow_box_label};
+use er_telemetry_core::counters::OPTIONS_02_040_QUIT6_RUNTIME_FAILURES;
+use er_telemetry_core::counters::OPTIONS_02_040_QUIT6_RUNTIME_SERVES;
 use fromsoftware_shared::FromStatic;
 use std::{
     ffi::{CStr, c_void},

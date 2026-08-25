@@ -110,7 +110,7 @@ under the current architecture.
   acceptable under §3a's own allowance ("observe/drive without *significantly* modifying flow"), but worth
   stating in the doc as the baseline's fidelity level.
 - **(b) ideal architecture (§3a's real intent):** move the rich `oracle_*` telemetry from the flow-altering
-  **product** into the non-flow-altering **er-telemetry-dll** (bd CRATE-CONSOLIDATION-ROADMAP). Then a truly
+  **product** into the non-flow-altering **er-telemetry** (bd CRATE-CONSOLIDATION-ROADMAP). Then a truly
   vanilla capture is telemetry-DLL + harness only — no product resident at all. Bigger refactor; the correct
   long-term home for the acceptance baseline.
 

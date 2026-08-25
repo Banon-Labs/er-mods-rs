@@ -164,7 +164,7 @@ def report(findings: list[Finding]) -> None:
     print(
         "Generate the bytes in the crate's build.rs from NAMED iced-x86 instructions -- see\n"
         "build-support/prologue_build.rs and, for a worked example, "
-        "crates/er-player-name-filter-dll/build.rs -- and `include!` the result from OUT_DIR.\n"
+        "crates/er-player-name-filter/build.rs -- and `include!` the result from OUT_DIR.\n"
         "A prologue that is one byte off (the game ships `mov rax, rsp` as 48 8b c4; an\n"
         "assembler left to choose emits 48 89 e0) disarms its own hook on every launch.\n"
         f"If these bytes are genuinely not a detour prologue, say so on the declaration or in\n"

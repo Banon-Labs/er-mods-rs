@@ -41,7 +41,7 @@ use std::sync::atomic::Ordering;
 //   2 = a detour's own `fs::read`/`fs::write` re-entered once and was passed through (steady state)
 //  >2 = a pass-through decision was lost and this bug class is back
 
-use er_telemetry::counters::{
+use er_telemetry_core::counters::{
     SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
 };
 

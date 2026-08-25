@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
 
 ## Quick Reference
 
@@ -235,7 +235,7 @@ cp -rf source dest          # NOT: cp -r source dest
 ### Rules
 
 - Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `$HOME/.local/bin/bd prime` for detailed command reference and session close protocol
+- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
@@ -346,6 +346,14 @@ constant names, so read them as synonyms rather than as a second feature:
 | Load Profile | **Load Character** | a character from the save container already loaded |
 | Load Save Profiles | **Load Character from File** | a save file off the disk |
 
+A THIRD cloned row, **Load Build from URL**, was added later and has never had another name.
+It is the odd one out on the tab: it neither returns to the title nor touches a save container,
+but rebuilds the character you are already playing from the `build_url` set in the game-directory
+`er-effects.toml` (items granted, gear worn, spells memorised, level and attributes matched). The
+importer behind it is `er-build-import-runtime`, shared with the standalone `er-build-import`
+shell -- which must therefore never be loaded in the same me3 profile as the product DLL. Its label
+bytes live in `SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W`, beside the two above.
+
 The label bytes live in `SYSTEM_QUIT_LOAD_PROFILE_LABEL_W` and
 `SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W` (`system_quit_dialog_handlers.rs`) -- the symbols
 kept the old names while their contents changed, which is exactly the trap this table
@@ -407,11 +415,11 @@ cargo xwin build --release --target x86_64-pc-windows-msvc
 
 # ...but that builds ONLY er-effects-rs. The workspace sets
 #     default-members = ["crates/er-effects-rs"]
-# so the bare command above silently skips EVERY other DLL crate -- er-invasion-warp-dll,
-# er-loading-portrait-dll, er-save-picker-dll, and the rest. It exits 0 in a fraction of a
+# so the bare command above silently skips EVERY other DLL crate -- er-invasion-warp,
+# er-loading-portrait, er-save-picker, and the rest. It exits 0 in a fraction of a
 # second having compiled nothing, which reads exactly like a successful incremental build.
 # For any other DLL, name it:
-cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-warp-dll
+cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-warp
 ```
 
 **Check the output hash before staging or launching.** A build that "succeeded" without

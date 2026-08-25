@@ -31,139 +31,139 @@ use er_game_base::fnv1a::fnv1a64;
 /// Cover-window measurability + FPS-bail resume state (bd er-effects-rs-dpf6 Phases 1+2): why the
 /// cover last stopped, when the window armed, the last window's arm->stop duration, and the
 /// publish-version/slot-key snapshots + once-per-epoch latch behind the publish-triggered resume.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST;
 /// DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-composite-is-killer-2026-07-20):
 /// last process-ms the per-frame boot-view stop DECISION was logged, so the log is rate-limited to
 /// ~1/s while we diagnose why neither stop path fires for the incomplete load2.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DECISION_LOG_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DECISION_LOG_MS;
 /// Per-frame composite counter (RAM semaphore: the boot view is actually reaching the backbuffer).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAW_HITS;
 /// Draw-state machine: 0 = uninit, 1 = ready, 2 = failed (give up; never retry).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_STATE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_RESUMED;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_RESUMES;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FPS_BAIL_SLOT_KEY;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAW_STATE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_RESUMED;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_RESUMES;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FPS_BAIL_SLOT_KEY;
 /// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_LAST_PERMILLE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_LAST_PERMILLE;
 /// Baseline `PROFILE_LOADSCREEN_TABLE_BUILDS` when the own-menu switch rearmed the boot view; a later
 /// increment is this switch's loading-window handoff. Default 0 preserves first-start behavior.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_LOADSCREEN_TABLE_BASELINE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_LOADSCREEN_TABLE_BASELINE;
 /// Monotonic-display clamp for the (phase idx, substep) LABEL numbers (user 2026-07-19): the visible
 /// numbers must only advance within one load epoch -- never repeat a value already passed nor
 /// decrement -- or the loading text reads as jumpy/looping. Ordinal = idx*ORD_SCALE + sub (phase idx
 /// dominates). Held label is a `&'static str` (all sub-labels come from const tables, so its ptr/len
 /// stay valid forever). Reset per load epoch.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_EPOCH;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_LABEL_LEN;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_LABEL_PTR;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MONO_ORD;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_MONO_EPOCH;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_MONO_LABEL_LEN;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_MONO_LABEL_PTR;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_MONO_ORD;
 /// Nonzero while the System->Quit custom ProfileSelect flow is switching to a picked slot. Value is
 /// selected_slot + 1 so slot 0 is representable. This reopens the boot bar after the first world load.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STOP_REASON;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_OWN_MENU_LOAD_ACTIVE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_STOP_REASON;
 /// One-shot stop latch: the loading window / world took over; reset only for a deliberate own-menu
 /// character switch so the same custom progress bar can cover the return-title/autoload black gap.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STOPPED;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_WINDOW_ARM_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_STOPPED;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_WINDOW_ARM_MS;
 /// `BOOT_VIEW_STOP_REASON` values (0 = armed/none).
 pub(crate) const BOOT_VIEW_STOP_REASON_RELEASE_FADE: usize = 1;
 pub(crate) const BOOT_VIEW_STOP_REASON_FPS_BAIL: usize = 2;
 pub(crate) const BOOT_VIEW_STOP_REASON_WORLD_HANDOFF: usize = 3;
 const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
 /// Load-epoch identity + the per-epoch baselines for process-sticky counters (bd er-effects-rs-ok8d).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_CONTINUE_ALLOW_BASELINE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_KIND;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_SEQ;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FRESH_DESER_BASELINE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_CONTINUE_ALLOW_BASELINE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_EPOCH_KIND;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_EPOCH_SEQ;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FRESH_DESER_BASELINE;
 /// Hash of the last composed visible loading label logged to the runtime debug log.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_LAST_LABEL_HASH;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_LAST_LABEL_HASH;
 /// Highest reached milestone index (drives the label).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_MILESTONE_IDX;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_PORTRAIT_SPARED_BASELINE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_MILESTONE_IDX;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PORTRAIT_SPARED_BASELINE;
 /// Monotonic bitmask of reached milestones (bit i = milestone i seen reached at least once).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_REACHED_MASK;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_TFC_CONTINUE_BASELINE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_REACHED_MASK;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_TFC_CONTINUE_BASELINE;
 /// `BOOT_VIEW_EPOCH_KIND` values.
 const BOOT_VIEW_EPOCH_KIND_RELOAD: usize = 1;
 
 // Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
 // windows-rs COM types are !Send). Deliberately SEPARATE from the OVERLAY_* objects so the boot view
 // cannot interfere with the proven portrait composite path or thrash its cached buffers at handoff.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_ALLOCATOR;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_ALLOCATOR;
 /// LOADING_SCREEN_UPDATE_HITS baseline latched at handoff detection: the counter is cumulative
 /// across loads, so an own-menu second load must measure only ITS loading screen's ticks.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DARK_GAP_FAILURES;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DARK_GAP_LAST_HELD_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DARK_GAP_FAILURES;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DARK_GAP_LAST_HELD_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS;
 /// Draw mutual-exclusion latch: the self-present pump thread and the game's render thread (Present
 /// detour) share the command allocator/list; whoever loses the swap skips its frame.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAW_BUSY;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAW_BUSY;
 /// 1 when the last rasterized upload included the optional cached screenshot background.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_BG_ACTIVE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_IDX;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAWN_BG_ACTIVE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAWN_IDX;
 /// Last (permille, idx) actually rasterized into the upload buffer (skip the map/write when unchanged).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_DRAWN_PERMILLE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_COMPLETE_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_FAILURES;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DRAWN_PERMILLE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_COMPLETE_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_FAILURES;
 /// One-way release fade (2026-08-22): how long the fade was PAUSED by an honored hold, the pause
 /// accumulator's own previous-frame stamp, and the re-assert tallies the pause is decided from.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HELD_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HITS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_HONORED;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REASSERT_RUN;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REASSERTS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_REFUSED;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_HOLD_TICK_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_LAST_ALPHA;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HELD_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HOLD_HONORED;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HOLD_REASSERT_RUN;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HOLD_REASSERTS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HOLD_REFUSED;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_HOLD_TICK_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_LAST_ALPHA;
 /// `LOADING_SCREEN_UPDATE_HITS` as it stood when this window's release fade began -- the snapshot a
 /// mid-fade hold is tested against, so an over-matched Scaleform label cannot pass for the game's
 /// own loading screen still running.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_START_LS_UPDATE_HITS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FADE_START_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_FENCE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_START_LS_UPDATE_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_START_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FENCE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE;
 /// Epoch-ms (never 0 once set) when the real loading/world handoff was first detected; the hold
 /// clock for the seamless cut. Early profile/keyed-frame semaphores must not start this clock.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_LIST;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_LIST;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS;
 /// THE defect counter for the 2026-08-22 "portrait comes back if I press escape too quickly"
 /// report: opaque cover draws that happened while the release fade was already running. Expected 0.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_PRE_WORLD_STOP_FAILURES;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_PRESENT_COVER_FAILURES;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_PRESENT_FULL_CLEAR_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NONFADE_DRAW_DURING_FADE_FIRST_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PRE_WORLD_STOP_FAILURES;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PRESENT_COVER_FAILURES;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PRESENT_FULL_CLEAR_HITS;
 /// Why the self-present pump stopped: 0 = still running/never ran, 1 = game started presenting
 /// (the goal), 2 = timeout budget, 3 = Present returned a failure HRESULT.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_PUMP_STOP_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_PUMP_STOP_REASON;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_QUEUE;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PUMP_STOP_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PUMP_STOP_REASON;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_QUEUE;
 /// 1-descriptor RTV heap for the self-present full-clear (the engine has never rendered the
 /// backbuffer before its first own present, so un-cleared regions would show garbage).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_RTV_HEAP;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_SELF_FULL_CLEAR_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_RTV_HEAP;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SELF_FULL_CLEAR_HITS;
 /// Frames WE presented on the game's swapchain before its render loop produced its first frame.
-pub(crate) use er_telemetry::counters::BOOT_VIEW_SELF_PRESENTS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SELF_PRESENTS;
 /// CS::LoadingScreen update hits at the moment the cover stopped (telemetry: proves the cut
 /// happened on a lit loading screen, not into the black gap).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STOP_NATIVE_HITS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STRIP_H;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_STOP_NATIVE_HITS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_STRIP_H;
 /// (w, h) the current upload buffer was rasterized for (strip geometry follows the backbuffer).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_STRIP_W;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_STRIP_W;
 /// Pump-relative ms at which the game swapchain was found + hooked (0 = never; pump path only).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_SWAPCHAIN_FOUND_MS;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SWAPCHAIN_FOUND_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS;
 /// Creep timing epoch + the epoch-ms when the milestone index last advanced.
 static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 /// First-load latch: the initial game boot-to-title native loading-screen counters are sticky. Do not
 /// let those stale "already reached 100%" semaphores drive the user-started load bar.
 static BOOT_VIEW_FIRST_LOAD_REQUEST_REARMED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-pub(crate) use er_telemetry::counters::BOOT_VIEW_IDX_CHANGED_MS;
+pub(crate) use er_telemetry_core::counters::BOOT_VIEW_IDX_CHANGED_MS;
 
 /// Optional, pre-decoded local screenshot background. This is intentionally disk-only: the DLL never
 /// touches the network on the launch path. A helper script may populate this cache before launch.
@@ -184,11 +184,11 @@ const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 /// The phase sequence THIS load epoch publishes. Boot walks engine bring-up through the first world;
 /// a character reload cannot replay any of that, so it publishes a strictly smaller sequence and its
 /// visible `N/M` denominator shrinks accordingly (bd er-effects-rs-ok8d).
-fn boot_view_phase_set() -> &'static er_loading_bar::PhaseSet {
+fn boot_view_phase_set() -> &'static er_loading_bar_core::PhaseSet {
     if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
-        &er_loading_bar::RELOAD_PHASE_SET
+        &er_loading_bar_core::RELOAD_PHASE_SET
     } else {
-        &er_loading_bar::BOOT_PHASE_SET
+        &er_loading_bar_core::BOOT_PHASE_SET
     }
 }
 /// Fill edge the bar pauses at while the startup save picker holds the boot (the MAIN MENU phase, whose
@@ -257,10 +257,10 @@ pub(super) const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
 const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
 const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
-pub(crate) const BOOT_VIEW_GLYPH_H: usize = er_loading_bar::GLYPH_H;
+pub(crate) const BOOT_VIEW_GLYPH_H: usize = er_loading_bar_core::GLYPH_H;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
 #[allow(dead_code)] // Retained: Glyph metric pair with the live BOOT_VIEW_GLYPH_H; kept so the two are read together.
-pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar::GLYPH_ADV;
+pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar_core::GLYPH_ADV;
 /// Hairline bar, like the game's own loading bar.
 const BOOT_VIEW_BAR_H: usize = 3;
 /// Gap between the text row and the bar track.
@@ -324,8 +324,8 @@ fn boot_view_load_confirmed_this_epoch() -> bool {
 /// atomic/pointer read that is safe from the render thread. Keyed on the phase IDENTITY rather than a
 /// table index so the boot and reload sequences cannot drift apart: a phase means the same thing in
 /// both, it just occupies a different slot.
-fn boot_phase_reached(phase: er_loading_bar::LoadPhase) -> bool {
-    use er_loading_bar::LoadPhase as P;
+fn boot_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
+    use er_loading_bar_core::LoadPhase as P;
     let reload = BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD;
     let quick_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     match phase {
@@ -384,8 +384,8 @@ fn boot_phase_reached(phase: er_loading_bar::LoadPhase) -> bool {
 /// The world-load phases, keyed off the game's native CS::LoadingScreen so they assert on every load
 /// path (normal autoload AND own-menu switch), independent of the profile-table build. Pure atomic
 /// reads; safe from the render thread.
-fn boot_world_phase_reached(phase: er_loading_bar::LoadPhase) -> bool {
-    use er_loading_bar::LoadPhase as P;
+fn boot_world_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
+    use er_loading_bar_core::LoadPhase as P;
     let update_hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
     let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
     let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
@@ -443,7 +443,7 @@ fn boot_view_player_render_ready() -> bool {
 /// is written only by the PROOF-ONLY can-move probe (`can_move_probe.rs:277` -- "never fires in a
 /// normal user session"), so it can never be the product path on its own.
 fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN, BOOT_VIEW_RELEASE_READY_MS,
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN, BOOT_VIEW_SEMANTIC_RELEASES,
     };
@@ -463,13 +463,13 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     // during the teardown/title -- the player is still resident and the teardown bar fills -- so a
     // latch kept from that phase would fire the release the instant the confirm landed, which is
     // the same bug one screen later. They must be observed again against the character load.
-    if er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst) != 0 {
+    if er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst) != 0 {
         let baseline =
-            er_telemetry::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.load(Ordering::SeqCst);
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.load(Ordering::SeqCst);
         let fresh_deser =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         if fresh_deser <= baseline {
-            er_telemetry::counters::BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM
                 .fetch_add(1, Ordering::SeqCst);
             BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
             BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
@@ -545,14 +545,15 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
         // A4: a release that lands without its switch's character load having begun is the q6vk
         // defect recurring. Counted, not merely logged, so the harness can gate on it.
         let require =
-            er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst);
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst);
         let baseline =
-            er_telemetry::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.load(Ordering::SeqCst);
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.load(Ordering::SeqCst);
         let fresh_deser =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let before_confirm = require != 0 && fresh_deser <= baseline;
         if before_confirm {
-            er_telemetry::counters::BOOT_VIEW_RELEASE_BEFORE_CONFIRM.fetch_add(1, Ordering::SeqCst);
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_BEFORE_CONFIRM
+                .fetch_add(1, Ordering::SeqCst);
         }
         append_autoload_debug(format_args!(
             "boot-view: COVER RELEASE #{n} at {now_ms}ms -- render-ready and native loading screen finishing both latched this window (the real handoff; no bail needed) require_confirm={require} fresh_deser={fresh_deser} baseline={baseline} before_confirm={before_confirm}"
@@ -760,10 +761,11 @@ fn boot_view_note_draw_after_stop(site: &str) {
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
         return;
     }
-    let n = er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP.fetch_add(1, Ordering::SeqCst) + 1;
-    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_TOTAL.fetch_add(1, Ordering::SeqCst);
+    let n =
+        er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP.fetch_add(1, Ordering::SeqCst) + 1;
+    er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP_TOTAL.fetch_add(1, Ordering::SeqCst);
     let now_ms = boot_view_epoch_ms().max(1) as usize;
-    let _ = er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.compare_exchange(
+    let _ = er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.compare_exchange(
         0,
         now_ms,
         Ordering::SeqCst,
@@ -775,7 +777,7 @@ fn boot_view_note_draw_after_stop(site: &str) {
         append_autoload_debug(format_args!(
             "boot-view: DRAW AFTER STOP at {now_ms}ms site={site} -- the cover composited a frame with BOOT_VIEW_STOPPED already set (stop_reason={} stop_ms={} epoch_seq={}); the 2026-08-22 \"our compositor did not draw it\" diagnosis does not hold",
             BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
-            er_telemetry::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst),
+            er_telemetry_core::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst),
             BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
         ));
     }
@@ -785,18 +787,19 @@ fn boot_view_note_draw_after_stop(site: &str) {
 /// latches stopped. Called from BOTH stop sites (release fade and FPS bail) so the watch behaves
 /// the same whichever way the window ended.
 fn boot_view_stamp_stop_baselines(now_ms: usize) {
-    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(now_ms.max(1), Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_STOP_MS.store(now_ms.max(1), Ordering::SeqCst);
     // A new watch starts with a clean RUN. The watch only samples inside its window, so a run left
     // part-way through when the previous window's watch expired would otherwise be continued by the
     // next one -- and `_max_run` is exactly the number that tells a brief reappearance apart from a
     // plate that never went down, so carrying a stale count into it corrupts the one reading it is
     // for. The cumulative frame/first/last counters are session totals and deliberately survive.
-    er_telemetry::counters::COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN.store(0, Ordering::SeqCst);
-    er_telemetry::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(
+    er_telemetry_core::counters::COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN
+        .store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(
         LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
-    er_telemetry::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(
+    er_telemetry_core::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(
         LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
@@ -808,11 +811,11 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
     BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
     // Post-stop draw detector + the post-release watch's baselines belong to ONE window.
-    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP.store(0, Ordering::SeqCst);
-    er_telemetry::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.store(0, Ordering::SeqCst);
-    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
-    er_telemetry::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(0, Ordering::SeqCst);
-    er_telemetry::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_STOP_LS_UPDATE_BASELINE.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_STOP_LS_FADEOUT_BASELINE.store(0, Ordering::SeqCst);
     BOOT_VIEW_WINDOW_ARM_MS.store(boot_view_epoch_ms().max(1) as usize, Ordering::SeqCst);
     BOOT_VIEW_FPS_BAIL_RESUMED.store(0, Ordering::SeqCst);
     BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
@@ -839,13 +842,13 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
     // Release latches belong to the window that observed them.
-    er_telemetry::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
-    er_telemetry::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
-    er_telemetry::counters::BOOT_VIEW_RELEASE_READY_MS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_READY_MS.store(0, Ordering::SeqCst);
     // Default OFF: boot's single load has no teardown screen in front of it, so it must not wait
     // for a fresh-deser bump that will never come. `rearm_boot_progress_for_own_menu_load` turns it
     // back on after calling through here, which is the only path that faces two screens.
-    er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(0, Ordering::SeqCst);
     // Draw cache: force a re-rasterize on the first frame of the new window.
     BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
@@ -967,11 +970,11 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     // started yet. Snapshot the fresh-deser count here; the release stays held until it advances,
     // which is exactly when the reload deserializes. Set AFTER boot_view_reset_epoch_state above,
     // which resets the per-window release latches.
-    er_telemetry::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.store(
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE.store(
         crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
-    er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(1, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(1, Ordering::SeqCst);
     // Clear the PREVIOUS character's portrait/render state IMMEDIATELY when a new load arms (2026-07-16,
     // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
     // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.
@@ -1067,10 +1070,10 @@ fn boot_view_progress() -> (usize, usize) {
         .load(Ordering::SeqCst)
         .min(1000);
     let world_idx = set
-        .index_of(er_loading_bar::LoadPhase::BuildingWorld)
+        .index_of(er_loading_bar_core::LoadPhase::BuildingWorld)
         .unwrap_or(0);
     let pm = if idx >= world_idx || native > 0 {
-        let floor = set.base_permille_of(er_loading_bar::LoadPhase::BuildingWorld);
+        let floor = set.base_permille_of(er_loading_bar_core::LoadPhase::BuildingWorld);
         pm.max(floor + native * (1000 - floor) / 1000)
     } else {
         pm
@@ -1218,7 +1221,7 @@ fn boot_view_load_save_submilestone() -> (&'static str, usize, usize) {
 /// The reported step is the first not-yet-satisfied one (the stage in progress); once all are done we
 /// hold the final milestone label. All labels are 5x7 font-safe (uppercase A-Z + space).
 fn boot_view_starting_up_submilestone() -> (&'static str, usize, usize) {
-    use er_telemetry::counters as c;
+    use er_telemetry_core::counters as c;
     // 1: the game swapchain is resolved and our Present detour is installed (the display path exists).
     let swapchain = c::GAME_SWAPCHAIN.load(Ordering::SeqCst) != 0
         || c::PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) != 0
@@ -1338,8 +1341,10 @@ fn boot_view_returning_to_title_submilestone() -> (&'static str, usize, usize) {
 /// through the same table. Every returned label is a substep OF THAT PHASE: a phase with known RAM
 /// granularity exposes its real substeps, and a phase without any exposes exactly one explicit
 /// phase-specific substep (`<label> 1/1`) instead of borrowing an unrelated one.
-fn boot_view_phase_submilestone(phase: er_loading_bar::LoadPhase) -> (&'static str, usize, usize) {
-    use er_loading_bar::LoadPhase as P;
+fn boot_view_phase_submilestone(
+    phase: er_loading_bar_core::LoadPhase,
+) -> (&'static str, usize, usize) {
+    use er_loading_bar_core::LoadPhase as P;
     match phase {
         P::StartingUp => boot_view_starting_up_submilestone(),
         P::GameSystems => boot_view_game_systems_submilestone(),
@@ -1412,11 +1417,11 @@ fn boot_view_phase_submilestone(phase: er_loading_bar::LoadPhase) -> (&'static s
 /// as blanks rather than failing.
 #[allow(dead_code)] // Retained: Measurement half of the boot-view text API, beside the live draw half.
 pub(crate) fn boot_text_width(text: &str, scale: usize) -> usize {
-    er_loading_bar::text_width(text, scale)
+    er_loading_bar_core::text_width(text, scale)
 }
 
 /// Blit `text` into the tight RGBA buffer at (x, y), scaled by `scale`.
-// Argument-for-argument pass-through of `er_loading_bar::draw_text_rgb`. Grouping these into a
+// Argument-for-argument pass-through of `er_loading_bar_core::draw_text_rgb`. Grouping these into a
 // struct would only unpack it again one line later; the argument count belongs to that API.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn boot_draw_text_rgb(
@@ -1429,7 +1434,7 @@ pub(crate) fn boot_draw_text_rgb(
     rgb: [u8; 3],
     scale: usize,
 ) {
-    er_loading_bar::draw_text_rgb(buf, w, h, x, y, text, rgb, scale);
+    er_loading_bar_core::draw_text_rgb(buf, w, h, x, y, text, rgb, scale);
 }
 
 fn boot_draw_text(
@@ -1467,7 +1472,7 @@ fn boot_draw_text_shadowed(
 }
 
 /// Axis-aligned opaque fill into the tight RGBA buffer (clamped).
-// Argument-for-argument pass-through of `er_loading_bar::fill_rect_rgb`; same reasoning as
+// Argument-for-argument pass-through of `er_loading_bar_core::fill_rect_rgb`; same reasoning as
 // `boot_draw_text_rgb` above.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn boot_fill_rect(
@@ -1480,7 +1485,7 @@ pub(super) fn boot_fill_rect(
     rh: usize,
     rgb: [u8; 3],
 ) {
-    er_loading_bar::fill_rect_rgb(buf, w, h, x0, y0, rw, rh, rgb);
+    er_loading_bar_core::fill_rect_rgb(buf, w, h, x0, y0, rw, rh, rgb);
 }
 
 fn boot_bg_image() -> Option<&'static BootBgImage> {
@@ -1799,7 +1804,7 @@ fn boot_darken_bar_shadow(
     }
 }
 
-// BootViewFrame moved to er_loading_portrait::host (portrait crate split); the struct
+// BootViewFrame moved to er_loading_portrait_core::host (portrait crate split); the struct
 // flows back in through the glob shim at the top of gpu_readback.rs, so this shared
 // rasterizer still constructs the same type the crate's native overlay consumes.
 
@@ -1888,7 +1893,7 @@ pub(crate) fn boot_view_d3d12_compositor_frame(
 ) -> er_d3d12_compositor::CompositorFrame {
     let frame = boot_view_render_frame(bw, bh);
     er_d3d12_compositor::CompositorFrame {
-        rgba: er_loading_bar::RgbaFrame {
+        rgba: er_loading_bar_core::RgbaFrame {
             width: frame.w,
             height: frame.h,
             pixels: frame.rgba,
@@ -2001,10 +2006,10 @@ fn boot_view_rasterize(spec: BootViewRaster, bg: Option<&BootBgImage>) -> Vec<u8
     // samechar-3x-threedll-20260730-082930) -- the same stale-oracle leak this issue is about.
     let world_phase = matches!(
         set.phase(idx),
-        er_loading_bar::LoadPhase::BuildingWorld
-            | er_loading_bar::LoadPhase::StreamingWorld
-            | er_loading_bar::LoadPhase::FinalizingWorld
-            | er_loading_bar::LoadPhase::EnteringWorld
+        er_loading_bar_core::LoadPhase::BuildingWorld
+            | er_loading_bar_core::LoadPhase::StreamingWorld
+            | er_loading_bar_core::LoadPhase::FinalizingWorld
+            | er_loading_bar_core::LoadPhase::EnteringWorld
     );
     let load_suffix = if b80 > 0 {
         format!(" - SAVE {}", load_in_progress_b80_name(b80))
@@ -2017,7 +2022,7 @@ fn boot_view_rasterize(spec: BootViewRaster, bg: Option<&BootBgImage>) -> Vec<u8
     } else {
         String::new()
     };
-    let label_model = er_loading_bar::LoadingLabel::new(
+    let label_model = er_loading_bar_core::LoadingLabel::new(
         set.label(idx),
         idx.min(set.main_total()),
         set.main_total(),
@@ -2513,7 +2518,7 @@ fn boot_view_try_fps_bail_resume_on_publish() -> bool {
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
     // The window is drawing again, so the post-release watch must close with it -- otherwise a
     // resumed cover would keep sampling against a stop that has been taken back.
-    er_telemetry::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_STOP_MS.store(0, Ordering::SeqCst);
     let n = BOOT_VIEW_FPS_BAIL_RESUMES.fetch_add(1, Ordering::SeqCst) + 1;
     append_autoload_debug(format_args!(
         "boot-view: FPS-bail RESUME #{n} on portrait publish (version {bail_version} -> {version}, update_recent={update_recent} fadeout_recent={fadeout_recent}) -- compositing the published head for the rest of the window; release fade owns the end"
@@ -2925,7 +2930,7 @@ unsafe fn composite_boot_progress_inner(
     BOOT_VIEW_DRAWN_IDX.store(ms_idx, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_BG_ACTIVE.store(full_frame as usize, Ordering::SeqCst);
 
-    let rgba = er_loading_bar::RgbaFrame {
+    let rgba = er_loading_bar_core::RgbaFrame {
         width: frame.w,
         height: frame.h,
         pixels: frame.rgba,

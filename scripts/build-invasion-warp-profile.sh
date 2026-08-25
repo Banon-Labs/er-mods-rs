@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build er_invasion_warp_dll.dll and write an me3 profile that loads it.
+# Build er_invasion_warp.dll and write an me3 profile that loads it.
 #
 # WHY THIS EXISTS. `scripts/check-rust-build.sh` type-checks the invasion-warp crates with
 # `cargo xwin check --tests`, which NEVER LINKS a cdylib, and `default-members` is only
@@ -9,7 +9,7 @@
 # with a DLL that does not link and cannot be loaded (bd er-effects-rs-5es review).
 #
 # The invasion-warp shell owns no Present detour and no MinHook instance, so unlike
-# `er_loading_portrait_dll.dll` it is SAFE alongside the product DLL in one profile. That
+# `er_loading_portrait.dll` it is SAFE alongside the product DLL in one profile. That
 # stays true only while it installs no detours; the first detour it adds must go through the
 # `er-hook` union, and this comment should be revisited then.
 #
@@ -41,11 +41,11 @@ fatal() {
 
 # Real LINK of the cdylib, not a metadata check. This is the step whose absence let an
 # unlinkable DLL pass every gate.
-echo "[invasion-warp-profile] cargo xwin build --release -p er-invasion-warp-dll --target $target"
-cargo xwin build --release -p er-invasion-warp-dll \
+echo "[invasion-warp-profile] cargo xwin build --release -p er-invasion-warp --target $target"
+cargo xwin build --release -p er-invasion-warp \
   --manifest-path "$repo_root/Cargo.toml" --target "$target"
 
-invasion_dll="$release_dir/er_invasion_warp_dll.dll"
+invasion_dll="$release_dir/er_invasion_warp.dll"
 [[ -f "$invasion_dll" ]] || fatal "cdylib did not link: $invasion_dll"
 
 natives=()
@@ -99,7 +99,7 @@ cat <<'EOF'
 [invasion-warp-profile] underneath it.
 [invasion-warp-profile]
 [invasion-warp-profile] Evidence written next to the game exe:
-[invasion-warp-profile]   er-invasion-warp-dll.log        every warp, refusal and verdict
+[invasion-warp-profile]   er-invasion-warp.log        every warp, refusal and verdict
 [invasion-warp-profile]   er-invasion-warp-telemetry.json oracle 1, the catalog read
 [invasion-warp-profile]   er-invasion-warp-run.json       the per-warp oracle document
 [invasion-warp-profile] Oracle 1 passes on an EXACT cardinality match (365 blocks / 7073

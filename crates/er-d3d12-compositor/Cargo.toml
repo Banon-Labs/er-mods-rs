@@ -9,7 +9,7 @@ name = "er_d3d12_compositor"
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
-er-loading-bar = { path = "../er-loading-bar" }
+er-loading-bar-core = { path = "../er-loading-bar-core" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Direct3D",

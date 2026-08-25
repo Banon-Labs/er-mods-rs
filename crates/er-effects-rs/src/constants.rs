@@ -22,7 +22,7 @@ pub(crate) const APPEAR_ANIMATION_ID: i32 = 63010;
 pub(crate) const INVALID_ANIMATION_ID_FLOOR: i32 = 0;
 /// Current local-player TimeAct animation id, or 0 when none/player unavailable. This is the product
 /// semaphore for "player animations are going" and is later than bare world/player-present readiness.
-pub(crate) use er_telemetry::counters::PLAYER_CURRENT_ANIMATION_ID;
+pub(crate) use er_telemetry_core::counters::PLAYER_CURRENT_ANIMATION_ID;
 pub(crate) const ANIM_QUEUE_SLOT_STEP: u32 = 1;
 pub(crate) const ANIM_QUEUE_SCAN_FLOOR: u32 = 0;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
@@ -134,7 +134,7 @@ pub(crate) const C30_WATCH_REARM_INTERVAL: usize = 64;
 pub(crate) const C30_WATCH_TICK_BIAS: usize = 1;
 pub(crate) const C30_WATCH_ARM_COUNT_NONE: i32 = 0;
 pub(crate) static C30_WATCH_LAST_ARM_TICK: AtomicUsize = AtomicUsize::new(C30_WATCH_NEVER_ARMED);
-pub(crate) use er_telemetry::counters::C30_WATCH_HITS;
+pub(crate) use er_telemetry_core::counters::C30_WATCH_HITS;
 /// 16-byte alignment for the stack CONTEXT buffer (Get/SetThreadContext require it);
 /// mask = align-1. Over-allocate by CONTEXT_ALIGN then round the pointer up.
 pub(crate) const CONTEXT_ALIGN: usize = 16;
@@ -145,13 +145,13 @@ pub(crate) const C30_WATCH_ARM_INCREMENT: i32 = 1;
 pub(crate) const INHERIT_HANDLE_FALSE: i32 = 0;
 /// Monotonic per-frame counter that paces the watchpoint re-arm cadence without
 /// taking the EffectsState lock before the player check.
-pub(crate) use er_telemetry::counters::C30_WATCH_FRAME_COUNTER;
+pub(crate) use er_telemetry_core::counters::C30_WATCH_FRAME_COUNTER;
 
 // The portrait constants files (portrait_semaphores.rs, portrait_camera.rs,
 // portrait_lookat.rs) and several anti_debug.rs/stats_panel_text.rs/gaitem_restore.rs
-// blocks moved to the er-loading-portrait crate (portrait crate split); the glob shim
+// blocks moved to the er-loading-portrait-core crate (portrait crate split); the glob shim
 // re-exports them so every remaining flat-namespace reference keeps compiling unchanged.
-pub(crate) use er_loading_portrait::*;
+pub(crate) use er_loading_portrait_core::*;
 
 include!("constants/software_breakpoints.rs");
 include!("constants/anti_debug.rs");

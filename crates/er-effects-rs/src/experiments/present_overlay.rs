@@ -24,11 +24,11 @@ use crate::mh::{MH_Initialize, MH_STATUS};
 use super::*;
 
 /// Per-frame Present hit counter (RAM semaphore that the overlay hook is live + firing).
-pub(crate) use er_telemetry::counters::PRESENT_HOOK_HITS;
-pub(crate) use er_telemetry::counters::PRESENT_HOOK_INSTALLED;
+pub(crate) use er_telemetry_core::counters::PRESENT_HOOK_HITS;
+pub(crate) use er_telemetry_core::counters::PRESENT_HOOK_INSTALLED;
 /// Original `IDXGISwapChain::Present` / `Present1` trampolines; 0 until installed.
-pub(crate) use er_telemetry::counters::PRESENT_ORIG;
-pub(crate) use er_telemetry::counters::PRESENT1_ORIG;
+pub(crate) use er_telemetry_core::counters::PRESENT_ORIG;
+pub(crate) use er_telemetry_core::counters::PRESENT1_ORIG;
 
 /// `IDXGISwapChain::Present` vtable index: IUnknown(3) + IDXGIObject(4) + IDXGIDeviceSubObject(1) = slot 8.
 const PRESENT_VTABLE_INDEX: usize = 8;
@@ -45,29 +45,29 @@ type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void
 /// each inline 0x170-byte entry's first qword is the per-window output object, whose first qword IS the live
 /// `IDXGISwapChain3*`. Chain: `*(base+RVA)` -> `+0x128` -> `*entry[0]` -> `*output` = swapchain. (Supersedes
 /// the old `GLOBAL_CSGraphics` root, which never held the swapchain -- CSGraphics is unrelated to GX present.)
-const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait::GX_DRAW_CONTEXT_RVA;
+const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait_core::GX_DRAW_CONTEXT_RVA;
 /// `GxDrawContext+0x128` = begin pointer of the per-window render-output vector (vector object at +0x120).
 const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
-pub(crate) use er_telemetry::counters::GAME_BASE;
+pub(crate) use er_telemetry_core::counters::GAME_BASE;
 /// Set once we've found the GAME's swapchain and hooked its REAL Present/Present1. (The earlier "dummy
 /// swapchain vtable funcs differ under vkd3d-proton" theory was unsound -- under Proton all dxgi.dll
 /// swapchains share one DXVK `CDXGISwapChain` vtable, so Present(8)/Present1(22) are the same function for
 /// every swapchain. The real prior blocker was the FIND missing the object, so MinHook was never attempted
 /// on a real swapchain; dinput8 MinHooks fire, so the hook path itself is sound.)
-pub(crate) use er_telemetry::counters::GAME_PRESENT_HOOKED;
+pub(crate) use er_telemetry_core::counters::GAME_PRESENT_HOOKED;
 /// The found GAME swapchain pointer + game module base, latched in `try_install_game_present_hook`. The
 /// Present detour composites the portrait only when `this` matches `GAME_SWAPCHAIN` -- the shared dxgi
 /// vtable means the detour ALSO fires for our throwaway dummy swapchain, which we must never draw on.
-pub(crate) use er_telemetry::counters::GAME_SWAPCHAIN;
-pub(crate) use er_telemetry::counters::GAME_SWAPCHAIN_FIND_TRIES;
+pub(crate) use er_telemetry_core::counters::GAME_SWAPCHAIN;
+pub(crate) use er_telemetry_core::counters::GAME_SWAPCHAIN_FIND_TRIES;
 /// The dummy swapchain's resolved `Present(8)` / `Present1(22)` addrs. Under vkd3d-proton EVERY dxgi
 /// swapchain shares one DXVK `CDXGISwapChain` vtable, so the GAME swapchain's `vtable[8]`/`vtable[22]`
 /// are byte-identical to these (runtime-proven: resolved 0x..209f0 == VMT-swapped Present8 0x..209f0).
 /// This lets `swapchain_vtable_matches` confirm a candidate by READING + comparing these two slots --
 /// never by dispatching `QueryInterface`, which faults on a half-constructed early-boot object whose
 /// dxgi-ranged-but-bogus vtable can't be caught by `catch_unwind` (that AV killed the pump at +726ms).
-pub(crate) use er_telemetry::counters::PRESENT_RESOLVED_ADDR;
-pub(crate) use er_telemetry::counters::PRESENT1_RESOLVED_ADDR;
+pub(crate) use er_telemetry_core::counters::PRESENT_RESOLVED_ADDR;
+pub(crate) use er_telemetry_core::counters::PRESENT1_RESOLVED_ADDR;
 
 // === Swapchain-find reject attribution (RAM oracles) =============================================
 // The 2026-07-15 native-Windows runs burned three probes on an opaque "chain miss": the walk gave no
@@ -77,24 +77,24 @@ pub(crate) use er_telemetry::counters::PRESENT1_RESOLVED_ADDR;
 /// How the game swapchain was accepted: 0=not yet, 1=exact vtable match against the dummy-resolved
 /// Present/Present1 (the vkd3d shared-vtable fast path), 2=module-backed + stable + QI fallback (the
 /// native-Windows / wrapped-swapchain path).
-pub(crate) use er_telemetry::counters::PRESENT_ACCEPT_PATH;
+pub(crate) use er_telemetry_core::counters::PRESENT_ACCEPT_PATH;
 /// Backbuffer DXGI_FORMAT.0 from the first Present's GetDesc1 (RAM oracle: makes the native-Windows
 /// HDR/10-bit case, DXGI_FORMAT_R10G10B10A2_UNORM=24, directly attributable instead of inferred from
 /// zero composite draw-hits). 0 until the first present.
-pub(crate) use er_telemetry::counters::PRESENT_BACKBUFFER_FORMAT;
+pub(crate) use er_telemetry_core::counters::PRESENT_BACKBUFFER_FORMAT;
 /// Last non-null chain candidate (`*output`), its vtable pointer, and its Present(8)/Present1(22).
-pub(crate) use er_telemetry::counters::PRESENT_FIND_CANDIDATE;
-pub(crate) use er_telemetry::counters::PRESENT_FIND_CANDIDATE_VT;
-pub(crate) use er_telemetry::counters::PRESENT_FIND_GOT8;
-pub(crate) use er_telemetry::counters::PRESENT_FIND_GOT22;
-pub(crate) use er_telemetry::counters::PRESENT_FIND_LAST_CANDIDATE;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_CANDIDATE;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_CANDIDATE_VT;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_GOT8;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_GOT22;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_LAST_CANDIDATE;
 /// Last find stage (see `FIND_STAGE_*`): which link/predicate the most recent attempt ended on.
-pub(crate) use er_telemetry::counters::PRESENT_FIND_STAGE;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_STAGE;
 /// Consecutive tries that yielded the SAME candidate pointer (the QI-fallback stability gate).
-pub(crate) use er_telemetry::counters::PRESENT_FIND_STREAK;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_STREAK;
 /// Owning module of the candidate's vtable: 0=unknown/not-module-backed, 1=dxgi.dll, 2=the game exe
 /// (mis-layout red flag), 3=another module (overlay/wrapper DLL -- name in the debug log).
-pub(crate) use er_telemetry::counters::PRESENT_FIND_VT_MODULE_KIND;
+pub(crate) use er_telemetry_core::counters::PRESENT_FIND_VT_MODULE_KIND;
 /// Consecutive same-candidate observations required before the QI fallback may dispatch through the
 /// candidate's vtable. A half-constructed transient does not survive consecutive frames in the game's
 /// single live output slot; the real swapchain does.
@@ -138,7 +138,7 @@ unsafe fn record_present_frame_stats(this: *mut c_void, sync: u32) {
     if this as usize != GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         return;
     }
-    er_telemetry::counters::PRESENT_SYNC_INTERVAL_LAST.store(sync as usize, Ordering::SeqCst);
+    er_telemetry_core::counters::PRESENT_SYNC_INTERVAL_LAST.store(sync as usize, Ordering::SeqCst);
     let Some(sc) = (unsafe { IDXGISwapChain::from_raw_borrowed(&this) }) else {
         return;
     };
@@ -152,21 +152,21 @@ unsafe fn record_present_frame_stats(this: *mut c_void, sync: u32) {
     let sr = stats.SyncRefreshCount as usize;
     let qpc = stats.SyncQPCTime.max(0) as u64;
     let prev_pc =
-        er_telemetry::counters::PRESENT_STATS_PREV_PRESENT_COUNT.swap(pc, Ordering::SeqCst);
+        er_telemetry_core::counters::PRESENT_STATS_PREV_PRESENT_COUNT.swap(pc, Ordering::SeqCst);
     let prev_sr =
-        er_telemetry::counters::PRESENT_STATS_PREV_SYNC_REFRESH.swap(sr, Ordering::SeqCst);
-    let prev_qpc = er_telemetry::counters::PRESENT_STATS_PREV_QPC.swap(qpc, Ordering::SeqCst);
+        er_telemetry_core::counters::PRESENT_STATS_PREV_SYNC_REFRESH.swap(sr, Ordering::SeqCst);
+    let prev_qpc = er_telemetry_core::counters::PRESENT_STATS_PREV_QPC.swap(qpc, Ordering::SeqCst);
     let dpc = pc.wrapping_sub(prev_pc);
     let dsr = sr.wrapping_sub(prev_sr);
     if dpc > 0 && dpc < 1000 {
-        er_telemetry::counters::PRESENT_REFRESH_PER_PRESENT_X100
+        er_telemetry_core::counters::PRESENT_REFRESH_PER_PRESENT_X100
             .store(dsr.wrapping_mul(100) / dpc, Ordering::SeqCst);
     }
     if prev_qpc != 0 && qpc > prev_qpc {
         let freq = qpc_frequency();
         if freq > 0 {
             let us = ((qpc - prev_qpc) as u128 * 1_000_000 / freq as u128) as usize;
-            er_telemetry::counters::PRESENT_QPC_DELTA_US.store(us, Ordering::SeqCst);
+            er_telemetry_core::counters::PRESENT_QPC_DELTA_US.store(us, Ordering::SeqCst);
         }
     }
 }
@@ -202,7 +202,7 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
         // per-frame WORK stall. bd FOCUS-AB-falsifies-unfocused-throttle...next-present-duration.
         let t0 = std::time::Instant::now();
         let r = unsafe { f(this, sync, flags) };
-        er_telemetry::counters::PRESENT_CALL_LAST_US
+        er_telemetry_core::counters::PRESENT_CALL_LAST_US
             .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
         unsafe { record_present_frame_stats(this, sync) };
         r
@@ -246,7 +246,7 @@ unsafe extern "system" fn present1_hook(
         let f: Present1Fn = unsafe { std::mem::transmute(orig) };
         let t0 = std::time::Instant::now();
         let r = unsafe { f(this, sync, flags, params) };
-        er_telemetry::counters::PRESENT_CALL_LAST_US
+        er_telemetry_core::counters::PRESENT_CALL_LAST_US
             .store(t0.elapsed().as_micros() as usize, Ordering::SeqCst);
         unsafe { record_present_frame_stats(this, sync) };
         r
@@ -256,7 +256,7 @@ unsafe extern "system" fn present1_hook(
 }
 
 /// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
-pub(crate) use er_telemetry::counters::PRESENT_COMPOSITE_EARLY_SKIPS;
+pub(crate) use er_telemetry_core::counters::PRESENT_COMPOSITE_EARLY_SKIPS;
 
 /// True on native Windows, where our overlay compositing must be fully suppressed. Runtime-proven across
 /// 17 native-Windows runs (bd er-effects-rs-n4x, 2026-07-15): compositing on the GAME's shared D3D12
@@ -284,7 +284,7 @@ fn composite_suppressed_on_native() -> bool {
 /// with the drive off, and its readback path is heavier), and draw the boot-progress bar + picker
 /// directly. On Wine/Proton (vkd3d), keep the full portrait-first path.
 /// Run the per-frame cover composite and report WHICH gate decided this frame, as a
-/// `er_telemetry::counters::NATIVE_LS_GATE_*` code. The caller feeds that to
+/// `er_telemetry_core::counters::NATIVE_LS_GATE_*` code. The caller feeds that to
 /// [`native_ls_exposure_record`], which latches the frames where the game's own loading screen was
 /// live but our cover did not draw -- er-effects-rs-wmw defect #1, the vanilla flash-through.
 ///
@@ -292,7 +292,7 @@ fn composite_suppressed_on_native() -> bool {
 /// frames where the native loading screen is stale, and the exposure judgement therefore does not
 /// apply, the frame is handed to the post-release cover watch instead of being dropped.
 unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
-    use er_telemetry::counters::NATIVE_LS_GATE_OVERLAY_DISABLED;
+    use er_telemetry_core::counters::NATIVE_LS_GATE_OVERLAY_DISABLED;
     // Time the boot-view composite (the suspected per-frame WORK stall on reloads). Gated on the
     // overlay being a product feature this run: telemetry-only measurement records cadence but
     // SKIPS the flow-modifying composite so the vanilla baseline stays flow-faithful.
@@ -302,7 +302,7 @@ unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
     } else {
         NATIVE_LS_GATE_OVERLAY_DISABLED
     };
-    er_telemetry::counters::COMPOSITE_LAST_US
+    er_telemetry_core::counters::COMPOSITE_LAST_US
         .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
     crate::telemetry::native_ls_exposure_record(base, gate);
 }
@@ -310,7 +310,7 @@ unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
 /// Returns the `NATIVE_LS_GATE_*` code describing whether the cover drew this frame, and if not,
 /// which gate blocked it.
 unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) -> usize {
-    use er_telemetry::counters::{
+    use er_telemetry_core::counters::{
         NATIVE_LS_GATE_COVER_STOPPED, NATIVE_LS_GATE_DREW, NATIVE_LS_GATE_EPOCH_WORLD_LIVE,
         NATIVE_LS_GATE_NATIVE_SUPPRESSED,
     };

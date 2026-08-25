@@ -11,7 +11,7 @@
 // and calling the native per-item release RemoveCSGaitemIns (which frees the ins AND returns its
 // index to the free-queue) -- the exact primitive the native teardown would use, no hand-rebuilt
 // queue. See bd system-quit-postswitch-crash-gaitem-freequeue-exhaustion-2026-07-02.
-pub(crate) const GLOBAL_CSGAITEM_SINGLETON_RVA: usize = 0x3d69890;
+pub(crate) const GLOBAL_CSGAITEM_SINGLETON_RVA: usize = er_game_base::rva::GLOBAL_CSGAITEM_RVA;
 /// `CS::GaItemImp::RemoveCSGaitemIns(CSGaitemImp*, uint* gaItemHandle)` -- dump 0x140672650 ->
 /// live/deobf 0x672560 (shift -0xf0, content-unique, ground-truthed via dump-deobf-shift.py). Given
 /// a handle it destructs+deallocates gaitemInsTable[index], resets the entry, and pushes index back
@@ -28,12 +28,12 @@ pub(crate) const CSGAITEM_FREE_QUEUE_END_OFFSET: usize = 0x1900c;
 pub(crate) const CSGAITEM_TABLE_CAPACITY: usize = 0x1400;
 /// Count of gaitem ins objects released by the pristine-restore sweep (product proof: >0 exactly
 /// once per switch reload, and the free-queue returns to full afterward).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT;
 /// Count of pristine-restore invocations (should be 1 per switch).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS;
 /// Free-queue slack (0x13ff - free_count) observed at the LAST reset, before/after the sweep. A
 /// healthy result is before>0 (char#1 items resident) and after==0 (queue full again).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE;
+pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE;
 pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
     AtomicUsize::new(usize::MAX);
 /// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes

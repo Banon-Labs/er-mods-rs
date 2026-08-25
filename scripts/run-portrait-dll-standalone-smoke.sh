@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bounded standalone smoke for the individually-shippable loading-portrait DLL
-# (crates/er-loading-portrait-dll). Proves er_loading_portrait_dll.dll loads ALONE
+# (crates/er-loading-portrait). Proves er_loading_portrait.dll loads ALONE
 # through me3 (no product er_effects_rs.dll -- NEVER both in one profile: double
 # Present detour / double MinHook), attaches in the live process, and its Present
 # compositor path runs, with zero crash-log entries.
@@ -19,7 +19,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-DLL_SRC="${PORTRAIT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_loading_portrait_dll.dll}"
+DLL_SRC="${PORTRAIT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_loading_portrait.dll}"
 HOLD_SECONDS="${HOLD_SECONDS:-60}"
 
 # shellcheck source=scripts/me3-launch-lib.sh disable=SC1091
@@ -30,12 +30,12 @@ source "$REPO_ROOT/scripts/steam-running.sh"
 CAP_SECONDS="$(python3 "$REPO_ROOT/scripts/runtime_timeout_cap.py")"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 ART_DIR="$REPO_ROOT/target/runtime-probe/portrait-dll-standalone-$STAMP"
-GAME_LOG="$GAME_DIR/er-loading-portrait-dll.log"
-GAME_CRASH_LOG="$GAME_DIR/er-loading-portrait-dll-crash-log.txt"
+GAME_LOG="$GAME_DIR/er-loading-portrait.log"
+GAME_CRASH_LOG="$GAME_DIR/er-loading-portrait-crash-log.txt"
 
 fatal() { echo "portrait-dll-smoke: $*" >&2; exit 2; }
 
-[[ -f "$DLL_SRC" ]] || fatal "missing DLL: $DLL_SRC (build: cargo xwin build --release --target x86_64-pc-windows-msvc -p er-loading-portrait-dll)"
+[[ -f "$DLL_SRC" ]] || fatal "missing DLL: $DLL_SRC (build: cargo xwin build --release --target x86_64-pc-windows-msvc -p er-loading-portrait)"
 [[ -d "$GAME_DIR" ]] || fatal "missing GAME_DIR: $GAME_DIR"
 steam_running || fatal "Steam is not running -- start Steam first (interactive login)"
 me3_preflight || fatal "me3 preflight failed"
@@ -55,11 +55,11 @@ for p in os.listdir('/proc'):
 PY
 
 mkdir -p "$ART_DIR"
-cp -f "$DLL_SRC" "$ART_DIR/er_loading_portrait_dll.dll"
-me3_write_profile "$ART_DIR/portrait-dll-standalone.me3" "$ART_DIR/er_loading_portrait_dll.dll"
+cp -f "$DLL_SRC" "$ART_DIR/er_loading_portrait.dll"
+me3_write_profile "$ART_DIR/portrait-dll-standalone.me3" "$ART_DIR/er_loading_portrait.dll"
 rm -f "$GAME_LOG" "$GAME_CRASH_LOG"
 
-echo "portrait-dll-smoke: launching me3 with ONLY er_loading_portrait_dll.dll (cap ${CAP_SECONDS}s, hold ${HOLD_SECONDS}s past first Present) -> $ART_DIR"
+echo "portrait-dll-smoke: launching me3 with ONLY er_loading_portrait.dll (cap ${CAP_SECONDS}s, hold ${HOLD_SECONDS}s past first Present) -> $ART_DIR"
 # Launch from GAME_DIR: me3 resolves its launcher payload from CWD-relative rust
 # target dirs (bd me3-launch-cwd-must-lack-rust-target-dir), and the DLL writes its
 # log into the game process CWD -- both need GAME_DIR, exactly like the probe scripts.

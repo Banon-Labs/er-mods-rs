@@ -1,4 +1,3 @@
-use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -6,17 +5,17 @@ use bitflags::bitflags;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::{GUID, s};
 
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_STATUS, UnionFn, register_union_hook};
 
 static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
 /// DIAGNOSTIC: how many times the game actually CALLS the DInput keyboard `GetDeviceState`
 /// (i.e. whether native ER reads keyboard input via DInput at all). If the keyboard counter stays 0
 /// while the harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key`
 /// stamp never reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
-pub use er_telemetry::counters::DINPUT_KB_HOOK_FIRES;
-pub(crate) use er_telemetry::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
-pub(crate) use er_telemetry::counters::INJECTED_KEY;
-pub(crate) use er_telemetry::counters::SUPPRESS_ARROW_KEYS;
+pub use er_telemetry_core::counters::DINPUT_KB_HOOK_FIRES;
+pub(crate) use er_telemetry_core::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
+pub(crate) use er_telemetry_core::counters::INJECTED_KEY;
+pub(crate) use er_telemetry_core::counters::SUPPRESS_ARROW_KEYS;
 
 #[derive(Default)]
 pub struct InputBlocker {
@@ -164,18 +163,28 @@ unsafe fn with_probe_device(
     unsafe { release_di8(di8) };
 }
 
-type GetDeviceStateFn = unsafe extern "system" fn(usize, u32, *mut u8) -> i32;
+pub(crate) use er_telemetry_core::counters::DINPUT_KB_GET_STATE_ORIG;
 
-pub(crate) use er_telemetry::counters::DINPUT_KB_GET_STATE_ORIG;
-
-unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, data: *mut u8) -> i32 {
+/// The keyboard detour, in the hook union's four-`usize` shape.
+///
+/// `DINPUT_KB_GET_STATE_ORIG` may hold the NEXT handler in the chain rather than the game
+/// trampoline, so it is called through [`UnionFn`] and not through the narrower three-argument
+/// `GetDeviceState` signature. The `usize` return carries the `HRESULT` in its low 32 bits, which
+/// is where the caller reads it from, so it is passed straight back.
+unsafe extern "system" fn dinput_kb_get_state_hook(
+    device: usize,
+    size: usize,
+    data: usize,
+    unused: usize,
+) -> usize {
     DINPUT_KB_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
-    let original_addr = DINPUT_KB_GET_STATE_ORIG.load(Ordering::Relaxed);
-    if original_addr == 0 {
+    let next = DINPUT_KB_GET_STATE_ORIG.load(Ordering::Relaxed);
+    if next == 0 {
         return 0;
     }
-    let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
-    let hr = unsafe { original(device, size, data) };
+    let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
+    let raw = unsafe { call(device, size, data, unused) };
+    let (hr, size, data) = (raw as i32, size as u32, data as *mut u8);
     if hr == 0 && !data.is_null() {
         crate::experiments::save_picker_latch_dinput_keyboard_state(
             data as *const u8,
@@ -183,7 +192,7 @@ unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, dat
         );
     }
     zero_blocked_dinput_state(hr, size, data, InputFlags::Keyboard);
-    hr
+    raw
 }
 
 fn zero_blocked_dinput_state(hr: i32, size: u32, data: *mut u8, flags: InputFlags) {
@@ -235,11 +244,6 @@ fn zero_dinput_arrow_keys(data: *mut u8) {
 const DINPUT_KEYBOARD_BUFFER_LEN: usize = 256;
 
 unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => return Err(status),
-    }
-
     let dinput8 = unsafe { GetModuleHandleA(s!("dinput8.dll")).expect("dinput8.dll not loaded") };
     let di8_create: DInput8CreateFn = unsafe {
         std::mem::transmute(
@@ -257,16 +261,18 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         })
     };
 
-    let kb_hook = unsafe {
-        MhHook::new(
-            keyboard_addr as *mut c_void,
-            dinput_kb_get_state_hook as *mut c_void,
+    // THROUGH THE UNION, NEVER A BARE `MhHook`. `er-net-effects` and `er-charm-enemies`
+    // detour this same `GetDeviceState` slot, and each links its own MinHook instance -- two
+    // instances on one prologue overwrite each other's trampolines and the loser silently never
+    // runs. Owning it in the union is also what lets those DLLs chain in through this DLL's
+    // `er_effects_union_register` export. See the [[shared]] rows in
+    // scripts/me3-dll-conflicts.toml.
+    unsafe {
+        register_union_hook(
+            keyboard_addr,
+            dinput_kb_get_state_hook,
+            &DINPUT_KB_GET_STATE_ORIG,
         )?
     };
-    DINPUT_KB_GET_STATE_ORIG.store(kb_hook.trampoline() as usize, Ordering::Relaxed);
-    unsafe { kb_hook.queue_enable()? };
-
-    unsafe { MH_ApplyQueued() }.ok_context("DInput MH_ApplyQueued")?;
-    crate::mh::leak_installed_hook(kb_hook);
     Ok(())
 }

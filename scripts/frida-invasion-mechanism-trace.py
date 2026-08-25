@@ -461,7 +461,7 @@ const INFO_FIELDS = [
 ];
 
 // CSGameMan singleton pointer, and the two fields the engine PLACES from. Byte-verified in this
-// repo against their own named getters (crates/er-invasion-warp/src/seamless_invade_probe.rs):
+// repo against their own named getters (crates/er-invasion-warp-core/src/seamless_invade_probe.rs):
 //   +0xac8 destination BlockId          GetTargetMapId                0x140679630
 //   +0xaf0 npcInvadeTargetEntryPoint    GetNpcInvadeTargetEntryPoint  0x140679650
 // The whole placement block, field names straight from the 1.16.2 dump's GameMan structure. THREE
@@ -553,7 +553,7 @@ function hexBytes(ptr_, len) {
 // m{AA}_{BB}_{CC}_{DD} -- the engine's own debug spelling of a BlockId, whose bytes in memory are
 // [index, region, block, area] low-to-high. The index byte is BCD-packed for areas 50..88, which
 // is why it is decoded rather than printed raw: an overworld block with a two-digit index prints
-// wrong otherwise. Mirrors BlockKey in crates/er-invasion-warp/src/invasion_warp.rs.
+// wrong otherwise. Mirrors BlockKey in crates/er-invasion-warp-core/src/invasion_warp.rs.
 function blockName(raw) {
   if (raw === BLOCK_NONE) return 'none';
   const area = (raw >>> 24) & 0xff, block = (raw >>> 16) & 0xff;

@@ -45,12 +45,12 @@ fi
 if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin check --tests --target $target"
 	cargo xwin check --tests --manifest-path "$repo_root/Cargo.toml" --target "$target"
-	# er-telemetry is a workspace member but NOT a default-member, so the line above (which
+	# er-telemetry-core is a workspace member but NOT a default-member, so the line above (which
 	# honours default-members = er-effects-rs) never compiles its test modules. It owns the
 	# load-count consistency logic, so keep its tests building for the shipping target; check.sh
 	# RUNS them on the host.
-	echo "[check-rust-build] cargo xwin check --tests -p er-telemetry --target $target"
-	cargo xwin check --tests -p er-telemetry --manifest-path "$repo_root/Cargo.toml" --target "$target"
+	echo "[check-rust-build] cargo xwin check --tests -p er-telemetry-core --target $target"
+	cargo xwin check --tests -p er-telemetry-core --manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# The Scaleform hook owner is a library, not a default member and not yet linked by a
 	# product until R24 moves the first hook family. Keep its Windows-only er-hook edge and
 	# test module compiling from the R23 skeleton onward.
@@ -59,25 +59,25 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# Save-picker split crates (docs/plans/save-picker-crate-extraction.md). None is a
 	# default-member, and the two DLL shells are not depended on by anything, so without
 	# this line nothing in any gate would compile them for the shipping target.
-	echo "[check-rust-build] cargo xwin check --tests -p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll --target $target"
+	echo "[check-rust-build] cargo xwin check --tests -p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu --target $target"
 	cargo xwin check --tests \
-		-p er-save-picker -p er-save-picker-dll -p er-quit-menu -p er-quit-menu-dll \
+		-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# World-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). Same
 	# situation as the save-picker split: neither is a default-member and the DLL shell is
 	# not depended on by anything, so without this line nothing in any gate would compile
 	# them for the shipping target -- including the `cfg(windows)`-only `CSAutoInvadePoint`
 	# read, which the host `cargo test` never sees.
-	echo "[check-rust-build] cargo xwin check --tests -p er-invasion-warp -p er-invasion-warp-dll --target $target"
+	echo "[check-rust-build] cargo xwin check --tests -p er-invasion-warp-core -p er-invasion-warp --target $target"
 	cargo xwin check --tests \
-		-p er-invasion-warp -p er-invasion-warp-dll \
+		-p er-invasion-warp-core -p er-invasion-warp \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# LINK the cdylib, do not merely type-check it. `cargo xwin check` stops at metadata and
 	# never invokes the linker, so a shell that cannot link -- a missing `#[no_mangle]`
 	# DllMain, a bad crate-type, an unresolved import from a `cfg(windows)` block -- passed
 	# every gate above while being unloadable. Found when the DLL had to be built by hand
 	# with an ad-hoc `-p` invocation to run it at all (bd er-effects-rs-5es review).
-	# `er-invasion-warp-dll` is not a default-member and nothing depends on it, so this is
+	# `er-invasion-warp` is not a default-member and nothing depends on it, so this is
 	# the only step in any gate that produces the artifact a profile can load.
 	# EVERY ME3-LOADABLE SHELL MUST LINK. `cargo xwin check` stops at metadata and never
 	# invokes the linker, and the bare `cargo xwin build` above builds only `default-members`
@@ -85,35 +85,37 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# `DllMain` -- i.e. every DLL a user can list in an me3 `[[natives]]` entry except the
 	# product itself -- were never linked by ANY gate. A shell that cannot link (missing
 	# `#[no_mangle] DllMain`, wrong crate-type, an unresolved import inside a `cfg(windows)`
-	# block) passed the whole suite while being unloadable. Found when er-invasion-warp-dll
+	# block) passed the whole suite while being unloadable. Found when er-invasion-warp
 	# had to be built by hand with an ad-hoc `-p` to run it at all (bd er-effects-rs-5es).
 	#
 	# Keep this list in sync with the cdylibs that define `DllMain`. Measured cost: ~17s
 	# incremental for all 13, which is cheap enough to run unconditionally.
-	# `package:artifact`. The artifact is NOT always the package name with dashes swapped for
-	# underscores -- four of these override `[lib] name`, so er-better-refills-dll produces
-	# er_better_refills.dll, er-inventory-sort-dll -> er_inventory_sort.dll,
-	# er-save-disable-dll -> er_save_disable.dll, mushroom-man-runtime -> mushroom_man.dll.
-	# Deriving the filename instead of listing it silently skipped those four.
+	# `package:artifact`. Since the `-dll` suffix removal every ER shell's artifact IS its
+	# package name with dashes swapped for underscores -- but the pair is still written out
+	# rather than derived, because `mushroom-man-runtime` produces mushroom_man.dll and
+	# er-ags-stub produces amd_ags_x64.dll. Deriving the filename would silently skip those,
+	# which is how four overridden `[lib] name`s went unchecked before.
 	me3_shells=(
 		er-armament-icons:er_armament_icons
-		er-better-refills-dll:er_better_refills
-		er-build-import-dll:er_build_import_dll
-		er-crash-logging-dll:er_crash_logging_dll
-		er-death-persist-dll:er_death_persist
-		er-input-harness-dll:er_input_harness_dll
-		er-invasion-warp-dll:er_invasion_warp_dll
-		er-inventory-sort-dll:er_inventory_sort
-		er-loading-bar-dll:er_loading_bar_dll
-		er-loading-portrait-dll:er_loading_portrait_dll
-		er-net-effects-dll:er_net_effects_dll
-		er-player-name-filter-dll:er_player_name_filter
-		er-quit-menu-dll:er_quit_menu_dll
-		er-reload-trace-dll:er_reload_trace_dll
-		er-save-disable-dll:er_save_disable
-		er-save-picker-dll:er_save_picker_dll
-		er-seamless-bugfixes-dll:er_seamless_bugfixes
-		er-telemetry-dll:er_telemetry_dll
+		er-better-refills:er_better_refills
+		er-build-import:er_build_import
+		er-charm-enemies:er_charm_enemies
+		er-crash-logging:er_crash_logging
+		er-death-persist:er_death_persist
+		er-input-harness:er_input_harness
+		er-build-watermark:er_build_watermark
+		er-invasion-warp:er_invasion_warp
+		er-inventory-sort:er_inventory_sort
+		er-loading-bar:er_loading_bar
+		er-loading-portrait:er_loading_portrait
+		er-net-effects:er_net_effects
+		er-player-name-filter:er_player_name_filter
+		er-quit-menu:er_quit_menu
+		er-reload-trace:er_reload_trace
+		er-save-disable:er_save_disable
+		er-save-picker:er_save_picker
+		er-seamless-bugfixes:er_seamless_bugfixes
+		er-telemetry:er_telemetry
 		mushroom-man-runtime:mushroom_man
 	)
 	shell_pkg_args=()
@@ -146,7 +148,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# NOTE the deliberate absence of `--no-deps`, which upstream passes. Upstream's
 	# default-members covers its whole workspace so `--no-deps` still lints everything
 	# there; here it would restrict linting to the shells and skip every library crate
-	# they depend on (er-game-base, er-telemetry, er-title-flow, er-quit-menu, ...).
+	# they depend on (er-game-base, er-telemetry-core, er-title-flow, er-quit-menu-core, ...).
 	# Registry dependencies are unaffected either way -- cargo applies `--cap-lints allow`
 	# to them automatically -- so dropping the flag costs nothing and closes that hole.
 	#
@@ -154,13 +156,13 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin clippy --all-targets (lint parity with ../fromsoftware-rs)"
 	cargo xwin clippy --release "${shell_pkg_args[@]}" -p er-effects-rs --all-targets \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
-	# FEATURE MATRIX. `er-quit-menu` takes `er-save-picker` with `default-features = false`
+	# FEATURE MATRIX. `er-quit-menu-core` takes `er-save-picker-core` with `default-features = false`
 	# so a standalone quit-menu DLL links the OS-native fallback surface WITHOUT the boot
 	# missing-save flow. Cargo unifies features across a build graph, so the line above
 	# only ever exercises the union of the two; this one proves the reduced build compiles
 	# on its own and cannot rot.
-	echo "[check-rust-build] cargo xwin check -p er-save-picker --no-default-features --target $target"
-	cargo xwin check -p er-save-picker --no-default-features \
+	echo "[check-rust-build] cargo xwin check -p er-save-picker-core --no-default-features --target $target"
+	cargo xwin check -p er-save-picker-core --no-default-features \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 fi
 

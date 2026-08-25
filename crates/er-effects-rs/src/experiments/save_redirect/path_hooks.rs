@@ -22,7 +22,7 @@ use er_save_redirect::{
     redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
     staged_entry_fate, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
 };
-use er_telemetry::counters::{
+use er_telemetry_core::counters::{
     SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN, SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED,
     SAVE_DIRECT_STAGE_STALE_REMOVED, SAVE_REDIRECT_DETOUR_MAX_DEPTH,
     SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
@@ -95,7 +95,7 @@ pub(crate) fn save_trace_enabled() -> bool {
             .exists()
 }
 
-pub(crate) use er_telemetry::counters::OBSERVED_ACTIVE_STEAM_ID64;
+pub(crate) use er_telemetry_core::counters::OBSERVED_ACTIVE_STEAM_ID64;
 
 pub(super) fn observe_steam_id64_from_save_path(path: &[u16]) {
     if let Some(steam_id) = steam_id64_from_wide_save_path(path) {
@@ -316,10 +316,10 @@ pub(super) static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
 /// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
-pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
-pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
-pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
-pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_NO_STEAMID_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
+pub(crate) use er_telemetry_core::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
+pub(crate) use er_telemetry_core::counters::SAVE_DIRECT_STAGE_NO_STEAMID_HITS;
 static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize =
     AtomicUsize::new(DirectStageNoSteamIdKind::None.as_usize());
 static SAVE_REDIRECT_MODE: AtomicUsize = AtomicUsize::new(SAVE_REDIRECT_MODE_UNSET);
@@ -538,11 +538,11 @@ fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
 /// get %APPDATA%, then formats `%APPDATA%/EldenRing/<steamid>/`. Returning OUR staged root here makes
 /// the game build AND open the full save path under our tree NATIVELY (Wine does case-insensitive
 /// resolution), so the character is read without depending on intercepting each handle-relative open.
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS;
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS;
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS;
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS;
+pub(crate) use er_telemetry_core::counters::SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS;
+pub(crate) use er_telemetry_core::counters::SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS;
+pub(crate) use er_telemetry_core::counters::SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS;
+pub(crate) use er_telemetry_core::counters::SAVE_REDIRECT_SHGFP_LOGGED;
+pub(crate) use er_telemetry_core::counters::SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS;
 /// One-shot redirect latch (user design 2026-06-23): the gold is provided via the Z: staged dir for
 /// the FIRST load (reading from Z: works), but writing to Z: fails (Wine free-space) AND would mutate
 /// the user's save. So once the gold profile is loaded (profile_slot_active != 0), we STOP redirecting
@@ -553,19 +553,19 @@ pub(crate) static SAVE_FIRST_LOAD_DONE: std::sync::atomic::AtomicBool =
 /// ntdll NtCreateFile diagnostic: the boot save read happens BELOW Win32 (no CreateFileW/
 /// GetFileAttributesW/FindFirstFileW hit the save), so hook the ntdll chokepoint to SEE the actual
 /// open of ER0000.sl2 -- its NT path form and whether it is relative to a RootDirectory handle.
-pub(crate) use er_telemetry::counters::SAVE_NTCREATE_DIAG_LOGGED;
+pub(crate) use er_telemetry_core::counters::SAVE_NTCREATE_DIAG_LOGGED;
 pub(super) const SAVE_NTCREATE_DIAG_MAX: usize = 120;
 /// THE corruption fix (corrupted-save-re-findings): the save commit prechecks free space via
 /// GetDiskFreeSpaceExW(saveDir), which on the Wine Z:->/home drive mapping returns bogus/ZERO free
 /// space -> `free < needed` -> the write aborts BEFORE any byte ("Failed to save game / corrupted").
 /// We hook it to report ample free space for the save dir so the game's OWN save flow writes our
 /// staged save (no hardcoded paths, no Steam Cloud).
-pub(crate) use er_telemetry::counters::SAVE_DISKFREE_LOGGED;
+pub(crate) use er_telemetry_core::counters::SAVE_DISKFREE_LOGGED;
 /// The game doesn't call kernel32!GetDiskFreeSpaceExW from our hook (no fire) -- under Wine all
 /// free-space queries funnel to ntdll!NtQueryVolumeInformationFile. Override the AVAILABLE allocation
 /// units for FileFsSizeInformation(3)/FileFsFullSizeInformation(7) so the save-commit free-space
 /// precheck sees ample space regardless of the bogus Z:-drive report. THE corruption fix, robust.
-pub(crate) use er_telemetry::counters::SAVE_VOLINFO_LOGGED;
+pub(crate) use er_telemetry_core::counters::SAVE_VOLINFO_LOGGED;
 /// One-shot/idempotency state for the core and redirect save-hook installers. The shared
 /// `er-save-redirect` type owns this contract so later standalone hook-owner code does not invent a
 /// second install state machine.
@@ -573,29 +573,29 @@ pub(super) static SAVE_HOOK_INSTALL_STATE: SaveHookInstallState = SaveHookInstal
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_HITS;
-pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
-pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
+pub(crate) use er_telemetry_core::counters::SAVE_REDIRECT_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
+pub(crate) use er_telemetry_core::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
 const SAVE_REDIRECT_LOG_MAX: usize = 8;
 /// Diagnostic: total CreateFileW calls our detour observed (proves the hook is live at all under
 /// Wine's kernel32->kernelbase forwarding), and a bounded log of save-LIKE paths so we can see the
 /// exact path form the game opens the save with (to fix the filter or confirm a missed hook).
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CALLS;
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_LOGGED;
+pub(crate) use er_telemetry_core::counters::SAVE_CREATEFILEW_CALLS;
+pub(crate) use er_telemetry_core::counters::SAVE_CREATEFILEW_DIAG_LOGGED;
 const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
 /// Sparse-sampling counter for the save-LIKE CreateFileW diag line (the `save_like` opens churn
 /// thousands of identical lines per run). Logs the first 8 hits then only at power-of-two intervals
 /// (16/32/64/...) -- same rate-limit pattern as `now_loading_helper_update_hook` -- so the diagnostic
 /// keeps its early window and a sparse tail without flooding the debug log.
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_CREATEFILEW_DIAG_HITS;
 static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize =
     AtomicUsize::new(SavePathKind::None.as_usize());
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
 static MISSING_SAVE_DIALOG_GATE: er_save_redirect::MissingSaveGate =
     er_save_redirect::MissingSaveGate::new();
-pub(crate) use er_telemetry::counters::MISSING_SAVE_BLOCKED_IO_LOGGED;
+pub(crate) use er_telemetry_core::counters::MISSING_SAVE_BLOCKED_IO_LOGGED;
 static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize =
     AtomicUsize::new(SavePathKind::None.as_usize());
 
@@ -615,21 +615,21 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 pub(crate) fn direct_save_file_source_active() -> bool {
     SAVE_DIRECT_SOURCE_FILE.get().is_some()
 }
-pub(crate) use er_telemetry::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry_core::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
 /// DEDICATED budget for save-FILE queries (paths ending .sl2 / .co2 or containing ER0000): the shared
 /// CreateFileW/existence-check diag cap above is exhausted by early-boot `eldenring\` dir churn
 /// (GraphicsConfig.xml etc.) BEFORE the actual save read, hiding whether/with-what-steamid the game
 /// ever queries ER0000.sl2. This separate counter guarantees those queries are always logged. Reveals
 /// the exact `EldenRing\<steamid>\ER0000.sl2` path the game builds (steamid match vs the staged 766).
-pub(crate) use er_telemetry::counters::SAVE_SL2_QUERY_LOGGED;
+pub(crate) use er_telemetry_core::counters::SAVE_SL2_QUERY_LOGGED;
 const SAVE_SL2_QUERY_MAX: usize = 40;
 
 /// Frames of "profile summary present but ZERO active slots" tolerated before the save-load watchdog
 /// aborts. ~15s at 60fps -- long enough to ignore the boot transient before the summary is parsed,
 /// short enough to fast-fail well under the runtime cap instead of stalling on the privacy policy.
-pub(crate) use er_telemetry::counters::SAVE_WATCHDOG_ZERO_FRAMES;
+pub(crate) use er_telemetry_core::counters::SAVE_WATCHDOG_ZERO_FRAMES;
 pub(crate) const SAVE_WATCHDOG_ZERO_BUDGET: usize = 900;
 
 /// Resolve configured save file -> the staged save ROOT (the ancestor directory that CONTAINS the
@@ -657,26 +657,28 @@ fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
 
 fn picker_status_for_save_source_rejection(
     err: er_save_redirect::SaveSourceRejection,
-) -> er_save_picker::PickerStatusMessage {
+) -> er_save_picker_core::PickerStatusMessage {
     match err {
         er_save_redirect::SaveSourceRejection::MissingOrNotFile => {
-            er_save_picker::PickerStatusMessage::new(
+            er_save_picker_core::PickerStatusMessage::new(
                 "SAVE NOT FOUND",
                 "The selected path is missing or is not a file.",
             )
         }
         er_save_redirect::SaveSourceRejection::WrongSize { len, expected } => {
-            er_save_picker::PickerStatusMessage::new(
+            er_save_picker_core::PickerStatusMessage::new(
                 "WRONG SAVE SIZE",
                 format!("Expected {expected} bytes, but this file is {len} bytes."),
             )
         }
-        er_save_redirect::SaveSourceRejection::NotBnd4 => er_save_picker::PickerStatusMessage::new(
-            "NOT AN ELDEN RING SAVE",
-            "The file is not a readable BND4 save container.",
-        ),
+        er_save_redirect::SaveSourceRejection::NotBnd4 => {
+            er_save_picker_core::PickerStatusMessage::new(
+                "NOT AN ELDEN RING SAVE",
+                "The file is not a readable BND4 save container.",
+            )
+        }
         er_save_redirect::SaveSourceRejection::Unreadable => {
-            er_save_picker::PickerStatusMessage::new(
+            er_save_picker_core::PickerStatusMessage::new(
                 "SAVE UNREADABLE",
                 "The save exists, but could not be read.",
             )
@@ -1177,8 +1179,8 @@ pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
 /// the picker stays up.
 pub(crate) fn complete_missing_save_selection_from_picker(
     path: &Path,
-) -> er_save_picker::MissingSaveSelectionOutcome {
-    use er_save_picker::MissingSaveSelectionOutcome;
+) -> er_save_picker_core::MissingSaveSelectionOutcome {
+    use er_save_picker_core::MissingSaveSelectionOutcome;
     // NO writability check: the pick is staged into a private native tree and the source is never a
     // write target, so a read-only save (the norm for the `0444` repo corpus) loads exactly like a
     // writable one. Rejecting those was a false negative that looked to the user like the picker
@@ -1199,7 +1201,7 @@ pub(crate) fn complete_missing_save_selection_from_picker(
     match fs::read(&validated) {
         Ok(bytes) if er_save_loader::bnd4::parse_entries(&bytes).is_ok() => {}
         Ok(bytes) => {
-            let message = er_save_picker::PickerStatusMessage::new(
+            let message = er_save_picker_core::PickerStatusMessage::new(
                 "NOT AN ELDEN RING SAVE",
                 "The file is not a readable BND4 save container.",
             );
@@ -1213,7 +1215,7 @@ pub(crate) fn complete_missing_save_selection_from_picker(
             return MissingSaveSelectionOutcome::Rejected(message);
         }
         Err(err) => {
-            let message = er_save_picker::PickerStatusMessage::new(
+            let message = er_save_picker_core::PickerStatusMessage::new(
                 "SAVE UNREADABLE",
                 "The save exists, but could not be read.",
             );
@@ -1659,8 +1661,8 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
             // attributable instead of indistinguishable from the game's own save I/O. These are
             // READ opens that pass through unredirected; the shell does not write the loaded save,
             // so this is a reporting concern, not a corruption one -- but it must be visible.
-            if er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0 {
-                er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS
+            if er_telemetry_core::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0 {
+                er_telemetry_core::counters::SAVE_PICKER_OS_SAVELIKE_OPENS
                     .fetch_add(1, Ordering::SeqCst);
             }
         }

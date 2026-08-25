@@ -1,11 +1,11 @@
 use super::*;
 
-// POSITIVE row identity for the four-row System -> Quit dialog.
+// POSITIVE row identity for the five-row System -> Quit dialog.
 //
-// S7 moved the pure row-decision core to `er-quit-menu::rows`. This product-side shim keeps the
+// S7 moved the pure row-decision core to `er-quit-menu-core::rows`. This product-side shim keeps the
 // live memory capture/telemetry functions in the root DLL until the hooked surfaces move in S8.
 
-pub(crate) use er_quit_menu::rows::{
+pub(crate) use er_quit_menu_core::rows::{
     PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
     QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitInputKind, QuitRow, QuitRowFacts,
     QuitRowLabel, QuitRowTable, QuitRowVerdict,
@@ -22,11 +22,24 @@ pub(crate) use er_quit_menu::rows::{
 /// Forget the captured row table. Called when the Quit tab starts building a dialog so a rebuilt
 /// pane can never be resolved against another dialog's indices.
 pub(crate) fn system_quit_row_table_reset(dialog: usize) {
+    // The Quit tab is building a FRESH dialog, so any link field latched against the previous one
+    // is pointing at a dead `MenuJobQueue`. This is the only moment that is reliably true, which is
+    // why the editor's reset hangs off the row table's rather than having a lifecycle of its own.
+    reset_build_url_editor_state();
+    set_build_url_row_help(er_build_import_core::BUILD_URL_ROW_HELP);
+    // The export machine hangs off the same moment for the same reason: a rebuilt dialog means any
+    // request latched against the previous one belongs to a row that no longer exists. Its worker,
+    // if one is running, is unaffected -- it holds a document, not a dialog -- and will simply find
+    // the phase already moved on.
+    er_build_import_runtime::export::reset();
+    set_generate_build_link_row_help(GENERATE_BUILD_LINK_ROW_HELP);
     SYSTEM_QUIT_ROW_TABLE_DIALOG.store(dialog, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1.store(0, Ordering::SeqCst);
 }
 
 /// Record the property-list index a row landed at. `index` is the row's slot in
@@ -44,6 +57,12 @@ pub(crate) fn system_quit_row_table_record_index(row: QuitRow, index: usize) {
         QuitRow::LoadSaveProfiles => {
             SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1.store(plus1, Ordering::SeqCst)
         }
+        QuitRow::LoadBuildFromUrl => {
+            SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1.store(plus1, Ordering::SeqCst)
+        }
+        QuitRow::GenerateBuildLink => {
+            SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1.store(plus1, Ordering::SeqCst)
+        }
     }
 }
 
@@ -56,6 +75,12 @@ pub(crate) fn system_quit_row_table_index(row: QuitRow) -> i32 {
         QuitRow::LoadProfile => SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1.load(Ordering::SeqCst),
         QuitRow::LoadSaveProfiles => {
             SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1.load(Ordering::SeqCst)
+        }
+        QuitRow::LoadBuildFromUrl => {
+            SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1.load(Ordering::SeqCst)
+        }
+        QuitRow::GenerateBuildLink => {
+            SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1.load(Ordering::SeqCst)
         }
     };
     quit_row_index_from_plus1(plus1)
@@ -76,10 +101,16 @@ pub(crate) fn system_quit_row_controller(row: QuitRow) -> usize {
         QuitRow::LoadSaveProfiles => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
         }
+        QuitRow::LoadBuildFromUrl => {
+            SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+        }
+        QuitRow::GenerateBuildLink => {
+            SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+        }
     }
 }
 
-/// Is this dispatched controller one of the patched Quit tab's four? A pure SCOPE test: the
+/// Is this dispatched controller one of the patched Quit tab's rows? A pure SCOPE test: the
 /// activation hook shares its `_Func_impl` thunk vtable and `Activate` slot with other dialogs, so it
 /// must forward foreign controllers untouched.
 ///
@@ -95,8 +126,8 @@ pub(crate) fn system_quit_controller_is_a_quit_row(controller: usize) -> bool {
 
 /// Read the label of one property row, live from the dialog. `EditProperty.label`
 /// (`row + 0x8`) is a `CS::MenuHelpLabelComponent` whose first field is the `MenuString`'s raw
-/// UTF-16 pointer, so the two cloned rows match this DLL's own static arrays by POINTER, and all
-/// four rows also match by text.
+/// UTF-16 pointer, so the three cloned rows match this DLL's own static arrays by POINTER, and
+/// every row also matches by text.
 pub(crate) unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Option<QuitRowLabel> {
     const HEAP_LO: usize = 0x10000;
     if dialog < HEAP_LO || index < 0 {
@@ -113,6 +144,12 @@ pub(crate) unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Opti
     let label_ptr = unsafe { safe_read_usize(row + EDIT_PROPERTY_LABEL_OFFSET) }?;
     if label_ptr < HEAP_LO {
         return None;
+    }
+    if label_ptr == SYSTEM_QUIT_GENERATE_BUILD_LINK_LABEL_W.as_ptr() as usize {
+        return Some(QuitRowLabel::Ours(QuitRow::GenerateBuildLink));
+    }
+    if label_ptr == SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W.as_ptr() as usize {
+        return Some(QuitRowLabel::Ours(QuitRow::LoadBuildFromUrl));
     }
     if label_ptr == SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W.as_ptr() as usize {
         return Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles));
@@ -131,11 +168,22 @@ pub(crate) unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Opti
     // classifies the file-browse row as the character row -- and this function's answer decides
     // which row a click ran. The old pair ("Load Save Profiles" / "Load Profile") did not overlap,
     // so the ordering was free then and is not now. Any future label must be checked against this.
+    //
+    // "Load Build from URL" shares only the word "Load" with the other two, and "Generate Build
+    // Link" shares no leading word with anything -- so neither is part of that prefix chain. They
+    // are still tested inside this longest-first list rather than beside it, so a FIFTH label can be
+    // inserted by length alone without re-deriving the rule.
     if wide_ptr_starts_with_ascii(label_ptr, b"Load Character from File") {
         return Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles));
     }
     if wide_ptr_starts_with_ascii(label_ptr, b"Load Character") {
         return Some(QuitRowLabel::Ours(QuitRow::LoadProfile));
+    }
+    if wide_ptr_starts_with_ascii(label_ptr, b"Generate Build Link") {
+        return Some(QuitRowLabel::Ours(QuitRow::GenerateBuildLink));
+    }
+    if wide_ptr_starts_with_ascii(label_ptr, b"Load Build from URL") {
+        return Some(QuitRowLabel::Ours(QuitRow::LoadBuildFromUrl));
     }
     if wide_ptr_starts_with_ascii(label_ptr, b"Save Game") {
         return Some(QuitRowLabel::Ours(QuitRow::SaveGame));
@@ -189,6 +237,8 @@ pub(crate) unsafe fn system_quit_resolve_row_now(
         return_desktop_index: system_quit_row_table_index(QuitRow::ReturnToDesktop),
         load_profile_index: system_quit_row_table_index(QuitRow::LoadProfile),
         load_save_profiles_index: system_quit_row_table_index(QuitRow::LoadSaveProfiles),
+        load_build_from_url_index: system_quit_row_table_index(QuitRow::LoadBuildFromUrl),
+        generate_build_link_index: system_quit_row_table_index(QuitRow::GenerateBuildLink),
     };
     let facts = QuitRowFacts::from_table(
         table,
@@ -204,9 +254,12 @@ pub(crate) unsafe fn system_quit_resolve_row_now(
 }
 
 /// Read the live `CS::GridControl` geometry of the patched Quit dialog into the navigability oracles.
-/// Called right after the rows are appended, so a run can show whether all four rows are reachable
+/// Called right after the rows are appended, so a run can show whether every row is reachable
 /// without inspecting the movie: `NAVIGABLE_CELLS = cols * rows` is the exact bound of the native
 /// mouse hit-test loop, `ROWS >= 2` is what enables up/down, and `ITEM_COUNT` is the cursor bound.
+/// With five rows the grid measures 2x3, so `NAVIGABLE_CELLS` is 6 while `ITEM_COUNT` is 5 -- the
+/// sixth cell does not exist and both the native hit test and cursor setter bound themselves by the
+/// item count, not by the cell count.
 pub(crate) unsafe fn system_quit_record_grid_geometry(dialog: usize) {
     if dialog < 0x10000 {
         return;
@@ -221,7 +274,7 @@ pub(crate) unsafe fn system_quit_record_grid_geometry(dialog: usize) {
     SYSTEM_QUIT_GRID_NAVIGABLE_CELLS.store(nonneg(cols) * nonneg(rows), Ordering::SeqCst);
     SYSTEM_QUIT_GRID_ITEM_COUNT.store(nonneg(count), Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "system-quit-dup: Quit grid geometry dialog=0x{dialog:x} cols={cols} rows={rows} navigable_cells={} item_count={count}; up/down needs rows>=2, the mouse hit test walks cols*rows cells",
+        "system-quit-dup: Quit grid geometry dialog=0x{dialog:x} cols={cols} rows={rows} navigable_cells={} item_count={count}; up/down needs rows>=2, the mouse hit test walks cols*rows cells and discards any whose item index is >= item_count",
         nonneg(cols) * nonneg(rows)
     ));
 }

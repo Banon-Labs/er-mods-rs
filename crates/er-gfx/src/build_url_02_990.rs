@@ -1,0 +1,468 @@
+//! The System>Quit **Load Build from URL** link field: a SECOND derivation of
+//! `data0:/menu/win/02_990_textinput.gfx`, centred on the stage with the movie's own chrome intact.
+//!
+//! # Why this movie and no other
+//!
+//! The native `CS::SoftwareKeyboard` binds its editable field by name -- `root -> TextInput ->
+//! Text_0` -- so the only movies it can be pointed at are ones that actually contain an EDITABLE
+//! `DefineEditText`. Across all 114 `.gfx` in the vanilla `menu/` extraction there are exactly two:
+//! `win/02_990_textinput.gfx` (character 7, a 400 px box) and `win/02_991_textinput2.gfx`
+//! (character 5, a 212 px box holding `WWWWWWWW`, the character-name field). Every other candidate
+//! surface -- `01_010/01_011/01_013_messagebox*`, `04_021_chrmake_textselect_center`,
+//! `02_044_pc_textselect`, `01_032_bloodmessage_edit` -- carries only `ReadOnly` display fields and
+//! has no `Text_0` for the controller to drive. There is no third, better-styled text-entry movie
+//! to switch to: 02_990 IS the game's styled text-entry surface, and it is already the wider of the
+//! two.
+//!
+//! # Why the field looked unstyled, anchored to the top-left corner
+//!
+//! Not a missing asset -- a borrowed one. The link field was reusing the save picker's cache key
+//! (`02_990_TextInput_PathEditor`) and therefore the save picker's DERIVED movie, and that
+//! derivation ([`crate::text_input_02_990::inline_current_path_editor`]) deliberately alpha-zeroes
+//! all three of the movie's chrome placements, because over ProfileSelect the picker's own
+//! `CurrentPath` button supplies the frame. Nothing else on the Quit tab supplies one, so what
+//! reached the screen was a bare text run. And the Quit tab installed no window placement at all
+//! (the existing helper positions against the ProfileSelect row layout), so the movie stayed at its
+//! authored `(100, 100)` origin -- the upper-left corner. Both symptoms, one cause.
+//!
+//! # What this derivation changes
+//!
+//! Its own cache key, its own derived bytes, and the save picker's movie untouched:
+//!
+//! * the black backing plate (character 5) and the two `MENU_FL_Arts_waku2` frame placements
+//!   (character 6, depths 2 and 4) are KEPT and scaled horizontally with the field, so the field
+//!   keeps the game's own text-entry chrome;
+//! * the field grows from 400 px to [`FIELD_WIDTH_PX`], measured against the link it has to hold;
+//! * a caption ([`CAPTION`]) is added above the box, naming the row that opened it;
+//! * [`build_url_window_position`] centres the box on the 1920x1080 stage.
+//!
+//! Font height, text colour, box height and the frame's vertical scale are the movie's own values,
+//! read out of it rather than chosen here.
+
+use crate::text_input_02_990::is_known_vanilla;
+use crate::{EditTextLayout, GfxError, Matrix, Movie, Rect, TWIPS_PER_PIXEL, Tag};
+use er_game_base::fnv1a::fnv1a64;
+
+/// Derived-movie fingerprint for the July extraction corpus input
+/// ([`crate::text_input_02_990::VANILLA_LEN`]). The installed 1.16.2 MemoryFile payload differs
+/// from the corpus by 11 bytes, so its derivation is structurally validated but not fingerprinted
+/// -- exactly as the save picker's derivation handles the same pair of inputs.
+pub const CENTERED_LEN: usize = 1222;
+/// FNV-1a-64 of the [`CENTERED_LEN`]-byte derived movie.
+pub const CENTERED_FNV1A64: u64 = 0xad1c_495a_f7fb_8787;
+
+/// Sprite id of the `TextInput` sprite, and character ids inside it. Vanilla values.
+const TEXT_INPUT_SPRITE_ID: u16 = 8;
+const PLATE_CHARACTER_ID: u16 = 5;
+const FRAME_CHARACTER_ID: u16 = 6;
+const TEXT_FIELD_CHARACTER_ID: u16 = 7;
+/// First unused character id in the movie. Vanilla defines 1..=8 and exports 1..=4 through
+/// `SymbolClass`; 9 is free for the caption field this derivation adds.
+const CAPTION_CHARACTER_ID: u16 = 9;
+/// Depth for the caption inside the `TextInput` sprite. Vanilla uses 1, 2, 4 and 6.
+const CAPTION_DEPTH: u16 = 8;
+
+/// The vanilla box, in px, measured off `win/02_990_textinput.gfx`.
+///
+/// Character 5 (a solid-black `DefineShape`, bounds `-200..7800 x 0..720` twips) and the field's
+/// own box (character 7 bounds `-40..7960 x -40..680` twips placed at `tx = -160, ty = 40`) are the
+/// SAME rectangle to the twip: `-200..7800 x 0..720`. That exact coincidence is what lets one scale
+/// factor move the plate and the field together without them drifting apart.
+const NATIVE_FIELD_WIDTH_PX: i32 = 400;
+const NATIVE_PLATE_LEFT_TWIPS: i32 = -200;
+const NATIVE_PLATE_LEFT_PX: f32 = -10.0;
+const NATIVE_PLATE_RIGHT_PX: f32 = 390.0;
+const NATIVE_PLATE_HEIGHT_PX: f32 = 36.0;
+/// Root placement of the `TextInput` sprite (`tx = ty = 2000` twips).
+const NATIVE_TEXT_INPUT_ORIGIN_PX: f32 = 100.0;
+/// The movie's authored stage (header rect `0..38400 x 0..21600` twips).
+const STAGE_WIDTH_PX: f32 = 1920.0;
+const STAGE_HEIGHT_PX: f32 = 1080.0;
+/// 16.16 fixed-point 1.0, the unit a `MATRIX` scale term is stored in.
+const FIXED_POINT_ONE: i32 = 1 << 16;
+
+/// Field width in px.
+///
+/// MEASURED, not chosen: `scripts/gfx_text_width.py --height-px 24` renders the canonical link
+/// `https://er-build-planner.nyasu.business/?b=bc2a932db14675` at 571.5 px in the movie's own
+/// `MenuFont_01` at its own 24 px font height. 640 px clears that by 68.5 px -- room for about five
+/// further share-id characters before the field falls back to scrolling -- and is still far
+/// narrower than the 870 px text column the game's own `01_011_messagebox_small` uses, so it stays
+/// inside native proportions rather than sprawling.
+pub const FIELD_WIDTH_PX: i32 = 640;
+
+/// Caption above the box. The exact wording of the row that opened it
+/// (`SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W`), so the field names its own origin instead of inventing a
+/// second name for one feature. 203.7 px at 24 px `MenuFont_01` against the 640 px caption box, so
+/// it cannot clip.
+pub const CAPTION: &str = "Load Build from URL";
+
+/// Caption box height in px. `min_clip_height_px(24)` is 39 px, so 40 px is the smallest round
+/// number that can render one line of the field's own font.
+const CAPTION_HEIGHT_PX: i32 = 40;
+/// Caption baseline box bottom, in sprite-local twips. The frame art's top edge sits at -343 twips
+/// (-17.15 px), so ending the caption at -440 twips leaves a 4.85 px gap and never overlaps the
+/// ornament.
+const CAPTION_BOTTOM_TWIPS: i32 = -440;
+
+/// `DefineEditText` flag bits, MSB-to-LSB in each byte (SWF spec order).
+const EDIT_TEXT_FLAG1_HAS_TEXT: u8 = 0x80;
+const EDIT_TEXT_FLAG1_READ_ONLY: u8 = 0x08;
+const EDIT_TEXT_FLAG1_HAS_TEXT_COLOR: u8 = 0x04;
+const EDIT_TEXT_FLAG2_HAS_FONT_CLASS: u8 = 0x80;
+const EDIT_TEXT_FLAG2_HAS_LAYOUT: u8 = 0x20;
+const EDIT_TEXT_FLAG2_NO_SELECT: u8 = 0x10;
+const EDIT_TEXT_FLAG2_USE_OUTLINES: u8 = 0x01;
+
+/// `PlaceObject2` flag bits used by the caption placement.
+const PLACE_FLAG_HAS_CHARACTER: u8 = 0x02;
+const PLACE_FLAG_HAS_MATRIX: u8 = 0x04;
+
+#[derive(Debug)]
+pub enum BuildUrlFieldError {
+    Parse(GfxError),
+    Write(GfxError),
+    UnknownInput { len: usize, fnv: u64 },
+    MissingStructure(&'static str),
+    KnownInputBadOutput { len: usize, fnv: u64 },
+}
+
+impl core::fmt::Display for BuildUrlFieldError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Parse(error) => write!(f, "parse: {error}"),
+            Self::Write(error) => write!(f, "write: {error}"),
+            Self::UnknownInput { len, fnv } => {
+                write!(f, "unknown 02_990 input len={len} fnv=0x{fnv:016x}")
+            }
+            Self::MissingStructure(name) => write!(f, "missing 02_990 structure {name}"),
+            Self::KnownInputBadOutput { len, fnv } => write!(
+                f,
+                "known 02_990 input derived len={len} fnv=0x{fnv:016x}; expected len={CENTERED_LEN} fnv=0x{CENTERED_FNV1A64:016x}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BuildUrlFieldError {}
+
+/// Horizontal scale that takes the vanilla 400 px box to [`FIELD_WIDTH_PX`].
+fn width_scale() -> f64 {
+    FIELD_WIDTH_PX as f64 / NATIVE_FIELD_WIDTH_PX as f64
+}
+
+/// Where the owning `MenuWindow` root has to sit for the box to land dead centre on the stage.
+///
+/// The window root is positioned in stage pixels with the origin at the top-left -- the same
+/// coordinate space the save picker's proven placement writes through
+/// `set_scaleform_value_position`. The box's centre inside the movie is the sprite's authored
+/// `(100, 100)` origin plus the scaled plate's own centre, so the translate is simply stage centre
+/// minus that.
+///
+/// The caption rides above the box rather than sharing its centring: a labelled field centres on
+/// the field, which is what the eye tracks and what the caret sits in.
+pub fn build_url_window_position() -> (f32, f32) {
+    let scale = width_scale() as f32;
+    let box_center_x =
+        NATIVE_TEXT_INPUT_ORIGIN_PX + (NATIVE_PLATE_LEFT_PX + NATIVE_PLATE_RIGHT_PX) * 0.5 * scale;
+    let box_center_y = NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_HEIGHT_PX * 0.5;
+    (
+        STAGE_WIDTH_PX * 0.5 - box_center_x,
+        STAGE_HEIGHT_PX * 0.5 - box_center_y,
+    )
+}
+
+/// Narrowest signed bit width that can hold every value, as a `RECT`/`MATRIX` `Nbits`.
+///
+/// The codec reproduces a source's `Nbits` verbatim rather than recomputing it (the exporter is not
+/// minimal), which is exactly right for tags this derivation does not touch -- and exactly wrong
+/// for the ones it does: leaving a widened translate at the source's 11 bits silently truncates it
+/// on write. Every field this module edits gets its width recomputed here.
+fn min_signed_nbits(values: &[i32]) -> u32 {
+    values
+        .iter()
+        .map(|&value| {
+            let magnitude = if value < 0 { !value } else { value } as u32;
+            u32::BITS - magnitude.leading_zeros() + 1
+        })
+        .max()
+        .unwrap_or(1)
+}
+
+/// Scale a `MATRIX`'s horizontal terms by `scale`, widening the stored bit widths to fit.
+///
+/// `has_scale` may be false on entry (the plate is placed with a bare translate), in which case the
+/// scale terms are created from 16.16 unity.
+fn scale_matrix_horizontally(matrix: &mut Matrix, scale: f64) {
+    let base_x = if matrix.has_scale {
+        matrix.scale_x
+    } else {
+        FIXED_POINT_ONE
+    };
+    let base_y = if matrix.has_scale {
+        matrix.scale_y
+    } else {
+        FIXED_POINT_ONE
+    };
+    matrix.has_scale = true;
+    matrix.scale_x = (base_x as f64 * scale).round() as i32;
+    matrix.scale_y = base_y;
+    matrix.scale_nbits = min_signed_nbits(&[matrix.scale_x, matrix.scale_y]);
+    matrix.translate_x = (matrix.translate_x as f64 * scale).round() as i32;
+    matrix.translate_nbits = min_signed_nbits(&[matrix.translate_x, matrix.translate_y]);
+}
+
+/// A pure-translate `MATRIX` in twips.
+fn translate_matrix(translate_x: i32, translate_y: i32) -> Matrix {
+    Matrix {
+        has_scale: false,
+        scale_nbits: 0,
+        scale_x: 0,
+        scale_y: 0,
+        has_rotate: false,
+        rotate_nbits: 0,
+        rotate_skew0: 0,
+        rotate_skew1: 0,
+        translate_nbits: min_signed_nbits(&[translate_x, translate_y]),
+        translate_x,
+        translate_y,
+    }
+}
+
+/// Everything the caption copies off the native field so it renders in the same voice.
+struct FieldStyle {
+    font_class: Option<String>,
+    font_height: Option<u16>,
+    text_color: Option<[u8; 4]>,
+    layout: Option<EditTextLayout>,
+}
+
+/// A `RECT` in twips with its `Nbits` computed rather than inherited.
+fn rect(x_min: i32, x_max: i32, y_min: i32, y_max: i32) -> Rect {
+    Rect {
+        nbits: min_signed_nbits(&[x_min, x_max, y_min, y_max]),
+        x_min,
+        x_max,
+        y_min,
+        y_max,
+    }
+}
+
+/// Derive the centred, chrome-intact link field from the game's own 02_990 payload.
+pub fn centered_build_url_editor(vanilla: &[u8]) -> Result<Vec<u8>, BuildUrlFieldError> {
+    let corpus_variant = vanilla.len() == crate::text_input_02_990::VANILLA_LEN
+        && fnv1a64(vanilla) == crate::text_input_02_990::VANILLA_FNV1A64;
+    if !is_known_vanilla(vanilla) {
+        return Err(BuildUrlFieldError::UnknownInput {
+            len: vanilla.len(),
+            fnv: fnv1a64(vanilla),
+        });
+    }
+    let scale = width_scale();
+    let mut movie = Movie::parse(vanilla).map_err(BuildUrlFieldError::Parse)?;
+
+    // 1. Widen the field itself, and remember the style the caption inherits.
+    let mut style: Option<FieldStyle> = None;
+    let mut field_left_twips = 0;
+    for tag in &mut movie.tags {
+        let Tag::DefineEditText {
+            character_id: TEXT_FIELD_CHARACTER_ID,
+            bounds,
+            font_class,
+            font_height,
+            text_color,
+            layout,
+            ..
+        } = tag
+        else {
+            continue;
+        };
+        bounds.x_max = bounds.x_min + FIELD_WIDTH_PX * TWIPS_PER_PIXEL;
+        bounds.nbits = min_signed_nbits(&[bounds.x_min, bounds.x_max, bounds.y_min, bounds.y_max]);
+        // The plate's left edge after scaling, which the field's left edge must stay glued to.
+        field_left_twips = (NATIVE_PLATE_LEFT_TWIPS as f64 * scale).round() as i32 - bounds.x_min;
+        style = Some(FieldStyle {
+            font_class: font_class.clone(),
+            font_height: *font_height,
+            text_color: *text_color,
+            layout: layout.clone(),
+        });
+    }
+    let Some(style) = style else {
+        return Err(BuildUrlFieldError::MissingStructure(
+            "DefineEditText character 7",
+        ));
+    };
+
+    // 2. Add the caption, defined immediately after the field it labels.
+    let field_index = movie
+        .tags
+        .iter()
+        .position(|tag| {
+            matches!(
+                tag,
+                Tag::DefineEditText {
+                    character_id: TEXT_FIELD_CHARACTER_ID,
+                    ..
+                }
+            )
+        })
+        .ok_or(BuildUrlFieldError::MissingStructure(
+            "DefineEditText character 7 index",
+        ))?;
+    // Same inset shape the field uses: the box starts 2 px left of and above its own origin.
+    let caption_bounds = rect(
+        -2 * TWIPS_PER_PIXEL,
+        (FIELD_WIDTH_PX - 2) * TWIPS_PER_PIXEL,
+        -2 * TWIPS_PER_PIXEL,
+        (CAPTION_HEIGHT_PX - 2) * TWIPS_PER_PIXEL,
+    );
+    let caption_translate_y = CAPTION_BOTTOM_TWIPS - caption_bounds.y_max;
+    movie.tags.insert(
+        field_index + 1,
+        Tag::DefineEditText {
+            character_id: CAPTION_CHARACTER_ID,
+            bounds: caption_bounds,
+            flags1: EDIT_TEXT_FLAG1_HAS_TEXT
+                | EDIT_TEXT_FLAG1_READ_ONLY
+                | EDIT_TEXT_FLAG1_HAS_TEXT_COLOR,
+            flags2: EDIT_TEXT_FLAG2_HAS_FONT_CLASS
+                | EDIT_TEXT_FLAG2_HAS_LAYOUT
+                | EDIT_TEXT_FLAG2_NO_SELECT
+                | EDIT_TEXT_FLAG2_USE_OUTLINES,
+            font_id: None,
+            font_class: style.font_class,
+            font_height: style.font_height,
+            text_color: style.text_color,
+            max_length: None,
+            layout: style.layout,
+            variable_name: String::new(),
+            initial_text: Some(CAPTION.to_owned()),
+            force_long: false,
+        },
+    );
+
+    // 3. Scale the chrome with the field, move the field to stay glued to the plate, and hang the
+    //    caption above the box.
+    let mut scaled_plate = 0usize;
+    let mut scaled_frames = 0usize;
+    let mut moved_field = 0usize;
+    for tag in &mut movie.tags {
+        let Tag::DefineSprite {
+            id: TEXT_INPUT_SPRITE_ID,
+            tags,
+            ..
+        } = tag
+        else {
+            continue;
+        };
+        for child in tags.iter_mut() {
+            let Tag::PlaceObject2 {
+                character_id: Some(character_id),
+                matrix: Some(matrix),
+                ..
+            } = child
+            else {
+                continue;
+            };
+            match *character_id {
+                PLATE_CHARACTER_ID => {
+                    scale_matrix_horizontally(matrix, scale);
+                    scaled_plate += 1;
+                }
+                FRAME_CHARACTER_ID => {
+                    scale_matrix_horizontally(matrix, scale);
+                    scaled_frames += 1;
+                }
+                TEXT_FIELD_CHARACTER_ID => {
+                    matrix.translate_x = field_left_twips;
+                    matrix.translate_nbits =
+                        min_signed_nbits(&[matrix.translate_x, matrix.translate_y]);
+                    moved_field += 1;
+                }
+                _ => {}
+            }
+        }
+        let caption_placement = Tag::PlaceObject2 {
+            flags: PLACE_FLAG_HAS_CHARACTER | PLACE_FLAG_HAS_MATRIX,
+            depth: CAPTION_DEPTH,
+            character_id: Some(CAPTION_CHARACTER_ID),
+            matrix: Some(translate_matrix(field_left_twips, caption_translate_y)),
+            color_transform: None,
+            ratio: None,
+            name: None,
+            clip_depth: None,
+            force_long: false,
+        };
+        let show_frame = tags
+            .iter()
+            .position(|child| matches!(child, Tag::ShowFrame { .. }))
+            .ok_or(BuildUrlFieldError::MissingStructure(
+                "TextInput sprite ShowFrame",
+            ))?;
+        tags.insert(show_frame, caption_placement);
+    }
+
+    if scaled_plate != 1 {
+        return Err(BuildUrlFieldError::MissingStructure(
+            "one backing-plate placement in sprite 8",
+        ));
+    }
+    if scaled_frames != 2 {
+        return Err(BuildUrlFieldError::MissingStructure(
+            "two frame-art placements in sprite 8",
+        ));
+    }
+    if moved_field != 1 {
+        return Err(BuildUrlFieldError::MissingStructure(
+            "one Text_0 placement in sprite 8",
+        ));
+    }
+
+    let out = movie.write().map_err(BuildUrlFieldError::Write)?;
+    let out_fnv = fnv1a64(&out);
+    if corpus_variant && (out.len() != CENTERED_LEN || out_fnv != CENTERED_FNV1A64) {
+        return Err(BuildUrlFieldError::KnownInputBadOutput {
+            len: out.len(),
+            fnv: out_fnv,
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bit widths this module recomputes are the difference between a correct movie and a
+    /// silently truncated one, so they are pinned rather than trusted.
+    #[test]
+    fn signed_bit_widths_are_the_narrowest_that_still_round_trip() {
+        assert_eq!(min_signed_nbits(&[0]), 1);
+        assert_eq!(min_signed_nbits(&[-1]), 1);
+        assert_eq!(min_signed_nbits(&[-40]), 7);
+        assert_eq!(min_signed_nbits(&[12760]), 15);
+        // -910 fits 11 bits; -1456, what it becomes at this width, does NOT.
+        assert_eq!(min_signed_nbits(&[-910]), 11);
+        assert_eq!(min_signed_nbits(&[-1456]), 12);
+        // 16.16 unity scaled to 640/400 px overflows the source's 17-bit scale field.
+        assert_eq!(min_signed_nbits(&[104_858]), 18);
+    }
+
+    /// The centring arithmetic, done twice: once by the helper, once by hand from the vanilla
+    /// numbers this module documents.
+    #[test]
+    fn the_box_centre_lands_on_the_stage_centre() {
+        let (window_x, window_y) = build_url_window_position();
+        let scale = FIELD_WIDTH_PX as f32 / NATIVE_FIELD_WIDTH_PX as f32;
+        let box_left = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_LEFT_PX * scale;
+        let box_right = window_x + NATIVE_TEXT_INPUT_ORIGIN_PX + NATIVE_PLATE_RIGHT_PX * scale;
+        assert_eq!((box_left + box_right) * 0.5, STAGE_WIDTH_PX * 0.5);
+        assert_eq!(box_right - box_left, FIELD_WIDTH_PX as f32);
+        let box_top = window_y + NATIVE_TEXT_INPUT_ORIGIN_PX;
+        assert_eq!(
+            box_top + NATIVE_PLATE_HEIGHT_PX * 0.5,
+            STAGE_HEIGHT_PX * 0.5
+        );
+    }
+}
