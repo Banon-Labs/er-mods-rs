@@ -122,10 +122,23 @@ and every id in `marker_fxr_ids` must LINGER. `302020` (held), `302021` (project
 (burst) are momentary Rainbow Stone stages: they flash once and vanish. Shipping those three as
 defaults gave one player a trail and everyone else nothing, which read as the colours changing.
 
-The open lead is runtime FXR patching -- replacing an effect's definition in memory so new
-instances use recoloured bytes. All four Rainbow Stone ids live in `sfxbnd_commoneffects` and are
-therefore always loaded and always patchable, and three of them are useless as markers anyway, so
-they are four free colour slots that need no new ids invented.
+The likely answer needs no patching at all: **the game already ships this effect in several
+colours.** `302464`, `302465` and `302466` are 71056 / 71040 / 71056 bytes, share `302022`'s
+`s84005` resource family, and `302464` vs `302466` differ only at the id and then on a regular
+64-byte stride -- the signature of a colour-table swap rather than a different effect. All are in
+`sfxbnd_commoneffects`, hence always resident and spawnable today. Whether they *read* as ground
+markers is a visual question, so `302022` stays first in the list: the first player gets the one
+known to linger regardless.
+
+Failing that, the fallback is runtime FXR patching -- replacing an effect's definition in memory so
+new instances use recoloured bytes. The mechanism is a pointer repoint, not an overwrite, so the
+replacement may be any size: load the new bytes through the game's own `FUN_1420fbd90` (which
+validates the magic and version, allocates, and runs both fix-up passes), then point the definition
+node's wrapper at the result. The node lives at `CSSfx -> +0x60 GXFfxSceneCtrl -> +0x28
+GXFfxGraphicsResourceManager -> +0x160 FxrResourceContainer -> +0x20`, and `fromsoftware-rs`
+already types every one of those structs. The machinery is about forty lines and no new
+dependencies; the expensive part is authoring recoloured bytes, since `302022` cycles its colour by
+design and that is a keyframed sequence rather than one constant.
 
 ## How the route is found
 

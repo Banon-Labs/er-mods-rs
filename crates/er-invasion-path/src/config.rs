@@ -172,7 +172,16 @@ marker_fxr_id = 0
 # trail that is not there -- which looks like the colours changing rather than like a broken
 # marker. 302022, the lingering coloured stone, is the only one of the four that marks anything.
 #
-#   marker_fxr_ids = 302022
+# CANDIDATES FOR ACTUAL PER-PLAYER COLOURS, untested on screen but promising on disk. 302464,
+# 302465 and 302466 are 71056 / 71040 / 71056 bytes -- three near-identical files sharing 302022's
+# s84005 resource family, and 302464 vs 302466 differ only at the id and then on a regular 64-byte
+# stride. That is what a colour-table swap looks like: one effect authored in several colours.
+# They are in sfxbnd_commoneffects, so they are already resident and spawnable with no patching.
+#
+# 302022 is listed FIRST on purpose: it is the one known to linger as a ground stone, so the first
+# player always gets a working trail even if the other three turn out to be something else.
+#
+#   marker_fxr_ids = 302022, 302464, 302465, 302466
 
 # The three spare arguments the spawn passes to the engine's effect-parameter builder. -1 is
 # "unset", which is what the game itself passes for a one-shot. NOTHING here is known to change an
