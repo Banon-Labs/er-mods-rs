@@ -1,6 +1,12 @@
 [workspace]
 members = [
   "crates/er-effects-rs",
+  # One vocabulary for naming a key in a config file, plus the reload decision that makes an
+  # edit take effect without a restart. Extracted after a hard-coded VK_F7 in er-invasion-warp
+  # collided with another mod's default and warped a live session, with no config key on either
+  # side to move. Host-buildable and game-free: the key table, the parser and the reload
+  # decision are all `cargo test`-able on Linux.
+  "crates/er-hotkey-config",
   "crates/er-hook",
   "crates/er-game-base",
   "crates/er-boot-profiler",

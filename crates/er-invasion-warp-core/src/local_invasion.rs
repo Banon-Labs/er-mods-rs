@@ -275,6 +275,17 @@ pub struct LocalInvasionConfig {
     pub mark_key: crate::keybind::VirtualKey,
     /// Virtual-key code that un-marks it.
     pub unmark_key: crate::keybind::VirtualKey,
+    /// Virtual-key code for "the nearest invasion point that is not the one under our feet".
+    ///
+    /// Configurable for a sharper reason than the mark keys. This was hard-coded to `VK_F7`, and
+    /// so was a feature in another mod loaded in the same me3 profile -- one keypress reached both,
+    /// and a live session warped when the player meant the other thing. Neither side had a config
+    /// key to move, so the only fix available to the player was unloading a mod.
+    pub warp_nearest_key: crate::keybind::VirtualKey,
+    /// Virtual-key code for "the next point in the catalog's stable order".
+    pub warp_next_key: crate::keybind::VirtualKey,
+    /// Virtual-key code for "the first point in a DIFFERENT area".
+    pub warp_other_area_key: crate::keybind::VirtualKey,
     pub allowed_blocks: BTreeSet<u32>,
     /// Exact blocks the user excluded with Delete. Overrides everything, including a mode that
     /// would otherwise accept them.
@@ -307,6 +318,9 @@ impl Default for LocalInvasionConfig {
             // muscle memory both keep working without touching the file.
             mark_key: crate::keybind::VK_INSERT,
             unmark_key: crate::keybind::VK_DELETE,
+            warp_nearest_key: crate::keybind::VK_F7,
+            warp_next_key: crate::keybind::VK_F8,
+            warp_other_area_key: crate::keybind::VK_F9,
             allowed_blocks: BTreeSet::new(),
             blocked_blocks: BTreeSet::new(),
         }

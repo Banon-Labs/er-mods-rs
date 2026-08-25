@@ -8,6 +8,12 @@ publish = false
 name = "er_net_effects"
 crate-type = ["cdylib"]
 
+# Host-buildable and game-free, so the modules that carry the key-binding decisions
+# (`bindings`, `selector_gate`) stay covered by `cargo test` on Linux -- which is where the
+# gate in scripts/check.sh runs them.
+[dependencies]
+er-hotkey-config = { path = "../er-hotkey-config" }
+
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }

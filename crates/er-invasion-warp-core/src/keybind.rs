@@ -1,18 +1,33 @@
-//! Naming the keys that mark and un-mark a location, so a keyboard without Insert/Delete can play.
+//! Naming the keys this crate's features are bound to, so a keyboard without Insert/Delete/F7 can
+//! play and two mods that picked the same default can be told apart.
 //!
 //! # Why names and not numbers
 //!
-//! The mark keys were hard-coded to `VK_INSERT`/`VK_DELETE`. A 60% keyboard -- the common compact
-//! EN-US layout -- has neither, which locks a whole feature out for anyone using one. Asking those
-//! players to write `0x2d` in a config file swaps one barrier for another: nobody knows the virtual
-//! key code for the key they are looking at.
+//! The mark keys were hard-coded to `VK_INSERT`/`VK_DELETE` and the warp keys to `VK_F7`/`F8`/`F9`.
+//! A 60% keyboard -- the common compact EN-US layout -- has neither the editing cluster nor the
+//! function row, which locks whole features out for anyone using one. Worse, F7 was ALSO another
+//! mod's default in the same me3 profile, and a live session warped on a keypress meant for the
+//! other one, with no config key on either side to move. Asking players to write `0x2d` in a config
+//! file swaps one barrier for another: nobody knows the virtual-key code for the key they are
+//! looking at.
 //!
 //! So the config takes a NAME (`"Insert"`, `"F7"`, `"KP_Plus"`, `"]"`), and a raw `0x2d`-style code
-//! is accepted too for anyone who does know. An unrecognised name is an ERROR that names the key it
-//! could not parse -- silently falling back to the default would leave the player pressing a key
-//! that does nothing, with no way to tell that from a broken feature.
+//! is accepted too for anyone who does know.
+//!
+//! # Where the table lives now
+//!
+//! In `er-hotkey-config`, shared with every other DLL in this workspace that binds a key, so one
+//! config vocabulary covers all of them. This module is the `i32` face of it: `GetAsyncKeyState`
+//! takes a signed virtual key, and the config type has always stored one.
+//!
+//! An unrecognised name is an ERROR that names the key it could not parse -- silently falling back
+//! to the default would leave the player pressing a key that does nothing, with no way to tell that
+//! from a broken feature. The CALLER then keeps whatever key was already working; see
+//! `local_invasion_config`.
 
-/// A Win32 virtual-key code.
+pub use er_hotkey_config::keys::KeyParseError;
+
+/// A Win32 virtual-key code, signed because that is what `GetAsyncKeyState` takes.
 pub type VirtualKey = i32;
 
 /// `VK_INSERT` -- the historical mark key, still the default.
@@ -20,159 +35,25 @@ pub const VK_INSERT: VirtualKey = 0x2d;
 /// `VK_DELETE` -- the historical un-mark key, still the default.
 pub const VK_DELETE: VirtualKey = 0x2e;
 
-/// Every key this crate will accept by name, lowercased, with its virtual-key code.
-///
-/// Deliberately covers what a compact keyboard actually HAS: the function row, the alphanumerics,
-/// the punctuation keys, the arrows, and the numeric keypad (present on TKL but not on 60%).
-/// Aliases are included where a key has more than one obvious name (`"esc"`/`"escape"`,
-/// `"]"`/`"rightbracket"`) because a config file is written by a person, not a parser.
-const NAMED_KEYS: &[(&str, VirtualKey)] = &[
-    ("insert", VK_INSERT),
-    ("ins", VK_INSERT),
-    ("delete", VK_DELETE),
-    ("del", VK_DELETE),
-    ("home", 0x24),
-    ("end", 0x23),
-    ("pageup", 0x21),
-    ("pgup", 0x21),
-    ("pagedown", 0x22),
-    ("pgdn", 0x22),
-    ("backspace", 0x08),
-    ("tab", 0x09),
-    ("enter", 0x0d),
-    ("return", 0x0d),
-    ("escape", 0x1b),
-    ("esc", 0x1b),
-    ("space", 0x20),
-    ("left", 0x25),
-    ("up", 0x26),
-    ("right", 0x27),
-    ("down", 0x28),
-    ("printscreen", 0x2c),
-    ("scrolllock", 0x91),
-    ("pause", 0x13),
-    ("capslock", 0x14),
-    // Punctuation, by symbol and by name. These survive on every compact layout.
-    ("-", 0xbd),
-    ("minus", 0xbd),
-    ("=", 0xbb),
-    ("equals", 0xbb),
-    ("[", 0xdb),
-    ("leftbracket", 0xdb),
-    ("]", 0xdd),
-    ("rightbracket", 0xdd),
-    ("\\", 0xdc),
-    ("backslash", 0xdc),
-    (";", 0xba),
-    ("semicolon", 0xba),
-    ("'", 0xde),
-    ("quote", 0xde),
-    (",", 0xbc),
-    ("comma", 0xbc),
-    (".", 0xbe),
-    ("period", 0xbe),
-    ("/", 0xbf),
-    ("slash", 0xbf),
-    ("`", 0xc0),
-    ("grave", 0xc0),
-    // Numeric keypad. Named with a KP_ prefix so "KP_2" is never confused with the "2" row key.
-    ("kp_0", 0x60),
-    ("kp_1", 0x61),
-    ("kp_2", 0x62),
-    ("kp_3", 0x63),
-    ("kp_4", 0x64),
-    ("kp_5", 0x65),
-    ("kp_6", 0x66),
-    ("kp_7", 0x67),
-    ("kp_8", 0x68),
-    ("kp_9", 0x69),
-    ("kp_multiply", 0x6a),
-    ("kp_plus", 0x6b),
-    ("kp_minus", 0x6d),
-    ("kp_period", 0x6e),
-    ("kp_divide", 0x6f),
-];
-
-/// Why a key name could not be turned into a virtual-key code.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum KeyParseError {
-    /// The value was empty or only whitespace.
-    Empty,
-    /// The name is not one this crate knows.
-    Unknown(String),
-    /// A `0x..`/decimal code that is outside the virtual-key range `1..=254`.
-    OutOfRange(i64),
-}
-
-impl std::fmt::Display for KeyParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "no key given"),
-            Self::Unknown(name) => write!(
-                f,
-                "unknown key {name:?}. Use a name like \"Insert\", \"F7\", \"KP_Plus\" or \"]\", a \
-                 single letter or digit, or a raw virtual-key code such as 0x2d"
-            ),
-            Self::OutOfRange(value) => write!(
-                f,
-                "virtual-key code {value:#x} is outside the usable range 0x01..=0xFE"
-            ),
-        }
-    }
-}
+/// `VK_F7` -- the historical "warp to the nearest invasion point" key, still the default.
+pub const VK_F7: VirtualKey = 0x76;
+/// `VK_F8` -- the historical "next point in the catalog's order" key, still the default.
+pub const VK_F8: VirtualKey = 0x77;
+/// `VK_F9` -- the historical "first point in another area" key, still the default.
+pub const VK_F9: VirtualKey = 0x78;
 
 /// Turn a config value into a virtual-key code.
 ///
-/// Accepts, in order: a single letter or digit (`"K"`, `"7"`), a function key (`"F1"`..`"F24"`), a
-/// name or symbol from [`NAMED_KEYS`], or a raw code (`"0x2d"`, `"45"`).
+/// Accepts a single letter or digit (`"K"`, `"7"`), a function key (`"F1"`..`"F24"`), a name or
+/// symbol (`"Insert"`, `"KP_Plus"`, `"]"`), or a raw code (`"0x2d"`, `"45"`).
 ///
 /// # Errors
 /// Returns [`KeyParseError`] when the value is empty, unrecognised, or a code outside `1..=254`.
 pub fn parse_key(value: &str) -> Result<VirtualKey, KeyParseError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(KeyParseError::Empty);
-    }
-    let lower = trimmed.to_ascii_lowercase();
-
-    // A single letter or digit maps to its own ASCII code -- that is exactly how Win32 numbers
-    // them, so no table is needed and every layout's alphanumerics work.
-    if lower.len() == 1 {
-        let ch = lower.as_bytes()[0];
-        if ch.is_ascii_lowercase() {
-            return Ok(VirtualKey::from(ch.to_ascii_uppercase()));
-        }
-        if ch.is_ascii_digit() {
-            return Ok(VirtualKey::from(ch));
-        }
-    }
-
-    // Function keys are contiguous from VK_F1, so they are computed rather than listed.
-    if let Some(rest) = lower.strip_prefix('f')
-        && let Ok(index) = rest.parse::<u8>()
-        && (1..=24).contains(&index)
-    {
-        return Ok(0x70 + VirtualKey::from(index - 1));
-    }
-
-    if let Some((_, code)) = NAMED_KEYS.iter().find(|(name, _)| *name == lower) {
-        return Ok(*code);
-    }
-
-    // A raw code, last, so a name never gets misread as a number.
-    let raw = if let Some(hex) = lower.strip_prefix("0x") {
-        i64::from_str_radix(hex, 16).ok()
-    } else {
-        lower.parse::<i64>().ok()
-    };
-    if let Some(raw) = raw {
-        if (1..=0xFE).contains(&raw) {
-            return Ok(raw as VirtualKey);
-        }
-        return Err(KeyParseError::OutOfRange(raw));
-    }
-
-    Err(KeyParseError::Unknown(trimmed.to_string()))
+    // The shared parser already refuses anything outside `1..=0xFE`, so the conversion cannot
+    // fail; `try_from` rather than `as` so a future widening of that range is a compile error
+    // here instead of a key silently going negative.
+    er_hotkey_config::keys::parse_virtual_key(value).map(|vk| VirtualKey::try_from(vk).unwrap_or(0))
 }
 
 /// The name this crate would print for a virtual-key code, for echoing config back to the player.
@@ -181,21 +62,7 @@ pub fn parse_key(value: &str) -> Result<VirtualKey, KeyParseError> {
 /// the raw-number path has no name to give.
 #[must_use]
 pub fn key_name(code: VirtualKey) -> String {
-    if (0x70..=0x87).contains(&code) {
-        return format!("F{}", code - 0x70 + 1);
-    }
-    if let Some((name, _)) = NAMED_KEYS.iter().find(|(_, c)| *c == code) {
-        let mut chars = name.chars();
-        return match chars.next() {
-            Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
-            None => name.to_string(),
-        };
-    }
-    if (0x30..=0x39).contains(&code) || (0x41..=0x5a).contains(&code) {
-        // SAFETY-FREE: both ranges are ASCII digits and uppercase letters by construction.
-        return char::from(code as u8).to_string();
-    }
-    format!("{code:#04x}")
+    u32::try_from(code).map_or_else(|_| format!("{code:#04x}"), er_hotkey_config::keys::vk_name)
 }
 
 #[cfg(test)]
@@ -219,6 +86,9 @@ mod tests {
         assert_eq!(parse_key("Delete"), Ok(VK_DELETE));
         assert_eq!(parse_key("ins"), Ok(VK_INSERT));
         assert_eq!(parse_key("DEL"), Ok(VK_DELETE));
+        assert_eq!(parse_key("F7"), Ok(VK_F7));
+        assert_eq!(parse_key("F8"), Ok(VK_F8));
+        assert_eq!(parse_key("F9"), Ok(VK_F9));
     }
 
     /// Case and surrounding whitespace are a person writing a file, not an error.
@@ -266,22 +136,67 @@ mod tests {
         assert_eq!(parse_key("0x1ff"), Err(KeyParseError::OutOfRange(0x1ff)));
     }
 
-    /// Every name in the table round-trips through the parser -- a typo'd table entry would
-    /// otherwise be a key nobody can select.
+    /// Every key the config file's own documentation lists must parse. The list is copied into the
+    /// generated TOML, so a name in the comments that the parser rejects is a lie the player reads.
     #[test]
-    fn every_named_key_parses_to_its_own_code() {
-        for (name, code) in NAMED_KEYS {
-            assert_eq!(parse_key(name), Ok(*code), "{name}");
+    fn every_key_the_config_comments_advertise_parses() {
+        for name in [
+            "Insert",
+            "Delete",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "Backspace",
+            "Tab",
+            "Enter",
+            "Escape",
+            "Space",
+            "Left",
+            "Up",
+            "Right",
+            "Down",
+            "PrintScreen",
+            "ScrollLock",
+            "Pause",
+            "CapsLock",
+            "Minus",
+            "Equals",
+            "LeftBracket",
+            "RightBracket",
+            "Backslash",
+            "Semicolon",
+            "Quote",
+            "Comma",
+            "Period",
+            "Slash",
+            "Grave",
+            "KP_0",
+            "KP_9",
+            "KP_Plus",
+            "KP_Minus",
+            "KP_Multiply",
+            "KP_Divide",
+            "KP_Period",
+            "F1",
+            "F24",
+        ] {
+            assert!(parse_key(name).is_ok(), "{name}");
         }
     }
 
-    /// Names are echoed back for the log line that tells the player which keys are live.
+    /// Names are echoed back for the log line that tells the player which keys are live, and for
+    /// the config file the mark keys rewrite -- so every name printed must parse back to the same
+    /// code, or a mark press would rewrite the file with a key the parser then rejects.
     #[test]
-    fn a_code_renders_a_name_the_player_would_recognise() {
+    fn a_code_renders_a_name_that_parses_back_to_it() {
+        for code in [VK_INSERT, VK_DELETE, VK_F7, VK_F8, VK_F9, 0x4b, 0x6b, 0xdd] {
+            assert_eq!(parse_key(&key_name(code)), Ok(code), "{code:#04x}");
+        }
         assert_eq!(key_name(VK_INSERT), "Insert");
         assert_eq!(key_name(0x76), "F7");
         assert_eq!(key_name(0x4b), "K");
-        assert_eq!(key_name(0x6b), "Kp_plus");
+        assert_eq!(key_name(0x6b), "KP_Plus");
     }
 
     /// Function keys are computed, so the whole range must be right at both ends.

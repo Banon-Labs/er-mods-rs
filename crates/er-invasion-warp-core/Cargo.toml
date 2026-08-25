@@ -28,6 +28,9 @@ name = "er_invasion_warp_core"
 er-telemetry-core = { path = "../er-telemetry-core" }
 # Shared zero-dependency content fingerprint owner.
 er-game-base = { path = "../er-game-base" }
+# Key names and the by-content config reload. Host-buildable, so `keybind` and the hot-reload
+# decision stay covered by `cargo test` on Linux.
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

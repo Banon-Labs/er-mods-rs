@@ -1,0 +1,27 @@
+# Hotkey bindings that a player can NAME in a DLL's own `.toml`, and that take effect while
+# the game is running.
+#
+# Every DLL in this workspace that binds a key had its own answer to two questions -- how a key
+# is spelled, and when the file is re-read -- and most had no answer to the second at all. That
+# is how `er-invasion-warp` came to poll a HARD-CODED `VK_F7` every frame: the same default
+# another mod had taken, with no way for the player to move either one, discovered only when a
+# live session warped on a keypress meant for something else.
+#
+# Host-buildable and game-free on purpose. There is no `windows` dependency and no `cfg(windows)`
+# gate anywhere in this crate: the key table, the parser and the reload decision are the parts
+# worth proving, and `cargo test` on Linux must be able to reach all three.
+[package]
+name = "er-hotkey-config"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_hotkey_config"
+
+[dependencies]
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. No `# DEBT:` allows -- this crate is plain data and text handling.
+[lints]
+workspace = true

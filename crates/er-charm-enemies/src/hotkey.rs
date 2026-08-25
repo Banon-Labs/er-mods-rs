@@ -11,17 +11,15 @@
 //! which reads as "the hotkey was released" and re-arms the press on the very next keyboard poll.
 //! The 256-byte size check is what keeps a held hotkey from toggling once per interleaved poll.
 
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use er_hook::{HookRoute, MH_STATUS, UnionFn, register_shared_hook_with_budget};
+use er_hotkey_config::{AtomicChord, chord_name, keys::DIK_DOWN_BIT};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::{GUID, s};
 
 use crate::{
-    keys::{DIK_DOWN_BIT, Hotkey, hotkey_is_down},
+    keys::{Chord, hotkey_is_down},
     log::charm_log,
 };
 
@@ -64,7 +62,10 @@ type ReleaseFn = unsafe extern "system" fn(RawObj) -> u32;
 /// already logged by the call that installed the detour.
 const HOOK_ROUTE_WHEN_INSTALLED: HookRoute = HookRoute::LocalUnion;
 
-static HOTKEY: OnceLock<Hotkey> = OnceLock::new();
+/// The hotkey in force, read by the detour below without a lock and REPLACED by
+/// [`rebind`] when the config file changes. It was a `OnceLock`, which is why changing the
+/// hotkey used to mean quitting the game.
+static HOTKEY: AtomicChord = AtomicChord::unset();
 static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 static GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// Whether the combination was already held on the previous keyboard poll, so a hold produces one
@@ -77,6 +78,25 @@ static NON_KEYBOARD_READS: AtomicUsize = AtomicUsize::new(0);
 /// Trigger-key bytes blanked so the hotkey does not also reach whatever the game binds that key
 /// to. Only the trigger is blanked; the modifiers are left alone.
 static SUPPRESSED_TRIGGER_READS: AtomicUsize = AtomicUsize::new(0);
+
+/// Swap in a new hotkey and FORGET whatever the old one was doing.
+///
+/// The reset is the load-bearing half. `HOTKEY_HELD` latches "the combination was down on the
+/// previous poll", and it is about the OLD key. Leave it set across a rebind and the next poll
+/// that finds the new key down sees `swap(true)` return true -- so the press is swallowed -- or,
+/// worse, a key that happens to be held at the moment of the swap counts as already pressed and
+/// the release re-arms it into a toggle the player never asked for. Pending toggles are dropped
+/// for the same reason: a press queued against the key that is no longer bound is not a press the
+/// player meant for the key that now is.
+pub(crate) fn rebind(hotkey: Chord) {
+    HOTKEY.store(hotkey);
+    HOTKEY_HELD.store(false, Ordering::SeqCst);
+    PENDING_TOGGLES.store(0, Ordering::SeqCst);
+    charm_log(format_args!(
+        "hotkey: now listening for {}",
+        chord_name(hotkey)
+    ));
+}
 
 /// Take the presses queued since the last call.
 pub(crate) fn take_pending_toggles() -> usize {
@@ -169,21 +189,24 @@ unsafe extern "system" fn get_device_state_union(
 /// Queue a toggle on the rising edge of the combination, and blank the trigger key so the game
 /// does not also see it.
 fn observe_keyboard_state(hr: i32, size: u32, data: *mut u8) {
-    let Some(&hotkey) = HOTKEY.get() else {
+    let Some(hotkey) = HOTKEY.load() else {
         return;
     };
     if hr != 0 || data.is_null() {
         HOTKEY_HELD.store(false, Ordering::SeqCst);
         return;
     }
-    let down = hotkey_is_down(hotkey, size, data.cast_const());
+    let down = unsafe { hotkey_is_down(hotkey, size, data.cast_const()) };
     if down && !HOTKEY_HELD.swap(true, Ordering::SeqCst) {
         PENDING_TOGGLES.fetch_add(1, Ordering::SeqCst);
     } else if !down {
         HOTKEY_HELD.store(false, Ordering::SeqCst);
     }
-    if down && (size as usize) > hotkey.key {
-        let trigger = unsafe { data.add(hotkey.key) };
+    if down
+        && let Some(trigger_offset) = hotkey.scancode_offset()
+        && (size as usize) > trigger_offset
+    {
+        let trigger = unsafe { data.add(trigger_offset) };
         if unsafe { *trigger } & DIK_DOWN_BIT != 0 {
             unsafe { *trigger = 0 };
             SUPPRESSED_TRIGGER_READS.fetch_add(1, Ordering::Relaxed);
@@ -198,11 +221,11 @@ fn observe_keyboard_state(hr: i32, size: u32, data: *mut u8) {
 /// linked MinHook instances on one prologue silently overwrite each other's trampolines -- the
 /// loser reports installed and never runs. Routing through the product's union when the product
 /// is co-loaded puts one instance in charge and CHAINS the handlers instead.
-pub(crate) fn install_hotkey_hook(hotkey: Hotkey) -> Result<HookRoute, MH_STATUS> {
+pub(crate) fn install_hotkey_hook(hotkey: Chord) -> Result<HookRoute, MH_STATUS> {
     if HOOK_INSTALLED.load(Ordering::Relaxed) {
         return Ok(HOOK_ROUTE_WHEN_INSTALLED);
     }
-    let _ = HOTKEY.set(hotkey);
+    HOTKEY.store(hotkey);
 
     let dinput8 = unsafe { GetModuleHandleA(s!("dinput8.dll")) }
         .map_err(|_| MH_STATUS::MH_ERROR_MODULE_NOT_FOUND)?;

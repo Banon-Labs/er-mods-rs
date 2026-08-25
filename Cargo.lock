@@ -2823,6 +2823,7 @@ dependencies = [
  "eldenring",
  "er-game-base",
  "er-hook",
+ "er-hotkey-config",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]
@@ -2931,6 +2932,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-hotkey-config"
+version = "0.1.0"
+
+[[package]]
 name = "er-input-harness"
 version = "0.1.0"
 dependencies = [
@@ -2960,6 +2965,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-game-base",
+ "er-hotkey-config",
  "er-telemetry-core",
  "fromsoftware-shared",
 ]
@@ -3020,6 +3026,7 @@ dependencies = [
  "er-effects-data",
  "er-game-base",
  "er-hook",
+ "er-hotkey-config",
  "fromsoftware-shared",
  "hudhook",
  "windows 0.62.2",

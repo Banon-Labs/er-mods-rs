@@ -50,6 +50,8 @@
 // instead of it being reasoned about in a review.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use crate::bindings::SelectorAction;
+
 /// Left arrow.
 pub(crate) const VK_LEFT: u32 = 0x25;
 /// Up arrow.
@@ -58,11 +60,8 @@ pub(crate) const VK_UP: u32 = 0x26;
 pub(crate) const VK_RIGHT: u32 = 0x27;
 /// Down arrow.
 pub(crate) const VK_DOWN: u32 = 0x28;
-/// Insert -- with Alt, one of the three show/hide keys.
-pub(crate) const VK_INSERT: u32 = 0x2d;
-/// The top-row `0` -- with Alt, one of the three show/hide keys.
-pub(crate) const VK_0: u32 = 0x30;
-/// Numpad `0` -- with Alt, one of the three show/hide keys.
+/// Numpad `0` -- with Alt, one of the three show/hide keys, and the base the effect-trigger
+/// hotkey file's `numpad<N>` names count up from.
 pub(crate) const VK_NUMPAD0: u32 = 0x60;
 /// Numpad `+` -- add the highlighted effect to the always-on stack.
 pub(crate) const VK_ADD: u32 = 0x6b;
@@ -87,17 +86,31 @@ pub(crate) enum SelectorKey {
     Other,
 }
 
-/// Classify a virtual-key code the way the selector reads it.
+/// Classify a virtual-key code the way the selector reads it, against the bindings in force.
 ///
 /// `alt_down` matters: bare `0` is a game key and bare `'` is a chat key, and neither may be
 /// mistaken for a selector command. Only the Alt-modified forms mean anything here.
+///
+/// The table this used to match on is now `crate::bindings`, because every one of these keys is
+/// configurable -- the arrows are the game's own menu keys, and `Alt+Insert` is a chord another
+/// mod may have taken. The classification is unchanged; only where the keys come from moved.
 pub(crate) fn key_for_vk(vk: u32, alt_down: bool) -> SelectorKey {
-    match vk {
-        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN => SelectorKey::Arrow,
-        VK_ADD | VK_SUBTRACT => SelectorKey::StackEdit,
-        VK_OEM_7 if alt_down => SelectorKey::EffectToggle,
-        VK_0 | VK_NUMPAD0 | VK_INSERT if alt_down => SelectorKey::ShowHide,
-        _ => SelectorKey::Other,
+    key_for_vk_in(&crate::bindings::live(), vk, alt_down)
+}
+
+/// The pure form, so the decision table can be exercised against explicit bindings.
+pub(crate) fn key_for_vk_in(
+    bindings: &crate::bindings::SelectorBindings,
+    vk: u32,
+    alt_down: bool,
+) -> SelectorKey {
+    match bindings.action_for(vk, alt_down) {
+        Some(SelectorAction::CursorUp | SelectorAction::CursorDown) => SelectorKey::Arrow,
+        Some(SelectorAction::CursorLeft | SelectorAction::CursorRight) => SelectorKey::Arrow,
+        Some(SelectorAction::StackAdd | SelectorAction::StackRemove) => SelectorKey::StackEdit,
+        Some(SelectorAction::EffectToggle) => SelectorKey::EffectToggle,
+        Some(SelectorAction::ShowHide) => SelectorKey::ShowHide,
+        None => SelectorKey::Other,
     }
 }
 
@@ -151,6 +164,12 @@ pub(crate) fn should_consume_key(open: bool, key: SelectorKey) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The shipped defaults for the two chords this module's tests name directly. They are no
+    /// longer crate constants -- every key is configurable now -- but the DECISION TABLE below is
+    /// about the shipped bindings, so it needs their codes.
+    const VK_INSERT: u32 = 0x2d;
+    const VK_0: u32 = 0x30;
+
     use super::*;
 
     const SHOWN_EXPANDED_IN_WORLD: SelectorInputState = SelectorInputState {

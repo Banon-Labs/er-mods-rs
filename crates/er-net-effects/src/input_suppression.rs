@@ -11,13 +11,11 @@ use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::{GUID, s};
 
 use crate::{
+    bindings::{self, CURSOR_SLOT_MASK},
     dinput_state, effects,
     hold_repeat::HoldRepeat,
     log::net_effects_log,
-    selector_gate::{
-        self, SelectorKey, VK_0, VK_ADD, VK_DOWN, VK_INSERT, VK_LEFT, VK_NUMPAD0, VK_RIGHT,
-        VK_SUBTRACT, VK_UP,
-    },
+    selector_gate::{self, SelectorKey},
 };
 
 /// Is the selector list on screen and able to act? See [`crate::selector_gate`] -- this is NOT
@@ -53,30 +51,8 @@ const FRAME_DRIVEN_RESOLVE_TRIES: u32 = 1;
 const FRAME_DRIVEN_RESOLVE_SLEEP_MS: u32 = 0;
 
 const DIRECTINPUT_VERSION: u32 = 0x0800;
-const DIK_0: usize = 0x0b;
 const DIK_LEFT_ALT: usize = 0x38;
-const DIK_NUMPAD0: usize = 0x52;
 const DIK_RIGHT_ALT: usize = 0xb8;
-const DIK_LEFT: usize = 0xcb;
-const DIK_RIGHT: usize = 0xcd;
-const DIK_UP: usize = 0xc8;
-const DIK_DOWN: usize = 0xd0;
-const DIK_INSERT: usize = 0xd2;
-/// Numpad `+` and `-`, from `dinput.h`. They edit the always-on effect stack.
-const DIK_ADD: usize = 0x4e;
-const DIK_SUBTRACT: usize = 0x4a;
-
-const DINPUT_KEY_LEFT: usize = 1 << 0;
-const DINPUT_KEY_RIGHT: usize = 1 << 1;
-const DINPUT_KEY_UP: usize = 1 << 2;
-const DINPUT_KEY_DOWN: usize = 1 << 3;
-const DINPUT_KEY_0: usize = 1 << 4;
-const DINPUT_KEY_NUMPAD0: usize = 1 << 5;
-const DINPUT_KEY_INSERT: usize = 1 << 6;
-const DINPUT_KEY_ADD: usize = 1 << 7;
-const DINPUT_KEY_SUBTRACT: usize = 1 << 8;
-const DINPUT_ARROW_KEY_MASK: usize =
-    DINPUT_KEY_LEFT | DINPUT_KEY_RIGHT | DINPUT_KEY_UP | DINPUT_KEY_DOWN;
 
 const IID_IDIRECTINPUT8W: GUID = GUID::from_values(
     0xbf798031,
@@ -106,31 +82,6 @@ type DInput8CreateFn =
     unsafe extern "system" fn(usize, u32, *const GUID, *mut RawObj, usize) -> i32;
 type CreateDeviceFn = unsafe extern "system" fn(RawObj, *const GUID, *mut RawObj, usize) -> i32;
 type ReleaseFn = unsafe extern "system" fn(RawObj) -> u32;
-
-#[derive(Clone, Copy)]
-struct RepeatKey {
-    bit: usize,
-    vk: u32,
-}
-
-const REPEAT_KEYS: [RepeatKey; 4] = [
-    RepeatKey {
-        bit: DINPUT_KEY_LEFT,
-        vk: VK_LEFT,
-    },
-    RepeatKey {
-        bit: DINPUT_KEY_RIGHT,
-        vk: VK_RIGHT,
-    },
-    RepeatKey {
-        bit: DINPUT_KEY_UP,
-        vk: VK_UP,
-    },
-    RepeatKey {
-        bit: DINPUT_KEY_DOWN,
-        vk: VK_DOWN,
-    },
-];
 
 /// Publish whether the selector is open to the DirectInput detours.
 ///
@@ -311,6 +262,17 @@ fn dinput_key_down(size: u32, data: *mut u8, offset: usize) -> bool {
     !data.is_null() && size as usize > offset && unsafe { *data.add(offset) & 0x80 } != 0
 }
 
+/// Forget every key edge, because the BINDINGS moved.
+///
+/// `DINPUT_PREVIOUS_SELECTOR_KEYS` is positional: bit 3 means "cursor right" only for as long as
+/// the bindings that produced it are in force. Carry it across a rebind and a key held at that
+/// instant either swallows its own press (the bit says it was already down) or manufactures one
+/// (its bit now belongs to a different key). The hold-to-repeat ramp is dropped for the same
+/// reason -- it is mid-hold on a key that is no longer bound.
+pub(crate) fn forget_key_edges_after_rebind() {
+    reset_dinput_repeat_state();
+}
+
 fn reset_dinput_repeat_state() {
     DINPUT_PREVIOUS_SELECTOR_KEYS.store(0, Ordering::Relaxed);
     if let Some(state) = DINPUT_REPEAT_STATE.get()
@@ -328,22 +290,21 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
 
     let open = selector_open();
 
+    // ONE snapshot for the whole poll. Taking it once rather than per key means a reload landing
+    // mid-poll cannot classify the first half of the buffer against one binding table and the
+    // second half against another.
+    let bindings = bindings::live();
+
     let alt_down =
         dinput_key_down(size, data, DIK_LEFT_ALT) || dinput_key_down(size, data, DIK_RIGHT_ALT);
     let mut pressed_mask = 0usize;
-    for (bit, offset) in [
-        (DINPUT_KEY_LEFT, DIK_LEFT),
-        (DINPUT_KEY_RIGHT, DIK_RIGHT),
-        (DINPUT_KEY_UP, DIK_UP),
-        (DINPUT_KEY_DOWN, DIK_DOWN),
-        (DINPUT_KEY_0, DIK_0),
-        (DINPUT_KEY_NUMPAD0, DIK_NUMPAD0),
-        (DINPUT_KEY_INSERT, DIK_INSERT),
-        (DINPUT_KEY_ADD, DIK_ADD),
-        (DINPUT_KEY_SUBTRACT, DIK_SUBTRACT),
-    ] {
-        if dinput_key_down(size, data, offset) {
-            pressed_mask |= bit;
+    for key in bindings.keys() {
+        // A key bound to something DirectInput cannot report simply is not in this buffer. It
+        // still reaches the selector through the low-level keyboard hook.
+        if let Some(offset) = key.chord.scancode_offset()
+            && dinput_key_down(size, data, offset)
+        {
+            pressed_mask |= key.bit();
         }
     }
 
@@ -352,34 +313,25 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
 
     let mut queued = 0usize;
     let mut ignored = 0usize;
-    for (bit, vk, needs_alt) in [
-        (DINPUT_KEY_LEFT, VK_LEFT, false),
-        (DINPUT_KEY_RIGHT, VK_RIGHT, false),
-        (DINPUT_KEY_UP, VK_UP, false),
-        (DINPUT_KEY_DOWN, VK_DOWN, false),
-        (DINPUT_KEY_0, VK_0, true),
-        (DINPUT_KEY_NUMPAD0, VK_NUMPAD0, true),
-        (DINPUT_KEY_INSERT, VK_INSERT, true),
-        // No alt: these two act on the highlighted effect, like the arrows do.
-        (DINPUT_KEY_ADD, VK_ADD, false),
-        (DINPUT_KEY_SUBTRACT, VK_SUBTRACT, false),
-    ] {
-        if new_edges & bit == 0 || (needs_alt && !alt_down) {
+    for key in bindings.keys() {
+        if new_edges & key.bit() == 0 || (key.chord.needs_alt() && !alt_down) {
             continue;
         }
-        // The gate is asked per key, not once for the poll: Alt+0 has to keep working while the
-        // rest of this table is deaf, or a hidden bar could never be brought back.
-        if !selector_gate::should_handle_key(open, selector_gate::key_for_vk(vk, alt_down)) {
+        // The gate is asked per key, not once for the poll: the show/hide chord has to keep
+        // working while the rest of this table is deaf, or a hidden bar could never be brought
+        // back.
+        let classified = selector_gate::key_for_vk_in(&bindings, key.chord.vk, alt_down);
+        if !selector_gate::should_handle_key(open, classified) {
             ignored = ignored.saturating_add(1);
             continue;
         }
-        effects::queue_effect_keyboard_vk(vk, alt_down);
+        effects::queue_effect_keyboard_vk(key.chord.vk, alt_down);
         queued = queued.saturating_add(1);
     }
     if ignored != 0 {
         effects::record_keys_ignored_while_closed(ignored);
     }
-    let repeated = queue_held_arrow_repeats(open, pressed_mask, new_edges);
+    let repeated = queue_held_arrow_repeats(&bindings, open, pressed_mask, new_edges);
     queued = queued.saturating_add(repeated);
     if repeated != 0 {
         DINPUT_REPEATED_SELECTOR_KEYS.fetch_add(repeated, Ordering::SeqCst);
@@ -389,8 +341,13 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
     }
 }
 
-fn queue_held_arrow_repeats(open: bool, pressed_mask: usize, new_edges: usize) -> usize {
-    let held_arrows = pressed_mask & DINPUT_ARROW_KEY_MASK;
+fn queue_held_arrow_repeats(
+    bindings: &bindings::SelectorBindings,
+    open: bool,
+    pressed_mask: usize,
+    new_edges: usize,
+) -> usize {
+    let held_arrows = pressed_mask & CURSOR_SLOT_MASK;
     if held_arrows == 0 || !selector_gate::should_handle_key(open, SelectorKey::Arrow) {
         if let Some(state) = DINPUT_REPEAT_STATE.get()
             && let Ok(mut state) = state.lock()
@@ -412,11 +369,16 @@ fn queue_held_arrow_repeats(open: bool, pressed_mask: usize, new_edges: usize) -
     // The press itself was already queued by the caller as the single step. This only decides
     // whether a HOLD owes another one: latch, then a steady one-at-a-time cadence, and only
     // after a long stretch of that does it start to speed up. See `hold_repeat`.
-    for (index, key) in REPEAT_KEYS.iter().enumerate() {
-        let held = held_arrows & key.bit != 0;
-        let edge = new_edges & key.bit != 0;
-        if state.observe(index, held, edge, now) {
-            effects::queue_effect_keyboard_vk(key.vk, false);
+    // The cursor slots ARE the repeat indices: `bindings::slot::CURSOR_UP..CURSOR_RIGHT` are 0..3
+    // by construction, which is what lets a per-direction hold state be looked up by slot.
+    for key in bindings.keys() {
+        if key.bit() & CURSOR_SLOT_MASK == 0 {
+            continue;
+        }
+        let held = held_arrows & key.bit() != 0;
+        let edge = new_edges & key.bit() != 0;
+        if state.observe(key.slot, held, edge, now) {
+            effects::queue_effect_keyboard_vk(key.chord.vk, false);
             queued = queued.saturating_add(1);
         }
     }
@@ -432,13 +394,20 @@ fn queue_held_arrow_repeats(open: bool, pressed_mask: usize, new_edges: usize) -
 fn zero_dinput_arrow_state(hr: i32, size: u32, data: *mut u8) {
     if hr != 0
         || data.is_null()
-        || size as usize <= DIK_DOWN
         || !selector_gate::should_consume_key(selector_open(), SelectorKey::Arrow)
     {
         return;
     }
     let mut cleared = 0usize;
-    for offset in [DIK_LEFT, DIK_RIGHT, DIK_UP, DIK_DOWN] {
+    // Whatever the CURSOR keys are bound to, and nothing else. The per-offset bounds check
+    // replaced a single `size <= DIK_DOWN` guard on the fixed table: with the offsets now coming
+    // from config, one of them could sit past the end of a short buffer while the others do not,
+    // and a fixed guard would either wave that through or refuse the whole poll.
+    for offset in bindings::live().cursor_scancodes() {
+        let offset = usize::from(offset);
+        if size as usize <= offset {
+            continue;
+        }
         let slot = unsafe { data.add(offset) };
         let was_pressed = unsafe { *slot } != 0;
         unsafe { *slot = 0 };
