@@ -116,6 +116,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-charm-enemies:er_charm_enemies
 		er-crash-logging:er_crash_logging
 		er-death-persist:er_death_persist
+		er-diag-harness:er_diag_harness
 		er-input-harness:er_input_harness
 		er-build-watermark:er_build_watermark
 		er-invasion-path:er_invasion_path

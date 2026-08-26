@@ -14,13 +14,29 @@ import rego.v1
 
 import data.cupcake.system.commands
 
+# Shell-wrapper decomposition (2026-08-26, bd er-effects-rs-dt2e). This policy
+# recognises its verbs through commands.has_verb, whose `(^|\s)verb(\s|$)`
+# boundary a quote does not satisfy -- so a hook bypass wrapped as
+# `bash -c 'git commit --no-verify -m x'` produced ZERO denials, measured.
+#
+# The scan set below is STRICTLY ADDITIVE on purpose: it is the executed-text
+# decomposition (which makes wrapper payloads visible) UNION the raw command
+# exactly as this policy saw it before. Nothing this builtin used to deny can
+# stop being denied. That is deliberately narrower than the repo-owned git
+# guards, which also had their quoted-prose false positives fixed: this file is
+# a vendored Cupcake builtin, and its own false-positive surface -- an unanchored
+# `contains(cmd, "--no-verify")` that fires on a doc, commit message or heredoc
+# merely NAMING the flag -- is a separate defect, filed rather than changed here.
+no_verify_scan_texts := commands.executed_texts(input.tool_input.command) | {input.tool_input.command}
+
 # Block git commands that bypass verification hooks
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 
-	# Get the command from tool input
-	command := lower(input.tool_input.command)
+	# Every text this command actually executes, plus the raw command itself
+	some text in no_verify_scan_texts
+	command := lower(text)
 
 	# Check if it's a git command with --no-verify flag
 	contains_git_no_verify(command)
@@ -70,7 +86,8 @@ deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 
-	command := lower(input.tool_input.command)
+	some text in no_verify_scan_texts
+	command := lower(text)
 
 	# Check if trying to disable hooks via git config
 	contains_hook_disable(command)
@@ -85,7 +102,10 @@ deny contains decision if {
 contains_hook_disable(cmd) if {
 	commands.has_verb(cmd, "git")
 	commands.has_verb(cmd, "config")
-	contains(cmd, "core.hooksPath")
+
+	# Lowercased: every caller passes `lower(text)`, so the shipped
+	# `core.hooksPath` spelling could never match and this rule was dead.
+	contains(cmd, "core.hookspath")
 	contains(cmd, "/dev/null")
 }
 

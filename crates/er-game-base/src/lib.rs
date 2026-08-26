@@ -10,6 +10,12 @@
 //! share one import surface. The mini-DLLs enable tier A only.
 
 pub mod build_id;
+/// Tier A: bounded, fault-safe walks over `FD4FileCap`, `DLString<wchar_t>` and the DLIO
+/// virtual-root table. Two images read those layouts now -- the product through
+/// `er-title-flow`, and the `er-diag-harness` shell that carries the msb-parse / DLC-root /
+/// loadlist-wait traces -- and one address must have exactly one declaration, so the walkers
+/// live below both rather than being copied into the second one.
+pub mod filecap;
 pub mod fnv1a;
 /// Tier A: one blocking HTTPS GET over WinHTTP. Lives here rather than in the importer that
 /// first needed it because a second caller appeared -- the build watermark's release lookup --

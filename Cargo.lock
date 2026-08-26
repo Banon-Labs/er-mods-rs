@@ -2863,6 +2863,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-diag-harness"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-effects-data"
 version = "0.1.0"
 dependencies = [
