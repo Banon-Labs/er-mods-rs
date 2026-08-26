@@ -287,7 +287,12 @@ fn apply_patch(patch: &Patch, base: usize) -> bool {
         ));
         return false;
     };
-    if !er_hook::write_code_byte(target, patch.replacement) {
+    // SAFETY: `target` is inside the game image -- `patch.target(base)` is an offset into the
+    // window `code_window_matches` just verified byte-for-byte against this build, so the address
+    // is mapped, executable, and holds the instruction this patch was written for. The call is
+    // `unsafe` because the primitive takes a bare `usize` and stores through it; that verified
+    // window is what earns the deref, and a mismatch has already returned `false` above.
+    if !unsafe { er_hook::write_code_byte(target, patch.replacement) } {
         log_message(format_args!(
             "DISARMED {} @0x{target:x}: VirtualProtect refused the write",
             patch.name
