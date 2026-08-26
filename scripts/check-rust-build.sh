@@ -88,8 +88,10 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# block) passed the whole suite while being unloadable. Found when er-invasion-warp
 	# had to be built by hand with an ad-hoc `-p` to run it at all (bd er-effects-rs-5es).
 	#
-	# Keep this list in sync with the cdylibs that define `DllMain`. Measured cost: ~17s
-	# incremental for all 13, which is cheap enough to run unconditionally.
+	# Keep this list in sync with the cdylibs that define `DllMain`. Measured cost: well under
+	# a second per shell incrementally, which is cheap enough to run unconditionally. (The
+	# count is deliberately not written here any more -- it said "all 13" while the list held
+	# 22, and the echo below prints `${#me3_shells[@]}` at runtime anyway.)
 	# `package:artifact`. Since the `-dll` suffix removal every ER shell's artifact IS its
 	# package name with dashes swapped for underscores -- but the pair is still written out
 	# rather than derived, because `mushroom-man-runtime` produces mushroom_man.dll and
@@ -104,6 +106,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-death-persist:er_death_persist
 		er-input-harness:er_input_harness
 		er-build-watermark:er_build_watermark
+		er-invasion-path:er_invasion_path
 		er-invasion-warp:er_invasion_warp
 		er-inventory-sort:er_inventory_sort
 		er-loading-bar:er_loading_bar

@@ -1,0 +1,40 @@
+# A path to every player you have invaded, drawn on the ground they would actually walk.
+#
+# Standalone shell: its own `[[natives]]` entry, no product dependency, no param edits (which
+# break Seamless invasions -- bd `param-patching-dlls-break-seamless-invasions-2026-08-23`), and
+# no writes to game memory at all. It reads the roster, asks the engine's own Havok-AI navmesh
+# for a route, and draws.
+[package]
+name = "er-invasion-path"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_invasion_path"
+crate-type = ["cdylib"]
+
+# Host-buildable half: the config parser, the projection math, the colour ramp and the arrow
+# geometry are all pure `f32`/text and are proven by `cargo test` on Linux rather than by
+# launching a game and squinting at a line.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+# Key NAMES ("F7", "]", "KP_Plus") rather than virtual-key numbers, so a 60% keyboard can bind
+# the hotkey. Reused rather than re-tabulated: a second copy of that table is a drift trap.
+er-invasion-warp-core = { path = "../er-invasion-warp-core" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# The one-imgui-host-per-process arbitration. This DLL hosts the overlay if it loads first and
+# draws as a GUEST otherwise; either way exactly one `Present` hook exists in the process.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+] }
+
+[lints]
+workspace = true

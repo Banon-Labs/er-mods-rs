@@ -245,6 +245,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # take the player's arrow keys away from the game, which is not a claim to leave to review.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 
+# er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
+# per-player colour assignment and the config parser. Every one of those can be wrong without
+# crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
+# broken" -- and none of it is reachable from any other gate: the crate is windows-only to ship,
+# and the workspace pins `default-members` to er-effects-rs, so a bare `cargo test` never selects
+# it. The near-plane trim regression this caught on the way in is exactly the class of bug that
+# otherwise costs a game launch to find.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-invasion-path
+
 # The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
 # grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
 # it had 23 tests, so the whole mapping could regress silently -- the game-side crates
