@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod picked_summary_refresh;
+pub(crate) use picked_summary_refresh::*;
+
 mod product_continue;
 pub(crate) use product_continue::*;
 

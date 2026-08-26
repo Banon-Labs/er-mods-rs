@@ -69,6 +69,14 @@ pub struct TitleFlowHost {
     pub direct_save_file_source_active: fn() -> bool,
     pub missing_save_selection_pending: fn() -> bool,
     pub save_override_telemetry_only: fn() -> bool,
+    /// Re-read the picked/loose container's `CS::ProfileSummary` records at the title, so the
+    /// native Continue row has something real to load. Idempotent and self-throttling: safe to
+    /// call every autoload tick. Returns true once the summary describes the picked container.
+    pub refresh_direct_source_profile_summary: fn() -> bool,
+    /// Does the slot the direct-file source will load fingerprint as a REAL character in the live
+    /// `CS::ProfileSummary` (level >= 1 + non-empty name)? This is `profile_slot_fingerprint`, not
+    /// `saveSlotsStates` -- the occupancy flag says nothing about the record's contents.
+    pub direct_source_slot_summary_real: fn() -> bool,
     // --- hook/patch helpers ----------------------------------------------------------
     /// MinHook create+queue wrapper (the product's `create_continue_trace_hook`).
     pub create_continue_trace_hook:
@@ -240,6 +248,8 @@ impl TitleFlowHost {
             direct_save_file_source_active: default_gate_off,
             missing_save_selection_pending: default_gate_off,
             save_override_telemetry_only: default_gate_off,
+            refresh_direct_source_profile_summary: default_gate_off,
+            direct_source_slot_summary_real: default_gate_off,
             create_continue_trace_hook: default_create_continue_trace_hook,
             install_auto_accept_hook: default_unit,
             decode_thunk_hop: default_decode_thunk_hop,
@@ -394,6 +404,12 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 }
 pub(crate) fn save_override_telemetry_only() -> bool {
     (host().save_override_telemetry_only)()
+}
+pub(crate) fn refresh_direct_source_profile_summary() -> bool {
+    (host().refresh_direct_source_profile_summary)()
+}
+pub(crate) fn direct_source_slot_summary_real() -> bool {
+    (host().direct_source_slot_summary_real)()
 }
 pub(crate) unsafe fn create_continue_trace_hook(
     _hooks: &mut Vec<MhHook>,

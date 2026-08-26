@@ -1,25 +1,25 @@
 use super::*;
 
-pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
+/// Rebuild EVERY live `CS::ProfileSummary` record from one save container's own bytes.
+///
+/// Pure record transport: it zeroes the ten records + occupancy bytes, then rewrites one record per
+/// slot the container's `USER_DATA010` occupancy bitmap marks active, from that slot's own body --
+/// name, level, play time, rune memory, map, `PlaceName`, `FaceData` and `ChrAsm`. It does NO
+/// snapshot/backout bookkeeping and NO renderer refresh: the callers own those, because the two
+/// callers want opposite things from them (a System>Quit preview is reversible; a boot autoload's
+/// re-read is not a preview at all).
+///
+/// `summary_snapshot` is the whole `CS::ProfileSummary` allocation as it looked BEFORE this call --
+/// used only as a STRUCTURAL template for slots whose visual blocks cannot be located, and read
+/// before the zeroing below, so callers must capture it first.
+///
+/// Returns the mask of slots written plus each written slot's attribute line.
+pub(crate) unsafe fn write_profile_summary_records_from_save_bytes(
     base: usize,
+    summary: usize,
+    summary_snapshot: &[u8],
     bytes: &[u8],
-) -> usize {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let summary = unsafe { system_quit_profile_summary_ptr() };
-    if summary == null {
-        append_autoload_debug(format_args!(
-            "system-quit-save-swap: cannot preview replacement save -- live ProfileSummary unavailable"
-        ));
-        return 0;
-    }
-    let mut st = system_quit_save_swap_lock();
-    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
-        st.summary_ptr = summary;
-        st.summary_snapshot = unsafe {
-            core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
-        };
-    }
-    let summary_snapshot = st.summary_snapshot.clone();
+) -> (usize, Vec<Vec<u16>>) {
     let fallback_slot = (0..TITLE_PROFILE_SLOT_COUNT).find(|slot| {
         summary_snapshot
             .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + *slot)
@@ -40,16 +40,15 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
         }
     }
     PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
-    drop(st);
 
+    let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
     let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: replacement preview refused -- active-slot bitmap unreadable"
         ));
-        return 0;
+        return (0, preview_stats);
     };
     let mut mask = 0usize;
-    let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
     for (slot, slot_stats) in preview_stats.iter_mut().enumerate() {
         if !active_slots.get(slot).copied().unwrap_or(false) {
             continue;
@@ -106,6 +105,34 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             }
         }
     }
+    (mask, preview_stats)
+}
+
+pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
+    base: usize,
+    bytes: &[u8],
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == null {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: cannot preview replacement save -- live ProfileSummary unavailable"
+        ));
+        return 0;
+    }
+    let mut st = system_quit_save_swap_lock();
+    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
+        st.summary_ptr = summary;
+        st.summary_snapshot = unsafe {
+            core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+        };
+    }
+    let summary_snapshot = st.summary_snapshot.clone();
+    drop(st);
+
+    let (mask, preview_stats) = unsafe {
+        write_profile_summary_records_from_save_bytes(base, summary, &summary_snapshot, bytes)
+    };
     if mask != 0 {
         {
             let mut st = system_quit_save_swap_lock();

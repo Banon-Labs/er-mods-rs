@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 50,350 |
+| all `experiments/**` | 78 | 50,604 |
 | excluding `startup_hooks/**` | 44 | 25,311 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -94,16 +94,17 @@ S10 and S11 are complete in-place module splits. R1 does not reopen their correc
 
 Reject a duplicate descriptor-guard extraction. Merged PR #272 already moved the descriptor-advance detour, byte-verified RVA/offset identities, and trampoline state into `er-scaleform-hooks`; its fresh-title proof recorded `oracle_scaleform_desc_guard_installed = 1`. The remaining `scaleform_descriptor_guard.rs` root wrapper is product policy: it retains attach-time ordering and turns the hook crate's installation result into product diagnostic logging. Moving that wrapper would be a different startup-policy change, not R24A's native mechanism move. The remaining R24 resource/message families stay independently executable.
 
-## Appendix A -- R1 current 80-file partition and caller ledger
+## Appendix A -- R1 current 78-file partition and caller ledger
 
 Every row below is a current source file. `Current partition` is the exact present owner/disposition; `Next node` is a future decision or implementation node and does not change present ownership.
 
 | Current file | Lines | Current partition | Next node |
 |---|---:|---|---|
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
-| `continue_load.rs` | 9 | product re-export facade | D5 |
+| `continue_load.rs` | 12 | product re-export facade | D5 |
+| `continue_load/picked_summary_refresh.rs` | 187 | picked-save ProfileSummary re-read at the title | D5 |
 | `continue_load/product_continue.rs` | 692 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 739 | product slot-resolution policy | D5 and R14 |
+| `continue_load/slot_resolution.rs` | 760 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 651 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
@@ -138,7 +139,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,060 | save source/path policy and redirect adapters | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,076 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 104 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 385 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
@@ -162,7 +163,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,895 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,523 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
-| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,275 | product profile renderer and quit swap families | R18-R19 |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,302 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,414 | System>Quit dialog implementation and picker adapter; the row TEXT layer moved to `er_quit_menu_core::row_text` | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 681 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,414 | ownership, telemetry, quit, and portrait families | R19 |

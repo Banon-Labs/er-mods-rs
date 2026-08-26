@@ -2669,3 +2669,32 @@ pub static SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT: AtomicUsize = AtomicUsize::new(0
 /// [`er_save_suppress::save_job_completions`] sampled immediately before the forced request was
 /// fired. The teardown gate and the degraded completion test are both relative to this.
 pub static SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+
+// ---- picked/loose save source: title-time ProfileSummary re-read + deser accounting -------------
+//
+// A save the user picks after boot has no `CS::ProfileSummary` record: the boot save-data job that
+// would have read one already ran and passed through. Without a record the native Continue row has
+// nothing to load, which is why every picked save used to be routed into a TITLE-TIME deserialize
+// -- `0x14067b290`, a function whose only caller in the whole image is `CS::MoveMapStep::DoSaveStuff`
+// (in-world). These counters make both halves of that visible.
+
+/// Total autoload ticks that entered the direct-source summary refresh (throttle denominator).
+pub static PICKED_SUMMARY_REFRESH_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Real re-read attempts made (a file read + record rewrite), not ticks. Capped.
+pub static PICKED_SUMMARY_REFRESH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// How the picked container's summary came to be readable, if it did:
+/// 0 = not (yet) readable, 1 = the game's own boot save-data read had already populated it,
+/// 2 = this DLL re-read it from the staged container at the title.
+pub static PICKED_SUMMARY_REFRESH_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask of slots whose records the re-read rewrote (bit N = slot N).
+pub static PICKED_SUMMARY_REFRESH_SLOT_MASK: AtomicUsize = AtomicUsize::new(0);
+
+/// Calls into the TITLE-TIME save deserialize `0x14067b290` from the full-read chain.
+///
+/// **A correct run reports 0.** Non-zero means a save was deserialized at the boot title rather
+/// than in-world from `CS::MoveMapStep::DoSaveStuff`, which is the crash this counter exists to
+/// stop being silent about (`gaitemInsTable[-1]` AV at `0x67141a`). It counts the call being made,
+/// not the call surviving, so a run that dies inside the deserialize still leaves the 1 behind.
+pub static TITLE_TIME_DESER_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Slot (+1, so 0 means "never") passed to the most recent title-time deserialize.
+pub static TITLE_TIME_DESER_LAST_SLOT: AtomicUsize = AtomicUsize::new(0);

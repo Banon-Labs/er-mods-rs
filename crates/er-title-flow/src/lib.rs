@@ -29,6 +29,7 @@
 // `[workspace.lints.rust] warnings = "deny"` (verified 2026-08-23). Adding the allow anyway would
 // hide nothing today and real host debt tomorrow, so it is deliberately not here.
 
+pub mod autoload_route;
 pub mod boot_hold;
 #[cfg(windows)]
 pub mod compat;

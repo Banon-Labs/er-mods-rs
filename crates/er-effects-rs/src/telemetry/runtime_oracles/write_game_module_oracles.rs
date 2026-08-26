@@ -60,6 +60,7 @@ fn write_game_module_oracles(body: &mut String) {
         body.push_str(&format!(
             "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
         ));
+        write_title_load_route_oracles(body);
         // SWITCH-TRIGGER pipeline oracle (goal 2026-07-21, bd er-effects-rs-tx9n +
         // USER-oracle-must-emit-teardown-and-noload-cause): make a NO-LOAD explain itself instead of
         // degrading to CAP_REACHED. These already-tracked counters expose the arm-eligibility inputs and
