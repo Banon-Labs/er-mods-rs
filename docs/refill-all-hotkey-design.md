@@ -148,30 +148,43 @@ behaviour, and the cycle is self-correcting rather than drifting.
 ## 6a. The storage-box gate is structural, not a check
 
 The requirement that the hotkey "can only have an effect when the user is in the menu view that
-would have any refillable item options" is met by **running the feature from inside that menu's own
-per-frame update**. With any other menu open, or none, the code is never called. There is no
-"is the storage box open?" predicate that could be asked wrongly, go stale by a frame, or answer
-true for a dialog that exists but is not showing.
+would have any refillable item options" is met by **bracketing the storage-box dialog's lifetime**:
+latch on `CS::DepositoryDialog`'s constructor, clear on its destructor, and act only while the latch
+is open. The dialog is genuinely heap-owned rather than pooled — its scalar-deleting destructor
+calls `operator_delete(this, 0x3190)` — so construction and destruction really are "opened" and
+"closed".
 
-Two facts got there:
+| | address | signature | uniqueness |
+|---|---|---|---|
+| constructor | `0x1408d54a0` | `(this, SceneObjProxy*, u8) -> this` | one call site (the factory) |
+| scalar-deleting destructor | `0x1408d6430` | `(this, u64 flags) -> this` | vtable slot 1, this class only |
 
-| | |
-|---|---|
-| A `MenuWindow`'s update is **vtable slot 2**, `(this, f32 delta, InputData*)` | established for `TitleTopDialog` (bd `HOOK-DESIGN-titletopdialog-update-…`) |
-| `DepositoryDialog`'s slot 2 is a bare `JMP` thunk at `0x1408d6e10` into the shared `0x140745570` | so the dialog *inherits* the update rather than overriding it |
+Per-frame work needs no hook at all: it runs from a `CSTaskImp` `FrameBegin` task, the same way
+`er-charm-enemies` drives its sweep — which is also the thread `GetAsyncKeyState` actually reports
+the user's keys on under Wine/Proton.
 
-The thunk is referenced exactly once in the image — from `0x142aebbb0`, this vtable's slot 2 — so
-hooking it would be perfectly targeted, but it is 5 bytes, exactly a `JMP rel32`, which is too
-tight to hook without relocating into whatever follows. So the hook goes on the shared function and
-identifies the caller by its vtable.
+### Why not the shared `MenuWindow::Update` (the first version, and why it was replaced)
 
-**And the vtable is a real identity here, which was checked rather than assumed.** `0x142aebba0`
-has exactly two references in the whole image, both inside `DepositoryDialog::DepositoryDialog` —
-the `LEA` pair that assigns `vfptr`. No other class installs it. A vtable shared between classes
-would have latched this onto menus with no storage box in them (bd
-`shared-vtable-is-not-an-identity-verify-uniqueness-before-latching`).
+v1 hooked `FUN_140745570` — the update every dialog inherits — and identified the storage box by
+comparing `*this` against its vtable. It worked live. It was still the wrong prologue to own:
 
----
+1. **It is shared with every menu window in the game, and MinHook binds ONE detour per address.**
+   The second `MH_CreateHook` gets `MH_ERROR_ALREADY_CREATED`; the loser reports installed, never
+   runs, and logs nothing. `er-hook`'s header records this as *measured*: the product and
+   `er-armament-icons` both detoured the Scaleform `file_open` prologue, and the product ran a whole
+   session at `installed = true`, `hits = 0`. A generic prologue is the likeliest address in the
+   game to be contended.
+2. **The hook union cannot carry it.** The union's signature is
+   `extern "system" fn(usize, usize, usize, usize) -> usize`, but `MenuWindow::Update` is
+   `(this, f32 delta, InputData*)` — `delta` rides in **XMM1**, with RDX unused. The union never
+   names XMM1, so routing that prologue through a Rust dispatcher would leave the frame delta in a
+   volatile register the ABI does not model, for every menu in the game. That corruption is worse
+   than the collision it would prevent.
+
+Both replacement targets take integer arguments only, which is exactly what the union's ABI models,
+so both are registered through **`er_hook::register_shared_hook`** — chaining into
+`er_effects_rs.dll`'s single union when the product is co-loaded, and using this DLL's own union
+when it is not. No handler can be silently dropped, here or in another mod.
 
 ## 7. The input half, as built
 

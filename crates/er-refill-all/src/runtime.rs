@@ -4,27 +4,45 @@
 //!
 //! The requirement is that the hotkey "can only have an effect when the user is in the menu view
 //! that would have any refillable item options". That menu is the storage box, and its dialog is
-//! `CS::DepositoryDialog`. Rather than poll "is the storage box open?" from somewhere else -- a
-//! question that can be asked wrongly, go stale by a frame, or answer true for a dialog that is
-//! constructed but not yet showing -- this DLL runs FROM INSIDE that dialog's own per-frame update.
-//! With any other menu open, or none, the code below is simply never called. There is no check to
-//! get wrong.
+//! `CS::DepositoryDialog`. This DLL brackets that dialog's LIFETIME -- latching on its constructor
+//! and clearing on its destructor -- and acts only while the latch is open. The dialog is genuinely
+//! heap-owned rather than pooled (its scalar-deleting destructor calls `operator_delete(this,
+//! 0x3190)`), so construction and destruction really are "opened" and "closed".
 //!
-//! Getting there took two facts:
+//! # Why NOT the shared `MenuWindow::Update`
 //!
-//! * A `MenuWindow`'s update is **vtable slot 2**, signature `(this, f32 delta, InputData*)` --
-//!   established previously for `TitleTopDialog` (bd `HOOK-DESIGN-titletopdialog-update-...`).
-//!   `DepositoryDialog`'s slot 2 is a bare `JMP` thunk at `0x1408d6e10` into the shared
-//!   `0x140745570`, so the dialog does not override the update; it inherits it.
-//! * The thunk is 5 bytes -- exactly a `JMP rel32` -- which is too tight to hook without
-//!   relocating into whatever follows it. So the hook goes on the shared function and identifies
-//!   the caller by its vtable instead.
+//! The first version hooked `FUN_140745570` -- the `MenuWindow` update every dialog inherits -- and
+//! identified the storage box by comparing `*this` against its vtable. That worked live, but it was
+//! the wrong prologue to own, for two independent reasons:
 //!
-//! **And the vtable IS an identity here, which was checked rather than assumed.** `0x142aebba0`
-//! has exactly two references in the whole image, both inside `DepositoryDialog::DepositoryDialog`
-//! (the `LEA` pair that assigns `vfptr`). No other class installs it. That matters because a
-//! vtable shared between classes would latch this feature onto menus that have no storage box in
-//! them -- see bd `shared-vtable-is-not-an-identity-verify-uniqueness-before-latching`.
+//! 1. **It is shared with every other menu window in the game, and MinHook binds ONE detour per
+//!    address.** The second `MH_CreateHook` on an address gets `MH_ERROR_ALREADY_CREATED`; the
+//!    loser reports installed, never runs, and logs nothing. `er-hook`'s own header records that as
+//!    measured, not hypothetical: the product and `er-armament-icons` both detoured the Scaleform
+//!    `file_open` prologue and the product ran an entire session with `installed = true` and
+//!    `hits = 0`. A generic prologue is the most likely address in the game to be contended.
+//! 2. **The hook union cannot carry it.** The union's shared signature is
+//!    `extern "system" fn(usize, usize, usize, usize) -> usize`, but `MenuWindow::Update` is
+//!    `(this, f32 delta, InputData*)` -- `delta` travels in **XMM1**, with RDX unused. The union
+//!    never names XMM1, so routing that prologue through a Rust dispatcher would leave the frame
+//!    delta riding in a volatile register the ABI does not model, for EVERY menu in the game. The
+//!    corruption that risks is worse than the collision it would prevent.
+//!
+//! So this hooks two `DepositoryDialog`-SPECIFIC prologues instead, both of which take integer
+//! arguments only and therefore fit the union's ABI exactly:
+//!
+//! | | address | signature | uniqueness |
+//! |---|---|---|---|
+//! | constructor | `0x1408d54a0` | `(this, SceneObjProxy*, u8) -> this` | one call site, the factory |
+//! | scalar-deleting destructor | `0x1408d6430` | `(this, u64 flags) -> this` | vtable slot 1, this class only |
+//!
+//! Both are registered through [`er_hook::register_shared_hook`], which chains into
+//! `er_effects_rs.dll`'s single union when the product is co-loaded and uses this DLL's own union
+//! when it is not -- so no handler can ever be silently dropped, here or in another mod.
+//!
+//! Per-frame work does not need a hook at all: it runs from a `CSTaskImp` `FrameBegin` task, the
+//! same way `er-charm-enemies` drives its sweep. That is also the thread `GetAsyncKeyState`
+//! actually reports the user's keys on under Wine/Proton.
 
 use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
@@ -49,9 +67,15 @@ const GAME_DATA_MAN_MAIN_PLAYER_GAME_DATA_OFFSET: usize = 0x8;
 /// `PlayerGameData + 0x2b0` (`equipGameData`, by value) `+ 0x338` (`itemReplenishStateTracker*`).
 const PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET: usize = 0x5e8;
 
-/// `FUN_140745570` -- the shared `MenuWindow` update that `DepositoryDialog`'s vtable slot 2
-/// thunks straight into. `(MenuWindow* this, f32 delta, InputData* input)`.
-const MENU_WINDOW_UPDATE_RVA: usize = 0x745570;
+/// `CS::DepositoryDialog::DepositoryDialog(this, SceneObjProxy*, u8) -> this`. Integer arguments
+/// only, and reached from exactly one call site (the dialog factory `FUN_1408d6470`), so owning
+/// this prologue contends with nothing.
+const DEPOSITORY_DIALOG_CTOR_RVA: usize = 0x8d54a0;
+/// `DepositoryDialog`'s scalar-deleting destructor, `(this, u64 flags) -> this` -- vtable slot 1,
+/// referenced by this class's vtable and nothing else. It calls `operator_delete(this, 0x3190)`,
+/// which is also the evidence the dialog is heap-owned rather than pooled: construction and
+/// destruction really do bracket "the storage box is open".
+const DEPOSITORY_DIALOG_DTOR_RVA: usize = 0x8d6430;
 /// `FUN_1408f13b0(DepositoryDialog*, int)` -- REBUILD THE DISPLAYED ITEM LIST.
 ///
 /// Writing replenish state changes nothing on screen by itself. The vanilla toggle
@@ -79,16 +103,20 @@ const TRACKER_ENTRY_AUTO_REPLENISH_OFFSET: usize = 4;
 const GOODS_ITEM_ID_FLAG: u32 = 0x4000_0000;
 
 static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
-static ORIG_MENU_WINDOW_UPDATE: AtomicUsize = AtomicUsize::new(0);
+static ORIG_DEPOSITORY_CTOR: AtomicUsize = AtomicUsize::new(0);
+static ORIG_DEPOSITORY_DTOR: AtomicUsize = AtomicUsize::new(0);
 static HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// The live `DepositoryDialog*`, or 0 while the storage box is closed. THE GATE.
+static LIVE_DEPOSITORY_DIALOG: AtomicUsize = AtomicUsize::new(0);
 
-/// Depository update frames seen, i.e. frames the storage box was actually open.
+/// Frames the storage box was actually open, counted by the per-frame task.
 static DEPOSITORY_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// Storage-box opens seen, so a gate that never opens is distinguishable from a dead hotkey.
+static DEPOSITORY_OPENS: AtomicU64 = AtomicU64::new(0);
 static CYCLES_RUN: AtomicU64 = AtomicU64::new(0);
 /// Last pad sample, so the edge detector and the rebind seed share one read per frame.
 static LAST_PAD_BUTTONS: AtomicU16 = AtomicU16::new(0);
 
-type MenuWindowUpdateFn = unsafe extern "system" fn(*mut core::ffi::c_void, f32, *mut u8);
 type SetStateFn = unsafe extern "system" fn(usize, *mut i32, bool);
 type ShouldReplenishItemFn = unsafe extern "system" fn(usize, *mut i32) -> bool;
 type ReplanishItemsFromChestFn = unsafe extern "system" fn();
@@ -107,104 +135,132 @@ struct Edges {
 static mut EDGES: Option<Edges> = None;
 
 pub(crate) fn install(base: usize) {
-    use std::ffi::c_void;
-
-    use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+    use er_hook::register_shared_hook;
 
     if HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 1 {
         return;
     }
     GAME_BASE.store(base, Ordering::SeqCst);
 
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            refill_log(format_args!("install: MH_Initialize failed: {status:?}"));
-            HOOK_INSTALLED.store(0, Ordering::SeqCst);
-            return;
-        }
-    }
-
-    let target = base + MENU_WINDOW_UPDATE_RVA;
-    let hook = match unsafe {
-        MhHook::new(
-            target as *mut c_void,
-            menu_window_update_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => hook,
-        Err(status) => {
-            refill_log(format_args!(
-                "install: MhHook::new(MenuWindow::Update @0x{target:x}) failed: {status:?}"
-            ));
-            HOOK_INSTALLED.store(0, Ordering::SeqCst);
-            return;
-        }
-    };
-    ORIG_MENU_WINDOW_UPDATE.store(hook.trampoline() as usize, Ordering::SeqCst);
-    // Not optional: MH_ApplyQueued applies the QUEUE, so a hook that was created but never queued
-    // leaves the detour installed-but-disabled -- the gate never fires and the feature is silently
-    // inert, which reads exactly like the hotkey not being detected.
-    if let Err(status) = unsafe { hook.queue_enable() } {
-        refill_log(format_args!(
-            "install: queue_enable(MenuWindow::Update @0x{target:x}) failed: {status:?}"
-        ));
-        HOOK_INSTALLED.store(0, Ordering::SeqCst);
-        return;
-    }
-
-    match unsafe { MH_ApplyQueued() } {
-        MH_STATUS::MH_OK => {
-            let config = config::init_config();
-            unsafe {
-                EDGES = Some(Edges {
-                    pad: PadEdge::new(config.pad()),
-                    keyboard_was_down: false,
-                });
+    // THROUGH THE UNION, NEVER A BARE `MhHook`. MinHook binds one detour per address, and the
+    // second `MH_CreateHook` on an address gets `MH_ERROR_ALREADY_CREATED`: the loser reports
+    // installed, never runs, and logs nothing. `register_shared_hook` chains into the product
+    // DLL's single union when `er_effects_rs.dll` is co-loaded and uses this DLL's own union when
+    // it is not, so a standalone run behaves identically and no handler is ever dropped. Both
+    // targets take integer arguments only, which is exactly what the union's four-`usize` ABI
+    // models -- see the module header for why the `MenuWindow::Update` prologue could not be.
+    for (name, target, handler, slot) in [
+        (
+            "DepositoryDialog::ctor",
+            base + DEPOSITORY_DIALOG_CTOR_RVA,
+            depository_ctor_union as er_hook::UnionFn,
+            &ORIG_DEPOSITORY_CTOR,
+        ),
+        (
+            "DepositoryDialog::dtor",
+            base + DEPOSITORY_DIALOG_DTOR_RVA,
+            depository_dtor_union as er_hook::UnionFn,
+            &ORIG_DEPOSITORY_DTOR,
+        ),
+    ] {
+        match unsafe { register_shared_hook(target, handler, slot) } {
+            Ok(route) => refill_log(format_args!(
+                "install: {name} @0x{target:x} registered via {route:?}"
+            )),
+            Err(status) => {
+                refill_log(format_args!(
+                    "install: register_shared_hook({name} @0x{target:x}) failed: {status:?}"
+                ));
+                HOOK_INSTALLED.store(0, Ordering::SeqCst);
+                return;
             }
-            refill_log(format_args!(
-                "install: hooked MenuWindow::Update @0x{target:x}; gate = DepositoryDialog vftable \
-                 @0x{:x}; gamepad_hotkey={} hotkey={} refill_immediately={} config={}",
-                base + DEPOSITORY_DIALOG_VFTABLE_RVA,
-                pad_chord_name(config.pad()),
-                config
-                    .keyboard()
-                    .map_or_else(|| "(none)".to_owned(), er_hotkey_config::chord_name),
-                config.refill_immediately,
-                config.config_path.display(),
-            ));
-        }
-        status => {
-            refill_log(format_args!("install: MH_ApplyQueued failed: {status:?}"));
-            HOOK_INSTALLED.store(0, Ordering::SeqCst);
         }
     }
+
+    let config = config::init_config();
+    // Safety: written once here, before the FrameBegin task that reads it is registered.
+    unsafe {
+        EDGES = Some(Edges {
+            pad: PadEdge::new(config.pad()),
+            keyboard_was_down: false,
+        });
+    }
+    refill_log(format_args!(
+        "install: gate = DepositoryDialog lifetime (ctor @0x{:x}, dtor @0x{:x}); \
+         gamepad_hotkey={} hotkey={} refill_immediately={} config={}",
+        base + DEPOSITORY_DIALOG_CTOR_RVA,
+        base + DEPOSITORY_DIALOG_DTOR_RVA,
+        pad_chord_name(config.pad()),
+        config
+            .keyboard()
+            .map_or_else(|| "(none)".to_owned(), er_hotkey_config::chord_name),
+        config.refill_immediately,
+        config.config_path.display(),
+    ));
 }
 
-/// The hook. Runs for EVERY `MenuWindow`, and returns immediately for all but one.
+/// The storage box opened: latch the dialog.
 ///
-/// The original is called first, unconditionally, so that a fault anywhere in our code cannot cost
-/// the player the menu frame itself.
-unsafe extern "system" fn menu_window_update_hook(
-    this: *mut core::ffi::c_void,
-    delta: f32,
-    input: *mut u8,
-) {
-    let original = ORIG_MENU_WINDOW_UPDATE.load(Ordering::SeqCst);
-    if original != 0 {
-        let original: MenuWindowUpdateFn = unsafe { std::mem::transmute(original) };
-        unsafe { original(this, delta, input) };
+/// Union shape, so the arguments arrive as four `usize`. The game passes three
+/// `(this, SceneObjProxy*, u8)`; the fourth is ignored, which is what the union's fixed ABI is for.
+unsafe extern "system" fn depository_ctor_union(a: usize, b: usize, c: usize, d: usize) -> usize {
+    let orig = ORIG_DEPOSITORY_CTOR.load(Ordering::SeqCst);
+    // The original constructs the object; only after it returns is the vfptr installed and the
+    // pointer worth latching.
+    let this = if orig == 0 {
+        a
+    } else {
+        let orig: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+        unsafe { orig(a, b, c, d) }
+    };
+    if this != 0 {
+        LIVE_DEPOSITORY_DIALOG.store(this, Ordering::SeqCst);
+        DEPOSITORY_OPENS.fetch_add(1, Ordering::Relaxed);
     }
+    this
+}
 
+/// The storage box closed: clear the latch BEFORE the memory is freed.
+///
+/// Cleared first, then the original runs and `operator_delete`s the object. Doing it the other way
+/// round would leave a window in which the per-frame task could read a freed dialog.
+unsafe extern "system" fn depository_dtor_union(a: usize, b: usize, c: usize, d: usize) -> usize {
+    if LIVE_DEPOSITORY_DIALOG.load(Ordering::SeqCst) == a {
+        LIVE_DEPOSITORY_DIALOG.store(0, Ordering::SeqCst);
+    }
+    let orig = ORIG_DEPOSITORY_DTOR.load(Ordering::SeqCst);
+    if orig == 0 {
+        return a;
+    }
+    let orig: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+    unsafe { orig(a, b, c, d) }
+}
+
+/// The storage box, if it is open right now. `None` closed, and `None` for a latched pointer whose
+/// vtable is no longer this class's -- a cheap belt against a dialog freed without its destructor
+/// running through our hook.
+fn live_depository_dialog(base: usize) -> Option<*mut core::ffi::c_void> {
+    let dialog = LIVE_DEPOSITORY_DIALOG.load(Ordering::SeqCst);
+    if dialog == 0 {
+        return None;
+    }
+    let vfptr = unsafe { safe_read_usize(dialog) }?;
+    (vfptr == base + DEPOSITORY_DIALOG_VFTABLE_RVA).then_some(dialog as *mut core::ffi::c_void)
+}
+
+/// One `FrameBegin` tick. Returns immediately unless the storage box is open.
+///
+/// A game task rather than a hook: per-frame work needs no prologue of its own, and this is the
+/// thread `GetAsyncKeyState` actually reports the user's keys on under Wine/Proton.
+pub(crate) fn tick() {
     let base = GAME_BASE.load(Ordering::SeqCst);
-    if base == 0 || this.is_null() {
+    if base == 0 {
         return;
     }
-    // THE GATE. Any menu window that is not the storage box leaves here.
-    let vfptr = unsafe { (this as *const usize).read() };
-    if vfptr != base + DEPOSITORY_DIALOG_VFTABLE_RVA {
+    // THE GATE.
+    let Some(dialog) = live_depository_dialog(base) else {
         return;
-    }
+    };
     DEPOSITORY_FRAMES.fetch_add(1, Ordering::Relaxed);
 
     // Sample the pad BEFORE the config reload, so a rebind can seed its latch from the buttons
@@ -217,7 +273,7 @@ unsafe extern "system" fn menu_window_update_hook(
     }
     let config = config::config();
 
-    // Safety: the menu update runs on one thread, and this is the only code that touches EDGES.
+    // Safety: the FrameBegin task runs on one thread, and this is the only code that touches EDGES.
     let edges = unsafe { (&raw mut EDGES).as_mut() }.and_then(Option::as_mut);
     let Some(edges) = edges else { return };
 
@@ -239,7 +295,7 @@ unsafe extern "system" fn menu_window_update_hook(
 
     if pad_pressed || keyboard_pressed {
         let source = if pad_pressed { "gamepad" } else { "keyboard" };
-        unsafe { run_cycle(base, this, source, config.refill_immediately) };
+        unsafe { run_cycle(base, dialog, source, config.refill_immediately) };
     }
 }
 
@@ -483,7 +539,7 @@ unsafe fn run_cycle(
     let cycles = CYCLES_RUN.fetch_add(1, Ordering::SeqCst) + 1;
     refill_log(format_args!(
         "{source}: cycle#{cycles} -> {} | eligible={} flipped={} inserted={} unchanged={} \
-         skipped_full={} tracker_count={} depository_frames={}",
+         skipped_full={} tracker_count={} depository_frames={} depository_opens={}",
         if target { "REFILL ALL" } else { "NO REFILLS" },
         outcome.eligible,
         outcome.flipped,
@@ -492,6 +548,7 @@ unsafe fn run_cycle(
         outcome.skipped_full,
         unsafe { tracker_count(tracker) },
         DEPOSITORY_FRAMES.load(Ordering::Relaxed),
+        DEPOSITORY_OPENS.load(Ordering::Relaxed),
     ));
     if outcome.skipped_full > 0 {
         refill_log(format_args!(
@@ -550,7 +607,24 @@ unsafe fn flip_existing_entry(tracker: usize, item_id: i32, state: bool) -> bool
 }
 
 /// Wait for the game module, then install. Called once from `DllMain`.
+/// Wait for the task scheduler. Only ever called from the spawned thread, never the loader lock.
+fn wait_for_task_instance() -> &'static eldenring::cs::CSTaskImp {
+    // `instance()` comes from this trait, not from the type.
+    use fromsoftware_shared::FromStatic;
+
+    loop {
+        match unsafe { eldenring::cs::CSTaskImp::instance() } {
+            Ok(instance) => return instance,
+            Err(_) => std::thread::yield_now(),
+        }
+    }
+}
+
 pub(crate) fn spawn(_module_base: usize) {
+    use eldenring::cs::CSTaskGroupIndex;
+    use eldenring::fd4::FD4TaskData;
+    use fromsoftware_shared::SharedTaskImpExt;
+
     let _ = std::thread::Builder::new()
         .name("er-refill-all".to_owned())
         .spawn(move || {
@@ -572,5 +646,14 @@ pub(crate) fn spawn(_module_base: usize) {
                     }
                 }
             }
+            // Per-frame work is a game task, not a hook: it owns no prologue and so can contend
+            // with nothing, and FrameBegin is a thread where `GetAsyncKeyState` actually reports
+            // the user's keys under Wine/Proton.
+            let task = wait_for_task_instance();
+            refill_log(format_args!("install: registering FrameBegin tick"));
+            task.run_recurring(
+                move |_data: &FD4TaskData| tick(),
+                CSTaskGroupIndex::FrameBegin,
+            );
         });
 }
