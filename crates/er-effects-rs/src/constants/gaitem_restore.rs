@@ -45,6 +45,43 @@ pub(crate) const CSGAITEM_TABLE_CAPACITY: usize = 0x1400;
 pub(crate) const CSGAITEM_DESERIALIZE_SCRATCH_OFFSET: usize = 0x19028;
 pub(crate) const CSGAITEM_IS_BEING_SERIALIZED_OFFSET: usize = 0x19030;
 pub(crate) const CSGAITEM_IS_BEING_DESERIALIZED_OFFSET: usize = 0x19031;
+
+// ---- CSGaitemImp::Deserialize stream pre-flight (the gate #353's free-queue check was not) ----
+// A FULL free queue is NECESSARY BUT NOT SUFFICIENT: runtime-tested 2026-08-26, the queue was
+// verifiably 5119/5119 and `deser` still died at the same 0x67141a. The deciding value is not the
+// SAVED handle, it is the NEWLY ALLOCATED one. Per stream entry the native loop does:
+//
+//     type = (saved_handle >> 0x1c) & 7;
+//     if (type >= 5) { /* NO branch runs -- the new handle is never assigned, stays 0 */ }
+//     else GetGaItemHandle{Weapon,Protector,Accessory,Goods,Gem}(imp, &tmp, itemId);
+//     idx = (IsIndexedGaitemHandle(new) && new != 0) ? GetIndex(new) : -1;
+//     gaitemInsTable[idx]->vfptr->Deserialize(stream);   // 0x14067141a -- NO guard on idx == -1
+//
+// So `new == 0` has exactly two producers: a type nibble >= 5 (unconditional kill), or the free
+// queue running dry mid-loop. `IsIndexedGaitemHandle(h) = (h>>23)&1` (0x140682240) and
+// `GetIndex(h) = h & 0xffff`, or -1 when bit 23 is clear or `(h & 0xffff) > 0xfffe` (0x140682220)
+// -- both pure arithmetic, no table. A param/regulation dependency is RULED OUT: the allocator
+// 0x1406720d0 is GetUnindexedGaItemHandle + HeapAlloc + ctor and never reads SoloParamRepository.
+pub(crate) use crate::constants::SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA as CSGAITEM_DESERIALIZE_RVA;
+/// `DLMemoryInputStream` (Ghidra, size 0x30): +0x00 vtable, +0x08 end, +0x10 buf, +0x18 position.
+pub(crate) const DLMEMORY_INPUT_STREAM_BUF_OFFSET: usize = 0x10;
+pub(crate) const DLMEMORY_INPUT_STREAM_POSITION_OFFSET: usize = 0x18;
+pub(crate) const DLMEMORY_INPUT_STREAM_END_OFFSET: usize = 0x8;
+/// Type nibble `(handle >> 0x1c) & 7`. 0..=4 are weapon/protector/accessory/goods/gem; anything
+/// else takes no branch, leaves the new handle at 0, and guarantees the `gaitemInsTable[-1]` kill.
+pub(crate) const GAITEM_HANDLE_TYPE_SHIFT: u32 = 0x1c;
+pub(crate) const GAITEM_HANDLE_TYPE_MASK: u32 = 7;
+pub(crate) const GAITEM_HANDLE_TYPE_COUNT: u32 = 5;
+/// `IsIndexedGaitemHandle(h) = (h >> 23) & 1` (`0x140682240`). Clear means the loop treats the
+/// SAVED handle as unindexed, leaves its index at -1, and then writes `scratch[-1]` -- four bytes
+/// before a `0x5000` heap allocation. The game never serialises such an entry, so seeing one is
+/// proof the stream is mispositioned rather than proof the save is bad.
+pub(crate) const GAITEM_HANDLE_INDEXED_BIT: u32 = 23;
+/// Entries logged from the stream head, so a mispositioned stream is visible as garbage rather
+/// than inferred from a crash. Only the FIRST entry can be VALIDATED: the per-item
+/// `gaitemInsTable[idx]->Deserialize(stream)` consumes a variable number of bytes, so the entries
+/// are not a fixed-stride array and a flat pre-walk would read the wrong offsets after entry 0.
+pub(crate) const GAITEM_DESER_PREVIEW_ENTRIES: usize = 8;
 /// Count of gaitem ins objects released by the pristine-restore sweep (product proof: >0 exactly
 /// once per switch reload, and the free-queue returns to full afterward).
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT;

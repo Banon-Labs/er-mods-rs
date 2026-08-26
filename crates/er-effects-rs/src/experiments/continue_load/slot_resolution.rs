@@ -367,6 +367,12 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64, slo
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
+        // The free-queue gate above is NECESSARY BUT NOT SUFFICIENT -- proven live 2026-08-26, the
+        // queue read 5119/5119 and `deser` still died at the same 0x67141a. So arm the pre-flight
+        // detour on `CSGaitemImp::Deserialize` before calling: it logs the `(handle, itemId)` pairs
+        // the native loop is about to consume (which is the only way to tell a mispositioned stream
+        // from an exhausted queue) and refuses outright when the first entry cannot survive.
+        install_gaitem_deser_preflight(base);
         let deser: unsafe extern "system" fn(i32) -> i32 =
             unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
         let dret = unsafe { deser(slot) };

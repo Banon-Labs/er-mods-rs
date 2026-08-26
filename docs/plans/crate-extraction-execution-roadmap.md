@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 52,544 |
+| all `experiments/**` | 80 | 52,768 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -97,7 +97,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 9 | product re-export facade | D5 |
 | `continue_load/product_continue.rs` | 461 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 833 | product slot-resolution policy | D5 and R14 |
+| `continue_load/slot_resolution.rs` | 839 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 651 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
@@ -124,7 +124,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_load/drive.rs` | 1,724 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
 | `own_load/loaders/load_drive.rs` | 668 | load-drive implementation family | D5 |
-| `own_load/loaders/switch_reload.rs` | 612 | switch-reload adapter family | D5 |
+| `own_load/loaders/switch_reload.rs` | 830 | switch-reload adapter family | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
 | `own_stepper/bootstrap_drive.rs` | 874 | product bootstrap-drive policy | D5 |
 | `own_stepper/load_steps.rs` | 741 | product load-step policy | D5 |

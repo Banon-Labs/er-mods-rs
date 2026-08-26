@@ -610,3 +610,221 @@ pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
         unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
     regulation_manager != 0 && regulation_manager != null
 }
+
+/// Whether the pre-flight detour on `CS::CSGaitemImp::Deserialize` is installed.
+static GAITEM_DESER_PREFLIGHT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// The trampoline back to the untouched native `CSGaitemImp::Deserialize`.
+static GAITEM_DESER_PREFLIGHT_ORIG: AtomicUsize = AtomicUsize::new(0);
+
+/// Read one `(handle, itemId)` pair from the stream's own buffer without disturbing its position.
+///
+/// The pair is what the native loop's two `ReadBytes(4)` calls are about to consume, so reading it
+/// here answers "what is the loop about to see" rather than "what do we think is in the save".
+unsafe fn gaitem_stream_entry(stream: usize, index: usize) -> Option<(u32, u32)> {
+    let buf = unsafe { safe_read_usize(stream + DLMEMORY_INPUT_STREAM_BUF_OFFSET) }?;
+    let position = unsafe { safe_read_usize(stream + DLMEMORY_INPUT_STREAM_POSITION_OFFSET) }?;
+    let end = unsafe { safe_read_usize(stream + DLMEMORY_INPUT_STREAM_END_OFFSET) }?;
+    let at = buf
+        .checked_add(position)?
+        .checked_add(index.checked_mul(8)?)?;
+    // `end` is the buffer length, so the last readable byte is `buf + end`. Refuse rather than
+    // read past it: a mispositioned stream is exactly the condition this exists to detect, and
+    // detecting it by faulting would defeat the point.
+    if position.checked_add(index * 8 + 8)? > end {
+        return None;
+    }
+    let handle = unsafe { safe_read_i32(at) }? as u32;
+    let item_id = unsafe { safe_read_i32(at + 4) }? as u32;
+    Some((handle, item_id))
+}
+
+/// Why this entry cannot be a real serialized gaitem, if it cannot.
+///
+/// Two independent tests, and the second is the one that caught the live failure:
+///
+/// * **type nibble outside 0..=4** -- none of the five `GetGaItemHandle*` branches runs, the new
+///   handle is never assigned, and `gaitemInsTable[-1]` is dispatched unguarded at `0x14067141a`.
+/// * **bit 23 clear** -- `IsIndexedGaitemHandle(h) = (h >> 23) & 1` (`0x140682240`) is how the loop
+///   decides whether the SAVED handle has an index. When it says no, `local_68` stays `-1` and the
+///   very next statement is `scratch[local_68] = ...`, i.e. a 4-byte write immediately BEFORE a
+///   `0x5000` heap allocation. The game never does that on a save it wrote, so an entry with bit 23
+///   clear is proof the stream is not where the loop believes it is.
+///
+/// Handle 0 is SAFE and returns `None`: the loop skips those entries entirely, and a run of zeroes
+/// is also the only case where the 8-byte stride is trustworthy.
+fn gaitem_entry_defect(handle: u32) -> Option<&'static str> {
+    if handle == 0 {
+        return None;
+    }
+    if (handle >> GAITEM_HANDLE_TYPE_SHIFT) & GAITEM_HANDLE_TYPE_MASK >= GAITEM_HANDLE_TYPE_COUNT {
+        return Some("type nibble outside 0..=4 -- no GetGaItemHandle branch runs");
+    }
+    if (handle >> GAITEM_HANDLE_INDEXED_BIT) & 1 == 0 {
+        return Some(
+            "bit 23 clear -- IsIndexedGaitemHandle says unindexed, so the loop writes scratch[-1]",
+        );
+    }
+    None
+}
+
+/// The detour: log what the loop is about to read, and refuse the call outright if its first
+/// entry cannot survive.
+///
+/// Only the FIRST entry is a gate. The per-item `gaitemInsTable[idx]->Deserialize(stream)`
+/// consumes a variable number of bytes, so entries are not fixed-stride and everything after
+/// entry 0 is at an offset this code cannot compute without re-implementing the parse. The
+/// remaining entries are logged as a PREVIEW under exactly that caveat -- if the stream is
+/// mispositioned they will be visibly garbage, which is the whole diagnostic value.
+///
+/// Refusing means returning without running the native body at all: the gaitem set is left empty.
+/// That is a wrong inventory, and the chain upstream must treat it as a failed load -- but a wrong
+/// inventory is recoverable and `gaitemInsTable[-1]` is not.
+unsafe extern "system" fn gaitem_deserialize_preflight(imp: usize, stream: usize) {
+    let base = game_module_base().unwrap_or(0);
+    let gaitem = unsafe { safe_read_usize(base + GLOBAL_CSGAITEM_SINGLETON_RVA) }.unwrap_or(0);
+    let head = unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_HEAD_OFFSET) }.unwrap_or(-1);
+    let end = unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_END_OFFSET) }.unwrap_or(-1);
+
+    use std::fmt::Write as _;
+    let mut preview = String::new();
+    let mut fatal_first: Option<&'static str> = None;
+    for index in 0..GAITEM_DESER_PREVIEW_ENTRIES {
+        match unsafe { gaitem_stream_entry(stream, index) } {
+            Some((handle, item_id)) => {
+                let kind = (handle >> GAITEM_HANDLE_TYPE_SHIFT) & GAITEM_HANDLE_TYPE_MASK;
+                let defect = gaitem_entry_defect(handle);
+                if index == 0 {
+                    fatal_first = defect;
+                }
+                let _ = write!(
+                    preview,
+                    " [{index}]h=0x{handle:08x} id=0x{item_id:08x} type={kind}{}",
+                    match defect {
+                        Some(reason) => format!(" FATAL({reason})"),
+                        None => String::new(),
+                    }
+                );
+            }
+            None => {
+                let _ = write!(preview, " [{index}]UNREADABLE");
+                break;
+            }
+        }
+    }
+    append_autoload_debug(format_args!(
+        "gaitem-deser-preflight: imp=0x{imp:x} stream=0x{stream:x} free-queue head/end {head}/{end}\
+         -- entries the native loop is about to read (only [0] is a gate; later offsets are a\
+         preview because per-item Deserialize consumes a variable length):{preview}"
+    ));
+
+    let orig = GAITEM_DESER_PREFLIGHT_ORIG.load(Ordering::SeqCst);
+    if orig == 0 {
+        return;
+    }
+    // SAFETY: the trampoline MinHook produced for this exact signature.
+    let orig: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize, usize)>(orig) };
+
+    let Some(reason) = fatal_first else {
+        unsafe { orig(imp, stream) };
+        return;
+    };
+
+    // SKIPPING THE CALL IS NOT AN OPTION, and that was measured rather than reasoned: the first
+    // version of this returned without calling the original, and the process died anyway at
+    // `game+0x671843` on `DLPanic("..\\..\\Source\\Game\\Gaitem\\CSGaitem.cpp", 0x307, "")`.
+    // `Deserialize` and its paired finalize `0x671670` are a matched pair: the prologue allocates
+    // the `0x5000` scratch into `+0x19028` and sets `+0x19031 = true`, and the finalize asserts on
+    // finding them. Skip the body and the finalize asserts on what the body never set.
+    //
+    // So run the body -- against a buffer of zeroes. Handle 0 is the one value the loop is
+    // GUARANTEED to survive: `if (local_res18[0] != 0)` skips the entry outright, no allocation, no
+    // index, no dispatch. 0x1400 zeroed entries walk the whole loop, leave the latches exactly as
+    // the finalize expects, and produce an empty gaitem set. An empty inventory is recoverable; a
+    // `gaitemInsTable[-1]` vtable dispatch and a `scratch[-1]` heap write are not.
+    let buf_field = stream + DLMEMORY_INPUT_STREAM_BUF_OFFSET;
+    let position_field = stream + DLMEMORY_INPUT_STREAM_POSITION_OFFSET;
+    let end_field = stream + DLMEMORY_INPUT_STREAM_END_OFFSET;
+    let (Some(saved_buf), Some(saved_position), Some(saved_end)) = (
+        unsafe { safe_read_usize(buf_field) },
+        unsafe { safe_read_usize(position_field) },
+        unsafe { safe_read_usize(end_field) },
+    ) else {
+        append_autoload_debug(format_args!(
+            "gaitem-deser-preflight: entry [0] is not a serialized gaitem ({reason}), but the stream fields are unreadable -- running the native body UNSUBSTITUTED"
+        ));
+        unsafe { orig(imp, stream) };
+        return;
+    };
+    append_autoload_debug(format_args!(
+        "gaitem-deser-preflight: SUBSTITUTING zeroes -- entry [0] is not a serialized gaitem ({reason}). buf=0x{saved_buf:x} position={saved_position} end={saved_end}. The native body runs against {} zero bytes so its latches and its paired finalize 0x671670 stay consistent; the gaitem set will be EMPTY and this load must be treated as failed.",
+        GAITEM_DESER_ZERO_FEED.len()
+    ));
+    let feed = GAITEM_DESER_ZERO_FEED.as_ptr() as usize;
+    // SAFETY: three plain `usize` fields inside a stream object the callee already owns; restored
+    // below before anything else can read them.
+    unsafe {
+        (buf_field as *mut usize).write(feed);
+        (position_field as *mut usize).write(0);
+        (end_field as *mut usize).write(GAITEM_DESER_ZERO_FEED.len());
+        orig(imp, stream);
+        (buf_field as *mut usize).write(saved_buf);
+        (position_field as *mut usize).write(saved_position);
+        (end_field as *mut usize).write(saved_end);
+    }
+}
+
+/// Zeroes for the substitution above: `0x1400` entries of two `u32`s, plus slack so a read that
+/// runs one entry long still lands inside it rather than past the end.
+static GAITEM_DESER_ZERO_FEED: [u8; CSGAITEM_TABLE_CAPACITY * 8 + 64] =
+    [0u8; CSGAITEM_TABLE_CAPACITY * 8 + 64];
+
+/// Install the pre-flight detour, once.
+///
+/// Idempotent and non-fatal: a failure to hook leaves the chain exactly as it was, which is the
+/// behaviour that crashed -- so the failure is logged loudly rather than swallowed.
+pub(crate) fn install_gaitem_deser_preflight(base: usize) {
+    if GAITEM_DESER_PREFLIGHT_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { crate::mh::MH_Initialize() } {
+        crate::mh::MH_STATUS::MH_OK | crate::mh::MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "gaitem-deser-preflight: MH_Initialize failed: {status:?} -- the native deserialize is UNGUARDED"
+            ));
+            return;
+        }
+    }
+    let target = base + CSGAITEM_DESERIALIZE_RVA as usize;
+    match unsafe {
+        crate::mh::MhHook::new(
+            target as *mut core::ffi::c_void,
+            gaitem_deserialize_preflight as *mut core::ffi::c_void,
+        )
+    } {
+        Ok(hook) => {
+            GAITEM_DESER_PREFLIGHT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "gaitem-deser-preflight: queue_enable failed: {status:?} -- UNGUARDED"
+                ));
+                return;
+            }
+            match unsafe { crate::mh::MH_ApplyQueued() } {
+                crate::mh::MH_STATUS::MH_OK => {
+                    crate::mh::leak_installed_hook(hook);
+                    append_autoload_debug(format_args!(
+                        "gaitem-deser-preflight: hooked CSGaitemImp::Deserialize 0x{target:x} -- logs the entries the loop will read and refuses a fatal entry [0]"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "gaitem-deser-preflight: MH_ApplyQueued failed: {status:?} -- UNGUARDED"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "gaitem-deser-preflight: MhHook::new failed: {status:?} -- UNGUARDED"
+        )),
+    }
+}
