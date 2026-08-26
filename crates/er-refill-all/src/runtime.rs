@@ -52,6 +52,17 @@ const PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET: usize = 0x5e8;
 /// `FUN_140745570` -- the shared `MenuWindow` update that `DepositoryDialog`'s vtable slot 2
 /// thunks straight into. `(MenuWindow* this, f32 delta, InputData* input)`.
 const MENU_WINDOW_UPDATE_RVA: usize = 0x745570;
+/// `FUN_1408f13b0(DepositoryDialog*, int)` -- REBUILD THE DISPLAYED ITEM LIST.
+///
+/// Writing replenish state changes nothing on screen by itself. The vanilla toggle
+/// (`FUN_1408d87d0`) calls `SetItemReplenishState` and then IMMEDIATELY calls this with `1`; it
+/// tail-calls `FUN_1408f6dc0`, which resets the dialog's gaitem list and re-runs the row-build
+/// lambda through vtable slots `0xf`/`0x10`. Without it the rows keep whatever refill icon they
+/// were built with, so the tracker and the screen disagree -- which is indistinguishable, from the
+/// player's side, from the hotkey having done nothing at all. Measured 2026-08-25: a run wrote all
+/// 449 entries and the icons did not move.
+const DEPOSITORY_DIALOG_REFRESH_RVA: usize = 0x8f13b0;
+
 /// `CS::DepositoryDialog::vftable`. Assigned ONLY by that class's constructor (verified: two
 /// references in the image, both in `DepositoryDialog::DepositoryDialog`), so `*this == this`
 /// is a sound identity test for "the storage box dialog is the one updating".
@@ -81,6 +92,7 @@ type MenuWindowUpdateFn = unsafe extern "system" fn(*mut core::ffi::c_void, f32,
 type SetStateFn = unsafe extern "system" fn(usize, *mut i32, bool);
 type ShouldReplenishItemFn = unsafe extern "system" fn(usize, *mut i32) -> bool;
 type ReplanishItemsFromChestFn = unsafe extern "system" fn();
+type DepositoryRefreshFn = unsafe extern "system" fn(*mut core::ffi::c_void, u32);
 
 /// Per-frame state that only the game's menu thread touches.
 ///
@@ -227,7 +239,7 @@ unsafe extern "system" fn menu_window_update_hook(
 
     if pad_pressed || keyboard_pressed {
         let source = if pad_pressed { "gamepad" } else { "keyboard" };
-        unsafe { run_cycle(base, source, config.refill_immediately) };
+        unsafe { run_cycle(base, this, source, config.refill_immediately) };
     }
 }
 
@@ -404,7 +416,12 @@ fn eligible_item_ids() -> Vec<i32> {
 }
 
 /// One press: work out which way to go, write it, and optionally refill straight away.
-unsafe fn run_cycle(base: usize, source: &str, refill_immediately: bool) {
+unsafe fn run_cycle(
+    base: usize,
+    dialog: *mut core::ffi::c_void,
+    source: &str,
+    refill_immediately: bool,
+) {
     let Some(tracker) = (unsafe { resolve_tracker(base) }) else {
         refill_log(format_args!(
             "{source}: press ignored: no ItemReplenishStateTracker yet"
@@ -494,6 +511,17 @@ unsafe fn run_cycle(base: usize, source: &str, refill_immediately: bool) {
             "{source}: cycle#{cycles} ran ReplanishItemsFromChest"
         ));
     }
+
+    // Repaint. The rows were built BEFORE the write, so without this they keep showing the old
+    // icons and the whole feature reads as inert -- which is exactly how it presented the first
+    // time it was tested live. Vanilla calls the same function after its own single-item toggle,
+    // so any cursor movement this causes is the game's own behaviour rather than something new.
+    let refresh: DepositoryRefreshFn =
+        unsafe { std::mem::transmute(base + DEPOSITORY_DIALOG_REFRESH_RVA) };
+    unsafe { refresh(dialog, 1) };
+    refill_log(format_args!(
+        "{source}: cycle#{cycles} rebuilt the storage list"
+    ));
 }
 
 /// Read `tracker->count`.
