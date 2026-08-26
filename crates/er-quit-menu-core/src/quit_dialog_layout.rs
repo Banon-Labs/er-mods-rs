@@ -33,8 +33,10 @@ pub const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
 /// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
 /// short-circuits the predicate with NO positional test (pad/keyboard confirm); the second is the one
 /// whose result the native code then hit-tests against the row's display object (mouse click).
-pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x758a10;
-pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x758a70;
+pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 =
+    er_game_base::rva::MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA;
+pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 =
+    er_game_base::rva::MENU_VIEWER_PAD_MOUSE_CLICKED_RVA;
 /// The `CS::GridControl` (0x7c8 bytes, vtable dump `0x142a913b8`) embedded in every
 /// `GenericListSelectDialog` at `+0xa38`. Its geometry fields, measured once at dialog construction
 /// by `GridControl::MeasureGridFromMovie` (vtable `+0x18`, `FUN_140737c60`) from which

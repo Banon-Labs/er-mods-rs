@@ -55,6 +55,13 @@ pub(crate) fn own_stepper_s2_timed_out() -> bool {
 pub(crate) fn own_stepper_s2_elapsed_ms() -> u64 {
     phase_elapsed_ms(&OWN_STEPPER_S2_PHASE_STARTED_MS)
 }
+// The 2026-06-18 DIRECT-BUILD drive (`own_stepper_direct_build`) stood here: it constructed a
+// CS::ProfileLoadDialog straight from dialog_factory 0x14081ead0 at the open menu, bypassing
+// the input-gated router_this/d180-on-confirm layer, then handed off to STAGE 2. Its only
+// caller was the `direct_build_enabled()` branch in
+// product_core_own_stepper/fallback_drives.rs, and that gate has returned a literal `false`
+// since it was written, so the build never ran. Deleted with the branch rather than left as an
+// orphan that reads like a live dialog-construction path.
 /// Multi-frame cold char-mount drive (gated, SAVE-SAFE). Sequence (worker registered): build+register
 /// the FD4 stream worker (0xb0a980 stub) so the scheduler ticks it and drains the save-IO read; set
 /// the slot; PREVIEW 0x67b4e0 (b80=1 + starts the iodev read); poll 0x679180 each frame until

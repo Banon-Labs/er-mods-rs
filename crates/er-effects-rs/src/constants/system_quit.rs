@@ -1,6 +1,7 @@
 // ============================================================================================
-/// XInput poll counter, incremented each XInputGetState call while inject-nav is active and the
-/// menu is open. The schedule below is in these poll-frames.
+/// XInput poll counter. It was named for the INJECT-NAV drive that once owned it; that drive is
+/// deleted and the sole remaining consumer is the System->Quit repro autopilot, which bumps it on
+/// every fabricated poll to guarantee a fresh `dwPacketNumber`.
 pub(crate) use er_telemetry_core::counters::INJECT_NAV_FRAME;
 pub(crate) use er_title_flow::XINPUT_GAMEPAD_DPAD_DOWN;
 /// XINPUT_GAMEPAD.wButtons bits for the System->Quit repro autopilot's controller sequence
@@ -19,12 +20,18 @@ pub(crate) const XINPUT_GAMEPAD_A: u16 = 0x1000;
 pub(crate) const XINPUT_GAMEPAD_B: u16 = 0x2000;
 /// Current game-task tick's synthesized gamepad wButtons for the System->Quit repro autopilot,
 /// written by `system_quit_repro_tick` and READ by the XInput poll hook (the stage the game reads a
-/// gamepad from). 0 = no button.
+/// gamepad from). 0 = no button. It is now the ONLY button source the XInput hook fabricates from.
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_XINPUT_BUTTONS;
 /// ProfileSelect cursor index captured on entry to TO_SLOT (the current/most-recent save the cursor
 /// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
 /// usize::MAX = not yet captured (reset on entry to TO_SLOT).
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_INITIAL_CURSOR;
+// The whole INJECT-NAV drive is gone (2026-08-26): the branch in
+// product_core_own_stepper/fallback_drives.rs, its counters (INJECT_NAV_LOG_COUNT /
+// INJECT_NAV_LOG_FIRST / INJECT_NAV_CUR_BUTTONS, deleted from er-telemetry-core), its poll-frame
+// tap/gap schedule (`inject_nav_buttons` + constants, deleted from er-title-flow), the XInput
+// force-connect term that served it, and finally the `inject_nav_enabled()` gate itself -- which
+// could only ever return `false`, so none of it ran on any build.
 // ---- CAN-MOVE probe (2026-07-18, user-directed readiness gate) ----
 // "render-ready" answers "can the user SEE the character"; CAN-MOVE answers "does INPUT MOVE the
 // character" -- the second half of the readiness the earlier automated capture lacked. When
@@ -78,6 +85,8 @@ pub(crate) const MOVE_PROBE_STICK_FORWARD: i32 = 30000;
 pub(crate) const MOVE_PROBE_PER_FRAME_THRESHOLD: f32 = 0.01;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MOVE_PROBE_REQUIRED_FRAMES: usize = 60;
+// DIK_DOWN (0xd0, DIK_DOWNARROW) was stamped into the blocked keyboard state by the INJECT-NAV
+// branch alone, so it went with that branch. DIK_NONE below is still written by the can-move probe.
 /// No key injected (clears the stamp on gap/settle frames).
 pub(crate) const DIK_NONE: u8 = 0;
 /// System->Quit Save Game REPRO AUTOPILOT state machine. Reproduces the controller path to the
@@ -195,10 +204,9 @@ pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0; 10];
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_CONFIRM_BASELINE;
 /// Game-task tick counter within the current repro state (reset to 0 on each state transition). The
-/// per-phase edge index is `tick / INJECT_NAV_CYCLE`; the injected edge hold/gap timing REUSES the
-/// RE-grounded own_stepper nav constants (edge-triggered menu nav needs a multi-frame hold to
-/// register one step; a 1-frame tap is missed -- bd keyboard-dik-down-injection-works-cursor-moves-
-/// 2026). No sq-repro-specific timing value is invented.
+/// injected edge hold/gap timing is RE-grounded, not invented: edge-triggered menu nav needs a
+/// multi-frame hold to register one step; a 1-frame tap is missed -- bd
+/// keyboard-dik-down-injection-works-cursor-moves-2026.
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_STATE_TICK;
 /// Latches "waiting-for-transition self-reported" for the current state so it logs exactly once
 /// (0 = not yet); reset on each state transition. Not a tap budget -- a boolean.
@@ -233,6 +241,8 @@ pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 /// recovers a frozen one) instead of hard-stalling. ~1500f (~47s at 32fps) is generous for a real load.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
+// INJECT_NAV_NO_BUTTONS went with the INJECT-NAV branch: it existed only to compare against that
+// schedule's per-frame wButtons.
 pub(crate) use er_title_flow::MSGBOX_CLOSING_LATCH_3B0_OFFSET;
 pub(crate) use er_title_flow::MSGBOX_CLOSING_YES;
 pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;

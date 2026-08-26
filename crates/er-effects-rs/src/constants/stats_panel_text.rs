@@ -614,20 +614,20 @@ pub(crate) const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_SET: u8 = true as u8;
 /// `mov eax,[owner+0xbc]` and feeds it through submit -> validate -> pair, which
 /// writes the value to GameMan+0x14 (the load value). The +0xac0 save slot only
 /// feeds global+0x1200, not the load pair — so this is the field to select.
-pub(crate) const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize =
-    core::mem::offset_of!(TitleOwnerLayout, play_game_slot);
+// TITLE_OWNER_PLAY_GAME_SLOT_OFFSET, TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET and
+// DEFAULT_PLAY_GAME_MAP moved to er-title-flow (autoload/title-flow slice) so the moved
+// own-stepper idx6 table could read them. No per-name shim stands here: the single
+// `pub(crate) use er_title_flow::*;` glob in constants.rs already re-exports them into this
+// module, and a redundant explicit re-export is an unused import under `warnings = "deny"`.
 pub(crate) use er_title_flow::TITLE_STEP_GAME_STEP_WAIT;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const TITLE_OWNER_JOB_PENDING_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLoadJobLayout, pending);
 pub(crate) use er_title_flow::FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA;
-pub(crate) const TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET: usize =
-    core::mem::offset_of!(TitleOwnerLayout, new_game_flag);
 /// Packed map id for m60_42_34_00 (the new-game default; resolver 0x14071fd60 packs
 /// mAA_BB_CC_DD decimal -> byte3=AA..byte0=DD). A valid map to pass the PlayGame
 /// map-area gate (area byte 0x32..0x58) while we prove the SetState(5) path builds
 /// CSFeMan; the real slot map comes from GameMan+0xc30 once peeked.
-pub(crate) const DEFAULT_PLAY_GAME_MAP: i32 = 0x3c2a2200;
 /// Full sync slot deserialize 0x14067b290(ecx=slot) -- CSFeMan-LESS (verified): reads
 /// the save, writes the real saved map to GameMan+0xc30, applies the character. The
 /// cycle-breaker for slot loading (slot9-load-phase-machine-b80-csfeman-less-2026).

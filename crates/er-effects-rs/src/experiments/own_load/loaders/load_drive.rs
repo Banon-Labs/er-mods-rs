@@ -650,6 +650,11 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
     append_autoload_debug(format_args!(
         "own-load-pump: *** pump #{fired} reached state=Success(2) subcode={subcode} -- deser+map-stream DONE (m28 mounted); driving title->ingame transition ONCE (owner=0x{owner:x} c30_live=0x{c30_live:x} c30_real={c30_real} fp_real={fp_real} level={fp_level}) ***"
     ));
+    // A `own_load_pump_verify_only()` early return used to sit here: a save-safe probe that stopped
+    // at Success(2) without the save-writing SetState5. Its gate has returned a literal `false`
+    // since it was introduced, so the branch never ran; it was deleted rather than left reading as
+    // a live save-safety lever, which is the one thing a reader must not get wrong here.
+    //
     // The transition is the SAME guarded continue_confirm/SetState5 path the legacy lever uses; it
     // re-checks c30_real && fp_real + the owner new-game flag internally and ABORTs (no write) on any
     // failure. Pass the live-re-verified c30 so the guard reflects the post-pump state.

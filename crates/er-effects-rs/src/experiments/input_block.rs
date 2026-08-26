@@ -811,14 +811,19 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
         hr = XINPUT_SUCCESS;
     }
     if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
-        // The System->Quit repro autopilot fabricates the pad at the poll source (the user's
-        // controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame). It
+        // ONE driver fabricates the pad at the poll source: the System->Quit repro autopilot (the
+        // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame). It
         // replaces the (blocked) real pad so the game reads our synthesized buttons.
         // Only fabricate the pad while ACTIVELY driving menus; during WAIT_RELOAD/DONE the reload
         // must not see a synthesized live pad (it bounces the title->world advance back to the FE).
+        //
+        // A second driver -- own_stepper title nav, gated on `inject_nav_enabled()` -- used to share
+        // this path, supplying INJECT_NAV_CUR_BUTTONS and its own packet counter. Its branch, its
+        // counters and finally the gate itself are all deleted; only INJECT_NAV_FRAME survives,
+        // because sq-repro reuses it below as the shared fresh-packet counter.
         if sq_repro_actively_driving() {
             // Force SUCCESS + a fresh packet number so a live pad is simulated; write the buttons
-            // the active driver scheduled this frame. Harmless if the game ignores XInput.
+            // the autopilot scheduled this frame. Harmless if the game ignores XInput.
             let buttons = SQ_REPRO_XINPUT_BUTTONS.load(Ordering::SeqCst) as u16;
             // sq-repro has no separate poll-frame schedule, so bump the shared packet counter here
             // to guarantee a fresh dwPacketNumber each poll.

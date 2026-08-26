@@ -73,7 +73,8 @@ pub const FD4_FILECAP_LOADPROCESS_78_OFFSET: usize = 0x78;
 /// which called the same address "the mounted-archive registry". It is not: a genuinely null
 /// manager would break every file read in the process, so that census reading `null` was a
 /// deref-depth/timing artifact and the conclusion drawn from it does not follow.
-pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
+pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize =
+    crate::rva::DL_FILE_DEVICE_MANAGER_SINGLETON_RVA;
 
 /// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
 /// (`allocator +0x00`, `start +0x08`, `end +0x10`, `capacity +0x18`).

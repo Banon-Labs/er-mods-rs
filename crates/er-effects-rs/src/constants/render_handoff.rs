@@ -92,7 +92,7 @@ pub(crate) const MOVEMAP_CHILD_FINISHED_POLL_RVA: usize = 0xeb5530; // dump 0x14
 /// MoveMap child wrapper (`InGameStep+0xe0`) AFTER WorldRes is resident; may skip STEP_Finish teardown,
 /// so prefer satisfying the real sub-gate. Verify state before use.
 #[allow(dead_code)]
-pub(crate) const EZ_CHILDSTEP_REQUEST_FINISH_RVA: usize = 0xeb5570;
+pub(crate) use er_title_flow::EZ_CHILDSTEP_REQUEST_FINISH_RVA;
 /// `InGameStep::STEP_RequestWait` -- at `requestCode==2` sets loadingScreenData.field_0x11 and, iff
 /// `CSMenuMan+0x798 == 0`, clears InGameStep+0xd8 (ends session -> title). While +0x798 != 0 it stays
 /// stable-in-world. Confirms +0x798 != 0 is the healthy state.

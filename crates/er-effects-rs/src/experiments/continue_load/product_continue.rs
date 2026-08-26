@@ -438,6 +438,23 @@ pub(crate) unsafe fn fire_product_title_load_action(
         "product-core-autoload: native TitleTopDialog Load-Game run returned; waiting for ProfileLoadDialog factory hook capture"
     ));
 }
+// The DETERMINISTIC MENU INPUT PROBE driver (`menu_input_probe`) stood here: a per-frame
+// Down->Confirm schedule injected at the native keystate bitmap, used as a measurement oracle
+// for whether the d180 leaf-Update ticks on highlight alone. Its only caller was the
+// `input_probe_enabled()` branch in product_core_own_stepper/fallback_drives.rs, and that gate
+// has returned a literal `false` since it was written, so the probe never ran. Deleted with the
+// branch rather than left as an orphan that reads like a live input path.
+/// OBSERVE-ONLY NATIVE-LOAD tick (native_load_enabled(), gated OFF by default). Runs each frame
+/// INSTEAD of the own_stepper forcing logic, then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10
+/// so the NATIVE title machine advances untouched (the user drives past press-any-button + modals).
+/// KEEP vs the normal own_stepper: it does NOT SetState(owner,2/3), does NOT clear the beginlogo
+/// gate, does NOT self-fire the registrar 0x1409b24e0, does NOT run direct_build / cold_char_mount.
+/// It ONLY: (1) read-only checks whether the live TitleTopDialog menu/action is rendered and
+/// semantically validated (TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game
+/// MenuMemberFuncJob node/action chain); (2) ONE-SHOT: fires that native run
+/// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the LIVE registered
+/// ProfileLoadDialog the native pump drives. After firing it observes (the caller keeps writing the
+/// golden oracle as the native pump hopefully loads the char). Pure read-only until the single fire.
 #[allow(dead_code)] // Retained: Staged-save slot seeder for the deprecated staged-save probe path; the RE it encodes (ProfileSummary slot layout, FaceData::CopyFromBuffer, ChrAsm copy) is the reason it stays.
 unsafe fn seed_profile_summary_slot_from_staged_save(
     base: usize,

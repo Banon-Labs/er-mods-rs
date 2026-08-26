@@ -61,25 +61,11 @@ pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
         ));
     }
 }
-/// The D-pad Down button mask to inject for poll-frame `n` (counted from the first poll after
-/// menu-open), per the INJECT_NAV schedule: settle, then `INJECT_NAV_MAX_CYCLES` tap+gap cycles
-/// with Down asserted for the first `INJECT_NAV_TAP_LEN` frames of each cycle. Returns 0 (no
-/// input) during settle, gaps, and after the cycles complete.
-pub fn inject_nav_buttons(n: usize) -> u16 {
-    const NONE: u16 = 0;
-    if n < INJECT_NAV_SETTLE_FRAMES {
-        return NONE;
-    }
-    let m = n - INJECT_NAV_SETTLE_FRAMES;
-    if m >= INJECT_NAV_MAX_CYCLES * INJECT_NAV_CYCLE {
-        return NONE;
-    }
-    if m % INJECT_NAV_CYCLE < INJECT_NAV_TAP_LEN {
-        XINPUT_GAMEPAD_DPAD_DOWN
-    } else {
-        NONE
-    }
-}
+// `inject_nav_buttons(n) -> u16` sat here: the per-poll-frame D-pad-Down fabrication schedule for
+// the INJECT-NAV title-cursor drive. Its sole caller was the INJECT-NAV branch behind
+// `inject_nav_enabled()`, a gate that could only return `false`; that branch was deleted first and
+// the schedule was left with no caller in any crate, so it went with the gate (2026-08-26). Its
+// tap/gap constants are gone from constants_moved.rs for the same reason.
 /// Tap Confirm (inputmgr+0x90+0x3d, edge) to walk the NATURAL flow:
 /// press-any-button -> [confirm] -> connection-error modal -> [confirm] -> MAIN MENU.
 /// STOPS once the modal has been SEEN and is now GONE, so we never confirm a main-menu item

@@ -1163,6 +1163,12 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
             ));
         }
     }
+    // A second MENU_D180_LEAF_TICKED accounting arm stood here, gated on
+    // `INPUT_PROBE_ACTIVE != 0`, to count GENUINE d180 leaf-Update ticks even after
+    // MENU_LOAD_GAME_ITEM was already latched. Its only writer was `menu_input_probe`, whose
+    // `input_probe_enabled()` gate returned a literal `false`, so INPUT_PROBE_ACTIVE was
+    // permanently 0 and this arm never ran. Deleted with the probe (autoload/title-flow slice);
+    // the latching arm below still bumps MENU_D180_LEAF_TICKED on the live path.
     if item != TITLE_OWNER_SCAN_START_ADDRESS
         && base != TITLE_OWNER_SCAN_START_ADDRESS
         && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS

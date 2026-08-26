@@ -256,3 +256,28 @@ pub const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d65f88;
 
 /// `WorldChrMan::mainPlayerIns`, the local player inside the singleton above.
 pub const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;
+
+// ---- Centralised by the #362 merge (move-vs-move) ------------------------------------------
+// These seven addresses were each declared as a literal in TWO crates at once, because two
+// branches independently moved the same constants into two different new crates: er-title-flow
+// (the autoload/title-flow slice) and er-diag-harness / er-quit-menu-core (already on main).
+// Neither branch was wrong; the merge is what made them duplicates, and
+// `scripts/check-rva-alias-drift.py` reported all seven as NEW drift.
+//
+// Its own prescription is followed here: declare the value ONCE, cross-cutting singletons in
+// this file, and derive every other name from it. One address, one literal.
+
+/// `FUN_14021bbf0` -- the MSB filecap parse callback.
+pub const MSB_FILECAP_PARSE_CALLBACK_RVA: usize = 0x0021_bbf0;
+/// `CS::MenuViewer` pad-confirm-pressed predicate.
+pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x0075_8a10;
+/// `CS::MenuViewer` mouse-clicked predicate.
+pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x0075_8a70;
+/// The DLC virtual-root refill JOB.
+pub const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
+/// `STEP_Loadlist_Wait`.
+pub const STEP_LOADLIST_WAIT_RVA: usize = 0x00af_1800;
+/// The DLC virtual-root BLANK path.
+pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
+/// `DLIO::DLFileDeviceManager` singleton global.
+pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;

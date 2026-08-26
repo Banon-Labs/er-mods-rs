@@ -140,7 +140,7 @@ pub(crate) fn own_stepper_enabled() -> bool {
 }
 /// OBSERVE-ONLY NATIVE-CONTINUE gate (PATH B, autoload-path-B-drive-native-load-chosen-2026-06-22).
 /// OFF by default; enable via env `ER_EFFECTS_NATIVE_CONTINUE=1` OR a GAME_DIR file
-/// `er-effects-native-continue.txt`. When ON, the idx10
+/// `er-effects-native-continue.txt`. Mirrors `native_load_enabled` (env OR file). When ON, the idx10
 /// handler installs the patch (so OUR handler runs each frame) but does NOT force the title state
 /// machine: it lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native boot naturally (the user
 /// drives past press-any-button + modals in this hybrid test, OR the own-stepper opens the menu),
@@ -305,6 +305,36 @@ pub(crate) fn native_fullread_commit_enabled() -> bool {
 pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
     product_autoload_enabled()
 }
+// PERMANENTLY-FALSE GATES KEEP LEAVING THIS FILE, from both directions, for the same reason.
+// `input_probe_enabled` / `own_load_pump_verify_only` / `direct_build_enabled` went with the
+// autoload/title-flow slice: each returned a literal `false`, each had exactly one call site, and
+// deleting those unreachable branches left the gate with no caller -- a hard error under
+// `[workspace.lints.rust] warnings = "deny"`. `main` then deleted 19 more the same way ("Delete 26
+// gates that could only ever be false, and the code behind them"), including the four the
+// er-title-flow seam still names: `experimental_direct_menu_load_enabled`,
+// `fire_tfc_continue_enabled`, `title_accept_byte_gate_enabled` and `title_proceed_gate_enabled`.
+// Those four are not gone from the product -- `lib_parts/dll_entry_parts/bootstrap.rs` wires the
+// corresponding `TitleFlowHost` fields to `|| false` closures instead, so the seam keeps its shape
+// without this crate carrying a function whose only possible answer is `false`.
+//
+// FOUR MORE WENT THE SAME WAY (2026-08-26, PR #362 review -- the user refused to approve a change
+// that ADDED permanently-false gates: "we cannot rely on env gating for product stability"):
+//
+//   * `native_profile_capture_enabled` -- a diagnostic native ProfileSelect/portrait-capture mode.
+//     It only ever ORed an extra `false` into six product gates (`force_profile_render_enabled`,
+//     `portrait_real_pixels_enabled`, `portrait_render_drive_enabled`, `portrait_overlay_enabled`,
+//     `stats_panel_enabled`, `native_continue_enabled`), so removing it cannot change any of them.
+//     The identically-named `TitleFlowHost` field is a DIFFERENT symbol and stays: bootstrap.rs
+//     wires it to `|| false` and `er-title-flow` reads it, exactly like the four above.
+//   * `native_profile_drive_disabled` -- an env force-OFF escape for the native-Windows portrait
+//     render-drive. Its two call sites were
+//     `is_native_windows() && native_profile_drive_disabled()`, never true. `is_native_windows()`
+//     itself is untouched: input_block.rs, task_tick.rs and title_visual_startup.rs still call it.
+//   * `own_stepper_passive_enabled` -- a marker-file-gated hand-driven own-stepper mode. Its idx10
+//     branch was already gone; the leftovers were two `input_block.rs` terms.
+//   * `inject_nav_enabled` -- an env/marker-file-gated fabricated D-pad-Down title nav. Its driver
+//     branch and its `INJECT_NAV_*` counters were already gone; the leftovers were the XInput
+//     force-connect terms in `input_block.rs`.
 
 /// MOVEMENT-PROOF probe (`er-effects-prove-movement.txt`). When staged, authorizes the in-DLL
 /// can-move probe to inject a forward stick in-world AND forces XInput slot 0 "connected" so the game

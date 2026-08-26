@@ -499,6 +499,13 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
+    // A GOLDEN BASELINE branch used to cache the live TITLE owner into OWN_LOAD_OWNER_CACHED here so
+    // the recurring world-stream observer could follow a USER-driven vanilla load. Its gate,
+    // `golden_observe_enabled()`, has returned a literal `false` since it was introduced, so the
+    // cache never happened and the observer's golden entry condition (deleted with it in
+    // own_load/drive.rs) could never be met either. OWN_LOAD_OWNER_CACHED keeps its one real
+    // writer: the OWN-LOAD continue_confirm fire site, which caches the exact owner/InGameStep it
+    // kicked the load on.
     let read_gm = |off: usize| {
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((gm + off) as *const i32) }
@@ -521,6 +528,17 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         }
     };
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    // OBSERVE-ONLY NATIVE-LOAD mode (gated OFF by default). Takes precedence over ALL the
+    // own_stepper forcing logic below: it does NOT force the title machine -- the native boot
+    // advances naturally via pass-through, and once the live menu is rendered + settled we fire
+    // the native Load-Game node's run exactly once, then keep observing so the golden oracle is
+    // written as the native pump loads the char. Pure read-only until the one-shot fire.
+    // An OBSERVE-ONLY NATIVE FULL-SAVE-READ mode used to take precedence over everything below:
+    // `if native_fullread_enabled() { native_fullread_tick(owner, base, n); pass_through(false);
+    // return; }`. That gate has returned a literal `false` since it was introduced, so idx10 has
+    // always fallen straight through to the fallbacks macro. `native_fullread_tick` itself still
+    // lives in continue_load/slot_resolution.rs and is still installed as a `TitleFlowHost` field
+    // by bootstrap.rs; only this unreachable dispatch is gone.
     own_stepper_idx10_fallbacks!(
         owner,
         framectx,

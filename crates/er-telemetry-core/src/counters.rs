@@ -1023,8 +1023,11 @@ pub static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(u
 pub static INJECT_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_XINPUT_BUTTONS: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_INITIAL_CURSOR: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static INJECT_NAV_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+// INJECT_NAV_LOG_COUNT (per-tap log throttle) and INJECT_NAV_CUR_BUTTONS (the schedule's per-frame
+// synthesized wButtons) were the INJECT-NAV drive's own counters. Writer and reader both sat behind
+// `inject_nav_enabled()`, which could only return `false`; they were left with no writer AND no
+// reader in any crate and went with the gate (2026-08-26). INJECT_NAV_FRAME above keeps its name
+// but is now purely the sq-repro fresh-packet counter, which is a real live reader.
 pub static FRAME_TIME_WORST_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static SUPPLIED_MOVEMENT_INPUT_FRAMES: AtomicUsize = AtomicUsize::new(0);

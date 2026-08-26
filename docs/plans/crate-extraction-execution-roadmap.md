@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 48,235 |
+| all `experiments/**` | 76 | 48,265 |
 | excluding `startup_hooks/**` | 44 | 25,311 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -102,16 +102,16 @@ Every row below is a current source file. `Current partition` is the exact prese
 |---|---:|---|---|
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 9 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 546 | product continue/load policy | D5 |
+| `continue_load/product_continue.rs` | 563 | product continue/load policy | D5 |
 | `continue_load/slot_resolution.rs` | 739 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
-| `gating/env_flags.rs` | 438 | product gate policy | D1 |
+| `gating/env_flags.rs` | 468 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 56 | product GPU-readback facade | R4-R5 |
 | `gpu_readback/boot_progress.rs` | 2,974 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
-| `input_block.rs` | 1,385 | product input ownership | `STAY` |
+| `input_block.rs` | 1,390 | product input ownership | `STAY` |
 | `input_trace.rs` | 924 | product diagnostic | D4 |
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 114 | product install ordering | `STAY` |
@@ -121,17 +121,17 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `mem.rs` | 24 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
 | `menu_diag/menu_observation.rs` | 615 | product menu observation | D4 |
-| `mod.rs` | 100 | experiments module root and compatibility exports | `STAY` |
-| `mod/own_stepper_idx6_memory.rs` | 109 | own-stepper memory family | D5 and R14 |
-| `mod/product_core_own_stepper.rs` | 536 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 570 | product fallback-drive diagnostic | D5 |
+| `mod.rs` | 107 | experiments module root and compatibility exports | `STAY` |
+| `mod/own_stepper_idx6_memory.rs` | 9 | own-stepper memory family | D5 and R14 |
+| `mod/product_core_own_stepper.rs` | 554 | product core own-stepper | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 599 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 9 | S11 own-load facade | D5 |
-| `own_load/drive.rs` | 1,718 | native-load, world-resource, and save-byte families | D5 |
+| `own_load/drive.rs` | 1,724 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
-| `own_load/loaders/load_drive.rs` | 659 | load-drive implementation family | D5 |
+| `own_load/loaders/load_drive.rs` | 664 | load-drive implementation family | D5 |
 | `own_load/loaders/switch_reload.rs` | 501 | switch-reload adapter family | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
-| `own_stepper/bootstrap_drive.rs` | 766 | product bootstrap-drive policy | D5 |
+| `own_stepper/bootstrap_drive.rs` | 773 | product bootstrap-drive policy | D5 |
 | `own_stepper/load_steps.rs` | 751 | product load-step policy | D5 |
 | `present_overlay.rs` | 950 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
@@ -173,7 +173,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/save_picker/save_picker_surface.rs` | 122 | picker surface routing adapter | R17-R18 |
 | `title.rs` | 5 | title facade | R22 |
 | `trace.rs` | 10 | trace facade | R6A-R6D and D4 |
-| `trace/menu_constructor_capture.rs` | 1,323 | menu constructor capture family | R6B and D4 |
+| `trace/menu_constructor_capture.rs` | 1,329 | menu constructor capture family | R6B and D4 |
 | `trace/menu_trace_hooks.rs` | 1,983 | title reload and menu trace families | R6C, R21, and D4 |
 | `trace/native_result_map_hooks.rs` | 739 | native result-map hook family | R6A and D4 |
 
