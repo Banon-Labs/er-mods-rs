@@ -3103,6 +3103,8 @@ name = "er-quit-menu-core"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-build-import-core",
+ "er-build-import-runtime",
  "er-game-base",
  "er-hook",
  "er-save-loader",

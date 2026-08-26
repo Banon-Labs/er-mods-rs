@@ -857,20 +857,19 @@ pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA: u32 = 0x974b0
 /// Non-canonical marker copied into only the cloned quick-load action payload; the invoke hook eats it.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_SENTINEL: usize = 0x4552_5351_4e4f_4f50;
-/// `PropertyEditDialog.properties.items`: 0x1260 + BasicViewItemList.items(+8).
-pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET: usize = 0x1268;
-/// `PropertyEditDialog.properties.items.count`: 0x1260 + BasicViewItemList.items(+8) +
-/// DLFixedVector<EditProperty>.count(+0x888). Pure diagnostic read only.
-pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET: usize = 0x1af0;
-pub(crate) const EDIT_PROPERTY_SIZE: usize = 0x88;
-pub(crate) const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
+// `PropertyEditDialog`/`EditProperty` layout moved to `er_quit_menu_core::quit_dialog_layout`
+// with the row-identity code that reads it; re-exported here so every caller path is unchanged
+// and each offset still has exactly one declaration.
+pub(crate) use er_quit_menu_core::quit_dialog_layout::{
+    EDIT_PROPERTY_CONTROLLER_OFFSET, EDIT_PROPERTY_SIZE,
+    PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET, PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET,
+};
 /// `CS::EditProperty.label` (a `CS::MenuHelpLabelComponent`, 0x70 bytes) whose FIRST field is the
 /// `MenuString`'s raw UTF-16 pointer -- `CS::MenuString::MenuString` stores the pointer it is handed,
 /// so a row built from this DLL's static label arrays is identifiable by pointer equality, and every
 /// row is identifiable by its text. This is the only per-row identity in the Quit dialog that the
 /// engine does not alias or share (1.16.2 `EditProperty`: super_MenuViewItem +0, label +8,
 /// propertyController +0x78, size 0x88).
-pub(crate) const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
 /// In `PropertyNewButtonController`, the action `std::function`'s `_Getter()` slot.
 ///
 /// NOT an object identity. `CS::PropertyNewButtonController` is a 0x300-byte allocation
@@ -886,8 +885,6 @@ pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET: usize = 0x
 /// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
 /// short-circuits the predicate with NO positional test (pad/keyboard confirm); the second is the one
 /// whose result the native code then hit-tests against the row's display object (mouse click).
-pub(crate) const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x758a10;
-pub(crate) const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x758a70;
 /// `CS::GridControl::SetItemCount(this, count)` (1.16.2 `FUN_140738dc0`; byte-verified against
 /// `eldenring-deobf.bin`: `48 89 5c 24 08 57 48 83 ec 20 8b fa 48 8b d9 85 d2 75 0d`).
 ///
@@ -905,9 +902,7 @@ pub(crate) const GRID_CONTROL_SET_ITEM_COUNT_RVA: u32 = 0x738dc0;
 /// `GridControl::Update` (`FUN_1407392f0`) enables up/down only at `rows >= 2` and left/right only at
 /// `cols != 1 || rows < 2`, and the mouse hit test (`FUN_140736c90`) walks exactly `cols * rows`
 /// cells -- so these two numbers are the whole navigation and hover model of the dialog.
-pub(crate) const DIALOG_GRID_CONTROL_A38_OFFSET: usize = 0xa38;
-pub(crate) const GRID_CONTROL_COLS_D8_OFFSET: usize = 0xd8;
-pub(crate) const GRID_CONTROL_ROWS_DC_OFFSET: usize = 0xdc;
+pub(crate) use er_quit_menu_core::quit_dialog_layout::DIALOG_GRID_CONTROL_A38_OFFSET;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG: AtomicUsize =

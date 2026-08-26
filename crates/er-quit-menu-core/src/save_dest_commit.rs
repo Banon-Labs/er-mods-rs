@@ -7,8 +7,12 @@ use crate::save_dest_identity::save_dest_normalize_path;
 // The BND4 container magic -- the format fact every save-destination write depends on. Kept
 // beside the other container constants (not folded into the test that builds a synthetic
 // container) because it describes the file format, not the test.
-#[allow(dead_code)]
-const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
+// `save_dest_commit_runtime` scores every written container against it, so it is declared
+// once, here, rather than in both halves.
+// Its only reader is `save_dest_commit_runtime`, which is windows-only, so a HOST build sees
+// nothing use it -- the value is still a format fact this module owns, not test scaffolding.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
 const SAVE_DEST_WRITE_ACCESS_MASK: u32 = 0x4000_0000 | 0x2;
 const SAVE_DEST_SEAMLESS_EXTENSION: &str = "co2";
 const SAVE_DEST_VANILLA_EXTENSION: &str = "sl2";
