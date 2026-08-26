@@ -648,6 +648,22 @@ pub(crate) fn arm_missing_save_picker_after_boot(reason: &str) -> bool {
     //     owns this pick" value and `boot_open_missing_save_picker_if_pending` compare-exchanges
     //     out of it; if an earlier arm had already moved it, the picker would never open for this
     //     one.
+    //
+    // REFUSE BEFORE RESETTING, THOUGH. The resets below are destructive to a selection that
+    // already exists, and `try_arm`'s compare-exchange refuses AFTER they would have run --
+    // too late to protect anything. The reachable case is not hypothetical: a user who picked
+    // a save at the boot picker leaves the gate `Ready` with their slot in
+    // MISSING_SAVE_PICKER_SELECTED_SLOT, and if THAT save is the one that fingerprints
+    // empty-like, this very branch escalates. Resetting first would wipe the pick and then
+    // decline to re-arm -- strictly worse than the dead end it replaces, and silent. So the
+    // gate is read first and a non-`Idle` gate leaves every latch untouched.
+    let state_before = MISSING_SAVE_DIALOG_GATE.state();
+    if state_before != er_save_redirect::MissingSaveState::Idle {
+        append_autoload_debug(format_args!(
+            "save-override: late missing-save picker arm DECLINED (reason={reason}) -- selection state is already {state_before:?}; a pick in flight or already made is never restarted, revoked, or cleared"
+        ));
+        return false;
+    }
     er_telemetry_core::counters::MISSING_SAVE_PICKER_SELECTED_SLOT
         .store(usize::MAX, Ordering::SeqCst);
     OWN_STEPPER_EXPECTED_SLOT.store(OWN_STEPPER_SLOT_NONE, Ordering::SeqCst);
