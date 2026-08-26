@@ -78,6 +78,16 @@ pub const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
 /// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
 pub const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
 
+/// `CS::ItemReplenishStateTracker::ShouldReplenishItem(tracker, int *itemId)` -- whether an item is
+/// currently flagged to be topped back up from the storage box. Honours the per-type DEFAULT for an
+/// item with no entry (`AUTO_REPLENISH_TYPE` 2 / Consumable defaults ON, type 1 defaults OFF), which
+/// is why it, and not a read of the entry vector, is the right question to ask about current state.
+pub const SHOULD_REPLENISH_ITEM_RVA: usize = 0x0023_d990;
+/// `ReplanishItemsFromChest()` -- the native storage -> personal inventory transfer loop. Vanilla
+/// runs it from `OnEvent_BonfireRespawn` and `MoveMapStep::UpdatePlayerInfo`. Marking replenish
+/// state alone moves no items; this is what moves them.
+pub const REPLANISH_ITEMS_FROM_CHEST_RVA: usize = 0x0024_dff0;
+
 /// `GameDataMan` -> `PlayerGameData` pointer field offset.
 /// `CS::GameMan::SetMoveMapStepBlockId(BlockId *out, BlockId *in)` -- writes
 /// `GameMan.moveMapStepBlockId`, i.e. picks the destination block of the next map transition.

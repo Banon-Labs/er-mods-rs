@@ -299,6 +299,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # confirmed to go red against a deliberately broken implementation.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hook --lib
 
+# er-refill-all: the pad-chord parser, the config reload decision, and the cycle-direction rule are
+# all host-buildable on purpose, so the parts that decide whether a press does the right thing are
+# testable without the game. The tracker-capacity assertion lives here too -- it is the guard on a
+# DLPanic that would crash the game outright.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-refill-all
+
 # HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
 # in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game
 # bindings always resolve -- so a `use windows::...` / `use eldenring::...` written WITHOUT a

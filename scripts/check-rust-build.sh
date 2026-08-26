@@ -42,6 +42,18 @@ fi
 # compiles `#[cfg(test)]`, so until this step existed nothing in any gate had ever compiled --
 # let alone run -- them. They rot silently when it does not. Compile them every run so a test
 # module can never drift out of the build.
+# CLIPPY ON THE WINDOWS TARGET. `cargo clippy` on the host CANNOT see a windows-only module: a
+# `#[cfg(windows)]` file is not compiled there, so it is not linted there either, and a lint that
+# only exists on the target the module actually builds for reaches CI untouched. That is exactly
+# how `clippy::manual_is_multiple_of` in er-refill-all's runtime.rs got through a clean local run
+# and failed CI (2026-08-25). Workspace-wide, because the gap applies to every DLL crate.
+if command -v cargo-xwin >/dev/null 2>&1; then
+	echo "[check-rust-build] cargo xwin clippy --workspace --target $target"
+	cargo xwin clippy --workspace --manifest-path "$repo_root/Cargo.toml" --target "$target"
+else
+	echo "[check-rust-build] cargo-xwin not found; skipping windows-target clippy" >&2
+fi
+
 if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin check --tests --target $target"
 	cargo xwin check --tests --manifest-path "$repo_root/Cargo.toml" --target "$target"
@@ -109,6 +121,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-invasion-path:er_invasion_path
 		er-invasion-warp:er_invasion_warp
 		er-inventory-sort:er_inventory_sort
+		er-refill-all:er_refill_all
 		er-loading-bar:er_loading_bar
 		er-loading-portrait:er_loading_portrait
 		er-net-effects:er_net_effects
