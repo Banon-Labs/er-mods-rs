@@ -291,7 +291,7 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
     crate::log_line(&format!(
         "[build-export] read character={:?} class={:?} armaments={} armour={} talismans={} \
          spells={} tears={} rune={:?} 2h={} flasks={}+{} upgrade={:?} unnamed={} \
-         whole_inventory={} ammunition_skipped={} duplicates_collapsed={} \
+         whole_inventory={} ammunition_skipped={} \
          goods_carried_not_exported={}",
         read.name,
         read.character_class,
@@ -308,7 +308,6 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
         read.unnamed_slots,
         read.read_whole_inventory,
         read.carried_ammunition,
-        read.collapsed_duplicates,
         read.carried_goods,
     ));
     // The per-armament levels and the appearance, both of which used to be absent from the link
@@ -367,7 +366,7 @@ fn spawn_worker(read: CharacterRead, sinks: Sinks) {
 /// The encode, the clipboard and the browser. Runs on the worker; touches no game state.
 fn export_inner(read: CharacterRead, sinks: Sinks) {
     let doc = crate::export_doc::document_from(&read);
-    let url = er_build_export::share_url(&doc);
+    let (url, stored) = share_link(&doc);
     let mut report = ExportReport {
         character: read.name.clone(),
         armaments: read.armaments.len(),
@@ -380,8 +379,14 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
         ..ExportReport::default()
     };
     crate::log_line(&format!(
-        "[build-export] encoded {} characters for {:?}",
-        report.url_len, report.character
+        "[build-export] {} link, {} characters, for {:?}",
+        if stored {
+            "STORED ?b="
+        } else {
+            "self-contained ?i="
+        },
+        report.url_len,
+        report.character
     ));
     // The whole URL, on its own line, so the offline oracle can decode exactly what the game
     // produced instead of a description of it.
@@ -423,6 +428,44 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
     }
     if let Ok(mut slot) = LAST_REPORT.lock() {
         *slot = Some(report);
+    }
+}
+
+/// The link to hand the player: the self-contained one when it fits, a stored one when it does not.
+///
+/// # A real inventory does not fit in a URL
+///
+/// The `?i=` form carries the whole document, and the whole document is what the player asked for
+/// -- every copy of every armament. One live character came to 87 KB of JSON and a
+/// 22,663-character link, which no browser sends and the planner never sees. So past
+/// [`crate::upload::MAX_SELF_CONTAINED_URL_CHARS`] the build is STORED on the planner instead and
+/// the link becomes a short `?b=<id>`.
+///
+/// A store that fails falls back to the long link rather than to nothing: it may be too long for
+/// this player's browser, but it is still the build, and it is still on their clipboard.
+fn share_link(doc: &er_build_export::BuildExportDoc) -> (String, bool) {
+    let self_contained = er_build_export::share_url(doc);
+    if self_contained.chars().count() <= crate::upload::MAX_SELF_CONTAINED_URL_CHARS {
+        return (self_contained, false);
+    }
+    crate::log_line(&format!(
+        "[build-export] the self-contained link is {} characters, past the {} a browser will \
+         carry -- storing the build on the planner instead",
+        self_contained.chars().count(),
+        crate::upload::MAX_SELF_CONTAINED_URL_CHARS,
+    ));
+    match crate::upload::store(doc) {
+        Ok(id) => (
+            format!("{}{id}", er_build_import_core::BUILD_URL_PREFIX),
+            true,
+        ),
+        Err(err) => {
+            crate::log_line(&format!(
+                "[build-export] the upload FAILED ({err}); falling back to the long \
+                 self-contained link, which this browser may refuse"
+            ));
+            (self_contained, false)
+        }
     }
 }
 

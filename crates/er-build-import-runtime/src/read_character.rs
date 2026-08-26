@@ -210,8 +210,6 @@ pub struct CharacterRead {
     /// Arrows and bolts the character is carrying. COUNTED, not exported -- see the ammunition
     /// note in [`read_carried`].
     pub carried_ammunition: usize,
-    /// Duplicate copies of an item that were collapsed into one entry.
-    pub collapsed_duplicates: usize,
     /// Consumables, crafting materials and key items the character is carrying. COUNTED, not
     /// exported: they are the bulk of an inventory and the planner models only the handful that
     /// sit in the quickbar, so shipping them would put several thousand characters of crafting

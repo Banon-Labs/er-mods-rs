@@ -42,6 +42,7 @@ pub mod gaitem;
 pub mod gem_mount;
 pub mod grant;
 pub mod read_character;
+pub mod upload;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -62,7 +63,7 @@ pub use er_build_import_core::BUILD_URL_KEY;
 pub const CONFIG_FILE_NAME: &str = "er-effects.toml";
 
 /// Identifies this client to the API owner, who runs the service for free.
-const USER_AGENT: &str = "er-effects-rs build-import (+github.com/Banon-Labs)";
+pub(crate) const USER_AGENT: &str = "er-effects-rs build-import (+github.com/Banon-Labs)";
 
 /// Log file name, written next to the game executable.
 const LOG_NAME: &str = "er-build-import.log";

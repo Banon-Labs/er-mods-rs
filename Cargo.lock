@@ -2797,6 +2797,7 @@ dependencies = [
  "er-build-import-core",
  "er-game-base",
  "fromsoftware-shared",
+ "serde_json",
  "windows 0.62.2",
 ]
 
