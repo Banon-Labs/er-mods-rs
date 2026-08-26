@@ -297,6 +297,223 @@ def main() -> int:
             "Do not push directly to main",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
+        # --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ------
+        #
+        # Measured against this same live engine BEFORE the fix: every one of the
+        # deny cases below came back ALLOW with zero denials. The four git guards
+        # anchored their patterns on a separator class that contains `\n` but not
+        # a quote, so a payload inside `bash -c '...'` had no command position --
+        # and AGENTS.md tells agents to wrap commands exactly that way for fish.
+        #
+        # The .rego unit tests run in the OPA INTERPRETER; these run the real
+        # binary, which compiles to WASM and has silently dropped whole guards
+        # before. Both halves are needed.
+        PolicyCase(
+            "deny-bash-c-single-quoted-push-main",
+            "bash -c 'git push origin main'",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-sh-c-double-quoted-push-main",
+            'sh -c "git push origin main"',
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-bash-lc-push-head-to-main",
+            "bash -lc 'git push origin HEAD:main'",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-zsh-c-push-main",
+            'zsh -c "git push origin main"',
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-nested-wrapper-push-main",
+            "bash -c 'bash -c \"git push origin main\"'",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-bash-c-bare-push-from-main-session",
+            "bash -c 'git push'",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # An exception cannot vouch for a command that also hides a push in a
+        # wrapper: the count-match spans every executed text at once.
+        PolicyCase(
+            "deny-explicit-upstream-push-chained-with-wrapped-bare-push",
+            "git push -u origin feature/x && bash -c 'git push'",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # ... and the refspec-rename exception still works THROUGH a wrapper,
+        # which is what makes the decomposition symmetric rather than just stricter.
+        PolicyCase(
+            "allow-wrapped-refspec-rename-from-main-session",
+            "bash -c 'git push origin origin/a:refs/heads/split/a'",
+            True,
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-wrapped-refspec-to-main-from-main-session",
+            "bash -c 'git push origin origin/a:refs/heads/main'",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # A payload the guard cannot read must not become an implicit allow.
+        PolicyCase(
+            "deny-unreadable-wrapper-payload-naming-git-and-push",
+            "bash -c $GIT_PUSH_CMD",
+            False,
+            "cannot read",
+        ),
+        # ... but an opaque wrapper outside the guard's jurisdiction is noise.
+        PolicyCase(
+            "allow-unreadable-wrapper-payload-unrelated-to-git",
+            "bash -c $BUILD_CMD",
+            True,
+        ),
+        # Siblings that shared the same anchor construction.
+        PolicyCase(
+            "deny-bash-c-commit-from-main-session",
+            "bash -c 'git commit -m bad'",
+            False,
+            "Do not commit unless",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-bash-c-force-push-when-origin-main-stale",
+            "bash -c 'git push --force origin feature/x'",
+            False,
+            "origin/main is stale or could not be verified",
+            extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}},
+        ),
+        PolicyCase(
+            "deny-bash-c-rebase-onto-stale-origin-main",
+            "sh -c \"git rebase origin/main\"",
+            False,
+            "origin/main is stale or could not be verified",
+            extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}},
+        ),
+        PolicyCase(
+            "deny-bash-c-commit-skipping-hooks",
+            "bash -c 'git commit " + "--no" + "-verify -m bad'",
+            False,
+            "are not permitted",
+        ),
+        # --- Quoted TEXT is not an executed payload --------------------------
+        #
+        # The mirror-image defect, and the reason widening the anchor class was
+        # not the fix: `\n` IS in that class, so a memory body, a commit message
+        # or a doc that merely QUOTED the guarded command on its own line was
+        # denied -- with nothing executed. This one was measured live: writing a
+        # bd memory that documented this very hole was refused by BOTH
+        # ER-EFFECTS-BLOCK-MAIN-PUSH and ER-EFFECTS-BLOCK-MAIN-COMMIT. A guard
+        # whose own documentation cannot be written in the repo that enforces it
+        # is unwritable, so these are requirements, not niceties.
+        PolicyCase(
+            "allow-bd-memory-body-quoting-the-guarded-command",
+            '$HOME/.local/bin/bd remember --key wrapper-bypass "before\ngit push origin main\nafter"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-naming-the-guarded-command",
+            'git commit -m "guard: block git push origin main via wrappers"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-with-the-guarded-command-on-its-own-line",
+            'git commit -m "guard: close the wrapper bypass\n\ngit push origin main was invisible\n"',
+            True,
+        ),
+        PolicyCase(
+            "allow-heredoc-documenting-the-guarded-command",
+            "cat > docs/guards.md <<'EOF'\ngit push origin main\nEOF",
+            True,
+        ),
+        PolicyCase(
+            "allow-echo-of-the-guarded-command",
+            'echo "git push origin main"',
+            True,
+        ),
+        # A message that names the BYPASS FORM: splitting on `'` alone finds a
+        # span whose preceding text ends in `bash -c `, so without a nesting
+        # check the message body reads as an executed payload and the commit
+        # describing the fix is denied by the fix. This is the exact shape of
+        # the commit message that landed this change.
+        PolicyCase(
+            "allow-commit-message-quoting-the-wrapper-bypass-form",
+            'git commit -m "the bypass form was bash -c \'git push origin main\'"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-quoting-the-bypass-form-inverted-quotes",
+            "git commit -m 'the bypass form was bash -c \"git push origin main\"'",
+            True,
+        ),
+        # One apostrophe in a double-quoted body must not desynchronise the
+        # quote parity and drop the whole command back to its raw form, where
+        # the line-anchored mention would be denied again.
+        PolicyCase(
+            "allow-bd-memory-body-with-an-apostrophe",
+            '$HOME/.local/bin/bd remember --key k "it\'s about this:\ngit push origin main\nend"',
+            True,
+        ),
+        # `python3 -c` takes a Python program, not shell.
+        PolicyCase(
+            "allow-python-dash-c-string-literal-naming-the-command",
+            "python3 -c 'print(\"git push origin main\")'",
+            True,
+        ),
+        # Neutralising a quoted span blanks its command-position characters
+        # rather than deleting it, so a quoted operand still parses.
+        PolicyCase(
+            "allow-git-c-push-with-quoted-worktree-path-from-main-session",
+            'git -C "/home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate" push -u origin feature/portrait-stats-crate',
+            True,
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        # Fail-closed fallbacks: command substitution runs even inside double
+        # quotes, so such a text keeps its raw form and the anchors keep matching.
+        PolicyCase(
+            "deny-command-substitution-running-a-push-to-main",
+            'echo "$(git push origin main)"',
+            False,
+            "Do not push directly to main",
+        ),
+        # KNOWN-OPEN, PINNED DELIBERATELY. A heredoc a SHELL reads is a program,
+        # not data, and the .rego unit test for this shape DENIES -- in the OPA
+        # interpreter. Here, against the real binary, it is ALLOWED, and no
+        # pattern in any policy can change that: `cupcake eval` replaces UNQUOTED
+        # newlines with spaces before evaluation (measured 2026-08-26 -- a
+        # two-line command's second line arrives with no separator in front of
+        # it), so the terminator that delimits the body is gone before a policy
+        # ever sees the text. The same erasure means a plain
+        #     echo hi
+        #     git push origin main
+        # is allowed live while the interpreter denies it. Filed as an engine
+        # input-normalisation defect. This case is pinned as `True` rather than
+        # deleted so the gap stays visible; if it ever goes red, cupcake stopped
+        # collapsing newlines and this expectation should flip to a denial.
+        PolicyCase(
+            "known-open-shell-read-heredoc-push-main-engine-collapses-newlines",
+            "bash <<'EOF'\ngit push origin main\nEOF",
+            True,
+        ),
         PolicyCase(
             "deny-destructive-parent-root",
             "rm -rf /",
