@@ -709,9 +709,9 @@ fn advance_self_check(state: &mut TaskState, roster: &game::Roster, config: &con
 /// Must be called on the game thread.
 #[cfg(windows)]
 unsafe fn marker_selfcheck(config: &config::PathConfig) {
-    let Some(fxr_id) = config.marker_fxr_for(0) else {
+    if config.marker_fxr_ids.is_empty() {
         return;
-    };
+    }
     // SAFETY: game thread; the reader screens the player pointer before touching it.
     let Some(at) = (unsafe { game::local_position() }) else {
         return;
@@ -722,12 +722,12 @@ unsafe fn marker_selfcheck(config: &config::PathConfig) {
         c: config.marker_variant.2,
     };
     // The settings the DLL ACTUALLY read, printed where they can be checked against the file.
-    // Two rounds of "that setting did not take effect" were spent comparing the toml on disk
-    // against what the DLL was believed to have loaded, which is a comparison nobody can make
-    // from the outside.
+    // Two rounds of "that setting did not take effect" were spent comparing a toml on disk against
+    // what the DLL was believed to have loaded, which is a comparison nobody outside the process
+    // can make.
     path_log(format_args!(
-        "marker-selfcheck: spawning fxr {fxr_id} variant=({},{},{}) spacing={}m per_pass={} \
-         keep_behind={}m max={} effects={:?} at the player",
+        "marker-selfcheck: variant=({},{},{}) spacing={}m per_pass={} keep_behind={}m max={} \
+         effects={:?}",
         variant.a,
         variant.b,
         variant.c,
@@ -737,23 +737,48 @@ unsafe fn marker_selfcheck(config: &config::PathConfig) {
         config.max_markers,
         config.marker_fxr_ids
     ));
-    // SAFETY: game thread.
-    let Some(marker) = (unsafe { sfx::spawn_tracked(fxr_id, at, variant) }) else {
+
+    // One of EVERY configured effect, laid out in a line at your feet.
+    //
+    // Choosing an effect used to mean editing the file, looking, editing again -- once per
+    // candidate, and the candidates are picked from file sizes and resource lists, so there are a
+    // lot of them. Spawning the whole list side by side turns that into one look: whichever ones
+    // are visible, and which of those reads as something you would want on the ground, is
+    // answered at a glance. `bound=` separates "the engine refused this id" from "it spawned and
+    // you cannot see it", which no amount of looking can.
+    //
+    // It needs no second player. The effects are local-only -- confirmed live with somebody else
+    // present, who saw none of them -- so this is a private test bench in the middle of a session.
+    for (index, fxr_id) in config.marker_fxr_ids.iter().enumerate() {
+        let offset = index as f32 * SELFCHECK_LINEUP_SPACING_METERS;
+        let spot = [at[0] + offset, at[1], at[2]];
+        // SAFETY: game thread.
+        let Some(marker) = (unsafe { sfx::spawn_tracked(*fxr_id, spot, variant) }) else {
+            path_log(format_args!(
+                "marker-selfcheck: fxr {fxr_id} NOT SPAWNED -- the SFX manager is not up"
+            ));
+            continue;
+        };
         path_log(format_args!(
-            "marker-selfcheck: REFUSED -- the SFX manager is not up, nothing was spawned"
+            "marker-selfcheck: fxr {fxr_id} at +{offset:.0}m bound={} {}",
+            marker.bound(),
+            if marker.bound() {
+                "-- the engine accepted it; whether you can SEE it is the other question"
+            } else {
+                "-- the engine REJECTED it: not resident, or out of range. Nothing was spawned."
+            }
         ));
-        return;
-    };
-    path_log(format_args!(
-        "marker-selfcheck: spawned bound={} -- false means the engine REJECTED the id (not \
-         resident, or out of range), not that the effect is invisible",
-        marker.bound()
-    ));
-    // HELD, not despawned in the same tick. Despawning immediately proved nothing: every real
-    // trail marker lives for seconds, and it is that gap -- during which the effect can finish on
-    // its own, leaving a control block pointing at a dead instance -- that took the game down.
-    HELD_MARKER.with(|held| *held.borrow_mut() = Some((marker, TICKS.load(Ordering::Relaxed))));
+        HELD_MARKERS.with(|held| held.borrow_mut().push(marker));
+    }
+    HELD_UNTIL.store(
+        TICKS.load(Ordering::Relaxed) + MARKER_SELFCHECK_HOLD_TICKS,
+        Ordering::Relaxed,
+    );
 }
+
+/// Metres between the effects the self-check lines up, so they can be told apart.
+#[cfg(windows)]
+const SELFCHECK_LINEUP_SPACING_METERS: f32 = 2.0;
 
 /// Frames the self-check holds its marker before removing it, so the round-trip spans the same
 /// kind of gap a real trail marker does.
@@ -762,11 +787,15 @@ const MARKER_SELFCHECK_HOLD_TICKS: usize = 300;
 
 #[cfg(windows)]
 thread_local! {
-    /// The self-check's held marker. Thread-local because it is only ever touched from the game
-    /// thread, and a `static mut` would be a lie about that.
-    static HELD_MARKER: std::cell::RefCell<Option<(sfx::Marker, usize)>> =
-        const { std::cell::RefCell::new(None) };
+    /// The self-check's held markers. Thread-local because they are only ever touched from the
+    /// game thread, and a `static mut` would be a lie about that.
+    static HELD_MARKERS: std::cell::RefCell<Vec<sfx::Marker>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
+
+/// Tick at which the held line-up is torn down. Zero means nothing is held.
+#[cfg(windows)]
+static HELD_UNTIL: AtomicUsize = AtomicUsize::new(0);
 
 /// Despawn the self-check's held marker once it has been held long enough.
 ///
@@ -775,25 +804,26 @@ thread_local! {
 /// Must be called on the game thread.
 #[cfg(windows)]
 unsafe fn drain_held_marker(ticks: usize) {
-    let due = HELD_MARKER.with(|held| {
-        let mut held = held.borrow_mut();
-        match held.as_ref() {
-            Some((_, since)) if ticks.saturating_sub(*since) >= MARKER_SELFCHECK_HOLD_TICKS => {
-                held.take().map(|(marker, _)| marker)
-            }
-            _ => None,
-        }
-    });
-    if let Some(marker) = due {
-        path_log(format_args!(
-            "marker-selfcheck: despawning after {MARKER_SELFCHECK_HOLD_TICKS} frames held"
-        ));
-        // SAFETY: game thread; this handle came from `sfx::spawn_tracked`.
-        unsafe { sfx::despawn(marker) };
-        path_log(format_args!(
-            "marker-selfcheck: PASS -- a held marker spawned and despawned without faulting"
-        ));
+    let until = HELD_UNTIL.load(Ordering::Relaxed);
+    if until == 0 || ticks < until {
+        return;
     }
+    HELD_UNTIL.store(0, Ordering::Relaxed);
+    let due = HELD_MARKERS.with(|held| std::mem::take(&mut *held.borrow_mut()));
+    if due.is_empty() {
+        return;
+    }
+    let count = due.len();
+    path_log(format_args!(
+        "marker-selfcheck: despawning {count} after {MARKER_SELFCHECK_HOLD_TICKS} frames held"
+    ));
+    for marker in due {
+        // SAFETY: game thread; every handle came from `sfx::spawn_tracked`.
+        unsafe { sfx::despawn(marker) };
+    }
+    path_log(format_args!(
+        "marker-selfcheck: PASS -- {count} held marker(s) spawned and despawned without faulting"
+    ));
 }
 
 #[cfg(windows)]

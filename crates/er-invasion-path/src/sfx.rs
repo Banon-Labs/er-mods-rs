@@ -38,8 +38,8 @@ const GLOBAL_CSSFX_RVA: u32 = 0x3d8_39b8;
 /// and deriving a rotation from the path direction would make each marker's orientation depend on
 /// a navmesh answer that changes between refreshes -- markers that visibly twitch as the route is
 /// recomputed.
-fn transform_at(position: [f32; 3]) -> [f32; 16] {
-    [
+fn transform_at(position: [f32; 3]) -> WorldTransform {
+    WorldTransform([
         1.0,
         0.0,
         0.0,
@@ -56,8 +56,29 @@ fn transform_at(position: [f32; 3]) -> [f32; 16] {
         position[1],
         position[2],
         1.0,
-    ]
+    ])
 }
+
+/// The spawn transform, **16-byte aligned**, because the engine loads it with `MOVAPS`.
+///
+/// This alignment is not a precaution, it is the fix for a crash. `SpawnFfxInstance` forwards the
+/// pointer to `FUN_141c9eeb0`, whose first act is to transpose the matrix in place:
+///
+/// ```text
+/// 141c9eeb9  MOV    RAX, qword ptr [RSP + 0xb0]      ; <- this pointer
+/// 141c9eedb  MOVAPS XMM4, xmmword ptr [RAX]
+/// 141c9eede  MOVAPS XMM2, xmmword ptr [RAX + 0x20]
+/// 141c9eee5  SHUFPS XMM3, xmmword ptr [RAX + 0x10], 0x44
+/// 141c9eeed  SHUFPS XMM1, xmmword ptr [RAX + 0x30], 0x44
+/// ```
+///
+/// `MOVAPS` and a memory-operand `SHUFPS` both **fault** on an address that is not a multiple of
+/// 16. A bare `[f32; 16]` local has alignment 4, so whether the spawn worked came down to where
+/// the compiler happened to place it on the stack -- and on 2026-08-26 it placed it badly and the
+/// game died inside the first marker self-check spawn, no log line, no fault handler, from a
+/// caller whose only sin was passing a correct matrix at the wrong address.
+#[repr(C, align(16))]
+struct WorldTransform([f32; 16]);
 
 /// Resolve a game function by RVA, refusing anything that is not inside the game image.
 fn function(rva: u32) -> Option<usize> {
@@ -126,7 +147,7 @@ type SpawnInstanceFn = unsafe extern "C" fn(
     usize,
     *mut u8,
     *const u32,
-    *const [f32; 16],
+    *const WorldTransform,
     u64,
     i32,
     i16,
@@ -382,16 +403,26 @@ mod tests {
     #[test]
     fn a_transform_carries_the_position_in_row_three_and_is_otherwise_identity() {
         let transform = transform_at([10.0, -2.5, 7.0]);
-        assert_eq!(&transform[12..15], &[10.0, -2.5, 7.0]);
-        assert_eq!(transform[15], 1.0);
+        assert_eq!(&transform.0[12..15], &[10.0, -2.5, 7.0]);
+        assert_eq!(transform.0[15], 1.0);
         // Rows 0..2 are the identity basis.
-        assert_eq!(&transform[0..4], &[1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(&transform[4..8], &[0.0, 1.0, 0.0, 0.0]);
-        assert_eq!(&transform[8..12], &[0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(&transform.0[0..4], &[1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(&transform.0[4..8], &[0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(&transform.0[8..12], &[0.0, 0.0, 1.0, 0.0]);
     }
 
     #[test]
     fn a_transform_is_the_sixteen_floats_the_engine_reads() {
-        assert_eq!(size_of::<[f32; 16]>(), 0x40);
+        assert_eq!(size_of::<WorldTransform>(), 0x40);
+    }
+
+    /// The engine transposes this matrix with `MOVAPS`, which faults on an address that is not a
+    /// multiple of 16. A plain `[f32; 16]` is alignment 4 and killed the game; this asserts the
+    /// alignment that fixed it, so nobody can quietly drop the `align(16)` again.
+    #[test]
+    fn the_transform_is_aligned_for_the_movaps_the_engine_loads_it_with() {
+        assert_eq!(align_of::<WorldTransform>(), 16);
+        let transform = transform_at([0.0, 0.0, 0.0]);
+        assert_eq!((&raw const transform).addr() % 16, 0);
     }
 }
