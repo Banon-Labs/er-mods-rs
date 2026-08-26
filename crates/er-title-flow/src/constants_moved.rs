@@ -470,68 +470,37 @@ pub const BLOCK_LOADSTATE_GAVEUP_06_OFFSET: usize = 0x06;
 /// (a `longlong*`, so byte offsets 0x40/0x48/0x50/0x58), taking `cap+0x90` from each.
 pub const BLOCK_LOADSTATE_FILECAP_SLOTS: [usize; 4] = [0x40, 0x48, 0x50, 0x58];
 
-/// FD4FileCap load status; `0x04` == load complete. Paired with a non-null bytes pointer.
-pub const FD4_FILECAP_STATUS_88_OFFSET: usize = 0x88;
-
-/// `MsbFileCap::msbResCap` -- the PARSED MSB resource, not the raw file buffer. `FD4FileCap` is
-/// exactly 0x90 bytes, so this is the first field of the `MsbFileCap` subclass.
-///
-/// IT HAS EXACTLY ONE ASSIGNMENT SITE (1.16.2 static RE, bd
-/// `msbrescap-single-assignment-site-and-null-content-shortcircuit-2026-07-30`): the load-complete
-/// callback `FUN_14021bbf0`, which does
-/// `content = AcquireContent(cap); if (content != 0 && header_ok) { msbResCap = MsbRepository::
-/// GetOrCreate(name, content, size); } ReleaseContent(cap);`
-/// -- and returns NORMALLY when `content` is null. `loadState` is already `4` by then, nothing
-/// errors and nothing retries, so `(loadState=4, msbResCap=0)` is a reachable SILENT TERMINAL state.
-/// That is precisely the profile-switch reload freeze: WorldBlockRes case 2 advances to phase 3 only
-/// on `cap+0x90 != 0`, and its only other escape is also closed, so the block spins at phase 2 with
-/// no timeout.
-///
-/// `0` and `0xDEADBEEF` mean DIFFERENT things and the distinction is the key discriminator:
-/// `MsbFileCap::MsbFileCap` (0x14021b880) inits it to `0`, while `~MsbFileCap` (0x14021b940)
-/// releases through the repository and then stores `0xDEADBEEF`. So `0` == NEVER PARSED, never
-/// "freed after use".
-pub const FD4_FILECAP_BYTES_90_OFFSET: usize = 0x90;
-
-/// `FD4ResCapHolderItem::resourceString` is an `FD4BasicHashString` at `cap+0x08`, whose
-/// `DLString<wchar_t>` starts at `cap+0x10`: union (inline `wchar[8]` OR pointer) at `+0x08`,
-/// `length` at `+0x18`, `capacity` at `+0x20`. `capacity > 7` means the union holds a POINTER.
-/// Reading it names WHICH msb the stalled cap is, which separates "wrong file requested" from
-/// "right file, empty read".
-pub const FD4_FILECAP_NAME_UNION_18_OFFSET: usize = 0x18;
-
-pub const FD4_FILECAP_NAME_LENGTH_28_OFFSET: usize = 0x28;
-
-pub const FD4_FILECAP_NAME_CAPACITY_30_OFFSET: usize = 0x30;
-
-/// Inline-vs-pointer threshold for `DLString<wchar_t>` (SSO capacity).
-pub const DLSTRING_INLINE_CAPACITY_MAX: usize = 7;
-
-/// Cap the wide-name read so a garbage `length` cannot walk the probe off a page.
-pub const FD4_FILECAP_NAME_MAX_CHARS: usize = 96;
+// FD4FileCap / DLString / DLIO virtual-root LAYOUT AND WALKERS MOVED DOWN to
+// `er_game_base::filecap` (2026-08-25), re-exported here so every call site in this crate, and
+// the product's `constants/gaitem_restore.rs` re-export chain, are unchanged.
+//
+// WHY THEY MOVED: `er-diag-harness` now carries the msb-parse / DLC-root / loadlist-wait traces
+// that used to compile into the product DLL, and each of those traces names a file cap or a
+// virtual root in its log line. A second image needed the same walks, and one game address must
+// have exactly one literal declaration (`scripts/check-rva-alias-drift.py`) -- so the owner sank
+// below both rather than being copied into the new one.
+pub use er_game_base::filecap::{
+    DL_FILE_DEVICE_MANAGER_SINGLETON_RVA, DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET,
+    DLSTRING_CAPACITY_20_OFFSET, DLSTRING_INLINE_CAPACITY_MAX, DLSTRING_LENGTH_18_OFFSET,
+    DLSTRING_UNION_08_OFFSET, FD4_FILECAP_BYTES_90_OFFSET, FD4_FILECAP_LOADPROCESS_78_OFFSET,
+    FD4_FILECAP_NAME_CAPACITY_30_OFFSET, FD4_FILECAP_NAME_LENGTH_28_OFFSET,
+    FD4_FILECAP_NAME_MAX_CHARS, FD4_FILECAP_NAME_UNION_18_OFFSET, FD4_FILECAP_STATUS_88_OFFSET,
+    FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET, FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET,
+    FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET, FD4_FILELOADPROCESSOR_SIZE_28_OFFSET,
+    FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET, FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE,
+    FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES, FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET,
+    FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET, VIRTUAL_ROOTS_OF_INTEREST,
+    dlio_virtual_roots_summary, dlstring_wide_ascii, fd4_filecap_content_state, fd4_filecap_name,
+};
 
 /// `FD4ResCapHolderItem::referenceCount`. Discriminates a FRESH cap (the reload built it) from a
 /// CACHE-HIT SURVIVOR still held by the outgoing world -- the two remaining explanations for a
 /// null `msbResCap`.
 pub const FD4_FILECAP_REFCOUNT_58_OFFSET: usize = 0x58;
 
-/// `FD4FileCap::loadProcess` -> `FD4FileLoadProcess::fileLoadProcessor` (`+0x20`) -> the content
-/// the load-complete callback gates on. A null anywhere along this chain makes `AcquireContent`
-/// return null, which is exactly the short-circuit that leaves `msbResCap` at `0`.
-pub const FD4_FILECAP_LOADPROCESS_78_OFFSET: usize = 0x78;
-
 /// `FD4FileCap::flags`; the `MsbFileCap` factory `FUN_1401f3560` sets `0x20` on every cap it builds
 /// before handing it to `AddFileCap`.
 pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
-
-/// `DLIO::DLFileDeviceManager` singleton. `GetFileDeviceManager` (0x141f48b40) is literally
-/// `MOV RAX,[0x1448464a8]` plus a null-check branch, so this global IS the manager pointer.
-///
-/// NOTE this corrects bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`,
-/// which called the same address "the mounted-archive registry". It is not: a genuinely null
-/// manager would break every file read in the process, so that census reading `null` was a
-/// deref-depth/timing artifact and the conclusion drawn from it does not follow.
-pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
 
 /// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
 /// and calls `CSDlcImp::AddVirtualFileRoots`.
@@ -546,60 +515,6 @@ pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON
 /// The DLIO alias every failing `m28` read resolves through.
 #[cfg(windows)]
 pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
-
-/// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
-/// (`allocator +0x00`, `start +0x08`, `end +0x10`, `capacity +0x18`).
-///
-/// THIS IS THE PHASE-2 FREEZE SUSPECT. The stalled caps are named
-/// `mapstudio_dlc2:/m28_00_00_00.msb`, and `mapstudio_dlc2` is an entry in THIS vector, not a data
-/// archive. It has a two-phase lifecycle: `FUN_140e06490(CSDlc, true)` -- called only from the title
-/// start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases with an EMPTY root `L""`, and
-/// only `CSDlcImp::AddVirtualFileRoots` (0x140e06b80, reachable solely via `FUN_140e05fb0`, whose
-/// callers are `CS::MoveMapListStep::STEP_LoadListWait` and one title-flow function) fills in the
-/// real `mapstudio_dlc2 -> "map_dlc2:/mapstudio"`. If the title blanks it and the
-/// `STEP_LoadListWait` gate (`loadList == NULL || *loadList in {2,3}`) does not pass on the warm
-/// reload, the alias stays empty, the msb read resolves against nothing and returns 0 bytes, and
-/// `msbResCap` never gets written. Reading the alias AT the stall settles that without any hook.
-pub const DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET: usize = 0x48;
-
-pub const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET: usize = 0x08;
-
-pub const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET: usize = 0x10;
-
-/// `FileDeviceVirtualRootVectorEntry`: `root` (the alias name) and `path` (what it resolves to),
-/// both `DLString<wchar_t>` (48 bytes each), so the entry stride is 0x60.
-pub const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE: usize = 0x60;
-
-pub const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET: usize = 0x30;
-
-/// `DLString<wchar_t>` field offsets RELATIVE TO THE STRING ITSELF (`allocator +0x00`,
-/// union `+0x08`, `length +0x18`, `capacity +0x20`). The `FD4_FILECAP_NAME_*` constants above are
-/// the same layout pre-added to the cap's `+0x10` string base, which is why their numbers differ.
-pub const DLSTRING_UNION_08_OFFSET: usize = 0x08;
-
-pub const DLSTRING_LENGTH_18_OFFSET: usize = 0x18;
-
-pub const DLSTRING_CAPACITY_20_OFFSET: usize = 0x20;
-
-/// Bound the virtual-root walk: the table is a few dozen aliases, so anything past this is a
-/// corrupt/mid-teardown vector and the probe must stop rather than walk off a page.
-pub const FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES: usize = 256;
-
-/// Alias prefixes worth reporting at the stall: the DLC roots that back `m28`, plus the base-game
-/// `mapstudio` for contrast (if the base alias is populated and the dlc2 one is not, that is the
-/// answer outright).
-pub const VIRTUAL_ROOTS_OF_INTEREST: [&str; 4] =
-    ["mapstudio_dlc2", "map_dlc2", "game_dlc2", "mapstudio"];
-
-pub const FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET: usize = 0x20;
-
-/// `FD4FileLoadProcessor`: `content_` at `+0x20`, its byte count at `+0x28`, and the
-/// acquire/release refcount at `+0x30` whose `1 -> 0` edge nulls `content_` and frees the buffer.
-pub const FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET: usize = 0x20;
-
-pub const FD4_FILELOADPROCESSOR_SIZE_28_OFFSET: usize = 0x28;
-
-pub const FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET: usize = 0x30;
 
 /// GameMan `save_slot` (compiler-verified equal to the upstream typed field).
 #[cfg(windows)]

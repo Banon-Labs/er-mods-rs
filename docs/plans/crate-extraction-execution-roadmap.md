@@ -10,14 +10,20 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 52,781 |
-| excluding `startup_hooks/**` | 44 | 25,245 |
-| `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
+| all `experiments/**` | 77 | 52,337 |
+| excluding `startup_hooks/**` | 44 | 25,311 |
+| `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
 | lifecycle S10 split | 5 | 2,304 |
 | own-load S11 split | 5 | 2,932 |
 | save redirect | 3 | 2,389 |
 
-The `scripts/check-crate-extraction-roadmap.py` gate checks the 79 paths, line counts, and required caller edges below. A source file add/remove/line-count change must refresh this ledger in the same change.
+The `scripts/check-crate-extraction-roadmap.py` gate checks the paths, line counts, and required caller edges below. A source file add/remove/line-count change must refresh this ledger in the same change (`--refresh` does the mechanical part).
+
+### D4 partially accepted (2026-08-25): `er-diag-harness`
+
+The three files that left `experiments/**` are `startup_hooks/diagnostics/{msb_parse_trace,loadlist_wait_trace,dlc_roots_trace}.rs`, into the new `crates/er-diag-harness` cdylib. They were the only rows on the D4 list that a second image could take: each is observe-and-forward, none exports an `oracle_*` field, and none reads or writes a product static.
+
+The rest of D4 does **not** follow them, and the reason is measured rather than judged. `trace/**` (4,134 lines) cannot move: `install_continue_trace_hooks` runs on every normal product boot -- its gate is `trace_continue_enabled()`, which is `product_autoload_enabled()`, armed by default -- and `create_continue_trace_hook` is `er-title-flow`'s SOLE hook-install primitive for eight product hooks, wired in from `bootstrap.rs`. Inside those files, `map_mount_guard_flip_tick` and `blockres_phase2_hook` write game memory as corrective fixes, `cap_builder_hook` overrides the native LoadGame slot argument, and `cap_dialog_factory_hook` drives the own-stepper into STAGE2; seven of their statics are read by product code outside the family, and four feed `oracle_*` fields. `menu_diag/menu_observation.rs` is likewise blocked: `decode_thunk_hop` is on the live `er-title-flow` seam. `input_trace.rs` has no hooks of its own -- it borrows the XInput detour that `input_block.rs` installs for the save picker, and `input_block.rs:786` calls back into it -- so moving it would need that detour to become a `[[shared]]` hook-union anchor first.
 
 ## 2. R1 ownership rules
 
@@ -134,11 +140,8 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
 | `save_redirect/path_hooks.rs` | 2,002 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 104 | product startup root and arming facade | `STAY` |
-| `startup_hooks/diagnostics/dlc_roots_trace.rs` | 169 | product diagnostic | `STAY` |
-| `startup_hooks/diagnostics/layout_global_hooks.rs` | 383 | mixed title, quit, and product diagnostics | R11 and R22 |
-| `startup_hooks/diagnostics/loadlist_wait_trace.rs` | 139 | product diagnostic | D4 |
-| `startup_hooks/diagnostics/mod.rs` | 22 | diagnostics module facade | `STAY` |
-| `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
+| `startup_hooks/diagnostics/layout_global_hooks.rs` | 385 | mixed title, quit, and product diagnostics | R11 and R22 |
+| `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,577 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
