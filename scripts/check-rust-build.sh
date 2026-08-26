@@ -109,6 +109,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-invasion-path:er_invasion_path
 		er-invasion-warp:er_invasion_warp
 		er-inventory-sort:er_inventory_sort
+		er-refill-all:er_refill_all
 		er-loading-bar:er_loading_bar
 		er-loading-portrait:er_loading_portrait
 		er-net-effects:er_net_effects
