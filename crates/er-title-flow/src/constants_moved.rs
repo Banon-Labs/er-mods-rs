@@ -1335,22 +1335,11 @@ pub const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
 /// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
 pub const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
 
-/// Settle the freshly-opened menu before injecting (poll-frames).
-pub const INJECT_NAV_SETTLE_FRAMES: usize = 90;
-
-/// Down asserted for this many consecutive poll-frames = one clean edge (one cursor step).
-pub const INJECT_NAV_TAP_LEN: usize = 4;
-
-/// Released gap between taps (edge re-arm; menu nav is edge-triggered, not auto-repeat).
-pub const INJECT_NAV_GAP_LEN: usize = 16;
-
-/// One tap+gap cycle length.
-pub const INJECT_NAV_CYCLE: usize = INJECT_NAV_TAP_LEN + INJECT_NAV_GAP_LEN;
-
-/// Number of Down taps to drive. The problem is fully deterministic: the cursor starts on
-/// Continue (index 0) and Load Game is index 1, so EXACTLY ONE Down reaches it. There is no state
-/// of knowledge that justifies more than one tap, so this is a literal 1 (not a tunable).
-pub const INJECT_NAV_MAX_CYCLES: usize = 1;
+// The INJECT-NAV tap/gap schedule constants (SETTLE_FRAMES / TAP_LEN / GAP_LEN / CYCLE /
+// MAX_CYCLES) lived here. They only ever fed `inject_nav_buttons` (title_tick_cover.rs), the D-pad-Down
+// fabrication schedule for the `inject_nav_enabled()` gate -- a gate that could only return `false`.
+// Gate, schedule and constants were deleted together (2026-08-26). XINPUT_GAMEPAD_DPAD_DOWN above
+// stays: the System->Quit repro autopilot and the DInput/VK translation tables still use it.
 
 /// Latched true once a load sustained >=MOVE_PROBE_REQUIRED_FRAMES consecutive frames of havok-position
 /// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.

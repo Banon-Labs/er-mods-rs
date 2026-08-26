@@ -1,6 +1,7 @@
 // ============================================================================================
-/// XInput poll counter, incremented each XInputGetState call while inject-nav is active and the
-/// menu is open. The schedule below is in these poll-frames.
+/// XInput poll counter. It was named for the INJECT-NAV drive that once owned it; that drive is
+/// deleted and the sole remaining consumer is the System->Quit repro autopilot, which bumps it on
+/// every fabricated poll to guarantee a fresh `dwPacketNumber`.
 pub(crate) use er_telemetry_core::counters::INJECT_NAV_FRAME;
 pub(crate) use er_title_flow::XINPUT_GAMEPAD_DPAD_DOWN;
 /// XINPUT_GAMEPAD.wButtons bits for the System->Quit repro autopilot's controller sequence
@@ -19,19 +20,18 @@ pub(crate) const XINPUT_GAMEPAD_A: u16 = 0x1000;
 pub(crate) const XINPUT_GAMEPAD_B: u16 = 0x2000;
 /// Current game-task tick's synthesized gamepad wButtons for the System->Quit repro autopilot,
 /// written by `system_quit_repro_tick` and READ by the XInput poll hook (the stage the game reads a
-/// gamepad from). 0 = no button. Distinct from INJECT_NAV_CUR_BUTTONS (own_stepper title nav).
+/// gamepad from). 0 = no button. It is now the ONLY button source the XInput hook fabricates from.
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_XINPUT_BUTTONS;
 /// ProfileSelect cursor index captured on entry to TO_SLOT (the current/most-recent save the cursor
 /// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
 /// usize::MAX = not yet captured (reset on entry to TO_SLOT).
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_INITIAL_CURSOR;
-// INJECT_NAV_LOG_COUNT / INJECT_NAV_LOG_FIRST (the per-tap log throttle) went with the INJECT-NAV
-// branch in product_core_own_stepper/fallback_drives.rs, whose `inject_nav_enabled()` gate returned
-// a literal `false`. INJECT_NAV_CUR_BUTTONS below is kept: the XInput hook still reads it.
-// INJECT_NAV_CUR_BUTTONS held the INJECT-NAV schedule's per-frame synthesized gamepad wButtons
-// for the XInput hook to read. Both its writer (the INJECT-NAV branch) and its reader (the
-// `inject_nav` arm of the XInput fabrication in input_block.rs) sat behind the
-// permanently-false `inject_nav_enabled()` gate and went with it.
+// The whole INJECT-NAV drive is gone (2026-08-26): the branch in
+// product_core_own_stepper/fallback_drives.rs, its counters (INJECT_NAV_LOG_COUNT /
+// INJECT_NAV_LOG_FIRST / INJECT_NAV_CUR_BUTTONS, deleted from er-telemetry-core), its poll-frame
+// tap/gap schedule (`inject_nav_buttons` + constants, deleted from er-title-flow), the XInput
+// force-connect term that served it, and finally the `inject_nav_enabled()` gate itself -- which
+// could only ever return `false`, so none of it ran on any build.
 // ---- CAN-MOVE probe (2026-07-18, user-directed readiness gate) ----
 // "render-ready" answers "can the user SEE the character"; CAN-MOVE answers "does INPUT MOVE the
 // character" -- the second half of the readiness the earlier automated capture lacked. When
@@ -204,10 +204,9 @@ pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0; 10];
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_CONFIRM_BASELINE;
 /// Game-task tick counter within the current repro state (reset to 0 on each state transition). The
-/// per-phase edge index is `tick / INJECT_NAV_CYCLE`; the injected edge hold/gap timing REUSES the
-/// RE-grounded own_stepper nav constants (edge-triggered menu nav needs a multi-frame hold to
-/// register one step; a 1-frame tap is missed -- bd keyboard-dik-down-injection-works-cursor-moves-
-/// 2026). No sq-repro-specific timing value is invented.
+/// injected edge hold/gap timing is RE-grounded, not invented: edge-triggered menu nav needs a
+/// multi-frame hold to register one step; a 1-frame tap is missed -- bd
+/// keyboard-dik-down-injection-works-cursor-moves-2026.
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_STATE_TICK;
 /// Latches "waiting-for-transition self-reported" for the current state so it logs exactly once
 /// (0 = not yet); reset on each state transition. Not a tap budget -- a boolean.

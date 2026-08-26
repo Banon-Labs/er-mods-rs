@@ -23,13 +23,6 @@ pub(crate) fn product_autoload_enabled() -> bool {
 pub(crate) fn profile_select_load_flow_enabled() -> bool {
     PROFILE_SELECT_LOAD_FLOW_ENABLED
 }
-/// Diagnostic mode for native ProfileSelect/profile-renderer portrait capture. This mode must not
-/// arm product title-cover/custom-cover mutations or default Continue autoload; it only permits the
-/// zero-host-input native menu open plus passive/native Load-Game row firing used by the capture
-/// harness.
-pub(crate) fn native_profile_capture_enabled() -> bool {
-    false
-}
 /// Force the live profile-portrait 3D model render at the title/menu phase (where the GxDrawContext is
 /// valid). The recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target
 /// slot used (`MarkProfileIndexAsUsed`) then calls the argless profile-render refresh to kick the async
@@ -40,7 +33,7 @@ pub(crate) fn native_profile_capture_enabled() -> bool {
 /// mirrors the native_continue/pab/splash de-gating precedent
 /// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
 /// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
-/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+/// `autoload_disabled()`; telemetry-only runs stay off; env/file remain force-on overrides.
 /// True on native Windows (NOT Wine/Proton). Wine's `ntdll` exports `wine_get_version`; native Windows
 /// never does. Cached. Used to disable the character-profile RENDER-DRIVE on native Windows, where
 /// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver (bd
@@ -61,25 +54,11 @@ pub(crate) fn is_native_windows() -> bool {
     !is_wine
 }
 
-/// True when the operator force-DISABLED the native-Windows profile render-drive (env
-/// `ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0`). The drive is now DEFAULT-ON for native (see the gates below):
-/// the isolated overlay owns its own D3D12 device and the 8-frame settle gate keeps the crash-prone
-/// model-drive blocked, so the portrait pipeline is runtime-proven safe on native (2026-07-15, zero AVs
-/// across 7 boots, animated head captured + displayed). This env is now only a diagnostic force-OFF escape.
-// ENV-GATE RATIONALE: ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0 force-DISABLES the (now default-on) native
-// profile render-drive; it is a diagnostic escape hatch only and never writes a save or perturbs the mount.
-fn native_profile_drive_disabled() -> bool {
-    false
-}
-
 // ENV-GATE RATIONALE: ER_EFFECTS_FORCE_PROFILE_RENDER=1 force-ENABLES the profile portrait render-drive
 // even on telemetry-only/no-load save-override runs (where it is otherwise off); diagnostic force-ON
 // override only. Does not write a save; simply keeps the portrait render pipeline active for the probe.
 pub(crate) fn force_profile_render_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
-        return false;
-    }
-    if is_native_windows() && native_profile_drive_disabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -94,9 +73,9 @@ pub(crate) fn force_profile_render_enabled() -> bool {
 ///
 /// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
 /// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Master off:
-/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+/// `autoload_disabled()`; telemetry-only runs stay off; env/file remain force-on overrides.
 pub(crate) fn portrait_real_pixels_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -114,13 +93,10 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
 /// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). The earlier
 /// "risky/unproven" caveat is retired: runtime-proven safe across the 2026-06-30 smokes (145-168 per-frame
 /// Present-hook composites, no crash). This also runs the per-frame depth-alpha-key + CPU-blend composite.
-/// Master off: `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain
+/// Master off: `autoload_disabled()`; telemetry-only runs stay off; env/file remain
 /// force-on overrides.
 pub(crate) fn portrait_render_drive_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
-        return false;
-    }
-    if is_native_windows() && native_profile_drive_disabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -145,7 +121,7 @@ pub(crate) fn measure_no_composite() -> bool {
 }
 
 pub(crate) fn portrait_overlay_enabled() -> bool {
-    if measure_no_composite() || autoload_disabled() || native_profile_capture_enabled() {
+    if measure_no_composite() || autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -299,18 +275,18 @@ pub(crate) fn autoload_disabled() -> bool {
 /// one-slot render feeds the loading-screen portrait) and only the box display is redirected.
 ///
 /// This is a PRODUCT-LEVEL lever tied to autoload state (not a per-feature knob): default-ON for any
-/// real product autoload run, OFF for telemetry-only/observe and native-capture runs. A single DISABLE
+/// real product autoload run, OFF for telemetry-only runs. A single DISABLE
 /// override turns the stats panel off for A/B, mirroring `autoload_disabled()`'s `ER_EFFECTS_NO_AUTOLOAD`
 /// shape: env `ER_EFFECTS_NO_STATS_PANEL=1` OR the GAME_DIR file `er-effects-no-stats-panel.txt`.
 pub(crate) fn stats_panel_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() || save_override_telemetry_only() {
+    if autoload_disabled() || save_override_telemetry_only() {
         return false;
     }
     true
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_continue_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -340,22 +316,25 @@ pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
 // Those four are not gone from the product -- `lib_parts/dll_entry_parts/bootstrap.rs` wires the
 // corresponding `TitleFlowHost` fields to `|| false` closures instead, so the seam keeps its shape
 // without this crate carrying a function whose only possible answer is `false`.
-/// PASSIVE own-stepper: do NOT force the menu (no SetState(2)/self-fire) and do NOT block input.
-/// The user navigates to Load Game once (the input that surfaces the input-gated d180); the
-/// capture hooks grab d180; then STAGE 2 drives mount->confirm->load. This both PROVES the load
-/// (correct + faster than manual slot-select) and lets the iterator log the menu-structure change
-/// so the pump-switch can be replayed zero-input later. File: er-effects-passive.txt.
-pub(crate) fn own_stepper_passive_enabled() -> bool {
-    false
-}
-/// SELF-DRIVEN GAMEPAD NAV INJECTION (er-effects-inject-nav.txt / ER_EFFECTS_INJECT_NAV). When on,
-/// the input block stays engaged PAST menu-open (user input fully suppressed) and the XInput hook
-/// fabricates a D-pad Down nav schedule at the gamepad poll source, cycling the title-menu cursor
-/// so the input/focus-gated row populate fires and the row-push/csmenu-ctor hooks capture its
-/// trigger -- uncontaminated by user input. Capture-only (Down nav, never Confirm).
-pub(crate) fn inject_nav_enabled() -> bool {
-    false
-}
+//
+// FOUR MORE WENT THE SAME WAY (2026-08-26, PR #362 review -- the user refused to approve a change
+// that ADDED permanently-false gates: "we cannot rely on env gating for product stability"):
+//
+//   * `native_profile_capture_enabled` -- a diagnostic native ProfileSelect/portrait-capture mode.
+//     It only ever ORed an extra `false` into six product gates (`force_profile_render_enabled`,
+//     `portrait_real_pixels_enabled`, `portrait_render_drive_enabled`, `portrait_overlay_enabled`,
+//     `stats_panel_enabled`, `native_continue_enabled`), so removing it cannot change any of them.
+//     The identically-named `TitleFlowHost` field is a DIFFERENT symbol and stays: bootstrap.rs
+//     wires it to `|| false` and `er-title-flow` reads it, exactly like the four above.
+//   * `native_profile_drive_disabled` -- an env force-OFF escape for the native-Windows portrait
+//     render-drive. Its two call sites were
+//     `is_native_windows() && native_profile_drive_disabled()`, never true. `is_native_windows()`
+//     itself is untouched: input_block.rs, task_tick.rs and title_visual_startup.rs still call it.
+//   * `own_stepper_passive_enabled` -- a marker-file-gated hand-driven own-stepper mode. Its idx10
+//     branch was already gone; the leftovers were two `input_block.rs` terms.
+//   * `inject_nav_enabled` -- an env/marker-file-gated fabricated D-pad-Down title nav. Its driver
+//     branch and its `INJECT_NAV_*` counters were already gone; the leftovers were the XInput
+//     force-connect terms in `input_block.rs`.
 
 /// MOVEMENT-PROOF probe (`er-effects-prove-movement.txt`). When staged, authorizes the in-DLL
 /// can-move probe to inject a forward stick in-world AND forces XInput slot 0 "connected" so the game

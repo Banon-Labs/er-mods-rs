@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 48,291 |
+| all `experiments/**` | 76 | 48,265 |
 | excluding `startup_hooks/**` | 44 | 25,311 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -105,13 +105,13 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `continue_load/product_continue.rs` | 563 | product continue/load policy | D5 |
 | `continue_load/slot_resolution.rs` | 739 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
-| `gating/env_flags.rs` | 489 | product gate policy | D1 |
+| `gating/env_flags.rs` | 468 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 56 | product GPU-readback facade | R4-R5 |
 | `gpu_readback/boot_progress.rs` | 2,974 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
-| `input_block.rs` | 1,399 | product input ownership | `STAY` |
+| `input_block.rs` | 1,390 | product input ownership | `STAY` |
 | `input_trace.rs` | 924 | product diagnostic | D4 |
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 114 | product install ordering | `STAY` |
@@ -121,10 +121,10 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `mem.rs` | 24 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
 | `menu_diag/menu_observation.rs` | 615 | product menu observation | D4 |
-| `mod.rs` | 106 | experiments module root and compatibility exports | `STAY` |
+| `mod.rs` | 107 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 9 | own-stepper memory family | D5 and R14 |
 | `mod/product_core_own_stepper.rs` | 554 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 596 | product fallback-drive diagnostic | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 599 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 9 | S11 own-load facade | D5 |
 | `own_load/drive.rs` | 1,724 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |

@@ -13,8 +13,9 @@ use std::{
 
 // `crate::input_blocker::InputBlocker` was imported here for the INJECT-NAV branch's
 // `set_injected_key` stamp in product_core_own_stepper/fallback_drives.rs. That branch was
-// unreachable (`inject_nav_enabled()` returns a literal `false`) and was deleted with the other
-// abandoned load-mechanism experiments, taking the last use of the type in this module with it.
+// unreachable -- its `inject_nav_enabled()` gate could only return `false` -- and was deleted with
+// the other abandoned load-mechanism experiments, taking the last use of the type in this module
+// with it. The gate itself is gone too (2026-08-26), along with the rest of INJECT-NAV.
 use eldenring::{
     cs::{GameMan, PlayerIns},
     fd4::FD4TaskData,

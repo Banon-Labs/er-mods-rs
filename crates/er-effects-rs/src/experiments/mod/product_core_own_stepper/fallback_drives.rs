@@ -130,9 +130,9 @@ macro_rules! own_stepper_idx10_fallbacks {
         );
         // A PASSIVE mode used to sit here: it skipped forcing the menu and handed off to
         // PHASE_MENU_BUILD to wait for the USER to open Load Game. Its gate,
-        // `own_stepper_passive_enabled()`, has returned a literal `false` since it was introduced,
-        // so idx10 has always forced the menu below. Deleted with the other unreachable
-        // load-mechanism experiments (input probe, inject-nav, direct build).
+        // `own_stepper_passive_enabled()`, only ever returned a literal `false`, so idx10 has
+        // always forced the menu below. Branch and gate are both deleted, with the other
+        // unreachable load-mechanism experiments (input probe, inject-nav, direct build).
         let (bare, bare_tree) = if live_dialog_enabled() {
             (None, None)
         } else {
@@ -281,7 +281,8 @@ macro_rules! own_stepper_idx10_fallbacks {
         const MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA: usize =
             ProfileLoadMenuRva::MenuLoadGameFunctorVtable as usize;
         // The `!own_stepper_passive_enabled() && !input_probe_enabled() &&` terms that opened this
-        // condition were both permanently `false`, so both negations were permanently `true`.
+        // condition were both permanently `false`, so both negations were permanently `true`. Both
+        // gates are deleted.
         if !live_dialog_enabled()
             && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
             && unsafe { title_scheduler_ready($owner, $base) }
@@ -412,8 +413,9 @@ macro_rules! own_stepper_idx10_fallbacks {
                 }
             }
         }
-        // Three post-menu-open experiments used to sit here, each behind a gate that has returned a
-        // literal `false` since it was written, so none of them ever ran on any build:
+        // Three post-menu-open experiments used to sit here, each behind a gate that could only
+        // return a literal `false`, so none of them ever ran on any build. All three gates have
+        // since been deleted too:
         //
         //   * DETERMINISTIC INPUT PROBE (`input_probe_enabled`) -- drove a frame-precise
         //     Down->Confirm through `menu_input_probe` as a measurement oracle;
@@ -435,8 +437,8 @@ macro_rules! own_stepper_idx10_fallbacks {
         // headless Load path is the own-the-stepper / session-activation route, not driving these
         // fake-menu steppers.
         // The `&& !own_stepper_passive_enabled() && !input_probe_enabled() && !inject_nav_enabled()`
-        // terms that followed were all permanently-`false` gates, so all three negations were
-        // permanently `true` and the menu-open check alone decided this branch.
+        // terms that followed were all permanently-`false` gates (now deleted), so all three
+        // negations were permanently `true` and the menu-open check alone decided this branch.
         if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO {
             if OWN_STEPPER_TITLE_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
                 == TITLE_OWNER_SCAN_START_ADDRESS
@@ -544,8 +546,9 @@ macro_rules! own_stepper_idx10_fallbacks {
                 own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_INVOKE);
             }
             None => {
-                // `&& !own_stepper_passive_enabled()` dropped: permanently-`false` gate, so the
-                // negation was permanently `true` and the timeout alone decided this walk.
+                // `&& !own_stepper_passive_enabled()` dropped: permanently-`false` gate (now
+                // deleted), so the negation was permanently `true` and the timeout alone decided
+                // this walk.
                 if menu_build_timed_out {
                     let _ = unsafe { diagnostic_menu_walk($owner, $base, "built138-timeout", true) };
                     let _ = unsafe {
