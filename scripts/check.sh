@@ -100,6 +100,13 @@ command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# A NUL-terminator walk over a pointer we did not create is how both testers' games died on
+# 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage NON-null
+# `key` from Steam/Seamless, past a guard that only checked for null. Four more sites of the same
+# shape were still live when that crash's own fix was reviewed, so the invariant is a gate rather
+# than a habit. Selftest first, so the gate is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py" --selftest
+python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py"
 # A detour's expected prologue must be GENERATED from named iced-x86 instructions in a build.rs,
 # never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
 # left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
