@@ -562,7 +562,7 @@ pub(crate) fn spawn(_module_base: usize) {
                         break;
                     }
                     Err(err) => {
-                        if attempts == 0 || attempts % 4096 == 0 {
+                        if attempts == 0 || attempts.is_multiple_of(4096) {
                             refill_log(format_args!(
                                 "install: waiting for game module base: {err}"
                             ));
