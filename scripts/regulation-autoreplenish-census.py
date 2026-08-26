@@ -70,6 +70,7 @@ def decrypt(path: Path) -> bytes:
         input=body,
         capture_output=True,
         check=True,
+        timeout=30,
     ).stdout
     if plain[:4] != b"DCX\0":
         raise SystemExit(f"decrypt failed: expected DCX magic, got {plain[:4]!r}")
