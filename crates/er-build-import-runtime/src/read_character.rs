@@ -287,7 +287,9 @@ unsafe fn read_slot(
     };
     let (weapon_art, gaitem_handle) = if kind == Kind::Weapon {
         // Safety: same context; the whole chain is null-checked inside.
-        let art = unsafe { read_weapon_art(module_base, msg, slot) };
+        let default_arts = default_arts_for(param_id / ARMAMENT_LEVEL_STEP * ARMAMENT_LEVEL_STEP);
+        let ashes = ash_of_war_arts_rows();
+        let art = unsafe { read_weapon_art(module_base, msg, slot, default_arts, &ashes) };
         // Safety: as above -- one read of the player singleton and one engine getter.
         let handle = unsafe { worn_armament_handle(module_base, slot) };
         (art, handle)
@@ -350,9 +352,19 @@ const fn GAITEM_HANDLE_CATEGORY_OF(handle: u32) -> u8 {
 /// # Safety
 ///
 /// Game thread; `module_base` the loaded image base and `msg` a live `MsgRepositoryImp*`.
-unsafe fn read_weapon_art(module_base: usize, msg: usize, slot: i32) -> Option<String> {
+unsafe fn read_weapon_art(
+    module_base: usize,
+    msg: usize,
+    slot: i32,
+    default_arts: Option<u32>,
+    ashes: &std::collections::BTreeSet<u32>,
+) -> Option<String> {
     // Safety: the caller's contract.
     let arts_id = unsafe { equipped_weapon_arts_id(module_base, slot) }?;
+    // The same two tests the carried read applies -- see `is_ash_of_war`.
+    if !is_ash_of_war(arts_id, default_arts, ashes) {
+        return None;
+    }
     // Safety: as above.
     unsafe { name_for(Kind::AshOfWar, msg, module_base, arts_id) }
 }
@@ -681,7 +693,8 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
         .items();
 
     let parts = protector_parts();
-    let types = weapon_types();
+    let facts = weapon_facts();
+    let ashes = ash_of_war_arts_rows();
     let levels = ReinforceLevels::read();
     let mut maxima: std::collections::BTreeMap<u32, u16> = std::collections::BTreeMap::new();
     let mut armaments = Vec::new();
@@ -699,11 +712,8 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
                 // 68 of the 123 entries the first whole-inventory export produced. The planner
                 // keeps ammo in its own `items.ammo` map, drops it from `inventory` on import,
                 // and the only thing it does in a share link is make the URL longer.
-                if types
-                    .get(&split.row_with_affinity)
-                    .copied()
-                    .is_some_and(is_ammunition)
-                {
+                let known = facts.get(&split.row_with_affinity).copied();
+                if known.is_some_and(|facts| is_ammunition(facts.wep_type)) {
                     out.carried_ammunition += 1;
                     continue;
                 }
@@ -721,7 +731,16 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
                 );
                 // Safety: the handle came out of the engine's own inventory entry, and the whole
                 // lookup chain is null-checked inside.
-                let weapon_art = unsafe { art_for_handle(module_base, msg, handle.0, handle.1) };
+                let weapon_art = unsafe {
+                    mounted_ash(
+                        module_base,
+                        msg,
+                        handle.0,
+                        handle.1,
+                        known.map(|facts| facts.default_arts),
+                        &ashes,
+                    )
+                };
                 armaments.push(ReadSlot {
                     name,
                     infusion: split.infusion.map(str::to_owned),
@@ -822,6 +841,58 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
     }
 }
 
+/// Every `SwordArtsParam` row that some `EquipParamGem` row grants -- i.e. every skill that IS an
+/// ash of war, as opposed to a skill an armament simply has.
+///
+/// # The technical shape of the bug this closes
+///
+/// `GetSwordArtsParamIdForWeapon` answers for every armament, gem or no gem: with a gem, that
+/// gem's `swordArtsParamId`; with none, the armament's own. The two are indistinguishable at the
+/// call, and the second is not an ash of war -- there is no gem item that grants it, so no ash
+/// exists by that name in any catalogue built from the gem table. That is the class:
+///
+/// * armaments that refuse ashes entirely (`Ringed Finger` -> `Claw Flick`, `Rivers of Blood` ->
+///   `Corpse Piler`, every boss and DLC unique);
+/// * armaments that allow one but have none mounted, which report the same way.
+///
+/// Exporting either as `weaponArt` names something the planner cannot resolve, and its build page
+/// throws while looking it up -- which is what made a build unsaveable. So the export asks the
+/// GEM TABLE whether the skill is an ash at all, which is the same question the planner's own
+/// (gem-derived) ash list answers, rather than testing one armament's default and hoping.
+fn ash_of_war_arts_rows() -> std::collections::BTreeSet<u32> {
+    use eldenring::cs::{EquipParamGem, SoloParamRepository};
+    use fromsoftware_shared::FromStatic;
+
+    let mut rows = std::collections::BTreeSet::new();
+    // Safety: read-only enumeration behind the populated-singleton check.
+    let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+        return rows;
+    };
+    for (_, row) in repo.rows::<EquipParamGem>() {
+        if let Ok(arts_id) = u32::try_from(row.sword_arts_param_id())
+            && arts_id != 0
+        {
+            rows.insert(arts_id);
+        }
+    }
+    rows
+}
+
+/// The skill one armament row carries with no ash mounted.
+///
+/// A single-row question, for the WORN read, which has no reason to build the whole table the
+/// carried read needs.
+fn default_arts_for(row_with_affinity: u32) -> Option<u32> {
+    use eldenring::cs::{EquipParamWeapon, SoloParamRepository};
+    use fromsoftware_shared::FromStatic;
+
+    // Safety: read-only row access behind the populated-singleton check.
+    let repo = (unsafe { SoloParamRepository::instance() }).ok()?;
+    repo.rows::<EquipParamWeapon>()
+        .find(|(id, _)| *id == row_with_affinity)
+        .and_then(|(_, row)| u32::try_from(row.sword_arts_param_id()).ok())
+}
+
 /// `EquipParamWeapon::wepType` values that are AMMUNITION rather than armaments.
 ///
 /// Measured, not assumed. The field sits at row offset 422 and every one of the game's 3554 weapon
@@ -835,20 +906,36 @@ fn is_ammunition(wep_type: u16) -> bool {
     AMMUNITION_WEAPON_TYPES.contains(&wep_type)
 }
 
-/// Every `EquipParamWeapon` row's `wepType`, read once off the live table.
-fn weapon_types() -> std::collections::BTreeMap<u32, u16> {
+/// What the param table says about each armament row: its `wepType`, and the skill it carries
+/// with NO ash of war mounted.
+#[derive(Clone, Copy)]
+struct WeaponFacts {
+    wep_type: u16,
+    /// `swordArtsParamId` -- the armament's OWN skill. An armament reporting this row is an
+    /// armament with no ash on it.
+    default_arts: u32,
+}
+
+/// [`WeaponFacts`] for every `EquipParamWeapon` row, read once off the live table.
+fn weapon_facts() -> std::collections::BTreeMap<u32, WeaponFacts> {
     use eldenring::cs::{EquipParamWeapon, SoloParamRepository};
     use fromsoftware_shared::FromStatic;
 
-    let mut types = std::collections::BTreeMap::new();
+    let mut facts = std::collections::BTreeMap::new();
     // Safety: read-only row access behind the populated-singleton check.
     let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
-        return types;
+        return facts;
     };
     for (row_id, row) in repo.rows::<EquipParamWeapon>() {
-        types.insert(row_id, row.wep_type());
+        facts.insert(
+            row_id,
+            WeaponFacts {
+                wep_type: row.wep_type(),
+                default_arts: u32::try_from(row.sword_arts_param_id()).unwrap_or_default(),
+            },
+        );
     }
-    types
+    facts
 }
 
 /// The highest level `row_with_affinity` can reach, cached: an inventory holds many copies of one
@@ -923,24 +1010,54 @@ fn deduplicate_protectors(items: Vec<(&'static str, ReadSlot)>) -> Vec<(&'static
 /// item), which is why they were invisible on the site and present in every payload.
 const UNARMED_ARMAMENT_ROW: u32 = 110_000;
 
-/// The ash of war mounted on the instance a gaitem handle names.
+/// The ash of war MOUNTED on the instance a gaitem handle names, or `None` when it is carrying
+/// nothing but its own skill.
+///
+/// # An armament's own skill is not an ash of war, and saying it is breaks the planner
+///
+/// `GetSwordArtsParamIdForWeapon` always answers: with a gem, the gem's row; without one, the
+/// armament's `swordArtsParamId`. Exporting that second answer as `weaponArt` names a skill the
+/// planner has no ash for -- Ringed Finger reports `Claw Flick`, which is a weapon skill and NOT
+/// in its ashes-of-war table (`allow_ash_of_war: !1` on that armament) -- and the page throws
+/// while looking it up. A build carrying one cannot be saved. So the default is filtered out
+/// here, which is also what it MEANS: nothing was mounted.
 ///
 /// # Safety
 ///
 /// Game thread; `module_base` the loaded image base and `msg` a live `MsgRepositoryImp*`.
-unsafe fn art_for_handle(
+unsafe fn mounted_ash(
     module_base: usize,
     msg: usize,
     selector: u32,
     category: u8,
+    default_arts: Option<u32>,
+    ashes: &std::collections::BTreeSet<u32>,
 ) -> Option<String> {
     let handle = (u32::from(category) << 28) | GAITEM_HANDLE_CATEGORY_FLAG | selector;
     // Safety: the caller's contract; the record is the engine's own and the chain is null-checked.
     let mut lookup = unsafe { GaitemLookupResult::from_handle(module_base, handle) }?;
     // Safety: as above.
     let arts_id = unsafe { lookup.sword_arts_id(module_base) }?;
+    if !is_ash_of_war(arts_id, default_arts, ashes) {
+        return None;
+    }
     // Safety: as above.
     unsafe { name_for(Kind::AshOfWar, msg, module_base, arts_id) }
+}
+
+/// Whether a skill an armament reports is an ASH OF WAR that was mounted on it.
+///
+/// Two tests, and the first is the class-wide one: a skill no `EquipParamGem` row grants is not an
+/// ash, whatever armament is carrying it. The second catches the remaining case -- an armament
+/// whose OWN skill happens to also exist as an ash (many do: `Square Off` is both the Longsword's
+/// default and a purchasable ash) and which has nothing mounted, where reporting the ash would
+/// claim an item the player does not have.
+fn is_ash_of_war(
+    arts_id: u32,
+    default_arts: Option<u32>,
+    ashes: &std::collections::BTreeSet<u32>,
+) -> bool {
+    ashes.contains(&arts_id) && default_arts != Some(arts_id)
 }
 
 /// Bit 31 of a `GaitemHandle`, which the engine sets alongside the category on every real handle.
