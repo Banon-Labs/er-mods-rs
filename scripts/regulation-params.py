@@ -49,6 +49,9 @@ def decrypt(path):
             ["openssl", "enc", "-d", "-aes-256-cbc", "-nopad",
              "-K", REGULATION_KEY, "-iv", iv.hex(), "-in", enc, "-out", dec],
             check=True,
+            # Two megabytes of AES is instant; a minute of it means openssl is stuck on
+            # something that is not this file.
+            timeout=30,
         )
         plain = open(dec, "rb").read()
     if plain[:4] != b"DCX\0":

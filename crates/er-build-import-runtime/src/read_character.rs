@@ -138,6 +138,11 @@ pub struct ReadSlot {
     /// armament -- which is the scale the planner's per-slot `upgrade` uses too. `None` for
     /// anything that is not an armament.
     pub upgrade: Option<u16>,
+    /// The engine's own acquisition-order key for this inventory entry
+    /// (`EquipInventoryDataListEntry::sort_id`), or 0 for something read off an equipment slot
+    /// rather than out of the inventory. The list is ordered by it, which is what makes the
+    /// planner's "Acquisition" sort agree with the game's.
+    pub sort_id: u32,
     /// The `EquipParamWeapon` row (affinity included, level stripped) this armament came from.
     /// Armaments only; carried for the diagnostics that need to ask the param table about it.
     pub row_with_affinity: Option<u32>,
@@ -300,6 +305,7 @@ unsafe fn read_slot(
         name,
         infusion: infusion.map(str::to_owned),
         weapon_art,
+        sort_id: 0,
         upgrade,
         row_with_affinity: (kind == Kind::Weapon)
             .then(|| param_id / ARMAMENT_LEVEL_STEP * ARMAMENT_LEVEL_STEP),
@@ -576,6 +582,9 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
                     name,
                     infusion: None,
                     weapon_art: None,
+                    // Memorisation order is the slot index, which the loop below carries in
+                    // `equip_index`; a spell is not an inventory entry and has no acquisition key.
+                    sort_id: 0,
                     upgrade: None,
                     row_with_affinity: None,
                     max_upgrade: None,
@@ -741,16 +750,25 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
                         &ashes,
                     )
                 };
-                armaments.push(ReadSlot {
+                let (copies, clamped) = copies_of(entry.quantity);
+                if clamped {
+                    crate::log_line(&format!(
+                        "[build-export] {name:?} says it is held {} times; exporting {MAX_COPIES_PER_ENTRY}",
+                        entry.quantity
+                    ));
+                }
+                let slot = ReadSlot {
                     name,
                     infusion: split.infusion.map(str::to_owned),
                     weapon_art,
                     upgrade: Some(split.level),
+                    sort_id: entry.sort_id,
                     row_with_affinity: Some(split.row_with_affinity),
                     max_upgrade: Some(max_upgrade(&levels, &mut maxima, split.row_with_affinity)),
                     equip_index: None,
                     gaitem_handle: Some(handle),
-                });
+                };
+                armaments.extend(std::iter::repeat_n(slot, copies as usize));
             }
             ItemCategory::Protector => {
                 // Safety: as above.
@@ -761,19 +779,22 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
                 let Some(part) = parts.get(&row).copied() else {
                     continue;
                 };
-                protectors.push((
+                let (copies, _) = copies_of(entry.quantity);
+                let slot = (
                     part,
                     ReadSlot {
                         name,
                         infusion: None,
                         weapon_art: None,
                         upgrade: None,
+                        sort_id: entry.sort_id,
                         row_with_affinity: None,
                         max_upgrade: None,
                         equip_index: None,
                         gaitem_handle: None,
                     },
-                ));
+                );
+                protectors.extend(std::iter::repeat_n(slot, copies as usize));
             }
             ItemCategory::Accessory => {
                 // Safety: as above.
@@ -781,35 +802,46 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
                 else {
                     continue;
                 };
-                talismans.push(ReadSlot {
+                let (copies, _) = copies_of(entry.quantity);
+                let slot = ReadSlot {
                     name,
                     infusion: None,
                     weapon_art: None,
                     upgrade: None,
+                    sort_id: entry.sort_id,
                     row_with_affinity: None,
                     max_upgrade: None,
                     equip_index: None,
                     gaitem_handle: None,
-                });
+                };
+                talismans.extend(std::iter::repeat_n(slot, copies as usize));
             }
             ItemCategory::Goods => out.carried_goods += 1,
             ItemCategory::Gem => {}
         }
     }
 
-    // A HUNDRED COPIES OF ONE ITEM IS NOT A BUILD. An inventory that has been imported into more
-    // than once holds the same armament many times over -- one character reached 978 -- and every
-    // copy costs URL. A planner build says WHICH items a character has, so identical entries are
-    // collapsed to one, keeping whichever copy is worn.
-    let armament_copies = armaments.len();
-    let talisman_copies = talismans.len();
-    let protector_copies = protectors.len();
-    let armaments = deduplicate(armaments);
-    let talismans = deduplicate(talismans);
-    let protectors = deduplicate_protectors(protectors);
-    out.collapsed_duplicates = (armament_copies - armaments.len())
-        + (talisman_copies - talismans.len())
-        + (protector_copies - protectors.len());
+    // ACQUISITION ORDER IS THE ENGINE'S, NOT THE ARRAY'S. The inventory array is in slot order --
+    // pick two items up and discard the first and the next one lands in the hole -- while the game
+    // sorts the equipment menu's "Order of Acquisition" by `sort_id`, a counter it hands out as
+    // items arrive. The planner's own "Acquisition" sort is `(a.order || 0) - (b.order || 0)`,
+    // i.e. it renders whatever order this export writes, so ordering by `sort_id` here is what
+    // makes the two agree.
+    armaments.sort_by_key(|item| item.sort_id);
+    talismans.sort_by_key(|item| item.sort_id);
+    protectors.sort_by_key(|(_, item)| item.sort_id);
+
+    // EVERY COPY IS EXPORTED, duplicates included. Two identical armaments is a real build -- it
+    // is how a character dual-wields one weapon -- and rows of the same armour piece are what the
+    // player sees in their own inventory. Collapsing them made a shorter link that described a
+    // different character, which is not a trade this export is allowed to make.
+    crate::log_line(&format!(
+        "[build-export] inventory: {} armament rows, {} talisman rows, {} armour rows (a stacked \
+         entry is expanded into one row per copy, the way the equipment menu draws it)",
+        armaments.len(),
+        talismans.len(),
+        protectors.len(),
+    ));
 
     out.read_whole_inventory = true;
     out.armaments = merge_worn(
@@ -891,6 +923,27 @@ fn default_arts_for(row_with_affinity: u32) -> Option<u32> {
     repo.rows::<EquipParamWeapon>()
         .find(|(id, _)| *id == row_with_affinity)
         .and_then(|(_, row)| u32::try_from(row.sword_arts_param_id()).ok())
+}
+
+/// How many copies of an item ONE inventory entry stands for.
+///
+/// An entry carries a `quantity`, and the equipment menu draws that many rows: gear the player
+/// holds several of can arrive as one entry saying five rather than as five entries. Exporting the
+/// entry alone loses the other four, which is exactly "rows of duplicates missing" -- so the entry
+/// is expanded here.
+///
+/// The bound is a sanity rail, not a policy: gear quantities are small, and a five-figure one
+/// means the read is wrong rather than that the player is carrying a five-figure pile. A clamp is
+/// logged by the caller rather than applied quietly.
+const MAX_COPIES_PER_ENTRY: u32 = 999;
+
+/// The number of rows one entry becomes, and whether that number had to be clamped.
+fn copies_of(quantity: u32) -> (u32, bool) {
+    let wanted = quantity.max(1);
+    (
+        wanted.min(MAX_COPIES_PER_ENTRY),
+        wanted > MAX_COPIES_PER_ENTRY,
+    )
 }
 
 /// `EquipParamWeapon::wepType` values that are AMMUNITION rather than armaments.

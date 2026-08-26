@@ -68,3 +68,6 @@ offline-launcher.exe
 # control the user drops in while a wf-*.js is running; never source.
 /.workflow-steering/
 reference-captures/
+
+# Third-party JS installed for the planner reference decoder (npm --prefix ... install lzutf8).
+crates/er-build-export/tests/reference/node_modules/
