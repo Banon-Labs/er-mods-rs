@@ -203,7 +203,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // deserialize arm). At the LIVE menu the FD4 IO worker pool is live so this DRAINS.
         let submit: unsafe extern "system" fn(i32) -> i32 =
             unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
-        let sret = unsafe { submit(slot) };
+        // NOT `submit(slot)`: the argument is a flag the game always passes as 0, and the slot
+        // was already set by `set_save_slot` above. See `B80_FULL_LOAD_SUBMIT_FLAG`.
+        let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
         let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
