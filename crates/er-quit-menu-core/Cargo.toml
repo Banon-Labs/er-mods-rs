@@ -42,6 +42,10 @@ er-save-loader = { path = "../er-save-loader" }
 # Shared cross-platform telemetry counters (the oracle_system_quit_* / save_flow_* /
 # save_dest_* / save_picker_* fields).
 er-telemetry-core = { path = "../er-telemetry-core" }
+# Share-link validation for the "Load Build from URL" row's field: the clipboard is only used
+# when it VALIDATES, so the pure host-side parser comes with the row. Data transformation only --
+# the game-side importer stays in er-build-import-runtime.
+er-build-import-core = { path = "../er-build-import-core" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
@@ -53,12 +57,18 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 er-hook = { path = "../er-hook" }
 # Fault-safe RAM readers, game base/rva resolution, typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# The game-side importer/exporter, shared with the standalone er-build-import DLL. The
+# System>Quit "Load Build from URL" and "Generate Build Link" rows are the product entry
+# points into it.
+er-build-import-runtime = { path = "../er-build-import-runtime" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
+  "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_Storage_FileSystem",
+  "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
 

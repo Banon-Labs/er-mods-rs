@@ -159,12 +159,14 @@ pub(crate) const BLOCK_SAMPLE_COUNT: usize = 4;
 pub(crate) const BLOCK_AREA_BYTE_MASK: u32 = 0xff;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
-pub(crate) use er_title_flow::FD4_FILECAP_STATUS_88_OFFSET;
-pub(crate) use er_title_flow::FD4_FILECAP_BYTES_90_OFFSET;
+// `FD4_FILECAP_STATUS_88_OFFSET`, `FD4_FILECAP_BYTES_90_OFFSET` and
+// `FD4_FILECAP_LOADPROCESS_78_OFFSET` were re-exported here for the msb-parse trace, which was
+// their ONLY reader in this crate. The trace moved into `crates/er-diag-harness/` on 2026-08-25 and
+// took them with it -- the layout now lives once, in `er_game_base::filecap`, which both images
+// read. The compiler found this: with the trace gone, all three went unused-import.
 /// Poison `~MsbFileCap` writes over `msbResCap` after releasing it; see above.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MSB_FILECAP_DESTROYED_SENTINEL: usize = 0xdead_beef;
-pub(crate) use er_title_flow::FD4_FILECAP_LOADPROCESS_78_OFFSET;
 
 /// OWN-LOAD m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
 /// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded
