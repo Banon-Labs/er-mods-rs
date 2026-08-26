@@ -165,6 +165,15 @@ python3 "$repo_root/scripts/test-dll-byte-identical.py"
 python3 "$repo_root/scripts/test-release-workflow.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
+# THE EXPERIMENTS RATCHET. er-effects-rs is being extracted INTO crates until it is a thin
+# shim that bundles them, so the line total under crates/er-effects-rs/src/experiments/** may
+# shrink but never grow; the roadmap's ledger row is the high-water mark. It is a ratchet, not
+# a freeze: edits are free, only NET GROWTH is refused, and `--refresh` accepts growth in one
+# command -- the value is that accepting it becomes a reviewable diff to the ledger instead of
+# the invisible default. Measured on PR #367, 62% of 1,553 added lines already landed in
+# extracted crates with no enforcement, pulled there by the host-seam pattern; what that
+# pattern does NOT catch is a new module born inside the shim, which is what this refuses.
+# Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
