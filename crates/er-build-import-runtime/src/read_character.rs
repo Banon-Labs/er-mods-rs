@@ -1015,52 +1015,6 @@ fn max_upgrade(
     max
 }
 
-/// Collapse identical items into one entry, keeping the WORN copy when there is one.
-///
-/// Identity is everything a planner build can express about an item: its name, its affinity, its
-/// upgrade level and the ash mounted on it. Two entries that agree on all four are the same item
-/// as far as a build is concerned, however many of them the character is hoarding -- and an
-/// inventory that has been imported into more than once holds a great many (one character reached
-/// 978 armaments, a 24,000-character link the planner would not open).
-fn deduplicate(items: Vec<ReadSlot>) -> Vec<ReadSlot> {
-    let mut out: Vec<ReadSlot> = Vec::with_capacity(items.len());
-    for item in items {
-        let seen = out.iter_mut().find(|kept| {
-            kept.name == item.name
-                && kept.infusion == item.infusion
-                && kept.upgrade == item.upgrade
-                && kept.weapon_art == item.weapon_art
-        });
-        match seen {
-            // A worn copy outranks a carried one: the equip index is the whole reason the entry
-            // matters, and dropping it would leave the build wearing nothing in that position.
-            Some(kept) if kept.equip_index.is_none() && item.equip_index.is_some() => *kept = item,
-            Some(_) => {}
-            None => out.push(item),
-        }
-    }
-    out
-}
-
-/// [`deduplicate`], per body part -- two identical helms are one helm, but a helm and a gauntlet
-/// that happen to share a name are not.
-fn deduplicate_protectors(items: Vec<(&'static str, ReadSlot)>) -> Vec<(&'static str, ReadSlot)> {
-    let mut out: Vec<(&'static str, ReadSlot)> = Vec::with_capacity(items.len());
-    for (part, item) in items {
-        let seen = out
-            .iter_mut()
-            .find(|(kept_part, kept)| *kept_part == part && kept.name == item.name);
-        match seen {
-            Some((_, kept)) if kept.equip_index.is_none() && item.equip_index.is_some() => {
-                *kept = item;
-            }
-            Some(_) => {}
-            None => out.push((part, item)),
-        }
-    }
-    out
-}
-
 /// `EquipParamWeapon` row 0x1adb0 -- "Unarmed", the item an EMPTY hand holds.
 ///
 /// An empty weapon slot does not read as nothing: `GetParamIdInSlot` answers 110000, which is a
