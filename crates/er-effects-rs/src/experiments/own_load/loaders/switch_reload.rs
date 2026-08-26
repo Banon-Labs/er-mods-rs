@@ -241,7 +241,10 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
     unsafe { set_save_slot(picked) };
     let submit: unsafe extern "system" fn(i32) -> i32 =
         unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
-    let sret = unsafe { submit(picked) };
+    // NOT `submit(picked)`: the argument is a flag the game always passes as 0, and the slot was
+    // already set by `set_save_slot` above. Passing the slot here is what refused every non-zero
+    // slot and soft-locked System->Quit->Load Character. See `B80_FULL_LOAD_SUBMIT_FLAG`.
+    let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
     let b80 = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
     append_autoload_debug(format_args!(
         "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} ret={sret} b80={b80} -> DRAIN (replicating boot native-fullread residency before feed+continue_confirm)",
