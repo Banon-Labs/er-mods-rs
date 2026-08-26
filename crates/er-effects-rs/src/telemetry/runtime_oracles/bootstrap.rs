@@ -77,7 +77,10 @@ fn title_logo_gfx_alpha_for_frame(frame: i32) -> i32 {
     }
 }
 
-fn push_json_usize(body: &mut String, name: &str, value: usize) {
+/// `pub(crate)` rather than private since the loading-cover crate extraction: the moved
+/// `cover_after_release` / `portrait_load_windows` oracle emitters call it through the
+/// `LoadingCoverHost` seam, which needs to take its address from the flat namespace.
+pub(crate) fn push_json_usize(body: &mut String, name: &str, value: usize) {
     body.push_str(&format!("  \"{name}\": {value},\n"));
 }
 

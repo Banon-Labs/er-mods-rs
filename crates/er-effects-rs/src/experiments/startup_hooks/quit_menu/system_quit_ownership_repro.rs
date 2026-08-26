@@ -1356,12 +1356,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // whose msgbox suppression then eats the confirm box the second A needs, so every later pick
     // stalled (observed autostep10b 2026-07-03: switch #1 confirmed via the OK chain, switch #2
     // suppressed msgbox-skip #2/#3 and held 20 min). It also no longer matched the human flow this
-    // autopilot exists to reproduce. Remaining gates: skip on the native-forward opt-in, when a
-    // switch is already in flight (phase != IDLE), for an out-of-range cursor, or for an EMPTY slot
-    // (arming an empty slot would tear down to a clean title then fail the deserialize).
+    // autopilot exists to reproduce. Remaining gates: skip when a switch is already in flight
+    // (phase != IDLE), for an out-of-range cursor, or for an EMPTY slot (arming an empty slot would
+    // tear down to a clean title then fail the deserialize).
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    if !system_quit_profile_load_activation_allowed()
-        && phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+    if phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
         && let Some(slot) = row_slot
     {
         if !unsafe { profile_slot_has_character(slot) } {

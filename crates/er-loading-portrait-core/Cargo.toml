@@ -49,6 +49,11 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dxgi",
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Direct3D",
+  # `D3DCompile`, for the boot-view fade / overlay pixel+vertex shaders in `gpu_draw_shared`
+  # (moved here by the loading-cover extraction). Cargo unified this feature in from the root
+  # crate while it was the only consumer, so a `-p er-loading-portrait-core` build is what
+  # proves the crate declares its own dependencies.
+  "Win32_Graphics_Direct3D_Fxc",
 ] }
 # LINT PARITY (root `[workspace.lints]`): this crate is at ZERO clippy + rustc warnings on its
 # shipping target (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`),

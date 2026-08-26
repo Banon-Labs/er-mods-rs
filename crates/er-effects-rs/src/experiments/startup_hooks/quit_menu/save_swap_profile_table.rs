@@ -771,12 +771,6 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // async character-model build. refresh is IDEMPOTENT per slot via the +0x754 "load-requested" latch,
     // so by default this builds each model ONCE and then leaves it -- the model stays LIVE every frame,
     // which is what the realtime look-at draw needs (an invalid/rebuilding pose-holder fails the draw).
-    //
-    // DESTRUCTIVE REBUILD (default OFF, `portrait_force_rebuild_enabled`): clear each build latch
-    // (+0x754/+0x755) + reset the look-at slot cache to force a FRESH build. The churn leaves models
-    // not-live most of the time (~88% draw failures -> flicker), so it is opt-in: flip it on briefly to
-    // re-capture the post-FaceData face (an early build before LOAD GAME loads FaceData = default head),
-    // then off. See `portrait_force_rebuild_enabled` and bd portrait-lookat-realtime-drawphase-design.
     let counter = PROFILE_FORCE_TICK_COUNTER.fetch_add(1, Ordering::SeqCst);
     // Post-Continue feed window: while it is open, run the (idempotent) mark+refresh every 8 ticks so the
     // freshly-built renderers' async model build is driven to completion and stays latched -- the once-per-
@@ -787,7 +781,6 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     }
     if counter.is_multiple_of(240) || (feed_window && counter.is_multiple_of(8)) {
         let log_this = counter.is_multiple_of(240); // throttle the in-window feed log to once per 240
-        let force_rebuild = portrait_force_rebuild_enabled();
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
         let mut marked = 0u32;
@@ -809,12 +802,6 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r_valid = valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
                     == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
-            if force_rebuild && r_valid {
-                unsafe {
-                    core::ptr::write_volatile((r + 0x754) as *mut u8, 0);
-                    core::ptr::write_volatile((r + 0x755) as *mut u8, 0);
-                }
-            }
             let _ = unsafe { mark(summary, s) };
             // PER-SLOT kick replica in place of the engine's GLOBAL refresh: the global form kicked
             // every marked slot (all the save's characters) -- the cross-slot portrait swap source.
@@ -845,29 +832,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         PROFILE_FOREIGN_MODELS_MAX.fetch_max(foreign, Ordering::SeqCst);
         if log_this {
             append_autoload_debug(format_args!(
-                "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} feed_window={feed_window} -- marked {marked} real slot(s) + per-slot kicked (summary=0x{summary:x} foreign_models={foreign})"
+                "force-profile-render: build cycle (counter={counter}) feed_window={feed_window} -- marked {marked} real slot(s) + per-slot kicked (summary=0x{summary:x} foreign_models={foreign})"
             ));
         }
-        // Only when we forced a fresh build: drop the cached look-at indices/base so they re-resolve and
-        // re-latch the idle base from the fresh skeleton. Without a forced rebuild the model (and its
-        // skeleton) persist, so KEEP the cache -> the look-at keeps driving every frame with no re-resolve gap.
-        if force_rebuild {
-            match PROFILE_LOOKAT_SLOTS.lock() {
-                Ok(mut g) => *g = [None; 10],
-                Err(p) => *p.into_inner() = [None; 10],
-            }
-            match PROFILE_CAM_FACE_YAW.lock() {
-                Ok(mut g) => *g = [None; 10],
-                Err(p) => *p.into_inner() = [None; 10],
-            }
-            PROFILE_CAM_FACE_YAW_LATCHED_MASK.store(0, Ordering::SeqCst);
-            // The models are being rebuilt -> the cached PoseHolder pointers are about to go stale. Drop
-            // them so they re-resolve against the fresh skeletons (and re-latch a clean base) before the
-            // sticky-keep path above starts driving them again.
-            for h in PROFILE_LOOKAT_HOLDERS.iter() {
-                h.store(0, Ordering::SeqCst);
-            }
-        }
+        // No forced rebuild happens any more, so the model (and its skeleton) persist -> KEEP the
+        // cached look-at indices/base; the look-at keeps driving every frame with no re-resolve gap.
     }
     // ~80 ticks AFTER each rebuild kick, reset the dump mask so the freshly-rebuilt models (not the
     // stale pre-clear model_ins) get re-dumped. Each cycle's dumps overwrite the per-slot files.

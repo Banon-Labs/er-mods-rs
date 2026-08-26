@@ -477,102 +477,12 @@ pub(crate) unsafe fn fire_product_title_load_action(
         "product-core-autoload: native TitleTopDialog Load-Game run returned; waiting for ProfileLoadDialog factory hook capture"
     ));
 }
-/// DETERMINISTIC MENU INPUT PROBE driver. Runs each frame (in PHASE_MENU_BUILD, after the menu is
-/// open) when `input_probe_enabled()`. Schedule (probe-frame `f`, see lib.rs consts):
-///   [0, DOWN_START)                 SETTLE   -- baseline, no input (rows empty headless?)
-///   [DOWN_START, +DOWN_TAP_FRAMES)  DOWN     -- inject one Down (Continue->Load Game)
-///   [DOWN_START, CONFIRM_START)     HIGHLIGHT-- NO input; watch MENU_D180_LEAF_TICKED grow?
-///   [CONFIRM_START, +CONFIRM_TAP)   CONFIRM  -- inject Confirm; native load fires (captured)
-/// The decisive signal is whether the genuine d180 leaf-Update tick count grows during HIGHLIGHT
-/// (before Confirm). Pure reads + the two keystate-bit writes; no SetState here (the Confirm drives
-/// the native load). `dump_titletop_menu_entries` logs the live router_this row vector each interval.
-pub(crate) unsafe fn menu_input_probe(owner: usize, base: usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    INPUT_PROBE_ACTIVE.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-    let inputmgr =
-        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(NULL);
-    let f = INPUT_PROBE_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-    let item = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
-    let leaf_ticks = MENU_D180_LEAF_TICKED.load(Ordering::SeqCst);
-
-    let in_down =
-        (INPUT_PROBE_DOWN_START..INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES).contains(&f);
-    let in_highlight = (INPUT_PROBE_DOWN_START..INPUT_PROBE_CONFIRM_START).contains(&f);
-    let in_confirm = (INPUT_PROBE_CONFIRM_START
-        ..INPUT_PROBE_CONFIRM_START + INPUT_PROBE_CONFIRM_TAP_FRAMES)
-        .contains(&f);
-
-    if inputmgr != NULL {
-        if in_down {
-            // Inject BOTH vertical-move events (one is Down, one Up; Up saturates at the top so
-            // from Continue only Down moves -> lands on Load Game). Edge-triggered &1.
-            unsafe {
-                *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_A_00) as *mut u8) |=
-                    MENU_EVENT_PRESSED_BIT;
-                *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_B_45) as *mut u8) |=
-                    MENU_EVENT_PRESSED_BIT;
-            }
-        }
-        if in_confirm {
-            unsafe {
-                *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_CONFIRM_3D) as *mut u8) |=
-                    MENU_EVENT_PRESSED_BIT;
-            }
-        }
-    }
-
-    // DECISIVE one-shot: d180's leaf Update ticked during the highlight window (after Down, before
-    // Confirm). Snapshot taken at DOWN_START; any growth here means highlight ALONE ticks d180.
-    if in_highlight
-        && leaf_ticks > INPUT_PROBE_DOWN_LEAF_BASELINE.load(Ordering::SeqCst)
-        && INPUT_PROBE_D180_PRECONFIRM.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == NULL
-    {
-        let (l, c, cur) = unsafe { dump_titletop_menu_entries(owner, base) };
-        append_autoload_debug(format_args!(
-            "INPUT-PROBE: *** d180 LEAF-TICKED during HIGHLIGHT (pre-confirm) f={f} ticks={leaf_ticks} item=0x{item:x} cursor={cur} load_entry=0x{:x} cont_entry=0x{:x} *** -> highlight ALONE ticks d180; zero-input functor-invoke route VIABLE",
-            l.unwrap_or(NULL),
-            c.unwrap_or(NULL)
-        ));
-    }
-
-    if f == INPUT_PROBE_DOWN_START {
-        // Latch the leaf-tick baseline at the moment Down begins, so HIGHLIGHT growth is measured
-        // strictly from here (ignores any pre-Down ticks).
-        INPUT_PROBE_DOWN_LEAF_BASELINE.store(leaf_ticks, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "INPUT-PROBE: DOWN inject f={f} inputmgr=0x{inputmgr:x} leaf_baseline={leaf_ticks} -- highlight window [{}..{}) before Confirm",
-            INPUT_PROBE_DOWN_START, INPUT_PROBE_CONFIRM_START
-        ));
-    }
-    if f == INPUT_PROBE_CONFIRM_START {
-        let pre = INPUT_PROBE_D180_PRECONFIRM.load(Ordering::SeqCst) != NULL;
-        append_autoload_debug(format_args!(
-            "INPUT-PROBE: CONFIRM inject f={f} d180_leaf_ticked_on_highlight={pre} ticks_now={leaf_ticks} -- {} (load now fires via Confirm)",
-            if pre {
-                "highlight WAS sufficient"
-            } else {
-                "highlight did NOT tick d180 -> needs static walk / focus is required"
-            }
-        ));
-    }
-    if f % INPUT_PROBE_LOG_INTERVAL == NULL as u64 {
-        let phase = if in_down {
-            "DOWN"
-        } else if in_confirm {
-            "CONFIRM"
-        } else if in_highlight {
-            "HIGHLIGHT"
-        } else if f < INPUT_PROBE_DOWN_START {
-            "SETTLE"
-        } else {
-            "POST"
-        };
-        append_autoload_debug(format_args!(
-            "INPUT-PROBE: f={f} phase={phase} d180_item=0x{item:x} leaf_ticks={leaf_ticks}"
-        ));
-        let _ = unsafe { dump_titletop_menu_entries(owner, base) };
-    }
-}
+// The DETERMINISTIC MENU INPUT PROBE driver (`menu_input_probe`) stood here: a per-frame
+// Down->Confirm schedule injected at the native keystate bitmap, used as a measurement oracle
+// for whether the d180 leaf-Update ticks on highlight alone. Its only caller was the
+// `input_probe_enabled()` branch in product_core_own_stepper/fallback_drives.rs, and that gate
+// has returned a literal `false` since it was written, so the probe never ran. Deleted with the
+// branch rather than left as an orphan that reads like a live input path.
 /// OBSERVE-ONLY NATIVE-LOAD tick (native_load_enabled(), gated OFF by default). Runs each frame
 /// INSTEAD of the own_stepper forcing logic, then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10
 /// so the NATIVE title machine advances untouched (the user drives past press-any-button + modals).

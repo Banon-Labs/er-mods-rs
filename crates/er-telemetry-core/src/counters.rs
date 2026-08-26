@@ -462,7 +462,6 @@ pub static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_NONNULL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
-pub static LOADING_COVER_SUPPRESS_WRITES: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_GX_KEPT: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_GX_CAPTURE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
@@ -567,10 +566,6 @@ pub static PROFILE_CAM_LAST_FOV_BITS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_FRAME: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_D180_PRECONFIRM: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_DOWN_LEAF_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_CONFIRM_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_CONFIRM_MODAL_SEEN: AtomicUsize = AtomicUsize::new(0);
 pub static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
@@ -968,7 +963,6 @@ pub static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT: AtomicUsize = AtomicUsi
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1041,8 +1035,11 @@ pub static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(u
 pub static INJECT_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_XINPUT_BUTTONS: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_INITIAL_CURSOR: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static INJECT_NAV_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+// INJECT_NAV_LOG_COUNT (per-tap log throttle) and INJECT_NAV_CUR_BUTTONS (the schedule's per-frame
+// synthesized wButtons) were the INJECT-NAV drive's own counters. Writer and reader both sat behind
+// `inject_nav_enabled()`, which could only return `false`; they were left with no writer AND no
+// reader in any crate and went with the gate (2026-08-26). INJECT_NAV_FRAME above keeps its name
+// but is now purely the sq-repro fresh-packet counter, which is a real live reader.
 pub static FRAME_TIME_WORST_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static SUPPLIED_MOVEMENT_INPUT_FRAMES: AtomicUsize = AtomicUsize::new(0);

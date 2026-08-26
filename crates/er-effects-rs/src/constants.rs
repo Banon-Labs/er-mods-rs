@@ -6,7 +6,7 @@
 use std::sync::{Once, atomic::AtomicUsize};
 
 use eldenring::{
-    cs::{ChrAsm, EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
+    cs::{EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
     dlkr::DLAllocator,
 };
 use fromsoftware_shared::FromStatic;
@@ -33,28 +33,11 @@ pub(crate) const TITLE_HANDOFF_INCOMPLETE: usize = 0;
 pub(crate) const TITLE_HANDOFF_COMPLETE_VALUE: usize = 1;
 pub(crate) const STACK_TRACE_FRAME_COUNT: usize = 8;
 pub(crate) const STACK_TRACE_FRAMES_TO_SKIP: u32 = 0;
-pub(crate) use er_title_flow::NULL_MODULE_BASE;
-pub(crate) const HOOK_ORIGINAL_UNSET: usize = 0;
 pub(crate) use er_title_flow::HOOK_FALSE_RETURN;
+pub(crate) use er_title_flow::HOOK_ORIGINAL_UNSET;
+pub(crate) use er_title_flow::NULL_MODULE_BASE;
 
-#[repr(usize)]
-pub(crate) enum RuntimeGlobalRva {
-    NowLoadingSingleton = 0x3d60ec8,
-    FakeLoadingScreenSingleton = 0x3d74868,
-    CsGraphicsSingleton = 0x3d71c48,
-    RendManSingleton = 0x3d7b0c0,
-    CsScaleformSingleton = 0x3d83148,
-    Fd4IoPool = 0x4853048,
-    /// `SaveLoad2::SLSystemImpl*`. Named `Fd4IoWorkerManager` until 2026-08-01, which was
-    /// wrong: the 1.16.2 dump shows its lazy initializer `FUN_14240dee0` opens with
-    /// `*param_1 = SaveLoad2::SLSystemImpl::vftable`, and all 11 xrefs sit in the SaveLoad2
-    /// region (`0x14240a...`, alongside requestLoad). `experiments/own_stepper/
-    /// bootstrap_drive.rs` already had it right in a comment. See bd
-    /// `rva-4852f88-is-saveload2-slsystemimpl-not-fd4-io-worker-2026-08-01`.
-    SaveLoad2SlSystemImpl = 0x4852f88,
-    IoDeviceSingleton = 0x4589390,
-    DluidInputManager = 0x485dc18,
-}
+pub(crate) use er_title_flow::RuntimeGlobalRva;
 
 /// Access-violation NTSTATUS (0xC0000005) as the i32 the OS passes to a VEH.
 pub(crate) const EXCEPTION_ACCESS_VIOLATION_CODE: u32 = 0xC000_0005;
@@ -152,6 +135,13 @@ pub(crate) use er_telemetry_core::counters::C30_WATCH_FRAME_COUNTER;
 // blocks moved to the er-loading-portrait-core crate (portrait crate split); the glob shim
 // re-exports them so every remaining flat-namespace reference keeps compiling unchanged.
 pub(crate) use er_loading_portrait_core::*;
+
+// The autoload_state.rs / return_title.rs / own_load_pump.rs constant tables moved to the
+// er-title-flow crate (autoload/title-flow slice) alongside the code that reads them. Same glob
+// shim as the portrait split above, replacing the per-name `pub(crate) use er_title_flow::NAME;`
+// lines those three files used to carry: the tables are large and entirely re-exported, so a
+// name-by-name list here would be a second copy of the table to keep in sync.
+pub(crate) use er_title_flow::*;
 
 include!("constants/software_breakpoints.rs");
 include!("constants/anti_debug.rs");

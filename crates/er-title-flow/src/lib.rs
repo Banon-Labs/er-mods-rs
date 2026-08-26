@@ -41,6 +41,22 @@ pub use constants_moved::*;
 #[cfg(windows)]
 pub use host::{TitleFlowHost, install_host};
 
+// Autoload/own-load/own-stepper cluster moved out of the root crate on 2026-08-25 (the
+// `refactor/autoload-title-flow` slice). Same flat include! layout and the same
+// `use crate::compat::*;` header as the files above; only visibility changed
+// (`pub(crate)` -> `pub`) so the root crate's `experiments::title` glob shim keeps every
+// old call site resolving. The three `constants_*` tables were `include!`d into the root
+// crate's `constants.rs` and are kept as separate files rather than folded into
+// `constants_moved.rs`, which would push that file past the 3,200-line hard size gate.
+#[cfg(windows)]
+include!("constants_own_load_pump.rs");
+#[cfg(windows)]
+include!("constants_autoload_state.rs");
+#[cfg(windows)]
+include!("constants_return_title.rs");
+#[cfg(windows)]
+include!("own_stepper_idx6_memory.rs");
+
 // Every include! below reads or patches live game memory through the windows-only bindings above.
 #[cfg(windows)]
 include!("product_autoload_gates.rs");

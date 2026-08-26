@@ -1,9 +1,15 @@
-use super::*;
-// Shared D3D12 GPU-draw plumbing used by the boot-view fade and effect-selector overlay
-// draws in boot_progress.rs: HLSL compile, root-signature/PSO builders, the generic
-// texture+upload+SRV slot creator, SRV handle math, and the close/execute/fence-wait
-// submit helper. Relocated out of the deleted path-A overlay composite
-// (bd er-effects-rs-f9mq); the imports below feed the whole flat gpu_readback namespace.
+//! Shared D3D12 GPU-draw plumbing used by the boot-view fade and effect-selector overlay
+//! draws in `boot_progress`: HLSL compile, root-signature/PSO builders, the generic
+//! texture+upload+SRV slot creator, SRV handle math, and the close/execute/fence-wait
+//! submit helper.
+//!
+//! Moved verbatim from er-effects-rs `experiments/gpu_readback/gpu_draw_shared.rs` with the
+//! loading-cover crate extraction (bd er-effects-rs-f9mq had relocated it out of the deleted
+//! path-A overlay composite before that). The only edit is visibility: the helpers were
+//! `pub(super)` inside the root's flat `gpu_readback` namespace and are `pub` here, because
+//! their callers now sit on the other side of a crate boundary.
+
+use crate::prelude::*;
 
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::{ID3DBlob, ID3DInclude};
@@ -25,10 +31,12 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_SHADER_RESOURCE_VIEW_DESC, D3D12_SHADER_RESOURCE_VIEW_DESC_0,
     D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SRV_DIMENSION_TEXTURE2D,
     D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK, D3D12_STATIC_SAMPLER_DESC, D3D12_TEX2D_SRV,
-    D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12SerializeRootSignature, ID3D12DescriptorHeap,
-    ID3D12PipelineState, ID3D12RootSignature,
+    D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12SerializeRootSignature,
 };
-use windows::core::{BOOL, s};
+use windows::Win32::Graphics::Direct3D12::{
+    ID3D12DescriptorHeap, ID3D12Device, ID3D12PipelineState, ID3D12RootSignature,
+};
+use windows::core::{BOOL, PCSTR, s};
 
 const OVERLAY_SHADER_HLSL: &[u8] = br#"
 Texture2D portrait_tex : register(t0);
@@ -60,9 +68,11 @@ float4 ps_main(VsOut input) : SV_Target {
 }
 "#;
 
-pub(super) unsafe fn create_overlay_root_signature(
-    device: &ID3D12Device,
-) -> Option<ID3D12RootSignature> {
+/// # Safety
+///
+/// `device` must be a live `ID3D12Device`. The call itself only serializes a root-signature
+/// description and hands it to the device; it dereferences no raw pointer of the caller's.
+pub unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
     let range = D3D12_DESCRIPTOR_RANGE {
         RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
         NumDescriptors: 1,
@@ -142,7 +152,11 @@ pub(super) unsafe fn create_overlay_root_signature(
     }
 }
 
-pub(super) unsafe fn create_overlay_pso(
+/// # Safety
+///
+/// `device` and `root_sig` must be live D3D12 objects, and `bb_format` a format the device
+/// supports as a render target. The shader blobs are compiled here and outlive the call.
+pub unsafe fn create_overlay_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     bb_format: DXGI_FORMAT,
@@ -258,7 +272,14 @@ fn log_shader_error(stage: &str, err: Option<&ID3DBlob>) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn ensure_overlay_gpu_texture_slot(
+/// # Safety
+///
+/// `device` and `srv_heap` must be live, `srv_index` must be within `srv_heap`'s descriptor
+/// count, and every `*_slot` must be a static the CALLER owns exclusively for this texture: on
+/// success the previous texture/upload pointers in those slots are OVERWRITTEN with newly leaked
+/// COM pointers (`into_raw`), so a shared slot would leak the old pair and hand two owners the
+/// same resource.
+pub unsafe fn ensure_overlay_gpu_texture_slot(
     device: &ID3D12Device,
     srv_heap: &ID3D12DescriptorHeap,
     sw: u32,
@@ -420,7 +441,7 @@ fn srv_cpu_handle_at(
     handle
 }
 
-pub(super) fn srv_gpu_handle_at(
+pub fn srv_gpu_handle_at(
     device: &ID3D12Device,
     heap: &ID3D12DescriptorHeap,
     index: u32,
@@ -435,7 +456,13 @@ pub(super) fn srv_gpu_handle_at(
 
 /// Close `list`, execute it on `queue`, signal `fence` with a fresh monotonic value, and CPU-wait (bounded)
 /// for GPU completion. `false` on any failure. Shared by the two-submit CPU-blend composite.
-pub(super) unsafe fn execute_and_wait(
+/// # Safety
+///
+/// `queue`, `list` and `fence` must be live and belong to the same device, and `list` must be
+/// in the recording state with every resource it references still alive. The CPU wait is bounded
+/// by [`READBACK_FENCE_WAIT_MS`]; on timeout this returns `false` with the GPU work still in
+/// flight, so the caller must not free the list's resources on that path.
+pub unsafe fn execute_and_wait(
     queue: &ID3D12CommandQueue,
     list: &ID3D12GraphicsCommandList,
     fence: &ID3D12Fence,

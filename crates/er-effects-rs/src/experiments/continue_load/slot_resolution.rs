@@ -95,11 +95,11 @@ unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
         "native-fullread: DISARM req_slot {prev} -> {OWN_STEPPER_SLOT_NONE} ({reason}) -- no pending native load request may survive a non-commit exit"
     ));
 }
-/// OBSERVE-ONLY NATIVE FULL-SAVE-READ tick (native_fullread_enabled(), gated OFF by default). Runs
+/// OBSERVE-ONLY NATIVE FULL-SAVE-READ tick, reached through the er-title-flow seam. Runs
 /// each frame INSTEAD of the own_stepper forcing logic (no SetState forcing for boot); the caller
 /// pass-throughs to OWN_STEPPER_ORIG_IDX10 so the NATIVE title machine advances untouched. Once the
-/// live TitleTopDialog menu action is semantically validated (same readiness helper as
-/// native_load_tick: TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game node/action chain),
+/// live TitleTopDialog menu action is semantically validated (TitleTopDialog vtable,
+/// [dialog+0xa48] registry, Load-Game node/action chain),
 /// it runs the full-save-read load chain as a per-frame phase
 /// machine at the LIVE menu (where the FD4 IO worker pool 0x144853048 is live so the submit drains):
 ///   SUBMIT: set GameMan+0xb78=slot (step 1, NEW), set_save_slot 0x14067a810 (step 2 -> GameMan+0xac0),

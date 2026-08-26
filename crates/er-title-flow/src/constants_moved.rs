@@ -502,19 +502,12 @@ pub const FD4_FILECAP_REFCOUNT_58_OFFSET: usize = 0x58;
 /// before handing it to `AddFileCap`.
 pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
 
-/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
-/// and calls `CSDlcImp::AddVirtualFileRoots`.
-// Consumed only by dlc_roots_self_heal.rs, which is `#[cfg(windows)]`-gated in lib.rs.
-#[cfg(windows)]
-pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
-
-/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
-#[cfg(windows)]
-pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
-
-/// The DLIO alias every failing `m28` read resolves through.
-#[cfg(windows)]
-pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
+// DLC_ROOTS_REFILL_RVA / CSDLC_SINGLETON_RVA / DLC_ROOT_ALIAS_NAME used to be declared here as
+// crate-private copies for `dlc_roots_self_heal.rs`, duplicating the root crate's
+// `constants/autoload_state.rs` declarations of the same three addresses. That table now lives in
+// this crate (`constants_autoload_state.rs`, autoload/title-flow slice), so the duplicate is gone
+// and `dlc_roots_self_heal.rs` reads the one remaining declaration. One address, one literal --
+// the invariant `scripts/check-rva-alias-drift.py` exists to hold.
 
 /// GameMan `save_slot` (compiler-verified equal to the upstream typed field).
 #[cfg(windows)]
@@ -1342,22 +1335,11 @@ pub const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
 /// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
 pub const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
 
-/// Settle the freshly-opened menu before injecting (poll-frames).
-pub const INJECT_NAV_SETTLE_FRAMES: usize = 90;
-
-/// Down asserted for this many consecutive poll-frames = one clean edge (one cursor step).
-pub const INJECT_NAV_TAP_LEN: usize = 4;
-
-/// Released gap between taps (edge re-arm; menu nav is edge-triggered, not auto-repeat).
-pub const INJECT_NAV_GAP_LEN: usize = 16;
-
-/// One tap+gap cycle length.
-pub const INJECT_NAV_CYCLE: usize = INJECT_NAV_TAP_LEN + INJECT_NAV_GAP_LEN;
-
-/// Number of Down taps to drive. The problem is fully deterministic: the cursor starts on
-/// Continue (index 0) and Load Game is index 1, so EXACTLY ONE Down reaches it. There is no state
-/// of knowledge that justifies more than one tap, so this is a literal 1 (not a tunable).
-pub const INJECT_NAV_MAX_CYCLES: usize = 1;
+// The INJECT-NAV tap/gap schedule constants (SETTLE_FRAMES / TAP_LEN / GAP_LEN / CYCLE /
+// MAX_CYCLES) lived here. They only ever fed `inject_nav_buttons` (title_tick_cover.rs), the D-pad-Down
+// fabrication schedule for the `inject_nav_enabled()` gate -- a gate that could only return `false`.
+// Gate, schedule and constants were deleted together (2026-08-26). XINPUT_GAMEPAD_DPAD_DOWN above
+// stays: the System->Quit repro autopilot and the DInput/VK translation tables still use it.
 
 /// Latched true once a load sustained >=MOVE_PROBE_REQUIRED_FRAMES consecutive frames of havok-position
 /// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
@@ -1916,3 +1898,55 @@ pub enum MenuEventId {
     Confirm = 0x3d,
     MoveB = 0x45,
 }
+
+// ----- from crates/er-effects-rs/src/constants.rs (autoload/title-flow slice) -----
+
+/// Sentinel for a MinHook trampoline slot that has not been filled yet. Read by every
+/// `*_ORIG: AtomicUsize` initializer in `constants_own_load_pump.rs` /
+/// `constants_autoload_state.rs`, which is why it moved with those tables rather than staying
+/// behind a shim the moved code could not see.
+pub const HOOK_ORIGINAL_UNSET: usize = 0;
+
+/// Singleton pointer globals the autoload tables resolve against, as data RVAs off the game
+/// image base.
+#[repr(usize)]
+pub enum RuntimeGlobalRva {
+    NowLoadingSingleton = 0x3d60ec8,
+    FakeLoadingScreenSingleton = 0x3d74868,
+    CsGraphicsSingleton = 0x3d71c48,
+    RendManSingleton = 0x3d7b0c0,
+    CsScaleformSingleton = 0x3d83148,
+    Fd4IoPool = 0x4853048,
+    /// `SaveLoad2::SLSystemImpl*`. Named `Fd4IoWorkerManager` until 2026-08-01, which was
+    /// wrong: the 1.16.2 dump shows its lazy initializer `FUN_14240dee0` opens with
+    /// `*param_1 = SaveLoad2::SLSystemImpl::vftable`, and all 11 xrefs sit in the SaveLoad2
+    /// region (`0x14240a...`, alongside requestLoad). `experiments/own_stepper/
+    /// bootstrap_drive.rs` already had it right in a comment. See bd
+    /// `rva-4852f88-is-saveload2-slsystemimpl-not-fd4-io-worker-2026-08-01`.
+    SaveLoad2SlSystemImpl = 0x4852f88,
+    IoDeviceSingleton = 0x4589390,
+    DluidInputManager = 0x485dc18,
+}
+
+// ----- from crates/er-effects-rs/src/constants/render_handoff.rs -----
+
+/// MoveMap child wrapper (`InGameStep+0xe0`) AFTER WorldRes is resident; may skip STEP_Finish teardown,
+/// so prefer satisfying the real sub-gate. Verify state before use.
+pub const EZ_CHILDSTEP_REQUEST_FINISH_RVA: usize = 0xeb5570;
+
+// ----- from crates/er-effects-rs/src/constants/stats_panel_text.rs -----
+
+/// `mov eax,[owner+0xbc]` and feeds it through submit -> validate -> pair, which
+/// writes the value to GameMan+0x14 (the load value). The +0xac0 save slot only
+/// feeds global+0x1200, not the load pair -- so this is the field to select.
+pub const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize =
+    core::mem::offset_of!(TitleOwnerLayout, play_game_slot);
+
+pub const TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET: usize =
+    core::mem::offset_of!(TitleOwnerLayout, new_game_flag);
+
+/// Packed map id for m60_42_34_00 (the new-game default; resolver 0x14071fd60 packs
+/// mAA_BB_CC_DD decimal -> byte3=AA..byte0=DD). A valid map to pass the PlayGame
+/// map-area gate (area byte 0x32..0x58) while we prove the SetState(5) path builds
+/// CSFeMan; the real slot map comes from GameMan+0xc30 once peeked.
+pub const DEFAULT_PLAY_GAME_MAP: i32 = 0x3c2a2200;

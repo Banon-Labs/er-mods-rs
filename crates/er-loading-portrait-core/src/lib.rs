@@ -24,6 +24,24 @@ mod prelude;
 pub mod host;
 pub use host::*;
 
+#[cfg(windows)]
+pub mod loading_cover_host;
+#[cfg(windows)]
+pub use loading_cover_host::{LoadingCoverHost, install_loading_cover_host};
+
+// Deliberately NOT glob-re-exported at the crate root. The root DLL keeps a same-named facade fn
+// for `install_window_reconfig_observer_hooks` (it installs the seam before delegating), and two
+// globs carrying one name is an ambiguity error at every use site. Consumers name the module.
+#[cfg(windows)]
+pub mod window_reconfig_observer;
+
+// Same reason as `window_reconfig_observer` above: the root keeps same-named facade fns that
+// install the seam before delegating, so these must not also arrive through a crate-root glob.
+#[cfg(windows)]
+pub mod cover_after_release;
+#[cfg(windows)]
+pub mod portrait_load_windows;
+
 pub mod bridge;
 pub use bridge::*;
 
@@ -34,6 +52,19 @@ pub use layout::*;
 pub mod pgd_layout;
 #[cfg(windows)]
 pub use pgd_layout::*;
+
+#[cfg(windows)]
+pub mod chr_asm_layout;
+#[cfg(windows)]
+pub use chr_asm_layout::*;
+
+pub mod tpf_textures;
+pub use tpf_textures::*;
+
+#[cfg(windows)]
+pub mod menu_input_probe;
+#[cfg(windows)]
+pub use menu_input_probe::*;
 
 #[cfg(windows)]
 pub mod player_identity;
@@ -65,6 +96,13 @@ pub use portrait_identity::*;
 pub mod resource_readback;
 #[cfg(windows)]
 pub use resource_readback::*;
+
+// Deliberately NOT glob-re-exported at the crate root: these are D3D12 plumbing helpers whose
+// names (`create_overlay_pso`, `execute_and_wait`, ...) would collide with the root DLL's own
+// present-overlay copies if they entered its flat namespace through the `er_loading_portrait_core::*`
+// shims. Consumers name the module.
+#[cfg(windows)]
+pub mod gpu_draw_shared;
 
 #[cfg(windows)]
 pub mod cached_depth_readback;
@@ -113,6 +151,11 @@ pub mod stats_lines;
 pub use stats_lines::*;
 
 pub mod portrait_equip;
+
+#[cfg(windows)]
+pub mod portrait_equip_oracle;
+#[cfg(windows)]
+pub use portrait_equip_oracle::*;
 
 pub mod title_stats_text;
 pub use title_stats_text::*;

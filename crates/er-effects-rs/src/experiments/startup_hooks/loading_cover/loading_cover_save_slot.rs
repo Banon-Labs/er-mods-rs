@@ -110,34 +110,6 @@ pub(crate) unsafe fn count_live_profile_models(base: usize) -> usize {
     n
 }
 
-/// EXPERIMENT (gated by `disable_loading_cover_enabled`): clamp the `CSFakeLoadingScreenImp` cover plate's
-/// `visible` byte to 0 so the render pipeline skips drawing it -- exposing the world underneath during a
-/// map load. Called every game-task frame; the map-load system raises `visible` once at load start and it
-/// stays raised, so a per-frame write to 0 wins for the draw. Only writes when the byte is currently
-/// non-zero (no needless writes), and only when a valid cover object is resolved. Reversible: with the gate
-/// off this is never called and the game draws its cover normally. Counts writes into a RAM oracle so we
-/// can confirm the clamp actually engaged. Fault-guarded (validated pointer + catch_unwind at the caller).
-pub(crate) unsafe fn suppress_loading_cover_tick(base: usize) {
-    if !disable_loading_cover_enabled() {
-        return;
-    }
-    let helper = unsafe { fake_loading_screen_ptr(base) };
-    if helper == 0 {
-        return;
-    }
-    let vis_addr = helper + FAKE_LOADING_SCREEN_VISIBLE_OFFSET;
-    let cur = unsafe { safe_read_u8(vis_addr) }.unwrap_or(0);
-    if cur != 0 {
-        unsafe { core::ptr::write_volatile(vis_addr as *mut u8, 0) };
-        let n = LOADING_COVER_SUPPRESS_WRITES.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 {
-            append_autoload_debug(format_args!(
-                "loading-cover-experiment: cleared CSFakeLoadingScreenImp.visible (was {cur}) at 0x{vis_addr:x} (write #{n}) -- world drawn uncovered this frame"
-            ));
-        }
-    }
-}
-
 /// POST-CONTINUE PORTRAIT: when the now-loading screen is up but the profile-renderer title table has been
 /// torn down (native-continue is menu-free, so the menu never built it, or Continue tore it down), call
 /// the engine's own builder ONCE to repopulate the 10-slot table. The existing mark+refresh feed +

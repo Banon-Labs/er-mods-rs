@@ -196,15 +196,16 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         autoload_disabled: crate::experiments::autoload_disabled,
         cleanup_title_dialog_after_world_enabled:
             crate::experiments::cleanup_title_dialog_after_world_enabled,
-        experimental_direct_menu_load_enabled:
-            crate::experiments::experimental_direct_menu_load_enabled,
-        fire_tfc_continue_enabled: crate::experiments::fire_tfc_continue_enabled,
+        // Permanently-off gates: the product-side fns were deleted; er-title-flow still declares the
+        // seam fields, so wire them to a literal-false closure rather than editing the core crate.
+        experimental_direct_menu_load_enabled: || false,
+        fire_tfc_continue_enabled: || false,
         force_profile_render_enabled: crate::experiments::force_profile_render_enabled,
-        native_profile_capture_enabled: crate::experiments::native_profile_capture_enabled,
+        native_profile_capture_enabled: || false,
         product_autoload_enabled: crate::experiments::product_autoload_enabled,
         profile_select_load_flow_enabled: crate::experiments::profile_select_load_flow_enabled,
-        title_accept_byte_gate_enabled: crate::experiments::title_accept_byte_gate_enabled,
-        title_proceed_gate_enabled: crate::experiments::title_proceed_gate_enabled,
+        title_accept_byte_gate_enabled: || false,
+        title_proceed_gate_enabled: || false,
         pab_advance_enabled: crate::experiments::pab_advance_enabled,
         outgoing_teardown_enabled: crate::experiments::outgoing_teardown_enabled,
         outgoing_teardown_suppresses_holds:
