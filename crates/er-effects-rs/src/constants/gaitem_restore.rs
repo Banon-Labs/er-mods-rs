@@ -44,10 +44,6 @@ pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
 /// with `IsAliveMotion` reading it as `MOVZX EAX, byte [RAX]` at offset 0. The 0x270-byte object
 /// allocated in the same function belongs to a DIFFERENT global (`MOV ECX,0x270` ...
 /// `MOV [0x143d68448],RAX`). The gate role below is unaffected -- only the size claim was wrong.
-/// If null at the writer's entry, 0x67bd70 returns without writing c30 (gate (a) in
-/// the c30-stays-default diagnosis). The save-safe c30-writer probe logs this.
-pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize =
-    er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
 /// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via

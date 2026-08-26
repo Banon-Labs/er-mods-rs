@@ -630,13 +630,6 @@ pub(crate) fn block_input_enabled() -> bool {
     }
     // (DE-GATED 2026-07-19: the env/marker FORCE-BLOCK override -- block unconditionally past
     // menu-open -- was a falsification diagnostic; env/marker feature gates are forbidden, removed.)
-    // INJECT-NAV instrument-capture: keep the block ON past menu-open so the user's input is
-    // suppressed while the XInput hook fabricates the cursor nav (so nothing pollutes the
-    // capture). The fabricated Down is written INTO the otherwise-blocked gamepad state, so the
-    // menu still gets a live (synthesized) input each frame -- it does not stall.
-    if own_stepper_enabled() && !own_stepper_passive_enabled() && inject_nav_enabled() {
-        return true;
-    }
     // NATIVE-WINDOWS PRODUCT is USER-INTERACTIVE (user drives the startup save picker, then plays). The
     // DEFAULT zero-input autoload block below -- DInput keyboard + XInput gamepad state-zeroing -- is a
     // Wine-probe PROOF feature (prove the autoload needs no foreign keyboard/gamepad input), NOT product
@@ -644,8 +637,8 @@ pub(crate) fn block_input_enabled() -> bool {
     // (user-reported 2026-07-15: "the DLL is moving my mouse / clicking / changing focus"; the mouse
     // forcing/blocking + cursor confinement are now fully removed, so the mouse is always live). So the
     // DEFAULT product path must never suppress the user's input on native Windows. The EXPLICIT probe
-    // opt-ins above (sq_repro, ER_EFFECTS_BLOCK_INPUT env/file, inject_nav) are checked first and still
-    // engage the keyboard/gamepad block when a real probe wants it, on native Windows or Wine.
+    // opt-in above (sq_repro) is checked first and still engages the keyboard/gamepad block when a
+    // real probe wants it, on native Windows or Wine.
     if is_native_windows() {
         return false;
     }
@@ -654,10 +647,10 @@ pub(crate) fn block_input_enabled() -> bool {
         || product_autoload_enabled()
         || native_continue_enabled()
         || pab_advance_enabled();
-    if !autoload_armed || own_stepper_passive_enabled() || autoload_load_started() {
+    if !autoload_armed || autoload_load_started() {
         return false;
     }
-    // PASSIVE mode never blocks. Otherwise keep the block engaged through the zero-input title/menu
+    // Keep the block engaged through the zero-input title/menu
     // drive and release as soon as the current load-start semaphore proves the engine committed the
     // load (native LoadingScreen update/bar, FakeLoadingScreen cover visibility, or GameMan.save_state
     // leaving idle). At that point our zero-input side is done; the user need not wait for full in-world
@@ -709,10 +702,10 @@ pub(crate) fn release_input_block_now() {
 /// NO-CONTROLLER HARNESS SUPPORT (agent-owned diagnostic): the game only KEEPS polling an XInput
 /// slot it believes is connected. When no physical pad is plugged in, the real `XInputGetState(0)`
 /// returns ERROR_DEVICE_NOT_CONNECTED, so ER's connection detection stops polling slot 0 and our
-/// button-fabrication frames (below) never reach the game -- which is exactly why the sq-repro /
-/// inject-nav harness previously only worked with a controller physically attached. To make the
-/// harness work with NO controller, whenever an XInput-driven harness is ARMED (env/file gate:
-/// `system_quit_repro_enabled()` / `inject_nav_enabled()`) we force slot 0 to report a CONNECTED
+/// button-fabrication frames (below) never reach the game -- which is exactly why the sq-repro
+/// harness previously only worked with a controller physically attached. To make the
+/// harness work with NO controller, whenever an XInput-driven harness is ARMED
+/// (`system_quit_repro_enabled()` / `prove_movement_enabled()`) we force slot 0 to report a CONNECTED
 /// idle pad (SUCCESS + fresh packet) instead of DEVICE_NOT_CONNECTED. That keeps ER polling slot 0
 /// so the fabrication frames land. This is gated STRICTLY behind the existing diagnostic
 /// opt-ins (never on the default/product path) and only touches slot 0; other slots and the
@@ -818,30 +811,18 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
         hr = XINPUT_SUCCESS;
     }
     if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
-        // Two drivers fabricate the pad at the poll source: the System->Quit repro autopilot (the
-        // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame) and
-        // own_stepper title nav via inject_nav. Either replaces the (blocked) real pad so the game
-        // reads our synthesized buttons.
+        // The System->Quit repro autopilot fabricates the pad at the poll source (the user's
+        // controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame). It
+        // replaces the (blocked) real pad so the game reads our synthesized buttons.
         // Only fabricate the pad while ACTIVELY driving menus; during WAIT_RELOAD/DONE the reload
         // must not see a synthesized live pad (it bounces the title->world advance back to the FE).
-        let sq_repro = sq_repro_actively_driving();
-        let inject_nav = inject_nav_enabled()
-            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO;
-        if sq_repro || inject_nav {
+        if sq_repro_actively_driving() {
             // Force SUCCESS + a fresh packet number so a live pad is simulated; write the buttons
             // the active driver scheduled this frame. Harmless if the game ignores XInput.
-            let buttons = if sq_repro {
-                SQ_REPRO_XINPUT_BUTTONS.load(Ordering::SeqCst) as u16
-            } else {
-                INJECT_NAV_CUR_BUTTONS.load(Ordering::SeqCst) as u16
-            };
+            let buttons = SQ_REPRO_XINPUT_BUTTONS.load(Ordering::SeqCst) as u16;
             // sq-repro has no separate poll-frame schedule, so bump the shared packet counter here
-            // to guarantee a fresh dwPacketNumber each poll; inject_nav keeps its own counter.
-            let pkt = if sq_repro {
-                INJECT_NAV_FRAME.fetch_add(1, Ordering::SeqCst) as u32
-            } else {
-                INJECT_NAV_FRAME.load(Ordering::SeqCst) as u32
-            };
+            // to guarantee a fresh dwPacketNumber each poll.
+            let pkt = INJECT_NAV_FRAME.fetch_add(1, Ordering::SeqCst) as u32;
             unsafe {
                 std::ptr::write_bytes(
                     state.add(XINPUT_GAMEPAD_OFFSET),
@@ -911,7 +892,7 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
     if user_index == XINPUT_PRIMARY_USER_INDEX
         && hr == XINPUT_ERROR_DEVICE_NOT_CONNECTED
         && !caps.is_null()
-        && (system_quit_repro_enabled() || inject_nav_enabled() || prove_movement_enabled())
+        && (system_quit_repro_enabled() || prove_movement_enabled())
     {
         unsafe {
             std::ptr::write_bytes(caps, 0, XINPUT_CAPABILITIES_SIZE);

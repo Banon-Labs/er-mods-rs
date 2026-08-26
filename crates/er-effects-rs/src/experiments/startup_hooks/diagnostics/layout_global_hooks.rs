@@ -170,55 +170,6 @@ pub(crate) fn install_menu_window_latch_hook() {
     }
 }
 
-/// Install the SAVE-SAFE c30-writer diagnostic hook once (MinHook on the SOLE
-/// GameMan+0xc30 writer 0x14067bd70), mirroring the MenuWindow-latch precedent exactly
-/// (MH_Initialize + MhHook::new + queue_enable + MH_ApplyQueued). Installed
-/// UNCONDITIONALLY at process attach. The hook (`c30_writer_hook`) is a pure
-/// passthrough that forwards all args + returns the original's result; it only logs the
-/// c30-write gate, c30 before/after, and a window of the resident save buffer so we can
-/// diagnose why c30 stays default cold. NO SetState5, NO save write -- harmless.
-pub(crate) fn install_c30_writer_hook() {
-    if C30_WRITER_HOOK_INSTALLED.load(Ordering::SeqCst) != C30_WRITER_HOOK_NOT_INSTALLED {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!("c30-writer: MH_Initialize failed: {status:?}"));
-            return;
-        }
-    }
-    let Ok(writer_addr) = game_rva(C30_WRITER_RVA as u32) else {
-        append_autoload_debug(format_args!("c30-writer: failed to resolve 0x67bd70 rva"));
-        return;
-    };
-    match unsafe { MhHook::new(writer_addr as *mut c_void, c30_writer_hook as *mut c_void) } {
-        Ok(hook) => {
-            C30_WRITER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!("c30-writer: queue_enable failed: {status:?}"));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    C30_WRITER_HOOK_INSTALLED
-                        .store(C30_WRITER_HOOK_INSTALLED_YES, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "c30-writer: hooked 0x{writer_addr:x} (SAVE-SAFE c30-write diagnostic; gate + c30 before/after + buffer window)"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "c30-writer: MH_ApplyQueued failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => {
-            append_autoload_debug(format_args!("c30-writer: MhHook::new failed: {status:?}"))
-        }
-    }
-}
-
 /// Clean static splash-skip patch (flip je->jg in STEP_BeginLogo) so the game's
 /// own flow advances past the logo via SetState instead of playing it. Validates
 /// the expected opcode first (aborts if the binary differs), and restores page

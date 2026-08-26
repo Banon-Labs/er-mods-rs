@@ -9,13 +9,6 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
 
-/// The `direct_menu_load`/product_core path is experimental and currently distinct from the
-/// known-good zero-input gold-load smoke path (`save_requested` + native Continue/PAB gates). Keep it
-/// fail-closed unless an operator deliberately asks for that experiment; stale `ER_EFFECTS_AUTOLOAD_*`
-/// env or release examples must not silently flip product smoke into the broken menu-core path.
-pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
-    false
-}
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
@@ -30,13 +23,6 @@ pub(crate) fn product_autoload_enabled() -> bool {
 pub(crate) fn profile_select_load_flow_enabled() -> bool {
     PROFILE_SELECT_LOAD_FLOW_ENABLED
 }
-/// Diagnostic mode for native ProfileSelect/profile-renderer portrait capture. This mode must not
-/// arm product title-cover/custom-cover mutations or default Continue autoload; it only permits the
-/// zero-host-input native menu open plus passive/native Load-Game row firing used by the capture
-/// harness.
-pub(crate) fn native_profile_capture_enabled() -> bool {
-    false
-}
 /// Force the live profile-portrait 3D model render at the title/menu phase (where the GxDrawContext is
 /// valid). The recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target
 /// slot used (`MarkProfileIndexAsUsed`) then calls the argless profile-render refresh to kick the async
@@ -47,7 +33,7 @@ pub(crate) fn native_profile_capture_enabled() -> bool {
 /// mirrors the native_continue/pab/splash de-gating precedent
 /// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
 /// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
-/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+/// `autoload_disabled()`; telemetry-only runs stay off; env/file remain force-on overrides.
 /// True on native Windows (NOT Wine/Proton). Wine's `ntdll` exports `wine_get_version`; native Windows
 /// never does. Cached. Used to disable the character-profile RENDER-DRIVE on native Windows, where
 /// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver (bd
@@ -68,25 +54,11 @@ pub(crate) fn is_native_windows() -> bool {
     !is_wine
 }
 
-/// True when the operator force-DISABLED the native-Windows profile render-drive (env
-/// `ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0`). The drive is now DEFAULT-ON for native (see the gates below):
-/// the isolated overlay owns its own D3D12 device and the 8-frame settle gate keeps the crash-prone
-/// model-drive blocked, so the portrait pipeline is runtime-proven safe on native (2026-07-15, zero AVs
-/// across 7 boots, animated head captured + displayed). This env is now only a diagnostic force-OFF escape.
-// ENV-GATE RATIONALE: ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0 force-DISABLES the (now default-on) native
-// profile render-drive; it is a diagnostic escape hatch only and never writes a save or perturbs the mount.
-fn native_profile_drive_disabled() -> bool {
-    false
-}
-
 // ENV-GATE RATIONALE: ER_EFFECTS_FORCE_PROFILE_RENDER=1 force-ENABLES the profile portrait render-drive
 // even on telemetry-only/no-load save-override runs (where it is otherwise off); diagnostic force-ON
 // override only. Does not write a save; simply keeps the portrait render pipeline active for the probe.
 pub(crate) fn force_profile_render_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
-        return false;
-    }
-    if is_native_windows() && native_profile_drive_disabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -101,9 +73,9 @@ pub(crate) fn force_profile_render_enabled() -> bool {
 ///
 /// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
 /// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Master off:
-/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+/// `autoload_disabled()`; telemetry-only runs stay off; env/file remain force-on overrides.
 pub(crate) fn portrait_real_pixels_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -121,13 +93,10 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
 /// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). The earlier
 /// "risky/unproven" caveat is retired: runtime-proven safe across the 2026-06-30 smokes (145-168 per-frame
 /// Present-hook composites, no crash). This also runs the per-frame depth-alpha-key + CPU-blend composite.
-/// Master off: `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain
+/// Master off: `autoload_disabled()`; telemetry-only runs stay off; env/file remain
 /// force-on overrides.
 pub(crate) fn portrait_render_drive_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
-        return false;
-    }
-    if is_native_windows() && native_profile_drive_disabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -152,73 +121,14 @@ pub(crate) fn measure_no_composite() -> bool {
 }
 
 pub(crate) fn portrait_overlay_enabled() -> bool {
-    if measure_no_composite() || autoload_disabled() || native_profile_capture_enabled() {
+    if measure_no_composite() || autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
 }
-/// DEFAULT-OFF experiment: suppress the game's `CSFakeLoadingScreenImp` cover plate during map loads so the
-/// world renders uncovered ("no loading screen -- watch it pop in"). While set, the game task clamps the
-/// cover's `visible` byte to 0 each frame. This is ORTHOGONAL to the portrait overlay -- the overlay keeps
-/// its own gates, so the two can be toggled independently. Fully reversible: unset the file/env and the
-/// game draws its cover normally. Exploratory visual experiment, not a product feature -- if we keep it,
-/// tie it to autoload state instead of a standalone gate. Env `ER_EFFECTS_DISABLE_LOADING_COVER=1` OR
-/// GAME_DIR file `er-effects-disable-loading-cover.txt`.
-pub(crate) fn disable_loading_cover_enabled() -> bool {
-    false
-}
-/// DEFAULT-OFF diagnostic rebuild: clear profile-renderer build latches so a later frame rebuilds and
-/// re-captures the post-FaceData portrait. Keep off for product runs; it can flicker during rebuild churn.
-pub(crate) fn portrait_force_rebuild_enabled() -> bool {
-    false
-}
-/// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
-/// title crash caused by our DLL). When set, the continue/load-flow hooks are
-/// not installed even if autoload is configured.
-/// Bisect kill-switch: when set, the recurring game task does nothing each
-/// frame, so we can tell whether the per-frame task body or the DLL's mere
-/// presence is what terminates the title ~19s in.
-pub(crate) fn inert_mode() -> bool {
-    false
-}
-/// Bisect kill-switch: the recurring task does lock + tick only, with no
-/// filesystem I/O. Lets us tell whether the per-frame file I/O (telemetry write)
-/// is what stalls the title vs. any per-frame work at all.
-pub(crate) fn lite_mode() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_NO_CONTINUE_TRACE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn continue_trace_disabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_TRACE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn trace_continue_enabled() -> bool {
     product_autoload_enabled()
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn native_title_job_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_SELECTBOT_PROBE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn selectbot_probe_enabled() -> bool {
-    false
-}
-/// Operator gate for the zero-input global-accept-byte title-advance lever (option c). Default OFF.
-// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_ACCEPT_BYTE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn title_accept_byte_gate_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_PROCEED_GATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn title_proceed_gate_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_AUTOLOAD is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn native_autoload_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_OBSERVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn observe_enabled() -> bool {
-    false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_OWN_STEPPER is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn own_stepper_enabled() -> bool {
@@ -228,22 +138,9 @@ pub(crate) fn own_stepper_enabled() -> bool {
     product_autoload_enabled()
         || OWN_STEPPER_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
-/// OBSERVE-ONLY NATIVE-LOAD gate (corrected-autoload-design-observe-not-force-native-load-2026).
-/// OFF by default; enable via env `ER_EFFECTS_NATIVE_LOAD=1` OR a GAME_DIR file
-/// `er-effects-native-load.txt`. Mirrors `own_stepper_enabled` (env OR file). When ON, the idx10
-/// handler installs the patch (so OUR handler runs each frame) but does NOT force the title state
-/// machine: it lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native boot naturally (the user
-/// drives past press-any-button + modals in this hybrid test), and ONCE the live TitleTopDialog
-/// menu is rendered + settled, it fires the native Load-Game MenuMemberFuncJob node's run
-/// 0x1409aaba0 exactly once -- testing whether that loads the real char in a NATURAL (non-forced)
-/// menu. NO SetState(2/3), NO beginlogo-gate clear, NO registrar self-fire, NO direct_build /
-/// cold_char_mount. De-risks design step 4.
-pub(crate) fn native_load_enabled() -> bool {
-    false
-}
 /// OBSERVE-ONLY NATIVE-CONTINUE gate (PATH B, autoload-path-B-drive-native-load-chosen-2026-06-22).
 /// OFF by default; enable via env `ER_EFFECTS_NATIVE_CONTINUE=1` OR a GAME_DIR file
-/// `er-effects-native-continue.txt`. Mirrors `native_load_enabled` (env OR file). When ON, the idx10
+/// `er-effects-native-continue.txt`. When ON, the idx10
 /// handler installs the patch (so OUR handler runs each frame) but does NOT force the title state
 /// machine: it lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native boot naturally (the user
 /// drives past press-any-button + modals in this hybrid test, OR the own-stepper opens the menu),
@@ -378,35 +275,21 @@ pub(crate) fn autoload_disabled() -> bool {
 /// one-slot render feeds the loading-screen portrait) and only the box display is redirected.
 ///
 /// This is a PRODUCT-LEVEL lever tied to autoload state (not a per-feature knob): default-ON for any
-/// real product autoload run, OFF for telemetry-only/observe and native-capture runs. A single DISABLE
+/// real product autoload run, OFF for telemetry-only runs. A single DISABLE
 /// override turns the stats panel off for A/B, mirroring `autoload_disabled()`'s `ER_EFFECTS_NO_AUTOLOAD`
 /// shape: env `ER_EFFECTS_NO_STATS_PANEL=1` OR the GAME_DIR file `er-effects-no-stats-panel.txt`.
 pub(crate) fn stats_panel_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() || save_override_telemetry_only() {
+    if autoload_disabled() || save_override_telemetry_only() {
         return false;
     }
     true
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_continue_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
-}
-/// OBSERVE-ONLY NATIVE FULL-SAVE-READ gate (native-full-save-read-slot-resolve-chain-observe-recipe-2026).
-/// OFF by default; enable via env `ER_EFFECTS_NATIVE_FULLREAD=1` OR a GAME_DIR file
-/// `er-effects-native-fullread.txt`. Mirrors `native_load_enabled` (env OR file). When ON, the idx10
-/// handler installs the patch (so OUR handler runs each frame) but does NOT force the title state
-/// machine: it lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native boot naturally (the user
-/// drives past press-any-button + modals in this hybrid test), and ONCE the live TitleTopDialog menu
-/// is rendered + settled, it runs the native full-save-read load chain directly at the live menu --
-/// where the FD4 IO worker pool is LIVE so the submit drains (SUBMIT -> DRAIN_POLL -> DESER -> GUARD
-/// -> CONFIRM). NO SetState forcing for boot, NO selector-step pump (probe-12 crash). The sole save
-/// write (continue_confirm 0x140b0e180 -> SetState5) is HARD-gated behind the step-6 guard AND the
-/// separate commit sub-gate `native_fullread_commit_enabled` (default = VERIFY-ONLY).
-pub(crate) fn native_fullread_enabled() -> bool {
-    false
 }
 /// COMMIT sub-gate for the native full-save-read chain (REQUIRED to actually fire continue_confirm
 /// 0x140b0e180 -> SetState5, the SOLE save write). OFF by default; enable via env
@@ -421,63 +304,6 @@ pub(crate) fn native_fullread_commit_enabled() -> bool {
 /// It fires only after PlayerIns exists, so it cannot participate in save/load success.
 pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
     product_autoload_enabled()
-}
-/// OPT-IN gate for the MenuWindow-latch diagnostic hook (SceneObjProxy ctor 0x14074a700).
-/// OFF by default: a clean run installs NO MinHook / NO detour for this. Enable only when
-/// the latch is needed, via env `ER_EFFECTS_MENU_WINDOW_LATCH=1` OR a GAME_DIR file
-/// `er-effects-menu-window-latch.txt`. Mirrors `own_stepper_enabled` (env OR file).
-/// Rationale: this hook was previously installed UNCONDITIONALLY at process-attach and was
-/// NOT present in the prior working cold-mount run; gating it lets us isolate hook-induced
-/// mount perturbation (see bd probe11 caveat).
-pub(crate) fn menu_window_latch_enabled() -> bool {
-    false
-}
-/// Explicit opt-in to let the injected in-world System -> Quit Game -> ProfileSelect route perform
-/// the native slot-load activation. Default OFF because the prior live attempt crashed inside
-/// CSGaitemImp::Deserialize at live/deobf 0x14067141a; default behavior logs the selected cursor and
-/// suppresses the activation so profile-selection investigation stays save-safe.
-pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
-    // MUST stay false. INVERTED SENSE (bd arm-commit-gap-rootcause-my-flip-of-activation-allowed-inverted):
-    // this is the opt-in to the NATIVE-FORWARD slot activation, which CRASHES in CSGaitemImp::Deserialize
-    // (0x14067141a). When it is FALSE, system_quit_ownership_repro.rs's `if !activation_allowed` gate runs
-    // the SAVE-SAFE DIRECT-ARM path (system_quit_arm_quickload_autoload -> advances the quickload phase ->
-    // return-title + own_load reload). Flipping this to true (a prior regression) SKIPPED the direct-arm,
-    // so load2 armed activate_count=1 but never committed (phase stayed IDLE, ProfileSelect pumped open,
-    // fresh_deser=0). The direct-arm is NOT harness-gated -- it fires for any in-range ProfileSelect pick.
-    false
-}
-/// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).
-/// OFF by default: a clean run installs NO MinHook / NO detour for this. Enable only when
-/// the diagnostic is needed, via env `ER_EFFECTS_C30_DIAG=1` OR a GAME_DIR file
-/// `er-effects-c30-diag.txt`. Mirrors `own_stepper_enabled` (env OR file).
-/// Rationale: a trampoline on the HOT 0x67bd70 deserialize path may itself perturb the
-/// mount (b80 stuck / crash); gating it lets us run without it to isolate (bd probe11).
-pub(crate) fn c30_writer_diag_enabled() -> bool {
-    false
-}
-/// PASSIVE own-stepper: do NOT force the menu (no SetState(2)/self-fire) and do NOT block input.
-/// The user navigates to Load Game once (the input that surfaces the input-gated d180); the
-/// capture hooks grab d180; then STAGE 2 drives mount->confirm->load. This both PROVES the load
-/// (correct + faster than manual slot-select) and lets the iterator log the menu-structure change
-/// so the pump-switch can be replayed zero-input later. File: er-effects-passive.txt.
-pub(crate) fn own_stepper_passive_enabled() -> bool {
-    false
-}
-/// DETERMINISTIC MENU INPUT PROBE (er-effects-input-probe.txt / ER_EFFECTS_INPUT_PROBE). After the
-/// menu opens, inject one Down tap then (after an observation window) one Confirm tap, at frames WE
-/// choose -- so we know exactly the frame to break on. Decisive question: does the Load-Game leaf
-/// d180 tick its leaf Update on HIGHLIGHT alone (Down, no Confirm yet), or only at Confirm? Targeted
-/// input used purely as a MEASUREMENT oracle (NOT the zero-input deliverable).
-pub(crate) fn input_probe_enabled() -> bool {
-    false
-}
-/// SELF-DRIVEN GAMEPAD NAV INJECTION (er-effects-inject-nav.txt / ER_EFFECTS_INJECT_NAV). When on,
-/// the input block stays engaged PAST menu-open (user input fully suppressed) and the XInput hook
-/// fabricates a D-pad Down nav schedule at the gamepad poll source, cycling the title-menu cursor
-/// so the input/focus-gated row populate fires and the row-push/csmenu-ctor hooks capture its
-/// trigger -- uncontaminated by user input. Capture-only (Down nav, never Confirm).
-pub(crate) fn inject_nav_enabled() -> bool {
-    false
 }
 
 /// MOVEMENT-PROOF probe (`er-effects-prove-movement.txt`). When staged, authorizes the in-DLL
@@ -568,18 +394,6 @@ pub(crate) fn cold_char_mount_enabled() -> bool {
 pub(crate) fn own_load_enabled() -> bool {
     OWN_LOAD_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
-/// GOLDEN BASELINE world-stream observe mode (er-effects-golden-observe.txt / ER_EFFECTS_GOLDEN_OBSERVE).
-/// OFF by default; purely ADDITIVE and OBSERVE-ONLY -- it fires NO continue/SetState5/load of any kind.
-/// When armed, the SAME recurring world-stream observer (`own_load_stream_observe_recurring`) runs on a
-/// NORMAL (vanilla, menu-driven) load too, so we can capture a GOLDEN baseline to diff against the
-/// menu-free OWN-LOAD stall. On a vanilla load neither `OWN_LOAD_CONTINUE_FIRED` nor the cached
-/// pointers from our continue_confirm are set, so golden mode instead has `own_stepper_idx10` cache the
-/// live TITLE owner into `OWN_LOAD_OWNER_CACHED` every title frame (the owner pointer is stable), and
-/// the observer re-derives InGameStep/MoveMapStep LIVE from that owner each frame (its existing
-/// `ingame_cached == 0` fallback) as the vanilla load builds the world.
-pub(crate) fn golden_observe_enabled() -> bool {
-    false
-}
 /// Whether the FINAL guarded `continue_confirm`/`SetState5` world-stream step is armed. SAVE-WRITING
 /// when it fires (`SetState5` autosaves), so it stays OFF by default: `own_load_drive` is verify-only
 /// unless this is explicitly armed via the autoload-file channel (`own_load_continue=1` in
@@ -621,31 +435,4 @@ pub(crate) fn own_load_install_job_enabled() -> bool {
 /// GAME_DIR file `er-effects-own-load-pump.txt`.
 pub(crate) fn own_load_pump_enabled() -> bool {
     OWN_LOAD_PUMP_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-}
-/// SAVE-SAFE PROBE GATE for `own_load_pump`: when set, the pump runs the corrected BUILD + per-frame
-/// `Run` (deser -> map-stream, all READ-only up to world-stream per the path-b spec) but, on reaching
-/// `state==Success`, LOGS the result and latches DONE WITHOUT firing the save-writing SetState5
-/// transition. This isolates the dialog-ctx correction (does the build no longer AV? does the pump
-/// progress to Success?) with ZERO save write -- so it can run against the user's real save with no
-/// swap and no autosave risk. OFF by default; env `ER_EFFECTS_OWN_LOAD_PUMP_VERIFY=1` or a GAME_DIR
-/// file `er-effects-own-load-pump-verify.txt`.
-pub(crate) fn own_load_pump_verify_only() -> bool {
-    false
-}
-/// DIRECT "Continue pressed" trigger (bd LIVE-continue-chain-via-selector-NOT-confirm-handler):
-/// once the title is at the settled main menu (STEP_MenuJobWait) after press-any-button AND
-/// GameMan/GameDataMan is set up, write the exact bit the native Continue path consumes --
-/// `*(TitleFlowContext+0x14c) = 1` (+ the save slot at `mss+0x1200`) -- so the native selector
-/// `0x1409a8eb0` dispatches the load through the engine's own pump. ZERO simulated input: a pure
-/// in-process field write replicating the confirm handler's side effects. OFF by default; arm via
-/// env `ER_EFFECTS_FIRE_TFC_CONTINUE=1` or a GAME_DIR file `er-effects-fire-tfc-continue.txt`.
-pub(crate) fn fire_tfc_continue_enabled() -> bool {
-    false
-}
-/// Direct ProfileLoadDialog build mode (er-effects-direct-build.txt / ER_EFFECTS_DIRECT_BUILD).
-/// OFF by default: a plain own_stepper run stays the safe read-only scan; the native dialog build
-/// (which leads to a guarded SetState(5) save-write via STAGE 2) fires only when deliberately
-/// enabled, so the first native-build run is a deliberate, save-backed experiment.
-pub(crate) fn direct_build_enabled() -> bool {
-    false
 }

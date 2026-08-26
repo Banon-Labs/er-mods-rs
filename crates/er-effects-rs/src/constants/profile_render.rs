@@ -212,7 +212,6 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SL
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
-pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID: AtomicUsize =

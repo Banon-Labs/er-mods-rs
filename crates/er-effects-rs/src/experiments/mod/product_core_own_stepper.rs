@@ -499,20 +499,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
-    // GOLDEN BASELINE mode: cache the live TITLE owner (stable pointer, supplied as our first arg every
-    // title frame) into OWN_LOAD_OWNER_CACHED so the RECURRING world-stream observer can re-derive
-    // InGameStep/MoveMapStep live from it on a user-driven vanilla load. We deliberately DO NOT cache
-    // InGameStep here (leave OWN_LOAD_INGAMESTEP_CACHED at 0): on a vanilla load InGameStep is built
-    // later during the loading screen, so the observer's `ingame_cached == 0` fallback must resolve it
-    // fresh each frame. OBSERVE-ONLY -- never fires continue/SetState5/any load. (Skipped once our own
-    // OWN-LOAD continue fired, which already cached the precise owner/InGameStep it kicked the load on.)
-    if golden_observe_enabled()
-        && !OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst)
-        && owner != TITLE_OWNER_SCAN_START_ADDRESS
-        && owner != 0
-    {
-        OWN_LOAD_OWNER_CACHED.store(owner, Ordering::SeqCst);
-    }
     let read_gm = |off: usize| {
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((gm + off) as *const i32) }
@@ -535,23 +521,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         }
     };
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-    // OBSERVE-ONLY NATIVE-LOAD mode (gated OFF by default). Takes precedence over ALL the
-    // own_stepper forcing logic below: it does NOT force the title machine -- the native boot
-    // advances naturally via pass-through, and once the live menu is rendered + settled we fire
-    // the native Load-Game node's run exactly once, then keep observing so the golden oracle is
-    // written as the native pump loads the char. Pure read-only until the one-shot fire.
-    // OBSERVE-ONLY NATIVE FULL-SAVE-READ mode (gated OFF by default). Takes precedence over ALL the
-    // own_stepper forcing logic below AND over native_load: it does NOT force the title machine --
-    // the native boot advances naturally via pass-through, and once the live menu is rendered +
-    // settled it runs the full-save-read load chain (SUBMIT -> DRAIN -> DESER -> GUARD -> CONFIRM)
-    // at the LIVE menu (where the FD4 IO worker pool is live so the submit drains). The sole save
-    // write (continue_confirm -> SetState5) is HARD-gated behind the step-6 guard AND the commit
-    // sub-gate (default = VERIFY-ONLY). NO SetState forcing for boot, NO selector pump.
-    if native_fullread_enabled() {
-        unsafe { native_fullread_tick(owner, base, n) };
-        pass_through(false);
-        return;
-    }
     own_stepper_idx10_fallbacks!(
         owner,
         framectx,

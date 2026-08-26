@@ -79,12 +79,9 @@ pub(crate) fn sq_repro_pause_at_menu() -> bool {
 
 /// PROFILE-LOAD-SWITCH repro mode: drive the user's exact switch (Quit tab -> Load Profile ->
 /// ProfileSelect -> pick the top character -> confirm -> load). Gated by its OWN marker
-/// `er-effects-system-quit-load-switch.txt` / `ER_EFFECTS_SQ_LOAD_SWITCH=1` -- deliberately NOT the
-/// `system_quit_profile_load_activation_allowed` opt-in, because that opt-in makes the ProfileSelect
-/// slot-activate hook FORWARD to the guarded native load instead of DIRECT-ARMING the save-safe switch
-/// (system_quit_ownership_repro.rs:1215 gates the direct-arm on `!allowed`). The direct-arm is exactly
-/// what the switch needs (it sets QUICKLOAD_PHASE and drives return-title + reload), so this mode must
-/// leave activation-allowed OFF.
+/// `er-effects-system-quit-load-switch.txt` / `ER_EFFECTS_SQ_LOAD_SWITCH=1`. The ProfileSelect
+/// slot-activate hook DIRECT-ARMS the save-safe switch (it sets QUICKLOAD_PHASE and drives
+/// return-title + reload), which is exactly what this mode needs.
 // ENV-GATE RATIONALE: ER_EFFECTS_SQ_LOAD_SWITCH=1 selects the profile-load-switch repro autopilot (Quit
 // tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
 // load/reload; agent-owned repro only, gated separately from the default Save Game harness.
@@ -968,7 +965,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     // Continue-trace compat: this unconditional hook replaced the trace-set `cap_continue_confirm`
     // hook on the same address (two MinHooks on one target fail -- the install_c30_writer_hook
     // precedent), so reproduce its logging + confirm latch exactly when tracing is on.
-    if trace_continue_enabled() && !continue_trace_disabled() {
+    if trace_continue_enabled() {
         let owner = if shim != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe {
                 safe_read_usize(shim + OWN_STEPPER_SHIM_OWNER_IDX * core::mem::size_of::<usize>())
