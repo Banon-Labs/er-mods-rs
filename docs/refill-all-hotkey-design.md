@@ -56,7 +56,7 @@ a census rather than a loop over all items.
 
 | Param | Rows | Eligible | Breakdown |
 |---|---|---|---|
-| `EquipParamWeapon` | 3554 | **71** | type 2 ×71 (the ammunition rows) |
+| `EquipParamWeapon` | 3554 | **71** | type 2 ×71 — all in `50000000`–`53500000`, the arrow/bolt range |
 | `EquipParamGoods` | 2326 | **378** | type 1 ×72, type 2 ×306 |
 | **Total** | | **449** | 1599 entries of headroom |
 
