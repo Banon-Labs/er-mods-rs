@@ -26,6 +26,25 @@ pub(crate) const CSGAITEM_ENTRY_STRIDE: usize = 0x8;
 pub(crate) const CSGAITEM_FREE_QUEUE_HEAD_OFFSET: usize = 0x19008;
 pub(crate) const CSGAITEM_FREE_QUEUE_END_OFFSET: usize = 0x1900c;
 pub(crate) const CSGAITEM_TABLE_CAPACITY: usize = 0x1400;
+/// The three latches `CS::CSGaitemImp::Deserialize` (0x671130) asserts on ENTRY, each with its own
+/// `DLPanic("..\\..\\Source\\Game\\Gaitem\\CSGaitem.cpp", <line>, "")` -- and `DLPanic` does not
+/// return, so violating any of them ends the process just as surely as the `gaitemInsTable[-1]` AV:
+///
+/// | offset    | asserted | panic line | meaning                                                 |
+/// |-----------|----------|------------|---------------------------------------------------------|
+/// | `0x19028` | `== 0`   | `0x2b1`    | the 0x5000 index scratch buffer; non-zero == a previous |
+/// |           |          |            | deserialize is still open (only 0x671670 frees it)      |
+/// | `0x19030` | `false`  | `0x2b2`    | `isBeingSerialized` -- a save is in flight              |
+/// | `0x19031` | `false`  | `0x2b3`    | `isBeingDeserialized` -- set on entry, cleared ONLY by  |
+/// |           |          |            | the paired finalize 0x671670                            |
+///
+/// `Deserialize` sets `0x19031 = true` and allocates `0x19028` itself and clears NEITHER; the paired
+/// `CSGaitemImp` finalize (0x671670, `SYSTEM_QUIT_GAITEM_FINALIZE_RVA`) is what releases both. So the
+/// call is not re-entrant and not repeatable, and a deserialize that died part-way leaves the
+/// singleton permanently latched against the next one.
+pub(crate) const CSGAITEM_DESERIALIZE_SCRATCH_OFFSET: usize = 0x19028;
+pub(crate) const CSGAITEM_IS_BEING_SERIALIZED_OFFSET: usize = 0x19030;
+pub(crate) const CSGAITEM_IS_BEING_DESERIALIZED_OFFSET: usize = 0x19031;
 /// Count of gaitem ins objects released by the pristine-restore sweep (product proof: >0 exactly
 /// once per switch reload, and the free-queue returns to full afterward).
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT;

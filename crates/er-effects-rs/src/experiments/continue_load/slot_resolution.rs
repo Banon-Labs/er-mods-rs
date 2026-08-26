@@ -324,51 +324,52 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64, slo
     }
 
     if phase == FULLREAD_PHASE_DESER {
-        // SWITCH FEED + STALE-TABLE FIX (0x67141a + soft-lock, 2026-07-16, workflow wf_0a1d790f). Two bugs on a
-        // 2nd+ consecutive System->Quit->Load-Profile switch, both here:
-        //  (a) CRASH: the native deser's inner CSGaitemImp::Deserialize (game+0x671130) runs on the PRIOR
-        //      character's stale gaitem table -> AV at game+0x67141a. Fix: reset the singleton to pristine
-        //      first (own_load_reset_gaitem_singleton, the same native per-item release continue_confirm uses).
-        //  (b) SOFT-LOCK: the native deser(slot) reads the game's RESIDENT IO buffer, which on switch 2 comes
-        //      back m10-null (c30=0xa010000, a level-9 shell) and never populates -> GUARD never passes ->
-        //      the COMMIT block's continue_confirm/SetState5 never fires -> DONE observe-loops forever.
-        // Fix (b): instead of the un-gated native deser, FEED our OWN on-disk slot bytes through the SAME
-        // native parser (own_load_feed_deserialize arms OWN_LOAD_GATE) so c30 becomes deterministically real
-        // -> GUARD passes -> COMMIT fires the native continue_confirm (our hook forwards it, no re-feed) ->
-        // SetState5 streams the character. Latch FRESH_DESER_DONE=1 so switch-1's own clean-title continue_confirm
-        // and this path never BOTH feed -- exactly ONE deserialize per switch. Boot / non-switch (picked==MAX,
-        // or continue_confirm already fed) falls back to the native deser unchanged.
-        let picked = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
-        let switch_feed_case = picked < TITLE_PROFILE_SLOT_COUNT
-            && gm != TITLE_OWNER_SCAN_START_ADDRESS
-            && unsafe { PlayerIns::local_player_mut() }.is_err()
-            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0;
-        let dret = if switch_feed_case {
-            unsafe { own_load_reset_gaitem_singleton(base) };
-            if unsafe { own_load_feed_deserialize(base, gm, picked as i32) } {
-                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
-                // Which slot's deserialize completed (slot+1) -- ground truth for the
-                // published-vs-loaded portrait oracle. See er_telemetry_core counters.
-                er_telemetry_core::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
-                    .store(picked + 1, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "native-fullread: DESER-path FEED of picked slot {picked} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams (FRESH_DESER_DONE=1, no double-feed)"
-                ));
-                1
-            } else {
-                append_autoload_debug(format_args!(
-                    "native-fullread: DESER-path FEED of picked slot {picked} FAILED -- falling back to native deser"
-                ));
-                let deser: unsafe extern "system" fn(i32) -> i32 =
-                    unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
-                unsafe { deser(slot) }
-            }
-        } else {
-            // Step 5: deserialize 0x14067b290(slot) ONCE at b80==3 -> writes GameMan+0xc30 = real map.
-            let deser: unsafe extern "system" fn(i32) -> i32 =
-                unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
-            unsafe { deser(slot) }
-        };
+        // Step 5: deserialize 0x14067b290(slot) ONCE at b80==3 -> writes GameMan+0xc30 = real map.
+        //
+        // THIS CALL CANNOT FAIL SOFTLY, SO IT IS GATED. `deser(slot)` reaches
+        // `CSGaitemImp::Deserialize` (0x671130) three frames down, and every way that function can
+        // be unhappy ends the process: an empty free-index queue makes it dispatch through
+        // `gaitemInsTable[-1]` (the AV at 0x67141a), and each of its three entry latches raises a
+        // non-returning `DLPanic`. There is no error code to check afterwards -- the check has to
+        // happen BEFORE. `gaitem_deserialize_blocker` carries the full derivation, including the
+        // captured crash frames that convicted this exact call on the boot path.
+        //
+        // ORDER: refuse outright while a local player is live (this is a TITLE chain, and a
+        // second deserialize into a live world is its own documented crash, plus the reset below is
+        // only sound once the old world is gone) -> restore the queue to pristine with the native
+        // per-item release -> re-read the preconditions -> only then call.
+        //
+        // THE SWITCH-FEED BRANCH THAT USED TO LIVE HERE IS DELETED, NOT MOVED. It required
+        // `SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT < TITLE_PROFILE_SLOT_COUNT`, which is the exact
+        // condition the STAND-DOWN at the top of this function returns early on, read from the same
+        // atomic. It was unreachable: the gaitem reset it performed has never run on any path that
+        // gets here, and every DESER this chain has ever executed was the raw native call with no
+        // precondition at all. That is why deleting it is a fix and not a regression -- the reset
+        // now runs unconditionally below, where it is actually reachable.
+        if unsafe { PlayerIns::local_player_mut() }.is_ok() {
+            append_autoload_debug(format_args!(
+                "native-fullread: DESER REFUSED slot={slot} -- a local player is live; the title chain must not deserialize into a live world (no deser, no write) -> DONE"
+            ));
+            unsafe { fullread_disarm_slot_request(gm, "deser-precondition-local-player") };
+            FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        // Return the boot/default character's still-resident gaitem instances to the free-index
+        // queue via the native per-item release, which is what the world teardown would have done
+        // before the game's own only call site (`CS::MoveMapStep::DoSaveStuff`) ever runs.
+        let _ = unsafe { own_load_reset_gaitem_singleton(base) };
+        if let Some(reason) = unsafe { gaitem_deserialize_blocker(base) } {
+            append_autoload_debug(format_args!(
+                "native-fullread: DESER REFUSED slot={slot} ({reason}) -- CSGaitemImp preconditions unmet after pristine-restore; calling 0x{:x} would end the process, not return an error (no deser, no continue_confirm, no write) -> DONE",
+                base + DESERIALIZE_SLOT_RVA
+            ));
+            unsafe { fullread_disarm_slot_request(gm, "deser-precondition-gaitem") };
+            FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        let deser: unsafe extern "system" fn(i32) -> i32 =
+            unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+        let dret = unsafe { deser(slot) };
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let (_fp, level, _nl) = unsafe { char_fingerprint(base) };

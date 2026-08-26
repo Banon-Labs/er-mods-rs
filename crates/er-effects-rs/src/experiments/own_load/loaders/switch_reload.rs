@@ -74,6 +74,120 @@ pub(crate) unsafe fn own_load_reset_gaitem_singleton(base: usize) -> Option<(u32
     Some((released, slack_before, slack_after))
 }
 
+/// THE PRECONDITION OF `deser(slot)` = `0x14067b290`, READ OUT OF LIVE RAM BEFORE THE CALL.
+///
+/// Returns `None` when the native slot deserialize may be called, or `Some(reason)` naming the
+/// single check that failed. The caller MUST refuse to call `0x67b290` on `Some` -- every listed
+/// failure ends the process rather than returning an error, so there is nothing to recover from
+/// afterwards.
+///
+/// WHY THIS EXISTS -- the crash it is derived from, proven by artifact, not inferred. A boot-title
+/// `deser(slot)` killed the game ~13s in and the DLL's own VEH wrote the frames
+/// (`er-effects-crash-log.txt`, 2026-08-25 17:03:10):
+///
+/// ```text
+/// access-violation rva=0x67141a  rcx=0x142a7e430[vt=0x140670f90]
+/// callers=[#4=0x14067141a, #5=0x140260035, #6=0x140256c32, #7=0x14067be5c]
+/// ```
+///
+/// which resolves against the 1.16.2 dump (shift 0) to exactly one chain:
+/// `0x67b290 deser` -> `+0x67b30e call 0x67bd70` (ret `0x67b313`) -> `+0x67be5c call 0x256be0` ->
+/// `+0x256c32 call PlayerGameData::Deserialize 0x25ffc0` -> `+0x260035 call
+/// CSGaitemImp::Deserialize 0x671130` -> fault at `0x67141a`.
+///
+/// `0x67141a` is `CALL qword ptr [RAX + 0x30]`, two instructions after
+/// `0x67140f MOV RCX,[RDI + RAX*0x8 + 0x8]` -- i.e. `gaitemInsTable[uVar2]`. The dump proves the
+/// index: `rcx` came back `0x142a7e430`, which is `.rdata`, and its first qword `0x140670f90` is
+/// code in the CSGaitem region -- that is the CSGaitemImp OBJECT'S OWN VTABLE, which is what
+/// `[RDI + (-1)*8 + 8]` == `[RDI]` reads. So `uVar2 == -1`, the documented `gaitemInsTable[-1]`.
+///
+/// And `-1` has exactly one source. `CSGaitemImp::Deserialize` allocates a fresh handle per save
+/// entry through `GetGaItemHandle{Weapon,Protector,Accessory,Goods,Gem}`, each of which calls
+/// `GetUnindexedGaItemHandle` (0x672440), whose whole body is:
+///
+/// ```text
+/// *out = 0;
+/// if (head != end) { pop; *out = <real handle>; }   // ONLY when the free queue is non-empty
+/// return out;                                        // head == end  ->  handle stays 0
+/// ```
+///
+/// A zero handle fails `IsIndexedGaitemHandle`, the index stays `0xffffffff`, and the very next
+/// statement dispatches through `gaitemInsTable[-1]`. **The precondition is therefore: the
+/// CSGaitemImp free-index queue must be FULL before the deserialize runs**, because the loop is
+/// `0x1400` iterations wide and may need one index per iteration.
+///
+/// The native game satisfies this for free and never had to think about it. `0x67b290` has exactly
+/// ONE caller in the image -- `CS::MoveMapStep::DoSaveStuff` (0x140afbad0), reached only from
+/// `CS::MoveMapStep::Update` (0x140aff640), whose body `DLPanic`s on `GLOBAL_DmgMan`,
+/// `GLOBAL_CSMenuMan`, `GLOBAL_CSSessionManager`, `GLOBAL_CSFile` and three more singletons. It is
+/// the IN-WORLD step, and by the time it runs the previous character's gaitem instances have been
+/// released back to the queue by the world/session teardown. Our chain calls the same function from
+/// the TITLE task, where the boot default character's instances are still resident, so the queue
+/// runs dry part-way through the save's entries and the next one indexes `[-1]`.
+///
+/// The buffer is not the suspect: `0x67bd70` validates the 0x10-byte header version via
+/// `FUN_1402624c0` and bails BEFORE `0x256be0` when it fails, so reaching frame `#6` at all proves
+/// the resident buffer carried a structurally valid save.
+///
+/// The three latch checks are a second, independent death mode on the same call -- see
+/// `CSGAITEM_DESERIALIZE_SCRATCH_OFFSET` -- and cost three reads.
+pub(crate) unsafe fn gaitem_deserialize_blocker(base: usize) -> Option<&'static str> {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const RING_USABLE: u32 = (CSGAITEM_TABLE_CAPACITY as u32) - 1; // 0x13ff (one sentinel slot)
+    let gaitem = unsafe { safe_read_usize(base + GLOBAL_CSGAITEM_SINGLETON_RVA) }.unwrap_or(NULL);
+    if gaitem == NULL || !unsafe { is_heap_aligned_ptr(gaitem) } {
+        append_autoload_debug(format_args!(
+            "gaitem-precondition: BLOCK -- GLOBAL_CSGaitem not resident/aligned (0x{gaitem:x}); the deserialize would run against an unknown object"
+        ));
+        return Some("singleton-unresolvable");
+    }
+    let scratch =
+        unsafe { safe_read_usize(gaitem + CSGAITEM_DESERIALIZE_SCRATCH_OFFSET) }.unwrap_or(1);
+    let serializing =
+        unsafe { safe_read_u8(gaitem + CSGAITEM_IS_BEING_SERIALIZED_OFFSET) }.unwrap_or(1);
+    let deserializing =
+        unsafe { safe_read_u8(gaitem + CSGAITEM_IS_BEING_DESERIALIZED_OFFSET) }.unwrap_or(1);
+    let head = unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_HEAD_OFFSET) }.unwrap_or(-1);
+    let end = unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_END_OFFSET) }.unwrap_or(-1);
+    if head < 0
+        || end < 0
+        || head as usize >= CSGAITEM_TABLE_CAPACITY
+        || end as usize >= CSGAITEM_TABLE_CAPACITY
+    {
+        append_autoload_debug(format_args!(
+            "gaitem-precondition: BLOCK -- free-queue head/end out of range (head={head} end={end} cap=0x{:x}); 0x{gaitem:x} is not the expected CSGaitemImp",
+            CSGAITEM_TABLE_CAPACITY
+        ));
+        return Some("free-queue-out-of-range");
+    }
+    // Ring distance head..end over capacity 0x1400 = the number of poppable free indices.
+    let free = (end as u32)
+        .wrapping_sub(head as u32)
+        .wrapping_add(CSGAITEM_TABLE_CAPACITY as u32)
+        % (CSGAITEM_TABLE_CAPACITY as u32);
+    let slack = RING_USABLE.saturating_sub(free);
+    let blocker = if scratch != 0 {
+        Some("deserialize-scratch-latched")
+    } else if serializing != 0 {
+        Some("is-being-serialized")
+    } else if deserializing != 0 {
+        Some("is-being-deserialized")
+    } else if slack != 0 {
+        Some("free-queue-not-full")
+    } else {
+        None
+    };
+    match blocker {
+        Some(reason) => append_autoload_debug(format_args!(
+            "gaitem-precondition: BLOCK ({reason}) gaitem=0x{gaitem:x} scratch=0x{scratch:x} serializing={serializing} deserializing={deserializing} free-queue head/end {head}/{end} free={free}/{RING_USABLE} slack={slack} -- native deser 0x67b290 would die (slack>0 -> gaitemInsTable[-1] AV at 0x67141a; a latch -> DLPanic in CSGaitem.cpp)"
+        )),
+        None => append_autoload_debug(format_args!(
+            "gaitem-precondition: OK gaitem=0x{gaitem:x} free-queue head/end {head}/{end} free={free}/{RING_USABLE} slack=0 (full) scratch=0 latches clear -- native deser 0x67b290 may run"
+        )),
+    }
+    blocker
+}
+
 /// SYNCHRONOUS fresh picked-slot feed-deserialize for the System->Quit->Load-Profile switch (the
 /// continue_confirm hook calls this BEFORE forwarding, so the c30/PGD the confirm streams belong to
 /// the PICKED slot -- bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
