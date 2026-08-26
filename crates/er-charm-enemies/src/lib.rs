@@ -103,14 +103,32 @@ fn consume_hotkey_presses() {
     ));
 }
 
+/// Re-read `er-charm-enemies.toml` and adopt anything that moved.
+///
+/// The reload itself is throttled inside `er_hotkey_config::HotFile`, so calling this every frame
+/// costs one integer comparison in the steady state. A moved hotkey goes to [`hotkey::rebind`],
+/// which is what clears the edge state -- without that, a key held at the instant of the swap
+/// reads as a press the player never made.
+#[cfg(windows)]
+fn poll_config_reload() {
+    let Some(update) = config::poll_reload() else {
+        return;
+    };
+    config::log_update(&update);
+    if update.hotkey_moved.is_some() {
+        hotkey::rebind(config::live_hotkey());
+    }
+}
+
 #[cfg(windows)]
 fn tick() {
+    poll_config_reload();
     let config = config::config();
     let ticks = TICKS.fetch_add(1, Ordering::Relaxed);
 
     if !hotkey::hook_installed() && ticks.is_multiple_of(HOOK_INSTALL_RETRY_TICKS) {
         // A successful install logs its own line, naming the MinHook instance that took it.
-        if let Err(status) = hotkey::install_hotkey_hook(config.hotkey)
+        if let Err(status) = hotkey::install_hotkey_hook(config.hotkey())
             && ticks == 0
         {
             charm_log(format_args!(
@@ -155,8 +173,9 @@ fn tick() {
         // anything without needing the feature turned on to find out.
         let counts = charm::sweep(config.effect_id, SweepMode::Count);
         charm_log(format_args!(
-            "status: enabled={} hook={} loaded_enemies={} charmed_now={} charmable={} speffect_rows={} keyboard_reads={} non_keyboard_reads={} suppressed_trigger_reads={} applied_total={} removed_total={}",
+            "status: enabled={} hotkey={} hook={} loaded_enemies={} charmed_now={} charmable={} speffect_rows={} keyboard_reads={} non_keyboard_reads={} suppressed_trigger_reads={} applied_total={} removed_total={}",
             enabled,
+            er_hotkey_config::chord_name(config.hotkey()),
             hotkey::hook_installed(),
             counts.enemies,
             counts.already_charmed,
@@ -191,8 +210,10 @@ fn install() {
     log::reset_log_file();
     let config = config::init_config();
     charm_log(format_args!(
-        "er-charm-enemies attach: hotkey={:?} effect_id={} remove_on_disable={} config={}",
+        "er-charm-enemies attach: hotkey={:?} ({}) effect_id={} remove_on_disable={} config={} \
+         -- edits to that file take effect while the game runs, no restart",
         config.hotkey_text,
+        er_hotkey_config::chord_name(config.hotkey()),
         config.effect_id,
         config.remove_on_disable,
         config.config_path.display()

@@ -1,15 +1,21 @@
 //! Loading [`LocalInvasionConfig`] from `er-invasion-warp-core.toml`, and RELOADING it while the game
 //! runs.
 //!
-//! # Hot reload, and why it is mtime-polled rather than event-driven
+//! # Hot reload, and why it is content-polled rather than event-driven
 //!
-//! The user edits this file to change where they are hunting, mid-session, and expects the next
-//! match to be judged by the new rules. A watcher API (ReadDirectoryChangesW, inotify) would be
-//! more elegant and is the wrong tool here: it needs a thread and a handle owned by a DLL that can
-//! be unloaded, and it fires on events we do not care about. The filter is consulted once per
-//! incoming match -- at most a few times a minute -- so checking the file's mtime at that moment
-//! costs one stat on a path we already know, and cannot drift out of sync with the decision it
-//! feeds. Polling is not a compromise here; it is the cheaper correct thing.
+//! The user edits this file to change where they are hunting -- or which key marks a location --
+//! mid-session, and expects the next match and the next keypress to follow the new rules. A watcher
+//! API (ReadDirectoryChangesW, inotify) would be more elegant and is the wrong tool here: it needs
+//! a thread and a handle owned by a DLL that can be unloaded, and it fires on events we do not care
+//! about. Polling is not a compromise here; it is the cheaper correct thing.
+//!
+//! It polls the file's TEXT (`er_hotkey_config::HotFile`), not its mtime, which is what it used to
+//! do. mtime has one-second resolution on several filesystems -- including the kind a Wine prefix
+//! sits on -- so two saves inside one second lost the second one, which reads as the edit not
+//! working. And a `touch`, a re-save with no changes, or this DLL's own write-back of a mark all
+//! moved mtime without changing anything, each of which was reported as a reload. That matters more
+//! now than it did: a reload RESETS the key edge detectors, so a spurious one makes a key held at
+//! that instant fire.
 //!
 //! # Parsing without a TOML dependency
 //!
@@ -43,7 +49,8 @@ pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp-core -- local invasi
 # are not where you want to be. Cancelling is safe: the session returns to idle and searching
 # continues. Nothing here fakes an invasion or spoofs session state.
 #
-# Edits take effect immediately. The file is re-read when the next match arrives; no restart.
+# EDITS TAKE EFFECT IMMEDIATELY. The file is re-read about once a second while the game runs; no
+# restart. The log names what changed each time.
 
 [local_invasion]
 
@@ -129,7 +136,7 @@ named_locations = []
 # is a property of the LOCATION, so the map reads the same wherever you are standing.
 #
 # The keys rewrite this file, so marks survive a restart. Hand-edits are equally fine; the file is
-# re-read when the next match arrives.
+# re-read about once a second while you play.
 allowed_blocks = []
 
 # The two keys, by NAME. Insert and Delete are the defaults, but a 60% keyboard has neither -- so
@@ -147,6 +154,23 @@ allowed_blocks = []
 # ignored, because a key that does nothing is indistinguishable from a broken feature.
 mark_key = "Insert"
 unmark_key = "Delete"
+
+# The three invasion-point keys, by NAME, from the same list above.
+#
+# CHANGE THESE IF ANOTHER MOD FIGHTS YOU FOR THEM. They were hard-coded to F7/F8/F9, which is a
+# popular enough choice that another mod in the same profile had taken F7 too -- one press reached
+# both, and there was no way to separate them short of unloading something. Now there is.
+#
+#   warp_nearest_key      the nearest invasion point that is not the one you are standing on
+#   warp_next_key         the next point in the catalog's own order, which crosses the map
+#   warp_other_area_key   the first point in a DIFFERENT area (base game <-> Shadow of the Erdtree)
+#
+# Invasion locations are markers rather than fast-travel destinations, so pressing one of these
+# currently logs why it declined instead of moving you. The keys are still read -- a key that does
+# nothing at all and a key whose handler is broken look identical from the outside.
+warp_nearest_key = "F7"
+warp_next_key = "F8"
+warp_other_area_key = "F9"
 
 # Locations you excluded. An exclusion beats everything, including a mode that would accept it.
 blocked_blocks = []
@@ -186,6 +210,49 @@ pub struct ParsedConfig {
 /// would make a correct shared config look broken.
 #[must_use]
 pub fn parse_local_invasion_config(text: &str) -> ParsedConfig {
+    parse_local_invasion_config_with_fallback(text, &LocalInvasionConfig::default())
+}
+
+/// One key binding, keeping `fallback` when the value cannot be read.
+///
+/// Surfaced as an issue rather than silently accepted: a player who mistypes their key otherwise
+/// presses it, gets nothing, and has no way to tell that apart from the feature being broken. And
+/// `fallback` rather than the built-in default because on a RELOAD the value already in force is
+/// the one that was working -- resetting a typo to F7 would move a key the player had deliberately
+/// moved away from F7, which is the collision this option exists to escape.
+fn key_setting(
+    name: &str,
+    value: &str,
+    fallback: crate::keybind::VirtualKey,
+    line_no: usize,
+    issues: &mut Vec<ConfigIssue>,
+) -> crate::keybind::VirtualKey {
+    match crate::keybind::parse_key(&unquote(value)) {
+        Ok(key) => key,
+        Err(error) => {
+            issues.push(ConfigIssue {
+                line: line_no,
+                message: format!(
+                    "{name}: {error} -- keeping {}",
+                    crate::keybind::key_name(fallback)
+                ),
+            });
+            fallback
+        }
+    }
+}
+
+/// Parse, keeping `fallback`'s KEY BINDINGS for any key line that does not parse.
+///
+/// Every other setting still falls back to its own built-in default when absent or malformed,
+/// which is the behaviour this file has always had. Key bindings are the exception because they
+/// are the setting a reload is most likely to be editing, and the one where falling back to the
+/// shipped default is actively wrong -- see [`key_setting`].
+#[must_use]
+pub fn parse_local_invasion_config_with_fallback(
+    text: &str,
+    fallback: &LocalInvasionConfig,
+) -> ParsedConfig {
     let mut config = LocalInvasionConfig::default();
     let mut issues = Vec::new();
     // None = top level (ours), Some(true) = inside [local_invasion], Some(false) = someone else's.
@@ -260,23 +327,46 @@ pub fn parse_local_invasion_config(text: &str) -> ParsedConfig {
                     message: format!("named_locations must be an array of strings, got {value:?}"),
                 }),
             },
-            "mark_key" => match crate::keybind::parse_key(&unquote(value)) {
-                Ok(key) => config.mark_key = key,
-                // Surfaced as an issue rather than silently kept at the default: a player who
-                // mistypes their key otherwise presses it, gets nothing, and has no way to tell
-                // that apart from the feature being broken.
-                Err(error) => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!("mark_key: {error}"),
-                }),
-            },
-            "unmark_key" => match crate::keybind::parse_key(&unquote(value)) {
-                Ok(key) => config.unmark_key = key,
-                Err(error) => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!("unmark_key: {error}"),
-                }),
-            },
+            "mark_key" => {
+                config.mark_key =
+                    key_setting("mark_key", value, fallback.mark_key, line_no, &mut issues);
+            }
+            "unmark_key" => {
+                config.unmark_key = key_setting(
+                    "unmark_key",
+                    value,
+                    fallback.unmark_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
+            "warp_nearest_key" => {
+                config.warp_nearest_key = key_setting(
+                    "warp_nearest_key",
+                    value,
+                    fallback.warp_nearest_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
+            "warp_next_key" => {
+                config.warp_next_key = key_setting(
+                    "warp_next_key",
+                    value,
+                    fallback.warp_next_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
+            "warp_other_area_key" => {
+                config.warp_other_area_key = key_setting(
+                    "warp_other_area_key",
+                    value,
+                    fallback.warp_other_area_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
             "named_location_text_ids" => match parse_int_array(value) {
                 Some(v) => config.named_location_text_ids = v.into_iter().collect(),
                 None => issues.push(ConfigIssue {
@@ -451,6 +541,18 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                 "unmark_key = \"{}\"\n",
                 crate::keybind::key_name(config.unmark_key)
             )),
+            "warp_nearest_key" => out.push_str(&format!(
+                "warp_nearest_key = \"{}\"\n",
+                crate::keybind::key_name(config.warp_nearest_key)
+            )),
+            "warp_next_key" => out.push_str(&format!(
+                "warp_next_key = \"{}\"\n",
+                crate::keybind::key_name(config.warp_next_key)
+            )),
+            "warp_other_area_key" => out.push_str(&format!(
+                "warp_other_area_key = \"{}\"\n",
+                crate::keybind::key_name(config.warp_other_area_key)
+            )),
             "named_location_text_ids" => {
                 let ids = config
                     .named_location_text_ids
@@ -489,16 +591,50 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
 
 /// Tracks the config file so edits during play take effect on the next match.
 ///
-/// Holds the last modification time and reloads when it changes. `reload_if_changed` returns
-/// `Some` only when a reload actually happened, so the caller can log the transition once instead
-/// of every time it asks.
-#[derive(Debug, Default)]
+/// # Why the file's TEXT and not its mtime
+///
+/// This used to hold the last modification time. Two things went wrong with that, and the second
+/// is the one that matters here:
+///
+/// * mtime has ONE-SECOND resolution on several filesystems, including the kind a Wine prefix
+///   tends to sit on. Two saves inside one second and the second one is invisible -- which reads
+///   as "changing the key did nothing", indistinguishable from a broken feature.
+/// * `touch`, a re-save with no edits, and this DLL's own write-back of a mark all move mtime
+///   without changing anything, and every one of those was reported as a reload. A reload RESETS
+///   the key edge detectors, so a key held at that instant fires again.
+///
+/// `er_hotkey_config::HotFile` compares the text and throttles itself to roughly one read a
+/// second, which is cheaper than the per-match `stat` this replaced and cannot miss an edit.
+///
+/// `reload_if_changed` returns `Some` only when a reload actually happened, so the caller can log
+/// the transition once instead of every time it asks.
+#[derive(Debug)]
 pub struct HotConfig {
     config: LocalInvasionConfig,
-    /// Last mtime seen, as whatever the platform reports. `None` until the file is first read, and
-    /// also when the file is missing -- so a file that appears mid-session is picked up.
-    last_stamp: Option<std::time::SystemTime>,
-    loaded_once: bool,
+    file: Option<er_hotkey_config::HotFile>,
+    poll_interval_ms: u64,
+}
+
+impl Default for HotConfig {
+    fn default() -> Self {
+        Self::with_poll_interval_ms(er_hotkey_config::reload::DEFAULT_POLL_INTERVAL_MS)
+    }
+}
+
+impl HotConfig {
+    /// A watcher that reads the file at most once every `poll_interval_ms`.
+    ///
+    /// The default is about a second, which is below the threshold at which a person editing a
+    /// file would call it "not working" and far above the frame rate. Tests pass `0` so a decision
+    /// can be exercised without waiting for a clock.
+    #[must_use]
+    pub fn with_poll_interval_ms(poll_interval_ms: u64) -> Self {
+        Self {
+            config: LocalInvasionConfig::default(),
+            file: None,
+            poll_interval_ms,
+        }
+    }
 }
 
 /// What a reload produced.
@@ -526,38 +662,54 @@ impl HotConfig {
     /// that emits something the parser drops would lose the user's mark while the key press looked
     /// like it worked. A `false` return means exactly that happened and is worth logging loudly.
     ///
-    /// The mtime stamp is updated from the file we just wrote, so our own write is not re-reported
-    /// as somebody editing the file.
+    /// The watcher ADOPTS the text we just wrote, so our own write is not re-reported as somebody
+    /// editing the file -- which would otherwise reset the key edge detectors on every mark press.
     pub fn save(
         &mut self,
         path: &std::path::Path,
         config: &LocalInvasionConfig,
     ) -> std::io::Result<bool> {
-        std::fs::write(path, render_local_invasion_config(config))?;
-        self.last_stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        self.loaded_once = true;
-        let round_tripped = parse_local_invasion_config(&std::fs::read_to_string(path)?).config;
+        let rendered = render_local_invasion_config(config);
+        std::fs::write(path, &rendered)?;
+        let read_back = std::fs::read_to_string(path)?;
+        self.watcher(path).adopt(read_back.clone());
+        let round_tripped = parse_local_invasion_config_with_fallback(&read_back, config).config;
         let matched = round_tripped == *config;
         self.config = round_tripped;
         Ok(matched)
     }
 
-    /// Re-read the file if its mtime moved since the last look.
+    /// The file watcher, created on first use so `HotConfig::default()` needs no path.
+    ///
+    /// The path is fixed for the life of the process; a caller that somehow passes a different one
+    /// gets a fresh watcher rather than a stale comparison against the old file's text.
+    fn watcher(&mut self, path: &std::path::Path) -> &mut er_hotkey_config::HotFile {
+        if self.file.as_ref().is_none_or(|hot| hot.path() != path) {
+            self.file = Some(er_hotkey_config::HotFile::with_interval(
+                path,
+                self.poll_interval_ms,
+            ));
+        }
+        // Just assigned above when it was absent.
+        self.file.as_mut().expect("the watcher was just created")
+    }
+
+    /// Re-read the file if its TEXT changed since the last look.
     ///
     /// Returns `Some` only on an actual change. A missing file reverts to defaults -- which means
     /// the filter switches OFF, because `enabled` defaults to false. Deleting the config is
     /// therefore a safe way to stop filtering mid-session, and it fails in the direction that
     /// stops cancelling other people's matches.
+    ///
+    /// Cheap to call often: the read itself is throttled to roughly once a second inside the
+    /// watcher, so a per-frame caller pays one integer comparison in the steady state.
     pub fn reload_if_changed(&mut self, path: &std::path::Path) -> Option<ReloadOutcome> {
-        let stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        if self.loaded_once && stamp == self.last_stamp {
-            return None;
-        }
-        self.last_stamp = stamp;
-        self.loaded_once = true;
-        match std::fs::read_to_string(path) {
-            Ok(text) => {
-                let parsed = parse_local_invasion_config(&text);
+        // The key bindings in force are the fallback for a key line that does not parse: on a
+        // reload, "what was working" is a better answer than "what shipped".
+        let fallback = self.config.clone();
+        match self.watcher(path).poll()? {
+            er_hotkey_config::FileChange::Text(text) => {
+                let parsed = parse_local_invasion_config_with_fallback(&text, &fallback);
                 self.config = parsed.config.clone();
                 Some(ReloadOutcome {
                     config: parsed.config,
@@ -565,7 +717,7 @@ impl HotConfig {
                     reverted_to_defaults: false,
                 })
             }
-            Err(_) => {
+            er_hotkey_config::FileChange::Missing => {
                 self.config = LocalInvasionConfig::default();
                 Some(ReloadOutcome {
                     config: LocalInvasionConfig::default(),
@@ -684,7 +836,9 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("er-invasion-warp.toml");
         let _ = std::fs::remove_file(&path);
-        let mut hot = HotConfig::default();
+        // Interval 0 so the poll below actually READS. With the shipped ~1s throttle it would
+        // return None without looking, and this test would pass without proving anything.
+        let mut hot = HotConfig::with_poll_interval_ms(0);
         let mut config = LocalInvasionConfig {
             enabled: true,
             ..Default::default()
@@ -695,7 +849,8 @@ mod tests {
             hot.current().allowed_blocks,
             [0x3c35_3800].into_iter().collect()
         );
-        // Our own write must not read as somebody else editing the file.
+        // Our own write must not read as somebody else editing the file. If it did, every mark
+        // press would also reset the key edge detectors -- and a key held at that instant fires.
         assert_eq!(hot.reload_if_changed(&path), None);
         let _ = std::fs::remove_file(&path);
     }
@@ -848,7 +1003,7 @@ mod tests {
         let path = dir.join("er-invasion-warp.toml");
         std::fs::write(&path, "enabled = false\nmode = \"exact\"\n").unwrap();
 
-        let mut hot = HotConfig::default();
+        let mut hot = HotConfig::with_poll_interval_ms(0);
         let first = hot
             .reload_if_changed(&path)
             .expect("first look always loads");
@@ -858,11 +1013,9 @@ mod tests {
             "an unchanged file must not report a reload"
         );
 
-        // Edit it the way a user would, mid-session.
+        // Edit it the way a user would, mid-session. No mtime games: the watcher compares the
+        // file's TEXT, so an edit inside one mtime tick is seen like any other.
         std::fs::write(&path, "enabled = true\nmode = \"area\"\n").unwrap();
-        // mtime granularity can be coarse; force a distinct stamp rather than sleeping.
-        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
-        let _ = filetime_set(&path, later);
         let second = hot
             .reload_if_changed(&path)
             .expect("an edited file must be picked up");
@@ -889,11 +1042,111 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Set an mtime without pulling in a dependency. Falls back to a rewrite when the platform
-    /// call is unavailable; the test only needs the stamp to CHANGE.
-    fn filetime_set(path: &std::path::Path, _when: std::time::SystemTime) -> std::io::Result<()> {
-        let text = std::fs::read_to_string(path)?;
-        std::fs::write(path, format!("{text}\n"))?;
-        Ok(())
+    /// TWO edits inside one mtime tick, both of which must land.
+    ///
+    /// This is the case the old mtime watcher got wrong. Several filesystems -- including the kind
+    /// a Wine prefix sits on -- stamp mtime to a whole second, so a player who saves their config
+    /// twice quickly had the second save silently ignored, which reads as the key change not
+    /// working. No sleeping here on purpose: the point is that the watcher never needed the clock.
+    #[test]
+    fn two_edits_inside_one_mtime_tick_are_both_picked_up() {
+        let dir =
+            std::env::temp_dir().join(format!("er-invasion-warp-fast-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("er-invasion-warp.toml");
+        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"F7\"\n").unwrap();
+
+        let mut hot = HotConfig::with_poll_interval_ms(0);
+        assert_eq!(
+            hot.reload_if_changed(&path)
+                .expect("first look loads")
+                .config
+                .warp_nearest_key,
+            crate::keybind::VK_F7
+        );
+        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"]\"\n").unwrap();
+        assert_eq!(
+            hot.reload_if_changed(&path)
+                .expect("the second edit must land too")
+                .config
+                .warp_nearest_key,
+            crate::keybind::parse_key("]").expect("] is a key")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE FALLBACK RULE. A typo on a RELOAD keeps the key that was working -- not the shipped
+    /// default, and not nothing.
+    ///
+    /// Falling back to F7 would be actively wrong: F7 is the binding a colliding mod had already
+    /// taken, so a typo would silently drag the player back onto the collision they had moved away
+    /// from, and the log would say the config loaded fine.
+    #[test]
+    fn a_malformed_key_on_reload_keeps_the_previous_value_not_the_shipped_default() {
+        let dir =
+            std::env::temp_dir().join(format!("er-invasion-warp-typo-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("er-invasion-warp.toml");
+        let chosen = crate::keybind::parse_key("]").expect("] is a key");
+        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"]\"\n").unwrap();
+
+        let mut hot = HotConfig::with_poll_interval_ms(0);
+        assert_eq!(
+            hot.reload_if_changed(&path)
+                .expect("first look loads")
+                .config
+                .warp_nearest_key,
+            chosen
+        );
+
+        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"Winkey\"\n").unwrap();
+        let outcome = hot
+            .reload_if_changed(&path)
+            .expect("the edit is a change even though it does not parse");
+        assert_eq!(
+            outcome.config.warp_nearest_key, chosen,
+            "a typo must not drag the binding back to the shipped default"
+        );
+        assert_eq!(hot.current().warp_nearest_key, chosen);
+        assert_eq!(outcome.issues.len(), 1, "{:?}", outcome.issues);
+        let message = &outcome.issues[0].message;
+        assert!(message.contains("Winkey"), "{message}");
+        assert!(message.contains("keeping ]"), "{message}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The three warp keys are readable by name, like the mark keys, and survive the writer -- the
+    /// mark keys rewrite this file, so a warp key the writer dropped would be erased on the first
+    /// mark press.
+    #[test]
+    fn the_warp_keys_are_configurable_and_survive_the_writer() {
+        let parsed = parse_local_invasion_config(
+            "[local_invasion]\nwarp_nearest_key = \"]\"\nwarp_next_key = \"K\"\n\
+             warp_other_area_key = \"KP_Plus\"\n",
+        );
+        assert_eq!(parsed.issues, Vec::new(), "{:?}", parsed.issues);
+        assert_eq!(parsed.config.warp_nearest_key, 0xdd);
+        assert_eq!(parsed.config.warp_next_key, 0x4b);
+        assert_eq!(parsed.config.warp_other_area_key, 0x6b);
+
+        let rendered = render_local_invasion_config(&parsed.config);
+        assert!(rendered.contains("warp_nearest_key = \"]\""), "{rendered}");
+        assert!(rendered.contains("warp_next_key = \"K\""), "{rendered}");
+        assert!(
+            rendered.contains("warp_other_area_key = \"KP_Plus\""),
+            "{rendered}"
+        );
+        assert_eq!(parse_local_invasion_config(&rendered).config, parsed.config);
+    }
+
+    /// The shipped file must name all five keys, and they must be the historical defaults so an
+    /// existing player's muscle memory keeps working.
+    #[test]
+    fn the_shipped_file_names_the_warp_keys_at_their_historical_defaults() {
+        let parsed = parse_local_invasion_config(DEFAULT_CONFIG_TOML);
+        assert_eq!(parsed.issues, Vec::new(), "{:?}", parsed.issues);
+        assert_eq!(parsed.config.warp_nearest_key, crate::keybind::VK_F7);
+        assert_eq!(parsed.config.warp_next_key, crate::keybind::VK_F8);
+        assert_eq!(parsed.config.warp_other_area_key, crate::keybind::VK_F9);
     }
 }

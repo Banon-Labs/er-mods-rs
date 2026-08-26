@@ -15,6 +15,9 @@ crate-type = ["cdylib"]
 # the windows-only block so the config/hotkey parsers stay covered by `cargo test` on the host.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+# Key names, the reload decision, and the lock-free slot the DirectInput detour reads the
+# hotkey out of. Host-buildable, so the config/hotkey parsers stay covered by `cargo test`.
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

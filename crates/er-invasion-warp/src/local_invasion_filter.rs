@@ -286,7 +286,8 @@ fn refresh_config() {
         } else {
             crate::standalone_log(format_args!(
                 "local-invasion: config loaded enabled={} mode={} hunt={} dll_users_only={} \
-                 reject_notice={} named={} ids={} blocks={} excluded={} mark={} unmark={}",
+                 reject_notice={} named={} ids={} blocks={} excluded={} mark={} unmark={} \
+                 warp_nearest={} warp_next={} warp_other_area={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
@@ -308,7 +309,11 @@ fn refresh_config() {
                 // into a DIFFERENT valid key looks exactly like the feature not working.
                 er_invasion_warp_core::keybind::key_name(outcome.config.mark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.warp_nearest_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.warp_next_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.warp_other_area_key),
             ));
+            warn_about_key_collisions(&outcome.config);
         }
         // SAY THAT THE TYPED NAMES DO NOTHING YET. `named_locations` is parsed and stored but never
         // resolved to text ids, so it contributes nothing to a verdict -- and in `mode = "named"`
@@ -329,6 +334,39 @@ fn refresh_config() {
                 "local-invasion: config line {}: {}",
                 issue.line, issue.message
             ));
+        }
+    }
+}
+
+/// Say so when two of THIS crate's own keys land on the same physical key.
+///
+/// Two pollers on one key is not a cosmetic clash. `GetAsyncKeyState`'s low bit means "pressed
+/// since the previous call ON THIS THREAD" and reading it CONSUMES it, so whichever poller asks
+/// first eats the edge and the other sees nothing -- intermittently, depending on ordering. That
+/// is the least debuggable shape a keybinding bug can take, and now that every key is
+/// configurable a player can produce it by hand in one edit.
+///
+/// A warning rather than a refusal: the config is the player's, and the mark keys and the warp
+/// keys are read by different pollers in different situations, so a deliberate overlap is theirs
+/// to make. What must not happen is it being silent.
+fn warn_about_key_collisions(config: &LocalInvasionConfig) {
+    let bindings = [
+        ("mark_key", config.mark_key),
+        ("unmark_key", config.unmark_key),
+        ("warp_nearest_key", config.warp_nearest_key),
+        ("warp_next_key", config.warp_next_key),
+        ("warp_other_area_key", config.warp_other_area_key),
+    ];
+    for (index, (name, key)) in bindings.iter().enumerate() {
+        for (other_name, other_key) in &bindings[index + 1..] {
+            if key == other_key {
+                crate::standalone_log(format_args!(
+                    "local-invasion: {name} and {other_name} are BOTH {} -- two pollers on one key \
+                     consume each other's press latch, so one of them will fire only sometimes. \
+                     Give them different keys.",
+                    er_invasion_warp_core::keybind::key_name(*key)
+                ));
+            }
         }
     }
 }
@@ -1824,6 +1862,31 @@ fn mark_keys_in_force() -> (i32, i32) {
         |config| (config.mark_key, config.unmark_key),
     )
 }
+/// The three warp keys, read from the config every poll, for the same reason and with the same
+/// fallback as [`mark_keys_in_force`].
+///
+/// These are the pair's sharper case. `VK_F7` was not merely unavailable on a compact keyboard, it
+/// was ALSO another mod's default in the same me3 profile, so one press reached both features and a
+/// live session warped when the player meant the other thing -- with no config key on either side
+/// to move.
+#[cfg(windows)]
+pub fn warp_keys_in_force() -> (i32, i32, i32) {
+    current_config().map_or(
+        (
+            er_invasion_warp_core::keybind::VK_F7,
+            er_invasion_warp_core::keybind::VK_F8,
+            er_invasion_warp_core::keybind::VK_F9,
+        ),
+        |config| {
+            (
+                config.warp_nearest_key,
+                config.warp_next_key,
+                config.warp_other_area_key,
+            )
+        },
+    )
+}
+
 /// `VK_SHIFT`: held, the mark keys act on the location's NAME instead of its exact block --
 /// "everywhere that shares this name" rather than "this tile".
 #[cfg(windows)]
@@ -1851,6 +1914,10 @@ unsafe extern "system" {
 pub struct MarkKeys {
     mark_was_down: bool,
     unmark_was_down: bool,
+    /// The keys the latches above are ABOUT. When the config moves a key, a latch left set says
+    /// the NEW key was already held -- so the next poll either swallows the press or, if the key
+    /// happens to be down at the moment of the swap, invents one.
+    bound_to: Option<(i32, i32)>,
 }
 
 #[cfg(windows)]
@@ -1860,6 +1927,7 @@ impl MarkKeys {
         Self {
             mark_was_down: false,
             unmark_was_down: false,
+            bound_to: None,
         }
     }
 
@@ -1877,6 +1945,15 @@ impl MarkKeys {
     /// held Shift look released on the second key press.
     fn poll(&mut self) {
         let (mark_key, unmark_key) = mark_keys_in_force();
+        if self.bound_to.replace((mark_key, unmark_key)) != Some((mark_key, unmark_key)) {
+            // A rebind (or the very first poll). Drop the latches AND the OS-level
+            // "pressed since last call" bit, which is per-thread and would otherwise deliver the
+            // new key's whole history as one edge the instant it is bound.
+            self.forget();
+            let _ = unsafe { GetAsyncKeyState(mark_key) };
+            let _ = unsafe { GetAsyncKeyState(unmark_key) };
+            return;
+        }
         // BOTH edges are read every poll, even when the two keys are the same. `GetAsyncKeyState`
         // consumes its own "pressed since" latch per call, so skipping one read would eat the
         // other's edge -- and a config that names one key for both would then fire neither.

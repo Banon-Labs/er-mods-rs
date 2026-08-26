@@ -22,13 +22,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{
+    bindings::SelectorAction,
     config::runtime_config,
     crash_telemetry, duration_filter, input_suppression,
     log::net_effects_log,
     present_overlay,
     selector_gate::{
-        self, SelectorInputState, SelectorKey, VK_0, VK_ADD, VK_DOWN, VK_INSERT, VK_LEFT,
-        VK_NUMPAD0, VK_OEM_7, VK_RIGHT, VK_SUBTRACT, VK_UP,
+        self, SelectorInputState, SelectorKey, VK_ADD, VK_DOWN, VK_LEFT, VK_NUMPAD0, VK_OEM_7,
+        VK_RIGHT, VK_SUBTRACT, VK_UP,
     },
     stacked_config,
 };
@@ -777,17 +778,21 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
     (calls, catalogs, load_error)
 }
 
+/// Which pending-action bit a virtual key sets, against the bindings in force.
+///
+/// The `VK_*` table this used to match on moved into `crate::bindings`, because every one of these
+/// keys is now configurable. The mapping itself is unchanged.
 fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
-    match vk {
-        VK_LEFT => EFFECT_HOTKEY_LEFT,
-        VK_UP => EFFECT_HOTKEY_UP,
-        VK_RIGHT => EFFECT_HOTKEY_RIGHT,
-        VK_DOWN => EFFECT_HOTKEY_DOWN,
-        VK_ADD => EFFECT_HOTKEY_STACK_ADD,
-        VK_SUBTRACT => EFFECT_HOTKEY_STACK_REMOVE,
-        VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
-        VK_0 | VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_SELECTOR_TOGGLE,
-        _ => 0,
+    match crate::bindings::live().action_for(vk, alt_down) {
+        Some(SelectorAction::CursorLeft) => EFFECT_HOTKEY_LEFT,
+        Some(SelectorAction::CursorUp) => EFFECT_HOTKEY_UP,
+        Some(SelectorAction::CursorRight) => EFFECT_HOTKEY_RIGHT,
+        Some(SelectorAction::CursorDown) => EFFECT_HOTKEY_DOWN,
+        Some(SelectorAction::StackAdd) => EFFECT_HOTKEY_STACK_ADD,
+        Some(SelectorAction::StackRemove) => EFFECT_HOTKEY_STACK_REMOVE,
+        Some(SelectorAction::EffectToggle) => EFFECT_HOTKEY_TOGGLE,
+        Some(SelectorAction::ShowHide) => EFFECT_HOTKEY_SELECTOR_TOGGLE,
+        None => 0,
     }
 }
 

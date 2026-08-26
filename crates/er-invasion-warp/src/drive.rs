@@ -57,14 +57,26 @@ use er_invasion_warp_core::select::{
 #[cfg(windows)]
 use er_invasion_warp_core::warp::classify_arrival;
 
-/// `VK_F7`: warp to the nearest invasion spawn point that is not the one under our feet.
+/// `VK_F7`, the DEFAULT for "warp to the nearest invasion spawn point that is not the one under
+/// our feet" -- no longer the binding.
+///
+/// # Why these became config keys
+///
+/// These three were hard-coded, and F7 in particular is a popular default: another mod loaded in
+/// the same me3 profile had taken it too, so one press reached both features and a live session
+/// warped when the player meant the other thing. Neither side had a config key, so the only fix
+/// available was unloading a mod. The binding now comes from `warp_nearest_key` /
+/// `warp_next_key` / `warp_other_area_key` in `er-invasion-warp.toml`, by NAME, re-read while the
+/// game runs -- see [`crate::local_invasion_filter::warp_keys_in_force`]. The constants remain as
+/// the fallback when the config is unreadable, because losing the file should cost the player
+/// their lists, not their keyboard.
 pub const VK_WARP_NEAREST: i32 = 0x76;
-/// `VK_F8`: step to the next invasion spawn point in the catalog's stable order. Unlike
-/// "nearest" this crosses the map, because the order is by block id rather than by distance.
+/// `VK_F8`, the default for "step to the next invasion spawn point in the catalog's stable order".
+/// Unlike "nearest" this crosses the map, because the order is by block id rather than by distance.
 pub const VK_WARP_NEXT: i32 = 0x77;
-/// `VK_F9`: jump to the first spawn point in a DIFFERENT area than the one the player is in --
-/// base game <-> Shadow of the Erdtree. A deliberate single action rather than something
-/// inferred from candidate counts, because "can the warp leave its own area" is the one
+/// `VK_F9`, the default for "jump to the first spawn point in a DIFFERENT area than the one the
+/// player is in" -- base game <-> Shadow of the Erdtree. A deliberate single action rather than
+/// something inferred from candidate counts, because "can the warp leave its own area" is the one
 /// question a filtered candidate list cannot answer.
 pub const VK_WARP_OTHER_AREA: i32 = 0x78;
 
@@ -166,6 +178,26 @@ impl KeyEdge {
     fn forget(&mut self) {
         self.was_down = false;
     }
+
+    /// Move this edge onto a different key, and forget everything about the old one.
+    ///
+    /// Returns whether the binding actually moved, so the caller can log it once.
+    ///
+    /// The reset is the load-bearing half, and it is TWO resets. `was_down` is about the old key,
+    /// so leaving it set means the new key is treated as already held -- its first press either
+    /// vanishes or, if the key happens to be down at the instant of the swap, its release invents
+    /// one. The discarded `GetAsyncKeyState` read clears the OS's own per-thread "pressed since
+    /// last call" latch for the new key, which has been accumulating since the process started and
+    /// would otherwise arrive as a phantom press the moment the key is bound.
+    fn rebind(&mut self, vkey: i32) -> bool {
+        if self.vkey == vkey {
+            return false;
+        }
+        self.vkey = vkey;
+        self.was_down = false;
+        let _ = unsafe { GetAsyncKeyState(vkey) };
+        true
+    }
 }
 
 #[cfg(windows)]
@@ -266,6 +298,32 @@ impl InvasionWarpDrive {
         }
     }
 
+    /// Move the three edges onto whatever `er-invasion-warp.toml` currently names, and say so once
+    /// per change.
+    ///
+    /// The log line is not decoration. A rebind that took and a rebind that was silently ignored
+    /// look identical from the player's side -- they press the new key and something either
+    /// happens or does not -- so the only way to tell a config that did not apply from a feature
+    /// that is broken is for the DLL to state which key it is now listening for.
+    fn adopt_configured_keys(&mut self, log: fn(std::fmt::Arguments<'_>)) {
+        let (nearest, next, other_area) = crate::local_invasion_filter::warp_keys_in_force();
+        let moved = [
+            self.nearest_key.rebind(nearest),
+            self.next_key.rebind(next),
+            self.other_area_key.rebind(other_area),
+        ];
+        // Silent on the very first tick, where every edge "moves" from its built-in default onto
+        // the identical configured value -- there is nothing to tell the player there.
+        if moved.iter().any(|changed| *changed) {
+            log(format_args!(
+                "invasion-warp: hotkeys now nearest={} next={} other_area={}",
+                er_invasion_warp_core::keybind::key_name(nearest),
+                er_invasion_warp_core::keybind::key_name(next),
+                er_invasion_warp_core::keybind::key_name(other_area),
+            ));
+        }
+    }
+
     /// One game-task tick.
     ///
     /// # Safety
@@ -350,6 +408,11 @@ impl InvasionWarpDrive {
             ));
         }
 
+        // Adopt any rebinding the player made in `er-invasion-warp.toml` since the last tick. The
+        // config read behind this is throttled to roughly once a second and compares the file's
+        // text, so a tick that changes nothing costs an integer comparison per key.
+        self.adopt_configured_keys(log);
+
         let focused = game_has_focus();
 
         // The heartbeat exists because every "nothing happened" path below is silent, and
@@ -393,18 +456,21 @@ impl InvasionWarpDrive {
             // in telemetry, so the number that can disagree with success is the one worth printing.
             let (banners_drawn, banners_empty) = crate::announce::measurement_tally();
             log(format_args!(
-                "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
-                 f8_state={:#06x} block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
+                "invasion-warp: heartbeat tick={} focused={focused} \
+                 nearest[{}]_state={:#06x} \
+                 next[{}]_state={:#06x} block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
                  maps] map[opens={opens} injected={injections} skipped={skips}] \
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
                  banner[shown={banners_shown} refused={banners_refused} \
                  drawn={banners_drawn} empty={banners_empty}] \
                  hotkey_refused={} \
-                 -- invasion locations are markers, not warp destinations: F7/F8/F9 and the map's \
-                 own confirm are all declined, and the pins are drawn dimmed to show it",
+                 -- invasion locations are markers, not warp destinations: the three warp keys and \
+                 the map's own confirm are all declined, and the pins are drawn dimmed to show it",
                 self.ticks,
+                er_invasion_warp_core::keybind::key_name(self.nearest_key.vkey),
                 self.nearest_key.raw_state() as u16,
+                er_invasion_warp_core::keybind::key_name(self.next_key.vkey),
                 self.next_key.raw_state() as u16,
                 block.map_or_else(|| "none".to_string(), |b| format!("{b:#010x}")),
                 player.map_or_else(
@@ -784,6 +850,50 @@ mod tests {
         assert_ne!(VK_WARP_NEAREST, VK_WARP_NEXT);
         assert_eq!(VK_WARP_NEAREST, 0x76, "F7");
         assert_eq!(VK_WARP_NEXT, 0x77, "F8");
+    }
+
+    /// These constants are now only the FALLBACK for an unreadable config, so they must agree with
+    /// what the shipped config file and the config type call the defaults. A drift between the
+    /// three would mean a player who deletes their config gets different keys than one who keeps
+    /// the shipped file, with nothing saying so.
+    #[test]
+    fn the_fallback_constants_match_the_shipped_defaults() {
+        let shipped = er_invasion_warp_core::local_invasion_config::parse_local_invasion_config(
+            er_invasion_warp_core::local_invasion_config::DEFAULT_CONFIG_TOML,
+        )
+        .config;
+        assert_eq!(shipped.warp_nearest_key, VK_WARP_NEAREST);
+        assert_eq!(shipped.warp_next_key, VK_WARP_NEXT);
+        assert_eq!(shipped.warp_other_area_key, VK_WARP_OTHER_AREA);
+
+        let built_in = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
+        assert_eq!(built_in.warp_nearest_key, VK_WARP_NEAREST);
+        assert_eq!(built_in.warp_next_key, VK_WARP_NEXT);
+        assert_eq!(built_in.warp_other_area_key, VK_WARP_OTHER_AREA);
+    }
+
+    /// The five keys this crate binds must not SHIP colliding with each other. A player can still
+    /// create a collision by hand -- and is warned when they do -- but the defaults must not.
+    #[test]
+    fn the_shipped_keys_do_not_collide_with_each_other() {
+        let shipped = er_invasion_warp_core::local_invasion_config::parse_local_invasion_config(
+            er_invasion_warp_core::local_invasion_config::DEFAULT_CONFIG_TOML,
+        )
+        .config;
+        let keys = [
+            shipped.mark_key,
+            shipped.unmark_key,
+            shipped.warp_nearest_key,
+            shipped.warp_next_key,
+            shipped.warp_other_area_key,
+        ];
+        for (index, key) in keys.iter().enumerate() {
+            assert!(
+                !keys[index + 1..].contains(key),
+                "two shipped bindings are both {}",
+                er_invasion_warp_core::keybind::key_name(*key)
+            );
+        }
     }
 
     #[test]

@@ -5,6 +5,10 @@
 //! and can be listed as its own ME3 `[[natives]]` entry without pulling in the
 //! product autoload/save/portrait/rendering dependencies.
 
+// Ungated on purpose: the selector's key bindings and the rules for reloading them, so their
+// tests run on the host. This is the module a rebind is decided in, and none of that decision
+// needs Windows.
+mod bindings;
 #[cfg(windows)]
 mod config;
 #[cfg(windows)]
