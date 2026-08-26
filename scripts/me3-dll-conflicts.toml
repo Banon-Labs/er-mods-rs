@@ -332,7 +332,13 @@ extra NPCs would make."""
 rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
 by another shell, which `check-shared-hook-rvas.py` re-proves on every run. Note that the union alone \
 would NOT be enough if one were: `register_union_hook` unions handlers within ONE DLL, because its \
-statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`."""
+statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`. \
+Since the Generate Build Link row moved into `er-quit-menu-core` this shell also LINKS \
+`er-build-import-runtime`, whose statics are per-DLL for the same reason -- but the harness calls \
+none of it and arms no row, so the second copy of the importer's phase machine never runs. If the \
+harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` \
+and with `er-effects-rs`, for exactly the reason the `er-effects-rs`/`er-build-import` pair \
+below already records."""
 "er-save-picker" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
 (0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \

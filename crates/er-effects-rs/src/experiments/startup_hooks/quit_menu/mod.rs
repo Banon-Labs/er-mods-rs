@@ -5,7 +5,6 @@ use crate::*;
 use crate::{crashlog::*, ffi::*, telemetry::*};
 use eldenring::cs::PlayerIns;
 use er_quit_menu_core::rows::QuitRow;
-use er_quit_menu_core::save_dest_identity::*;
 use er_quit_menu_core::save_flow_boxes::{SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE};
 use er_telemetry_core::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
 use er_telemetry_core::counters::SAVE_DEST_COMMIT_COUNT;
@@ -26,9 +25,8 @@ use std::{
     path::Path,
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicU16, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
-    time::UNIX_EPOCH,
 };
 
 pub(crate) mod profile_05_010_editor_runtime;

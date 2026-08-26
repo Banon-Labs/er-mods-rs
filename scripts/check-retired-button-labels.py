@@ -29,10 +29,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-LABEL_SOURCE = (
-    REPO_ROOT
-    / "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_dialog_handlers.rs"
-)
+# The row TEXT layer moved out of the product DLL into the quit-menu crate
+# (`experiments/startup_hooks/quit_menu/system_quit_dialog_handlers.rs` ->
+# `er_quit_menu_core::row_text`). This gate follows the bytes, because reading a file that no
+# longer holds a label would make it pass on nothing.
+LABEL_SOURCE = REPO_ROOT / "crates/er-quit-menu-core/src/row_text.rs"
 PROSE = [REPO_ROOT / "AGENTS.md", *sorted((REPO_ROOT / "docs").rglob("*.md"))]
 
 # Retired -> the row it became. The replacement is CONFIRMED against the source below, so a
