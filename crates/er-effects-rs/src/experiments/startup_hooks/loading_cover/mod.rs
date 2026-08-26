@@ -9,7 +9,7 @@ use er_telemetry_core::counters::OPTIONS_02_040_QUIT6_RUNTIME_FAILURES;
 use er_telemetry_core::counters::OPTIONS_02_040_QUIT6_RUNTIME_SERVES;
 use fromsoftware_shared::FromStatic;
 use std::{
-    ffi::{CStr, c_void},
+    ffi::c_void,
     fs,
     sync::{
         Mutex, OnceLock,

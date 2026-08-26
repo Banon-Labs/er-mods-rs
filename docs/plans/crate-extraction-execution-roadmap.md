@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 52,764 |
+| all `experiments/**` | 80 | 52,781 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -97,7 +97,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 9 | product re-export facade | D5 |
 | `continue_load/product_continue.rs` | 653 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 737 | product slot-resolution policy | D5 and R14 |
+| `continue_load/slot_resolution.rs` | 739 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 651 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
@@ -124,9 +124,9 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_load/drive.rs` | 1,724 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
 | `own_load/loaders/load_drive.rs` | 668 | load-drive implementation family | D5 |
-| `own_load/loaders/switch_reload.rs` | 498 | switch-reload adapter family | D5 |
+| `own_load/loaders/switch_reload.rs` | 501 | switch-reload adapter family | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
-| `own_stepper/bootstrap_drive.rs` | 874 | product bootstrap-drive policy | D5 |
+| `own_stepper/bootstrap_drive.rs` | 876 | product bootstrap-drive policy | D5 |
 | `own_stepper/load_steps.rs` | 751 | product load-step policy | D5 |
 | `present_overlay.rs` | 950 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
@@ -145,7 +145,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 989 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,083 | title-flow and product modal families | R22 |
-| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,409 | Scaleform resource, title, and product families | R22 and R24 |
+| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,419 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 473 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/build_url_clipboard.rs` | 211 | clipboard read plus the per-frame mirror that lets a paste land in an already-open build-url field | R18 |

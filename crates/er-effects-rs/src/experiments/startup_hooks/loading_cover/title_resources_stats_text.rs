@@ -408,11 +408,29 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     ));
 }
 
+/// Bound for [`scene_obj_name`]. The longest path this file matches on is
+/// `ProfileList/ItemList/ItemList/ItemList` at 38 bytes, so 255 is generous for a Scaleform node
+/// path and small enough that a junk pointer into a mapped region cannot hand back a long run of
+/// garbage.
+const MAX_SCENE_OBJ_NAME_LEN: usize = 255;
+
+/// Read a Scaleform scene-object name that the GAME handed us, without trusting the pointer.
+///
+/// Every `name_ptr` in this file arrives as a detour argument, so it is foreign in exactly the
+/// sense that killed two testers' games on 2026-08-23 (bd `er-effects-rs-uuly`): `CStr::from_ptr`
+/// calls `strlen`, `strlen` dereferences, and a non-null-but-garbage pointer takes the process
+/// down. The `name_ptr == 0` guard these call sites used to carry is the same null-only guard that
+/// did not help there, and `TITLE_OWNER_SCAN_START_ADDRESS` is `usize::MIN`, so it was that guard
+/// written twice. `safe_read_cstr` reads through `ReadProcessMemory` and fails closed instead.
+fn scene_obj_name(name_ptr: usize) -> Option<Vec<u8>> {
+    unsafe { er_game_base::mem::safe_read_cstr(name_ptr, MAX_SCENE_OBJ_NAME_LEN) }
+}
+
 pub(crate) unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
-    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+    let Some(bytes) = scene_obj_name(name_ptr) else {
         return false;
-    }
-    let Ok(name) = (unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() }) else {
+    };
+    let Ok(name) = std::str::from_utf8(&bytes) else {
         return false;
     };
     matches!(
@@ -429,13 +447,7 @@ pub(crate) unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
 }
 
 pub(crate) unsafe fn title_profile_list_container_matches(name_ptr: usize) -> bool {
-    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
-        return false;
-    }
-    let Ok(name) = (unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() }) else {
-        return false;
-    };
-    name == "ProfileList/ItemList/ItemList/ItemList"
+    scene_obj_name(name_ptr).as_deref() == Some(b"ProfileList/ItemList/ItemList/ItemList")
 }
 
 pub(crate) fn record_title_text_gfx_value(value: usize) {
@@ -464,11 +476,7 @@ pub(crate) fn record_title_text_gfx_value(value: usize) {
 }
 
 unsafe fn er_char_stats_field_name_matches(name_ptr: usize) -> bool {
-    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
-        return false;
-    }
-    let name = unsafe { CStr::from_ptr(name_ptr as *const i8).to_bytes() };
-    name == b"ErCharStats"
+    scene_obj_name(name_ptr).as_deref() == Some(b"ErCharStats")
 }
 
 pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
@@ -550,7 +558,9 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
                 .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
                 + OWN_STEPPER_CALL_INC;
             if calls <= 8 {
-                let name = unsafe { CStr::from_ptr(name_ptr as *const i8) }.to_string_lossy();
+                let name = scene_obj_name(name_ptr)
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .unwrap_or_default();
                 append_autoload_debug(format_args!(
                     "title-cover-part-a: named-child bind hid {name} out_proxy=0x{out_proxy:x} parent=0x{parent:x} context=0x{context:x} value=0x{value:x} calls={calls}"
                 ));

@@ -91,8 +91,7 @@ SUBPROCESS_TIMEOUT = 28
 
 
 def game_dir() -> Path:
-    steam = Path(os.environ.get("ME3_STEAM_DIR", Path.home() / ".local/share/Steam"))
-    return steam / "steamapps/common/ELDEN RING/Game"
+    return er_run_lib.game_dir()
 
 
 def target_dir() -> Path:

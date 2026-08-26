@@ -100,6 +100,13 @@ command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# A NUL-terminator walk over a pointer we did not create is how both testers' games died on
+# 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage NON-null
+# `key` from Steam/Seamless, past a guard that only checked for null. Four more sites of the same
+# shape were still live when that crash's own fix was reviewed, so the invariant is a gate rather
+# than a habit. Selftest first, so the gate is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py" --selftest
+python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py"
 # A detour's expected prologue must be GENERATED from named iced-x86 instructions in a build.rs,
 # never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
 # left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
@@ -169,6 +176,7 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
 shellcheck "$repo_root/scripts/beads-prime.sh"
 shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 
@@ -245,6 +253,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # take the player's arrow keys away from the game, which is not a claim to leave to review.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 
+# er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
+# per-player colour assignment and the config parser. Every one of those can be wrong without
+# crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
+# broken" -- and none of it is reachable from any other gate: the crate is windows-only to ship,
+# and the workspace pins `default-members` to er-effects-rs, so a bare `cargo test` never selects
+# it. The near-plane trim regression this caught on the way in is exactly the class of bug that
+# otherwise costs a game launch to find.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-invasion-path
+
 # The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
 # grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
 # it had 23 tests, so the whole mapping could regress silently -- the game-side crates
@@ -260,6 +277,27 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
 # real coverage; the cross-compile check in check-rust-build.sh keeps it building for the shipping
 # target too.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
+
+# er-seamless-bugfixes' registries. The crate's own docs already said the `cfg(not(windows))` allow
+# exists so `cargo test -p er-seamless-bugfixes` can build -- but no gate ever RAN it, so all 23
+# tests were inert: `default-members` pins the workspace to er-effects-rs, and check-rust-build.sh
+# only LINKS this shell. What that left unchecked is the whole safety argument for the code patch.
+# The freelist patch rewrites one byte of live game code, and its licence to do so is that the `JZ`
+# two bytes earlier already lands past the `INT3`; these tests recompute that landing address the
+# way the CPU does, and require the write to be one NOP at the `INT3`'s own offset. The window
+# BYTES are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
+
+# er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
+# er_effects_rs.dll among them, so a defect in a byte-patch primitive here is a defect in all of
+# them at once -- and it is the crate LEAST able to report one: it carries a crate-level
+# `#![allow(dead_code, ...)]` for MinHook binding parity, so an unused or wrong primitive draws no
+# warning, and `default-members` pins a bare `cargo test` to er-effects-rs so nothing ever selected
+# it. The tests cover what a compile check cannot see about `write_code_byte`: that the page is
+# relocked to the protection it actually had rather than left `PAGE_EXECUTE_READWRITE`, and that a
+# refused `VirtualProtect` returns before the store instead of writing anyway. Each assertion was
+# confirmed to go red against a deliberately broken implementation.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hook --lib
 
 # HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
 # in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game
@@ -315,6 +353,11 @@ python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
 python3 "$repo_root/scripts/er-run-branch.py" --selftest
+
+# Scoring a DLL by launching it alone. Its verdict is the husk oracle -- thread count and CPU
+# burn, not a pid existing -- and its selftest drives every branch of that classification,
+# including the two-thread husk that a naive check calls a pass. It launches nothing.
+python3 "$repo_root/scripts/er-release-bisect.py" --selftest
 
 # Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
 # er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into

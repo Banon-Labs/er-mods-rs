@@ -695,12 +695,39 @@ pub(crate) const INGAMESTEP_REQ_BLOCKID_100_OFFSET: usize = 0x100;
 /// remaining references sit in `let _ = (...)` warning-suppression tuples, and one trace hook
 /// observes it), so this is a badly-named loaded gun rather than a live hazard.
 pub(crate) const BLANK_SAVE_CONTAINER_REQUEST_RVA: usize = 0x67b4e0;
-/// FULL-LOAD (deserialize-arm) initiator 0x14067b1a0(ecx=slot): begins the slot read and
+/// FULL-LOAD (deserialize-arm) initiator 0x14067b1a0: begins the slot read and
 /// sets GameMan+0xb80=2 (the b80==2 deserialize arm), NOT b80=1 (the preview lane that
 /// 0x14067b4e0 uses and that resets to 0 without deserializing). Runtime-proven the
 /// preview lane never reaches b80==3; the b80=2 arm is the one the poll 0x140679180
 /// advances 2->3 (resident) so the full deserialize 0x14067b290 can run.
+///
+/// **ITS ARGUMENT IS NOT THE SLOT.** This comment used to say `(ecx=slot)` and that is
+/// what every call site in this repo believed. The game's own and only call site passes
+/// a hard zero:
+///
+/// ```text
+/// 14082a740:  33 c9              xor  %ecx,%ecx
+/// 14082a742:  e9 59 0a e5 ff     jmp  0x14067b1a0
+/// ```
+///
+/// `getXrefsTo 0x14067b1a0` returns two references in the whole image -- that one
+/// tail-call and one data reference. Nothing anywhere passes a non-zero value, and the
+/// reason shows up one frame down: `0x14067b1a0` forwards its argument as the third
+/// parameter of `FUN_140e6eb80(io, 10, flag)`, whose next branch is `if (flag == 0)` --
+/// the allocate-and-enqueue path. A non-zero argument takes the other branch, nothing is
+/// enqueued, the initiator returns 0 and `b80` stays 0.
+///
+/// The SLOT is communicated separately and beforehand, by
+/// [`FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA`] (`0x14067a810`) plus the `GameMan+0xb78`
+/// selector write. Passing the slot here worked for slot 0 purely because 0 is the value
+/// the game passes anyway; every other slot was silently refused, which is what
+/// soft-locked System->Quit->Load Character on a covered title screen (bd
+/// `save-read-submit-67b1a0-arg-is-a-flag-not-a-slot-2026-08-26`).
 pub(crate) const B80_FULL_LOAD_INITIATOR_RVA: usize = 0x67b1a0;
+/// The only value the game ever passes to [`B80_FULL_LOAD_INITIATOR_RVA`]. Named rather
+/// than spelled `0` at each call site, because a bare zero next to a slot variable reads
+/// like an oversight and invites someone to "fix" it back into a slot.
+pub(crate) const B80_FULL_LOAD_SUBMIT_FLAG: i32 = 0;
 /// The MENU's STEP_LoadSaveData initiator 0x14067b200(ecx=slot): sets GameMan+0xb80=2
 /// (the deserialize arm) the way the real Load-Game list does. Distinct from the
 /// preview 0x67b4e0 (b80=1) and the 0x67b1a0 variant. Hooked for the b80-mount capture

@@ -457,7 +457,9 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         unsafe { set_save_slot(want_slot) };
         let submit: unsafe extern "system" fn(i32) -> i32 =
             unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
-        let sret = unsafe { submit(want_slot) };
+        // NOT `submit(want_slot)`: the argument is a flag the game always passes as 0, and the
+        // slot was already set by `set_save_slot` above. See `B80_FULL_LOAD_SUBMIT_FLAG`.
+        let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
         let (io10, io18, io20) = iodev_summary();
         let q8_after = read_q(FD4_IO_WORKER_QUEUE_08_OFFSET);
         let q10_after = read_q(FD4_IO_WORKER_QUEUE_10_OFFSET);

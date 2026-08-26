@@ -430,11 +430,13 @@ mod live {
         let read = get_lobby_data(iface)?;
         let key = format!("{LOBBY_MAP_KEY}\0");
         let got = unsafe { read(iface, lobby, key.as_ptr()) };
-        if got.is_null() {
-            return None;
-        }
-        let value = unsafe { core::ffi::CStr::from_ptr(got.cast()) };
-        value.to_str().ok().map(str::to_owned)
+        // Steam's RETURN is a foreign pointer for exactly the same reason its arguments are, and
+        // `is_null` is exactly the guard that let `0x011000010e05acda` into `strlen` on the
+        // argument side of this file. Documented to be `""` on a missing key is not the same as
+        // observed to be a valid pointer, and ersc.dll sits between us and Steam here.
+        let value =
+            unsafe { er_game_base::mem::safe_read_cstr(got as usize, MAX_LOBBY_VALUE_LEN) }?;
+        String::from_utf8(value).ok()
     }
 
     /// Is this the lobby an invader's query can actually see?
@@ -452,13 +454,9 @@ mod live {
             return false;
         };
         let got = unsafe { read(iface, lobby, ADVERTISEMENT_MARKER_KEY.as_ptr()) };
-        if got.is_null() {
-            return false;
-        }
-        let value = unsafe { core::ffi::CStr::from_ptr(got.cast()) };
-        value
-            .to_str()
-            .is_ok_and(|v| v == ADVERTISEMENT_MARKER_VALUE)
+        // Same foreign-pointer rule as `published_value` above: fault-safe read, not a null check.
+        let value = unsafe { er_game_base::mem::safe_read_cstr(got as usize, MAX_LOBBY_VALUE_LEN) };
+        value.as_deref() == Some(ADVERTISEMENT_MARKER_VALUE.as_bytes())
     }
 
     fn get_lobby_data(iface: usize) -> Option<GetLobbyDataFn> {

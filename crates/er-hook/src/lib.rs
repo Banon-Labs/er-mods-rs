@@ -554,8 +554,84 @@ unsafe extern "system" {
 
 /// Bytes touched by [`write_code_byte`]. Named so the protection, the store, and the cache flush
 /// visibly agree on one length.
-#[cfg(windows)]
 const ONE_CODE_BYTE: usize = 1;
+
+/// The page operations a code-byte write performs, behind a seam. [`Win32CodePage`] is the only
+/// production implementation; the seam exists because the two ways this primitive can be wrong are
+/// both invisible to a compile check -- a page left `PAGE_EXECUTE_READWRITE` after the write, and a
+/// refused protection change that stores the byte anyway -- so the SEQUENCE is asserted on the host
+/// instead of only in a game. `er-scaleform-hooks` keeps its native hook owner testable the same
+/// way.
+trait CodePageOps {
+    /// `VirtualProtect`: returns whether the protection change was allowed, writing the previous
+    /// protection into `old_protect`.
+    fn protect(&mut self, addr: usize, len: usize, new_protect: u32, old_protect: &mut u32)
+    -> bool;
+
+    /// # Safety
+    ///
+    /// `addr` must be writable for the duration of the call.
+    unsafe fn store(&mut self, addr: usize, value: u8);
+
+    /// Flush the instruction cache so threads already inside this code see the new byte.
+    fn flush(&mut self, addr: usize, len: usize);
+}
+
+/// Shared body of [`write_code_byte`]: unlock, store, relock to the PREVIOUS protection, flush.
+///
+/// Returns whether the protection change was allowed. A refused change returns before the store,
+/// so nothing is written and no protection is left changed.
+///
+/// # Safety
+///
+/// With [`Win32CodePage`], `address` must be a byte of currently-mapped code in this process that
+/// is safe to overwrite; the store is an unsynchronised write into executable memory.
+unsafe fn write_code_byte_with<O: CodePageOps>(ops: &mut O, address: usize, value: u8) -> bool {
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    if !ops.protect(
+        address,
+        ONE_CODE_BYTE,
+        PAGE_EXECUTE_READWRITE,
+        &mut old_protect,
+    ) {
+        hook_log(format_args!(
+            "write_code_byte: VirtualProtect failed at 0x{address:x}"
+        ));
+        return false;
+    }
+    unsafe { ops.store(address, value) };
+    let mut restored = PAGE_PROTECT_UNSET;
+    ops.protect(address, ONE_CODE_BYTE, old_protect, &mut restored);
+    ops.flush(address, ONE_CODE_BYTE);
+    true
+}
+
+/// The production [`CodePageOps`]: Win32 `VirtualProtect` + `FlushInstructionCache` against the
+/// current process.
+#[cfg(windows)]
+struct Win32CodePage;
+
+#[cfg(windows)]
+impl CodePageOps for Win32CodePage {
+    fn protect(
+        &mut self,
+        addr: usize,
+        len: usize,
+        new_protect: u32,
+        old_protect: &mut u32,
+    ) -> bool {
+        let allowed = unsafe { VirtualProtect(addr as *mut c_void, len, new_protect, old_protect) };
+        allowed != WIN32_FALSE
+    }
+
+    unsafe fn store(&mut self, addr: usize, value: u8) {
+        unsafe { *(addr as *mut u8) = value };
+    }
+
+    fn flush(&mut self, addr: usize, len: usize) {
+        unsafe { FlushInstructionCache(CURRENT_PROCESS_PSEUDO_HANDLE, addr as *const c_void, len) };
+    }
+}
 
 /// Write a single byte of executable code at `address`, with the protection dance the write needs:
 /// `PAGE_EXECUTE_READWRITE`, the store, the original protection back, then an instruction-cache
@@ -564,39 +640,20 @@ const ONE_CODE_BYTE: usize = 1;
 /// Returns whether `VirtualProtect` allowed the write. It deliberately does NOT report whether the
 /// byte landed: a caller patching game code should read it back, because another mod can own the
 /// same address, and a successful `VirtualProtect` says nothing about that.
+///
+/// Unlike [`patch_3byte_stub`] and [`apply_xor_ret_stub`], this does NOT validate the byte it
+/// overwrites. Those two abort when the existing byte is not the expected one, which is what stops
+/// a version-drifted RVA from being patched mid-instruction; a caller of this primitive gets no
+/// such guard and must check the address itself.
+///
+/// # Safety
+///
+/// `address` must be a byte of currently-mapped code in this process that is safe to overwrite.
+/// The store is unsynchronised: it is a single byte, so it cannot tear, but a thread may execute
+/// the patched instruction at any point during the call.
 #[cfg(windows)]
-pub fn write_code_byte(address: usize, value: u8) -> bool {
-    let target = address as *mut u8;
-    let mut old_protect = PAGE_PROTECT_UNSET;
-    let protect_ok = unsafe {
-        VirtualProtect(
-            target as *mut c_void,
-            ONE_CODE_BYTE,
-            PAGE_EXECUTE_READWRITE,
-            &mut old_protect,
-        )
-    };
-    if protect_ok == WIN32_FALSE {
-        return false;
-    }
-    unsafe { *target = value };
-    let mut restored = PAGE_PROTECT_UNSET;
-    unsafe {
-        VirtualProtect(
-            target as *mut c_void,
-            ONE_CODE_BYTE,
-            old_protect,
-            &mut restored,
-        )
-    };
-    unsafe {
-        FlushInstructionCache(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            target as *const c_void,
-            ONE_CODE_BYTE,
-        )
-    };
-    true
+pub unsafe fn write_code_byte(address: usize, value: u8) -> bool {
+    unsafe { write_code_byte_with(&mut Win32CodePage, address, value) }
 }
 
 /// Write a self-contained 3-byte return stub at `base+rva` after validating the expected first
@@ -706,4 +763,185 @@ pub fn apply_xor_ret_stub(
         "online-disable: patched {label} 0x{:x} -> xor eax,eax;ret (forces offline)",
         base + rva
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A page operation, recorded rather than performed.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Op {
+        Protect {
+            addr: usize,
+            len: usize,
+            new_protect: u32,
+        },
+        Store {
+            addr: usize,
+            value: u8,
+        },
+        Flush {
+            addr: usize,
+            len: usize,
+        },
+    }
+
+    /// Stands in for a real code page. `original_protect` is what it reports as the page's previous
+    /// protection, so a test can assert that exact value is handed back on the second call.
+    struct FakePage {
+        ops: Vec<Op>,
+        original_protect: u32,
+        protect_allowed: bool,
+    }
+
+    impl FakePage {
+        fn allowing(original_protect: u32) -> Self {
+            Self {
+                ops: Vec::new(),
+                original_protect,
+                protect_allowed: true,
+            }
+        }
+
+        fn refusing() -> Self {
+            Self {
+                ops: Vec::new(),
+                original_protect: 0,
+                protect_allowed: false,
+            }
+        }
+    }
+
+    impl CodePageOps for FakePage {
+        fn protect(
+            &mut self,
+            addr: usize,
+            len: usize,
+            new_protect: u32,
+            old_protect: &mut u32,
+        ) -> bool {
+            self.ops.push(Op::Protect {
+                addr,
+                len,
+                new_protect,
+            });
+            if !self.protect_allowed {
+                return false;
+            }
+            *old_protect = self.original_protect;
+            true
+        }
+
+        unsafe fn store(&mut self, addr: usize, value: u8) {
+            self.ops.push(Op::Store { addr, value });
+        }
+
+        fn flush(&mut self, addr: usize, len: usize) {
+            self.ops.push(Op::Flush { addr, len });
+        }
+    }
+
+    const PAGE_EXECUTE_READ: u32 = 0x20;
+    const TEST_ADDR: usize = 0x1234_5678;
+    const TEST_BYTE: u8 = 0xcc;
+
+    /// The whole sequence, in order: unlock to RWX, store, relock, flush.
+    #[test]
+    fn writes_between_unlocking_and_relocking_then_flushes() {
+        let mut page = FakePage::allowing(PAGE_EXECUTE_READ);
+
+        let wrote = unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+        assert!(wrote);
+        assert_eq!(
+            page.ops,
+            vec![
+                Op::Protect {
+                    addr: TEST_ADDR,
+                    len: ONE_CODE_BYTE,
+                    new_protect: PAGE_EXECUTE_READWRITE,
+                },
+                Op::Store {
+                    addr: TEST_ADDR,
+                    value: TEST_BYTE,
+                },
+                Op::Protect {
+                    addr: TEST_ADDR,
+                    len: ONE_CODE_BYTE,
+                    new_protect: PAGE_EXECUTE_READ,
+                },
+                Op::Flush {
+                    addr: TEST_ADDR,
+                    len: ONE_CODE_BYTE,
+                },
+            ]
+        );
+    }
+
+    /// The hazard: a patched page left writable-and-executable for the rest of the process. The
+    /// relock must name the protection the page actually had, not a guess and not RWX.
+    #[test]
+    fn does_not_leave_the_page_executable_and_writable() {
+        for original in [PAGE_EXECUTE_READ, 0x02, 0x04, 0x80] {
+            let mut page = FakePage::allowing(original);
+
+            unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+            let last_protect = page
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Protect { new_protect, .. } => Some(*new_protect),
+                    _ => None,
+                })
+                .next_back()
+                .expect("a protection change");
+            assert_eq!(
+                last_protect, original,
+                "page relocked to the wrong protection"
+            );
+            assert_ne!(last_protect, PAGE_EXECUTE_READWRITE, "page left RWX");
+        }
+    }
+
+    /// A refused protection change must abort before the store. Writing anyway would fault, or
+    /// worse, succeed on a page that was already writable and hide the refusal.
+    #[test]
+    fn refused_protection_change_writes_nothing() {
+        let mut page = FakePage::refusing();
+
+        let wrote = unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+        assert!(!wrote);
+        assert_eq!(
+            page.ops,
+            vec![Op::Protect {
+                addr: TEST_ADDR,
+                len: ONE_CODE_BYTE,
+                new_protect: PAGE_EXECUTE_READWRITE,
+            }],
+            "nothing may follow a refused VirtualProtect"
+        );
+    }
+
+    /// What the `ONE_CODE_BYTE` doc claims: the protection, the store and the flush cover the same
+    /// one byte at the same address. A length that disagreed would unlock or flush a range the
+    /// caller never asked about.
+    #[test]
+    fn every_page_operation_covers_the_same_single_byte() {
+        let mut page = FakePage::allowing(PAGE_EXECUTE_READ);
+
+        unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+        assert_eq!(ONE_CODE_BYTE, size_of::<u8>());
+        for op in &page.ops {
+            let (addr, len) = match op {
+                Op::Protect { addr, len, .. } | Op::Flush { addr, len } => (*addr, *len),
+                Op::Store { addr, .. } => (*addr, ONE_CODE_BYTE),
+            };
+            assert_eq!(addr, TEST_ADDR, "{op:?} touched a different address");
+            assert_eq!(len, ONE_CODE_BYTE, "{op:?} covered a different length");
+        }
+    }
 }
