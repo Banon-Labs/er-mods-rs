@@ -129,6 +129,16 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             "system-quit-save-swap: per-slot stats/name caches reloaded from the previewed save ({decoded}/10 slots, reloads={reloads})"
         ));
         PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
+        // PARK THE CURSOR ON A ROW THIS SAVE ACTUALLY HAS. The rows about to be built describe
+        // ONLY the slots in `mask` (the native builder pushes a row per set
+        // `saveSlotsStates[slot]`), and the dialog's constructor leaves the cursor on row 0 --
+        // which, for a save whose lowest character is not slot 0, is either another character's
+        // row or the live session's own. Requested here, applied by the per-frame
+        // `05_010_ProfileSelect` run through the game's own `SelectSaveSlot`, because the dialog
+        // this preview is for is generally not built yet.
+        if let Some(target) = er_quit_menu_core::profile_rows::preview_cursor_slot(mask as u32) {
+            SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_SLOT.store(target, Ordering::SeqCst);
+        }
         let refresh: unsafe extern "system" fn() =
             unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
         unsafe { refresh() };
@@ -204,6 +214,12 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
     // describing the previewed save must go. Dropped rather than reloaded because the bytes of the
     // active save are not in hand here -- the next row populate reads them.
     crate::experiments::startup_hooks::loading_cover::invalidate_profile_slot_caches(reason);
+    // ...and so must a pending cursor move: it named a slot of the save that is no longer previewed,
+    // so applying it after the restore would drive the cursor onto an unrelated character's row.
+    SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_SLOT.store(
+        SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_NONE,
+        Ordering::SeqCst,
+    );
     // The restored snapshot's records are the ORIGINAL save's characters -- the foreign preview face
     // fingerprints no longer describe any slot, and neither does the preview's record of which slots
     // it could not source a place name for.
@@ -282,6 +298,39 @@ pub(crate) unsafe fn system_quit_save_swap_poll_preview(base: usize) {
     st.preview_applied = true;
     append_autoload_debug(format_args!(
         "system-quit-save-swap: applied FOREIGN ProfileSummary preview from replacement path='{path}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; active save file restored until the user selects a foreign slot"
+    ));
+}
+
+/// Park the live `05_010_ProfileSelect` cursor on the slot a foreign preview asked for, through the
+/// game's own `CS::ProfileLoadDialog::SelectSaveSlot`.
+///
+/// A no-op unless a preview armed a target. It is retried from the per-frame ProfileSelect run and
+/// cleared the moment the native call reports it found a row, so it moves the cursor exactly once
+/// per preview and never fights a user who then navigates.
+pub(crate) unsafe fn system_quit_park_profile_select_cursor(base: usize, dialog: usize) {
+    let target = SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_SLOT.load(Ordering::SeqCst);
+    if target == SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_NONE {
+        return;
+    }
+    // The preview lands while the FILE BROWSER still owns this same 05_010 window, and its rows are
+    // directory entries, not character slots. Wait for the browser to hand the window back before
+    // touching a cursor that currently means "which file".
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    if !unsafe { er_title_flow::profile_dialog_select_save_slot(base, dialog, target) } {
+        // The rows are not built yet, or this save has no row for that slot. Either way leave the
+        // request armed: the next frame retries, and a restore clears it.
+        return;
+    }
+    SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_SLOT.store(
+        SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_NONE,
+        Ordering::SeqCst,
+    );
+    let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+    let bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: parked ProfileSelect cursor on the previewed save's slot {target} via native SelectSaveSlot dialog=0x{dialog:x} cursor={cursor} bound={bound}"
     ));
 }
 

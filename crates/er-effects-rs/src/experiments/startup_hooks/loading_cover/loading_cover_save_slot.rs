@@ -1129,26 +1129,56 @@ impl<'a> SerializedSaveSlot<'a> {
             .take(SAVE_PGD_SCAN_LEADING_FACE_COUNT)
     }
 
+    /// Locate this slot body's serialized `PlayerGameData`.
+    ///
+    /// TWO CANDIDATE SOURCES, ONE ACCEPTANCE TEST ([`SerializedPlayerGameData::is_plausible_core`]
+    /// plus the best [`SerializedPlayerGameData::score`], both unchanged).
+    ///
+    /// The `0xa000..=0xa600` window before each leading `FACE` magic is an OBSERVATION of one
+    /// save's layout, and it is too narrow. Across the ten characters of one real container the
+    /// true PGD->FaceData delta ran `0x9d14..=0xa05c`, and the live default container's single
+    /// character sat at `0x959c`, so the window matched ONE of eleven -- every other character read
+    /// as an empty slot. That is what made the "Load Character from File" preview offer one row of
+    /// ten (`slot_mask=0x8`, 2026-08-25) and what made `save_bytes_have_any_character` call the live
+    /// default save a `native empty container` while `scripts/dump-save-slots.py` and the game
+    /// itself both read a character out of it. Reproduce with
+    /// `scripts/er-save-active-slots.py --deep <save>`.
+    ///
+    /// So the Rune Level invariant is a candidate source too, borrowed from
+    /// `er_save_loader::stats` rather than re-implemented -- the same delegation `saved_map()`
+    /// makes, and for the same reason: that locator carries the host tests. It is ADDITIVE and
+    /// ordered last, so a body the window already resolved keeps the exact offset it had (an equal
+    /// score does not displace the incumbent).
     pub(crate) fn player_game_data(self) -> Option<SerializedPlayerGameData<'a>> {
         let mut best: Option<SerializedPlayerGameData<'a>> = None;
         let mut best_score = 0usize;
+        let consider = |offset: usize,
+                        best: &mut Option<SerializedPlayerGameData<'a>>,
+                        best_score: &mut usize| {
+            let candidate = SerializedPlayerGameData {
+                body: self.body,
+                offset,
+            };
+            if !candidate.is_plausible_core() {
+                return;
+            }
+            let score = candidate.score();
+            if score > *best_score {
+                *best_score = score;
+                *best = Some(candidate);
+            }
+        };
         for face_offset in self.face_magic_offsets() {
             let start = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_HIGH);
             let stop = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_LOW);
             for offset in start..=stop {
-                let candidate = SerializedPlayerGameData {
-                    body: self.body,
-                    offset,
-                };
-                if !candidate.is_plausible_core() {
-                    continue;
-                }
-                let score = candidate.score();
-                if score > best_score {
-                    best_score = score;
-                    best = Some(candidate);
-                }
+                consider(offset, &mut best, &mut best_score);
             }
+        }
+        if let Some(offset) = er_save_loader::stats::located_stat_block_offset(self.body)
+            .and_then(|stat_base| stat_base.checked_sub(SAVE_PGD_STAT_BASE_OFFSET))
+        {
+            consider(offset, &mut best, &mut best_score);
         }
         best
     }
