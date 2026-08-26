@@ -20,6 +20,10 @@ members = [
   "crates/er-ags-stub",
   "crates/er-inventory-sort",
   "crates/er-better-refills",
+  # Hotkey that marks every auto-refillable item refill / no-refill in one press, cycling.
+  # Runs from inside the storage box dialog's own update, which is what confines it to the only
+  # menu with refill options rather than a check that could be got wrong.
+  "crates/er-refill-all",
   "crates/er-armament-icons",
   "crates/er-net-effects",
   # Hotkey toggle that keeps every loaded enemy under the Charming Branch SpEffect. Standalone

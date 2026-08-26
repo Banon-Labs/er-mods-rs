@@ -1,8 +1,13 @@
-# Refill-all hotkey: how it can be built
+# Refill-all hotkey
 
-A new DLL that, on one configurable combination, marks **every** refillable item as auto-refill,
-and on the next press marks them all no-refill, cycling forever. Config lives in a TOML in the game
-directory and is hot-reloaded.
+`crates/er-refill-all` — a DLL that, on one configurable combination (**Select + Start** by
+default), marks **every** refillable item as auto-refill, and on the next press marks them all
+no-refill, cycling forever. It only does anything while the **storage box** is open. Config lives
+in `er-refill-all.toml` in the game directory and is hot-reloaded.
+
+**Status: built, host-tested, not runtime-validated.** 23 host tests cover the pad-chord parser,
+the config reload rules and the cycle-direction rule; the capacity guard is a compile-time
+assertion. Nothing has been proven in a running game — see §9.
 
 Everything in "What the game gives us" is static RE against 1.16.2 (`dump == deobf == runtime`,
 shift 0) plus an offline read of the installed `regulation.bin`. **None of it is runtime-validated
@@ -140,9 +145,39 @@ behaviour, and the cycle is self-correcting rather than drifting.
 
 ---
 
-## 7. The input half is the actual gap
+## 6a. The storage-box gate is structural, not a check
 
-`er-hotkey-config` — the shared owner of key names and hot reload — is **keyboard-only**:
+The requirement that the hotkey "can only have an effect when the user is in the menu view that
+would have any refillable item options" is met by **running the feature from inside that menu's own
+per-frame update**. With any other menu open, or none, the code is never called. There is no
+"is the storage box open?" predicate that could be asked wrongly, go stale by a frame, or answer
+true for a dialog that exists but is not showing.
+
+Two facts got there:
+
+| | |
+|---|---|
+| A `MenuWindow`'s update is **vtable slot 2**, `(this, f32 delta, InputData*)` | established for `TitleTopDialog` (bd `HOOK-DESIGN-titletopdialog-update-…`) |
+| `DepositoryDialog`'s slot 2 is a bare `JMP` thunk at `0x1408d6e10` into the shared `0x140745570` | so the dialog *inherits* the update rather than overriding it |
+
+The thunk is referenced exactly once in the image — from `0x142aebbb0`, this vtable's slot 2 — so
+hooking it would be perfectly targeted, but it is 5 bytes, exactly a `JMP rel32`, which is too
+tight to hook without relocating into whatever follows. So the hook goes on the shared function and
+identifies the caller by its vtable.
+
+**And the vtable is a real identity here, which was checked rather than assumed.** `0x142aebba0`
+has exactly two references in the whole image, both inside `DepositoryDialog::DepositoryDialog` —
+the `LEA` pair that assigns `vfptr`. No other class installs it. A vtable shared between classes
+would have latched this onto menus with no storage box in them (bd
+`shared-vtable-is-not-an-identity-verify-uniqueness-before-latching`).
+
+---
+
+## 7. The input half, as built
+
+`er-hotkey-config` — the shared owner of key names and hot reload — is **keyboard-only**, so the
+controller half is a new `PadChord` type in `crates/er-refill-all/src/pad.rs` rather than a change
+to that shared crate:
 
 ```rust
 pub struct Chord {
@@ -155,7 +190,10 @@ pub struct Chord {
 No mouse button in its key table, no gamepad concept anywhere in the crate. Binding `"mouse4"` or
 `"LB+RB"` today produces a parse rejection, not a working chord. Both halves need adding.
 
-### Mouse — a small extension of the same poll
+**Not built: mouse.** It remains a small extension of the same poll, and the caveats below still
+apply, but nothing in this crate binds a mouse button today.
+
+### Mouse — a small extension of the same poll (not implemented)
 
 `GetAsyncKeyState` already reports `VK_LBUTTON 0x01`, `VK_RBUTTON 0x02`, `VK_MBUTTON 0x04`,
 `VK_XBUTTON1 0x05`, `VK_XBUTTON2 0x06`. Add them to the key table with `dik: None`. Two caveats:
@@ -165,7 +203,7 @@ No mouse button in its key table, no gamepad concept anywhere in the crate. Bind
 - Whether Wine/Proton reports the X buttons through `GetAsyncKeyState` at all is **unproven**.
   Verify before shipping it as a default.
 
-### Controller — a different source, template already in-repo
+### Controller — built, on the template already in-repo
 
 `crates/er-save-picker-core/src/overlay.rs` already does it: `resolve_xinput_get_state()` walks
 `xinput1_4` / `xinput1_3` / `xinput9_1_0` via `GetModuleHandleA` (the game already loaded one, so no
@@ -207,14 +245,21 @@ compares **file text, not mtime** (mtime has one-second resolution on the filesy
 sits on, and a re-save moves it without changing anything).
 
 ```toml
-# Any of these fires the cycle. Leave a value empty to disable that input.
-hotkey         = "ctrl+shift+r"   # keyboard chord
-mouse_hotkey   = "mouse4"         # XBUTTON1 -- side button; LMB/RMB would also attack
-gamepad_hotkey = "lb+rb+dpad_up"  # wButtons mask, edge-detected
+# Controller combination. Every named button must be held together; order does not matter, and
+# holding other buttons as well is fine. Empty disables the controller binding.
+gamepad_hotkey = "select+start"
+
+# Keyboard combination, if you would rather use one. Empty means no keyboard binding.
+hotkey = ""
 
 # Call ReplanishItemsFromChest right after marking, instead of waiting for the next grace/load.
 refill_immediately = true
 ```
+
+Button names accept both Xbox and PlayStation spellings — `select`/`back`/`share`/`view`,
+`start`/`options`/`menu`, `a`/`cross`, `lb`/`l1`, and so on. Being told `unknown pad button
+"select"` for the button whose face says Select is the kind of rejection that reads as the feature
+being broken.
 
 A malformed value must **keep the last working binding** — not the shipped default (which would
 drag the player back onto the collision they escaped) and not nothing. And a rejection is not a
@@ -229,8 +274,16 @@ two of its five keys collide; this DLL shares a process with that one.
 
 ## 9. What is still unproven
 
-- No runtime validation of any of it — no live `SetState` call, no observed refill.
-- The 449 census is the **stock** regulation; a modded one changes it, and 2048 is a crash.
-- Mouse X-buttons through `GetAsyncKeyState` under Proton: untested.
-- Whether the tracker's 449 entries serialise cleanly into the save file at that size.
-- Whether writing all 449 in one frame is cheap enough not to hitch.
+The DLL builds and its host tests pass. None of the following has been checked in a running game:
+
+- **No runtime validation at all** — no live `SetState` call, no observed refill, and the
+  `MenuWindow::Update` hook has never been installed in a real process.
+- Whether the vtable identity check fires when the storage box opens (the gate could be *too*
+  tight as easily as too loose, and a gate that never opens looks identical to a dead hotkey).
+- Whether `XInputGetState` reports Select+Start under Steam Input's remapping on this setup.
+- The 449 census is the **stock** regulation; a modded one changes it, and 2048 is a crash. The
+  `INSERT_CEILING` guard exists for exactly that, and has itself never been hit in anger.
+- Whether the tracker's entries serialise cleanly into the save file at that size.
+- Whether writing ~449 entries in one frame is cheap enough not to hitch.
+- Whether calling `ReplanishItemsFromChest` while the storage box is *open* leaves its item list
+  visually stale until reopened.

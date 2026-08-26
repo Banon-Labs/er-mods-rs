@@ -18,7 +18,7 @@ use std::{
 use er_game_base::{
     log::{append_line, game_directory_path},
     mem::{game_module_base, safe_read_usize},
-    rva::GAME_DATA_MAN_GLOBAL_RVA,
+    rva::{GAME_DATA_MAN_GLOBAL_RVA, REPLANISH_ITEMS_FROM_CHEST_RVA, SHOULD_REPLENISH_ITEM_RVA},
 };
 
 const DLL_PROCESS_ATTACH: u32 = 1;
@@ -29,10 +29,6 @@ const LOG_FILE_NAME: &str = "er-better-refills.log";
 /// `SetItemReplenishState(int *itemId)`, called by the DepositoryDialog toggle handler.
 /// Static RE / 1.16.2 MCP: `FUN_1408d87d0 -> SetItemReplenishState`.
 const SET_ITEM_REPLENISH_STATE_RVA: usize = 0x786430;
-/// `ReplanishItemsFromChest()`: native storage -> personal inventory refill loop.
-const REPLANISH_ITEMS_FROM_CHEST_RVA: usize = 0x24dff0;
-/// `ItemReplenishStateTracker::ShouldReplenishItem(tracker, int *itemId)`.
-const SHOULD_REPLENISH_ITEM_RVA: usize = 0x23d990;
 /// `IsItemReplanishFromChestRequested()`: reads `GameMan->itemReplanishFromChestRequested`.
 const IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA: usize = 0x67a050;
 /// `CS::MoveMapStep::UpdatePlayerInfo(this)`: native post-load player handoff. The function tail

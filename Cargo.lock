@@ -3102,6 +3102,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-refill-all"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "er-hotkey-config",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-reload-trace"
 version = "0.1.0"
 dependencies = [
