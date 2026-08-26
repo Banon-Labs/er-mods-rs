@@ -246,6 +246,57 @@ def main() -> int:
                 }
             },
         ),
+        # Source:destination refspec exception (2026-08-25). Renaming an
+        # already-pushed remote branch names a non-main destination explicitly,
+        # so it cannot update remote main -- but it matched neither earlier
+        # exception's parser and was denied from a session sitting on main.
+        PolicyCase(
+            "allow-git-push-refspec-rename-from-main-session",
+            "git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates",
+            True,
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # ... and every main DESTINATION stays denied through it. push_targets_main
+        # is a separate blocked_push_context rule, so no exception can reach it.
+        PolicyCase(
+            "deny-git-push-refspec-to-refs-heads-main-from-main-session",
+            "git push origin origin/refactor/drop-dead-gates:refs/heads/main",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # `heads/main` resolves to refs/heads/main on the remote (verified against
+        # real repositories); from a FEATURE branch only push_targets_main can
+        # catch it, which is why it was added there.
+        PolicyCase(
+            "deny-git-push-refspec-to-heads-main-from-feature-branch",
+            "git push origin HEAD:heads/main",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-git-push-refspec-rename-chained-with-main-push",
+            "git push origin origin/a:refs/heads/split/a && git push origin main",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # Deletion pushes are deliberately out of scope and fail closed.
+        PolicyCase(
+            "deny-git-push-deletion-refspec-from-main-session",
+            "git push origin :refs/heads/split/a",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # A second operand the parser never read must not be vouched for.
+        PolicyCase(
+            "deny-git-push-refspec-with-second-operand-from-main-session",
+            "git push origin origin/a:refs/heads/split/a origin/b:refs/heads/split/b",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
         PolicyCase(
             "deny-destructive-parent-root",
             "rm -rf /",

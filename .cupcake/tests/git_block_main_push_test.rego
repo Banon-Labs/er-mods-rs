@@ -187,3 +187,177 @@ test_deny_git_c_push_chained_with_bare_push_from_main_session if {
 	)
 	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
 }
+
+# --- Explicit <src>:<dst> refspec exception (2026-08-25) ----------------------
+
+# The verbatim command that motivated the exception: renaming an already-pushed
+# remote feature branch from a session whose primary checkout sits on main.
+test_allow_refspec_rename_when_branch_signal_stale_main if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+test_allow_refspec_rename_when_branch_signal_missing if {
+	denials := guard.deny with input as bash_event_no_branch_signal(
+		"git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates",
+	)
+	count(denials) == 0
+}
+
+test_allow_refspec_rename_followed_by_status_inspection if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates && git status --short --branch",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+test_allow_two_refspec_renames_in_one_command if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/a:refs/heads/split/a && git push origin origin/b:refs/heads/split/b",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+# Pushing main's own commits ONTO a non-main branch cannot update remote main.
+test_allow_refspec_from_main_source_to_nonmain_destination if {
+	denials := guard.deny with input as bash_event(
+		"git push origin refs/heads/main:refs/heads/backup/main-snapshot-2026-08-25",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+# A `+`-prefixed (force) refspec still cannot update remote main, so THIS guard
+# permits it. Force pushes are the other guard's business:
+# ER-EFFECTS-REQUIRE-FRESH-ORIGIN-MAIN matches `push ... +<refspec>` and demands a
+# verified-fresh origin/main. Pinned here so the split of responsibility is
+# deliberate rather than accidental.
+test_allow_force_refspec_to_nonmain_destination if {
+	denials := guard.deny with input as bash_event(
+		"git push origin +origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+# --- ... and every spelling of a main DESTINATION stays denied ----------------
+
+test_deny_refspec_destination_bare_main if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/refactor/drop-dead-gates:main",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_refspec_destination_refs_heads_main if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/refactor/drop-dead-gates:refs/heads/main",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# `heads/main` resolves to refs/heads/main on the remote (verified against real
+# repositories, see the policy comment) and push_targets_main now names it.
+test_deny_refspec_destination_heads_main if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/refactor/drop-dead-gates:heads/main",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_refspec_destination_heads_main_from_feature_branch if {
+	denials := guard.deny with input as bash_event(
+		"git push origin HEAD:heads/main",
+		"feature/no-main-push\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# Conservative by design: a genuinely distinct branch whose last path component
+# is `main` is refused rather than adjudicated.
+test_deny_refspec_destination_nested_main_component if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/refactor/drop-dead-gates:refs/heads/split/main",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# --- Mixed and unparsed forms fail closed -------------------------------------
+
+test_deny_refspec_rename_chained_with_main_push if {
+	denials := guard.deny with input as bash_event(
+		"git push origin a:refs/heads/b && git push origin main",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# ... and the same mixture is denied from a feature branch too, where only
+# push_targets_main can catch it.
+test_deny_refspec_rename_chained_with_main_push_from_feature_branch if {
+	denials := guard.deny with input as bash_event(
+		"git push origin a:refs/heads/b && git push origin main",
+		"feature/no-main-push\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_refspec_rename_chained_with_bare_push if {
+	denials := guard.deny with input as bash_event(
+		"git push origin a:refs/heads/b && git push",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_refspec_rename_chained_with_explicit_upstream_push if {
+	denials := guard.deny with input as bash_event(
+		"git push origin a:refs/heads/b && git push -u origin feature/x",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# Deletion pushes are deliberately out of scope: both spellings fail closed.
+test_deny_deletion_refspec_empty_source if {
+	denials := guard.deny with input as bash_event("git push origin :refs/heads/foo", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_delete_option_push if {
+	denials := guard.deny with input as bash_event("git push origin --delete foo", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# An option between `push` and the refspec is unparsed, so it fails closed.
+test_deny_force_option_before_refspec if {
+	denials := guard.deny with input as bash_event(
+		"git push --force origin origin/a:refs/heads/split/a",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_refspec_with_trailing_third_operand if {
+	denials := guard.deny with input as bash_event(
+		"git push origin origin/a:refs/heads/split/a origin/b:refs/heads/split/b",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A source with no colon is not a refspec; it must not fall through to this
+# exception (the `-u` exception owns that shape, and only with `-u`).
+test_deny_two_operand_push_without_colon if {
+	denials := guard.deny with input as bash_event("git push origin feature/x", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}

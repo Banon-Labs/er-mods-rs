@@ -30,7 +30,24 @@ import rego.v1
 # a non-main upstream destination (`git push -u origin feature/name`) is safe to
 # permit: it cannot update remote main. Bare pushes and unparsed options remain
 # fail-closed. Explicit main refspecs (push_targets_main) stay denied
-# unconditionally.
+# unconditionally. (Its name predates the exception below and is misleading: it
+# parses `-u <remote> <branch>`, which carries no `<src>:<dst>` refspec at all.)
+#
+# Source:destination refspec exception (2026-08-25): renaming or republishing an
+# already-pushed remote branch has no sanctioned form. From a session whose
+# primary checkout sits on main, this was denied:
+#
+#     git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates
+#
+# Neither side of that refspec is main, so the command cannot update remote main,
+# yet it matched neither existing exception: `pushes_target_only_nonmain_worktrees`
+# wants the `git -C <path> push` form and `pushes_target_only_explicit_nonmain_branches`
+# wants `-u|--set-upstream <remote> <branch>`. Both parsers stop at the first
+# `<src>:<dst>` token. `pushes_target_only_explicit_nonmain_refspecs` below permits
+# a command only when EVERY push in it is `git push <remote> <src>:<dst>` with both
+# sides non-empty and a destination that cannot be main. push_targets_main is a
+# separate blocked_push_context rule and still denies `main`, `HEAD:main`,
+# `heads/main` and `feature:refs/heads/main` regardless of any exception.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
@@ -49,12 +66,14 @@ blocked_push_context(cmd) if {
 	current_branch == "main"
 	not pushes_target_only_nonmain_worktrees(cmd)
 	not pushes_target_only_explicit_nonmain_branches(cmd)
+	not pushes_target_only_explicit_nonmain_refspecs(cmd)
 }
 
 blocked_push_context(cmd) if {
 	current_branch == ""
 	not pushes_target_only_nonmain_worktrees(cmd)
 	not pushes_target_only_explicit_nonmain_branches(cmd)
+	not pushes_target_only_explicit_nonmain_refspecs(cmd)
 }
 
 blocked_push_context(cmd) if {
@@ -73,13 +92,22 @@ is_git_push(cmd) if {
 # Main-target forms we block even from a feature branch:
 #   git push origin main
 #   git push origin HEAD:main
+#   git push origin HEAD:heads/main
 #   git push origin feature:refs/heads/main
 #   git -C repo push origin refs/heads/main
+#
+# `heads/main` was added on 2026-08-25. A destination that does not start with
+# `refs/` is resolved against the remote's existing refs, and `refs/<dst>` is one
+# of those resolution rules -- so `heads/main` reaches `refs/heads/main`. Verified
+# against real repositories, not inferred: `git push origin HEAD:heads/main`
+# fast-forwarded remote `refs/heads/main` and printed `HEAD -> main`, while
+# `HEAD:refs/main` was refused by git (a `refs/`-prefixed destination is literal)
+# and `HEAD:Main` created a distinct branch (refs are case-sensitive).
 push_targets_main(cmd) if {
 	regex.match(git_push_main_target_pattern, cmd)
 }
 
-git_push_main_target_pattern := `(?m)(^|[;&|]\s*|\n)\s*(command\s+)?git(\s+((-c|--git-dir|--work-tree|--namespace|--config-env)(=|\s+)("[^"\n]*"|'[^'\n]*'|[^\s;&|()]+)|--(bare|no-pager|paginate|literal-pathspecs|no-replace-objects|exec-path)(=("[^"\n]*"|'[^'\n]*'|[^\s;&|()]+))?))*\s+push(\s+[^;&|\n]*)?(\s|:)(refs/heads/)?main(\s|$|[;&|\n])`
+git_push_main_target_pattern := `(?m)(^|[;&|]\s*|\n)\s*(command\s+)?git(\s+((-c|--git-dir|--work-tree|--namespace|--config-env)(=|\s+)("[^"\n]*"|'[^'\n]*'|[^\s;&|()]+)|--(bare|no-pager|paginate|literal-pathspecs|no-replace-objects|exec-path)(=("[^"\n]*"|'[^'\n]*'|[^\s;&|()]+))?))*\s+push(\s+[^;&|\n]*)?(\s|:)((refs/)?heads/)?main(\s|$|[;&|\n])`
 
 current_branch := branch if {
 	branch := trim(input.signals.current_branch, " \t\r\n")
@@ -173,4 +201,67 @@ explicit_nonmain_destination(token) if {
 	destination := trim(token, "\"'")
 	destination != ""
 	not startswith(destination, "-")
+}
+
+# --- Explicit <src>:<dst> refspec exception ----------------------------------
+
+# Strict single-target form: `git push <remote> <src>:<dst>`, nothing else on the
+# invocation. Group 2 captures the remote token, group 3 the refspec token.
+#
+# The remote token's first character excludes `-`, so any option between `push`
+# and the refspec (`--force`, `-f`, `--delete`, `-u`) fails to match here and the
+# whole command falls back to denied. That is the intent: an option changes what
+# the refspec MEANS, and none of them have a parser or regression coverage yet.
+#
+# DELETION PUSHES ARE DELIBERATELY OUT OF SCOPE, both spellings. `git push origin
+# --delete foo` never matches (the option sits in the remote slot), and
+# `git push origin :refs/heads/foo` is rejected below because its source side is
+# empty. Deleting a non-main branch is safe, but the two forms need their own
+# parser -- one that reads `--delete`'s operands as destinations rather than as a
+# refspec -- and a wrong parser here deletes a branch nobody asked to delete. They
+# stay fail-closed until someone writes that parser with its own tests.
+#
+# The trailing group anchors the refspec as the LAST token of the invocation, so
+# a second operand (`git push origin a:b c:d`) does not match and the command
+# falls back to denied. Without that anchor the parser would vouch for a refspec
+# list it never looked at.
+git_push_refspec_extract_pattern := `(?i)(^|[;&|(\n])\s*(?:command\s+)?git[ \t]+push[ \t]+("[^"\n]*"|'[^'\n]*'|[^-\s;&|()\n][^\s;&|()\n]*)[ \t]+("[^"\n]*"|'[^'\n]*'|[^\s;&|()\n]+)[ \t]*(?:[;&|)\n]|$)`
+
+# Every push invocation in the command must be the strict form above and every
+# extracted refspec must name a destination that cannot be main. One unrecognized
+# push in the command (a bare `git push`, an option form, a second remote) makes
+# the strict count differ from the general count and the exception does not apply.
+# push_targets_main is evaluated independently and still denies explicit main
+# destinations even when this rule holds.
+pushes_target_only_explicit_nonmain_refspecs(cmd) if {
+	general := regex.find_all_string_submatch_n(git_push_findall_pattern, cmd, -1)
+	refspecs := regex.find_all_string_submatch_n(git_push_refspec_extract_pattern, cmd, -1)
+	count(general) > 0
+	count(refspecs) == count(general)
+	every m in refspecs {
+		refspec_nonmain_destination(m[3])
+	}
+}
+
+# A destination is treated as main whenever its last path component is `main`.
+# That is wider than git's own resolution -- it also refuses a genuinely distinct
+# branch such as `refs/heads/split/main` -- and it is meant to be: this exception
+# exists to unblock branch renames, not to adjudicate which spellings of `main`
+# reach the protected ref. Anything it refuses simply falls back to the deny.
+refspec_main_destination_pattern := `(?i)(^|/)main$`
+
+refspec_nonmain_destination(token) if {
+	spec := trim(token, "\"'")
+	parts := split(spec, ":")
+	count(parts) == 2
+	source := parts[0]
+	destination := parts[1]
+
+	# Both sides must be present: `src:` and `:dst` (the deletion form) are not
+	# what this parser was written for.
+	source != ""
+	destination != ""
+	not startswith(source, "-")
+	not startswith(destination, "-")
+	not regex.match(refspec_main_destination_pattern, destination)
 }
