@@ -10,12 +10,12 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 52,781 |
-| excluding `startup_hooks/**` | 44 | 25,245 |
-| `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
+| all `experiments/**` | 79 | 51,603 |
+| excluding `startup_hooks/**` | 43 | 24,836 |
+| `startup_hooks/**` plus `startup_hooks.rs` | 36 | 26,767 |
 | lifecycle S10 split | 5 | 2,304 |
-| own-load S11 split | 5 | 2,932 |
-| save redirect | 3 | 2,389 |
+| own-load S11 split | 5 | 2,909 |
+| save redirect | 3 | 2,357 |
 
 The `scripts/check-crate-extraction-roadmap.py` gate checks the 79 paths, line counts, and required caller edges below. A source file add/remove/line-count change must refresh this ledger in the same change.
 
@@ -88,7 +88,7 @@ S10 and S11 are complete in-place module splits. R1 does not reopen their correc
 
 Reject a duplicate descriptor-guard extraction. Merged PR #272 already moved the descriptor-advance detour, byte-verified RVA/offset identities, and trampoline state into `er-scaleform-hooks`; its fresh-title proof recorded `oracle_scaleform_desc_guard_installed = 1`. The remaining `scaleform_descriptor_guard.rs` root wrapper is product policy: it retains attach-time ordering and turns the hook crate's installation result into product diagnostic logging. Moving that wrapper would be a different startup-policy change, not R24A's native mechanism move. The remaining R24 resource/message families stay independently executable.
 
-## Appendix A -- R1 current 77-file partition and caller ledger
+## Appendix A -- R1 current 79-file partition and caller ledger
 
 Every row below is a current source file. `Current partition` is the exact present owner/disposition; `Next node` is a future decision or implementation node and does not change present ownership.
 
@@ -102,9 +102,8 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `gating/env_flags.rs` | 651 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
-| `gpu_readback.rs` | 62 | product GPU-readback facade | R4-R5 |
+| `gpu_readback.rs` | 56 | product GPU-readback facade; the shared D3D12 draw plumbing it used to own moved to `er-loading-portrait-core::gpu_draw_shared` | R4-R5 |
 | `gpu_readback/boot_progress.rs` | 2,974 | loading-bar, boot-cover, and product adapter families | R4-R5 |
-| `gpu_readback/gpu_draw_shared.rs` | 469 | boot-cover draw helper family | R5 and R27-R30 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
 | `input_block.rs` | 1,404 | product input ownership | `STAY` |
 | `input_trace.rs` | 924 | product diagnostic | D4 |
@@ -140,14 +139,14 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/diagnostics/mod.rs` | 22 | diagnostics module facade | `STAY` |
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,577 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
-| `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
-| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
+| `startup_hooks/loading_cover/mod.rs` | 72 | loading-cover module facade plus `ensure_loading_cover_host`, the install-once wiring for the `er-loading-portrait-core` LoadingCoverHost seam | R15-R16 |
+| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | documentation-only facade; the sampler + publication moved to `er-loading-portrait-core::portrait_equip_oracle` | R16 done |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 989 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,083 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,419 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
-| `startup_hooks/loading_cover/window_reconfig_observer.rs` | 473 | window-observation/final-geometry family | R9 |
+| `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | product install entry point; the observer hooks + early final-geometry apply moved to `er-loading-portrait-core::window_reconfig_observer` | R9 done |
 | `startup_hooks/quit_menu/build_url_clipboard.rs` | 211 | clipboard read plus the per-frame mirror that lets a paste land in an already-open build-url field | R18 |
 | `startup_hooks/quit_menu/build_url_editor.rs` | 700 | System>Quit link field: submit, validate on accept, re-open on refusal | R18 |
 | `startup_hooks/quit_menu/build_url_row.rs` | 178 | System>Quit "Load Build from URL" row: press -> `er-build-import-runtime::request`, FrameBegin tick -> `::tick` | R18 |
