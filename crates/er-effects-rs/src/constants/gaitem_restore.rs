@@ -44,10 +44,6 @@ pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
 /// with `IsAliveMotion` reading it as `MOVZX EAX, byte [RAX]` at offset 0. The 0x270-byte object
 /// allocated in the same function belongs to a DIFFERENT global (`MOV ECX,0x270` ...
 /// `MOV [0x143d68448],RAX`). The gate role below is unaffected -- only the size claim was wrong.
-/// If null at the writer's entry, 0x67bd70 returns without writing c30 (gate (a) in
-/// the c30-stays-default diagnosis). The save-safe c30-writer probe logs this.
-pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize =
-    er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
 /// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via
@@ -163,12 +159,14 @@ pub(crate) const BLOCK_SAMPLE_COUNT: usize = 4;
 pub(crate) const BLOCK_AREA_BYTE_MASK: u32 = 0xff;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
-pub(crate) use er_title_flow::FD4_FILECAP_STATUS_88_OFFSET;
-pub(crate) use er_title_flow::FD4_FILECAP_BYTES_90_OFFSET;
+// `FD4_FILECAP_STATUS_88_OFFSET`, `FD4_FILECAP_BYTES_90_OFFSET` and
+// `FD4_FILECAP_LOADPROCESS_78_OFFSET` were re-exported here for the msb-parse trace, which was
+// their ONLY reader in this crate. The trace moved into `crates/er-diag-harness/` on 2026-08-25 and
+// took them with it -- the layout now lives once, in `er_game_base::filecap`, which both images
+// read. The compiler found this: with the trace gone, all three went unused-import.
 /// Poison `~MsbFileCap` writes over `msbResCap` after releasing it; see above.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MSB_FILECAP_DESTROYED_SENTINEL: usize = 0xdead_beef;
-pub(crate) use er_title_flow::FD4_FILECAP_LOADPROCESS_78_OFFSET;
 
 /// OWN-LOAD m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
 /// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded

@@ -521,14 +521,6 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         return unsafe { original(job, result, fd4_time, d) };
     }
 
-    if system_quit_profile_load_activation_allowed() {
-        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "system-quit-dup: ProfileSelect load-job Run ALLOWED job=0x{job:x} list=0x{list:x} profile_id={profile_id}; forwarding native load path (known crash risk: CSGaitemImp::Deserialize rva 0x67141a)"
-        ));
-        return unsafe { original(job, result, fd4_time, d) };
-    }
-
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
     unsafe { system_quit_arm_quickload_autoload(profile_id, "ProfileSelectLoadJobRun") };
     if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {

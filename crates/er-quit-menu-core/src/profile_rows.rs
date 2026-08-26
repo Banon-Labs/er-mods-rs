@@ -99,7 +99,7 @@ mod profile_row_tests {
 
     #[test]
     fn several_occupants_park_the_cursor_on_the_lowest() {
-        assert_eq!(preview_cursor_slot(0b0010_1001_00), Some(2));
+        assert_eq!(preview_cursor_slot(0b00_1010_0100), Some(2));
         assert_eq!(preview_cursor_slot(0x3ff), Some(0));
         assert_eq!(preview_cursor_slot(1 << 9), Some(9));
     }

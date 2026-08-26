@@ -191,9 +191,9 @@ the destinations still hold but the line *quantities* -- and any offset derived 
 | `loading_cover/mod.rs` | 189 | 189 | STAY 188 | 1 |
 | `diagnostics/mod.rs` | 174 | 174 | STAY 172 | 1 |
 | `save_picker/mod.rs` | 171 | 171 | STAY 169 | 1 |
-| `diagnostics/dlc_roots_trace.rs` | 169 | 169 | STAY 162 | 1 |
-| `diagnostics/msb_parse_trace.rs` | 139 | 139 | STAY 136 | 1 |
-| `diagnostics/loadlist_wait_trace.rs` | 139 | 139 | STAY 135 | 1 |
+| `diagnostics/dlc_roots_trace.rs` | 169 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 162) | 1 |
+| `diagnostics/msb_parse_trace.rs` | 139 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 136) | 1 |
+| `diagnostics/loadlist_wait_trace.rs` | 139 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 135) | 1 |
 | `save_picker/save_picker_surface.rs` | 122 | 122 | er-quit-menu-core 53 / STAY 32 / er-save-picker-core 23 / DELETE 10 | 4 |
 | `loading_cover/scaleform_descriptor_guard.rs` | 95 | 95 | NEW:er-scaleform-hooks 94 | 1 |
 | `save_picker/save_picker_os_dialog.rs` | 27 | 27 | DELETE 25 | 1 |

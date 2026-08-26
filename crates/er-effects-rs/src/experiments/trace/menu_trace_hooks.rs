@@ -1,6 +1,5 @@
 use std::{
     ffi::c_void,
-    fmt::Write as _,
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -16,7 +15,6 @@ use crate::{
     BLOCKRES_SECOND_FILECAP_48_OFFSET, BOOT_VIEW_OWN_MENU_LOAD_ACTIVE, BOOTSTRAP_DETAIL_DONE,
     BOOTSTRAP_DETAIL_START, BOOTSTRAP_EVENT_CONTINUE_TRACE_APPLIED,
     BOOTSTRAP_EVENT_CONTINUE_TRACE_APPLY_FAILED, BOOTSTRAP_EVENT_CONTINUE_TRACE_STARTED,
-    C30_WRITER_BUFFER_DUMP_BYTES, C30_WRITER_LOG_COUNT, C30_WRITER_LOG_MAX, C30_WRITER_ORIG,
     CAP_APPEND_ONE_ORIG, CAP_BUILDER_ORIG, CAP_CSMENU_CTOR_ORIG, CAP_DIALOG_FACTORY_ORIG,
     CAP_LOAD_ACTIVATE_ORIG, CAP_LOAD_ACTIVATE2_ORIG, CAP_MENU_DESER_ORIG, CAP_REBUILD_ROWS_ORIG,
     CAP_SELECTOR_TICK_ORIG, CAP_SETSTATE_ORIG, COMBINED_LOAD_ORIG, CONTINUE_LOAD_ORIG,
@@ -53,24 +51,24 @@ use crate::{
     PROFILE_LOAD_SELECTOR_TICK_RVA, ProfileLoadMenuRva, REBUILD_ROWS_RVA, REQUEST_SAVE_ORIG,
     RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_BUILDER_RVA, RESULT_EVENT_HANDLER_ORIG,
     RESULT_EVENT_HANDLER_RVA, RESULT_EVENT_WRAPPER_BUILDER_ORIG, RESULT_EVENT_WRAPPER_BUILDER_RVA,
-    SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ,
-    SAVE_DATA_SUBSYSTEM_GATE_RVA, SAVE_LOAD_STATE_INIT_ORIG, SAVE_REQUEST_PROFILE_ORIG,
-    SEQUENCE_ITER_ORIG, SEQUENCE_ITER_RVA, SET_SAVE_SLOT_ORIG, SWITCH_ORACLE_MMS_FINISH_HITS,
-    SWITCH_ORACLE_MMS_INIT_HITS, TASK_ENQUEUE_ORIG, TITLE_NATIVE_READY_PREDICATE_ORIG,
-    TITLE_NATIVE_READY_PREDICATE_RVA, TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE,
-    TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA,
-    TRACE_MENU_OTHER_LOAD_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA, TRACE_UNKNOWN_TABLE_RVA,
-    WORLDRES_BLOCKRES_GETTER_RVA, WORLDRES_BLOCKRES_PHASE2_RVA, WORLDRES_ENTRY_CTOR_RVA,
-    WORLDRES_RESMGR_10_OFFSET, append_autoload_debug, append_continue_trace, cap_append_one_hook,
-    cap_builder_hook, cap_csmenu_ctor_hook, cap_dialog_factory_hook, cap_load_activate_hook,
-    cap_load_activate2_hook, cap_menu_deser_hook, cap_menu_item_update_hook, cap_rebuild_rows_hook,
-    cap_selector_tick_hook, cap_sequence_iter_hook, cap_setstate_hook, combined_load_hook,
-    continue_load_hook, current_slot_load_hook, game_directory_path, game_man_ptr_or_null,
-    game_module_base, game_rva, map_load_hook, menu_window_job_ctor_hook,
-    menu_window_job_idle_ctor_hook, menu_window_job_native_ctor_b_hook, native_submit_hook,
-    request_save_hook, result_action_builder_hook, result_event_handler_hook,
-    result_event_wrapper_builder_hook, safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize,
-    save_load_state_init_hook, save_request_profile_hook, set_save_slot_hook, task_enqueue_hook,
+    SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ, SAVE_LOAD_STATE_INIT_ORIG,
+    SAVE_REQUEST_PROFILE_ORIG, SEQUENCE_ITER_ORIG, SEQUENCE_ITER_RVA, SET_SAVE_SLOT_ORIG,
+    SWITCH_ORACLE_MMS_FINISH_HITS, SWITCH_ORACLE_MMS_INIT_HITS, TASK_ENQUEUE_ORIG,
+    TITLE_NATIVE_READY_PREDICATE_ORIG, TITLE_NATIVE_READY_PREDICATE_RVA,
+    TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE, TRACE_MENU_CONTINUE_WRAPPER_RVA,
+    TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA, TRACE_MENU_OTHER_LOAD_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
+    TRACE_UNKNOWN_TABLE_RVA, WORLDRES_BLOCKRES_GETTER_RVA, WORLDRES_BLOCKRES_PHASE2_RVA,
+    WORLDRES_ENTRY_CTOR_RVA, WORLDRES_RESMGR_10_OFFSET, append_autoload_debug,
+    append_continue_trace, cap_append_one_hook, cap_builder_hook, cap_csmenu_ctor_hook,
+    cap_dialog_factory_hook, cap_load_activate_hook, cap_load_activate2_hook, cap_menu_deser_hook,
+    cap_menu_item_update_hook, cap_rebuild_rows_hook, cap_selector_tick_hook,
+    cap_sequence_iter_hook, cap_setstate_hook, combined_load_hook, continue_load_hook,
+    current_slot_load_hook, game_directory_path, game_man_ptr_or_null, game_module_base, game_rva,
+    map_load_hook, menu_window_job_ctor_hook, menu_window_job_idle_ctor_hook,
+    menu_window_job_native_ctor_b_hook, native_submit_hook, request_save_hook,
+    result_action_builder_hook, result_event_handler_hook, result_event_wrapper_builder_hook,
+    safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize, save_load_state_init_hook,
+    save_request_profile_hook, set_save_slot_hook, task_enqueue_hook,
     title_native_ready_predicate_hook, trace_callers_summary, write_bootstrap_event,
 };
 use eldenring::cs::GameMan;
@@ -1905,80 +1903,6 @@ pub(crate) unsafe extern "system" fn b80_deserialize_hook(slot: i32) -> i32 {
         "b80_deserialize_67b290 LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
-    ret
-}
-
-/// The SOLE GameMan+0xc30 writer 0x14067bd70(rcx=GameMan, rdx=buf, r8d=size). Logs the
-/// CALLER STACK (which deserializer drove the c30 write -- the Wine-safe replacement
-/// for the hardware watchpoint) + the mount state, then chains the original. If this
-/// never fires during a Seamless .co2 load, ERSC writes c30 from its own module.
-pub(crate) unsafe extern "system" fn c30_writer_hook(
-    game_man: usize,
-    buffer: usize,
-    size: u32,
-) -> usize {
-    // SAVE-SAFE diagnostic (NO SetState5, NO save write): a pure passthrough that forwards
-    // ALL args + returns the original's result. Rate-limited to the first few calls (the cold
-    // deserialize drives a small bounded number of c30-writer entries). On ENTER we log the gate
-    // [0x143d68078] (null -> writer returns without writing), c30 BEFORE, and a window of the
-    // resident save buffer (rdx) so the REAL target map record can be spotted offline. On LEAVE
-    // we log the return (al) + c30 AFTER, so we can see whether 0x67bd70 ran, whether it changed
-    // c30, and to what. (coldmount-c30-is-the-single-key-write-conditions-and-recipe-2026)
-    const C30_LOG_INC: usize = 1;
-    const HEX_BYTES_PER_LINE: usize = 16;
-    let log_n = C30_WRITER_LOG_COUNT.fetch_add(C30_LOG_INC, Ordering::SeqCst);
-    let do_log = log_n < C30_WRITER_LOG_MAX;
-    if do_log {
-        let gate = game_module_base()
-            .ok()
-            .map(|base| unsafe { *((base + SAVE_DATA_SUBSYSTEM_GATE_RVA) as *const usize) })
-            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-        let c30_before = unsafe { *((game_man + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
-        // Hex window of the resident 0x280000 save buffer header so the map record is visible.
-        let mut hex = String::new();
-        const BUFFER_DUMP_START: usize = 0;
-        for i in BUFFER_DUMP_START..C30_WRITER_BUFFER_DUMP_BYTES {
-            if i % HEX_BYTES_PER_LINE == TITLE_OWNER_SCAN_START_ADDRESS {
-                hex.push(' ');
-            }
-            let byte = unsafe { *((buffer + i) as *const u8) };
-            let _ = write!(hex, "{byte:02x}");
-        }
-        append_continue_trace(format_args!(
-            "c30_writer_67bd70 ENTER#{log_n} game_man=0x{game_man:x} buf=0x{buffer:x} size=0x{size:x} gate(0x143d68078)=0x{gate:x} c30_before=0x{c30_before:x} buf[0..0x{:x}]={hex} {} {}",
-            C30_WRITER_BUFFER_DUMP_BYTES,
-            b80_mount_trace_summary(),
-            trace_callers_summary()
-        ));
-    }
-    let original = C30_WRITER_ORIG.load(Ordering::SeqCst);
-    let ret = if original == HOOK_ORIGINAL_UNSET {
-        B80_HOOK_DEFAULT_RET as usize
-    } else {
-        let original: unsafe extern "system" fn(usize, usize, u32) -> usize =
-            unsafe { std::mem::transmute(original) };
-        unsafe { original(game_man, buffer, size) }
-    };
-    const C30_WRITER_FULL_SAVE_SIZE: u32 = 0x280000;
-    const C30_WRITER_SUCCESS_RET: usize = 1;
-    const C30_AFTER_ZERO: i32 = 0;
-    let c30_after = unsafe { *((game_man + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
-    if ret == C30_WRITER_SUCCESS_RET
-        && size == C30_WRITER_FULL_SAVE_SIZE
-        && c30_after != C30_AFTER_ZERO
-    {
-        OWN_STEPPER_MOUNT_C30.store(c30_after, Ordering::SeqCst);
-        OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "c30_writer_67bd70: latched full-save native deser success c30=0x{c30_after:x} size=0x{size:x}"
-        ));
-    }
-    if do_log {
-        append_continue_trace(format_args!(
-            "c30_writer_67bd70 LEAVE#{log_n} ret=0x{ret:x} c30_after=0x{c30_after:x} {}",
-            b80_mount_trace_summary()
-        ));
-    }
     ret
 }
 

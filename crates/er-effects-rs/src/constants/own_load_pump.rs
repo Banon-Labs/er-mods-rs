@@ -283,22 +283,6 @@ pub(crate) use er_title_flow::OWN_STEPPER_SLOT;
 pub(crate) use er_title_flow::OWN_STEPPER_PHASE;
 pub(crate) static mut OWN_STEPPER_SHIM: [usize; OWN_STEPPER_SHIM_LEN] =
     [TITLE_OWNER_SCAN_START_ADDRESS; OWN_STEPPER_SHIM_LEN];
-/// 2026-06-18 DIRECT BUILD: persistent buffers for building a ProfileLoadDialog directly via
-/// dialog_factory 0x14081ead0 (bypassing the input-gated router_this/d180-on-confirm layer that
-/// never builds headless). `cap[0]` = owner+0x138 (the ctor r8 = *(capture+8)); the factory reads
-/// *(rcx). `ctx` is the zeroed incoming-ctx the factory reads to build the (empty cosmetic) label.
-/// Both PERSISTENT (the built dialog retains a pointer to the ctx), so static, never stack.
-pub(crate) const DIRECT_BUILD_CAP_LEN: usize = 1;
-pub(crate) static mut DIRECT_BUILD_CAP: [usize; DIRECT_BUILD_CAP_LEN] =
-    [TITLE_OWNER_SCAN_START_ADDRESS; DIRECT_BUILD_CAP_LEN];
-pub(crate) const DIRECT_BUILD_CTX_LEN: usize = 8;
-pub(crate) static mut DIRECT_BUILD_CTX: [usize; DIRECT_BUILD_CTX_LEN] =
-    [TITLE_OWNER_SCAN_START_ADDRESS; DIRECT_BUILD_CTX_LEN];
-/// One-shot latch so the native build fires at most once per run.
-pub(crate) static OWN_STEPPER_DIRECT_BUILT: AtomicUsize =
-    AtomicUsize::new(OWN_STEPPER_DIRECT_BUILT_NO);
-pub(crate) const OWN_STEPPER_DIRECT_BUILT_NO: usize = false as usize;
-pub(crate) const OWN_STEPPER_DIRECT_BUILT_YES: usize = true as usize;
 /// MODEL B (live_dialog_enabled): one-shot latch so the live Load-Game node's native run
 /// 0x1409aaba0 fires at most once per run (a re-fire would double-build / leak the dialog).
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.

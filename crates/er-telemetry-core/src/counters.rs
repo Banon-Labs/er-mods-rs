@@ -450,7 +450,6 @@ pub static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_NONNULL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
-pub static LOADING_COVER_SUPPRESS_WRITES: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_GX_KEPT: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_GX_CAPTURE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
@@ -555,10 +554,6 @@ pub static PROFILE_CAM_LAST_FOV_BITS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_FRAME: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_D180_PRECONFIRM: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_DOWN_LEAF_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_CONFIRM_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_CONFIRM_MODAL_SEEN: AtomicUsize = AtomicUsize::new(0);
 pub static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
@@ -814,54 +809,21 @@ pub static MENU_WINDOW_JOB_FINALIZE_GUARDS: AtomicUsize = AtomicUsize::new(0);
 /// Last window pointer the finalize hook neutralized (diagnostic).
 pub static MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
-/// One-shot install guard for the msb-parse trace (the sole `msbResCap` writer, deobf 0x14021bbf0).
-pub static MSB_PARSE_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the msb-parse trace. 0 = not hooked.
-pub static MSB_PARSE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Total msb load-complete callbacks observed. Read from the `msb-parse #N` debug-log lines;
-/// despite the name pattern there is no `oracle_msb_parse_calls` JSON field.
-pub static MSB_PARSE_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Callbacks that returned with `msbResCap` STILL null -- i.e. the content was null and the parse
-/// silently short-circuited. Every one of these is a cap that will wedge `WorldBlockRes` case 2 if a
-/// block ever waits on it, so a non-zero value here IS the freeze precursor. Read from the
-/// `msb-parse-NULL-RESULT` debug-log lines; there is no JSON export for it.
-pub static MSB_PARSE_TRACE_NULL_RESULTS: AtomicUsize = AtomicUsize::new(0);
-
-/// One-shot install guard for the `STEP_LoadListWait` gate trace (deobf 0x140af1800).
-pub static LOADLIST_WAIT_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the `STEP_LoadListWait` gate trace. 0 = not hooked.
-pub static LOADLIST_WAIT_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Total `STEP_LoadListWait` entries observed. THE ZERO CASE IS THE POINT: the DLC virtual roots are
-/// refilled only from inside this step, so if this stays flat across a profile-switch reload the
-/// blocker is "the step never ran", which is NOT any of its three internal gates. Read from the
-/// `loadlist-wait #N` debug-log lines; there is no JSON export for it.
-pub static LOADLIST_WAIT_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Last gate verdict seen, so the trace can log on CHANGE instead of every frame. Encoding matches
-/// `loadlist_wait_verdict`: 0 = both readable gates pass, 1 = loadList state gate, 2 = the `+0xb8`
-/// gate. `usize::MAX` = nothing observed yet.
-pub static LOADLIST_WAIT_TRACE_LAST_VERDICT: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Entries where BOTH readable gates passed, i.e. the step reached the storage-status check. If this
-/// is non-zero on a reload whose roots stayed empty, the blocker is that third check -- the one the
-/// trace deliberately does NOT evaluate itself, because it allocates and would perturb the run.
-/// Reported inline as `reachedC=` on each `loadlist-wait` line; there is no JSON export for it.
-pub static LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE: AtomicUsize = AtomicUsize::new(0);
-
-/// One-shot install guard for the DLC virtual-root blank/refill traces.
-pub static DLC_ROOTS_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the DLC-root BLANK (`FUN_140e06490`). 0 = not hooked.
-pub static DLC_ROOTS_BLANK_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the DLC-root REFILL (`FUN_140e05fb0`). 0 = not hooked.
+// THE MSB-PARSE / LOADLIST-WAIT / DLC-ROOT TRACE COUNTERS LEFT THIS TABLE on 2026-08-25, with the
+// traces that owned them: `crates/er-diag-harness/` now holds them as private statics. They were
+// never read outside those traces -- no `push_json_*` consumer, no `oracle_*` field -- and a second
+// image gets its own copy of any static regardless, so hosting them centrally bought nothing.
+//
+// `DLC_ROOTS_REFILL_ORIG` below is the one that stayed: the DLC-root self-heal in
+// `er-title-flow/src/dlc_roots_self_heal.rs` reads it, and it belongs beside that self-heal's own
+// state rather than with the departed traces.
+/// Trampoline for the DLC-root REFILL (`FUN_140e05fb0`), stored by whichever image detoured it.
+///
+/// NOW ALWAYS 0 IN THE PRODUCT, and that is the intended reading. The `er-diag-harness` trace that
+/// used to fill it in lives in another image, so the self-heal takes the `game_rva` fallback it has
+/// always carried: in a product-only profile that resolves the un-detoured native (identical
+/// behaviour), and in a product + harness profile it enters the harness's detour, which forwards.
 pub static DLC_ROOTS_REFILL_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Times the DLC virtual roots were blanked to `L""`. Read from the `dlc-roots-BLANK` log lines.
-pub static DLC_ROOTS_BLANK_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the DLC-root refill JOB BODY (`FUN_140836f30`). 0 = not hooked.
-pub static DLC_ROOTS_JOB_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Times the refill JOB BODY ran. THIS IS THE FORK: the job body sits one level above the refill
-/// (body -> FUN_14082e230 -> FUN_14082eb60 -> FUN_14082dbf0 -> FUN_14082faf0 -> ... -> the refill).
-/// If this fires on a reload whose roots stay empty, the job runs and diverges INSIDE, so a native
-/// fix exists. If it stays flat, the job was never enqueued -- and its creator is a dynamically
-/// built `std::function` with no static registration, so there is no call site to patch.
-pub static DLC_ROOTS_JOB_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Cached address of the `mapstudio_dlc2` entry in `DLFileDeviceManager::virtualRoots`.
 pub static DLC_ROOT_ENTRY_ADDR: AtomicUsize = AtomicUsize::new(0);
@@ -880,10 +842,6 @@ pub static DLC_ROOT_HEAL_OK: AtomicUsize = AtomicUsize::new(0);
 /// when DLC ownership is unresolved). Non-zero means the heal fired too early and DLC content is
 /// resolving to the wrong place -- treat as a failure, not a partial success.
 pub static DLC_ROOT_HEAL_WRONG: AtomicUsize = AtomicUsize::new(0);
-
-/// Times the DLC virtual-root refill ran. IF THIS TRAILS THE BLANK COUNT ACROSS A RELOAD, the roots
-/// were emptied and never restored -- which is the softlock. Read from the `dlc-roots-REFILL` lines.
-pub static DLC_ROOTS_REFILL_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Blocks whose stale file cap stayed (status=0x04, data=null) AFTER the single native re-enqueue.
 /// This is the DETERMINISTIC "the map archive backing this file is not mounted" signal -- the read
@@ -993,7 +951,6 @@ pub static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT: AtomicUsize = AtomicUsi
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);

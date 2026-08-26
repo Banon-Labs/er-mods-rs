@@ -12,34 +12,6 @@ pub(crate) fn process_autoload_request(state: &mut EffectsState) {
         return;
     };
 
-    if selectbot_probe_enabled() || title_proceed_gate_enabled() || title_accept_byte_gate_enabled()
-    {
-        // selectbot_probe_once samples the SelectBot/pump state each title-idle
-        // frame; when ER_EFFECTS_TITLE_PROCEED_GATE is set it ALSO fires the
-        // one-shot title-accept latch write (lever 1) at state 10, and when
-        // ER_EFFECTS_TITLE_ACCEPT_BYTE is set it fires lever 2 (global accept
-        // byte 0x144589bdc) for the zero-input natural menu-open. Returns
-        // without completing the autoload so sampling continues across the
-        // cascade.
-        unsafe { selectbot_probe_once(game_module_base, state.game_task_ticks) };
-        return;
-    }
-
-    if native_autoload_enabled() {
-        // Recipe A: arm the game's own built-in title autoload (slot + force flag)
-        // and let the save-manager update perform the load with zero input.
-        if let Some(slot) = state.autoload.slot() {
-            unsafe { native_autoload_once(game_module_base, slot, state.game_task_ticks) };
-        }
-        return;
-    }
-
-    if native_title_job_enabled()
-        && !unsafe { call_native_title_job_once(game_module_base, state.game_task_ticks) }
-    {
-        return;
-    }
-
     let context = SaveLoadContext {
         game_module_base,
         title_handoff_complete: TITLE_HANDOFF_COMPLETE.load(Ordering::SeqCst)

@@ -422,21 +422,6 @@ pub(crate) static START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK: Once = Once::new();
 /// redirect). Armed at process attach only when `enforce_save_override_or_abort` resolved a valid
 /// env save source (Redirect mode); see save-override-no-default-fallback-mandatory-env-2026-06-23.
 pub(crate) static START_SAVE_REDIRECT: Once = Once::new();
-/// One-shot install guard for the SAVE-SAFE c30-writer diagnostic hook (mirrors
-/// MENU_WINDOW_LATCH_INSTALLED). Installed unconditionally at process attach; the
-/// hook is a pure passthrough that logs the c30-write gate, c30 before/after, and a
-/// window of the resident save buffer to diagnose why GameMan+0xc30 stays default.
-pub(crate) use er_telemetry_core::counters::C30_WRITER_HOOK_INSTALLED;
-pub(crate) const C30_WRITER_HOOK_NOT_INSTALLED: usize = 0;
-pub(crate) const C30_WRITER_HOOK_INSTALLED_YES: usize = 1;
-pub(crate) static START_C30_WRITER_HOOK: Once = Once::new();
-/// Rate limit for the c30-writer diagnostic log: only the first few calls are logged
-/// (the cold deserialize drives a small bounded number of c30-writer entries).
-pub(crate) use er_telemetry_core::counters::C30_WRITER_LOG_COUNT;
-pub(crate) const C30_WRITER_LOG_MAX: usize = 8;
-/// Bytes of the resident save buffer (rdx) to dump as hex from the c30-writer ENTER,
-/// so the real target map record can be spotted offline. Read-only header window.
-pub(crate) const C30_WRITER_BUFFER_DUMP_BYTES: usize = 0x40;
 pub(crate) use er_title_flow::CONNECTION_ERROR_DIALOG;
 /// Last vtable-validated MessageBoxDialog built by the game. Unlike CONNECTION_ERROR_DIALOG this
 /// is never used to auto-dismiss; telemetry reads it at the end of a run to fail the oracle if a

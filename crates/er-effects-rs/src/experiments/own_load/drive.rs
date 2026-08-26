@@ -1474,12 +1474,8 @@ unsafe fn own_load_m28_dispatch(
 
 /// SAVE-SAFE RECURRING world-stream observer, called from the per-frame GAME TASK (NOT the
 /// title-phase own_stepper_idx10, which stops ticking once SetState5 starts the title->ingame
-/// transition). Runs when `OWN_LOAD_CONTINUE_FIRED` (our menu-free OWN-LOAD path) OR
-/// `golden_observe_enabled()` (GOLDEN baseline mode observing a user-driven vanilla load) is set, so it
-/// never spams during normal play. PURE READS ONLY (safe_read_*; never changes load behavior). In
-/// golden mode `OWN_LOAD_OWNER_CACHED` is filled by own_stepper_idx10 each title frame and the cached
-/// InGameStep stays 0, so the live `ingame_cached == 0` re-derivation below resolves the chain fresh
-/// every frame as the vanilla load builds the world.
+/// transition). Runs when `OWN_LOAD_CONTINUE_FIRED` (our menu-free OWN-LOAD path) is set, so it
+/// never spams during normal play. PURE READS ONLY (safe_read_*; never changes load behavior).
 ///
 /// It re-reads the world-stream from the CACHED title owner + InGameStep (snapshotted at fire time),
 /// NOT from a fresh own_stepper owner, so it keeps observing through the whole loading screen:
@@ -1501,11 +1497,9 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     gm: usize,
     player_present: bool,
 ) {
-    // Run after our own continue_confirm fired (OWN-LOAD path) OR in GOLDEN baseline mode (observing a
-    // user-driven vanilla load). Golden mode supplies `owner` via own_stepper_idx10's per-frame cache
-    // and leaves the cached InGameStep at 0, so the `ingame_cached == 0` fallback below re-derives the
-    // chain LIVE each frame. Either way this stays pure-read and never changes load behavior.
-    if !OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) && !golden_observe_enabled() {
+    // Run after our own continue_confirm fired (OWN-LOAD path). Stays pure-read and never changes
+    // load behavior.
+    if !OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;

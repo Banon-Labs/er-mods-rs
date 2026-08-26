@@ -13,8 +13,8 @@ pub(crate) fn live_dialog_enabled() -> bool {
     false
 }
 /// Arm the readiness-gated press-any-button advance. ENV `ER_EFFECTS_PAB_ADVANCE=1` or GAME_DIR file
-/// `er-effects-pab-advance.txt`. DECOUPLED from `fire_tfc_continue_enabled` (that gate previously also
-/// drove `maybe_auto_open_menu`, so removing it stranded a probe at press-any-button).
+/// `er-effects-pab-advance.txt`. Deliberately independent of the (deleted) direct
+/// "Continue pressed" trigger, which also used to drive `maybe_auto_open_menu`.
 pub(crate) fn pab_advance_enabled() -> bool {
     if autoload_disabled() {
         return false;
@@ -64,13 +64,13 @@ pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
 /// artifact `title-05-000-native-ui-stripped-recorded-latest` reached EVENT T_controllable
 /// (+21.9s) with the PressStart proxy still bindable (dialog+0xb78 readiness gate satisfied).
 /// Gated like `native_continue_enabled` (no new opt-in gate; splash-skip de-gating precedent):
-/// off for no-autoload / profile-capture / telemetry-only runs, so a pure observe run never
+/// off for no-autoload / telemetry-only runs, so a pure observe run never
 /// mutates visual resources. `ER_EFFECTS_TITLE_05_000_MEMORY_GFX` remains the explicit override:
 /// a path replaces the default asset; `embedded:title-05-000-suppressed` arms the same runtime
 /// derivation; the literal `vanilla`/`off`/`0` forces the native on-disk movie while autoload
 /// stays on (handled in `load_title_scaleform_memory_gfx`).
 pub(crate) fn title_05_000_strip_default_enabled() -> bool {
-    !(autoload_disabled() || native_profile_capture_enabled() || save_override_telemetry_only())
+    !(autoload_disabled() || save_override_telemetry_only())
 }
 
 /// DEFAULT-ON product masquerade cover Part A: suppress only the native `05_000_Title`
@@ -78,10 +78,7 @@ pub(crate) fn title_05_000_strip_default_enabled() -> bool {
 /// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement
 /// surface on this branch, not a vanilla/main object to suppress.
 pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
-    if title_resource_memory_gfx_enabled()
-        || autoload_disabled()
-        || native_profile_capture_enabled()
-    {
+    if title_resource_memory_gfx_enabled() || autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()

@@ -60,11 +60,7 @@ pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
     // verified host MenuWindow*) for the live-dialog Load-Game path; pure latch + passthrough.
-    // OPT-IN (off by default): only install when `menu_window_latch_enabled()` is set
-    // (env ER_EFFECTS_MENU_WINDOW_LATCH=1 OR GAME_DIR file er-effects-menu-window-latch.txt).
-    // When off, the hook is never installed (no MinHook, no detour) -- a clean run has neither.
-    if menu_window_latch_enabled() || product_autoload_enabled() || native_profile_capture_enabled()
-    {
+    if product_autoload_enabled() {
         START_MENU_WINDOW_LATCH.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-menu-window-latch".to_owned())
@@ -88,21 +84,6 @@ pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
         });
     }
 
-    // SAVE-SAFE c30-writer diagnostic: install the MinHook on the SOLE GameMan+0xc30
-    // writer 0x67bd70 UNCONDITIONALLY at process attach (same early-attach pattern as the
-    // MenuWindow latch). Pure passthrough + log of the c30-write gate, c30 before/after,
-    // and a window of the resident save buffer -- NO SetState5, NO save write, harmless.
-    // OPT-IN (off by default): only install when `c30_writer_diag_enabled()` is set
-    // (env ER_EFFECTS_C30_DIAG=1 OR GAME_DIR file er-effects-c30-diag.txt). When off, the
-    // hook is never installed (no MinHook, no detour on the hot 0x67bd70 deserialize path).
-    if c30_writer_diag_enabled() {
-        START_C30_WRITER_HOOK.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-c30-writer-hook".to_owned())
-                .spawn(install_c30_writer_hook);
-        });
-    }
-
     if safe_input_path().exists() {
         START_SAFE_INPUT_HOOKS.call_once(|| {
             let _ = std::thread::Builder::new()
@@ -119,7 +100,7 @@ pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
             .name("er-effects-winreconfig-observer".to_owned())
             .spawn(install_window_reconfig_observer_hooks);
     });
-    if trace_continue_enabled() && !continue_trace_disabled() {
+    if trace_continue_enabled() {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED,
             BOOTSTRAP_DETAIL_START,

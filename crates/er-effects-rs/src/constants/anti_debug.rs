@@ -364,10 +364,6 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_LAST_SLOTS_MASK;
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK;
-/// RAM oracle (`oracle_loading_cover_suppress_writes`): frames the loading-cover experiment actually
-/// cleared `CSFakeLoadingScreenImp.visible`. >0 means the clamp engaged during at least one map load; 0
-/// with the gate on means the cover object never resolved / was never raised (nothing was suppressed).
-pub(crate) use er_telemetry_core::counters::LOADING_COVER_SUPPRESS_WRITES;
 /// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover PLATE the game draws during a map load to
 /// HIDE the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
 /// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not

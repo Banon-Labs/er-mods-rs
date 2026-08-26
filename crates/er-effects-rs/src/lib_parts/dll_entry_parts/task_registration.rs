@@ -141,11 +141,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 {
                     append_autoload_debug(format_args!("boot-phase: first_game_frame"));
                 }
-                // Bisect kill-switch: do nothing per frame. Isolates "our task
-                // body crashes the title ~19s" from "the DLL's mere presence".
-                if inert_mode() {
-                    return;
-                }
                 tick_before_player_lookup(task_data);
                 poll_autoload_handoff_parent_state_guard();
                 // Startup save-picker: input/navigation runs on the render thread (the Present hook),
@@ -169,13 +164,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // Observe the natural flow PAST the modal: tap Confirm (game's own input).
                     if auto_confirm_enabled() {
                         auto_confirm_tap();
-                    }
-                    // Bisect kill-switch: lock + tick only, NO filesystem I/O
-                    // (no telemetry write, no experiments). Discriminates "our
-                    // per-frame file I/O stalls the title" (lite survives) from
-                    // "any per-frame work trips a budget" (lite still exits).
-                    if lite_mode() {
-                        return;
                     }
                     if let Ok(base) = game_module_base() {
                         unsafe { profile_editor_necromancy_tick(base) };
@@ -255,26 +243,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // OWN-THE-STEPPER: patch the idx10 step-fn slot to our handler so
                     // the FD4 scheduler runs OUR code in-context (step 1: verify the
                     // control point with a logging pass-through).
-                    // OWN-STEPPER and the SEPARATE observe-only NATIVE-LOAD gate both install the
-                    // idx10 patch so OUR handler runs each frame. own_stepper_idx10 dispatches to
-                    // the native-load (observe-only, no forcing) path when native_load_enabled().
-                    if own_stepper_enabled()
-                        || native_load_enabled()
-                        || native_continue_enabled()
-                        || native_fullread_enabled()
-                        || own_load_enabled()
-                    {
+                    // OWN-STEPPER installs the idx10 patch so OUR handler runs each frame.
+                    if own_stepper_enabled() || native_continue_enabled() || own_load_enabled() {
                         if let Ok(base) = game_module_base() {
                             unsafe { own_stepper_patch_once(base) };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Pure observe: log the title->menu->load transition each interval
-                    // with NO forcing, to capture what the REAL button press does.
-                    if observe_enabled() {
-                        if let Ok(base) = game_module_base() {
-                            unsafe { title_observe_tick(base, state.game_task_ticks) };
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;
@@ -504,10 +476,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     write_telemetry_throttled(&mut state, false);
                     return;
                 }
-                if (own_stepper_enabled()
-                    || native_load_enabled()
-                    || native_continue_enabled()
-                    || native_fullread_enabled())
+                if (own_stepper_enabled() || native_continue_enabled())
                     && let Ok(base) = game_module_base() {
                         unsafe {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
@@ -517,11 +486,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // the load-correctness record + the T_controllable timeline marker ONCE. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so
                 // the two records are directly comparable (field-for-field == correct load).
-                if (own_stepper_enabled()
-                    || observe_enabled()
-                    || native_load_enabled()
-                    || native_continue_enabled()
-                    || native_fullread_enabled())
+                if (own_stepper_enabled() || native_continue_enabled())
                     && LOAD_CORRECTNESS_DUMPED
                         .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == LOAD_CORRECTNESS_NOT_DUMPED

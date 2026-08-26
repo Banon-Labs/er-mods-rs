@@ -2281,13 +2281,6 @@ fn write_game_module_oracles(body: &mut String) {
         // the swap bug's signature), how many per-slot target build kicks fired (0 = the loaded character
         // was never requested), and the max count of NON-target renderers seen holding a live model during
         // the feed window (>0 = a foreign character built on the loading screen -- the swap precondition).
-        // LOADING-COVER EXPERIMENT: frames the cover-suppress clamp actually cleared visible (0 with the
-        // gate on = the cover object never resolved / was never raised).
-        push_json_usize(
-            body,
-            "oracle_loading_cover_suppress_writes",
-            LOADING_COVER_SUPPRESS_WRITES.load(Ordering::SeqCst),
-        );
         push_json_usize(
             body,
             "oracle_portrait_rt_pin",
@@ -3172,7 +3165,9 @@ fn write_game_module_oracles(body: &mut String) {
         );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
-            native_profile_capture_enabled(),
+            // The native-profile capture mode was a permanently-off diagnostic gate; the field is
+            // kept (its shape is consumed by scripts/er-readiness-watch.py) and is now always false.
+            false,
             title_custom_cover_profile_source_ready,
             TITLE_CUSTOM_COVER_SYSTEX_TARGET,
             TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS,

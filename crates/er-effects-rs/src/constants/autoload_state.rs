@@ -857,20 +857,19 @@ pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA: u32 = 0x974b0
 /// Non-canonical marker copied into only the cloned quick-load action payload; the invoke hook eats it.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_SENTINEL: usize = 0x4552_5351_4e4f_4f50;
-/// `PropertyEditDialog.properties.items`: 0x1260 + BasicViewItemList.items(+8).
-pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET: usize = 0x1268;
-/// `PropertyEditDialog.properties.items.count`: 0x1260 + BasicViewItemList.items(+8) +
-/// DLFixedVector<EditProperty>.count(+0x888). Pure diagnostic read only.
-pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET: usize = 0x1af0;
-pub(crate) const EDIT_PROPERTY_SIZE: usize = 0x88;
-pub(crate) const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
+// `PropertyEditDialog`/`EditProperty` layout moved to `er_quit_menu_core::quit_dialog_layout`
+// with the row-identity code that reads it; re-exported here so every caller path is unchanged
+// and each offset still has exactly one declaration.
+pub(crate) use er_quit_menu_core::quit_dialog_layout::{
+    EDIT_PROPERTY_CONTROLLER_OFFSET, EDIT_PROPERTY_SIZE,
+    PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET, PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET,
+};
 /// `CS::EditProperty.label` (a `CS::MenuHelpLabelComponent`, 0x70 bytes) whose FIRST field is the
 /// `MenuString`'s raw UTF-16 pointer -- `CS::MenuString::MenuString` stores the pointer it is handed,
 /// so a row built from this DLL's static label arrays is identifiable by pointer equality, and every
 /// row is identifiable by its text. This is the only per-row identity in the Quit dialog that the
 /// engine does not alias or share (1.16.2 `EditProperty`: super_MenuViewItem +0, label +8,
 /// propertyController +0x78, size 0x88).
-pub(crate) const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
 /// In `PropertyNewButtonController`, the action `std::function`'s `_Getter()` slot.
 ///
 /// NOT an object identity. `CS::PropertyNewButtonController` is a 0x300-byte allocation
@@ -886,8 +885,6 @@ pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET: usize = 0x
 /// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
 /// short-circuits the predicate with NO positional test (pad/keyboard confirm); the second is the one
 /// whose result the native code then hit-tests against the row's display object (mouse click).
-pub(crate) const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x758a10;
-pub(crate) const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x758a70;
 /// `CS::GridControl::SetItemCount(this, count)` (1.16.2 `FUN_140738dc0`; byte-verified against
 /// `eldenring-deobf.bin`: `48 89 5c 24 08 57 48 83 ec 20 8b fa 48 8b d9 85 d2 75 0d`).
 ///
@@ -905,9 +902,7 @@ pub(crate) const GRID_CONTROL_SET_ITEM_COUNT_RVA: u32 = 0x738dc0;
 /// `GridControl::Update` (`FUN_1407392f0`) enables up/down only at `rows >= 2` and left/right only at
 /// `cols != 1 || rows < 2`, and the mouse hit test (`FUN_140736c90`) walks exactly `cols * rows`
 /// cells -- so these two numbers are the whole navigation and hover model of the dialog.
-pub(crate) const DIALOG_GRID_CONTROL_A38_OFFSET: usize = 0xa38;
-pub(crate) const GRID_CONTROL_COLS_D8_OFFSET: usize = 0xd8;
-pub(crate) const GRID_CONTROL_ROWS_DC_OFFSET: usize = 0xdc;
+pub(crate) use er_quit_menu_core::quit_dialog_layout::DIALOG_GRID_CONTROL_A38_OFFSET;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG: AtomicUsize =
@@ -1114,45 +1109,16 @@ pub(crate) const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ac720;
 /// `MenuWindowJob::Run` (0x7ad1c0), where two detours already collided (MinHook allows one per
 /// address; see bd system-quit-menuwindowjob-run-dead-hook-rootcause-2026-07-15).
 pub(crate) const MENU_WINDOW_JOB_FINALIZE_RVA: usize = 0x7ada40;
-/// `MsbFileCap` load-complete callback -- THE SOLE WRITER of `msbResCap` (`cap+0x90`), 1.16.2 dump
-/// `FUN_14021bbf0`. Byte-verified against `eldenring-deobf.bin` at the same VA (shift 0 on 1.16.2):
-/// `48 8b c4 56 57 41 56 48 81 ec 80 00 00 00`, with the first rip-relative operand only at +0x1e,
-/// so the prologue is safely detourable.
-///
-/// It writes `msbResCap` ONLY when the cap's content is non-null, and returns normally otherwise --
-/// leaving `(loadState=4, msbResCap=0)`, which wedges `WorldBlockRes` case 2 forever. Tracing it
-/// separates "fired with null content" (empty read) from "never fired" (cache hit, no enqueue); no
-/// passive read can, because both end in identical cap state.
-pub(crate) const MSB_FILECAP_PARSE_CALLBACK_RVA: usize = 0x21bbf0;
-/// How many SUCCESSFUL parses to log before rate-limiting. Null-result parses are always logged.
-pub(crate) const MSB_PARSE_TRACE_VERBOSE_CALLS: usize = 24;
-/// `CS::MoveMapListStep::STEP_LoadListWait` -- the ONLY live path that refills the DLC virtual roots
-/// (it calls `FUN_140e05fb0(GLOBAL_CSDlc, true)` -> `CSDlcImp::AddVirtualFileRoots`). Proven to be
-/// the fix site by bd `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty`.
-///
-/// Prologue is `40 53 48 83 ec 20 48 8b 81 c0 02 00 00` (`push rbx; sub rsp,0x20; mov rax,[rcx+0x2c0]`)
-/// -- no rip-relative operand anywhere near the patch site, and the deobf bytes match the 1.16.2 dump
-/// exactly, so a 5-byte detour relocates cleanly. `rcx` is the `MoveMapListStep` this-pointer.
-pub(crate) const STEP_LOADLIST_WAIT_RVA: usize = 0x00af_1800;
-/// Gate A operand: `MoveMapListStep::loadList`. The step proceeds when this is NULL **or** the int at
-/// `*loadList` is 2 or 3 (`sub eax,2; cmp eax,1; ja bail`).
-pub(crate) const MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET: usize = 0x2c0;
-/// Gate B operand: must be 0 for the step to proceed (`cmp qword [rcx+0xb8],0; jnz bail`).
-pub(crate) const MOVEMAPLISTSTEP_GATE_B8_OFFSET: usize = 0xb8;
-/// `STEP_LoadListWait` runs every frame, so the trace logs only on VERDICT CHANGE plus this many
-/// opening entries -- enough to capture the load-1 baseline without burying the reload.
-pub(crate) const LOADLIST_WAIT_TRACE_VERBOSE_CALLS: usize = 6;
-/// `FUN_140e06490(CSDlcImp*, bool)` -- BLANKS the 13 `*_dlc2` virtual roots to `L""` and clears the
-/// DLC ownership flags. Sole code caller is the title start-game flow `FUN_1409b24e0`.
-pub(crate) const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
-/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the REFILL: re-queries Steam DLC ownership and calls
-/// `CSDlcImp::AddVirtualFileRoots`. Hooked at this shared entry rather than at either caller,
-/// because a measured run showed `STEP_LoadListWait` never executes at all.
-pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
-/// `FUN_140836f30` -- the `Do` of the MenuFunctorJob that eventually reaches the refill (vtable
-/// 0x142acb638). One level above `FUN_140e05fb0`, so it separates "job never enqueued" from "job ran
-/// and diverged inside". Prologue `48 89 54 24 10 53 48 83 ec 30`, no rip-relative in the window.
-pub(crate) const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
+// THE MSB-PARSE / STEP_LoadListWait / DLC-VIRTUAL-ROOT TRACE ADDRESSES MOVED OUT on 2026-08-25,
+// with the traces that owned them, into `crates/er-diag-harness/src/rva.rs`. `MSB_FILECAP_PARSE_CALLBACK_RVA`
+// (0x21bbf0), `STEP_LOADLIST_WAIT_RVA` (0xaf1800), `DLC_ROOTS_BLANK_RVA` (0xe06490) and
+// `DLC_ROOTS_JOB_RVA` (0x836f30), plus the `MOVEMAPLISTSTEP_*` gate operands and the two
+// verbose-call budgets, had no reader in this crate other than those traces. They moved rather
+// than being copied: one game address gets exactly one literal declaration
+// (`scripts/check-rva-alias-drift.py`).
+//
+// `DLC_ROOTS_REFILL_RVA` did NOT move -- `er-title-flow`'s DLC-root self-heal names it too, so it
+// stays where both can reach it, in the shared `er_game_base::rva` table.
 /// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton. Grounded from `FUN_1408371e0`'s own load:
 /// `mov 0x354f9ed(%rip),%rcx  # 0x143d86bd8`.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
@@ -1161,10 +1127,6 @@ pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
 
-/// How many NULL-RESULT parses also carry a DLIO virtual-root dump. The null path fires ~13x/second
-/// during the stall and the root walk is a vector scan, so only the first few need it -- the roots
-/// do not change once the block is wedged, and the load-1 baseline comes from the verbose successes.
-pub(crate) const MSB_PARSE_TRACE_ROOTS_ON_NULL_RESULTS: usize = 4;
 pub(crate) const MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET: usize = 0x130;
 /// The window's cached menu id (`field246_0x180`). `0xffff` is the unmapped sentinel and the state
 /// every observed crash was in; the finalize's second getter is itself gated on it.
@@ -1204,19 +1166,12 @@ pub(crate) use er_telemetry_core::counters::{
     MENU_WINDOW_JOB_FINALIZE_GUARDS, MENU_WINDOW_JOB_FINALIZE_INSTALLED,
     MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW, MENU_WINDOW_JOB_FINALIZE_ORIG,
 };
-pub(crate) use er_telemetry_core::counters::{
-    MSB_PARSE_TRACE_CALLS, MSB_PARSE_TRACE_INSTALLED, MSB_PARSE_TRACE_NULL_RESULTS,
-    MSB_PARSE_TRACE_ORIG,
-};
-pub(crate) use er_telemetry_core::counters::{
-    LOADLIST_WAIT_TRACE_CALLS, LOADLIST_WAIT_TRACE_INSTALLED, LOADLIST_WAIT_TRACE_LAST_VERDICT,
-    LOADLIST_WAIT_TRACE_ORIG, LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE,
-};
-pub(crate) use er_telemetry_core::counters::{
-    DLC_ROOTS_BLANK_CALLS, DLC_ROOTS_BLANK_ORIG, DLC_ROOTS_REFILL_CALLS, DLC_ROOTS_REFILL_ORIG,
-    DLC_ROOTS_TRACE_INSTALLED,
-};
-pub(crate) use er_telemetry_core::counters::{DLC_ROOTS_JOB_CALLS, DLC_ROOTS_JOB_ORIG};
+// The msb-parse / loadlist-wait / DLC-root trace counters left with their traces (2026-08-25):
+// they now live as private statics in `crates/er-diag-harness/`, because a second image gets its
+// own copy of any static anyway and nothing in the product ever read them. `DLC_ROOTS_REFILL_ORIG`
+// is the exception -- `er-title-flow`'s self-heal still reads it (and now always finds it 0, which
+// is the fallback it already handled) -- so it stays in `er-telemetry-core::counters` beside the
+// rest of that self-heal's state.
 pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
 pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
 pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
