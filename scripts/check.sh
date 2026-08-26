@@ -280,6 +280,17 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # BYTES are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
+# er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
+# er_effects_rs.dll among them, so a defect in a byte-patch primitive here is a defect in all of
+# them at once -- and it is the crate LEAST able to report one: it carries a crate-level
+# `#![allow(dead_code, ...)]` for MinHook binding parity, so an unused or wrong primitive draws no
+# warning, and `default-members` pins a bare `cargo test` to er-effects-rs so nothing ever selected
+# it. The tests cover what a compile check cannot see about `write_code_byte`: that the page is
+# relocked to the protection it actually had rather than left `PAGE_EXECUTE_READWRITE`, and that a
+# refused `VirtualProtect` returns before the store instead of writing anyway. Each assertion was
+# confirmed to go red against a deliberately broken implementation.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hook --lib
+
 # HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
 # in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game
 # bindings always resolve -- so a `use windows::...` / `use eldenring::...` written WITHOUT a
