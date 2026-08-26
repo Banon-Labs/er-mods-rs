@@ -6,7 +6,7 @@
 use std::sync::{Once, atomic::AtomicUsize};
 
 use eldenring::{
-    cs::{ChrAsm, EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
+    cs::{EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
     dlkr::DLAllocator,
 };
 use fromsoftware_shared::FromStatic;

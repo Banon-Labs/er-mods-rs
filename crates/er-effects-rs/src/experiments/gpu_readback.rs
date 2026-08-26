@@ -14,19 +14,14 @@ use super::*;
 // top of resource_readback.rs before that file moved to er-loading-portrait-core).
 use std::mem::ManuallyDrop;
 
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, WAIT_OBJECT_0};
+use windows::Win32::Foundation::GENERIC_READ;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
-    D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_UPLOAD,
-    D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_DESC,
-    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE,
-    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ,
+    D3D12_FENCE_FLAG_NONE, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_STATE_COPY_DEST,
     D3D12_RESOURCE_STATE_PRESENT, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-    D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12CommandAllocator,
-    ID3D12CommandList, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
+    ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
     ID3D12GraphicsCommandList, ID3D12PipelineState, ID3D12Resource, ID3D12RootSignature,
 };
 use windows::Win32::Graphics::Direct3D12::{
@@ -35,9 +30,7 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
     D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_VIEWPORT,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
-};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICBitmapSource, IWICImagingFactory,
@@ -46,14 +39,15 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
 };
-use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-use windows::core::{IUnknown, Interface, PCSTR, PCWSTR};
+use windows::core::{IUnknown, Interface, PCWSTR};
 
-mod gpu_draw_shared;
-// Private glob on purpose: nothing in this submodule is `pub(crate)`, so a `pub(crate) use`
-// re-exports nothing and rustc reports it as an unused import. Children still reach these
+// The shared D3D12 draw plumbing (HLSL compile, root-signature/PSO builders, the texture+upload+SRV
+// slot creator, SRV handle math, the execute/fence-wait submit) moved to
+// `er_loading_portrait_core::gpu_draw_shared` with the loading-cover crate extraction. Private glob
+// on purpose, exactly as the local module's was: nothing here is `pub(crate)`, so a `pub(crate) use`
+// would re-export nothing and rustc would report it as an unused import. Children still reach these
 // through their own `use super::*`.
-use gpu_draw_shared::*;
+use er_loading_portrait_core::gpu_draw_shared::*;
 
 mod boot_progress;
 pub(crate) use boot_progress::*;

@@ -364,10 +364,6 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_LAST_SLOTS_MASK;
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK;
-/// RAM oracle (`oracle_loading_cover_suppress_writes`): frames the loading-cover experiment actually
-/// cleared `CSFakeLoadingScreenImp.visible`. >0 means the clamp engaged during at least one map load; 0
-/// with the gate on means the cover object never resolved / was never raised (nothing was suppressed).
-pub(crate) use er_telemetry_core::counters::LOADING_COVER_SUPPRESS_WRITES;
 /// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover PLATE the game draws during a map load to
 /// HIDE the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
 /// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
@@ -399,10 +395,9 @@ const _: () = assert!(core::mem::offset_of!(CSFakeLoadingScreenImp, visible) == 
 /// /rdx/) -> u8` (1 = bound; producer then lists the rti).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
-/// In-memory TPF -> TpfResCap factory `CreateTpfResCap` (dump 0x140b83770 -> deobf 0x140b83680).
-/// `fn(tpfRepo /rcx = *GLOBAL_TpfRepository/, name: *const u16 /rdx/, bytes: *const u8 /r8/, size: u64
-/// /r9/, flag: u8 /stack=0/, extra: u32 /stack=0/) -> *mut TpfResCap` (0xb8; +0x78 count, +0x80 array).
-pub(crate) const CREATE_TPF_RESCAP_RVA: usize = 0xb83680;
+// `CREATE_TPF_RESCAP_RVA` moved to `er_loading_portrait_core::tpf_textures` with the loading-cover
+// crate extraction, beside `CREATE_TPF_RES_CAP_RVA` (its only alias) and the cover texture keys
+// that are its only readers. `constants.rs`'s glob puts it back in this flat namespace.
 /// `CS::TpfFileCap::TpfFileCap` ctor (dump 0x140226010 -> deobf 0x140225f60). `fn(this: *mut /0x98
 /// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.

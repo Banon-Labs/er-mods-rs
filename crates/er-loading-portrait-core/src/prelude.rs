@@ -20,6 +20,8 @@ pub(crate) use crate::bridge::*;
 #[cfg(windows)]
 pub(crate) use crate::cached_depth_readback::*;
 #[cfg(windows)]
+pub(crate) use crate::chr_asm_layout::*;
+#[cfg(windows)]
 pub(crate) use crate::depth_mask_upload::*;
 #[cfg(windows)]
 pub(crate) use crate::dlstring_lookat_math::*;
@@ -65,6 +67,11 @@ pub(crate) use er_telemetry_core::counters::{
 pub(crate) const TITLE_OWNER_SCAN_START_ADDRESS: usize = usize::MIN;
 /// er-effects-rs `constants.rs`: `HOOK_ORIGINAL_UNSET = 0`.
 pub(crate) const HOOK_ORIGINAL_UNSET: usize = 0;
+/// er-title-flow `MENU_TRACE_UNSEEN_SEQ = NULL_MODULE_BASE = 0`: "this menu sequence has never
+/// been observed". Copied rather than imported because er-title-flow DEPENDS on this crate, so
+/// depending back on it is a cycle; the product keeps its own re-export.
+#[cfg(windows)]
+pub(crate) const MENU_TRACE_UNSEEN_SEQ: usize = 0;
 /// er-effects-rs `constants/own_load_pump.rs`: `OWN_STEPPER_CALL_INC = true as usize`.
 /// Only the hook-hit counters in the `#[cfg(windows)]` modules consume it.
 #[cfg(windows)]
@@ -90,6 +97,10 @@ pub(crate) use eldenring::fd4::FD4TaskData;
 pub(crate) use er_game_base::mem::*;
 #[cfg(windows)]
 pub(crate) use er_game_base::pgd::{read_utf16_name_units, utf16_name_empty_like};
+#[cfg(windows)]
+pub(crate) use er_game_base::profile_summary::{
+    PROFILE_SUMMARY_CHR_ASM_OFFSET, profile_summary_record_address,
+};
 #[cfg(windows)]
 pub(crate) use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 

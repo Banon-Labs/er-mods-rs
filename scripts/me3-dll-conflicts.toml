@@ -270,6 +270,27 @@ dependency-closure walk. Load it only when death-persistence IS the experiment, 
 invade during that run: `--with er-death-persist`."""
 
 [compatible]
+"er-diag-harness" = """Co-loadable with the product, and co-loadable is the whole point: this \
+shell exists to carry five detours the product USED TO install unconditionally, so every one of \
+its addresses is one the product has stopped claiming. `0x21bbf0` (the sole `MsbFileCap::msbResCap` \
+writer), `0xaf1800` (`CS::MoveMapListStep::STEP_LoadListWait`), and `0xe06490` / `0xe05fb0` / \
+`0x836f30` (the DLC virtual-root blank, refill and job body) had exactly one claimant before the \
+move and have exactly one after it -- the claimant is just a different image now. No other shell \
+in this table names any of the five.
+
+It cannot corrupt a co-load in the ways the other rows describe. It installs no D3D12 Present or \
+compositor hook, drives no input, and reads no product static: every value in its log lines comes \
+from GAME memory through `er_game_base::filecap`, and each of its detours calls its own MinHook \
+trampoline and returns the native result verbatim. It links only `er-hook` and `er-game-base` \
+(tier A), so it is not a second owner of any feature crate's state machine -- deliberately, since \
+that is the `duplicate-owner` failure mode above.
+
+ONE SOFT COUPLING IS DOCUMENTED RATHER THAN CONFLICTING. `er-title-flow`'s DLC-root self-heal \
+prefers the refill trampoline over the refill's RVA so it does not re-enter our detour; Rust \
+statics are per-DLL, so with the trace here the product's copy stays 0 and the heal takes the \
+`game_rva` fallback it already carried. Product-only: the un-detoured native, identical behaviour. \
+Product + harness: the heal enters this detour, which samples the roots and forwards -- one extra \
+log line, no recursion, and the trace now also sees the heal's refill."""
 "er-armament-icons" = """Co-loadable with the product. Its TilePopulate, GFx-parse (AOB-scanned) \
 and FileOpener::OpenFile (vtable-resolved) detours are on prologues no other shell claims, so they \
 stay on its own MinHook instance. The ONE prologue it shares -- the Scaleform file-open wrapper -- \
@@ -332,7 +353,13 @@ extra NPCs would make."""
 rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
 by another shell, which `check-shared-hook-rvas.py` re-proves on every run. Note that the union alone \
 would NOT be enough if one were: `register_union_hook` unions handlers within ONE DLL, because its \
-statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`."""
+statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`. \
+Since the Generate Build Link row moved into `er-quit-menu-core` this shell also LINKS \
+`er-build-import-runtime`, whose statics are per-DLL for the same reason -- but the harness calls \
+none of it and arms no row, so the second copy of the importer's phase machine never runs. If the \
+harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` \
+and with `er-effects-rs`, for exactly the reason the `er-effects-rs`/`er-build-import` pair \
+below already records."""
 "er-save-picker" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
 (0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \

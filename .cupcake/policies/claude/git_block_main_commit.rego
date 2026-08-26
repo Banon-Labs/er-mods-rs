@@ -13,6 +13,8 @@ package cupcake.policies.claude.git_block_main_commit
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 # Never allow local commits while the active branch is main. Agents must create a
 # feature/tooling branch from the intended base first, then commit there. If the
 # branch signal is missing, fail closed: a missing signal caused a live main
@@ -26,18 +28,58 @@ import rego.v1
 # invocation explicitly targets a registered git worktree on a non-main branch is
 # not a main commit and is allowed. Anything unparsed, unregistered, detached, or
 # bare (`git commit` without -C) keeps the deny (fail closed).
+#
+# Shell-wrapper decomposition (2026-08-26, bd er-effects-rs-dt2e): this guard
+# carried the same anchor construction as ER-EFFECTS-BLOCK-MAIN-PUSH and the same
+# double defect. `bash -c 'git commit -m x'` from a main session produced ZERO
+# denials, because the character before the verb is a quote and a quote is not in
+# `(^|[;&|(\n])`; meanwhile a newline IS, so quoted prose that named the command
+# on its own line was denied though nothing would run. The pattern is unchanged;
+# it now runs over commands.executed_texts, which neutralises the anchors inside
+# quoted operand spans and hands back every shell-wrapper payload as its own
+# text. See the header of .cupcake/system/commands.rego.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
-	is_git_commit(lower(input.tool_input.command))
+	any_executed_commit
 	blocked_branch_context
-	not commits_target_only_nonmain_worktrees(input.tool_input.command)
+	not commits_target_only_nonmain_worktrees
 
 	decision := {
 		"rule_id": "ER-EFFECTS-BLOCK-MAIN-COMMIT",
 		"reason": "Do not commit unless the guard can confirm the active branch is not main. Create/switch to a feature or tooling branch based on the intended base (or target a registered non-main worktree explicitly: git -C <worktree-path> commit), and ensure the current_branch signal is available.",
 		"severity": "CRITICAL",
 	}
+}
+
+# Fail closed on a wrapper whose payload cannot be read while the command names
+# git and commit: `bash -c $CMD` hands a shell a program the guard cannot see,
+# and a blind spot must not read as an allow.
+deny contains decision if {
+	input.hook_event_name == "PreToolUse"
+	input.tool_name == "Bash"
+	opaque_commit_payload
+	blocked_branch_context
+
+	decision := {
+		"rule_id": "ER-EFFECTS-BLOCK-MAIN-COMMIT",
+		"reason": "This command wraps a shell payload the guard cannot read (an unquoted or substituted `-c`/`eval` argument) while naming git and commit, and the active branch cannot be confirmed as non-main. Run the git command directly, or put the payload in a quoted argument.",
+		"severity": "CRITICAL",
+	}
+}
+
+executed_texts := commands.executed_texts(input.tool_input.command)
+
+any_executed_commit if {
+	some text in executed_texts
+	is_git_commit(lower(text))
+}
+
+opaque_commit_payload if {
+	commands.unparsed_shell_payload(input.tool_input.command)
+	lowered := lower(input.tool_input.command)
+	contains(lowered, "git")
+	contains(lowered, "commit")
 }
 
 blocked_branch_context if {
@@ -77,12 +119,21 @@ git_commit_findall_pattern := `(?i)(^|[;&|(\n])\s*(command\s+)?git([ \t]+((-c|--
 # arrangement deliberately fails the strict match and keeps the deny.
 git_c_commit_extract_pattern := `(?i)(^|[;&|(\n])\s*(?:command\s+)?git[ \t]+-C[ \t]+("[^"\n]*"|'[^'\n]*'|[^ \t;&|()\n]+)[ \t]+commit(?:[ \t;&|)\n]|$)`
 
+# Every commit invocation ACROSS ALL EXECUTED TEXTS, so a commit smuggled into a
+# `bash -c` payload counts towards the general tally and the exception cannot
+# vouch for a command it never read.
+extracted(pattern) := [m |
+	some text in executed_texts
+	matches := regex.find_all_string_submatch_n(pattern, text, -1)
+	some m in matches
+]
+
 # Every commit invocation in the command must be the strict `git -C <path>
 # commit` form (strict count == general count) and every extracted path must be
 # a registered worktree on a non-main branch.
-commits_target_only_nonmain_worktrees(cmd) if {
-	general := regex.find_all_string_submatch_n(git_commit_findall_pattern, cmd, -1)
-	strict := regex.find_all_string_submatch_n(git_c_commit_extract_pattern, cmd, -1)
+commits_target_only_nonmain_worktrees if {
+	general := extracted(git_commit_findall_pattern)
+	strict := extracted(git_c_commit_extract_pattern)
 	count(general) > 0
 	count(strict) == count(general)
 	every m in strict {

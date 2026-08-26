@@ -17,6 +17,12 @@ members = [
   "crates/er-crash-logging",
   "crates/er-reload-trace",
   "crates/er-input-harness",
+  # The agent trace detours the SHIPPING DLL used to install unconditionally: the sole
+  # `msbResCap` writer, `STEP_LoadListWait`, and the three DLC virtual-root entry points. All
+  # observe-and-forward, none feeding an `oracle_*` field, so every player carried five detours
+  # for a log nothing read back. Same contract as er-input-harness: a separate `[[natives]]`
+  # entry, enabled by presence, omitted from a production profile.
+  "crates/er-diag-harness",
   "crates/er-ags-stub",
   "crates/er-inventory-sort",
   "crates/er-better-refills",

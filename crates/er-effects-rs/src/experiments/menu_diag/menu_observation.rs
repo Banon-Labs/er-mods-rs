@@ -460,7 +460,7 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
 /// native run 0x1409aaba0 is fired against; `window_item` = the first d180 MenuWindowJob item
 /// (whose +0xa8 holds the d180 functor). It does NOT latch/advance (the caller decides) so a first
 /// run stays NO-WRITE at the menu. (Extended 2026-06-18 to also return the MenuMemberFuncJob node
-/// so native_load_enabled() can fire its run; previously it returned only the window item.)
+/// so a caller can fire its run; previously it returned only the window item.)
 pub(crate) unsafe fn scan_dialog_for_loadgame(
     owner: usize,
     base: usize,

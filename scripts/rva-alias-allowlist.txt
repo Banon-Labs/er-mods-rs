@@ -11,12 +11,10 @@
 # See docs/plans/experiments-module-split-audit.md section 2.
 
 0x100001    exempt:not-an-address     # CONTEXT_CONTROL_AMD64 || Windows CONTEXT_FLAGS bitmask, not a game RVA.
-0x280000    exempt:not-an-address     # C30_WRITER_FULL_SAVE_SIZE, SLOT_BODY_LEN  || A LENGTH, not an RVA: the engine's fixed per-character-save-slot
 0x67b200    exempt:role-alias         # B80_LOAD_SAVE_DATA_INITIATOR_RVA, NATIVE_LOAD_SAVE_DATA_RVA, SYSTEM_QU  || FUN_14067b200(uint slot) -- request an asynchronous READ of a CH
 0x67b290    exempt:role-alias         # DESERIALIZE_SLOT_RVA, SYSTEM_QUIT_INWORLD_LOAD_RVA  || FUN_14067b290(int slot) -- apply a loaded character slot: alloca
 0x67b750    exempt:role-alias         # SAVE_DISPATCH_CHAR_RVA, SAVE_WRITE_TO_SLOT_RVA  || FUN_14067b750(uint slot /*-1 = GameMan->saveSlot*/, char flush,
 0x67bc10    todo:centralize-function-rva  # SAVE_DISPATCH_ENTRY0B_RVA || FUN_14067bc10 allocates 0x240010, serializes via FUN_1402585c0, submits IO request kind 0xb, then sets GameMan.saveState=1.
-0x67bd70    exempt:role-alias         # C30_WRITER_RVA, SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA  || FUN_14067bd70(GameMan *gm, void *buf, int size) -- the character
 0x733150    exempt:role-alias         # PROXY_IS_BOUND_RVA, TITLE_NATIVE_READY_PREDICATE_RVA  || `bool FUN_140733150(SceneObjProxy *param_1)` -- a 21-byte generi
 0x733340    exempt:role-alias         # PROXY_SET_VISIBLE_RVA, TITLE_PRESS_START_SET_VISIBLE_RVA  || `void FUN_140733340(SceneObjProxy *param_1, undefined1 visible)`
 0x74a2f0    exempt:role-alias         # ASSIGN_COMPONENT_WITH_NAME_RVA, TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND  || `SceneObjProxy * CS::SceneObjProxy::assignComponentWithName(Scen
