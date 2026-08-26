@@ -193,13 +193,16 @@ pub fn request() -> Result<(), RequestError> {
 pub struct ExportReport {
     /// The character's name, as the link will carry it.
     pub character: String,
-    /// Equipped armaments, armour pieces, talismans and memorised spells that made it in.
+    /// Armaments, armour pieces, talismans and memorised spells that made it in -- CARRIED, worn
+    /// ones included.
     pub armaments: usize,
     pub protectors: usize,
     pub talismans: usize,
     pub spells: usize,
     /// Equipment slots holding an item whose id resolved to no name, so a short build says so.
     pub unnamed: usize,
+    /// Whether the link carries the character's appearance.
+    pub face_data: bool,
     /// Characters in the finished URL.
     pub url_len: usize,
     /// Whether the URL reached the clipboard, and whether a browser accepted it.
@@ -211,11 +214,12 @@ impl ExportReport {
     /// One line for a menu help field or a log.
     pub fn summary(&self) -> String {
         format!(
-            "{} armaments, {} armour, {} talismans, {} spells -> {} char link{}{}",
+            "{} armaments, {} armour, {} talismans, {} spells{} -> {} char link{}{}",
             self.armaments,
             self.protectors,
             self.talismans,
             self.spells,
+            if self.face_data { ", face" } else { "" },
             self.url_len,
             if self.clipboard { ", copied" } else { "" },
             if self.opened { ", opened" } else { "" },
@@ -231,10 +235,25 @@ impl ExportReport {
 /// declared, instead of forcing every consumer to carry them.
 #[derive(Clone, Copy)]
 pub struct Sinks {
-    /// Put the URL on the clipboard. Returns whether it landed.
-    pub clipboard: fn(&str) -> bool,
-    /// Hand the URL to the OS to open. Returns whether it was accepted.
-    pub open: fn(&str) -> bool,
+    /// Put the URL on the clipboard. Returns whether it landed. `None` when the caller has no
+    /// clipboard at all.
+    pub clipboard: Option<fn(&str) -> bool>,
+    /// Hand the URL to the OS to open. Returns whether it was accepted. `None` when the caller has
+    /// no browser to offer -- which is NOT the same as a browser that refused, and must not be
+    /// reported as a failed export.
+    pub open: Option<fn(&str) -> bool>,
+}
+
+impl Sinks {
+    /// Sinks for a caller whose only output is the log: the harness DLL, whose entire job is to
+    /// put one link in front of a reader without a menu press or a browser window.
+    #[must_use]
+    pub const fn log_only() -> Self {
+        Self {
+            clipboard: None,
+            open: None,
+        }
+    }
 }
 
 /// One frame of the exporter. Does nothing until a press has asked AND the game can be read.
@@ -271,7 +290,9 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
     };
     crate::log_line(&format!(
         "[build-export] read character={:?} class={:?} armaments={} armour={} talismans={} \
-         spells={} tears={} rune={:?} 2h={} flasks={}+{} upgrade={:?} unnamed={}",
+         spells={} tears={} rune={:?} 2h={} flasks={}+{} upgrade={:?} unnamed={} \
+         whole_inventory={} ammunition_skipped={} \
+         goods_carried_not_exported={}",
         read.name,
         read.character_class,
         read.armaments.len(),
@@ -285,6 +306,33 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
         read.flask_cerulean,
         read.weapon_upgrade,
         read.unnamed_slots,
+        read.read_whole_inventory,
+        read.carried_ammunition,
+        read.carried_goods,
+    ));
+    // The per-armament levels and the appearance, both of which used to be absent from the link
+    // entirely. Logged as their own line because they are the two things a reader of the last
+    // export's evidence most needs to check.
+    crate::log_line(&format!(
+        "[build-export] worn or ash-carrying armaments (name, +level, equip slot, ash, gaitem \
+         handle) {:?}; face data {}",
+        read.armaments
+            .iter()
+            .filter(|item| item.weapon_art.is_some() || item.equip_index.is_some())
+            .map(|item| {
+                (
+                    item.name.as_str(),
+                    item.upgrade,
+                    item.equip_index,
+                    item.weapon_art.as_deref(),
+                    item.gaitem_handle.map(|handle| format!("{handle:#010x}")),
+                )
+            })
+            .collect::<Vec<_>>(),
+        match read.face_data.as_deref() {
+            Some(bytes) => format!("{} bytes", bytes.len()),
+            None => "NOT READ".to_owned(),
+        }
     ));
 
     PHASE.store(Phase::Opening as usize, Ordering::SeqCst);
@@ -318,7 +366,7 @@ fn spawn_worker(read: CharacterRead, sinks: Sinks) {
 /// The encode, the clipboard and the browser. Runs on the worker; touches no game state.
 fn export_inner(read: CharacterRead, sinks: Sinks) {
     let doc = crate::export_doc::document_from(&read);
-    let url = er_build_export::share_url(&doc);
+    let (url, stored) = share_link(&doc);
     let mut report = ExportReport {
         character: read.name.clone(),
         armaments: read.armaments.len(),
@@ -326,28 +374,44 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
         talismans: read.talismans.len(),
         spells: read.spells.len(),
         unnamed: read.unnamed_slots,
+        face_data: read.face_data.is_some(),
         url_len: url.chars().count(),
         ..ExportReport::default()
     };
     crate::log_line(&format!(
-        "[build-export] encoded {} characters for {:?}",
-        report.url_len, report.character
+        "[build-export] {} link, {} characters, for {:?}",
+        if stored {
+            "STORED ?b="
+        } else {
+            "self-contained ?i="
+        },
+        report.url_len,
+        report.character
     ));
     // The whole URL, on its own line, so the offline oracle can decode exactly what the game
     // produced instead of a description of it.
     crate::log_line(&format!("[build-export] URL {url}"));
 
-    report.clipboard = (sinks.clipboard)(&url);
-    report.opened = (sinks.open)(&url);
+    report.clipboard = sinks.clipboard.is_some_and(|copy| copy(&url));
+    report.opened = sinks.open.is_some_and(|open| open(&url));
     crate::log_line(&format!(
         "[build-export] clipboard={} browser={}",
-        report.clipboard, report.opened
+        match sinks.clipboard {
+            Some(_) => report.clipboard.to_string(),
+            None => "n/a".to_owned(),
+        },
+        match sinks.open {
+            Some(_) => report.opened.to_string(),
+            None => "n/a".to_owned(),
+        }
     ));
 
     if let Ok(mut slot) = LAST_URL.lock() {
         *slot = Some(url);
     }
-    if !report.opened {
+    // A browser that REFUSED is a failure the player has to be told about. A caller with no
+    // browser at all is not: the harness's link went to the log, which is where it was asked to go.
+    if sinks.open.is_some() && !report.opened {
         // A link that was built but never reached a browser is a FAILURE the player must be told
         // about -- silently succeeding here is how "I pressed it and nothing happened" happens.
         set_error(format!(
@@ -364,6 +428,44 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
     }
     if let Ok(mut slot) = LAST_REPORT.lock() {
         *slot = Some(report);
+    }
+}
+
+/// The link to hand the player: the self-contained one when it fits, a stored one when it does not.
+///
+/// # A real inventory does not fit in a URL
+///
+/// The `?i=` form carries the whole document, and the whole document is what the player asked for
+/// -- every copy of every armament. One live character came to 87 KB of JSON and a
+/// 22,663-character link, which no browser sends and the planner never sees. So past
+/// [`crate::upload::MAX_SELF_CONTAINED_URL_CHARS`] the build is STORED on the planner instead and
+/// the link becomes a short `?b=<id>`.
+///
+/// A store that fails falls back to the long link rather than to nothing: it may be too long for
+/// this player's browser, but it is still the build, and it is still on their clipboard.
+fn share_link(doc: &er_build_export::BuildExportDoc) -> (String, bool) {
+    let self_contained = er_build_export::share_url(doc);
+    if self_contained.chars().count() <= crate::upload::MAX_SELF_CONTAINED_URL_CHARS {
+        return (self_contained, false);
+    }
+    crate::log_line(&format!(
+        "[build-export] the self-contained link is {} characters, past the {} a browser will \
+         carry -- storing the build on the planner instead",
+        self_contained.chars().count(),
+        crate::upload::MAX_SELF_CONTAINED_URL_CHARS,
+    ));
+    match crate::upload::store(doc) {
+        Ok(id) => (
+            format!("{}{id}", er_build_import_core::BUILD_URL_PREFIX),
+            true,
+        ),
+        Err(err) => {
+            crate::log_line(&format!(
+                "[build-export] the upload FAILED ({err}); falling back to the long \
+                 self-contained link, which this browser may refuse"
+            ));
+            (self_contained, false)
+        }
     }
 }
 

@@ -2774,6 +2774,7 @@ name = "er-build-import"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-build-import-core",
  "er-build-import-runtime",
  "fromsoftware-shared",
  "windows 0.62.2",
@@ -2796,6 +2797,7 @@ dependencies = [
  "er-build-import-core",
  "er-game-base",
  "fromsoftware-shared",
+ "serde_json",
  "windows 0.62.2",
 ]
 

@@ -140,6 +140,44 @@ impl GaitemLookupResult {
     }
 }
 
+/// `GaitemLookupResult::GetGemGaitemHandleFromWeapon` -- the handle of the gem MOUNTED on this
+/// armament, or zero when it has none.
+///
+/// Reached through the engine rather than by walking `CSGemSlotTable` here: the function checks
+/// `canGemBeChanged` and the instance pointer first, so an armament that takes no gem answers zero
+/// instead of reading a slot table that is not there.
+const GET_GEM_HANDLE_FROM_WEAPON: usize = 0x673e30;
+
+type GemHandleFromWeaponFn =
+    unsafe extern "system" fn(*mut GaitemLookupResult, *mut u32) -> *mut u32;
+
+impl GaitemLookupResult {
+    /// The `EquipParamGem` row of the gem mounted on this armament, or `None` for none.
+    ///
+    /// The gem's own item id carries the goods-style category nibble, so the row is its low 28
+    /// bits -- the same mask every other id in this crate is read through.
+    ///
+    /// # Safety
+    ///
+    /// Game thread; `module_base` the loaded image base, and `self` a record the engine filled.
+    pub unsafe fn mounted_gem_row(&mut self, module_base: usize) -> Option<u32> {
+        // Safety: verified RVA inside the loaded image.
+        let from_weapon: GemHandleFromWeaponFn =
+            unsafe { core::mem::transmute(module_base + GET_GEM_HANDLE_FROM_WEAPON) };
+        let mut handle = 0u32;
+        // Safety: our own destination; the engine writes one `uint` through it and zeroes it when
+        // the armament carries no gem.
+        unsafe { from_weapon(&raw mut *self, &raw mut handle) };
+        if handle == 0 || handle == u32::MAX {
+            return None;
+        }
+        // Safety: the handle is the engine's own.
+        let gem = unsafe { GaitemLookupResult::from_handle(module_base, handle) }?;
+        let row = gem.item_id & 0x0FFF_FFFF;
+        (row != 0 && row != 0x0FFF_FFFF).then_some(row)
+    }
+}
+
 /// The gaitem handle of the armament worn in `slot`, or `None` when the slot is empty.
 ///
 /// `slot` is a `ChrAsmSlot` and the engine validates it as `(uint)(slot + 6) < 0x12`, i.e. the

@@ -276,6 +276,16 @@ stay on its own MinHook instance. The ONE prologue it shares -- the Scaleform fi
 is registered through `er_hook::register_shared_hook`, which chains it into the product's single \
 union rather than installing a second instance; see the [[shared]] entry above for the measurement \
 that forced this."""
+"er-refill-all" = """Co-loadable with the product and with every other shell here. The two \
+prologues it detours are `CS::DepositoryDialog`'s own constructor and destructor -- it brackets that \
+one dialog's lifetime and acts only while the latch is open -- and no other shell in this table \
+claims either. Its own module header records WHY those two and not the obvious one: the first \
+version hooked `MenuWindow::Update`, the prologue every dialog in the game inherits, which MinHook \
+binds one detour to and which the product and `er-armament-icons` already proved is the exact way \
+to end up `installed = true, hits = 0`. It reads a pad/keyboard combination of its own, writes only \
+the storage box's refill-state vector through the game's own native, and hooks nothing on the \
+render or Scaleform paths."""
+
 "er-build-watermark" = """Co-loadable with everything, because it detours nothing at all. It \
 installs one hudhook/imgui DX12 overlay, reads the loaded-module list through GetProcAddress, and \
 draws text; it writes no game memory, claims no prologue and takes no input. The one thing that \

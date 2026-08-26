@@ -62,15 +62,6 @@ const INFUSIONS: &[(&str, u32)] = &[
     ("Occult", 1200),
 ];
 
-/// Somber-armament upgrade remap, replicated verbatim from the planner.
-///
-/// Applied only when a slot carries an explicit upgrade *and* the armament takes
-/// Somber Smithing Stones. The planner's intent here is not documented and the
-/// mapping is reproduced rather than reinterpreted; [`somber_remap`] returns
-/// `None` past the table's end so an out-of-range level is reported instead of
-/// silently wrapping.
-const SOMBER_REMAP: &[u16] = &[0, 1, 4, 6, 9, 11, 14, 16, 19, 21, 24, 25];
-
 /// Flasks the exporter deliberately never grants -- the character already owns
 /// them and duplicating them corrupts the flask UI.
 const NEVER_GRANT: &[&str] = &["Flask of Crimson Tears", "Flask of Cerulean Tears"];
@@ -90,7 +81,23 @@ pub struct Grant {
     /// How many to give.
     pub quantity: u32,
     /// Upgrade level, as its own field.
+    ///
+    /// Whose number this is matters: see [`Self::upgrade_is_character_default`].
     pub reinforce_lv: u16,
+    /// Whether [`Self::reinforce_lv`] came from the character-wide `weaponUpgrade` rather than
+    /// from this slot's own `upgrade`.
+    ///
+    /// THE TWO ARE ON DIFFERENT SCALES, and only for somber armaments. The planner's
+    /// character-wide number is always regular smithing-stone levels 0..=25 and is mapped down per
+    /// armament when it renders (`U_(weaponUpgrade, weapon)` -> `lr[level]`). A per-slot `upgrade`
+    /// is NOT mapped: the planner's own editor caps that input at the mapped maximum -- 10 for a
+    /// somber armament -- writes the typed number straight into the slot, and adds it straight to
+    /// the item id when it exports. So a somber armament at `weaponUpgrade: 25` means +10, while
+    /// the same armament at `upgrade: 25` would be nonsense the planner cannot produce.
+    ///
+    /// Which mapping to apply is therefore decided HERE, at the source of the number, and applied
+    /// in the runtime, which is the only side that can measure whether an armament is somber.
+    pub upgrade_is_character_default: bool,
     /// Ash of war as a gem item id ([`GEM_ITEM_CATEGORY`] `| EquipParamGem row`), or
     /// [`NO_SKILL`].
     pub weapon_skill: u32,
@@ -151,34 +158,167 @@ pub fn infusion_offset(infusion: Option<&str>) -> Option<u32> {
         .map(|(_, offset)| *offset)
 }
 
-/// Split an armament param id back into its base row and affinity name -- the inverse of
-/// [`infusion_offset`], and the arithmetic the EXPORTER runs on every equipped weapon.
+/// Split an armament param id back into its base row, affinity name and upgrade level -- the
+/// inverse of [`infusion_offset`] plus [`armament_item_id`], and the arithmetic the EXPORTER runs
+/// on every equipped weapon.
 ///
-/// The affinity is an offset folded INTO the id (`Occult = +1200`), and the base is always a
-/// multiple of [`ARMAMENT_ID_BLOCK`], which is what makes the split unambiguous. The reinforce
-/// level is deliberately absent from both directions: it is a separate field, never part of the id.
+/// An armament id carries three things at once, and the exporter needs all three separated:
+/// `base + affinity_offset + level`, where the affinity is a multiple of [`INFUSION_STEP`] inside
+/// a [`ARMAMENT_ID_BLOCK`] block and the LEVEL is the last two digits.
+///
+/// **The level MUST come off before the row is named.** `EquipParamWeapon` has no row for a
+/// levelled id -- 16110200 (Keen Cross-Naginata) is a row, 16110217 (the same armament at +17) is
+/// not -- and the game's name getter is an exact `MsgRepositoryImp::LookupEntry`, so it answers
+/// null for anything that is not a row. Leaving the level on therefore does not produce a slightly
+/// wrong name; it produces NO name, and the exporter drops the slot. That is what emptied the
+/// inventory of every exported build: a finished character's armaments are all upgraded, so every
+/// one of them looked unnameable. Verified against the installed regulation
+/// (`scripts/regulation-params.py --contains 16110217 EquipParamWeapon` -> ABSENT).
 ///
 /// `Standard` comes back as `None` rather than as the string, because that is how the planner
 /// spells it -- a slot with no `infusion` key. Emitting the word would import identically and diff
 /// against every hand-authored build.
 ///
 /// ```
-/// use er_build_import_core::plan::{infusion_offset, split_armament_id};
+/// use er_build_import_core::plan::{infusion_offset, split_armament_id, ArmamentId};
 /// // Misericorde + Occult, the pair the importer builds as 1_070_000 + 1200.
-/// assert_eq!(split_armament_id(1_071_200), (1_070_000, Some("Occult")));
-/// assert_eq!(split_armament_id(1_070_000), (1_070_000, None));
+/// assert_eq!(
+///     split_armament_id(1_071_200),
+///     ArmamentId {
+///         row: 1_070_000,
+///         row_with_affinity: 1_071_200,
+///         infusion: Some("Occult"),
+///         level: 0,
+///     },
+/// );
+/// // The same armament as the player is actually carrying it: Occult, +9.
+/// assert_eq!(
+///     split_armament_id(1_071_209),
+///     ArmamentId {
+///         row: 1_070_000,
+///         row_with_affinity: 1_071_200,
+///         infusion: Some("Occult"),
+///         level: 9,
+///     },
+/// );
+/// // A somber armament, which has no affinity block at all, at +7.
+/// assert_eq!(
+///     split_armament_id(1_010_007),
+///     ArmamentId {
+///         row: 1_010_000,
+///         row_with_affinity: 1_010_000,
+///         infusion: None,
+///         level: 7,
+///     },
+/// );
 /// assert_eq!(infusion_offset(Some("Occult")), Some(1200));
 /// ```
-pub fn split_armament_id(param_id: u32) -> (u32, Option<&'static str>) {
-    let index = (param_id % ARMAMENT_ID_BLOCK / INFUSION_STEP) as usize;
-    match INFUSIONS.get(index) {
+pub fn split_armament_id(param_id: u32) -> ArmamentId {
+    let level = (param_id % ARMAMENT_LEVEL_STEP) as u16;
+    let row_with_affinity = param_id - u32::from(level);
+    let index = (row_with_affinity % ARMAMENT_ID_BLOCK / INFUSION_STEP) as usize;
+    let (row, infusion) = match INFUSIONS.get(index) {
         // Index 0 IS Standard, which the planner writes as an absent field.
-        Some(_) if index == 0 => (param_id, None),
-        Some((name, offset)) => (param_id - offset, Some(name)),
+        Some(_) if index == 0 => (row_with_affinity, None),
+        Some((name, offset)) => (row_with_affinity - offset, Some(*name)),
         // An offset past the table is not an affinity at all, so the id is taken whole rather than
         // having an invented amount subtracted from it.
-        None => (param_id, None),
+        None => (row_with_affinity, None),
+    };
+    ArmamentId {
+        row,
+        row_with_affinity,
+        infusion,
+        level,
     }
+}
+
+/// What an armament param id is made of, once [`split_armament_id`] has taken it apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArmamentId {
+    /// The `EquipParamWeapon` row for this armament WITHOUT its affinity -- the id the message
+    /// repository names it by.
+    pub row: u32,
+    /// The row the affinity variant occupies, i.e. [`Self::row`] plus the affinity offset and
+    /// without the level. This is the id `ReinforceParamWeapon` questions are asked about, because
+    /// `reinforceTypeId` is a property of the affinity variant rather than of the base armament.
+    pub row_with_affinity: u32,
+    /// Affinity name, or `None` for Standard (and for an armament that takes none).
+    pub infusion: Option<&'static str>,
+    /// Upgrade level as the GAME counts it: 0..=25 for a regular armament, 0..=10 for a somber
+    /// one. That is also the scale the planner's PER-SLOT `upgrade` uses, so it is exported
+    /// verbatim; its character-wide `weaponUpgrade` is the one on the other scale.
+    pub level: u16,
+}
+
+/// The step the upgrade level occupies at the bottom of an armament id.
+pub const ARMAMENT_LEVEL_STEP: u32 = 100;
+
+/// The planner's regular-level -> somber-level table, transcribed from the live bundle (`lr`).
+///
+/// The planner counts EVERY upgrade in regular smithing-stone levels, 0..=25, including for
+/// armaments that take Somber Smithing Stones: its `getWeaponUpgradeLevel` maps the character's
+/// `weaponUpgrade` through this table (`U_(level, weapon)` -> `lr[level]`) whenever the armament's
+/// `upgrade_material` is `Somber Smithing Stone`, and 0 when it is `None`.
+///
+/// It applies to the character-wide number ONLY. A build whose `weaponUpgrade` is 25 puts a somber
+/// armament at the game's +10; the same build's per-slot `upgrade: 10` also means +10, because the
+/// planner's slot editor caps that input at the mapped maximum and stores what was typed. Getting
+/// the two the wrong way round is silent -- both numbers are in range, and the armament simply
+/// comes out at a level nobody asked for.
+const SOMBER_LEVEL_FOR_REGULAR: [u16; 26] = [
+    0, 0, 1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 5, 6, 6, 7, 7, 7, 8, 8, 9, 9, 9, 10,
+];
+
+/// Highest regular level the planner recognises.
+pub const MAX_REGULAR_LEVEL: u16 = 25;
+/// Highest level a somber armament reaches.
+pub const MAX_SOMBER_LEVEL: u16 = 10;
+
+/// The GAME level a somber armament ends up at when a planner build asks for `regular`.
+///
+/// ```
+/// use er_build_import_core::plan::somber_level_for_regular;
+/// assert_eq!(somber_level_for_regular(25), 10);
+/// assert_eq!(somber_level_for_regular(17), 7);
+/// assert_eq!(somber_level_for_regular(0), 0);
+/// // Out of range asks for the most the armament can take rather than nothing.
+/// assert_eq!(somber_level_for_regular(99), 10);
+/// ```
+#[must_use]
+pub fn somber_level_for_regular(regular: u16) -> u16 {
+    SOMBER_LEVEL_FOR_REGULAR
+        .get(usize::from(regular))
+        .copied()
+        .unwrap_or(MAX_SOMBER_LEVEL)
+}
+
+/// The PLANNER level that describes an armament the game holds at somber `level`.
+///
+/// The inverse of [`somber_level_for_regular`], which is one-to-many, so this returns the HIGHEST
+/// regular level that maps back. Used for ONE thing: the document-wide `weaponUpgrade`, which is a
+/// regular-scale number and acts as a CAP on every slot (`min(slot.upgrade, lr[weaponUpgrade])`).
+/// Taking the highest is what keeps a maxed somber armament from being capped below its own level.
+///
+/// ```
+/// use er_build_import_core::plan::{regular_level_for_somber, somber_level_for_regular};
+/// assert_eq!(regular_level_for_somber(10), 25);
+/// assert_eq!(regular_level_for_somber(7), 19);
+/// for somber in 0..=10 {
+///     assert_eq!(somber_level_for_regular(regular_level_for_somber(somber)), somber);
+/// }
+/// ```
+#[must_use]
+pub fn regular_level_for_somber(somber: u16) -> u16 {
+    let mut found = 0;
+    let mut regular = 0;
+    while regular < SOMBER_LEVEL_FOR_REGULAR.len() {
+        if SOMBER_LEVEL_FOR_REGULAR[regular] == somber {
+            found = regular as u16;
+        }
+        regular += 1;
+    }
+    found
 }
 
 /// The block an armament id's affinity offset occupies; the base row is always a multiple of it.
@@ -228,11 +368,6 @@ pub fn armament_item_id(base_with_affinity: u32, level: u16) -> u32 {
     base_with_affinity + u32::from(level)
 }
 
-/// Remap a requested upgrade level for a somber armament.
-pub fn somber_remap(level: u16) -> Option<u16> {
-    SOMBER_REMAP.get(usize::from(level)).copied()
-}
-
 impl Entry {
     /// The bare param row id, with the category nibble stripped.
     pub fn param_id(self) -> u32 {
@@ -275,6 +410,7 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
                     also_known_as: catalog.alternates(Kind::Spell, &slot.name),
                     quantity: 1,
                     reinforce_lv: 0,
+                    upgrade_is_character_default: true,
                     weapon_skill: NO_SKILL,
                     label: slot.name.clone(),
                 });
@@ -341,20 +477,12 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         return;
     };
 
-    let requested = slot.upgrade.unwrap_or(doc.weapon_upgrade);
-    let reinforce_lv = if slot.upgrade.is_some() && found.somber {
-        match somber_remap(requested) {
-            Some(mapped) => mapped,
-            None => {
-                out.unresolved.push(Unresolved {
-                    kind: Kind::Weapon,
-                    name: format!("{} (somber upgrade {requested} out of range)", slot.name),
-                });
-                return;
-            }
-        }
-    } else {
-        requested
+    // The number is carried forward WITH its provenance rather than resolved here: whether it
+    // needs the somber mapping depends on where it came from, and whether the armament is somber
+    // is something only the runtime can measure (see `Grant::upgrade_is_character_default`).
+    let (reinforce_lv, upgrade_is_character_default) = match slot.upgrade {
+        Some(level) => (level, false),
+        None => (doc.weapon_upgrade, true),
     };
 
     let mut weapon_skill = NO_SKILL;
@@ -383,6 +511,7 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
             .collect(),
         quantity: 1,
         reinforce_lv,
+        upgrade_is_character_default,
         weapon_skill,
         label: slot.name.clone(),
     });
@@ -396,6 +525,7 @@ fn push_simple(catalog: &dyn Catalog, kind: Kind, slot: &Slot, quantity: u32, ou
             also_known_as: catalog.alternates(kind, &slot.name),
             quantity,
             reinforce_lv: 0,
+            upgrade_is_character_default: true,
             weapon_skill: NO_SKILL,
             label: slot.name.clone(),
         }),

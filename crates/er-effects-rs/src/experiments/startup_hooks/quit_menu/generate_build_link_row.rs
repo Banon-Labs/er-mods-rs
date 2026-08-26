@@ -112,8 +112,8 @@ fn open_sink(url: &str) -> bool {
 
 fn sinks() -> Sinks {
     Sinks {
-        clipboard: clipboard_sink,
-        open: open_sink,
+        clipboard: Some(clipboard_sink),
+        open: Some(open_sink),
     }
 }
 

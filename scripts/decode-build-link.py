@@ -186,6 +186,8 @@ def summarise(doc: dict) -> str:
                 extra.append(entry["infusion"])
             if entry.get("weaponArt"):
                 extra.append(f"art={entry['weaponArt']}")
+            if entry.get("upgrade") is not None:
+                extra.append(f"+{entry['upgrade']}")
             if entry.get("equipIndex") is not None:
                 extra.append(f"slot={entry['equipIndex']}")
             suffix = f"  [{', '.join(extra)}]" if extra else ""
@@ -200,6 +202,17 @@ def summarise(doc: dict) -> str:
     tears = [t for t in (doc.get("items", {}).get("crystalTears") or []) if t]
     lines.append(f"physick       {', '.join(tears) if tears else '(empty)'}")
     lines.append(f"great rune    {doc.get('greatRune') or '(none)'}")
+    # The appearance, which is OURS and not the planner's: the site has no such key, so a link that
+    # carries one was written by this repository's exporter. Printed as a length plus the magic
+    # rather than 576 characters of hex, with the whole AOB one line further down so it can still
+    # be copied into a save editor.
+    face = doc.get("faceData")
+    if face:
+        magic = bytes.fromhex(face[:8]).decode("ascii", "replace") if len(face) >= 8 else "?"
+        lines.append(f"face data     {len(face) // 2} bytes, magic {magic!r}")
+        lines.append(f"    {face}")
+    else:
+        lines.append("face data     (none)")
     return "\n".join(lines)
 
 

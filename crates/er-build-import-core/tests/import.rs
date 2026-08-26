@@ -479,12 +479,100 @@ fn every_affinity_the_importer_adds_the_exporter_can_subtract() {
             .unwrap_or_else(|| panic!("the importer must know the affinity {name:?}"));
         assert_eq!(offset, index as u32 * INFUSION_STEP, "{name} offset");
 
-        let (base, read_back) = split_armament_id(BASE + offset);
-        assert_eq!(base, BASE, "{name} base row");
+        let split = split_armament_id(BASE + offset);
+        assert_eq!(split.row, BASE, "{name} base row");
+        assert_eq!(
+            split.row_with_affinity,
+            BASE + offset,
+            "{name} affinity row"
+        );
+        assert_eq!(split.level, 0, "{name} level");
         // Standard is index 0 and is spelled as an ABSENT field, never as the word.
         let expected = (index != 0).then_some(name);
-        assert_eq!(read_back, expected, "{name} round trip");
+        assert_eq!(split.infusion, expected, "{name} round trip");
+
+        // AND THE SAME ID AT EVERY UPGRADE LEVEL. The level lives in the id's last two digits, so
+        // an exporter that does not take it off asks the message repository about a row that does
+        // not exist -- which answers nothing, drops the slot, and empties the build.
+        for level in 0..=25u16 {
+            let split = split_armament_id(BASE + offset + u32::from(level));
+            assert_eq!(split.row, BASE, "{name} +{level} base row");
+            assert_eq!(split.infusion, expected, "{name} +{level} affinity");
+            assert_eq!(split.level, level, "{name} +{level} level");
+        }
     }
+}
+
+#[test]
+fn a_levelled_armament_id_names_the_row_the_game_actually_has() {
+    use er_build_import_core::plan::{armament_item_id, split_armament_id};
+
+    // The exact pair from a live import log: the plan placed Keen Cross-Naginata (16110200) and
+    // the slot came back holding 16110217, the same armament at +17. `EquipParamWeapon` has a row
+    // for the first and none for the second (verified offline against the installed regulation),
+    // so the split has to hand back the first.
+    let split = split_armament_id(16_110_217);
+    assert_eq!(split.row, 16_110_000);
+    assert_eq!(split.row_with_affinity, 16_110_200);
+    assert_eq!(split.infusion, Some("Keen"));
+    assert_eq!(split.level, 17);
+
+    // ...and the importer's own id builder is its exact inverse.
+    assert_eq!(
+        armament_item_id(split.row_with_affinity, split.level),
+        16_110_217,
+    );
+}
+
+#[test]
+fn the_somber_scale_matches_the_planners_own_table() {
+    use er_build_import_core::plan::somber_level_for_regular;
+
+    // Transcribed from the live bundle's `lr`, which is what `getWeaponUpgradeLevel` maps a
+    // character's `weaponUpgrade` through for any armament taking Somber Smithing Stones. It maps
+    // the CHARACTER-WIDE number only: a per-slot `upgrade` is already on the game's scale, because
+    // the planner's slot editor caps that input at `getWeaponUpgradeLevel(weapon)` -- 10 for a
+    // somber armament -- and stores the typed number unchanged.
+    const PLANNER_TABLE: [u16; 26] = [
+        0, 0, 1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 5, 6, 6, 7, 7, 7, 8, 8, 9, 9, 9, 10,
+    ];
+    for (regular, somber) in PLANNER_TABLE.into_iter().enumerate() {
+        assert_eq!(
+            somber_level_for_regular(regular as u16),
+            somber,
+            "+{regular}"
+        );
+    }
+    // A maxed character puts a somber armament at its own maximum, not at 25.
+    assert_eq!(somber_level_for_regular(25), 10);
+    // Out of range asks for the most the armament can take rather than for nothing.
+    assert_eq!(somber_level_for_regular(99), 10);
+}
+
+#[test]
+fn a_per_slot_upgrade_and_the_character_default_are_told_apart() {
+    use er_build_import_core::plan::plan;
+    use er_build_import_core::{
+        catalog::{Kind, MapCatalog, entry},
+        model,
+    };
+
+    let catalog = MapCatalog::new().with(Kind::Weapon, "Nagakiba", entry(1_070_000));
+    let doc = model::parse(
+        r#"{"weaponUpgrade": 17, "inventory": {"slots": [
+            {"name": "Nagakiba"},
+            {"name": "Nagakiba", "upgrade": 8}
+        ]}}"#,
+    )
+    .expect("valid build document");
+    let result = plan(&doc, &catalog);
+
+    // The slot with no `upgrade` carries the character's number AND says so, because that one has
+    // to be mapped down for a somber armament and the other one must not be.
+    assert_eq!(result.grants[0].reinforce_lv, 17);
+    assert!(result.grants[0].upgrade_is_character_default);
+    assert_eq!(result.grants[1].reinforce_lv, 8);
+    assert!(!result.grants[1].upgrade_is_character_default);
 }
 
 #[test]
@@ -493,7 +581,10 @@ fn an_id_carrying_no_recognisable_affinity_is_taken_whole() {
 
     // Offset 1300 is past the last affinity (Occult, 1200). Subtracting an invented amount would
     // silently rename the weapon, so the id is left alone and reported as having no affinity.
-    assert_eq!(split_armament_id(1_071_300), (1_071_300, None));
+    let split = split_armament_id(1_071_300);
+    assert_eq!(split.row, 1_071_300);
+    assert_eq!(split.infusion, None);
+    assert_eq!(split.level, 0);
 }
 
 #[test]

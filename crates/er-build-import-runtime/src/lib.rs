@@ -39,8 +39,10 @@ pub mod equip_native;
 pub mod export;
 pub mod export_doc;
 pub mod gaitem;
+pub mod gem_mount;
 pub mod grant;
 pub mod read_character;
+pub mod upload;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -61,7 +63,7 @@ pub use er_build_import_core::BUILD_URL_KEY;
 pub const CONFIG_FILE_NAME: &str = "er-effects.toml";
 
 /// Identifies this client to the API owner, who runs the service for free.
-const USER_AGENT: &str = "er-effects-rs build-import (+github.com/Banon-Labs)";
+pub(crate) const USER_AGENT: &str = "er-effects-rs build-import (+github.com/Banon-Labs)";
 
 /// Log file name, written next to the game executable.
 const LOG_NAME: &str = "er-build-import.log";
@@ -187,6 +189,19 @@ pub fn configured_build_url() -> Option<String> {
     let path = er_game_base::log::game_directory_path()?.join(CONFIG_FILE_NAME);
     let contents = std::fs::read_to_string(path).ok()?;
     er_build_import_core::build_url_from_config(&contents).map(str::to_owned)
+}
+
+/// Whether the game-directory `er-effects.toml` asks the STANDALONE shell to export one build link
+/// at character load. Never consulted by the product DLL -- see
+/// [`er_build_import_core::EXPORT_ON_LOAD_KEY`].
+pub fn configured_export_on_load() -> bool {
+    let Some(path) = er_game_base::log::game_directory_path() else {
+        return false;
+    };
+    let Ok(contents) = std::fs::read_to_string(path.join(CONFIG_FILE_NAME)) else {
+        return false;
+    };
+    er_build_import_core::config_flag(&contents, er_build_import_core::EXPORT_ON_LOAD_KEY)
 }
 
 // ------------------------------------------------------------------ request

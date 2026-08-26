@@ -198,6 +198,62 @@ detail lands in `er-build-import-core.log` beside the game executable; the row's
 outcome, including a fetch that failed after the press, lands in
 `er-effects-autoload-debug.log`.
 
+## Generating a link from the character you are playing
+
+The **Generate Build Link** row on the same tab is the inverse: it reads the live
+character -- the whole inventory of armaments with their affinities, ashes of war and
+upgrade levels, all the armour and talismans being carried, memorised spells, flask
+allocation, physick, great rune, class and attributes -- encodes all of it into a
+self-contained `?i=` planner link, copies that link to the clipboard and opens it in a
+browser. Nothing is uploaded and no account is created: the `?i=` form carries the whole
+build in the URL itself.
+
+**A build too big for a URL is stored instead of truncated.** The self-contained `?i=` form
+carries the whole document in the link, and a real inventory does not fit: one live
+character came to 87 KB of JSON and a 22,663-character link, which no browser sends.
+Past 4,000 characters the build is uploaded to the planner (`POST /inventories`) and the
+row hands you a short `?b=<id>` link instead. That upload makes ONE anonymous planner
+account for this installation, kept in `er-build-planner-session.json` beside the game so
+every later link reuses it, and a build small enough for `?i=` never touches the network
+at all.
+
+What the link leaves out, it leaves out for a reason: **ammunition** (arrows and bolts
+are `EquipParamWeapon` rows, so they arrive with the armaments, but the planner keeps
+ammo in its own list and a full quiver is most of an inventory), **consumables and
+crafting materials**, and **duplicate copies** of an item the character holds more than
+once. All three are counted in `er-build-import.log`, so nothing is dropped silently.
+The reason is length: the link has to fit in a URL, and an inventory that has been
+imported into a few times reached 978 armaments and a 24,000-character link that no
+browser would open.
+
+Three things about what the link carries are worth knowing.
+
+**Every armament states its own upgrade level.** The level is read off the id of the
+weapon actually in the slot, so a `+8` backup and a `+25` main hand export as `+8` and
+`+25` rather than both taking the character's highest level.
+
+**The build's overall `weaponUpgrade` is measured from those armaments**, not taken from
+the game's `matching_weapon_level` field -- which reads 25 on characters whose every
+weapon is `+17`, and put a `+25` on the shared page that described nothing the character
+owned.
+
+**The link also carries your character's appearance**, as a `faceData` key holding the
+game's own `FaceDataBuffer` as an uppercase hex AOB. That key is ours, not the
+planner's -- the site has no appearance concept, ignores it, and shows the build it
+always showed. It rides along so a shared build can carry the face with it; today it is
+read back by `scripts/decode-build-link.py --summary`, which prints the AOB for pasting
+into a save/appearance editor.
+
+The row reports on itself in its own help line (how long the link is, whether it was
+copied, whether a browser took it), and the full URL is written to
+`er-build-import.log` beside the game executable, so a link can be recovered without
+the clipboard:
+
+<!-- md-test: bash-n -->
+```bash
+python3 scripts/decode-build-link.py --log ~/.local/share/Steam/steamapps/common/'ELDEN RING'/Game/er-build-import.log --summary
+```
+
 ## Save-source behavior
 
 The DLL resolves its autoload source once, at attach, in this order:
