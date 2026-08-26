@@ -17,9 +17,12 @@ lines already landed in extracted crates with no enforcement at all, because the
 pattern pulls them there. The leak that pattern does NOT catch is a NEW MODULE born inside
 the shim -- `experiments/continue_load/picked_summary_refresh.rs` arrived as 187 fresh lines
 with no reason to start there, while a same-sized chunk of the same PR correctly landed in
-`er-save-redirect`. Most of the remaining 595 shim lines were genuinely mandatory (telemetry
-emission, `product_continue` spine wiring, `path_hooks` seams), so a blanket freeze would
-have blocked real work for no gain.
+`er-save-redirect`. (That file is gone: this gate named it, and it was extracted into
+`crates/er-profile-summary-core` with the rest of the ProfileSummary concept. It stays quoted
+here because it is the shape of leak the ratchet exists for, not because it still exists.)
+Most of the remaining 595 shim lines were genuinely mandatory (telemetry emission,
+`product_continue` spine wiring, `path_hooks` seams), so a blanket freeze would have blocked
+real work for no gain.
 """
 
 from __future__ import annotations

@@ -56,6 +56,10 @@ members = [
   "crates/er-save-picker",
   "crates/er-save-redirect",
   "crates/er-quit-menu-core",
+  # `CS::ProfileSummary` -- the ten in-memory character records every character-identity
+  # surface reads (the title Continue row, the System>Quit load rows, the ProfileSelect list,
+  # the loading-screen portrait). Was four files of the er-effects-rs shim, one verb each.
+  "crates/er-profile-summary-core",
   "crates/er-quit-menu",
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
   # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same

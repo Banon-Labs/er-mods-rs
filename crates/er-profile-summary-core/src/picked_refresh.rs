@@ -32,30 +32,31 @@
 //! It deliberately does NOT call the profile-renderer refresh: that AVs when the renderer table has
 //! not been built yet (`0x9aa6d4`, observed), and at the boot title it has not.
 
-use super::*;
+use core::sync::atomic::Ordering;
 
-/// Autoload ticks between re-read attempts.
-///
-/// The work is a ~26 MB file read plus ten record rewrites, so it must not run per frame; and there
-/// is nothing to gain from trying faster, because what it is waiting for (`GameDataMan` ->
-/// `ProfileSummary` coming up) is a boot milestone, not a race.
-const REFRESH_ATTEMPT_INTERVAL_TICKS: usize = 30;
+use er_game_base::mem::game_module_base;
+use er_game_base::profile_summary::PROFILE_SUMMARY_TOTAL_BYTES;
 
-/// Hard cap on real attempts. Every failure here is structural -- no summary pointer yet, no
-/// resolvable staged path, an unreadable file, a container with no active slots -- so retrying
-/// forever would only churn a 26 MB read behind a boot that is never going to succeed. The cap is
-/// generous enough (40 x 30 ticks = 1200 ticks, ~20 s at 60 fps) to outlast the summary allocation.
-const REFRESH_MAX_ATTEMPTS: usize = 40;
+use crate::host::{
+    active_save_file_for_system_quit, append_autoload_debug, direct_save_file_source_active,
+    load_profile_slot_caches_from_bytes, native_fullread_slot,
+};
+use crate::live_records::{profile_slot_fingerprint, system_quit_profile_summary_ptr};
+use crate::refresh_policy::{RefreshStep, refresh_step};
+use crate::save_bytes_records::write_profile_summary_records_from_save_bytes;
+
+/// A null game pointer -- the product's `TITLE_OWNER_SCAN_START_ADDRESS`, which is `usize::MIN`.
+const NULL_SUMMARY: usize = usize::MIN;
 
 /// [`PICKED_SUMMARY_REFRESH_STATE`]: the game's own boot save-data read already populated it.
-pub(crate) const PICKED_SUMMARY_STATE_NATIVE_READ: usize = 1;
+pub const PICKED_SUMMARY_STATE_NATIVE_READ: usize = 1;
 /// [`PICKED_SUMMARY_REFRESH_STATE`]: this DLL re-read the staged container at the title.
-pub(crate) const PICKED_SUMMARY_STATE_REREAD: usize = 2;
+pub const PICKED_SUMMARY_STATE_REREAD: usize = 2;
 
-pub(crate) use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_ATTEMPTS;
-pub(crate) use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_SLOT_MASK;
-pub(crate) use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_STATE;
-pub(crate) use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_TICKS;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_ATTEMPTS;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_SLOT_MASK;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_STATE;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_TICKS;
 
 /// Does the slot a direct-file (picked / loose `save_file`) source will load hold a REAL character
 /// in the live `CS::ProfileSummary`?
@@ -64,7 +65,7 @@ pub(crate) use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_TICKS;
 /// deliberately not `saveSlotsStates[slot]`, which says only that something once marked the slot.
 /// The slot is resolved with [`native_fullread_slot`] so the predicate and the full-read fallback
 /// can never disagree about which slot is being talked about.
-pub(crate) fn direct_source_slot_summary_real() -> bool {
+pub fn direct_source_slot_summary_real() -> bool {
     if !direct_save_file_source_active() {
         return false;
     }
@@ -76,7 +77,7 @@ pub(crate) fn direct_source_slot_summary_real() -> bool {
 ///
 /// Returns true once the summary describes the picked container -- whether the game's own boot read
 /// did it or this did.
-pub(crate) fn refresh_direct_source_profile_summary() -> bool {
+pub fn refresh_direct_source_profile_summary() -> bool {
     if !direct_save_file_source_active() {
         return false;
     }
@@ -95,21 +96,18 @@ pub(crate) fn refresh_direct_source_profile_summary() -> bool {
         return true;
     }
     let tick = PICKED_SUMMARY_REFRESH_TICKS.fetch_add(1, Ordering::SeqCst);
-    if !tick.is_multiple_of(REFRESH_ATTEMPT_INTERVAL_TICKS) {
-        return false;
-    }
     let attempts = PICKED_SUMMARY_REFRESH_ATTEMPTS.load(Ordering::SeqCst);
-    if attempts >= REFRESH_MAX_ATTEMPTS {
+    let RefreshStep::Attempt(attempt) = refresh_step(tick, attempts) else {
         return false;
-    }
-    PICKED_SUMMARY_REFRESH_ATTEMPTS.store(attempts + 1, Ordering::SeqCst);
-    unsafe { attempt_profile_summary_reread(attempts + 1) }
+    };
+    PICKED_SUMMARY_REFRESH_ATTEMPTS.store(attempt, Ordering::SeqCst);
+    unsafe { attempt_profile_summary_reread(attempt) }
 }
 
 /// One re-read attempt. Every early return logs why, because a silent failure here is what puts the
 /// deserialize back at the title.
 unsafe fn attempt_profile_summary_reread(attempt: usize) -> bool {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const NULL: usize = NULL_SUMMARY;
     let Ok(base) = game_module_base() else {
         append_autoload_debug(format_args!(
             "picked-summary: attempt {attempt} deferred -- game module base unresolved"

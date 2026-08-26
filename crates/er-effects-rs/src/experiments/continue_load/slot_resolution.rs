@@ -441,40 +441,6 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
     }
 }
-pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const BAD_I32: i32 = -1;
-    const ZERO_U32: u32 = 0;
-    const NAME_LEN_NONE: usize = 0;
-    const MIN_REAL_LEVEL: u32 = 1;
-    if slot < OWN_STEPPER_SLOT_ZERO {
-        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
-    }
-    let gdm = game_data_man_ptr_or_null();
-    if gdm == NULL {
-        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
-    }
-    let profile_summary =
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
-    if profile_summary == NULL {
-        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
-    }
-    let rec = profile_summary_record_address(profile_summary, slot as usize);
-    let profile_map = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_MAP_OFFSET) }
-        .map(|value| value as u32 as i32)
-        .unwrap_or(BAD_I32);
-    let profile_level = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }
-        .map(|value| value as u32)
-        .unwrap_or(ZERO_U32);
-    let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
-    let profile_name_empty = utf16_name_empty_like(&profile_name, profile_name_len);
-    (
-        profile_level >= MIN_REAL_LEVEL && !profile_name_empty,
-        profile_map,
-        profile_level,
-        profile_name_len,
-    )
-}
 /// The save slot to auto-load: the ACTIVE slot holding the most-progressed real character (highest level;
 /// lowest index on a tie). "Active/real" is judged by the RECORD-based `profile_slot_fingerprint`
 /// (level>=1 && non-empty name) -- NOT the `profile_summary+0x8` active byte, which the DLL writes itself

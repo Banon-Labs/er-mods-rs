@@ -254,6 +254,13 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait-core
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu
 
+# The ProfileSummary crate split. Its two host-portable decisions are the ones that were
+# untestable while they lived in the shim: whether a record describes a real character (the
+# predicate the whole autoload chain turns on) and the throttle standing between a ~26 MB file
+# read and a per-frame ~26 MB file read. `check-rust-build.sh` keeps the windows-only half --
+# the serialized-save reader and the record writer -- building and RUNNING on the shipping target.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-profile-summary-core
+
 # The world-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). The
 # catalog, the block grouping, the BlockId disk/memory byte-order conversion and the on-disk
 # `.aip` decoder are all pure logic, so the HOST run is their real coverage -- that

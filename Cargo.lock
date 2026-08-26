@@ -2894,6 +2894,7 @@ dependencies = [
  "er-hook",
  "er-loading-bar-core",
  "er-loading-portrait-core",
+ "er-profile-summary-core",
  "er-quit-menu-core",
  "er-save-loader",
  "er-save-picker-core",
@@ -3088,6 +3089,17 @@ dependencies = [
  "er-hook",
  "iced-x86",
  "regex",
+]
+
+[[package]]
+name = "er-profile-summary-core"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-loading-portrait-core",
+ "er-save-loader",
+ "er-telemetry-core",
 ]
 
 [[package]]

@@ -46,40 +46,15 @@ pub(crate) const PGD_MAX_CRIMSON_FLASK_101_OFFSET: usize =
 pub(crate) const PGD_MAX_CERULEAN_FLASK_102_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, max_fp_flask);
 pub(crate) const PGD_FACE_DATA_OFFSET: usize = core::mem::offset_of!(PlayerGameData, face_data);
-pub(crate) const FACE_DATA_BUFFER_OFFSET: usize = core::mem::offset_of!(FaceData, face_data_buffer);
-#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
-pub(crate) const FACE_DATA_BUFFER_MAGIC_OFFSET: usize =
-    core::mem::offset_of!(FaceDataBuffer, magic);
-pub(crate) const FACE_DATA_BUFFER_VERSION_OFFSET: usize =
-    core::mem::offset_of!(FaceDataBuffer, version);
-pub(crate) const FACE_DATA_BUFFER_SIZE_OFFSET: usize =
-    core::mem::offset_of!(FaceDataBuffer, buffer_size);
-pub(crate) const FACE_DATA_BUFFER_PAYLOAD_OFFSET: usize =
-    core::mem::offset_of!(FaceDataBuffer, buffer);
-pub(crate) const FACE_DATA_BUFFER_PAYLOAD_SIZE: usize =
-    core::mem::size_of::<FaceDataBuffer>() - FACE_DATA_BUFFER_PAYLOAD_OFFSET;
-pub(crate) const FACE_DATA_BUFFER_TOTAL_SIZE: usize =
-    FACE_DATA_BUFFER_PAYLOAD_OFFSET + FACE_DATA_BUFFER_PAYLOAD_SIZE;
-/// Native `FaceData::CopyFromBuffer` (mirrored from the native row builder `FUN_14025f9b0`): copies an
-/// inner `FaceDataBuffer` (`FACE` magic) into a live `FaceData` wrapper (e.g. a ProfileSummary record's
-/// +0x38 block). The SAVED wrapper header does NOT match the live one (2026-06-27 native row dumps), so
-/// records must be filled through this helper, never by memcpy'ing the saved wrapper.
-pub(crate) const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
-/// Native `ChrAsm` copy the row builder uses for a ProfileSummary record's equipment block (+0x1a8) --
-/// the source the profile renderer reads to dress the portrait model.
-///
-/// NOT A MEMCPY (byte-verified 2026-07-31 at deobf 0x140245c00, 1.16.2 zero shift): it runs
-/// `GaitemHandle::copy` (0x140682580) 22 times over `+0x24`, i.e. a REFCOUNTING assign that
-/// increments the incoming handle and releases the previous occupant, and only then does a plain
-/// 22-entry u32 copy of `equipment_param_ids` at `+0x7c`. Feeding it a FOREIGN save's handles
-/// therefore touches live refcount state on a `gaitemInsTable` this process owns -- which is why
-/// `SerializedSaveSlot::runtime_chr_asm_image` zeroes the handle array instead of copying it.
-///
-/// It also copies `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) VERBATIM (`field0_0x0 =
-/// *param_2; field5_0xd4 = param_2[0x35]; field6_0xd8 = param_2[0x36]`), and the profile pipeline
-/// runs it twice more (record +0x1a8 -> renderer +0x548 -> +0x33c -> +0x130). A wrong value in those
-/// three therefore reaches the model build unaltered -- see `CHR_ASM_OVERRIDE_ABSENT`.
-pub(crate) const CHR_ASM_COPY_RVA: usize = 0x00245c00;
+// `FACE_DATA_BUFFER_OFFSET`, `FACE_DATA_BUFFER_MAGIC_OFFSET`, `FACE_DATA_BUFFER_VERSION_OFFSET`,
+// `FACE_DATA_BUFFER_SIZE_OFFSET`, `FACE_DATA_BUFFER_PAYLOAD_OFFSET`,
+// `FACE_DATA_BUFFER_PAYLOAD_SIZE`, `FACE_DATA_BUFFER_TOTAL_SIZE`,
+// `FACE_DATA_COPY_FROM_BUFFER_RVA` and `CHR_ASM_COPY_RVA` moved to
+// `er_profile_summary_core::face_data` with the ProfileSummary crate extraction (same values, same
+// doc comments): a record's `face_data` (+0x38) and `chr_asm` (+0x1a8) blocks are ProfileSummary
+// fields, written by that crate's serialized-slot reader and read by nothing else. The
+// `constants.rs` glob re-exports them into this flat namespace, exactly as the `CHR_ASM_*` move
+// below already does.
 // `CHR_ASM_PROTECTOR_HEAD_INDEX`, `CHR_ASM_PROTECTOR_SLOT_COUNT`, `CHR_ASM_EQUIPMENT_ENTRY_COUNT`,
 // `CHR_ASM_UNK0_OFFSET`, `CHR_ASM_UNKD4_OFFSET`, `CHR_ASM_UNKD8_OFFSET` and
 // `CHR_ASM_OVERRIDE_ABSENT` moved to `er_loading_portrait_core::chr_asm_layout` with the
