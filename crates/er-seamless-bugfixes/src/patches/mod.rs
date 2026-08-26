@@ -127,6 +127,99 @@ mod tests {
         }
     }
 
+    /// The address actually written is derived, not stored, so the derivation is what a wrong
+    /// patch would get wrong. A base of zero would make this pass on the identity, so it uses the
+    /// real preferred image base.
+    #[test]
+    fn target_is_the_window_start_plus_the_offset() {
+        const PREFERRED_IMAGE_BASE: usize = 0x1_4000_0000;
+        for patch in REGISTRY {
+            assert_eq!(
+                patch.target(PREFERRED_IMAGE_BASE),
+                PREFERRED_IMAGE_BASE + patch.rva + patch.offset,
+                "{}: target must name the byte inside the window, not the window",
+                patch.name
+            );
+            assert!(
+                patch.target(PREFERRED_IMAGE_BASE) >= PREFERRED_IMAGE_BASE + patch.rva,
+                "{}: target fell before its own window",
+                patch.name
+            );
+        }
+    }
+
+    /// `apply_patch` refuses a patch whose `replaced()` is `None`, and that refusal is the only
+    /// thing standing between an out-of-range offset and a write past the verified window. The
+    /// registry can never produce one (`every_patch_is_documented_and_pinned` forbids it), so the
+    /// branch is proven on a constructed row instead of left unexercised.
+    #[test]
+    fn an_offset_past_the_window_has_no_byte_to_replace() {
+        static NEVER_APPLIED: AtomicBool = AtomicBool::new(false);
+        let window: &'static [u8] = &[0x90, 0x90];
+        let out_of_range = Patch {
+            name: "test row, never registered",
+            rva: 0x1000,
+            expected_window: window,
+            offset: window.len(),
+            replacement: 0xcc,
+            applied: &NEVER_APPLIED,
+            rationale: "constructed for the refusal path; not a real patch",
+        };
+        assert_eq!(
+            out_of_range.replaced(),
+            None,
+            "an offset outside the window must report no byte, so the install path refuses"
+        );
+    }
+
+    /// One byte changes and the rest of the verified window stays exactly as it was. This is rule
+    /// 3 made executable: writing the whole window would rewrite bytes that were already correct,
+    /// widening the race against threads executing this code right now.
+    #[test]
+    fn applying_a_patch_changes_exactly_one_byte_of_the_window() {
+        for patch in REGISTRY {
+            let mut patched = patch.expected_window.to_vec();
+            patched[patch.offset] = patch.replacement;
+            let differing = patch
+                .expected_window
+                .iter()
+                .zip(&patched)
+                .filter(|(before, after)| before != after)
+                .count();
+            assert_eq!(
+                differing, 1,
+                "{}: a patch must move exactly one byte of its window",
+                patch.name
+            );
+            assert_eq!(
+                patched.len(),
+                patch.expected_window.len(),
+                "{}: the window must not change length, or every instruction after the patch                  moves",
+                patch.name
+            );
+        }
+    }
+
+    /// Two patches sharing a window would each verify bytes the other had already rewritten, so
+    /// whichever installed second would disarm on a mismatch it caused itself.
+    #[test]
+    fn no_two_patches_share_a_window() {
+        for (index, patch) in REGISTRY.iter().enumerate() {
+            let end = patch.rva + patch.expected_window.len();
+            for other in &REGISTRY[index + 1..] {
+                let other_end = other.rva + other.expected_window.len();
+                assert!(
+                    end <= other.rva || other_end <= patch.rva,
+                    "patch '{}' [0x{:x}..0x{end:x}) overlaps patch '{}' [0x{:x}..0x{other_end:x})",
+                    patch.name,
+                    patch.rva,
+                    other.name,
+                    other.rva,
+                );
+            }
+        }
+    }
+
     /// A patch inside a guarded function's prologue would fight MinHook's jump for the same bytes.
     #[test]
     fn no_patch_window_overlaps_a_guard_prologue() {
