@@ -178,17 +178,8 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         // present-wait). One-shot, self-gated (Wine + telemetry-measurement only), fail-closed.
         unsafe { try_install_gpu_frame_oracle(base) };
     }
-    // LOADING-COVER EXPERIMENT: clear CSFakeLoadingScreenImp.visible each frame so the world
-    // draws uncovered during map loads. Self-gates (disable_loading_cover_enabled); runs before
-    // the player check so it acts during the loading screen (player absent). catch_unwind so a
-    // torn cover pointer can never fault the game thread.
-    if let Ok(base) = game_module_base() {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            suppress_loading_cover_tick(base)
-        }));
-    }
     // before the player check so it arms at the title (pre-load), independent
-    // of the active observe/own-stepper mode.
+    // of the active own-stepper mode.
     if c30_watch_enabled()
         && let Ok(base) = game_module_base()
     {
@@ -203,14 +194,9 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // task is the ONLY place that keeps logging the world-stream pump THROUGH the loading
     // screen. Runs BEFORE the player check so it ticks while there is no player yet (the
     // loading-screen frames are exactly when player_present is false). Pure reads only.
-    // GOLDEN baseline mode (golden_observe_enabled) ALSO drives the observer even though our
-    // continue never fired, so a NORMAL user-driven vanilla load is captured for diffing
-    // against the menu-free OWN-LOAD stall. The observer self-gates and re-resolves the
-    // owner->InGameStep->MoveMapStep chain live from OWN_LOAD_OWNER_CACHED (filled by
-    // own_stepper_idx10 each title frame in golden mode). OBSERVE-ONLY: no load is fired.
     // OBSERVE-ONLY WorldBlockRes::Update diagnostic detour (worldblockres-phase-machine-
     // drives-loadstate-to-0xa-2026-06-22): installed ONCE (idempotent) whenever a diagnostic
-    // OWN-LOAD / golden-observe context is armed, so normal play is untouched. The detour is a
+    // OWN-LOAD context is armed, so normal play is untouched. The detour is a
     // pure-read pass-through (bumps a call counter + tracks max phase/gate atomics, then calls
     // the original and returns its value), so installing early is harmless and never alters
     // load behavior. It answers: is WorldBlockRes::Update ticked at all on our path, and do
@@ -224,7 +210,6 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         own_load_enabled(),
         own_load_continue_enabled(),
         own_load_pump_enabled(),
-        golden_observe_enabled(),
     );
     install_wbr_update_hook();
     // PHASE-3 teardown oracle (bd PHASE3-render-release-is-CommonFinalize): install the OBSERVE-ONLY
@@ -245,8 +230,8 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // or normal map transitions; when armed it holds movability/loading-close until CSWorldGeomMan geometry
     // streaming settles (bounded fail-soft), removing the movable-while-streaming overlap dip.
     install_worldreswait_gate_hook();
-    if ((own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
-        || golden_observe_enabled())
+    if own_load_enabled()
+        && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst)
         && let Ok(base) = game_module_base()
     {
         let gm = game_man_ptr_or_null();
@@ -283,25 +268,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         let frame_delta = task_data.delta_time.time;
         unsafe { own_load_pump_tick(base, gm, frame_delta) };
     }
-    // DIRECT "Continue pressed" trigger: at the settled main menu (post press-any-button,
-    // GameMan set up), write the exact bit the native selector consumes
-    // (*(TitleFlowContext+0x14c)=1), invoke the selector to BUILD the LoadGame job, and
-    // PushBackJob it to the dialog queue. Self-gates + fires once; no input. Then DRAIN the
-    // queue each frame (FUN_1407a90f0) so the posted job runs to completion (deser+world).
-    if fire_tfc_continue_enabled()
-        && let Ok(base) = game_module_base()
-    {
-        // Autonomous press-any-button: self-fire the open-menu registrar when the
-        // title settles (zero-input), so no real button press is needed.
-        unsafe { maybe_auto_open_menu(base) };
-        // The Continue BUILD now runs IN-CONTEXT from the hooked TitleTopDialog::update
-        // detour (the pump's live-dialog frame), NOT from this game task -- that timing
-        // was the mis-context cause. Install the hook once; the detour fires the build.
-        unsafe { install_title_update_hook(base) };
-        let frame_delta = task_data.delta_time.time;
-        unsafe { tfc_continue_drain_tick(base, frame_delta) };
-    }
-    // GOLDEN-PATH zero-input boot -> open menu (DECOUPLED from fire_tfc_continue): the
+    // GOLDEN-PATH zero-input boot -> open menu: the
     // readiness-gated press-any-button advance (hook 0x1407ad1c0 -> set [job+0x1e8]=2)
     // gets PAST press-any-button with no input, then the menu opens with NO selector fire,
     // so an observe run can reach the menu cleanly. bd
@@ -320,9 +287,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         && let Ok(base) = game_module_base()
     {
         unsafe { install_pab_advance_hook(base) };
-        if !native_profile_capture_enabled() {
-            unsafe { maybe_set_title_accept_byte(base) };
-        }
+        unsafe { maybe_set_title_accept_byte(base) };
     }
     // Now-loading helper observer: attach only after the native title accept byte fired.
     // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed

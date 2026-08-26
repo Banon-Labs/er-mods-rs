@@ -330,15 +330,31 @@ def main() -> int:
     require("PRODUCT_AUTOLOAD_ARMED.store" in arm_body, "product arm must latch PRODUCT_AUTOLOAD_ARMED", failures)
     require("append_autoload_debug" not in arm_body, "product arm must not perform early debug/file I/O", failures)
     # DEPRECATE-ENV-MARKER-GATE-ALLOWLISTS-2026-07-19: env/marker feature gates are forbidden. The
-    # direct_menu_load/product_core experiment is now a DISABLED experiment (experimental_direct_menu_
-    # load_enabled() returns false with no env/marker read), which keeps it out of the product path
-    # even more strongly than the former env/file gate. Assert it is NOT env/marker-gated.
-    direct_menu_load_gate = rust_fn_body(experiments, "experimental_direct_menu_load_enabled")
+    # direct_menu_load/product_core experiment is a DISABLED experiment (the gate is a literal false
+    # with no env/marker read), which keeps it out of the product path even more strongly than the
+    # former env/file gate. Assert it is NOT env/marker-gated.
+    #
+    # The product-side `fn experimental_direct_menu_load_enabled` was deleted as permanently-false
+    # dead code; er-title-flow still declares the seam field, so what has to stay literal-false is
+    # now the BOOTSTRAP WIRING, not a function body. Check whichever of the two exists -- the
+    # er-title-flow shim body remains reachable here, and the wiring check is what actually pins the
+    # value the shim returns.
+    direct_menu_load_gate = optional_rust_fn_body(experiments, "experimental_direct_menu_load_enabled")
+    if direct_menu_load_gate is not None:
+        require(
+            "std::env::var" not in direct_menu_load_gate
+            and "er-effects-" not in direct_menu_load_gate,
+            "direct_menu_load/product_core experiment must not be env/marker-gated; it is a disabled "
+            "experiment, neither product default nor a runtime knob",
+            failures,
+        )
     require(
-        "std::env::var" not in direct_menu_load_gate
-        and "er-effects-" not in direct_menu_load_gate,
-        "direct_menu_load/product_core experiment must not be env/marker-gated; it is a disabled "
-        "experiment, neither product default nor a runtime knob",
+        "experimental_direct_menu_load_enabled: || false," in read_module_tree(
+            RUNTIME_SRC / "lib.rs", RUNTIME_SRC / "lib_parts"
+        )
+        or direct_menu_load_gate is not None,
+        "the er-title-flow experimental_direct_menu_load_enabled seam must be wired to a literal "
+        "false; the direct_menu_load/product_core experiment is disabled, not a runtime knob",
         failures,
     )
 
@@ -409,8 +425,14 @@ def main() -> int:
         failures,
     )
 
+    # `menu_window_latch_enabled` was DELETED as permanently-false dead code (its whole body was the
+    # literal `false`, so the hook it gated could only ever install via `product_autoload_enabled()`).
+    # A deleted gate satisfies "not part of the product core path" outright, so this is an optional
+    # lookup rather than a hard one -- it re-arms the moment anyone reintroduces the gate.
     for legacy_gate in ("live_dialog_enabled", "menu_window_latch_enabled"):
-        body = rust_fn_body(experiments, legacy_gate)
+        body = optional_rust_fn_body(experiments, legacy_gate)
+        if body is None:
+            continue
         require(
             "product_autoload_enabled()" not in body,
             f"{legacy_gate} must remain opt-in and not be part of the product core path",

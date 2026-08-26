@@ -123,15 +123,6 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .name("er-effects-title-text-bind-observer".to_owned())
                 .spawn(install_title_scaleform_bind_observer_hook);
         });
-    } else if native_profile_capture_enabled() {
-        // Native ProfileSelect diagnostic: install only the passive Scaleform bind observer. Do not
-        // install title-cover/custom-cover hooks; this mode is specifically meant to prove native
-        // ProfileSelect/profile-renderer provenance without the product cover mutation path.
-        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-native-profile-bind-observer".to_owned())
-                .spawn(install_title_scaleform_bind_observer_hook);
-        });
     }
 
     // er-effects-rs-jsm PIVOT: suppress the native loading tips (our overlay renders player-stats text

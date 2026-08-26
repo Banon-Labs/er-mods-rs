@@ -11,7 +11,6 @@ use std::{
     time::Instant,
 };
 
-use crate::input_blocker::InputBlocker;
 use eldenring::{
     cs::{GameMan, PlayerIns},
     fd4::FD4TaskData,

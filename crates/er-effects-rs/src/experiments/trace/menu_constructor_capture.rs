@@ -14,7 +14,7 @@ use crate::{
     CAP_ROW_PUSH_LOG_FIRST, CAP_SELECTOR_TICK_COUNT, CAP_SELECTOR_TICK_LOG_FIRST,
     CAP_SELECTOR_TICK_LOG_INTERVAL, CAP_SELECTOR_TICK_ORIG, CAP_SETSTATE_ORIG,
     CONTINUE_CONFIRM_RVA, HOOK_ORIGINAL_UNSET, IN_WORLD_REACHED, IN_WORLD_REACHED_YES,
-    INPUT_PROBE_ACTIVE, IODEV_GLOBAL_RVA, IODEV_REQHANDLE_18_OFFSET, IODEV_REQHANDLE_20_OFFSET,
+    IODEV_GLOBAL_RVA, IODEV_REQHANDLE_18_OFFSET, IODEV_REQHANDLE_20_OFFSET,
     LIVE_DIALOG_FACTORY_RVA, LOADGAME_BUILDER_LAST_NATIVE_SLOT, LOADGAME_BUILDER_SLOT_OVERRIDES,
     MENU_CONTINUE_ITEM, MENU_CONTINUE_ITEM_FIELD_LOG_COUNT, MENU_CONTINUE_ROW_ENTRY,
     MENU_D180_LEAF_TICKED, MENU_ENTRIES_SEEN, MENU_ENTRIES_SEEN_YES, MENU_ITEM_FUNCTOR_A8_OFFSET,
@@ -1161,19 +1161,6 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
                 unsafe { menu_item_action_summary(item) },
                 trace_callers_summary()
             ));
-        }
-    }
-    // While the deterministic input probe is active, count GENUINE d180 leaf-Update ticks (this
-    // leaf fn 0x1407ad1c0 actually running for the Load-Game item) even after MENU_LOAD_GAME_ITEM
-    // is already latched -- so the probe can tell "d180 leaf ticked" from "static walk found it".
-    if INPUT_PROBE_ACTIVE.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
-        && item != TITLE_OWNER_SCAN_START_ADDRESS
-        && base != TITLE_OWNER_SCAN_START_ADDRESS
-        && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
-    {
-        let mut chain = String::new();
-        if unsafe { functor_chain_hits_factory(item, base, &mut chain) } {
-            MENU_D180_LEAF_TICKED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         }
     }
     if item != TITLE_OWNER_SCAN_START_ADDRESS

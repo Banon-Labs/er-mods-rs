@@ -145,32 +145,55 @@ def selftest() -> int:
         got = validate(listed, current, total, ledgers, f"{required_text}\n{text}")
         if (len(got) == 0) != (want_errors == 0):
             failures.append(f"{label}: expected {'pass' if want_errors == 0 else 'failure'}, got {got}")
+    # `--write` must be a round trip: rewriting a drifted document with the measured inventory
+    # has to produce one that `validate` then passes. Exercised on a literal document so the case
+    # covers the heading count, a retuned row, and a dropped row at once.
+    drifted = (
+        "## Appendix A -- R1 current 9-file partition and caller ledger\n"
+        "| file | lines | owner |\n"
+        "| `a.rs` | 999 | S10 lifecycle |\n"
+        "| `b.rs` | 3 | S11 own-load |\n"
+        "| `gone.rs` | 7 | S11 own-load |\n"
+        "| all `experiments/**` | 9 | 9,999 |\n"
+    )
+    written, retuned, dropped, missing = rewrite(drifted, clean)
+    rewrite_failures = []
+    if "## Appendix A -- R1 current 2-file partition and caller ledger" not in written:
+        rewrite_failures.append("write did not regenerate the Appendix A heading file count")
+    if "| all `experiments/**` | 2 | 5 |" not in written:
+        rewrite_failures.append("write did not regenerate the total row")
+    if retuned != ["a.rs 999->2"] or dropped != ["gone.rs"] or missing != []:
+        rewrite_failures.append(f"write reported {retuned=} {dropped=} {missing=}")
+    if "| S10 lifecycle |" not in written or "| S11 own-load |" not in written:
+        rewrite_failures.append("write did not preserve the authored ownership columns")
+    relisted = {p: int(n.replace(",", "")) for p, n in ROW.findall(written)}
+    retotal = TOTAL.search(written)
+    if relisted != clean or retotal is None:
+        rewrite_failures.append(f"write output does not re-parse: {relisted=}")
+    elif validate(
+        relisted,
+        clean,
+        (int(retotal.group(1).replace(",", "")), int(retotal.group(2).replace(",", ""))),
+        len(LEDGER_HEADING.findall(written)),
+        f"{required_text}\nexact",
+    ):
+        rewrite_failures.append("write output still fails validate")
+    failures.extend(f"write round trip: {f}" for f in rewrite_failures)
+
     if failures:
         for failure in failures:
             print(f"[check-crate-extraction-roadmap] selftest FAILED: {failure}", file=sys.stderr)
         return 1
-    print(f"[check-crate-extraction-roadmap] selftest ok ({len(cases)} cases)")
+    print(f"[check-crate-extraction-roadmap] selftest ok ({len(cases)} cases + write round trip)")
     return 0
 
 
-def refresh() -> int:
-    """Rewrite the ledger's line counts and total from measured source.
+def rewrite(text: str, inventory: dict[str, int]) -> tuple[str, list[str], list[str], list[str]]:
+    """Pure text transform behind `--write`: return (new_text, retuned, dropped, missing).
 
-    The ledger is a MEASURED MIRROR of `experiments/**`, not a plan of intent -- a row exists
-    if and only if the file exists, with an exact line count, and the total row must match
-    (file count, summed lines). So there is no judgement to apply and the refresh is mechanical,
-    which is exactly why it belongs in the tool rather than in an ad-hoc script written from
-    scratch each time. It had been hand-refreshed at least three times (PR #301 and twice during
-    the 2026-08-21 lint-parity sweep, where any edit that adds or removes a line silently rots
-    the gate) before this mode existed.
-
-    Only the COUNT column is rewritten. The description and R-number columns are authored
-    judgement and are preserved verbatim; a row whose file has left `experiments/**` is dropped,
-    and a file with no row is reported rather than invented, because inventing one would mean
-    inventing the ownership claim next to it.
+    Kept separate from the file I/O so `--selftest` can exercise it on a literal document
+    instead of on the real roadmap. Every number this touches is MEASURED, never authored.
     """
-    text = ROADMAP.read_text(encoding="utf-8")
-    inventory = current_inventory()
     seen: set[str] = set()
     retuned: list[str] = []
     dropped: list[str] = []
@@ -191,10 +214,41 @@ def refresh() -> int:
         if new != old:
             retuned.append(f"{path} {old}->{new}")
         out.append(f"| `{path}` | {new} |{rest}")
-    text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
+    new_text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
-    text = TOTAL.sub(
-        f"| all `experiments/**` | {len(inventory):,} | {sum(inventory.values()):,} |", text
+    new_text = TOTAL.sub(
+        f"| all `experiments/**` | {len(inventory):,} | {sum(inventory.values()):,} |", new_text
+    )
+    # The Appendix A heading restates the file count. `validate` matches it by PATTERN so a stale
+    # number does not fail the gate -- which is exactly why it must be regenerated here, or a file
+    # entering/leaving `experiments/**` leaves a heading that quietly contradicts the table below it.
+    new_text = LEDGER_HEADING.sub(
+        f"## Appendix A -- R1 current {len(inventory)}-file partition and caller ledger", new_text
+    )
+    return new_text, retuned, dropped, sorted(set(inventory) - seen)
+
+
+def write_ledger() -> int:
+    """Rewrite the Appendix A ledger rows, its heading count, and the total from measured source.
+
+    The ledger is a MEASURED MIRROR of `experiments/**`, not a plan of intent -- a row exists
+    if and only if the file exists, with an exact line count, and the total row must match
+    (file count, summed lines). So there is no judgement to apply and the rewrite is mechanical,
+    which is exactly why it belongs in the tool rather than in an ad-hoc script written from
+    scratch each time. It had been hand-refreshed at least three times (PR #301 and twice during
+    the 2026-08-21 lint-parity sweep, where any edit that adds or removes a line silently rots
+    the gate) before this mode existed. It is also the conflict resolution for concurrent
+    branches: two branches that both delete lines under `experiments/**` will always collide on
+    the total row, and the fix is to re-run this rather than to hand-merge two measured numbers.
+
+    Only the COUNT column is rewritten. The description and R-number columns are authored
+    judgement and are preserved verbatim; a row whose file has left `experiments/**` is dropped,
+    and a file with no row is reported rather than invented, because inventing one would mean
+    inventing the ownership claim next to it.
+    """
+    inventory = current_inventory()
+    text, retuned, dropped, missing = rewrite(
+        ROADMAP.read_text(encoding="utf-8"), inventory
     )
     ROADMAP.write_text(text, encoding="utf-8")
 
@@ -202,7 +256,6 @@ def refresh() -> int:
         print(f"[check-crate-extraction-roadmap] retuned {entry}")
     for entry in dropped:
         print(f"[check-crate-extraction-roadmap] dropped (file left experiments/**): {entry}")
-    missing = sorted(set(inventory) - seen)
     for entry in missing:
         print(
             f"[check-crate-extraction-roadmap] NO ROW for {entry} -- add one by hand with its "
@@ -210,7 +263,7 @@ def refresh() -> int:
             file=sys.stderr,
         )
     print(
-        f"[check-crate-extraction-roadmap] refreshed: {len(inventory)} files / "
+        f"[check-crate-extraction-roadmap] wrote: {len(inventory)} files / "
         f"{sum(inventory.values()):,} lines"
     )
     return 1 if missing else 0
@@ -220,15 +273,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument(
+        "--write",
         "--refresh",
+        dest="write",
         action="store_true",
-        help="rewrite the ledger line counts + total from measured source (mechanical)",
+        help=(
+            "regenerate the Appendix A ledger rows, its heading file count, and the "
+            "`all experiments/**` total row from measured source (mechanical). Use this to "
+            "resolve a total-row conflict between concurrent branches instead of hand-merging."
+        ),
     )
     args = parser.parse_args()
     if args.selftest:
         return selftest()
-    if args.refresh:
-        return refresh()
+    if args.write:
+        return write_ledger()
 
     text = ROADMAP.read_text(encoding="utf-8")
     listed = {path: int(lines.replace(",", "")) for path, lines in ROW.findall(text)}
