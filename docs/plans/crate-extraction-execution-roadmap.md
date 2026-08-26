@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 50,253 |
+| all `experiments/**` | 77 | 50,350 |
 | excluding `startup_hooks/**` | 44 | 25,311 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -102,7 +102,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 |---|---:|---|---|
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 9 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 653 | product continue/load policy | D5 |
+| `continue_load/product_continue.rs` | 692 | product continue/load policy | D5 |
 | `continue_load/slot_resolution.rs` | 739 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 651 | product gate policy | D1 |
@@ -138,7 +138,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,002 | save source/path policy and redirect adapters | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,060 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 104 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 385 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |

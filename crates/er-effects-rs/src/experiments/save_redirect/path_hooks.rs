@@ -607,6 +607,64 @@ pub(crate) fn missing_save_selection_pending() -> bool {
     MISSING_SAVE_DIALOG_GATE.is_pending()
 }
 
+/// Arm the missing-save picker AFTER boot, when a save the boot check accepted turns out to be
+/// unloadable.
+///
+/// The boot arm (`enforce_save_override_or_abort`) answers one question -- "is there a save source
+/// at all?" -- and answers it from the filesystem, before the game exists. It cannot answer the
+/// only question that finally matters: whether the game can actually LOAD what it was handed. When
+/// those two answers disagree the autoload used to have nowhere to go; this is where it goes. The
+/// reason is deliberately open-ended, because the recovery must not care WHY the load turned out
+/// impossible -- an empty slot, a container the runtime does not own, a save that reads but does
+/// not deserialize -- only that it did.
+///
+/// Everything downstream of the gate already follows it live and needs no help: the picker overlay
+/// arms itself off `missing_save_selection_pending()` from the Present hook and the game task
+/// (`boot_open_missing_save_picker_if_pending`), the title `SetState` detour starts denying world
+/// entry, and `TitleTopDialog::open_menu` starts being suppressed. All three are installed
+/// unconditionally and read the flag per call, so setting it here is the whole arm.
+///
+/// IDEMPOTENT BY CONSTRUCTION -- `MissingSaveGate::try_arm` is a compare-exchange from `Idle`, so a
+/// second call (later tick, other thread) neither restarts a browse already `Pending` nor revokes a
+/// save already `Ready`. Returns whether THIS call did the arming.
+pub(crate) fn arm_missing_save_picker_after_boot(reason: &str) -> bool {
+    // SUPERSEDE FIRST, ARM SECOND. Every reset below has to be in place before the gate opens,
+    // because the gate is what other threads watch: the Present hook and the game task both call
+    // `boot_open_missing_save_picker_if_pending` every frame, and either can be inside it the
+    // instant `try_arm` returns. Clearing a latch after that point would clobber a picker that had
+    // already opened on it.
+    //
+    // The rejected selection must leave nothing behind that could still steer the retry at the save
+    // we just gave up on:
+    //   * MISSING_SAVE_PICKER_SELECTED_SLOT is what `native_fullread_slot` and the product-core
+    //     callsite both consult FIRST, so any stale value here would outrank the user's new pick.
+    //     Cleared to the "none yet" sentinel so the picker's own character stage is the only thing
+    //     that can set it.
+    //   * OWN_STEPPER_EXPECTED_SLOT is the guard phase's identity check for a load already in
+    //     flight. The rejected attempt never got far enough to arm it -- the empty-profile branch
+    //     returns before it writes any slot register, so GameMan+0xb78/+0xac0 are untouched too --
+    //     but a retry must not inherit one from any earlier attempt either.
+    //   * SAVE_PICKER_OS_BOOT_STATE is the boot picker's one-shot open latch. IDLE is its "nobody
+    //     owns this pick" value and `boot_open_missing_save_picker_if_pending` compare-exchanges
+    //     out of it; if an earlier arm had already moved it, the picker would never open for this
+    //     one.
+    er_telemetry_core::counters::MISSING_SAVE_PICKER_SELECTED_SLOT
+        .store(usize::MAX, Ordering::SeqCst);
+    OWN_STEPPER_EXPECTED_SLOT.store(OWN_STEPPER_SLOT_NONE, Ordering::SeqCst);
+    SAVE_PICKER_OS_BOOT_STATE.store(er_save_picker_core::BOOT_PICKER_IDLE, Ordering::SeqCst);
+    if !MISSING_SAVE_DIALOG_GATE.try_arm() {
+        append_autoload_debug(format_args!(
+            "save-override: late missing-save picker arm REFUSED (reason={reason}) -- selection state is already {:?}; a pick in flight or already made is never restarted or revoked",
+            MISSING_SAVE_DIALOG_GATE.state()
+        ));
+        return false;
+    }
+    append_autoload_debug(format_args!(
+        "save-override: *** REJECTING the boot-accepted save and ARMING the missing-save picker LATE (reason={reason}) *** -- the autoload could not load what the boot check accepted; the 05_010 file browser presents itself over the boot cover, world entry stays denied, and the user's pick supersedes this selection"
+    ));
+    true
+}
+
 /// True after an explicit loose save source (`er-effects.toml save_file` / ER_EFFECTS_SAVE_FILE) or
 /// the in-game picker has activated direct-file staging. In this mode the user's original save is a
 /// read-only source and native reads/writes target our private staged `%APPDATA%` tree. The load path

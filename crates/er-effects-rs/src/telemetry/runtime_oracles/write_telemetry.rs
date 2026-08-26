@@ -705,6 +705,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PROFILE_ROW_LAST_SAVED_ROWS.load(Ordering::SeqCst),
         PROFILE_ROW_LAST_SAVED_STAGE_FAILURES.load(Ordering::SeqCst)
     ));
+    // AUTOLOAD SLOT REJECTION -- the semaphore the post-boot picker fallback is ordered against.
+    // Counts ticks on which the product autoload fingerprinted its Continue slot as empty-like and
+    // refused to submit it. It is the SAME counter the escalation reads to decide when to give up
+    // and hand the choice to the user, not a parallel one, so a run can never show an arm that its
+    // own rejection count does not justify. NOTE the reset: a single tick on which the slot reads
+    // REAL puts it back to 0, because "consecutive" is what makes it a correct arming input -- a
+    // boot whose ProfileSummary is merely still filling must not accumulate toward the hand-back.
+    // Rising above 0 is therefore "the dead end was reached", and its first non-zero poll is
+    // strictly earlier than oracle_save_picker_overlay_armed on a working fallback.
+    body.push_str(&format!(
+        "  \"oracle_autoload_empty_slot_rejections\": {},\n",
+        er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"oracle_save_picker_overlay_armed\": {},\n  \"oracle_save_picker_overlay_open_count\": {},\n  \"oracle_save_picker_overlay_draw_hits\": {},\n  \"oracle_save_picker_overlay_input_hits\": {},\n  \"oracle_save_picker_overlay_poll_count\": {},\n  \"oracle_save_picker_overlay_held_polls\": {},\n  \"oracle_save_picker_kbd_hook_hits\": {},\n  \"oracle_save_picker_overlay_pick_count\": {},\n  \"oracle_save_picker_overlay_pick_reject_count\": {},\n",
         SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst),

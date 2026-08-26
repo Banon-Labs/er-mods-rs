@@ -1315,6 +1315,14 @@ pub static SAVE_PICKER_OVERLAY_HELD_POLLS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_STAGE_CHARS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_CHAR_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static MISSING_SAVE_PICKER_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Consecutive ticks the product autoload has read an empty-like profile for its Continue slot.
+/// Reset by a single real read, so it measures an unbroken window rather than uptime; past
+/// `er_title_flow::boot_hold::EMPTY_PROFILE_ESCALATE_TICKS` the autoload rejects its own save
+/// selection and arms the missing-save picker.
+pub static PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: the empty-profile window has already handed the choice back to the user, so the
+/// loud hand-back line is never repeated (the arm itself is idempotent regardless).
+pub static PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ONTO_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);

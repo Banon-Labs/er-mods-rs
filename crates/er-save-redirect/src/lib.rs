@@ -153,6 +153,28 @@ impl MissingSaveGate {
     pub fn is_pending(&self) -> bool {
         self.state() == MissingSaveState::Pending
     }
+
+    /// Arm the picker from `Idle`, and only from `Idle`.
+    ///
+    /// This is the LATE arm's primitive. `set` is a plain store, which is right for the boot path
+    /// (one caller, before any other thread can be looking) and wrong for every later one: the
+    /// autoload tick, the Present hook and the picker's own threads all read this gate, so a
+    /// re-arm that lands on a `Pending` selection would restart a browse the user is halfway
+    /// through, and one that lands on `Ready` would revoke a save they already chose and send the
+    /// boot back to the picker it had just left.
+    ///
+    /// The compare-exchange makes both impossible and makes the call idempotent by construction:
+    /// exactly one caller ever observes `true`, however many threads ask and however often.
+    pub fn try_arm(&self) -> bool {
+        self.state
+            .compare_exchange(
+                MissingSaveState::Idle.as_usize(),
+                MissingSaveState::Pending.as_usize(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
 }
 
 impl Default for MissingSaveGate {
@@ -1768,6 +1790,33 @@ mod tests {
         assert!(gate.is_pending());
         gate.set(MissingSaveState::Ready);
         assert_eq!(gate.state(), MissingSaveState::Ready);
+    }
+
+    #[test]
+    fn try_arm_admits_one_caller_and_never_disturbs_a_pick_in_flight() {
+        let gate = MissingSaveGate::new();
+        assert!(gate.try_arm(), "the first arm from Idle must take");
+        assert!(gate.is_pending());
+        assert!(
+            !gate.try_arm(),
+            "a second arm must not re-arm a selection already pending"
+        );
+        assert!(gate.is_pending());
+
+        gate.set(MissingSaveState::Ready);
+        assert!(
+            !gate.try_arm(),
+            "a pick already made must never be revoked by a later arm"
+        );
+        assert_eq!(gate.state(), MissingSaveState::Ready);
+    }
+
+    #[test]
+    fn try_arm_is_the_only_transition_out_of_idle_it_performs() {
+        let gate = MissingSaveGate::new();
+        assert_eq!(gate.state(), MissingSaveState::Idle);
+        assert!(gate.try_arm());
+        assert_eq!(gate.state(), MissingSaveState::Pending);
     }
 
     #[test]

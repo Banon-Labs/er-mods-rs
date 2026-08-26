@@ -9,6 +9,9 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
 
+pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED;
+pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS;
+
 pub(crate) unsafe fn product_continue_action_ready(
     ready: &ProductCoreAutoloadReady,
     base: usize,
@@ -228,11 +231,47 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         }
         let (profile_real, profile_map, profile_level, profile_name_len) =
             unsafe { profile_slot_fingerprint(slot) };
+        // CONSECUTIVE, and reset by a single real read. A boot whose ProfileSummary is still
+        // filling can reach this check before the save-data job has parsed it, so the count has to
+        // measure an UNBROKEN run of empty-like reads -- not how long the autoload has been alive.
+        let empty_ticks = PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.load(Ordering::SeqCst) as u64;
+        let empty_ticks =
+            er_title_flow::boot_hold::empty_profile_next_ticks(empty_ticks, profile_real);
+        PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.store(empty_ticks as usize, Ordering::SeqCst);
         if !profile_real {
-            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
-                append_autoload_debug(format_args!(
-                    "product-core-autoload: Continue slot profile is empty-like (slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len}); fail-closed with no native Load Game fallback, no legal-popup auto-accept, no Continue submit, and no input"
-                ));
+            let escalated = PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED.load(Ordering::SeqCst) != null;
+            let action = er_title_flow::boot_hold::empty_profile_action(
+                empty_ticks,
+                PRODUCT_CONTINUE_WAIT_LOG_TICKS,
+                escalated,
+            );
+            match action {
+                er_title_flow::boot_hold::EmptyProfileAction::Escalate => {
+                    // THE DEAD END ENDS HERE. Waiting longer cannot help: this branch has
+                    // republished the identical fingerprint every tick for the whole threshold
+                    // window, so the profile is not filling, it is absent. Reject our own selection
+                    // and hand the choice to the user -- the picker's pick supersedes it, and the
+                    // retry runs through the native full-read chain (which reads the picked
+                    // container directly) instead of re-fingerprinting this slot.
+                    PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED
+                        .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "product-core-autoload: *** GIVING UP on the Continue slot after {empty_ticks} consecutive empty-like ticks (slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} tick={tick}) *** -- this save cannot be loaded; arming the missing-save picker so the user can choose one that can"
+                    ));
+                    let armed = arm_missing_save_picker_after_boot(
+                        "product-continue-empty-profile-exhausted",
+                    );
+                    append_autoload_debug(format_args!(
+                        "product-core-autoload: late picker arm requested for slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} -> armed_by_this_call={armed}"
+                    ));
+                }
+                er_title_flow::boot_hold::EmptyProfileAction::Log => {
+                    append_autoload_debug(format_args!(
+                        "product-core-autoload: Continue slot profile is empty-like (slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len}); waiting {empty_ticks}/{} ticks before rejecting this save and arming the missing-save picker -- no native Load Game fallback, no legal-popup auto-accept, no Continue submit, and no input",
+                        er_title_flow::boot_hold::EMPTY_PROFILE_ESCALATE_TICKS
+                    ));
+                }
+                er_title_flow::boot_hold::EmptyProfileAction::Wait => {}
             }
             return;
         }
