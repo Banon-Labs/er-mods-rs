@@ -455,20 +455,17 @@ pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
 pub(crate) fn c30_writer_diag_enabled() -> bool {
     false
 }
+// input_probe_enabled / own_load_pump_verify_only / direct_build_enabled were removed with the
+// autoload/title-flow slice: each returned a literal `false`, each had exactly one call site,
+// and deleting those unreachable branches left the gate itself with no caller (a hard error
+// under `[workspace.lints.rust] warnings = "deny"`). The other five permanently-false gates in
+// this file still have live call sites and are untouched.
 /// PASSIVE own-stepper: do NOT force the menu (no SetState(2)/self-fire) and do NOT block input.
 /// The user navigates to Load Game once (the input that surfaces the input-gated d180); the
 /// capture hooks grab d180; then STAGE 2 drives mount->confirm->load. This both PROVES the load
 /// (correct + faster than manual slot-select) and lets the iterator log the menu-structure change
 /// so the pump-switch can be replayed zero-input later. File: er-effects-passive.txt.
 pub(crate) fn own_stepper_passive_enabled() -> bool {
-    false
-}
-/// DETERMINISTIC MENU INPUT PROBE (er-effects-input-probe.txt / ER_EFFECTS_INPUT_PROBE). After the
-/// menu opens, inject one Down tap then (after an observation window) one Confirm tap, at frames WE
-/// choose -- so we know exactly the frame to break on. Decisive question: does the Load-Game leaf
-/// d180 tick its leaf Update on HIGHLIGHT alone (Down, no Confirm yet), or only at Confirm? Targeted
-/// input used purely as a MEASUREMENT oracle (NOT the zero-input deliverable).
-pub(crate) fn input_probe_enabled() -> bool {
     false
 }
 /// SELF-DRIVEN GAMEPAD NAV INJECTION (er-effects-inject-nav.txt / ER_EFFECTS_INJECT_NAV). When on,
@@ -622,16 +619,6 @@ pub(crate) fn own_load_install_job_enabled() -> bool {
 pub(crate) fn own_load_pump_enabled() -> bool {
     OWN_LOAD_PUMP_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
-/// SAVE-SAFE PROBE GATE for `own_load_pump`: when set, the pump runs the corrected BUILD + per-frame
-/// `Run` (deser -> map-stream, all READ-only up to world-stream per the path-b spec) but, on reaching
-/// `state==Success`, LOGS the result and latches DONE WITHOUT firing the save-writing SetState5
-/// transition. This isolates the dialog-ctx correction (does the build no longer AV? does the pump
-/// progress to Success?) with ZERO save write -- so it can run against the user's real save with no
-/// swap and no autosave risk. OFF by default; env `ER_EFFECTS_OWN_LOAD_PUMP_VERIFY=1` or a GAME_DIR
-/// file `er-effects-own-load-pump-verify.txt`.
-pub(crate) fn own_load_pump_verify_only() -> bool {
-    false
-}
 /// DIRECT "Continue pressed" trigger (bd LIVE-continue-chain-via-selector-NOT-confirm-handler):
 /// once the title is at the settled main menu (STEP_MenuJobWait) after press-any-button AND
 /// GameMan/GameDataMan is set up, write the exact bit the native Continue path consumes --
@@ -640,12 +627,5 @@ pub(crate) fn own_load_pump_verify_only() -> bool {
 /// in-process field write replicating the confirm handler's side effects. OFF by default; arm via
 /// env `ER_EFFECTS_FIRE_TFC_CONTINUE=1` or a GAME_DIR file `er-effects-fire-tfc-continue.txt`.
 pub(crate) fn fire_tfc_continue_enabled() -> bool {
-    false
-}
-/// Direct ProfileLoadDialog build mode (er-effects-direct-build.txt / ER_EFFECTS_DIRECT_BUILD).
-/// OFF by default: a plain own_stepper run stays the safe read-only scan; the native dialog build
-/// (which leads to a guarded SetState(5) save-write via STAGE 2) fires only when deliberately
-/// enabled, so the first native-build run is a deliberate, save-backed experiment.
-pub(crate) fn direct_build_enabled() -> bool {
     false
 }

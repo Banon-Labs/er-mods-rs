@@ -55,116 +55,13 @@ pub(crate) fn own_stepper_s2_timed_out() -> bool {
 pub(crate) fn own_stepper_s2_elapsed_ms() -> u64 {
     phase_elapsed_ms(&OWN_STEPPER_S2_PHASE_STARTED_MS)
 }
-/// 2026-06-18 BREAKTHROUGH build: construct a CS::ProfileLoadDialog DIRECTLY at the open menu,
-/// bypassing the input-gated router_this/d180-on-confirm layer (runtime-PROVEN never to build
-/// headless -- loadgame-fingerprint-scan-confirms-router-this-not-built-headless-2026). The
-/// ProfileLoadDialog ctor 0x1409a3d90 is COLD-VIABLE (it builds router_this + the slot rows
-/// inline, no session/PlayerGameData/input-focus deps). We call dialog_factory 0x14081ead0,
-/// which does op-new(0x1cd0) via allocator [0x143d87350] + ctx-build + ctor, passing:
-///   rcx = &cap  (cap[0] = owner+0x138 = the ctor r8 = *(capture+8); factory reads *(rcx));
-///   rdx = &ctx  (zeroed incoming-ctx -> empty cosmetic label).
-/// Returns the dialog* in rax. FULLY read-only-validated before the native call (owner-obj vtable
-/// 0x142ac7f20 + a populated row-vector [+0xa58..+0xa60]); fail-closed on any mismatch (NO call /
-/// NO further action / NO write). On success: store OWN_STEPPER_DIALOG + advance to S2_ACTIVATE,
-/// which own_stepper_stage2 drives (load_activate -> menu_deser mount -> guarded continue_confirm).
-/// One-shot (OWN_STEPPER_DIRECT_BUILT). The ONLY save-write risk is STAGE 2's guarded SetState(5).
-pub(crate) unsafe fn own_stepper_direct_build(owner: usize, base: usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const FACTORY_RVA: usize = 0x81ead0;
-    const OWNER_OBJ_138: usize = 0x138;
-    const OWNER_OBJ_VTABLE_RVA: usize = 0x2ac7f20;
-    const ROWVEC_BEGIN_A58: usize = 0xa58;
-    const ROWVEC_END_A60: usize = 0xa60;
-    const ROWVEC_MAX_SPAN: usize = 0x10000;
-    const PTR_ALIGN_MASK: usize = 0x7;
-    // CONVERGENCE (2026-06-18, cold-b80-drain-is-PREVIEW-metadata-lane + direct-build): ACTIVATE the
-    // slot byte BEFORE building the dialog, so the ctor's list-builder 0x140875590 (which checks
-    // 0x140261cd0 = [ProfileSummary+8+slot]) APPENDS the slot -> the dialog's save-rows populate
-    // (bound>0) -> load_activate has a row to read. This wires the ACTIVATE-byte breakthrough into
-    // the direct-built dialog. Save-safe (in-memory byte; the dialog build is no-write).
-    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-    let gdm = game_data_man_ptr_or_null();
-    let profile_summary = if gdm != NULL {
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    if profile_summary != NULL && want_slot >= OWN_STEPPER_SLOT_ZERO {
-        let activate: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute(base + PROFILE_SLOT_ACTIVATE_RVA) };
-        unsafe { activate(profile_summary, want_slot) };
-        // Record-state: load_activate 0x1409a4670's gate is INVERTED (load_activate-gate-inverted-
-        // live-mount-is-nonbuild-path) -- the LIVE mount takes the NON-build branch (which calls
-        // builder 0x140826510 @0x9a4985) when [rec+0x295]>=1 && accessor 0x140e362c0([rec+0x44])==2.
-        // So set those so load_activate BUILDS the selector step (then we self-pump it -- the cold
-        // standalone dialog is not ticked by the MENU group). rec = profile + 0x18 + slot*0x2a0.
-        const RECORD_BASE_18: usize = 0x18;
-        const RECORD_STRIDE_2A0: usize = 0x2a0;
-        const RECORD_VALID_295: usize = 0x295;
-        const RECORD_STATE_44: usize = 0x44;
-        const RECORD_VALID_SET: u8 = 1;
-        const RECORD_STATE_LOADABLE: i32 = 2;
-        let rec = profile_summary + RECORD_BASE_18 + (want_slot as usize) * RECORD_STRIDE_2A0;
-        unsafe { *((rec + RECORD_VALID_295) as *mut u8) = RECORD_VALID_SET };
-        unsafe { *((rec + RECORD_STATE_44) as *mut i32) = RECORD_STATE_LOADABLE };
-        append_autoload_debug(format_args!(
-            "own_stepper: DIRECT-BUILD ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) + record [rec=0x{rec:x}+0x295]=1 [+0x44]=2 (rows populate + load_activate reaches the selector builder)",
-            base + PROFILE_SLOT_ACTIVATE_RVA
-        ));
-    }
-    let owner_obj = owner + OWNER_OBJ_138;
-    // Read-only re-validation of r8 (owner_obj) before the native build: expected vtable + a
-    // populated row-vector (begin < end, sane span). Fail-closed (latch set so we don't spin).
-    let ovt = unsafe { safe_read_usize(owner_obj) }.unwrap_or(NULL);
-    let begin = unsafe { safe_read_usize(owner_obj + ROWVEC_BEGIN_A58) }.unwrap_or(NULL);
-    let end = unsafe { safe_read_usize(owner_obj + ROWVEC_END_A60) }.unwrap_or(NULL);
-    let span = end.wrapping_sub(begin);
-    let rows_ok = ovt == base + OWNER_OBJ_VTABLE_RVA
-        && begin != NULL
-        && (begin & PTR_ALIGN_MASK) == NULL
-        && end > begin
-        && span <= ROWVEC_MAX_SPAN;
-    if !rows_ok {
-        append_autoload_debug(format_args!(
-            "own_stepper: DIRECT-BUILD ABORT (fail-closed, NO native call) owner_obj=0x{owner_obj:x} vt=0x{ovt:x}(want 0x{:x}) rowvec=[0x{begin:x}..0x{end:x}] span=0x{span:x}",
-            base + OWNER_OBJ_VTABLE_RVA
-        ));
-        OWN_STEPPER_DIRECT_BUILT.store(OWN_STEPPER_DIRECT_BUILT_YES, Ordering::SeqCst);
-        return;
-    }
-    // Stage the persistent buffers: cap[0] = owner_obj (factory reads *(rcx) for the ctor r8);
-    // ctx stays zeroed (factory reads it to build an empty label).
-    let cap_ptr = (&raw mut DIRECT_BUILD_CAP) as *mut usize;
-    unsafe { *cap_ptr = owner_obj };
-    let cap_addr = cap_ptr as usize;
-    let ctx_addr = (&raw mut DIRECT_BUILD_CTX) as *mut usize as usize;
-    let factory: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + FACTORY_RVA) };
-    append_autoload_debug(format_args!(
-        "own_stepper: DIRECT-BUILD calling factory 0x{:x}(rcx=&cap[=0x{owner_obj:x}], rdx=&ctx) owner_obj vt=0x{ovt:x} rowvec=[0x{begin:x}..0x{end:x}]",
-        base + FACTORY_RVA
-    ));
-    let dialog = unsafe { factory(cap_addr, ctx_addr) };
-    let dvt = if dialog != NULL {
-        unsafe { safe_read_usize(dialog) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    OWN_STEPPER_DIRECT_BUILT.store(OWN_STEPPER_DIRECT_BUILT_YES, Ordering::SeqCst);
-    if dialog != NULL && dvt == base + PROFILE_LOAD_DIALOG_VTABLE_RVA {
-        OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
-        own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
-        append_autoload_debug(format_args!(
-            "own_stepper: DIRECT-BUILD SUCCESS dialog=0x{dialog:x} vt=0x{dvt:x} (ProfileLoadDialog) -- entering STAGE2 ACTIVATE (slot={})",
-            OWN_STEPPER_SLOT.load(Ordering::SeqCst)
-        ));
-    } else {
-        append_autoload_debug(format_args!(
-            "own_stepper: DIRECT-BUILD returned dialog=0x{dialog:x} vt=0x{dvt:x} != ProfileLoadDialog 0x{:x} -- fail-closed, STAY (NO STAGE2, NO write)",
-            base + PROFILE_LOAD_DIALOG_VTABLE_RVA
-        ));
-    }
-}
+// The 2026-06-18 DIRECT-BUILD drive (`own_stepper_direct_build`) stood here: it constructed a
+// CS::ProfileLoadDialog straight from dialog_factory 0x14081ead0 at the open menu, bypassing
+// the input-gated router_this/d180-on-confirm layer, then handed off to STAGE 2. Its only
+// caller was the `direct_build_enabled()` branch in
+// product_core_own_stepper/fallback_drives.rs, and that gate has returned a literal `false`
+// since it was written, so the build never ran. Deleted with the branch rather than left as an
+// orphan that reads like a live dialog-construction path.
 /// Multi-frame cold char-mount drive (gated, SAVE-SAFE). Sequence (worker registered): build+register
 /// the FD4 stream worker (0xb0a980 stub) so the scheduler ticks it and drains the save-IO read; set
 /// the slot; PREVIEW 0x67b4e0 (b80=1 + starts the iodev read); poll 0x679180 each frame until

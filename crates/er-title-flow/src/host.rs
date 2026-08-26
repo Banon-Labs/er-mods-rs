@@ -311,12 +311,14 @@ pub(crate) fn game_man_ptr_or_null() -> usize {
 pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
     (host().runtime_heap_allocator_ptr_or_null)()
 }
-pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
-    (host().ingamestep_request_code_name)(v)
-}
-pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
-    (host().movemapstep_step_name)(idx)
-}
+// `ingamestep_request_code_name` and `movemapstep_step_name` no longer need a seam hop: the
+// autoload/title-flow slice moved their definitions into this crate
+// (`constants_return_title.rs`), so `title_load_step_hooks.rs` / `title_tick_cover.rs` now call
+// the real i32 -> &str tables directly and the wrappers that used to stand here were dead code.
+// The two `TitleFlowHost` FIELDS are deliberately still declared and still installed: the root
+// crate's `lib_parts/dll_entry_parts/bootstrap.rs` sets them by name, and this branch does not
+// edit that file. They point at the very functions above (via the root's `constants` re-export
+// shim), so nothing changed behaviourally -- the field is simply no longer read.
 pub(crate) fn title_step_state_name(v: i32) -> &'static str {
     (host().title_step_state_name)(v)
 }

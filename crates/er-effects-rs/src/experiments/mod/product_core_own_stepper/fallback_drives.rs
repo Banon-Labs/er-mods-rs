@@ -128,16 +128,11 @@ macro_rules! own_stepper_idx10_fallbacks {
             n,
             format_args!("owner=0x{owner:x} state10 slot={want_slot} c30=0x{c30:x}"),
         );
-        // PASSIVE mode: do NOT force the menu. Hand off to PHASE_MENU_BUILD which waits for the
-        // user to navigate to Load Game (surfacing d180 via the capture hooks), then runs STAGE 2.
-        if own_stepper_passive_enabled() {
-            append_autoload_debug(format_args!(
-                "own_stepper: PASSIVE -- not forcing the menu; waiting for the user to open Load Game so d180 is captured, then STAGE 2 drives the load (input UNBLOCKED) #{n}"
-            ));
-            own_stepper_enter_menu_build_phase();
-            $pass_through(false);
-            return;
-        }
+        // A PASSIVE mode used to sit here: it skipped forcing the menu and handed off to
+        // PHASE_MENU_BUILD to wait for the USER to open Load Game. Its gate,
+        // `own_stepper_passive_enabled()`, has returned a literal `false` since it was introduced,
+        // so idx10 has always forced the menu below. Deleted with the other unreachable
+        // load-mechanism experiments (input probe, inject-nav, direct build).
         let (bare, bare_tree) = if live_dialog_enabled() {
             (None, None)
         } else {
@@ -285,9 +280,9 @@ macro_rules! own_stepper_idx10_fallbacks {
         // classification.
         const MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA: usize =
             ProfileLoadMenuRva::MenuLoadGameFunctorVtable as usize;
-        if !own_stepper_passive_enabled()
-            && !input_probe_enabled()
-            && !live_dialog_enabled()
+        // The `!own_stepper_passive_enabled() && !input_probe_enabled() &&` terms that opened this
+        // condition were both permanently `false`, so both negations were permanently `true`.
+        if !live_dialog_enabled()
             && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
             && unsafe { title_scheduler_ready($owner, $base) }
         {
@@ -417,59 +412,20 @@ macro_rules! own_stepper_idx10_fallbacks {
                 }
             }
         }
-        // DETERMINISTIC INPUT PROBE: once the menu is open, drive a frame-precise Down->Confirm
-        // (targeted input as a MEASUREMENT oracle) and short-circuit the zero-input locate/STAGE2
-        // path -- the injected Confirm drives the native load; idx6 watches it. Answers whether the
-        // d180 leaf ticks on highlight alone (so the zero-input functor-invoke route is viable).
-        if input_probe_enabled()
-            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
-        {
-            unsafe { menu_input_probe($owner, $base) };
-            $pass_through(false);
-            return;
-        }
-        // INJECT-NAV instrument-capture: self-drive the cursor with synthesized menu-DOWN while
-        // the user's input stays blocked. The menu is KEYBOARD-navigated under Proton (XInput is
-        // not polled), so the primary vehicle is the DInput keyboard block, into which we stamp
-        // DIK_DOWN on the schedule (InputBlocker::set_injected_key); the gamepad button state is
-        // also published for the XInput hook in case a controller is present. This runs every
-        // frame (unlike the XInput hook). Capture-only: DOWN nav, never Confirm -> no load/write.
-        if inject_nav_enabled()
-            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
-        {
-            let nf = INJECT_NAV_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-            let buttons = inject_nav_buttons(nf);
-            INJECT_NAV_CUR_BUTTONS.store(buttons as usize, Ordering::SeqCst);
-            let dik = if buttons != INJECT_NAV_NO_BUTTONS {
-                DIK_DOWN
-            } else {
-                DIK_NONE
-            };
-            InputBlocker::get_instance().set_injected_key(dik);
-            if dik != DIK_NONE {
-                let lc = INJECT_NAV_LOG_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-                if lc < INJECT_NAV_LOG_FIRST {
-                    append_autoload_debug(format_args!(
-                        "inject-nav: frame={nf} menu-DOWN asserted (DIK=0x{dik:x} wButtons=0x{buttons:x})"
-                    ));
-                }
-            }
-            $pass_through(false);
-            return;
-        }
-        // 2026-06-18 DIRECT BUILD (gated, OFF by default). Once the menu is open, build the
-        // ProfileLoadDialog DIRECTLY (factory 0x14081ead0) -- bypassing the input-gated row
-        // controller that never constructs headless -- then drive STAGE 2 (mount + guarded
-        // continue_confirm). One-shot + fail-closed (validates r8 read-only before the native
-        // call). A plain (un-gated) run skips this and stays the safe read-only scan below.
-        if direct_build_enabled()
-            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
-            && OWN_STEPPER_DIRECT_BUILT.load(Ordering::SeqCst) == OWN_STEPPER_DIRECT_BUILT_NO
-        {
-            unsafe { own_stepper_direct_build($owner, $base) };
-            $pass_through(false);
-            return;
-        }
+        // Three post-menu-open experiments used to sit here, each behind a gate that has returned a
+        // literal `false` since it was written, so none of them ever ran on any build:
+        //
+        //   * DETERMINISTIC INPUT PROBE (`input_probe_enabled`) -- drove a frame-precise
+        //     Down->Confirm through `menu_input_probe` as a measurement oracle;
+        //   * INJECT-NAV capture (`inject_nav_enabled`) -- stamped DIK_DOWN into the DInput block
+        //     via `InputBlocker::set_injected_key` to self-drive the cursor, DOWN only;
+        //   * DIRECT BUILD (`direct_build_enabled`) -- built the ProfileLoadDialog straight from
+        //     factory 0x14081ead0 through `own_stepper_direct_build`, bypassing the input-gated
+        //     row controller.
+        //
+        // All three returned early, so deleting them cannot change which path runs: control has
+        // always reached the safe read-only default below.
+        //
         // SAFE DEFAULT (RTTI-corrected, 2026-06-17). The "title-confirm" menu-drive that used to sit
         // below was built on a MISIDENTIFIED function: 0x14078e1c0 is CommandSelectDialog::Update (an
         // in-game dialog), NOT the TitleTopDialog ($owner+0xe0, RTTI vt 0x142b26468) confirm router, so
@@ -478,11 +434,10 @@ macro_rules! own_stepper_idx10_fallbacks {
         // reaches the open menu zero-input and STAYS there (no fire, no SetState, save-safe). The real
         // headless Load path is the own-the-stepper / session-activation route, not driving these
         // fake-menu steppers.
-        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
-            && !own_stepper_passive_enabled()
-            && !input_probe_enabled()
-            && !inject_nav_enabled()
-        {
+        // The `&& !own_stepper_passive_enabled() && !input_probe_enabled() && !inject_nav_enabled()`
+        // terms that followed were all permanently-`false` gates, so all three negations were
+        // permanently `true` and the menu-open check alone decided this branch.
+        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO {
             if OWN_STEPPER_TITLE_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
                 == TITLE_OWNER_SCAN_START_ADDRESS
             {
@@ -589,7 +544,9 @@ macro_rules! own_stepper_idx10_fallbacks {
                 own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_INVOKE);
             }
             None => {
-                if menu_build_timed_out && !own_stepper_passive_enabled() {
+                // `&& !own_stepper_passive_enabled()` dropped: permanently-`false` gate, so the
+                // negation was permanently `true` and the timeout alone decided this walk.
+                if menu_build_timed_out {
                     let _ = unsafe { diagnostic_menu_walk($owner, $base, "built138-timeout", true) };
                     let _ = unsafe {
                         diagnostic_job_tree_walk(

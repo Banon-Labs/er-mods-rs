@@ -25,13 +25,13 @@ pub(crate) use er_telemetry_core::counters::SQ_REPRO_XINPUT_BUTTONS;
 /// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
 /// usize::MAX = not yet captured (reset on entry to TO_SLOT).
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_INITIAL_CURSOR;
-/// Throttle the per-tap log.
-pub(crate) use er_telemetry_core::counters::INJECT_NAV_LOG_COUNT;
-pub(crate) const INJECT_NAV_LOG_FIRST: usize = 20;
-/// The current frame's synthesized gamepad wButtons, computed by the per-frame schedule in
-/// own_stepper idx10 and READ by the XInput hook (so the schedule lives in one place that runs
-/// every frame, instead of the XInput hook which the game may never poll). 0 = no input.
-pub(crate) use er_telemetry_core::counters::INJECT_NAV_CUR_BUTTONS;
+// INJECT_NAV_LOG_COUNT / INJECT_NAV_LOG_FIRST (the per-tap log throttle) went with the INJECT-NAV
+// branch in product_core_own_stepper/fallback_drives.rs, whose `inject_nav_enabled()` gate returned
+// a literal `false`. INJECT_NAV_CUR_BUTTONS below is kept: the XInput hook still reads it.
+// INJECT_NAV_CUR_BUTTONS held the INJECT-NAV schedule's per-frame synthesized gamepad wButtons
+// for the XInput hook to read. Both its writer (the INJECT-NAV branch) and its reader (the
+// `inject_nav` arm of the XInput fabrication in input_block.rs) sat behind the
+// permanently-false `inject_nav_enabled()` gate and went with it.
 // ---- CAN-MOVE probe (2026-07-18, user-directed readiness gate) ----
 // "render-ready" answers "can the user SEE the character"; CAN-MOVE answers "does INPUT MOVE the
 // character" -- the second half of the readiness the earlier automated capture lacked. When
@@ -85,11 +85,8 @@ pub(crate) const MOVE_PROBE_STICK_FORWARD: i32 = 30000;
 pub(crate) const MOVE_PROBE_PER_FRAME_THRESHOLD: f32 = 0.01;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MOVE_PROBE_REQUIRED_FRAMES: usize = 60;
-/// DInput keyboard scancode DIK_DOWN (down-arrow) -- the menu "move down" keyboard input. The
-/// menu is keyboard-navigated under Proton with no controller (XInput is not polled), so the
-/// schedule drives this via InputBlocker::set_injected_key (stamped into the blocked keyboard
-/// state). 0xD0 = DIK_DOWNARROW.
-pub(crate) const DIK_DOWN: u8 = 0xd0;
+// DIK_DOWN (0xd0, DIK_DOWNARROW) was stamped into the blocked keyboard state by the INJECT-NAV
+// branch alone, so it went with that branch. DIK_NONE below is still written by the can-move probe.
 /// No key injected (clears the stamp on gap/settle frames).
 pub(crate) const DIK_NONE: u8 = 0;
 /// System->Quit Save Game REPRO AUTOPILOT state machine. Reproduces the controller path to the
@@ -245,8 +242,8 @@ pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 /// recovers a frozen one) instead of hard-stalling. ~1500f (~47s at 32fps) is generous for a real load.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
-/// No gamepad buttons asserted this frame.
-pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
+// INJECT_NAV_NO_BUTTONS went with the INJECT-NAV branch: it existed only to compare against that
+// schedule's per-frame wButtons.
 pub(crate) use er_title_flow::MSGBOX_CLOSING_LATCH_3B0_OFFSET;
 pub(crate) use er_title_flow::MSGBOX_CLOSING_YES;
 pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;

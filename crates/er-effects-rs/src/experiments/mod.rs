@@ -11,7 +11,10 @@ use std::{
     time::Instant,
 };
 
-use crate::input_blocker::InputBlocker;
+// `crate::input_blocker::InputBlocker` was imported here for the INJECT-NAV branch's
+// `set_injected_key` stamp in product_core_own_stepper/fallback_drives.rs. That branch was
+// unreachable (`inject_nav_enabled()` returns a literal `false`) and was deleted with the other
+// abandoned load-mechanism experiments, taking the last use of the type in this module with it.
 use eldenring::{
     cs::{GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -96,6 +99,8 @@ pub(crate) use lifecycle::*;
 mod product_core_own_stepper;
 pub(crate) use product_core_own_stepper::*;
 
+// own_stepper_idx6_memory.rs moved to the er-title-flow crate (autoload/title-flow slice); the
+// `title` glob above already re-exports it, so the module keeps its declaration site without a
+// second re-export of its own.
 #[path = "mod/own_stepper_idx6_memory.rs"]
 mod own_stepper_idx6_memory;
-pub(crate) use own_stepper_idx6_memory::*;

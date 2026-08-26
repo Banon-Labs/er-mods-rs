@@ -818,30 +818,25 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
         hr = XINPUT_SUCCESS;
     }
     if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
-        // Two drivers fabricate the pad at the poll source: the System->Quit repro autopilot (the
-        // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame) and
-        // own_stepper title nav via inject_nav. Either replaces the (blocked) real pad so the game
-        // reads our synthesized buttons.
+        // ONE driver fabricates the pad at the poll source: the System->Quit repro autopilot (the
+        // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame). It
+        // replaces the (blocked) real pad so the game reads our synthesized buttons.
         // Only fabricate the pad while ACTIVELY driving menus; during WAIT_RELOAD/DONE the reload
         // must not see a synthesized live pad (it bounces the title->world advance back to the FE).
+        //
+        // A second driver -- own_stepper title nav via `inject_nav_enabled()` -- used to share this
+        // path, supplying INJECT_NAV_CUR_BUTTONS and its own packet counter. That gate returned a
+        // literal `false`, so the `inject_nav` term was never true, the `else` arms below were
+        // unreachable, and the counter had no writer once the INJECT-NAV branch in
+        // product_core_own_stepper/fallback_drives.rs was deleted (autoload/title-flow slice).
         let sq_repro = sq_repro_actively_driving();
-        let inject_nav = inject_nav_enabled()
-            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO;
-        if sq_repro || inject_nav {
+        if sq_repro {
             // Force SUCCESS + a fresh packet number so a live pad is simulated; write the buttons
-            // the active driver scheduled this frame. Harmless if the game ignores XInput.
-            let buttons = if sq_repro {
-                SQ_REPRO_XINPUT_BUTTONS.load(Ordering::SeqCst) as u16
-            } else {
-                INJECT_NAV_CUR_BUTTONS.load(Ordering::SeqCst) as u16
-            };
+            // the autopilot scheduled this frame. Harmless if the game ignores XInput.
+            let buttons = SQ_REPRO_XINPUT_BUTTONS.load(Ordering::SeqCst) as u16;
             // sq-repro has no separate poll-frame schedule, so bump the shared packet counter here
-            // to guarantee a fresh dwPacketNumber each poll; inject_nav keeps its own counter.
-            let pkt = if sq_repro {
-                INJECT_NAV_FRAME.fetch_add(1, Ordering::SeqCst) as u32
-            } else {
-                INJECT_NAV_FRAME.load(Ordering::SeqCst) as u32
-            };
+            // to guarantee a fresh dwPacketNumber each poll.
+            let pkt = INJECT_NAV_FRAME.fetch_add(1, Ordering::SeqCst) as u32;
             unsafe {
                 std::ptr::write_bytes(
                     state.add(XINPUT_GAMEPAD_OFFSET),
