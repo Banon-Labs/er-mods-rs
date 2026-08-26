@@ -110,21 +110,6 @@ const FACE_DATA_MAGIC: [u8; 4] = *b"FACE";
 /// are not looking at live save data, so the field is reported as unknown rather than exported.
 const MATCHING_WEAPON_LEVEL_MAX: u8 = 25;
 
-/// Starting classes in `CharaInitParam` order, i.e. indexed by `PlayerGameData::archetype`. The
-/// same list the importer maps the other way; kept in one place there and read from here.
-const CLASSES: &[&str] = &[
-    "Vagabond",
-    "Warrior",
-    "Hero",
-    "Bandit",
-    "Astrologer",
-    "Prophet",
-    "Samurai",
-    "Prisoner",
-    "Confessor",
-    "Wretch",
-];
-
 /// One equipped item, as the planner names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadSlot {
@@ -497,8 +482,9 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
             ("fth", read_i32(pgd::FAITH)),
             ("arc", read_i32(pgd::ARCANE)),
         ];
-        let archetype = *((pgd + pgd::ARCHETYPE) as *const u8) as usize;
-        out.character_class = CLASSES.get(archetype).map(|name| (*name).to_owned());
+        let archetype = *((pgd + pgd::ARCHETYPE) as *const u8);
+        out.character_class =
+            er_build_import_core::class::class_for_archetype(archetype).map(str::to_owned);
         let upgrade = *((pgd + pgd::MATCHING_WEAPON_LEVEL) as *const u8);
         out.weapon_upgrade = (upgrade <= MATCHING_WEAPON_LEVEL_MAX).then_some(u16::from(upgrade));
         out.flask_crimson = u32::from(*((pgd + pgd::MAX_HP_FLASK) as *const u8));

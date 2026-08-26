@@ -27,6 +27,7 @@
 //! ```
 
 pub mod catalog;
+pub mod class;
 pub mod equip;
 pub mod model;
 pub mod name;

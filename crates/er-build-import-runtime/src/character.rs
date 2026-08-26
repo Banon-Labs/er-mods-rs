@@ -59,23 +59,6 @@ const STAT_INTELLIGENCE: usize = 7;
 const STAT_FAITH: usize = 8;
 const STAT_ARCANE: usize = 9;
 
-/// Starting classes in `CharaInitParam` order: row `3000 + index`.
-///
-/// Taken from the planner's own class list, which is the list that produced the payload's
-/// `characterClass` string, and which matches the game's row order.
-const CLASSES: &[&str] = &[
-    "Vagabond",
-    "Warrior",
-    "Hero",
-    "Bandit",
-    "Astrologer",
-    "Prophet",
-    "Samurai",
-    "Prisoner",
-    "Confessor",
-    "Wretch",
-];
-
 type GetStatsFn = unsafe extern "system" fn(*mut i32);
 type ApplyStatsFn = unsafe extern "system" fn(*const i32);
 type SlotsCountFn = unsafe extern "system" fn(usize, usize) -> u32;
@@ -118,10 +101,7 @@ pub unsafe fn player_game_data() -> Option<usize> {
 
 /// The archetype index for a class name, or `None` if unrecognised.
 pub fn archetype_of(class_name: &str) -> Option<u8> {
-    CLASSES
-        .iter()
-        .position(|name| name.eq_ignore_ascii_case(class_name))
-        .and_then(|index| u8::try_from(index).ok())
+    er_build_import_core::class::archetype_for_class(class_name)
 }
 
 /// Set the starting class.
