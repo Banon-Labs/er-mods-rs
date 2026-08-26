@@ -193,13 +193,16 @@ pub fn request() -> Result<(), RequestError> {
 pub struct ExportReport {
     /// The character's name, as the link will carry it.
     pub character: String,
-    /// Equipped armaments, armour pieces, talismans and memorised spells that made it in.
+    /// Armaments, armour pieces, talismans and memorised spells that made it in -- CARRIED, worn
+    /// ones included.
     pub armaments: usize,
     pub protectors: usize,
     pub talismans: usize,
     pub spells: usize,
     /// Equipment slots holding an item whose id resolved to no name, so a short build says so.
     pub unnamed: usize,
+    /// Whether the link carries the character's appearance.
+    pub face_data: bool,
     /// Characters in the finished URL.
     pub url_len: usize,
     /// Whether the URL reached the clipboard, and whether a browser accepted it.
@@ -211,11 +214,12 @@ impl ExportReport {
     /// One line for a menu help field or a log.
     pub fn summary(&self) -> String {
         format!(
-            "{} armaments, {} armour, {} talismans, {} spells -> {} char link{}{}",
+            "{} armaments, {} armour, {} talismans, {} spells{} -> {} char link{}{}",
             self.armaments,
             self.protectors,
             self.talismans,
             self.spells,
+            if self.face_data { ", face" } else { "" },
             self.url_len,
             if self.clipboard { ", copied" } else { "" },
             if self.opened { ", opened" } else { "" },
@@ -231,10 +235,25 @@ impl ExportReport {
 /// declared, instead of forcing every consumer to carry them.
 #[derive(Clone, Copy)]
 pub struct Sinks {
-    /// Put the URL on the clipboard. Returns whether it landed.
-    pub clipboard: fn(&str) -> bool,
-    /// Hand the URL to the OS to open. Returns whether it was accepted.
-    pub open: fn(&str) -> bool,
+    /// Put the URL on the clipboard. Returns whether it landed. `None` when the caller has no
+    /// clipboard at all.
+    pub clipboard: Option<fn(&str) -> bool>,
+    /// Hand the URL to the OS to open. Returns whether it was accepted. `None` when the caller has
+    /// no browser to offer -- which is NOT the same as a browser that refused, and must not be
+    /// reported as a failed export.
+    pub open: Option<fn(&str) -> bool>,
+}
+
+impl Sinks {
+    /// Sinks for a caller whose only output is the log: the harness DLL, whose entire job is to
+    /// put one link in front of a reader without a menu press or a browser window.
+    #[must_use]
+    pub const fn log_only() -> Self {
+        Self {
+            clipboard: None,
+            open: None,
+        }
+    }
 }
 
 /// One frame of the exporter. Does nothing until a press has asked AND the game can be read.
@@ -271,7 +290,9 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
     };
     crate::log_line(&format!(
         "[build-export] read character={:?} class={:?} armaments={} armour={} talismans={} \
-         spells={} tears={} rune={:?} 2h={} flasks={}+{} upgrade={:?} unnamed={}",
+         spells={} tears={} rune={:?} 2h={} flasks={}+{} upgrade={:?} unnamed={} \
+         whole_inventory={} ammunition_skipped={} duplicates_collapsed={} \
+         goods_carried_not_exported={}",
         read.name,
         read.character_class,
         read.armaments.len(),
@@ -285,6 +306,24 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
         read.flask_cerulean,
         read.weapon_upgrade,
         read.unnamed_slots,
+        read.read_whole_inventory,
+        read.carried_ammunition,
+        read.collapsed_duplicates,
+        read.carried_goods,
+    ));
+    // The per-armament levels and the appearance, both of which used to be absent from the link
+    // entirely. Logged as their own line because they are the two things a reader of the last
+    // export's evidence most needs to check.
+    crate::log_line(&format!(
+        "[build-export] armaments {:?}; face data {}",
+        read.armaments
+            .iter()
+            .map(|item| (item.name.as_str(), item.upgrade, item.equip_index))
+            .collect::<Vec<_>>(),
+        match read.face_data.as_deref() {
+            Some(bytes) => format!("{} bytes", bytes.len()),
+            None => "NOT READ".to_owned(),
+        }
     ));
 
     PHASE.store(Phase::Opening as usize, Ordering::SeqCst);
@@ -326,6 +365,7 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
         talismans: read.talismans.len(),
         spells: read.spells.len(),
         unnamed: read.unnamed_slots,
+        face_data: read.face_data.is_some(),
         url_len: url.chars().count(),
         ..ExportReport::default()
     };
@@ -337,17 +377,26 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
     // produced instead of a description of it.
     crate::log_line(&format!("[build-export] URL {url}"));
 
-    report.clipboard = (sinks.clipboard)(&url);
-    report.opened = (sinks.open)(&url);
+    report.clipboard = sinks.clipboard.is_some_and(|copy| copy(&url));
+    report.opened = sinks.open.is_some_and(|open| open(&url));
     crate::log_line(&format!(
         "[build-export] clipboard={} browser={}",
-        report.clipboard, report.opened
+        match sinks.clipboard {
+            Some(_) => report.clipboard.to_string(),
+            None => "n/a".to_owned(),
+        },
+        match sinks.open {
+            Some(_) => report.opened.to_string(),
+            None => "n/a".to_owned(),
+        }
     ));
 
     if let Ok(mut slot) = LAST_URL.lock() {
         *slot = Some(url);
     }
-    if !report.opened {
+    // A browser that REFUSED is a failure the player has to be told about. A caller with no
+    // browser at all is not: the harness's link went to the log, which is where it was asked to go.
+    if sinks.open.is_some() && !report.opened {
         // A link that was built but never reached a browser is a FAILURE the player must be told
         // about -- silently succeeding here is how "I pressed it and nothing happened" happens.
         set_error(format!(

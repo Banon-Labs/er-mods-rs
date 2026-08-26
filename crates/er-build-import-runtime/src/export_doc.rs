@@ -17,8 +17,45 @@
 
 use er_build_export::BuildExportDoc;
 use er_build_export::model::{Slot, SlotList, Stats};
+use er_build_import_core::equip::PROTECTOR_PARTS;
+use er_build_import_core::plan::{MAX_SOMBER_LEVEL, regular_level_for_somber};
 
-use crate::read_character::CharacterRead;
+use crate::read_character::{CharacterRead, ReadSlot};
+
+/// The equip index the planner writes for ARMOUR.
+///
+/// One, not zero, and not the body part: the planner's own writer is
+/// `setSlotEquipIndex('protectors', slot, 1)` -- membership only, since which part a piece is worn
+/// on comes from which of the four lists it sits in. Most of the site reads armour back with
+/// `equipIndex != null`, which zero satisfies, but its build-code exporter looks for
+/// `equipIndex === 1` exactly and finds NOTHING when the value is zero.
+const PROTECTOR_EQUIP_INDEX: u32 = 1;
+
+/// One item, as a planner slot: name, position in its list, and everything the read knew about it.
+///
+/// The equip index is what separates a WORN item from a carried one, and it is the read's answer
+/// rather than the list position -- the two are different numbers, and conflating them is what
+/// would put a backup weapon in the main hand.
+fn planner_slot(item: &ReadSlot, order: usize) -> Slot {
+    let mut slot = Slot::carried(&item.name, order as i64);
+    if let Some(index) = item.equip_index {
+        slot = slot.equipped_at(index);
+    }
+    if let Some(infusion) = item.infusion.as_deref() {
+        slot = slot.with_infusion(infusion);
+    }
+    if let Some(art) = item.weapon_art.as_deref() {
+        slot = slot.with_weapon_art(art);
+    }
+    // EVERY armament states its own level. `weaponUpgrade` is one number for the whole character
+    // (the game's own `matching_weapon_level`), so leaving the per-slot key off showed a backup
+    // weapon at the main weapon's level -- and the level is not an inference here: it is read
+    // straight off the id of the instance in the slot.
+    if let Some(upgrade) = item.upgrade {
+        slot = slot.with_upgrade(upgrade);
+    }
+    slot
+}
 
 /// The planner's stat keys, in the order [`CharacterRead::stats`] produces them. Named here so a
 /// key that stops matching fails to find its field rather than silently exporting a zero.
@@ -62,13 +99,30 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         ..BuildExportDoc::default()
     };
 
-    // The character's HIGHEST weapon upgrade is what the planner's `weaponUpgrade` means -- it is
-    // the level every armament defaults to. Per-slot `upgrade` overrides exist in the format but
-    // are NOT emitted: the level of an individual weapon lives in its gaitem, which this read does
-    // not reach, and inventing one per slot would state something unmeasured as fact. A character
-    // whose weapons are all at the same level -- which is the overwhelming case for a finished
-    // build -- exports exactly right; a mixed one exports its best level for all of them.
-    if let Some(upgrade) = read.weapon_upgrade {
+    // `weaponUpgrade` is MEASURED off the armaments, not taken from the character.
+    //
+    // `PlayerGameData::matching_weapon_level` looks like the right field and is not: it read 25 on
+    // a character whose every armament is +17 or +7 (nothing it owned was +25), which put a "+25"
+    // on the shared sheet that described nothing. So the number is derived from the armaments this
+    // export actually carries, on the planner's regular-stone scale -- a somber armament's level is
+    // mapped back up, because that is the scale this field is in and it also acts as a CAP:
+    // the planner renders a slot at `min(slot.upgrade, lr[weaponUpgrade])`, so a number below any
+    // slot's own level would silently clamp it.
+    //
+    // The character's field remains the fallback for a build with no armaments at all, where there
+    // is nothing to measure.
+    let measured = read
+        .armaments
+        .iter()
+        .filter_map(|item| {
+            let level = item.upgrade?;
+            Some(match item.max_upgrade {
+                Some(MAX_SOMBER_LEVEL) => regular_level_for_somber(level),
+                _ => level,
+            })
+        })
+        .max();
+    if let Some(upgrade) = measured.or(read.weapon_upgrade) {
         doc.weapon_upgrade = upgrade;
     }
 
@@ -76,32 +130,39 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         .armaments
         .iter()
         .enumerate()
-        .map(|(order, item)| {
-            let mut slot = Slot::carried(&item.name, order as i64).equipped_at(item.equip_index);
-            if let Some(infusion) = item.infusion.as_deref() {
-                slot = slot.with_infusion(infusion);
-            }
-            if let Some(art) = item.weapon_art.as_deref() {
-                slot = slot.with_weapon_art(art);
-            }
-            slot
-        })
+        .map(|(order, item)| planner_slot(item, order))
         .collect();
 
     doc.talismans.slots = read
         .talismans
         .iter()
         .enumerate()
-        .map(|(order, item)| Slot::carried(&item.name, order as i64).equipped_at(item.equip_index))
+        .map(|(order, item)| planner_slot(item, order))
         .collect();
 
-    for (part, item) in &read.protectors {
-        // Each body part holds exactly one worn piece, so it is index 0 of its own list.
+    // Armour, one list per body part, carrying everything the character HOLDS for that part with
+    // the worn piece marked. Ordered by part rather than by the order the inventory listed them,
+    // because the planner keeps four separate lists and an item's list is what says which part it
+    // is for.
+    for part in PROTECTOR_PARTS {
+        let slots: Vec<Slot> = read
+            .protectors
+            .iter()
+            .filter(|(held_part, _)| *held_part == part)
+            .enumerate()
+            .map(|(order, (_, item))| {
+                let mut slot = planner_slot(item, order);
+                if item.equip_index.is_some() {
+                    slot = slot.equipped_at(PROTECTOR_EQUIP_INDEX);
+                }
+                slot
+            })
+            .collect();
         let list = SlotList {
-            slots: vec![Slot::carried(&item.name, 0).equipped_at(0)],
+            slots,
             ..SlotList::default()
         };
-        match *part {
+        match part {
             "head" => doc.protectors.head = list,
             "body" => doc.protectors.body = list,
             "arms" => doc.protectors.arms = list,
@@ -128,5 +189,25 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
     doc.items.flasks.total = read.flask_crimson + read.flask_cerulean;
 
     doc.great_rune = read.great_rune.clone();
+    // The appearance, as an uppercase hex AOB. Hex rather than base64 because it is what a player
+    // pastes into a save editor or a Cheat Engine table, which is the only tool that can do
+    // anything with it today -- the planner has no appearance at all.
+    doc.face_data = read.face_data.as_deref().map(hex_upper);
     doc
 }
+
+/// Bytes as one uppercase hex string, no separators -- an AOB the way every tool that eats one
+/// spells it.
+fn hex_upper(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(HEX_DIGITS[usize::from(byte >> 4)]);
+        out.push_str(HEX_DIGITS[usize::from(byte & 0x0F)]);
+    }
+    out
+}
+
+/// Uppercase hex digits, indexed by nibble.
+const HEX_DIGITS: [&str; 16] = [
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F",
+];

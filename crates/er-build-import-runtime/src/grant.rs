@@ -340,7 +340,11 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         let full_id = if is_armament(grant) {
             armament_item_id(
                 grant.item_id,
-                levels.clamp(grant.item_id & ITEM_ROW_MASK, grant.reinforce_lv),
+                levels.game_level_for(
+                    grant.item_id & ITEM_ROW_MASK,
+                    grant.reinforce_lv,
+                    grant.upgrade_is_character_default,
+                ),
             )
         } else {
             grant.item_id
@@ -456,11 +460,16 @@ unsafe fn grant_armament(
     let mut handle = [0u32; 4];
 
     // THE LEVEL IS PART OF THE ITEM ID, and it has to be decided before the mint rather than
-    // after it. The build's level is what the AUTHOR asked for, not necessarily a level this
-    // armament has -- somber armaments stop at +10 and a build's `weaponUpgrade` is one number
-    // for the whole character -- so the game is asked which `reinforceTypeId + level` rows exist
-    // and the request is clamped to one of them.
-    let wanted_level = levels.clamp(grant.item_id & ITEM_ROW_MASK, grant.reinforce_lv);
+    // after it. The build's level is what the AUTHOR asked for, on the PLANNER's scale, not
+    // necessarily a level this armament has -- somber armaments stop at +10 while the planner
+    // still counts them in regular smithing-stone levels, and a build's `weaponUpgrade` is one
+    // number for the whole character -- so the game is asked which `reinforceTypeId + level` rows
+    // exist and the request is translated onto them.
+    let wanted_level = levels.game_level_for(
+        grant.item_id & ITEM_ROW_MASK,
+        grant.reinforce_lv,
+        grant.upgrade_is_character_default,
+    );
     let minted_id = armament_item_id(grant.item_id, wanted_level);
 
     // Safety: our own buffer, the live singleton, and ids that are plain integers.

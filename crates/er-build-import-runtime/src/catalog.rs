@@ -32,6 +32,15 @@ use er_build_import_core::catalog::{Entry, Kind, MapCatalog};
 /// happily resolve `"?GoodsName?"` to whichever row asked last.
 const PLACEHOLDER_PREFIX: char = '?';
 
+/// The OTHER placeholder, and the one that actually ships in the message files: FromSoftware names
+/// its dummy and unused rows `[ERROR]`, `[ERROR]Type 1`, `[ERROR]type 10`, and so on. There are
+/// hundreds of them -- they are why a catalog build reports around a hundred colliding names, all
+/// of them this one string -- and not one is an item. Treating them as names lets a slot holding a
+/// dummy row export as an item nothing can resolve, and lets a build asking for `"[error]"` import
+/// whichever dummy row was enumerated last. Verified against the shipped message files:
+/// `python3 scripts/er-item-name.py ProtectorName 1000` answers `'[ERROR]Type 1'`.
+const ERROR_PLACEHOLDER_PREFIX: &str = "[error]";
+
 /// RVAs of the game's per-category name getters, verified in the 1.16.2 dump.
 ///
 /// Each takes `(MsgRepositoryImp*, u32 row_id)` and returns a NUL-terminated `wchar_t*`.
@@ -188,6 +197,17 @@ unsafe fn read_wide(ptr: *const u16) -> Option<String> {
     }
     let text = String::from_utf16(&units).ok()?;
     if text.is_empty() || text.starts_with(PLACEHOLDER_PREFIX) {
+        return None;
+    }
+    // Case-insensitively, because the shipped files spell it both `[ERROR]Type 1` and
+    // `[ERROR]type 10` -- a case-sensitive test would let half of them through. Sliced with `get`
+    // rather than `[..7]`: item names are UTF-16 from the game and a byte-index slice through a
+    // multi-byte character PANICS, which in this crate means taking the game down to avoid
+    // exporting a placeholder.
+    if text
+        .get(..ERROR_PLACEHOLDER_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(ERROR_PLACEHOLDER_PREFIX))
+    {
         return None;
     }
     Some(text)
@@ -612,6 +632,41 @@ impl ReinforceLevels {
             Err(_) => std::collections::BTreeSet::new(),
         };
         Self { rows }
+    }
+
+    /// The GAME level to store for an armament the build wants at `requested`.
+    ///
+    /// Two numbers reach this function on DIFFERENT scales, and `is_character_default` says which
+    /// one this is (see `er_build_import_core::plan::Grant::upgrade_is_character_default`):
+    ///
+    /// * a per-slot `upgrade` is already the game's level, so it is only clamped;
+    /// * the character-wide `weaponUpgrade` is in regular smithing-stone levels for EVERY
+    ///   armament, so for a somber one it is mapped down first -- `weaponUpgrade: 17` means the
+    ///   game's +7 there, and clamping 17 instead would silently hand over a maxed +10.
+    ///
+    /// Somber is MEASURED rather than flagged: an armament whose highest existing
+    /// `reinforceTypeId + level` row is [`er_build_import_core::plan::MAX_SOMBER_LEVEL`] is one,
+    /// which is the same question [`Self::clamp`] already answers.
+    pub fn game_level_for(
+        &self,
+        weapon_param_id: u32,
+        requested: u16,
+        is_character_default: bool,
+    ) -> u16 {
+        use er_build_import_core::plan::{
+            MAX_REGULAR_LEVEL, MAX_SOMBER_LEVEL, somber_level_for_regular,
+        };
+
+        if !is_character_default {
+            return self.clamp(weapon_param_id, requested);
+        }
+        let max = self.clamp(weapon_param_id, MAX_REGULAR_LEVEL);
+        let wanted = if max == MAX_SOMBER_LEVEL {
+            somber_level_for_regular(requested)
+        } else {
+            requested
+        };
+        self.clamp(weapon_param_id, wanted)
     }
 
     /// The highest level at or below `requested` that `weapon_param_id` actually has a row for.

@@ -26,9 +26,9 @@ use er_build_import_core::catalog::Kind;
 use er_build_import_core::equip::{
     ARMAMENT_CHR_ASM_SLOTS, CHR_ASM_SLOT_ACCESSORY_1, CHR_ASM_SLOT_PROTECTOR_HEAD, PROTECTOR_PARTS,
 };
-use er_build_import_core::plan::split_armament_id;
+use er_build_import_core::plan::{ARMAMENT_LEVEL_STEP, split_armament_id};
 
-use crate::catalog::name_for;
+use crate::catalog::{ReinforceLevels, name_for};
 use crate::character::player_game_data;
 
 // Every game address this module calls is declared ONCE in `er-game-base::rva` and derived here.
@@ -85,7 +85,26 @@ mod pgd {
     // The same two assertions `er_game_base::pgd` makes, so the two derivations cannot drift.
     const _: () = assert!(NAME == 0x9c);
     const _: () = assert!(NAME_LEN_U16 == 17);
+
+    /// `PlayerGameData::face_data.face_data_buffer` -- the character's APPEARANCE, magic first.
+    ///
+    /// Bound to the upstream layout the same way every other offset here is, so a struct change
+    /// breaks the build instead of exporting 288 bytes of something else.
+    pub const FACE_DATA_BUFFER: usize = core::mem::offset_of!(PlayerGameData, face_data)
+        + core::mem::offset_of!(eldenring::cs::FaceData, face_data_buffer);
+
+    /// Its length: `FACE` + version + declared size + the payload itself.
+    pub const FACE_DATA_BUFFER_LEN: usize = core::mem::size_of::<eldenring::cs::FaceDataBuffer>();
+
+    // The buffer the game serialises into a save slot is 288 bytes and starts with `FACE`. Both
+    // are asserted rather than assumed because the export writes them into a share link, where a
+    // silently shorter blob would be indistinguishable from a valid one.
+    const _: () = assert!(FACE_DATA_BUFFER_LEN == 0x120);
 }
+
+/// The four bytes every `FaceDataBuffer` begins with. A read that does not start with them is not
+/// face data, and exporting it anyway would publish whatever happened to be at that address.
+const FACE_DATA_MAGIC: [u8; 4] = *b"FACE";
 
 /// Highest upgrade level `matching_weapon_level` can legitimately hold. A byte above this means we
 /// are not looking at live save data, so the field is reported as unknown rather than exported.
@@ -115,8 +134,40 @@ pub struct ReadSlot {
     pub infusion: Option<String>,
     /// Ash of war on this armament, if the equipped gem resolved to one.
     pub weapon_art: Option<String>,
-    /// Position within its category, which is also the planner's `equipIndex`.
-    pub equip_index: u32,
+    /// Upgrade level for armaments, as the GAME counts it -- 0..=25, or 0..=10 for a somber
+    /// armament -- which is the scale the planner's per-slot `upgrade` uses too. `None` for
+    /// anything that is not an armament.
+    pub upgrade: Option<u16>,
+    /// The `EquipParamWeapon` row (affinity included, level stripped) this armament came from.
+    /// Armaments only; carried for the diagnostics that need to ask the param table about it.
+    pub row_with_affinity: Option<u32>,
+    /// The HIGHEST level this armament can reach -- 25 for a regular one, 10 for a somber one, 0
+    /// for something that does not upgrade at all (ammunition). Measured off the live
+    /// `ReinforceParamWeapon` table, and the only sound way to tell somber from regular.
+    pub max_upgrade: Option<u16>,
+    /// The instance this slot names, as `(selector, category)` off its `GaitemHandle`. Present for
+    /// armaments only, and only so a carried armament can be matched to the equipment slot holding
+    /// it: several copies of one armament share an item id and differ only by the ash mounted on
+    /// them, so the id cannot pick a copy and the handle can.
+    pub gaitem_handle: Option<(u32, u8)>,
+    /// Position within its category, which is also the planner's `equipIndex` -- `None` for an
+    /// item the character is merely CARRYING.
+    pub equip_index: Option<u32>,
+}
+
+/// What one equipment slot held.
+///
+/// Three outcomes, not two: a slot can be EMPTY, which is nothing to report, or it can be occupied
+/// by an item the message repository would not name, which is a build that comes out short and has
+/// to say so. Collapsing those two into `None` is what let the count of unnameable slots sit at
+/// zero no matter what happened.
+enum SlotRead {
+    /// Nothing equipped here.
+    Empty,
+    /// Something is equipped, and it could not be named.
+    Unnamed,
+    /// A named item.
+    Item(ReadSlot),
 }
 
 /// The character, as the planner would describe it.
@@ -131,11 +182,12 @@ pub struct CharacterRead {
     /// Highest weapon upgrade level on the character, which is what the planner's `weaponUpgrade`
     /// means. `None` when the field failed its sanity bound.
     pub weapon_upgrade: Option<u16>,
-    /// Equipped armaments, in planner index order.
+    /// Armaments the character is CARRYING, worn ones included and marked by their
+    /// [`ReadSlot::equip_index`].
     pub armaments: Vec<ReadSlot>,
-    /// Equipped armour, keyed by [`PROTECTOR_PARTS`].
+    /// Armour, keyed by [`PROTECTOR_PARTS`] -- again everything carried, not only what is worn.
     pub protectors: Vec<(&'static str, ReadSlot)>,
-    /// Equipped talismans.
+    /// Talismans, carried and worn.
     pub talismans: Vec<ReadSlot>,
     /// Memorised spells, in slot order.
     pub spells: Vec<ReadSlot>,
@@ -154,6 +206,23 @@ pub struct CharacterRead {
     /// Slots that held an item whose id resolved to NO name. Never silently dropped: a build that
     /// came out short says so.
     pub unnamed_slots: usize,
+    /// The character's APPEARANCE, exactly as the game holds it: the whole `FaceDataBuffer`, magic
+    /// first. `None` when the read failed or the magic was wrong, which is the only two ways this
+    /// can be anything other than the player's own face.
+    pub face_data: Option<Vec<u8>>,
+    /// Arrows and bolts the character is carrying. COUNTED, not exported -- see the ammunition
+    /// note in [`read_carried`].
+    pub carried_ammunition: usize,
+    /// Duplicate copies of an item that were collapsed into one entry.
+    pub collapsed_duplicates: usize,
+    /// Consumables, crafting materials and key items the character is carrying. COUNTED, not
+    /// exported: they are the bulk of an inventory and the planner models only the handful that
+    /// sit in the quickbar, so shipping them would put several thousand characters of crafting
+    /// material into a URL to say nothing. Counted rather than ignored so the omission is visible.
+    pub carried_goods: usize,
+    /// Whether the carried-inventory read ran at all. `false` means the lists above are the WORN
+    /// loadout only -- the honest state to report rather than an empty backpack.
+    pub read_whole_inventory: bool,
 }
 
 type ParamInSlotFn = unsafe extern "system" fn(usize, i32) -> i32;
@@ -161,7 +230,17 @@ type OutParamGetterFn = unsafe extern "system" fn(usize, *mut i32, i32) -> *mut 
 type MagicIdFn = unsafe extern "system" fn(usize, i32) -> i32;
 type SlotsCountFn = unsafe extern "system" fn(usize, usize) -> u32;
 
-/// Read one equipment slot and name it, or `None` when the slot is empty or unnameable.
+/// Read one equipment slot and name it.
+///
+/// # The level has to come off the id before anything is named
+///
+/// `GetParamIdInSlot` answers with the id of the INSTANCE in the slot, and for an armament that id
+/// carries the upgrade level in its last two digits (`16110217` = Cross-Naginata + Keen `200` +
+/// `17`). `EquipParamWeapon` has no row for that -- only for `16110200` -- and the game's name
+/// getter is an exact `MsgRepositoryImp::LookupEntry`, so asking it about the levelled id answers
+/// NULL. That is not a slightly wrong name, it is no name, and this function used to report the
+/// slot as unnameable and drop it. Every armament on a finished character is upgraded, so every
+/// armament on a finished character vanished from the exported build.
 ///
 /// # Safety
 ///
@@ -172,37 +251,98 @@ unsafe fn read_slot(
     egd: usize,
     slot: i32,
     kind: Kind,
-    equip_index: u32,
-) -> Option<ReadSlot> {
+    equip_index: Option<u32>,
+) -> SlotRead {
     // Safety: verified RVA; a pure read of the slot's current param id.
     let get: ParamInSlotFn = unsafe { core::mem::transmute(module_base + GET_PARAM_ID_IN_SLOT) };
     // Safety: the caller's contract.
     let raw = unsafe { get(egd, slot) };
     // An empty slot reads as -1, and the engine also uses large sentinels for "nothing"; anything
     // that is not a plausible row id is simply not an item.
-    let param_id = u32::try_from(raw).ok()?;
+    let Ok(param_id) = u32::try_from(raw) else {
+        return SlotRead::Empty;
+    };
     if param_id == 0 || param_id == u32::MAX {
-        return None;
+        return SlotRead::Empty;
     }
-    let (row_id, infusion) = if kind == Kind::Weapon {
-        split_armament_id(param_id)
+    let (row_id, infusion, upgrade) = if kind == Kind::Weapon {
+        let split = split_armament_id(param_id);
+        // An EMPTY hand is not an armament. It reads as row 110000 ("Unarmed"), which names
+        // itself perfectly well -- see `UNARMED_ARMAMENT_ROW`.
+        if split.row == UNARMED_ARMAMENT_ROW {
+            return SlotRead::Empty;
+        }
+        // Verbatim, on the game's own scale. The planner's PER-SLOT `upgrade` is on that same
+        // scale -- its editor caps the input at the armament's real maximum (10 for a somber one)
+        // and stores what was typed -- so no mapping belongs here. Only its character-wide
+        // `weaponUpgrade` is on the regular-stone scale, and that field is written from
+        // `matching_weapon_level`, which is already regular.
+        (split.row, split.infusion, Some(split.level))
     } else {
-        (param_id, None)
+        (param_id, None, None)
     };
     // Safety: the caller's contract carries through.
-    let name = unsafe { name_for(kind, msg, module_base, row_id) }?;
-    let weapon_art = if kind == Kind::Weapon {
-        // Safety: same context; the whole chain is null-checked inside.
-        unsafe { read_weapon_art(module_base, msg, slot) }
-    } else {
-        None
+    let Some(name) = (unsafe { name_for(kind, msg, module_base, row_id) }) else {
+        return SlotRead::Unnamed;
     };
-    Some(ReadSlot {
+    let (weapon_art, gaitem_handle) = if kind == Kind::Weapon {
+        // Safety: same context; the whole chain is null-checked inside.
+        let art = unsafe { read_weapon_art(module_base, msg, slot) };
+        // Safety: as above -- one read of the player singleton and one engine getter.
+        let handle = unsafe { worn_armament_handle(module_base, slot) };
+        (art, handle)
+    } else {
+        (None, None)
+    };
+    SlotRead::Item(ReadSlot {
         name,
         infusion: infusion.map(str::to_owned),
         weapon_art,
+        upgrade,
+        row_with_affinity: (kind == Kind::Weapon)
+            .then(|| param_id / ARMAMENT_LEVEL_STEP * ARMAMENT_LEVEL_STEP),
+        max_upgrade: None,
         equip_index,
+        gaitem_handle,
     })
+}
+
+/// The gaitem handle of the armament worn in `slot`, as `(selector, category)`.
+///
+/// The same pair the inventory entries carry, so the merge can tell WHICH copy of an armament is
+/// the worn one -- several copies share an item id and differ only by the ash mounted on them.
+///
+/// # Safety
+///
+/// Game thread; `module_base` the loaded image base.
+unsafe fn worn_armament_handle(module_base: usize, slot: i32) -> Option<(u32, u8)> {
+    // Safety: fault-checked reads of the singleton slot and one offset inside it.
+    let world =
+        unsafe { er_game_base::mem::safe_read_usize(module_base + WORLD_CHR_MAN_GLOBAL_RVA) }?;
+    if world == 0 {
+        return None;
+    }
+    // Safety: as above.
+    let player =
+        unsafe { er_game_base::mem::safe_read_usize(world + WORLD_CHR_MAN_PLAYER_INS_OFFSET) }?;
+    if player == 0 {
+        return None;
+    }
+    // Safety: the caller's contract; the slot came from the caller's fixed table.
+    let handle = unsafe { worn_weapon_handle(module_base, player, slot) }?;
+    Some((
+        handle & GAITEM_HANDLE_SELECTOR_MASK,
+        GAITEM_HANDLE_CATEGORY_OF(handle),
+    ))
+}
+
+/// Bits 23:0 of a `GaitemHandle` -- the selector, which is what identifies the instance.
+const GAITEM_HANDLE_SELECTOR_MASK: u32 = 0x00FF_FFFF;
+
+/// Bits 30:28 of a `GaitemHandle` -- its category.
+#[allow(non_snake_case)]
+const fn GAITEM_HANDLE_CATEGORY_OF(handle: u32) -> u8 {
+    ((handle >> 28) & 0x7) as u8
 }
 
 /// The ash of war on the armament in `slot`, named -- see [`worn_armament`] for how it is read.
@@ -349,40 +489,52 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     // Safety: the name is read through the fault-checked reader, so an unmapped page yields a
     // short name rather than a fault.
     out.name = unsafe { read_character_name(pgd) };
+    // Safety: as above -- a fault-checked read of a fixed-length field at a derived offset.
+    out.face_data = unsafe { read_face_data(pgd) };
 
     let mut unnamed = 0usize;
-    let mut count_read = |slot: Option<ReadSlot>, occupied: bool| {
-        if occupied && slot.is_none() {
-            unnamed += 1;
-        }
-        slot
-    };
 
     // Armaments, in the planner's index order rather than the engine's interleaved one.
     for (equip_index, slot) in ARMAMENT_CHR_ASM_SLOTS.into_iter().enumerate() {
         let equip_index = equip_index as u32;
         // Safety: the caller's contract.
-        let read = unsafe { read_slot(module_base, msg, egd, slot, Kind::Weapon, equip_index) };
-        if let Some(item) = count_read(read, false) {
-            out.armaments.push(item);
+        let read =
+            unsafe { read_slot(module_base, msg, egd, slot, Kind::Weapon, Some(equip_index)) };
+        match read {
+            SlotRead::Item(item) => out.armaments.push(item),
+            SlotRead::Unnamed => unnamed += 1,
+            SlotRead::Empty => {}
         }
     }
     // Armour: head, chest, hands, legs, consecutive from ProtectorHead.
     for (offset, part) in PROTECTOR_PARTS.into_iter().enumerate() {
         let slot = CHR_ASM_SLOT_PROTECTOR_HEAD + offset as i32;
         // Safety: as above.
-        let read = unsafe { read_slot(module_base, msg, egd, slot, Kind::Protector, 0) };
-        if let Some(item) = count_read(read, false) {
-            out.protectors.push((part, item));
+        let read = unsafe { read_slot(module_base, msg, egd, slot, Kind::Protector, Some(0)) };
+        match read {
+            SlotRead::Item(item) => out.protectors.push((part, item)),
+            SlotRead::Unnamed => unnamed += 1,
+            SlotRead::Empty => {}
         }
     }
     // Talismans.
     for index in 0..4i32 {
         let slot = CHR_ASM_SLOT_ACCESSORY_1 + index;
         // Safety: as above.
-        let read = unsafe { read_slot(module_base, msg, egd, slot, Kind::Talisman, index as u32) };
-        if let Some(item) = count_read(read, false) {
-            out.talismans.push(item);
+        let read = unsafe {
+            read_slot(
+                module_base,
+                msg,
+                egd,
+                slot,
+                Kind::Talisman,
+                Some(index as u32),
+            )
+        };
+        match read {
+            SlotRead::Item(item) => out.talismans.push(item),
+            SlotRead::Unnamed => unnamed += 1,
+            SlotRead::Empty => {}
         }
     }
 
@@ -412,7 +564,11 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
                     name,
                     infusion: None,
                     weapon_art: None,
-                    equip_index: slot as u32,
+                    upgrade: None,
+                    row_with_affinity: None,
+                    max_upgrade: None,
+                    equip_index: Some(slot as u32),
+                    gaitem_handle: None,
                 }),
                 None => unnamed += 1,
             }
@@ -461,6 +617,8 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     });
 
     out.unnamed_slots = unnamed;
+    // Safety: the caller's contract -- game task thread, params streamed, live `egd`/`msg`.
+    unsafe { read_carried(module_base, msg, egd, &mut out) };
     Some(out)
 }
 
@@ -486,6 +644,399 @@ unsafe fn read_character_name(pgd: usize) -> String {
         units.push(unit);
     }
     String::from_utf16(&units).unwrap_or_default()
+}
+
+/// Everything in the character's inventory, named -- the BACKPACK, not just what is worn.
+///
+/// # Why this is a second pass rather than a replacement for the equipment read
+///
+/// The equipment slots say what is WORN and in which position; the inventory says what is HELD.
+/// Elden Ring keeps a worn item in the inventory too, so the two overlap, and the merge below
+/// takes the inventory as the list and the equipment slots as the annotation. Written this way
+/// round, a character whose inventory cannot be read still exports its loadout exactly as before
+/// -- [`CharacterRead::read_whole_inventory`] says which of the two happened.
+///
+/// # What is left out, and counted instead
+///
+/// Goods -- consumables, crafting materials, key items -- are counted into
+/// [`CharacterRead::carried_goods`] and not exported. A finished character carries several hundred
+/// of them, the planner models only the few that sit in the quickbar, and the payload rides in a
+/// URL. Gems (ashes of war) are skipped for the same reason: the ash that matters is the one
+/// MOUNTED on an armament, and that is exported with the armament.
+///
+/// # Safety
+///
+/// Game task thread, params streamed, `egd` a live `EquipGameData*` and `msg` a live
+/// `MsgRepositoryImp*`.
+unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut CharacterRead) {
+    use eldenring::cs::{EquipGameData, EquipInventoryData, ItemCategory};
+
+    /// `EquipGameData::equip_inventory_data`, from the upstream typed layout.
+    const INVENTORY_OFFSET: usize = core::mem::offset_of!(EquipGameData, equip_inventory_data);
+
+    // Safety: the caller's contract -- `egd` is the live `EquipGameData` and the inventory is a
+    // by-value member of it, so this is a field address rather than a pointer to follow.
+    let inventory = unsafe { &*((egd + INVENTORY_OFFSET) as *const EquipInventoryData) }
+        .items_data
+        .items();
+
+    let parts = protector_parts();
+    let types = weapon_types();
+    let levels = ReinforceLevels::read();
+    let mut maxima: std::collections::BTreeMap<u32, u16> = std::collections::BTreeMap::new();
+    let mut armaments = Vec::new();
+    let mut protectors: Vec<(&'static str, ReadSlot)> = Vec::new();
+    let mut talismans = Vec::new();
+
+    for entry in inventory {
+        let item_id = entry.item_id;
+        let row = item_id.param_id();
+        match item_id.category() {
+            ItemCategory::Weapon => {
+                let split = split_armament_id(row);
+                // AMMUNITION IS NOT AN ARMAMENT. Arrows and bolts are `EquipParamWeapon` rows, so
+                // they arrive in this list, and a quiver of them is most of a real inventory --
+                // 68 of the 123 entries the first whole-inventory export produced. The planner
+                // keeps ammo in its own `items.ammo` map, drops it from `inventory` on import,
+                // and the only thing it does in a share link is make the URL longer.
+                if types
+                    .get(&split.row_with_affinity)
+                    .copied()
+                    .is_some_and(is_ammunition)
+                {
+                    out.carried_ammunition += 1;
+                    continue;
+                }
+                // Safety: the caller's contract carries through.
+                let Some(name) = (unsafe { name_for(Kind::Weapon, msg, module_base, split.row) })
+                else {
+                    continue;
+                };
+                if split.row == UNARMED_ARMAMENT_ROW {
+                    continue;
+                }
+                let handle = (
+                    entry.gaitem_handle.selector(),
+                    entry.gaitem_handle.category_raw(),
+                );
+                // Safety: the handle came out of the engine's own inventory entry, and the whole
+                // lookup chain is null-checked inside.
+                let weapon_art = unsafe { art_for_handle(module_base, msg, handle.0, handle.1) };
+                armaments.push(ReadSlot {
+                    name,
+                    infusion: split.infusion.map(str::to_owned),
+                    weapon_art,
+                    upgrade: Some(split.level),
+                    row_with_affinity: Some(split.row_with_affinity),
+                    max_upgrade: Some(max_upgrade(&levels, &mut maxima, split.row_with_affinity)),
+                    equip_index: None,
+                    gaitem_handle: Some(handle),
+                });
+            }
+            ItemCategory::Protector => {
+                // Safety: as above.
+                let Some(name) = (unsafe { name_for(Kind::Protector, msg, module_base, row) })
+                else {
+                    continue;
+                };
+                let Some(part) = parts.get(&row).copied() else {
+                    continue;
+                };
+                protectors.push((
+                    part,
+                    ReadSlot {
+                        name,
+                        infusion: None,
+                        weapon_art: None,
+                        upgrade: None,
+                        row_with_affinity: None,
+                        max_upgrade: None,
+                        equip_index: None,
+                        gaitem_handle: None,
+                    },
+                ));
+            }
+            ItemCategory::Accessory => {
+                // Safety: as above.
+                let Some(name) = (unsafe { name_for(Kind::Talisman, msg, module_base, row) })
+                else {
+                    continue;
+                };
+                talismans.push(ReadSlot {
+                    name,
+                    infusion: None,
+                    weapon_art: None,
+                    upgrade: None,
+                    row_with_affinity: None,
+                    max_upgrade: None,
+                    equip_index: None,
+                    gaitem_handle: None,
+                });
+            }
+            ItemCategory::Goods => out.carried_goods += 1,
+            ItemCategory::Gem => {}
+        }
+    }
+
+    // A HUNDRED COPIES OF ONE ITEM IS NOT A BUILD. An inventory that has been imported into more
+    // than once holds the same armament many times over -- one character reached 978 -- and every
+    // copy costs URL. A planner build says WHICH items a character has, so identical entries are
+    // collapsed to one, keeping whichever copy is worn.
+    let armament_copies = armaments.len();
+    let talisman_copies = talismans.len();
+    let protector_copies = protectors.len();
+    let armaments = deduplicate(armaments);
+    let talismans = deduplicate(talismans);
+    let protectors = deduplicate_protectors(protectors);
+    out.collapsed_duplicates = (armament_copies - armaments.len())
+        + (talisman_copies - talismans.len())
+        + (protector_copies - protectors.len());
+
+    out.read_whole_inventory = true;
+    out.armaments = merge_worn(
+        core::mem::take(&mut out.armaments),
+        armaments,
+        |worn, held| worn.gaitem_handle.is_some() && worn.gaitem_handle == held.gaitem_handle,
+    );
+    out.talismans = merge_worn(
+        core::mem::take(&mut out.talismans),
+        talismans,
+        |worn, held| worn.name == held.name,
+    );
+
+    let worn_protectors = core::mem::take(&mut out.protectors);
+    for part in PROTECTOR_PARTS {
+        let worn: Vec<ReadSlot> = worn_protectors
+            .iter()
+            .filter(|(worn_part, _)| *worn_part == part)
+            .map(|(_, slot)| slot.clone())
+            .collect();
+        let held: Vec<ReadSlot> = protectors
+            .iter()
+            .filter(|(held_part, _)| *held_part == part)
+            .map(|(_, slot)| slot.clone())
+            .collect();
+        for slot in merge_worn(worn, held, |worn, held| worn.name == held.name) {
+            out.protectors.push((part, slot));
+        }
+    }
+}
+
+/// `EquipParamWeapon::wepType` values that are AMMUNITION rather than armaments.
+///
+/// Measured, not assumed. The field sits at row offset 422 and every one of the game's 3554 weapon
+/// rows was tabulated against its own name (`scripts/regulation-params.py` +
+/// `scripts/er-item-name.py`): 81 is `Arrow`, 83 `Great Arrow`, 85 `Bolt`, 86 `Ballista Bolt`, and
+/// no other type carries any of those four. 33 is `Unarmed`, alone in its type.
+const AMMUNITION_WEAPON_TYPES: [u16; 4] = [81, 83, 85, 86];
+
+/// Whether a `wepType` is one of the four ammunition types.
+fn is_ammunition(wep_type: u16) -> bool {
+    AMMUNITION_WEAPON_TYPES.contains(&wep_type)
+}
+
+/// Every `EquipParamWeapon` row's `wepType`, read once off the live table.
+fn weapon_types() -> std::collections::BTreeMap<u32, u16> {
+    use eldenring::cs::{EquipParamWeapon, SoloParamRepository};
+    use fromsoftware_shared::FromStatic;
+
+    let mut types = std::collections::BTreeMap::new();
+    // Safety: read-only row access behind the populated-singleton check.
+    let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+        return types;
+    };
+    for (row_id, row) in repo.rows::<EquipParamWeapon>() {
+        types.insert(row_id, row.wep_type());
+    }
+    types
+}
+
+/// The highest level `row_with_affinity` can reach, cached: an inventory holds many copies of one
+/// armament and the answer is a scan of the whole `EquipParamWeapon` table.
+fn max_upgrade(
+    levels: &ReinforceLevels,
+    cache: &mut std::collections::BTreeMap<u32, u16>,
+    row_with_affinity: u32,
+) -> u16 {
+    if let Some(known) = cache.get(&row_with_affinity) {
+        return *known;
+    }
+    let max = levels.clamp(
+        row_with_affinity,
+        er_build_import_core::plan::MAX_REGULAR_LEVEL,
+    );
+    cache.insert(row_with_affinity, max);
+    max
+}
+
+/// Collapse identical items into one entry, keeping the WORN copy when there is one.
+///
+/// Identity is everything a planner build can express about an item: its name, its affinity, its
+/// upgrade level and the ash mounted on it. Two entries that agree on all four are the same item
+/// as far as a build is concerned, however many of them the character is hoarding -- and an
+/// inventory that has been imported into more than once holds a great many (one character reached
+/// 978 armaments, a 24,000-character link the planner would not open).
+fn deduplicate(items: Vec<ReadSlot>) -> Vec<ReadSlot> {
+    let mut out: Vec<ReadSlot> = Vec::with_capacity(items.len());
+    for item in items {
+        let seen = out.iter_mut().find(|kept| {
+            kept.name == item.name
+                && kept.infusion == item.infusion
+                && kept.upgrade == item.upgrade
+                && kept.weapon_art == item.weapon_art
+        });
+        match seen {
+            // A worn copy outranks a carried one: the equip index is the whole reason the entry
+            // matters, and dropping it would leave the build wearing nothing in that position.
+            Some(kept) if kept.equip_index.is_none() && item.equip_index.is_some() => *kept = item,
+            Some(_) => {}
+            None => out.push(item),
+        }
+    }
+    out
+}
+
+/// [`deduplicate`], per body part -- two identical helms are one helm, but a helm and a gauntlet
+/// that happen to share a name are not.
+fn deduplicate_protectors(items: Vec<(&'static str, ReadSlot)>) -> Vec<(&'static str, ReadSlot)> {
+    let mut out: Vec<(&'static str, ReadSlot)> = Vec::with_capacity(items.len());
+    for (part, item) in items {
+        let seen = out
+            .iter_mut()
+            .find(|(kept_part, kept)| *kept_part == part && kept.name == item.name);
+        match seen {
+            Some((_, kept)) if kept.equip_index.is_none() && item.equip_index.is_some() => {
+                *kept = item;
+            }
+            Some(_) => {}
+            None => out.push((part, item)),
+        }
+    }
+    out
+}
+
+/// `EquipParamWeapon` row 0x1adb0 -- "Unarmed", the item an EMPTY hand holds.
+///
+/// An empty weapon slot does not read as nothing: `GetParamIdInSlot` answers 110000, which is a
+/// real row with a real name, so a character wielding one armament exported as SIX -- the armament
+/// and five copies of "Unarmed". The planner deletes them on import (its catalogue has no such
+/// item), which is why they were invisible on the site and present in every payload.
+const UNARMED_ARMAMENT_ROW: u32 = 110_000;
+
+/// The ash of war mounted on the instance a gaitem handle names.
+///
+/// # Safety
+///
+/// Game thread; `module_base` the loaded image base and `msg` a live `MsgRepositoryImp*`.
+unsafe fn art_for_handle(
+    module_base: usize,
+    msg: usize,
+    selector: u32,
+    category: u8,
+) -> Option<String> {
+    let handle = (u32::from(category) << 28) | GAITEM_HANDLE_CATEGORY_FLAG | selector;
+    // Safety: the caller's contract; the record is the engine's own and the chain is null-checked.
+    let mut lookup = unsafe { GaitemLookupResult::from_handle(module_base, handle) }?;
+    // Safety: as above.
+    let arts_id = unsafe { lookup.sword_arts_id(module_base) }?;
+    // Safety: as above.
+    unsafe { name_for(Kind::AshOfWar, msg, module_base, arts_id) }
+}
+
+/// Bit 31 of a `GaitemHandle`, which the engine sets alongside the category on every real handle.
+const GAITEM_HANDLE_CATEGORY_FLAG: u32 = 1 << 31;
+
+/// Merge the WORN list into the HELD one: every held item, with the worn ones carrying their
+/// equip index.
+///
+/// A worn item that matched nothing held is kept rather than dropped -- it is on the character, so
+/// leaving it out because the inventory did not list it would export a loadout the player is not
+/// wearing.
+fn merge_worn(
+    worn: Vec<ReadSlot>,
+    held: Vec<ReadSlot>,
+    matches: impl Fn(&ReadSlot, &ReadSlot) -> bool,
+) -> Vec<ReadSlot> {
+    let mut claimed = vec![false; worn.len()];
+    let mut out: Vec<ReadSlot> = held
+        .into_iter()
+        .map(|mut slot| {
+            if let Some((index, worn_slot)) = worn
+                .iter()
+                .enumerate()
+                .find(|(index, worn_slot)| !claimed[*index] && matches(worn_slot, &slot))
+            {
+                claimed[index] = true;
+                slot.equip_index = worn_slot.equip_index;
+                // The worn read knows the ash the INSTANCE carries; keep it when the held read
+                // could not answer.
+                if slot.weapon_art.is_none() {
+                    slot.weapon_art = worn_slot.weapon_art.clone();
+                }
+            }
+            slot
+        })
+        .collect();
+    for (index, slot) in worn.into_iter().enumerate() {
+        if !claimed[index] {
+            out.push(slot);
+        }
+    }
+    out
+}
+
+/// Which body part every `EquipParamProtector` row is worn on.
+///
+/// Read from the live param table rather than inferred from the id, because the id ranges are not
+/// contiguous per part. Built once per export: the table is ~800 rows and a carried inventory can
+/// hold a hundred pieces.
+fn protector_parts() -> std::collections::BTreeMap<u32, &'static str> {
+    use eldenring::cs::{EquipParamProtector, SoloParamRepository};
+    use fromsoftware_shared::FromStatic;
+
+    let mut parts = std::collections::BTreeMap::new();
+    // Safety: read-only row access behind the populated-singleton check.
+    let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+        return parts;
+    };
+    for (row_id, row) in repo.rows::<EquipParamProtector>() {
+        let part = if row.head_equip() {
+            "head"
+        } else if row.body_equip() {
+            "body"
+        } else if row.arm_equip() {
+            "arms"
+        } else if row.leg_equip() {
+            "legs"
+        } else {
+            continue;
+        };
+        parts.insert(row_id, part);
+    }
+    parts
+}
+
+/// Read the character's APPEARANCE out of `PlayerGameData`.
+///
+/// Returns the buffer whole -- `FACE`, version, declared size, payload -- because that is the unit
+/// the game serialises into a save slot and the unit every appearance-editing tool exchanges. A
+/// read that does not begin with the magic is reported as no face data at all rather than as a
+/// blob: the failure mode this guards against is publishing 288 bytes of unrelated heap into a
+/// share link, which nothing downstream could tell from a real face.
+///
+/// # Safety
+///
+/// `pgd` must be a live `PlayerGameData*`.
+unsafe fn read_face_data(pgd: usize) -> Option<Vec<u8>> {
+    let mut buffer = vec![0u8; pgd::FACE_DATA_BUFFER_LEN];
+    // Safety: fault-checked; an unmapped page answers false instead of taking the game down.
+    if !unsafe { er_game_base::mem::read_bytes(pgd + pgd::FACE_DATA_BUFFER, &mut buffer) } {
+        return None;
+    }
+    if buffer[..FACE_DATA_MAGIC.len()] != FACE_DATA_MAGIC {
+        return None;
+    }
+    Some(buffer)
 }
 
 /// Low 28 bits of a category-tagged item id, i.e. the param row.

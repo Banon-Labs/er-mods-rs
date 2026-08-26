@@ -86,6 +86,20 @@ pub struct BuildExportDoc {
     /// which is why it is skipped rather than written when unset.
     #[serde(rename = "greatRune", skip_serializing_if = "Option::is_none")]
     pub great_rune: Option<String>,
+    /// The character's APPEARANCE, as an uppercase hex AOB of the game's own `FaceDataBuffer`.
+    ///
+    /// **Ours, not the planner's.** No key of `makeDefault()` carries an appearance and nothing in
+    /// the planner reads one: a build there is stats and gear. It is written at the top level
+    /// anyway because the `?i=` payload is the only place a shared build can carry it, and because
+    /// the planner's merge (`K_`) copies unknown keys through or ignores them -- it never fails on
+    /// one. So the site shows the build it always showed, and a reader that knows about this key
+    /// (this repository's own decoder, or a player pasting the AOB into a save editor) gets the
+    /// face back with it.
+    ///
+    /// The value is the whole buffer, magic first, so it is self-describing and matches what every
+    /// appearance tool exchanges byte for byte. Absent rather than `null` when unknown.
+    #[serde(rename = "faceData", skip_serializing_if = "Option::is_none")]
+    pub face_data: Option<String>,
     /// Schema version; see [`PLANNER_VERSION`].
     pub version: String,
     /// Cloud account that stored the build, or `null` for a local one.
@@ -126,6 +140,7 @@ impl Default for BuildExportDoc {
             items: Items::default(),
             character_class: None,
             great_rune: None,
+            face_data: None,
             version: PLANNER_VERSION.to_string(),
             author: None,
             weapon_upgrade: DEFAULT_WEAPON_UPGRADE,
@@ -544,6 +559,19 @@ mod tests {
             ..BuildExportDoc::default()
         };
         assert_eq!(as_object(&doc)["greatRune"], "Great Rune of the Unborn");
+    }
+
+    #[test]
+    fn face_data_is_absent_by_default_and_present_once_set() {
+        // Absent, not null: the planner has no such key, so writing `null` would put a field on
+        // the document that neither side reads.
+        assert!(!as_object(&BuildExportDoc::default()).contains_key("faceData"));
+
+        let doc = BuildExportDoc {
+            face_data: Some("46414345".to_string()),
+            ..BuildExportDoc::default()
+        };
+        assert_eq!(as_object(&doc)["faceData"], "46414345");
     }
 
     #[test]

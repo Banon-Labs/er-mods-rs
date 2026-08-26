@@ -76,15 +76,32 @@ pub const BUILD_URL_KEY: &str = "build_url";
 /// assert_eq!(er_build_import_core::build_url_from_config("slot = 0\n"), None);
 /// ```
 pub fn build_url_from_config(contents: &str) -> Option<&str> {
+    config_value(contents, BUILD_URL_KEY)
+}
+
+/// Pull one key's value out of an `er-effects.toml`'s text.
+///
+/// The generic form of [`build_url_from_config`], and the same deliberate one-key scan rather than
+/// a TOML dependency -- see that function for why. Returns `None` for an absent or empty value, so
+/// a key that is present but blank reads as unset rather than as the empty string.
+///
+/// ```
+/// assert_eq!(
+///     er_build_import_core::config_value("# a comment\nslot = 0\nname = 'x'\n", "name"),
+///     Some("x"),
+/// );
+/// assert_eq!(er_build_import_core::config_value("name = ''\n", "name"), None);
+/// ```
+pub fn config_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
     for line in contents.lines() {
         let line = line.trim();
         if line.starts_with('#') {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else {
+        let Some((name, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim() != BUILD_URL_KEY {
+        if name.trim() != key {
             continue;
         }
         let value = value.trim().trim_matches(|c| c == '\'' || c == '"').trim();
@@ -94,6 +111,35 @@ pub fn build_url_from_config(contents: &str) -> Option<&str> {
     }
     None
 }
+
+/// Whether a boolean key is set to `true`. Anything else -- absent, `false`, a typo -- is `false`,
+/// because every caller of this is an opt-in switch and a misread must leave it OFF.
+///
+/// ```
+/// assert!(er_build_import_core::config_flag("export_build_link_on_load = true\n", "export_build_link_on_load"));
+/// assert!(!er_build_import_core::config_flag("export_build_link_on_load = false\n", "export_build_link_on_load"));
+/// assert!(!er_build_import_core::config_flag("", "export_build_link_on_load"));
+/// ```
+pub fn config_flag(contents: &str, key: &str) -> bool {
+    config_value(contents, key).is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+/// Config key that makes the STANDALONE shell export one build link at character load.
+///
+/// Read only by `er-build-import`, the harness DLL -- never by the product, whose export is the
+/// System>Quit row a player presses. It exists because the content of an exported link is worth
+/// checking without a human driving a menu: with this set, one link is written to
+/// `er-build-import.log` as soon as the character is in the world, and
+/// `scripts/decode-build-link.py --log <that file> --summary` says exactly what it carries.
+pub const EXPORT_ON_LOAD_KEY: &str = "export_build_link_on_load";
+
+/// Config key that makes the STANDALONE shell import the configured build and THEN export the
+/// character it produced -- the round trip, whose answer is known in advance.
+///
+/// Separate from [`EXPORT_ON_LOAD_KEY`], which exports the character as it already is. Measuring
+/// an export that ran straight after an import measures the importer as much as the exporter, and
+/// the import also GRANTS items, so repeating it inflates the very inventory being exported.
+pub const ROUND_TRIP_ON_LOAD_KEY: &str = "round_trip_build_link_on_load";
 
 /// The URL prefix the in-game editor opens with, so a player only has to supply the id.
 ///

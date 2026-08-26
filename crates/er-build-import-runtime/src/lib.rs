@@ -189,6 +189,19 @@ pub fn configured_build_url() -> Option<String> {
     er_build_import_core::build_url_from_config(&contents).map(str::to_owned)
 }
 
+/// Whether the game-directory `er-effects.toml` asks the STANDALONE shell to export one build link
+/// at character load. Never consulted by the product DLL -- see
+/// [`er_build_import_core::EXPORT_ON_LOAD_KEY`].
+pub fn configured_export_on_load() -> bool {
+    let Some(path) = er_game_base::log::game_directory_path() else {
+        return false;
+    };
+    let Ok(contents) = std::fs::read_to_string(path.join(CONFIG_FILE_NAME)) else {
+        return false;
+    };
+    er_build_import_core::config_flag(&contents, er_build_import_core::EXPORT_ON_LOAD_KEY)
+}
+
 // ------------------------------------------------------------------ request
 
 /// Why [`request`] refused. A refusal never changes [`phase`].
