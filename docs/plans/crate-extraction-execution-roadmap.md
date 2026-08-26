@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 49,413 |
+| all `experiments/**` | 76 | 48,235 |
 | excluding `startup_hooks/**` | 44 | 25,311 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -94,7 +94,7 @@ S10 and S11 are complete in-place module splits. R1 does not reopen their correc
 
 Reject a duplicate descriptor-guard extraction. Merged PR #272 already moved the descriptor-advance detour, byte-verified RVA/offset identities, and trampoline state into `er-scaleform-hooks`; its fresh-title proof recorded `oracle_scaleform_desc_guard_installed = 1`. The remaining `scaleform_descriptor_guard.rs` root wrapper is product policy: it retains attach-time ordering and turns the hook crate's installation result into product diagnostic logging. Moving that wrapper would be a different startup-policy change, not R24A's native mechanism move. The remaining R24 resource/message families stay independently executable.
 
-## Appendix A -- R1 current 77-file partition and caller ledger
+## Appendix A -- R1 current 76-file partition and caller ledger
 
 Every row below is a current source file. `Current partition` is the exact present owner/disposition; `Next node` is a future decision or implementation node and does not change present ownership.
 
@@ -108,9 +108,8 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `gating/env_flags.rs` | 438 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
-| `gpu_readback.rs` | 62 | product GPU-readback facade | R4-R5 |
+| `gpu_readback.rs` | 56 | product GPU-readback facade | R4-R5 |
 | `gpu_readback/boot_progress.rs` | 2,974 | loading-bar, boot-cover, and product adapter families | R4-R5 |
-| `gpu_readback/gpu_draw_shared.rs` | 469 | boot-cover draw helper family | R5 and R27-R30 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
 | `input_block.rs` | 1,385 | product input ownership | `STAY` |
 | `input_trace.rs` | 924 | product diagnostic | D4 |
@@ -143,14 +142,14 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 336 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,549 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
-| `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
-| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
+| `startup_hooks/loading_cover/mod.rs` | 72 | loading-cover module facade | R15-R16 |
+| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 989 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,083 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,419 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
-| `startup_hooks/loading_cover/window_reconfig_observer.rs` | 473 | window-observation/final-geometry family | R9 |
+| `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/build_url_clipboard.rs` | 7 | product re-export facade: moved to `er_quit_menu_core::build_url_clipboard` | R18 |
 | `startup_hooks/quit_menu/build_url_editor.rs` | 700 | System>Quit link field: submit, validate on accept, re-open on refusal | R18 |
 | `startup_hooks/quit_menu/build_url_row.rs` | 178 | System>Quit "Load Build from URL" row: press -> `er-build-import-runtime::request`, FrameBegin tick -> `::tick` | R18 |
