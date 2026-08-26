@@ -284,9 +284,19 @@ unsafe fn read_slot(
     };
     let (weapon_art, gaitem_handle) = if kind == Kind::Weapon {
         // Safety: same context; the whole chain is null-checked inside.
-        let default_arts = default_arts_for(param_id / ARMAMENT_LEVEL_STEP * ARMAMENT_LEVEL_STEP);
+        let row_with_affinity = param_id / ARMAMENT_LEVEL_STEP * ARMAMENT_LEVEL_STEP;
+        let facts = weapon_facts_for(row_with_affinity);
         let ashes = ash_of_war_arts_rows();
-        let art = unsafe { read_weapon_art(module_base, msg, slot, default_arts, &ashes) };
+        let art = unsafe {
+            read_weapon_art(
+                module_base,
+                msg,
+                slot,
+                facts.map(|facts| facts.default_arts),
+                facts.map(|facts| facts.wep_type),
+                &ashes,
+            )
+        };
         // Safety: as above -- one read of the player singleton and one engine getter.
         let handle = unsafe { worn_armament_handle(module_base, slot) };
         (art, handle)
@@ -342,12 +352,24 @@ unsafe fn read_weapon_art(
     msg: usize,
     slot: i32,
     default_arts: Option<u32>,
+    wep_type: Option<u16>,
     ashes: &std::collections::BTreeSet<u32>,
 ) -> Option<String> {
     // Safety: the caller's contract.
-    let arts_id = unsafe { equipped_weapon_arts_id(module_base, slot) }?;
-    // The same two tests the carried read applies -- see `is_ash_of_war`.
+    let worn = unsafe { worn_armament(module_base, slot) }?;
+    let arts_id = worn.arts_id?;
+    // The same tests the carried read applies -- see `is_ash_of_war` and `mounted_ash`.
     if !is_ash_of_war(arts_id, default_arts, ashes) {
+        return None;
+    }
+    if let Some(wep_type) = wep_type
+        && let Some(handle) = unsafe { worn_armament_handle(module_base, slot) }
+        // Safety: the handle is the engine's own.
+        && let Some(mut lookup) = unsafe { GaitemLookupResult::from_handle(module_base, handle) }
+        // Safety: as above.
+        && let Some(gem_row) = unsafe { lookup.mounted_gem_row(module_base) }
+        && !crate::gem_mount::gem_can_mount(gem_row, wep_type)
+    {
         return None;
     }
     // Safety: as above.
@@ -729,6 +751,7 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
                         msg,
                         handle,
                         known.map(|facts| facts.default_arts),
+                        known.map(|facts| facts.wep_type),
                         &ashes,
                     )
                 };
@@ -892,11 +915,9 @@ fn ash_of_war_arts_rows() -> std::collections::BTreeSet<u32> {
     rows
 }
 
-/// The skill one armament row carries with no ash mounted.
-///
-/// A single-row question, for the WORN read, which has no reason to build the whole table the
-/// carried read needs.
-fn default_arts_for(row_with_affinity: u32) -> Option<u32> {
+/// [`WeaponFacts`] for ONE armament row, for the worn read, which has no reason to build the
+/// whole table the carried read needs.
+fn weapon_facts_for(row_with_affinity: u32) -> Option<WeaponFacts> {
     use eldenring::cs::{EquipParamWeapon, SoloParamRepository};
     use fromsoftware_shared::FromStatic;
 
@@ -904,7 +925,10 @@ fn default_arts_for(row_with_affinity: u32) -> Option<u32> {
     let repo = (unsafe { SoloParamRepository::instance() }).ok()?;
     repo.rows::<EquipParamWeapon>()
         .find(|(id, _)| *id == row_with_affinity)
-        .and_then(|(_, row)| u32::try_from(row.sword_arts_param_id()).ok())
+        .map(|(_, row)| WeaponFacts {
+            wep_type: row.wep_type(),
+            default_arts: u32::try_from(row.sword_arts_param_id()).unwrap_or_default(),
+        })
 }
 
 /// How many copies of an item ONE inventory entry stands for.
@@ -1065,6 +1089,7 @@ unsafe fn mounted_ash(
     msg: usize,
     handle: u32,
     default_arts: Option<u32>,
+    wep_type: Option<u16>,
     ashes: &std::collections::BTreeSet<u32>,
 ) -> Option<String> {
     // Safety: the caller's contract; the record is the engine's own and the chain is null-checked.
@@ -1073,6 +1098,20 @@ unsafe fn mounted_ash(
     let arts_id = unsafe { lookup.sword_arts_id(module_base) }?;
     if !is_ash_of_war(arts_id, default_arts, ashes) {
         return None;
+    }
+    // AND THE GAME HAS TO ALLOW IT ON THIS ARMAMENT. An ash reaches an armament as a gem, and
+    // nothing in a grant path checks whether that gem may be mounted there -- a build asking for
+    // a shield ash on a katana gets one, and the character then carries a pairing the game itself
+    // would never let a player make. `CheckIfWepTypeCanEquipGem` is the rule, and it is applied to
+    // the gem ACTUALLY mounted rather than to the one a catalogue would have picked for the skill.
+    if let Some(wep_type) = wep_type {
+        // Safety: the caller's contract; the record is the engine's own.
+        match unsafe { lookup.mounted_gem_row(module_base) } {
+            Some(gem_row) if !crate::gem_mount::gem_can_mount(gem_row, wep_type) => return None,
+            // No gem at all means the skill is the armament's own, which `is_ash_of_war` already
+            // refused; anything else is a gem the game is happy with.
+            _ => {}
+        }
     }
     // Safety: as above.
     unsafe { name_for(Kind::AshOfWar, msg, module_base, arts_id) }

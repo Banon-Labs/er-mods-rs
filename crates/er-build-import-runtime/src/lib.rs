@@ -39,6 +39,7 @@ pub mod equip_native;
 pub mod export;
 pub mod export_doc;
 pub mod gaitem;
+pub mod gem_mount;
 pub mod grant;
 pub mod read_character;
 
