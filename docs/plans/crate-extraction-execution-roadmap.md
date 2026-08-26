@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 52,653 |
+| all `experiments/**` | 80 | 52,429 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -96,8 +96,8 @@ Every row below is a current source file. `Current partition` is the exact prese
 |---|---:|---|---|
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 9 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 653 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 737 | product slot-resolution policy | D5 and R14 |
+| `continue_load/product_continue.rs` | 461 | product continue/load policy | D5 |
+| `continue_load/slot_resolution.rs` | 832 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 651 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
@@ -115,11 +115,11 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `lifecycle/title_visual_startup.rs` | 186 | product startup arming/order | R22 |
 | `mem.rs` | 24 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
-| `menu_diag/menu_observation.rs` | 615 | product menu observation | D4 |
+| `menu_diag/menu_observation.rs` | 497 | product menu observation | D4 |
 | `mod.rs` | 101 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 109 | own-stepper memory family | D5 and R14 |
-| `mod/product_core_own_stepper.rs` | 567 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 639 | product fallback-drive diagnostic | D5 |
+| `mod/product_core_own_stepper.rs` | 558 | product core own-stepper | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 638 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 9 | S11 own-load facade | D5 |
 | `own_load/drive.rs` | 1,724 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
@@ -171,7 +171,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/save_picker/save_picker_surface.rs` | 122 | picker surface routing adapter | R17-R18 |
 | `title.rs` | 5 | title facade | R22 |
 | `trace.rs` | 10 | trace facade | R6A-R6D and D4 |
-| `trace/menu_constructor_capture.rs` | 1,336 | menu constructor capture family | R6B and D4 |
+| `trace/menu_constructor_capture.rs` | 1,337 | menu constructor capture family | R6B and D4 |
 | `trace/menu_trace_hooks.rs` | 2,059 | title reload and menu trace families | R6C, R21, and D4 |
 | `trace/native_result_map_hooks.rs` | 739 | native result-map hook family | R6A and D4 |
 

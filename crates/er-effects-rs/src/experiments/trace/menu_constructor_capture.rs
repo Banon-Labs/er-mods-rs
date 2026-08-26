@@ -16,14 +16,15 @@ use crate::{
     CONTINUE_CONFIRM_RVA, HOOK_ORIGINAL_UNSET, IN_WORLD_REACHED, IN_WORLD_REACHED_YES,
     INPUT_PROBE_ACTIVE, IODEV_GLOBAL_RVA, IODEV_REQHANDLE_18_OFFSET, IODEV_REQHANDLE_20_OFFSET,
     LIVE_DIALOG_FACTORY_RVA, LOADGAME_BUILDER_LAST_NATIVE_SLOT, LOADGAME_BUILDER_SLOT_OVERRIDES,
-    MENU_CONTINUE_ITEM, MENU_CONTINUE_ITEM_FIELD_LOG_COUNT, MENU_CONTINUE_ROW_ENTRY,
-    MENU_D180_LEAF_TICKED, MENU_ENTRIES_SEEN, MENU_ENTRIES_SEEN_YES, MENU_ITEM_FUNCTOR_A8_OFFSET,
-    MENU_ITEM_UPDATE_CAPTURE_COUNT, MENU_ITEM_UPDATE_HITS, MENU_ITEM_UPDATE_LAST,
-    MENU_ITEM_UPDATE_LAST_ACCEPT, MENU_ITEM_UPDATE_LAST_DOCALL, MENU_ITEM_UPDATE_LAST_FUNCTOR,
-    MENU_ITEM_UPDATE_LAST_ITEM, MENU_ITEM_UPDATE_LAST_VT, MENU_ITEM_UPDATE_LOG_MAX,
-    MENU_ITEM_UPDATE_ORIG, MENU_ITEM_UPDATE_SEMANTIC_HITS, MENU_LOAD_GAME_ITEM,
-    MENU_LOADGAME_ROW_ENTRY, MENU_ROUTER_THIS, MENU_TITLE_CONTINUE_DOCALL_RVA,
-    MENU_WINDOW_JOB_CTOR_HITS, MENU_WINDOW_JOB_CTOR_LAST_ACCEPT, MENU_WINDOW_JOB_CTOR_LAST_DOCALL,
+    MENU_BACKSCREEN_OVERLAY_ITEM, MENU_BACKSCREEN_OVERLAY_ITEM_FIELD_LOG_COUNT,
+    MENU_CONTINUE_ROW_ENTRY, MENU_D180_LEAF_TICKED, MENU_ENTRIES_SEEN, MENU_ENTRIES_SEEN_YES,
+    MENU_ITEM_FUNCTOR_A8_OFFSET, MENU_ITEM_UPDATE_CAPTURE_COUNT, MENU_ITEM_UPDATE_HITS,
+    MENU_ITEM_UPDATE_LAST, MENU_ITEM_UPDATE_LAST_ACCEPT, MENU_ITEM_UPDATE_LAST_DOCALL,
+    MENU_ITEM_UPDATE_LAST_FUNCTOR, MENU_ITEM_UPDATE_LAST_ITEM, MENU_ITEM_UPDATE_LAST_VT,
+    MENU_ITEM_UPDATE_LOG_MAX, MENU_ITEM_UPDATE_ORIG, MENU_ITEM_UPDATE_SEMANTIC_HITS,
+    MENU_LOAD_GAME_ITEM, MENU_LOADGAME_ROW_ENTRY, MENU_ROUTER_THIS,
+    MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA, MENU_WINDOW_JOB_CTOR_HITS,
+    MENU_WINDOW_JOB_CTOR_LAST_ACCEPT, MENU_WINDOW_JOB_CTOR_LAST_DOCALL,
     MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR, MENU_WINDOW_JOB_CTOR_LAST_ITEM,
     MENU_WINDOW_JOB_CTOR_LAST_VT, MENU_WINDOW_JOB_CTOR_ORIG, MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS,
     MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS, MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT,
@@ -54,7 +55,7 @@ use crate::{
     TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE, append_autoload_debug,
     append_continue_trace, b80_mount_trace_summary, decode_thunk_hop, functor_chain_hits_factory,
     game_module_base, live_dialog_enabled, own_stepper_enter_s2_phase, product_autoload_enabled,
-    profile_select_load_flow_enabled, record_continue_candidate, safe_read_usize,
+    profile_select_load_flow_enabled, record_backscreen_overlay_candidate, safe_read_usize,
     trace_callers_summary, trace_first_game_caller_rva,
 };
 
@@ -812,7 +813,7 @@ pub(crate) unsafe extern "system" fn title_native_ready_predicate_hook(this: usi
 
 /// MenuWindowJob ctor 0x1407ac8c0 hook: observe constructed menu jobs and latch the semantic
 /// Continue item only when both the Continue action and native accept predicate are installed.
-/// This avoids poisoning MENU_CONTINUE_ITEM with the first updated title input leaf, whose
+/// This avoids poisoning MENU_BACKSCREEN_OVERLAY_ITEM with the first updated title input leaf, whose
 /// accept predicate is the constant-false 0x1407add70 diagnostic dead end.
 pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     out_slot: usize,
@@ -864,18 +865,18 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let continue_candidate =
-        vt == base + MENU_WINDOW_JOB_VTABLE_RVA && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
-    if continue_candidate {
-        record_continue_candidate(item, accept_predicate, base);
+    let backscreen_overlay_job = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+        && do_call == base + MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA;
+    if backscreen_overlay_job {
+        record_backscreen_overlay_candidate(item, accept_predicate, base);
     }
-    let semantic_continue_item =
-        continue_candidate && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
-    if semantic_continue_item {
+    let backscreen_overlay_native_accept =
+        backscreen_overlay_job && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+    if backscreen_overlay_native_accept {
         MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
     }
-    if semantic_continue_item
-        && MENU_CONTINUE_ITEM
+    if backscreen_overlay_native_accept
+        && MENU_BACKSCREEN_OVERLAY_ITEM
             .compare_exchange(
                 TITLE_OWNER_SCAN_START_ADDRESS,
                 item,
@@ -885,12 +886,12 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
             .is_ok()
     {
         append_continue_trace(format_args!(
-            "MENU-WINDOW-CTOR captured semantic native Continue item=0x{item:x} out=0x{out_slot:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
+            "MENU-WINDOW-CTOR captured native-accept 01_900_Black backscreen-overlay job item=0x{item:x} out=0x{out_slot:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
             unsafe { menu_item_action_summary(item) },
             trace_callers_summary()
         ));
         append_autoload_debug(format_args!(
-            "product-core-autoload: constructor captured semantic native Continue MenuWindowJob item=0x{item:x} vt=0x{vt:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x}"
+            "menu-diag: constructor captured native-accept backscreen-overlay MenuWindowJob (NOT a Continue row) item=0x{item:x} vt=0x{vt:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x}"
         ));
     }
     ret
@@ -954,13 +955,13 @@ pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
-        && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
+    let backscreen_overlay_native_accept = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+        && do_call == base + MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA
         && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
-    if semantic_continue_item {
+    if backscreen_overlay_native_accept {
         MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
-        record_continue_candidate(item, accept_predicate, base);
-        if MENU_CONTINUE_ITEM
+        record_backscreen_overlay_candidate(item, accept_predicate, base);
+        if MENU_BACKSCREEN_OVERLAY_ITEM
             .compare_exchange(
                 TITLE_OWNER_SCAN_START_ADDRESS,
                 item,
@@ -970,12 +971,12 @@ pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
             .is_ok()
         {
             append_continue_trace(format_args!(
-                "MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item=0x{item:x} caller_rva=0x{caller_rva:x} out=0x{out_slot:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
+                "MENU-WINDOW-NATIVE-CTOR-B captured native-accept 01_900_Black backscreen-overlay job item=0x{item:x} caller_rva=0x{caller_rva:x} out=0x{out_slot:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
                 unsafe { menu_item_action_summary(item) },
                 trace_callers_summary()
             ));
             append_autoload_debug(format_args!(
-                "product-core-autoload: native ctor B captured semantic native Continue MenuWindowJob item=0x{item:x} caller_rva=0x{caller_rva:x} accept_predicate=0x{accept_predicate:x}"
+                "menu-diag: native ctor B captured native-accept backscreen-overlay MenuWindowJob (NOT a Continue row) item=0x{item:x} caller_rva=0x{caller_rva:x} accept_predicate=0x{accept_predicate:x}"
             ));
         }
     }
@@ -1038,18 +1039,18 @@ pub(crate) unsafe extern "system" fn menu_window_job_idle_ctor_hook(
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let continue_candidate =
-        vt == base + MENU_WINDOW_JOB_VTABLE_RVA && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
-    if continue_candidate {
+    let backscreen_overlay_job = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+        && do_call == base + MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA;
+    if backscreen_overlay_job {
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.store(item, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT.store(out_slot, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL.store(do_call, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-        record_continue_candidate(item, accept_predicate, base);
+        record_backscreen_overlay_candidate(item, accept_predicate, base);
         append_continue_trace(format_args!(
-            "MENU-WINDOW-IDLE-CTOR observed Continue-looking disabled item=0x{item:x} caller_rva=0x{caller_rva:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
+            "MENU-WINDOW-IDLE-CTOR observed disabled 01_900_Black backscreen-overlay item=0x{item:x} caller_rva=0x{caller_rva:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
             unsafe { menu_item_action_summary(item) },
             trace_callers_summary()
         ));
@@ -1109,18 +1110,18 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
         MENU_ITEM_UPDATE_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_DOCALL.store(do_call, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-        let continue_candidate = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
-            && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
-        if continue_candidate {
-            record_continue_candidate(item, accept_predicate, base);
+        let backscreen_overlay_job = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+            && do_call == base + MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA;
+        if backscreen_overlay_job {
+            record_backscreen_overlay_candidate(item, accept_predicate, base);
         }
-        let semantic_continue_item =
-            continue_candidate && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
-        if semantic_continue_item {
+        let backscreen_overlay_native_accept =
+            backscreen_overlay_job && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+        if backscreen_overlay_native_accept {
             MENU_ITEM_UPDATE_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        if semantic_continue_item
-            && MENU_CONTINUE_ITEM
+        if backscreen_overlay_native_accept
+            && MENU_BACKSCREEN_OVERLAY_ITEM
                 .compare_exchange(
                     TITLE_OWNER_SCAN_START_ADDRESS,
                     item,
@@ -1130,21 +1131,21 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
                 .is_ok()
         {
             append_continue_trace(format_args!(
-                "MENU-ITEM-UPDATE captured semantic native Continue item=0x{item:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
+                "MENU-ITEM-UPDATE captured native-accept 01_900_Black backscreen-overlay job item=0x{item:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
                 unsafe { menu_item_action_summary(item) },
                 trace_callers_summary()
             ));
             append_autoload_debug(format_args!(
-                "product-core-autoload: captured semantic native Continue MenuWindowJob item=0x{item:x} vt=0x{vt:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x}"
+                "menu-diag: update captured native-accept backscreen-overlay MenuWindowJob (NOT a Continue row) item=0x{item:x} vt=0x{vt:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x}"
             ));
         }
     }
     if product_autoload_enabled()
         && item != TITLE_OWNER_SCAN_START_ADDRESS
-        && item == MENU_CONTINUE_ITEM.load(Ordering::SeqCst)
+        && item == MENU_BACKSCREEN_OVERLAY_ITEM.load(Ordering::SeqCst)
     {
-        let n =
-            MENU_CONTINUE_ITEM_FIELD_LOG_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        let n = MENU_BACKSCREEN_OVERLAY_ITEM_FIELD_LOG_COUNT
+            .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         const FIELD_LOG_0: usize = 0;
         const FIELD_LOG_8: usize = 8;
         const FIELD_LOG_30: usize = 30;
@@ -1157,7 +1158,7 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
             || n == FIELD_LOG_120
         {
             append_continue_trace(format_args!(
-                "MENU-ITEM-UPDATE Continue candidate fields tick_count={n} item=0x{item:x} item_fields{{{}}} {}",
+                "MENU-ITEM-UPDATE backscreen-overlay candidate fields tick_count={n} item=0x{item:x} item_fields{{{}}} {}",
                 unsafe { menu_item_action_summary(item) },
                 trace_callers_summary()
             ));

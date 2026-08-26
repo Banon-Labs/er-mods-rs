@@ -95,26 +95,95 @@ unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
         "native-fullread: DISARM req_slot {prev} -> {OWN_STEPPER_SLOT_NONE} ({reason}) -- no pending native load request may survive a non-commit exit"
     ));
 }
-/// OBSERVE-ONLY NATIVE FULL-SAVE-READ tick (native_fullread_enabled(), gated OFF by default). Runs
-/// each frame INSTEAD of the own_stepper forcing logic (no SetState forcing for boot); the caller
-/// pass-throughs to OWN_STEPPER_ORIG_IDX10 so the NATIVE title machine advances untouched. Once the
-/// live TitleTopDialog menu action is semantically validated (same readiness helper as
-/// native_load_tick: TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game node/action chain),
-/// it runs the full-save-read load chain as a per-frame phase
-/// machine at the LIVE menu (where the FD4 IO worker pool 0x144853048 is live so the submit drains):
-///   SUBMIT: set GameMan+0xb78=slot (step 1, NEW), set_save_slot 0x14067a810 (step 2 -> GameMan+0xac0),
-///           submit full read 0x14067b1a0 (step 3, type-0xa).
+/// THE OBJECTIVE'S ORACLE, WATCHED EVERY FRAME.
+///
+/// Nothing is "fixed" until `GameMan+0xb80` (`GameMan::save_state`) goes 0 -> 2 (Active). Two
+/// byte-verified native writers produce that edge, and BOTH end up here:
+///   * `0x14067b1a0` (the full-read submit this chain calls at SUBMIT) --
+///     `14067b1dd  c7 80 80 0b 00 00 02 00 00 00   movl $0x2,0xb80(%rax)`;
+///   * `0x14067b200` (`LoadSaveData`, reached from the native `MoveMapStep` update `FUN_140afb880`
+///     once `GameMan+0xb78` carries our slot) -- `14067b21b` writes the same immediate.
+///
+/// A telemetry sample of the VALUE can miss the edge between two writes; this watcher cannot, and
+/// it also names WHICH transition happened so a run can be read in one look. Pure reads, no calls.
+pub(crate) fn observe_save_state_edge(tick: u64) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const B80_ACTIVE: i32 = 2;
+    const NEVER: u64 = u64::MAX;
+    let gm = game_man_ptr_or_null();
+    if gm == NULL {
+        return;
+    }
+    let Some(now) = (unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }) else {
+        return;
+    };
+    let prev = SAVE_STATE_B80_LAST_SEEN.swap(i64::from(now), Ordering::SeqCst);
+    if prev == i64::from(now) {
+        return;
+    }
+    let c30 =
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
+    let b78 = unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) }
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    let ac0 = unsafe { safe_read_i32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) }
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    if now == B80_ACTIVE {
+        let edges = SAVE_STATE_B80_ACTIVE_EDGES.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = SAVE_STATE_B80_FIRST_ACTIVE_TICK.compare_exchange(
+            NEVER,
+            tick,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        append_autoload_debug(format_args!(
+            "*** SAVE-STATE b80 {prev} -> 2 ACTIVE *** (GameMan+0xb80; the game's own LoadSaveData/full-read submit wrote it) edge#{edges} tick={tick} req_slot_b78={b78} save_slot_ac0={ac0} c30=0x{c30:x}"
+        ));
+        timeline_event(
+            "T_save_state_active",
+            tick,
+            format_args!("b80={prev}->2 b78={b78} ac0={ac0} c30=0x{c30:x}"),
+        );
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "save-state: b80 {prev} -> {now} tick={tick} req_slot_b78={b78} save_slot_ac0={ac0} c30=0x{c30:x}"
+    ));
+}
+/// THE NATIVE SAVE-READ + NATIVE-CONFIRM CHAIN -- the product's only character-load route.
+///
+/// Runs one phase per frame from the caller's game task; the caller pass-throughs to
+/// OWN_STEPPER_ORIG_IDX10 so the NATIVE title machine advances untouched. Every step is a call into
+/// the game's own save manager; NO `MenuJob` is created, retained or pumped here (see AGENTS.md:
+/// "Manual per-frame pumping is only a bounded diagnostic ... the product path must be native
+/// enqueue + native pump ownership").
+///
+///   SUBMIT: `MarkProfileIndexAsUsed(summary, slot)` (step 0) -> `GameMan+0xb78 = slot` (step 1;
+///           `CS::GameMan::GetRequestedSaveSlotLoad` 0x1406793c0 is byte-verified as
+///           `mov eax,[rax+0xb78]`) -> `set_save_slot` 0x14067a810 (step 2 -> `GameMan+0xac0`) ->
+///           submit full read `0x14067b1a0` (step 3, index 0xa). That submit is the GOLDEN EDGE:
+///           it is byte-verified as `c7 80 80 0b 00 00 02 00 00 00` == `movl $0x2,0xb80(%rax)`,
+///           i.e. the game's own `GameMan->saveState = 2` write.
 ///   DRAIN:  tick lane 0x140679510 + poll 0x140679180 each frame until GameMan+0xb80==3 (step 4).
 ///   DESER:  deserialize 0x14067b290(slot) ONCE at b80==3 (step 5 -> GameMan+0xc30 = real map).
-///   GUARD:  c30 != 0xa010000 (m10 default) AND char fingerprint present (level>=10 + name) (step 6).
-///   CONFIRM (step 7, the SOLE save write): ONLY if the guard passes AND native_fullread_commit_enabled():
-///           continue_confirm 0x140b0e180(rcx=shim{[OWNER]=live_title_owner});
-///           it takes the non-NewGame branch when owner+0x284!=1, sets owner+0xbc=c30 + SetState5
-///           (AUTOSAVES). Without the
-///           commit sub-gate, stops at GUARD (VERIFY-ONLY: log only, NO continue_confirm/NO SetState5).
-/// Reuses cold_char_mount_drive's submit/lane/poll/deser CALLS (exact RVAs) but builds/pumps NO
-/// selector step (probe-12 crash) and forces NO SetState for boot. Logs b80/c30/level each frame.
-pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
+///   GUARD:  c30 != 0xa010000 (m10 default) AND char fingerprint present (step 6).
+///   CONFIRM (step 7, the SOLE save write): ONLY if the guard passes AND
+///           native_fullread_commit_enabled(): continue_confirm 0x140b0e180(rcx=shim{[OWNER]=live
+///           title owner}). Byte-verified: it reads shim+8, takes the non-NewGame branch when
+///           owner+0x284 != 1, copies `GameMan+0xc30` into `TitleStep+0xbc`
+///           (`140b0e1a7 call 0x140679560` reads `0xc30(%rax)`; `140b0e1b7 mov %eax,0xbc(%rcx)`)
+///           and then calls `TitleStep::RequestState(5)` at 0x140b0d960. The c30 copy is why DESER
+///           must precede CONFIRM: confirming first would enter the world at the new-game map.
+///           Then `GameMan+0xb78` is disarmed.
+///
+/// The b78 arm is not decoration. `FUN_140afb880` -- the native MoveMapStep update -- does
+/// `call GetRequestedSaveSlotLoad; mov ecx,eax; call 0x14067b200` at 0x140afba36..0x140afba3d, and
+/// `0x14067b200` is the `LoadSaveData` the objective names: it also writes
+/// `movl $0x2,0xb80(%rax)`. So after the handoff the native pump resolves OUR slot by itself.
+///
+/// `slot_hint` is the slot the CALLER resolved (`>= 0` wins). Two resolvers disagreeing about which
+/// slot the user meant is how a portrait ends up targeting one character while another loads, so
+/// the caller's answer is authoritative and `native_fullread_slot()` is only the fallback.
+pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64, slot_hint: i32) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const WAIT_INC: usize = 1;
     let gm = game_man_ptr_or_null();
@@ -145,21 +214,15 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         }
         return;
     }
-    // The Load-Game action-node scan is a readiness GATE (and log provenance) only -- the load chain
-    // below uses slot/gm/base, never the node. For direct-file save sources (missing-save picker OR
-    // explicit loose save_file) the product tick has already confirmed the live menu is open and the IO
-    // pool is up, so skip the scan there: it can be over-strict and would otherwise stall on a menu with
-    // no separate Load-Game node / stale profile summary.
-    let direct_file_source = direct_save_file_source_active();
+    // MENU READINESS IS THE CALLER'S JOB, AND `title_menu_action_ready` CANNOT BE THE GATE.
+    // It used to hard-gate every non-direct-file source here, and it is UNSATISFIABLE: it demands a
+    // `MenuMemberFuncJob<TitleTopDialog>` whose member fn reaches `LIVE_DIALOG_FACTORY_RVA`, but the
+    // class's member-fn census is closed at 0x9b2f00 / 0x9b35f0 (see TITLE_MEMBER_FN_LOGOUT_RESET_RVA)
+    // and neither reaches the factory by any jump chain. That is why three measured runs captured the
+    // "Load-Game leaf" zero times. The real menu gate is `product_continue_action_ready` (live
+    // TitleTopDialog vtable + native menu-open latch), which the caller checks before dispatching
+    // here; the node below is now log provenance only.
     let action = unsafe { title_menu_action_ready(owner, base) };
-    if action.is_none() && !direct_file_source {
-        if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
-            append_autoload_debug(format_args!(
-                "native-fullread: waiting for semantic Load-Game action readiness (#{n}) gm=0x{gm:x} -- TitleTopDialog/registry/node/action not all validated yet"
-            ));
-        }
-        return;
-    }
     if gm == NULL {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
             let (node, registry) = action
@@ -171,7 +234,11 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         }
         return;
     }
-    let slot = native_fullread_slot();
+    let slot = if slot_hint >= OWN_STEPPER_SLOT_ZERO {
+        slot_hint
+    } else {
+        native_fullread_slot()
+    };
     let read_i32 = |off: usize| unsafe { *((gm + off) as *const i32) };
 
     if phase == FULLREAD_PHASE_SUBMIT {
@@ -326,31 +393,59 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let c30_real = c30 != FULLREAD_C30_M10_DEFAULT && c30 != GAME_MAN_C30_UNSET;
         // Direct-file source: picker/config selected a concrete save file and the full-read guard has
         // c30_real + fp_real as the hard new-game/null blockers, so any real level is acceptable. The
-        // >=10 default is only a heuristic for the diagnostic path where nothing preselected a source.
-        let min_level = if direct_save_file_source_active() {
-            1
-        } else {
-            FULLREAD_MIN_REAL_LEVEL
-        };
+        // same now holds when the ProfileSummary RECORD for this slot is itself real -- the product
+        // tick refuses to arm otherwise (`profile_slot_fingerprint`), so the slot is already known to
+        // hold a character and re-applying a level>=10 heuristic would refuse a legitimate low-level
+        // one AFTER the read had already succeeded. The >=10 default survives only for the diagnostic
+        // path where nothing validated the source at all.
+        let min_level =
+            if direct_save_file_source_active() || unsafe { profile_slot_fingerprint(slot) }.0 {
+                1
+            } else {
+                FULLREAD_MIN_REAL_LEVEL
+            };
         let level_real = level >= min_level;
-        let guard_pass = c30_real && fp_real && level_real;
+        // REQUESTED-SLOT IDENTITY. Carried over from the Continue-item guard this chain replaced,
+        // because it is the only check that says the character now in PlayerGameData is the one
+        // belonging to the slot we asked for: the slot's ProfileSummary record must agree with the
+        // live PGD on map (== c30), level and name length. `c30_real && fp_real` only prove that
+        // SOME real character loaded. For a direct-file source the staged save's summary record can
+        // legitimately lag or differ, so there it is logged and not gated -- exactly the scope it
+        // had before.
+        let identity = unsafe { requested_slot_identity(slot, c30) };
+        let identity_gated = !direct_save_file_source_active();
+        let identity_ok = identity.matches || !identity_gated;
+        let guard_pass = c30_real && fp_real && level_real && identity_ok;
         let commit = native_fullread_commit_enabled();
         let guard_waits = FULLREAD_DRAIN_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst) as u64;
         append_autoload_debug(format_args!(
-            "native-fullread: GUARD waits={guard_waits} c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} -> guard_pass={guard_pass} commit_gate={commit}"
+            "native-fullread: GUARD waits={guard_waits} c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} identity={}(gated={identity_gated} profile_map=0x{:x} profile_level={} profile_name_len={} pgd_level={} pgd_name_len={}) -> guard_pass={guard_pass} commit_gate={commit}",
+            identity.matches,
+            identity.profile_map,
+            identity.profile_level,
+            identity.profile_name_len,
+            identity.pgd_level,
+            identity.pgd_name_len
         ));
         if !guard_pass {
-            const DIRECT_FILE_GUARD_SETTLE_TICKS: u64 = 120;
-            if direct_save_file_source_active() && guard_waits < DIRECT_FILE_GUARD_SETTLE_TICKS {
+            // SETTLE WINDOW FOR EVERY SOURCE, not just direct-file. The native profile/c30/PGD
+            // writers can lag DESER by several frames, so the first GUARD frame legitimately sees a
+            // half-written state. This used to apply only to direct-file sources because the default
+            // save went through a different guard entirely (with a ~1200-frame budget); giving every
+            // source the same window keeps the default path from fail-closing on a transient.
+            const GUARD_SETTLE_TICKS: u64 = 120;
+            if guard_waits < GUARD_SETTLE_TICKS {
                 if guard_waits % FULLREAD_LOG_INTERVAL == NULL as u64 {
                     append_autoload_debug(format_args!(
-                        "native-fullread: GUARD settling direct-file source waits={guard_waits}/{DIRECT_FILE_GUARD_SETTLE_TICKS} c30=0x{c30:x} level={level} name_len={name_len} -- native profile/c30 writers can lag DESER by several frames; holding req_slot and rechecking"
+                        "native-fullread: GUARD settling waits={guard_waits}/{GUARD_SETTLE_TICKS} c30=0x{c30:x} level={level} name_len={name_len} identity={} -- native profile/c30 writers can lag DESER by several frames; holding req_slot and rechecking",
+                        identity.matches
                     ));
                 }
                 return;
             }
             append_autoload_debug(format_args!(
-                "native-fullread: GUARD FAIL (c30=0x{c30:x} level={level}) -- NO continue_confirm, NO SetState5, NO save write -> DONE (save-safe)"
+                "native-fullread: GUARD FAIL (c30=0x{c30:x} level={level} c30_real={c30_real} fp_real={fp_real} level_real={level_real} identity={}) -- NO continue_confirm, NO SetState5, NO save write -> DONE (save-safe)",
+                identity.matches
             ));
             unsafe { fullread_disarm_slot_request(gm, "guard-fail") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);

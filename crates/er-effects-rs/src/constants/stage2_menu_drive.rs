@@ -36,10 +36,29 @@ pub(crate) const MENU_ITEM_CTX_10_OFFSET: usize =
     core::mem::offset_of!(MenuWindowJobLayout, dialog_context);
 pub(crate) const MENU_ITEM_DIALOG_RESULT_130_OFFSET: usize =
     core::mem::offset_of!(MenuWindowJobLayout, dialog_result);
-/// Main-title Continue row action `_Do_call` thunk. This is the `+0xa8` action on the
-/// first focused MenuWindowJob after native `TitleTopDialog::open_menu`; it builds the native
-/// row result consumed by the FD4 menu submit helper, not a save-load/direct-confirm shortcut.
-pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
+/// The `01_900_Black` BACKSCREEN-OVERLAY row action `_Do_call` thunk -- **not** a Continue row.
+///
+/// RENAMED 2026-08-25 after the old name (`MENU_TITLE_CONTINUE_DOCALL_RVA`) was proven wrong. Its
+/// own doc admitted the provenance: "the `+0xa8` action on the first focused MenuWindowJob after
+/// native `TitleTopDialog::open_menu`" -- an ordering guess, never verified. What 0x764b80 actually
+/// is (1.16.2 dump):
+///   * it is reached through functor vtable 0x142a9b9c8, which four builders SHARE
+///     (`getXrefsTo 0x142a9b9c8` -> `FUN_140764920`, `FUN_140764a70`, `FUN_140764c90`,
+///     `FUN_140764290`), so the `_Do_call` test was never row-specific;
+///   * `FUN_140764290` builds the Scaleform movie `L"01_900_Black"` -- the fade/backscreen overlay
+///     -- through the idle ctor `FUN_1407acf80` at caller_rva 0x76432c;
+///   * its sibling `FUN_140764620` builds `L"01_910_Fade"`, `L"02_903_NowLoading2"` and
+///     `L"02_904_NowLoading3"`. The whole family is the loading/backscreen overlay set built from
+///     `CSMenuManImp::Update` @0x140766980.
+///
+/// The other half of the old test was equally non-specific: `MENU_WINDOW_JOB_VTABLE_RVA`
+/// (0x2aa97e8) is the GENERIC `MenuWindowJob` vtable.
+///
+/// Consequence of believing it: three measured runs captured zero real Continue rows and
+/// `GameMan+0xb80` never left 0, because the whole arm/read/confirm chain sat behind a predicate
+/// nothing could satisfy. It is kept ONLY as a diagnostic label for the overlay jobs; it must never
+/// gate a load again.
+pub(crate) const MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA: usize = 0x00764b80;
 /// Native FD4 row submit helper used by `MenuWindowJob::Update` for one result-mode branch.
 /// It forwards event `3` to the row result's own vtable slot `+0x60`.
 /// `f(rcx = MenuWindow*)`: calls `MenuJobResult::SetResult(&r, Failed=3, 0)` then invokes the
@@ -48,13 +67,6 @@ pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
 /// Renamed 2026-08-01 -- the old name and doc asserted three things the dump contradicts.
 pub(crate) const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize =
     er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
-/// Row-result field consumed by `MenuWindowJob::Update` to choose which native accept event branch
-/// to send to the built row result.
-pub(crate) const MENU_ITEM_RESULT_MODE_58_OFFSET: usize = 0x58;
-/// Row-result virtual event handler slot. Both native accept branches dispatch through this slot.
-pub(crate) const MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET: usize = 0x60;
-/// Tiny FD4 event constructor: writes `{ code: edx, payload: r8d }` to the output slot.
-pub(crate) const FD4_EVENT_CONSTRUCTOR_RVA: usize = 0x007a91e0;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENU_ITEM_RESULT_MODE_EVENT3: i32 = 1;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.

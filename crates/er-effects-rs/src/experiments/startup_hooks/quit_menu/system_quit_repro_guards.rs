@@ -699,7 +699,7 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     // 2026-07-02 bisect showed regress the single switch -- those stay disabled.)
     FULLREAD_PHASE.store(FULLREAD_PHASE_SUBMIT, Ordering::SeqCst);
     FULLREAD_DRAIN_WAITS.store(0, Ordering::SeqCst);
-    MENU_CONTINUE_ITEM.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_BACKSCREEN_OVERLAY_ITEM.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     MENU_CONTINUE_ENTRY.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     MENU_CONTINUE_FUNCTOR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     MENU_CONTINUE_DOCALL.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);

@@ -246,20 +246,25 @@ def loading_layer_runtime_deref_guarded(telemetry: str, constants: str) -> bool:
     return not any(re.search(pattern, telemetry, re.IGNORECASE | re.DOTALL) for pattern in unsafe_patterns)
 
 
-def continue_candidate_is_diagnostic_only(experiments: str) -> bool:
-    """The diagnostic Continue candidate can be the disabled/idle 0x1407add70 job.
+def overlay_candidate_is_diagnostic_only(experiments: str) -> bool:
+    """The 0x764b80 menu-row latches are the 01_900_Black backscreen overlay, not a Continue row.
 
-    Only MENU_CONTINUE_ITEM is promoted by constructor hooks after the native
-    accept predicate is present. The product submit path must not fall back to
-    MENU_CONTINUE_CANDIDATE_ITEM, or it can chase the constant-false idle job
-    forever and obscure the real missing semantic row/action producer.
+    REWRITTEN 2026-08-25. This used to read `product_continue_item_action` and merely forbid it
+    from falling back from MENU_CONTINUE_ITEM to MENU_CONTINUE_CANDIDATE_ITEM -- a rule whose whole
+    premise was that one of those two latches held a real Continue row. Neither did: the `_Do_call`
+    0x764b80 they keyed on builds the Scaleform movie L"01_900_Black" (the fade/backscreen overlay)
+    through the shared functor vtable 0x142a9b9c8, and MENU_WINDOW_JOB_VTABLE_RVA is the generic
+    MenuWindowJob vtable. So the rule policed which of two wrong answers got used.
+
+    The load driver now takes neither. This asserts that: no function in the product load path may
+    read either latch, so a menu-row observation can never again become a load trigger.
     """
-    body = rust_fn_body(experiments, "product_continue_item_action")
-    forbidden_patterns = [
-        r"TITLE_OWNER_SCAN_START_ADDRESS\s*=>\s*MENU_CONTINUE_CANDIDATE_ITEM\.load",
-        r"let\s+item\s*=\s*match\s+MENU_CONTINUE_ITEM\.load[\s\S]*MENU_CONTINUE_CANDIDATE_ITEM\.load",
+    drivers = [
+        rust_fn_body(experiments, "product_continue_autoload_tick"),
+        rust_fn_body(experiments, "native_fullread_tick"),
     ]
-    return not any(re.search(pattern, body) for pattern in forbidden_patterns)
+    forbidden = ("MENU_CONTINUE_CANDIDATE_ITEM", "MENU_BACKSCREEN_OVERLAY_ITEM")
+    return not any(token in body for body in drivers for token in forbidden)
 
 
 def main() -> int:
@@ -317,8 +322,8 @@ def main() -> int:
         failures,
     )
     require(
-        continue_candidate_is_diagnostic_only(experiments),
-        "product submit path must not fall back from MENU_CONTINUE_ITEM to diagnostic MENU_CONTINUE_CANDIDATE_ITEM",
+        overlay_candidate_is_diagnostic_only(experiments),
+        "the product load driver must not read the 01_900_Black backscreen-overlay row latches; a menu-row observation is not a load trigger",
         failures,
     )
 
@@ -446,32 +451,105 @@ def main() -> int:
         "product open-menu gate must allow validated title dialog + latch-clear and must not require Loop/TextFadeout-only timing",
         failures,
     )
-    continue_item_body = rust_fn_body(experiments, "product_continue_item_action")
+    # ===================================================================================
+    # THE TITLE LOAD ROUTE (rewritten 2026-08-25; the rules these replaced asserted a
+    # falsified identification and are listed in the header block at the top of this file).
+    #
+    # WHAT WAS BEING ASSERTED, AND WHY IT WAS WRONG. Three rules used to demand that
+    # `product_continue_item_action` gate the load on a "native Continue MenuWindowJob":
+    # `+0xa8` functor `_Do_call` == 0x764b80 AND `+0xf8` accept predicate == 0x7ad810, with
+    # a fourth rule forbidding the 0x1407acf80 idle constructor from promoting such a row.
+    # Every load-bearing clause was false against the 1.16.2 dump:
+    #   * 0x764b80 reaches `FUN_140764290`, which builds the Scaleform movie L"01_900_Black"
+    #     -- the fade/backscreen overlay -- via that same idle ctor at caller_rva 0x76432c.
+    #     Its siblings build L"01_910_Fade", L"02_903_NowLoading2", L"02_904_NowLoading3".
+    #   * the functor vtable 0x142a9b9c8 it hangs off is shared by four builders, and
+    #     MENU_WINDOW_JOB_VTABLE_RVA (0x2aa97e8) is the GENERIC MenuWindowJob vtable, so
+    #     neither half of the test was row-specific.
+    #   * so the "idle ctor must not promote" rule was pointing at the row's REAL
+    #     constructor and forbidding the only thing that ever built it.
+    # Net effect in three measured runs: zero Continue rows captured, the arm/read/confirm
+    # chain never ran, GameMan+0xb80 never left 0, frozen loading bar.
+    #
+    # WHAT IS ASSERTED NOW: there is no title MenuJob that loads a character (the
+    # MenuMemberFuncJob<TitleTopDialog> member-fn census is closed at two values, neither of
+    # which reads a save slot), so the product path must go through the game's own save
+    # manager and must not resurrect a row predicate.
+    # ===================================================================================
+    product_continue_tick = rust_fn_body(experiments, "product_continue_autoload_tick")
     require(
-        "MENU_ITEM_ACCEPT_IDLE_RVA" in continue_item_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in continue_item_body
-        and "constant false idle predicate" in continue_item_body
-        and "return None" in continue_item_body,
-        "product Continue item validation must reject the constant-false idle accept predicate before native submit",
+        "native_fullread_tick" in product_continue_tick
+        and "product_continue_action_ready" in product_continue_tick
+        and "profile_slot_fingerprint" in product_continue_tick
+        and "MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA" not in product_continue_tick
+        and "MENU_ITEM_ACCEPT_NATIVE_RVA" not in product_continue_tick
+        and "MENU_BACKSCREEN_OVERLAY_ITEM" not in product_continue_tick,
+        "product autoload must drive the native save-read chain and must not gate the load on any menu-row _Do_call/accept predicate",
+        failures,
+    )
+    fullread_body = rust_fn_body(experiments, "native_fullread_tick")
+    require(
+        "B80_FULL_LOAD_INITIATOR_RVA" in fullread_body
+        and "GAME_MAN_SLOT_SELECT_B78_OFFSET" in fullread_body
+        and "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA" in fullread_body
+        and "DESERIALIZE_SLOT_RVA" in fullread_body
+        and "CONTINUE_CONFIRM_RVA" in fullread_body
+        and "fullread_disarm_slot_request" in fullread_body
+        and fullread_body.index("DESERIALIZE_SLOT_RVA") < fullread_body.index("CONTINUE_CONFIRM_RVA"),
+        "the native save-read chain must arm GameMan+0xb78, submit the read, deserialize BEFORE continue_confirm (which copies GameMan+0xc30 into TitleStep+0xbc), and disarm the slot request",
+        failures,
+    )
+    require(
+        "TITLE_MEMBER_FN_LOGOUT_RESET_RVA" in experiments
+        and "TITLE_MEMBER_FN_MENU_SHOW_RVA" in experiments
+        and "MEMBERFUNCJOB_MEMBER_FN_18_OFFSET" in experiments
+        and "MEMBERFUNCJOB_OWNER_10_OFFSET" in experiments,
+        "the MenuMemberFuncJob<TitleTopDialog> layout and its member-function census must stay declared as named constants",
+        failures,
+    )
+    action_ready_body = rust_fn_body(experiments, "title_menu_action_ready")
+    require(
+        "TITLE_MEMBER_FN_LOGOUT_RESET_RVA" in action_ready_body
+        and "TITLE_MEMBER_FN_MENU_SHOW_RVA" in action_ready_body
+        and "LIVE_DIALOG_FACTORY_RVA" not in action_ready_body,
+        "title_menu_action_ready must assert the proven MenuMemberFuncJob member-fn census, never the unsatisfiable LIVE_DIALOG_FACTORY_RVA thunk chain",
+        failures,
+    )
+    fire_action_body = rust_fn_body(experiments, "fire_product_title_load_action")
+    require(
+        "TITLE_MEMBER_FN_LOGOUT_RESET_RVA" in fire_action_body and "REFUSING" in fire_action_body,
+        "firing a MenuMemberFuncJob must refuse the title logout/TitleFlowContext::Reset member function",
+        failures,
+    )
+    edge_body = rust_fn_body(experiments, "observe_save_state_edge")
+    require(
+        "SAVE_STATE_B80_ACTIVE_EDGES" in edge_body
+        and "SAVE_STATE_B80_FIRST_ACTIVE_TICK" in edge_body
+        and "GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET" in edge_body
+        and "T_save_state_active" in edge_body
+        and "observe_save_state_edge" in lib
+        and "oracle_save_state_b80_active_edges" in telemetry
+        and "oracle_save_state_b80_first_active_tick" in telemetry,
+        "the GameMan+0xb80 0->2 (Active) edge must be watched every frame and exposed as a telemetry oracle, not left to a sampled value read",
         failures,
     )
     menu_update_body = rust_fn_body(experiments, "cap_menu_item_update_hook")
     require(
-        "captured semantic native Continue item" in menu_update_body
-        and "semantic_continue_item" in menu_update_body
-        and "MENU_TITLE_CONTINUE_DOCALL_RVA" in menu_update_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in menu_update_body
+        "backscreen-overlay job" in menu_update_body
+        and "backscreen_overlay_job" in menu_update_body
+        and "MENU_TITLE_BACKSCREEN_OVERLAY_DOCALL_RVA" in menu_update_body
+        and "native Continue" not in menu_update_body
         and "captured first title item as native Continue" not in menu_update_body,
-        "product Continue capture must latch a semantic Continue item, not the first ticked MenuWindowJob",
+        "the 0x764b80 update capture must label what it sees as the 01_900_Black backscreen overlay, never as a Continue row",
         failures,
     )
     ctor_body = rust_fn_body(experiments, "menu_window_job_ctor_hook")
     require(
-        "MENU-WINDOW-CTOR captured semantic native Continue item" in ctor_body
+        "MENU-WINDOW-CTOR captured native-accept 01_900_Black backscreen-overlay job" in ctor_body
         and "MENU_WINDOW_JOB_CTOR_RVA" in lib
         and "cap_menu_window_job_ctor_7ac8c0" in experiments
         and "MENU_WINDOW_JOB_CTOR_ORIG" in lib,
-        "product Continue capture must observe MenuWindowJob construction before update-time first-item latching",
+        "MenuWindowJob construction must stay observed, and labelled as the backscreen overlay it is",
         failures,
     )
     native_ctor_b_body = rust_fn_body(experiments, "menu_window_job_native_ctor_b_hook")
@@ -479,12 +557,11 @@ def main() -> int:
         "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA" in lib
         and "cap_menu_window_job_native_ctor_b_7acb00" in experiments
         and "MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG" in lib
-        and "MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item" in native_ctor_b_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in native_ctor_b_body
-        and "MENU_CONTINUE_ITEM" in native_ctor_b_body
+        and "MENU-WINDOW-NATIVE-CTOR-B captured native-accept 01_900_Black backscreen-overlay job"
+        in native_ctor_b_body
         and "0x007ad810" in native_ctor_b_body
         and "0x007add70" not in native_ctor_b_body,
-        "product diagnostics must hook native-accept MenuWindowJob constructor B without accepting idle rows",
+        "the native-accept MenuWindowJob constructor B must stay hooked as a passive overlay observer",
         failures,
     )
     idle_ctor_body = rust_fn_body(experiments, "menu_window_job_idle_ctor_hook")
@@ -493,12 +570,11 @@ def main() -> int:
         and "MENU_ITEM_ACCEPT_IDLE_RVA" in experiments
         and "cap_menu_window_job_idle_ctor_7acf80" in experiments
         and "MENU_WINDOW_JOB_IDLE_CTOR_ORIG" in lib
-        and "MENU-WINDOW-IDLE-CTOR observed Continue-looking disabled item" in idle_ctor_body
-        and "record_continue_candidate" in idle_ctor_body
-        and "trace_first_game_caller_rva" in idle_ctor_body
-        and "MENU_CONTINUE_ITEM.store" not in idle_ctor_body
-        and "MENU_CONTINUE_ITEM.compare_exchange" not in idle_ctor_body,
-        "product diagnostics must passively attribute disabled Continue rows to the 0x1407acf80 idle constructor without promoting them",
+        and "MENU-WINDOW-IDLE-CTOR observed disabled 01_900_Black backscreen-overlay item"
+        in idle_ctor_body
+        and "record_backscreen_overlay_candidate" in idle_ctor_body
+        and "trace_first_game_caller_rva" in idle_ctor_body,
+        "the 0x1407acf80 idle constructor must stay a passive observer of the overlay rows it builds",
         failures,
     )
     title_ready_body = rust_fn_body(experiments, "title_native_ready_predicate_hook")

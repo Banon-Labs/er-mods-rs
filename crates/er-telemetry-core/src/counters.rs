@@ -11,7 +11,9 @@
 //! tick needs; the bulk migration (own_load / move_probe / rawinput / profile /
 //! depth families) lands file-group by file-group per the plan's Step 3.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicI64, AtomicU8, AtomicU64, AtomicUsize, Ordering,
+};
 
 /// Number of standalone read-side ticks that have executed (proves the game-thread
 /// callback is live in the telemetry-only DLL). Owned here from the start.
@@ -1681,6 +1683,21 @@ pub static TASK_ENQUEUE_GENERIC_HITS: AtomicU64 = AtomicU64::new(0);
 pub static TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS: AtomicU64 = AtomicU64::new(0);
 pub static MENU_ITEM_UPDATE_HITS: AtomicU64 = AtomicU64::new(0);
 pub static MENU_ITEM_UPDATE_SEMANTIC_HITS: AtomicU64 = AtomicU64::new(0);
+/// THE OBJECTIVE'S ORACLE. `GameMan+0xb80` (`GameMan::save_state`) edge counters, written by
+/// `observe_save_state_edge` on the per-frame game task. A sampled read of the value can miss the
+/// transition entirely; these cannot. `ACTIVE_EDGES` counts every `!= 2 -> 2` edge (the value the
+/// game's own `LoadSaveData` 0x14067b200 and the full-read submit 0x14067b1a0 both write with
+/// `movl $0x2,0xb80(%rax)`); `FIRST_ACTIVE_TICK` latches the game-task tick of the first one, and
+/// stays at `u64::MAX` while the load has never started.
+pub static SAVE_STATE_B80_ACTIVE_EDGES: AtomicU64 = AtomicU64::new(0);
+
+/// See [`SAVE_STATE_B80_ACTIVE_EDGES`]. `u64::MAX` == never went Active.
+pub static SAVE_STATE_B80_FIRST_ACTIVE_TICK: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// See [`SAVE_STATE_B80_ACTIVE_EDGES`]. Last value observed by the edge watcher (`-1` == GameMan
+/// not resolvable yet), so a log-free telemetry read still shows what the watcher itself saw.
+pub static SAVE_STATE_B80_LAST_SEEN: AtomicI64 = AtomicI64::new(-1);
+
 pub static MENU_CONTINUE_CANDIDATE_HITS: AtomicU64 = AtomicU64::new(0);
 pub static MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS: AtomicU64 = AtomicU64::new(0);
 pub static MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS: AtomicU64 = AtomicU64::new(0);

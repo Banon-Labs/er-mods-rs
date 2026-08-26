@@ -75,6 +75,26 @@ unsafe fn product_profile_select_load_flow(owner: usize, base: usize, slot: i32,
         ));
     }
 }
+/// READINESS ONLY -- a live `CS::MenuMemberFuncJob<CS::TitleTopDialog>` is registered on an open
+/// TitleTopDialog. The returned node is NOT a fireable character-load action, and this function
+/// never claims it is.
+///
+/// It used to require `member_fn` to reach `LIVE_DIALOG_FACTORY_RVA` (0x81ead0) through up to six
+/// thunk hops -- "the Load-Game leaf". That predicate is UNSATISFIABLE, not merely rare, and three
+/// measured runs captured it zero times. Proof (1.16.2, byte-verified in `eldenring-deobf.bin`,
+/// shift 0):
+///   * `MEMBERFUNCJOB_VTABLE_RVA` (0x142b265d0) is written by exactly one function -- both xrefs
+///     land inside `FUN_1409a6c70`. So every object passing the `node_vt` test above was built
+///     there, and `[node+0x18]` is whatever PMF that call site passed.
+///   * `FUN_1409a6c70` has exactly three callers, and each passes a literal PMF: `open_menu`
+///     (`FUN_1409b24e0`) passes 0x1409b2f00 and 0x1409b35f0; `FUN_1409ad660` passes 0x1409b35f0.
+///   * 0x1409b2f00 opens `40 53 / 48 83 ec 20` (a real prologue, no jump) and 0x1409b35f0 is
+///     `b2 01 / e9 09 00 00 00` -> `FUN_1409b3600`, whose first byte is `40 55` (push rbp) -- also
+///     not a jump. Neither reaches 0x14081ead0 by any hop count.
+///
+/// So the member-function census is closed at two values and the factory is not one of them. The
+/// check below asserts that census instead of the impossible one; a third value appearing at
+/// runtime means the census is stale and must be re-derived, not that a Load-Game row was found.
 pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let dialog =
@@ -90,48 +110,33 @@ pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuA
         unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
     // In the native profile-capture direct-open path this slot can be a live heap/registry value
     // instead of an image vtable-shaped value. Treat it as provenance, not as a pre-scan hard gate:
-    // the bounded scanner below still validates the actual MenuMemberFuncJob vtable/member_fn chain
-    // before returning anything fireable.
+    // the bounded scanner below still validates the actual MenuMemberFuncJob vtable/member_fn chain.
     let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
     let node = member_node?;
     let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);
     if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
         return None;
     }
-    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
-    const MEMBER_FN_18: usize = 0x18;
-    const MEMBER_ADJ_20: usize = 0x20;
-    const JMP_HOPS: usize = 6;
-    const HOP_START: usize = 0;
-    const HOP_STEP: usize = 1;
-    let member_dialog = unsafe { safe_read_usize(node + MEMBER_DIALOG_10) }.unwrap_or(null);
-    let member_fn = unsafe { safe_read_usize(node + MEMBER_FN_18) }.unwrap_or(null);
-    let member_adjust = unsafe { safe_read_usize(node + MEMBER_ADJ_20) }.unwrap_or(null);
-    if member_fn == null {
+    let member_dialog =
+        unsafe { safe_read_usize(node + MEMBERFUNCJOB_OWNER_10_OFFSET) }.unwrap_or(null);
+    let member_fn =
+        unsafe { safe_read_usize(node + MEMBERFUNCJOB_MEMBER_FN_18_OFFSET) }.unwrap_or(null);
+    let member_adjust =
+        unsafe { safe_read_usize(node + MEMBERFUNCJOB_MEMBER_ADJUST_20_OFFSET) }.unwrap_or(null);
+    let in_census = member_fn == base + TITLE_MEMBER_FN_LOGOUT_RESET_RVA
+        || member_fn == base + TITLE_MEMBER_FN_MENU_SHOW_RVA;
+    if !in_census {
         return None;
     }
-    let factory_abs = base + LIVE_DIALOG_FACTORY_RVA;
-    let mut target = member_fn;
-    let mut hop = HOP_START;
-    while hop < JMP_HOPS && target != null {
-        if target == factory_abs {
-            return Some(MenuActionNode {
-                node,
-                node_vt,
-                registry,
-                member_dialog,
-                member_fn,
-                member_adjust,
-                window_item: window_item.unwrap_or(null),
-            });
-        }
-        match unsafe { decode_thunk_hop(target) } {
-            Some(next) => target = next,
-            None => break,
-        }
-        hop += HOP_STEP;
-    }
-    None
+    Some(MenuActionNode {
+        node,
+        node_vt,
+        registry,
+        member_dialog,
+        member_fn,
+        member_adjust,
+        window_item: window_item.unwrap_or(null),
+    })
 }
 pub unsafe fn title_live_dialog_fire_ready(
     owner: usize,

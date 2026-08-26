@@ -66,7 +66,6 @@ pub struct TitleFlowHost {
     /// Title-anim speedup multiplier (1.0 = neutral).
     pub title_anim_speedup_factor: fn() -> f32,
     // --- save-source policy ----------------------------------------------------------
-    pub direct_save_file_source_active: fn() -> bool,
     pub missing_save_selection_pending: fn() -> bool,
     pub save_override_telemetry_only: fn() -> bool,
     // --- hook/patch helpers ----------------------------------------------------------
@@ -75,7 +74,6 @@ pub struct TitleFlowHost {
         unsafe fn(&mut Vec<MhHook>, &str, u32, *mut c_void, &'static AtomicUsize),
     pub install_auto_accept_hook: fn(),
     // --- menu/dialog observation -----------------------------------------------------
-    pub decode_thunk_hop: unsafe fn(usize) -> Option<usize>,
     pub scan_dialog_for_loadgame: unsafe fn(usize, usize) -> (Option<usize>, Option<usize>),
     pub resolve_menu_system_save_load: unsafe fn(usize) -> Option<usize>,
     // --- product continue/load drivers -----------------------------------------------
@@ -84,7 +82,7 @@ pub struct TitleFlowHost {
         unsafe fn(&ProductCoreAutoloadReady, usize, usize, i32) -> bool,
     pub product_continue_autoload_tick:
         unsafe fn(usize, usize, usize, i32, u64, &ProductCoreAutoloadReady),
-    pub native_fullread_tick: unsafe fn(usize, usize, u64),
+    pub native_fullread_tick: unsafe fn(usize, usize, u64, i32),
     pub resolve_active_load_slot: unsafe fn(i32) -> i32,
     pub mark_tfc_forced_continue_handoff: fn(),
     pub own_stepper_enter_s2_phase: fn(usize),
@@ -133,9 +131,6 @@ unsafe fn default_create_continue_trace_hook(
 }
 fn default_unit() {}
 fn default_unit_str(_source: &str) {}
-unsafe fn default_decode_thunk_hop(_addr: usize) -> Option<usize> {
-    None
-}
 unsafe fn default_scan_dialog_for_loadgame(
     _owner: usize,
     _base: usize,
@@ -169,7 +164,7 @@ unsafe fn default_product_continue_autoload_tick(
     _ready: &ProductCoreAutoloadReady,
 ) {
 }
-unsafe fn default_native_fullread_tick(_owner: usize, _base: usize, _n: u64) {}
+unsafe fn default_native_fullread_tick(_owner: usize, _base: usize, _n: u64, _slot_hint: i32) {}
 unsafe fn default_own_load_switch_reload_fire(
     _base: usize,
     _gm: usize,
@@ -237,12 +232,10 @@ impl TitleFlowHost {
             outgoing_teardown_suppresses_holds: default_gate_off,
             switch_reload_ownload_disabled: default_gate_off,
             title_anim_speedup_factor: default_factor_neutral,
-            direct_save_file_source_active: default_gate_off,
             missing_save_selection_pending: default_gate_off,
             save_override_telemetry_only: default_gate_off,
             create_continue_trace_hook: default_create_continue_trace_hook,
             install_auto_accept_hook: default_unit,
-            decode_thunk_hop: default_decode_thunk_hop,
             scan_dialog_for_loadgame: default_scan_dialog_for_loadgame,
             resolve_menu_system_save_load: default_resolve_menu_system_save_load,
             fire_product_title_load_action: default_fire_product_title_load_action,
@@ -386,9 +379,6 @@ pub(crate) fn run_ebl_mount_census(src: &str) {
 pub(crate) fn title_anim_speedup_factor() -> f32 {
     (host().title_anim_speedup_factor)()
 }
-pub(crate) fn direct_save_file_source_active() -> bool {
-    (host().direct_save_file_source_active)()
-}
 pub(crate) fn missing_save_selection_pending() -> bool {
     (host().missing_save_selection_pending)()
 }
@@ -406,9 +396,6 @@ pub(crate) unsafe fn create_continue_trace_hook(
 }
 pub(crate) fn install_auto_accept_hook() {
     (host().install_auto_accept_hook)()
-}
-pub(crate) unsafe fn decode_thunk_hop(addr: usize) -> Option<usize> {
-    unsafe { (host().decode_thunk_hop)(addr) }
 }
 pub(crate) unsafe fn scan_dialog_for_loadgame(
     owner: usize,
@@ -445,8 +432,8 @@ pub(crate) unsafe fn product_continue_autoload_tick(
 ) {
     unsafe { (host().product_continue_autoload_tick)(owner, base, gm, slot, tick, ready) }
 }
-pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
-    unsafe { (host().native_fullread_tick)(owner, base, n) }
+pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64, slot_hint: i32) {
+    unsafe { (host().native_fullread_tick)(owner, base, n, slot_hint) }
 }
 pub(crate) unsafe fn resolve_active_load_slot(configured: i32) -> i32 {
     unsafe { (host().resolve_active_load_slot)(configured) }

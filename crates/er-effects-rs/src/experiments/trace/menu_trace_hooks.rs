@@ -562,7 +562,7 @@ pub(crate) fn install_continue_trace_hooks() {
             &CAP_DIALOG_FACTORY_ORIG,
         );
         // MenuWindowJob ctor 0x1407ac8c0: latch semantic Continue items at construction before
-        // the first updated/idle title input leaf can poison MENU_CONTINUE_ITEM.
+        // the first updated/idle title input leaf can poison MENU_BACKSCREEN_OVERLAY_ITEM.
         create_continue_trace_hook(
             &mut hooks,
             "cap_menu_window_job_ctor_7ac8c0",

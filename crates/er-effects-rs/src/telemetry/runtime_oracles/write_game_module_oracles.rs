@@ -57,8 +57,21 @@ fn write_game_module_oracles(body: &mut String) {
                 read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET),
             )
         };
+        // THE OBJECTIVE'S ORACLE. The VALUE above is a sample and can miss the transition; the two
+        // edge fields below cannot. `observe_save_state_edge` (per-frame game task) counts every
+        // `!= 2 -> 2` edge on GameMan+0xb80 and latches the tick of the first one, so a run can be
+        // read in one look: `oracle_save_state_b80_active_edges == 0` means the load never started.
+        let b80_active_edges =
+            er_telemetry_core::counters::SAVE_STATE_B80_ACTIVE_EDGES.load(Ordering::SeqCst);
+        let b80_first_active_tick =
+            er_telemetry_core::counters::SAVE_STATE_B80_FIRST_ACTIVE_TICK.load(Ordering::SeqCst);
+        let b80_first_active_tick = if b80_first_active_tick == u64::MAX {
+            -1i64
+        } else {
+            b80_first_active_tick as i64
+        };
         body.push_str(&format!(
-            "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
+            "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_save_state_b80_active_edges\": {b80_active_edges},\n  \"oracle_save_state_b80_first_active_tick\": {b80_first_active_tick},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
         ));
         // SWITCH-TRIGGER pipeline oracle (goal 2026-07-21, bd er-effects-rs-tx9n +
         // USER-oracle-must-emit-teardown-and-noload-cause): make a NO-LOAD explain itself instead of

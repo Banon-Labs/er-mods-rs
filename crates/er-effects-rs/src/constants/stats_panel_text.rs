@@ -375,11 +375,21 @@ pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01
 /// it with `0` is a native visibility semantic, not a timeline FadeIn/FadeOut guess.
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA: usize = 0x9a6180;
 pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA;
-/// TitleTopDialog start-login/native accept path (dump 0x1409b3050 -> deobf/live 0x1409b2f00).
-/// It calls `TitleBackViewParts::SetVisible(1)` on dialog+0xaa8 before continuing through native
-/// login/save-load setup, so detouring it and hiding the logo after the original is the earliest
-/// proven TitleTopDialog-owned logo visibility point on the zero-input Continue path.
-pub(crate) const TITLE_TOP_START_LOGIN_RVA: usize = 0x9b2f00;
+/// The `MenuMemberFuncJob<TitleTopDialog>` step at 0x1409b2f00, kept under its original name
+/// because a live logo-visibility hook is attached to it. The VALUE is now declared once, in
+/// `er_title_flow::TITLE_MEMBER_FN_LOGOUT_RESET_RVA`, and derived here.
+///
+/// DOC CORRECTED 2026-08-25. The old text called this the "start-login/native accept path" that
+/// "continues through native login/save-load setup". The 1.16.2 dump says the opposite: it calls
+/// `CS::CSServerInterface::StartLogOutJob` (log OUT), then `FUN_14082d0d0` --
+/// `TitleFlowContext::Reset`, which rebuilds ~7 empty `CS::MenuString`s and zeroes
+/// `titleFlowStepId_`/`serverErrorCode`/`regulationVersion` -- then clears the menu-open latch
+/// `dialog+0xa40` and plays `"Loop"`. It reads no save slot and loads no character.
+///
+/// What is unchanged and is what the hook actually relies on: it calls
+/// `TitleBackViewParts::SetVisible(1)` on dialog+0xaa8, so detouring it and hiding the logo after
+/// the original is still a TitleTopDialog-owned logo visibility point.
+pub(crate) const TITLE_TOP_START_LOGIN_RVA: usize = er_title_flow::TITLE_MEMBER_FN_LOGOUT_RESET_RVA;
 pub(crate) const TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES: usize = 1;
 pub(crate) static TITLE_TOP_START_LOGIN_HIDE_ORIG: AtomicUsize =

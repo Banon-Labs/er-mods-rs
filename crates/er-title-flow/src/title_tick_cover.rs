@@ -2091,34 +2091,12 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     if phase == OWN_STEPPER_PHASE_MENU
         && FULLREAD_PHASE.load(Ordering::SeqCst) == FULLREAD_PHASE_GUARD
     {
-        // Direct-file save sources own FULLREAD_PHASE via the native full-read chain (which reads the
-        // staged save itself); let it run its own GUARD/COMMIT, not the Continue-item guard below.
-        // This covers both the missing-save picker and explicit loose `save_file` config.
-        if direct_save_file_source_active() {
-            unsafe { native_fullread_tick(owner, module_base, tick) };
-            return true;
-        }
-        // Native Continue can reset title-menu visual latches while its modal-confirm branch waits.
-        // The product intent is to disable that confirm wait after the native load has produced
-        // loaded-slot evidence, so keep the post-submit guard running instead of re-gating on title
-        // visuals that are no longer authoritative.
-        let guard_ready = ProductCoreAutoloadReady {
-            committed: TITLE_STATE_OWNER_GONE,
-            requested: TITLE_STATE_OWNER_GONE,
-            table: null,
-            session: null,
-            game_data_man: null,
-            profile_summary: null,
-            iodev: null,
-            heap_allocator: null,
-            title_dialog: null,
-            title_in_loop: false,
-            title_in_textfadeout: false,
-            menu_opened_latch: null,
-            press_start_proxy: null,
-            press_start_context: null,
-        };
-        unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &guard_ready) };
+        // EVERY product save source owns FULLREAD_PHASE via the native save-read chain, not just the
+        // direct-file ones. The default-save branch below used to run a separate "Continue-item"
+        // guard whose `modal_disable_ready` required `b80 == 1` -- unreachable, because b80 only
+        // leaves 0 once the read this chain starts has begun. Deadlock: the confirm waited on a
+        // state only the confirm could produce. One chain, one GUARD/COMMIT.
+        unsafe { native_fullread_tick(owner, module_base, tick, slot) };
         return true;
     }
     // MENU-FREE SWITCH RELOAD (2026-07-18, RE workflow + bd live-switch-teardown-fixed-now-menu-open-stall).
@@ -2415,16 +2393,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // so rustc never codegen'd them, the INSTALLED latches were never set, and each disable was
             // an unconditional early return. bd er-effects-rs-57fw.
         }
-        // Direct-file save source: the "native Continue row" product_continue waits for can be stale
-        // or backed by an empty ProfileSummary. Picker path already used this bypass; explicit loose
-        // `save_file` needs the same verified native full-read chain. It marks the slot occupied (so
-        // the save-load gate 0x14067b200 accepts it), reads the staged save itself
-        // (submit/drain/deserialize), and commits (continue_confirm -> SetState5) into the redirected
-        // staged save. The user's original source save remains read-only.
-        if direct_save_file_source_active() {
-            unsafe { native_fullread_tick(owner, module_base, tick) };
-            return true;
-        }
+        // ONE ROUTE FOR EVERY SAVE SOURCE. The direct-file sources (missing-save picker, explicit
+        // loose `save_file`) already used the native save-read chain; the default user save waited
+        // instead on a "native Continue row" that does not exist -- see
+        // `product_continue_autoload_tick` for the falsified identification. That tick now arms the
+        // pre-read gates and hands off to the same chain, so the picker, an explicit save_file and
+        // the default save all load through the game's own save manager. It marks the slot occupied
+        // (so the save-load gate 0x14067b200 accepts it), reads the save (submit/drain/deserialize),
+        // and commits (continue_confirm -> SetState5). Source saves stay read-only.
         unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &ready) };
     }
     let phase_now = OWN_STEPPER_PHASE.load(Ordering::SeqCst);

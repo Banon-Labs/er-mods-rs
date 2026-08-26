@@ -148,6 +148,14 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 tick_before_player_lookup(task_data);
                 poll_autoload_handoff_parent_state_guard();
+                // THE OBJECTIVE'S ORACLE. Watch GameMan+0xb80 (`save_state`) every frame, on both
+                // sides of the title handoff, so the 0 -> 2 (Active) edge the game's own
+                // LoadSaveData 0x14067b200 / full-read submit 0x14067b1a0 writes is recorded even
+                // if it lands between two throttled telemetry samples. Pure reads.
+                {
+                    let ticks = state_or_return(&state).game_task_ticks;
+                    crate::experiments::observe_save_state_edge(ticks);
+                }
                 // Startup save-picker: input/navigation runs on the render thread (the Present hook),
                 // the only thread that reads OS keys under Wine. Only the one-shot pick COMPLETION
                 // (redirect + MinHook install) runs here on the game task -- it is alive at pick time

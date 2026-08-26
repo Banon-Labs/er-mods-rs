@@ -499,8 +499,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                 && (waits % STAGE1D_RETRY_INTERVAL) == TITLE_OWNER_SCAN_START_ADDRESS as u64
             {
                 OWN_STEPPER_LOADGAME_SCANS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-                let _ = unsafe { scan_dialog_for_loadgame($owner, $base) };
-            }
+                    }
             if menu_build_timed_out {
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }

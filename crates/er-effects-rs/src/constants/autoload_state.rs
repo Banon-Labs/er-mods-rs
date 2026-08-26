@@ -28,6 +28,11 @@ pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 /// recipe for the full-read chain.)
 pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize =
     core::mem::offset_of!(GameMan, requested_save_slot_load_index);
+/// The GameMan+0xb80 (`save_state`) EDGE oracle -- the objective's run-stopping proof that a load
+/// actually started. Written by `observe_save_state_edge` on the per-frame game task.
+pub(crate) use er_telemetry_core::counters::SAVE_STATE_B80_ACTIVE_EDGES;
+pub(crate) use er_telemetry_core::counters::SAVE_STATE_B80_FIRST_ACTIVE_TICK;
+pub(crate) use er_telemetry_core::counters::SAVE_STATE_B80_LAST_SEEN;
 pub(crate) use er_title_flow::GAME_MAN_SAVE_STATE_IDLE;
 pub(crate) const GAME_MAN_SAVE_STATE_OPENING: i32 = 1;
 pub(crate) const GAME_MAN_SAVE_STATE_READING: i32 = 2;

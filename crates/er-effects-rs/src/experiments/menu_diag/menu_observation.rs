@@ -5,9 +5,8 @@ use crate::{
         CONTINUE_CONFIRM_RVA, DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET, DIALOG_SLOT_BOUND_B08_OFFSET,
         DIALOG_SLOT_CURSOR_B0C_OFFSET, LIVE_DIALOG_FACTORY_RVA, MENU_ITEM_FUNCTOR_A8_OFFSET,
         MENU_ROUTER_THIS, ROUTER_THIS_VTABLE_RVA, TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
-        TITLE_OWNER_MENU_LIST_130_OFFSET, TITLE_OWNER_SCAN_START_ADDRESS,
-        TITLE_OWNER_STATE_COMMITTED_OFFSET, TITLE_STATE_OWNER_GONE, TITLE_TOP_DIALOG_VTABLE_RVA,
-        TRACE_MENU_CONTINUE_WRAPPER_RVA,
+        TITLE_OWNER_SCAN_START_ADDRESS, TITLE_OWNER_STATE_COMMITTED_OFFSET, TITLE_STATE_OWNER_GONE,
+        TITLE_TOP_DIALOG_VTABLE_RVA, TRACE_MENU_CONTINUE_WRAPPER_RVA,
     },
     experiments::{
         MENU_CONTINUE_DOCALL, MENU_CONTINUE_ENTRY, MENU_CONTINUE_FUNCTOR, MENU_CONTINUE_INDEX,
@@ -461,155 +460,38 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
 /// (whose +0xa8 holds the d180 functor). It does NOT latch/advance (the caller decides) so a first
 /// run stays NO-WRITE at the menu. (Extended 2026-06-18 to also return the MenuMemberFuncJob node
 /// so native_load_enabled() can fire its run; previously it returned only the window item.)
+/// Load-Game dialog lookup -- DELIBERATELY DOES NOT SCAN. Always `(None, None)`.
+///
+/// WHY THE SCAN IS GONE (bisected 2026-08-25, three runs)
+/// -----------------------------------------------------
+/// This walked 1280 qwords off the TitleTopDialog every frame, dereferencing any qword that
+/// was non-null, 8-aligned and above a heap floor, reading its vtable, and calling
+/// `reaches_factory()` on what it found. Those are SHAPE checks, not identity checks: a stale
+/// or recycled pointer passes all three, and `safe_read_usize` only survives an unmapped page,
+/// not a pointer into freed-but-still-mapped heap. The walk was the last code running before
+/// the process vanished -- no exception, no shutdown sequence -- in every measured run.
+///
+/// A/B that convicted it, identical single-DLL profile and empty save dir, only the DLL differs:
+///   main-e618a1dba0e8 (a96025bccf0b5b56)  ALIVE at 45s, reached the world, log at 43132ms
+///   this branch       (bce208d789420fea)  DEAD ~15s, log stops at 13316ms mid-scan
+///
+/// Removing it costs NOTHING because it never once worked: `hits=0` and
+/// `found_member_node=0x0 found_item=0x0` in every run ever logged. Returning `(None, None)`
+/// therefore reproduces its observed behaviour exactly, minus the walk.
+///
+/// The premise was also wrong, not merely unsafe. It assumed `owner+0x138` is the
+/// ProfileLoadDialog ctor's `r8`, from a single "gold capture" that was never re-verified; the
+/// live object reads `vt=0x142ac7f20`, so `+0xa58` (the supposed row-vector begin) landed in the
+/// middle of a UTF-16 string -- one run logged `rowvec_begin=0x70006e0073005f`.
+///
+/// THE REAL FIX, if this lookup is ever needed: take the object from the code that BUILDS the
+/// rows -- hook the constructor and record what it is handed -- never from a fixed offset walked
+/// out of a parent. Identity comes from a property the object carries, never from its position.
+/// Same defect as `MENU_TITLE_CONTINUE_DOCALL_RVA` matching the `01_900_Black` fade overlay; see
+/// bd `shared-vtable-is-not-an-identity-verify-uniqueness-before-latching-2026-08-25`.
 pub(crate) unsafe fn scan_dialog_for_loadgame(
-    owner: usize,
-    base: usize,
+    _owner: usize,
+    _base: usize,
 ) -> (Option<usize>, Option<usize>) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const DIALOG_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
-    const ENTRY_REGISTRY_A48: usize = 0xa48;
-    const ENTRY_SOURCE_A38: usize = DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
-    // d180 std::function _Func_impl vtable (user-capture-confirmed); MenuMemberFuncJob vtable.
-    const FUNCTOR_VTABLE_RVA: usize = 0x02ac3ea8;
-    const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x02b265d0;
-    const FACTORY_RVA: usize = 0x0081ead0;
-    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
-    const MEMBER_FN_18: usize = 0x18;
-    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
-    const MEMBER_ADJ_20: usize = 0x20;
-    const SCAN_QWORDS: usize = 0x500;
-    const PTR_SZ: usize = core::mem::size_of::<usize>();
-    const PTR_ALIGN_MASK: usize = 0x7;
-    const HEAP_LO: usize = 0x10000;
-    const QW_START: usize = 0;
-    const QW_STEP: usize = 1;
-    const JMP_HOPS: usize = 6;
-    const HOP_START: usize = 0;
-    const HOP_STEP: usize = 1;
-    const HIT_CAP: usize = 24;
-    const HIT_START: usize = 0;
-    const HIT_STEP: usize = 1;
-
-    let dialog = unsafe { safe_read_usize(owner + DIALOG_E0) }.unwrap_or(NULL);
-    if dialog == NULL {
-        return (None, None);
-    }
-    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
-        append_autoload_debug(format_args!(
-            "loadgame-scan: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} != TitleTopDialog 0x{:x} -- skip",
-            base + TITLE_TOP_DIALOG_VTABLE_RVA
-        ));
-        return (None, None);
-    }
-    let functor_vt = base + FUNCTOR_VTABLE_RVA;
-    let memberjob_vt = base + MEMBERFUNCJOB_VTABLE_RVA;
-    let factory_abs = base + FACTORY_RVA;
-    // Resolve a (member-)fn forward through up to JMP_HOPS jmp-thunks; true if it reaches the
-    // Load-Game dialog_factory. (A full member fn that only CALLs the factory internally won't
-    // chain-resolve; the raw fn VA is logged regardless for offline disasm.)
-    let reaches_factory = |start: usize| -> bool {
-        let mut tgt = start;
-        let mut hop = HOP_START;
-        while hop < JMP_HOPS && tgt != NULL {
-            if tgt == factory_abs {
-                return true;
-            }
-            match unsafe { decode_thunk_hop(tgt) } {
-                Some(next) => tgt = next,
-                None => break,
-            }
-            hop += HOP_STEP;
-        }
-        tgt == factory_abs
-    };
-    let registry = unsafe { safe_read_usize(dialog + ENTRY_REGISTRY_A48) }.unwrap_or(NULL);
-    let source = unsafe { safe_read_usize(dialog + ENTRY_SOURCE_A38) }.unwrap_or(NULL);
-    append_autoload_debug(format_args!(
-        "loadgame-scan: dialog=0x{dialog:x} registry(0xa48)=0x{registry:x} source(0xa38)=0x{source:x} functor_vt=0x{functor_vt:x} memberjob_vt=0x{memberjob_vt:x} -- scanning {SCAN_QWORDS} qwords"
-    ));
-    // DIRECT-BUILD r8 (ctor owner-obj) candidate validation (2026-06-18 breakthrough: the
-    // ProfileLoadDialog ctor 0x1409a3d90 is COLD-VIABLE -- it builds router_this + slot rows
-    // inline, no session/PGD/input-focus deps). dialog_factory 0x14081ead0 passes the ctor
-    // r8 = *(capture+8); the gold capture showed that = owner+0x138, and the ctor reads the
-    // profile ROW-VECTOR COUNT at [r8+0xa60]. Validate READ-ONLY which candidate has a plausible
-    // vtable [+0] + a small row count [+0xa60] BEFORE any native build call (look before acting).
-    const OWNER_MENU_OBJ_138: usize =
-        TITLE_OWNER_MENU_LIST_130_OFFSET + core::mem::size_of::<usize>();
-    const CTOR_ROW_COUNT_A60: usize = 0xa60;
-    const CTOR_ROW_VEC_BEGIN_A58: usize = 0xa58;
-    const R8_CAND_N: usize = 2;
-    let cand_a = owner + OWNER_MENU_OBJ_138;
-    let cand_b = unsafe { safe_read_usize(cand_a) }.unwrap_or(NULL);
-    let cands: [(&str, usize); R8_CAND_N] = [("owner+0x138", cand_a), ("*(owner+0x138)", cand_b)];
-    for (tag, c) in cands.iter() {
-        if *c == NULL {
-            continue;
-        }
-        let cvt = unsafe { safe_read_usize(*c) }.unwrap_or(NULL);
-        let cnt = unsafe { safe_read_usize(*c + CTOR_ROW_COUNT_A60) }.unwrap_or(NULL);
-        let vbeg = unsafe { safe_read_usize(*c + CTOR_ROW_VEC_BEGIN_A58) }.unwrap_or(NULL);
-        append_autoload_debug(format_args!(
-            "loadgame-scan: r8-cand[{tag}]=0x{c:x} vt=0x{cvt:x} rowvec_begin[+0xa58]=0x{vbeg:x} rowcount[+0xa60]=0x{cnt:x}"
-        ));
-    }
-    let mut found_item: Option<usize> = None;
-    let mut found_member_node: Option<usize> = None;
-    let mut hits = HIT_START;
-    let mut q = QW_START;
-    while q < SCAN_QWORDS {
-        let off = q * PTR_SZ;
-        let p = unsafe { safe_read_usize(dialog + off) }.unwrap_or(NULL);
-        if p != NULL && (p & PTR_ALIGN_MASK) == QW_START && p >= HEAP_LO {
-            let vt = unsafe { safe_read_usize(p) }.unwrap_or(NULL);
-            if vt == memberjob_vt {
-                // (a) a MenuMemberFuncJob registry entry node.
-                let mfn = unsafe { safe_read_usize(p + MEMBER_FN_18) }.unwrap_or(NULL);
-                let mdlg = unsafe { safe_read_usize(p + MEMBER_DIALOG_10) }.unwrap_or(NULL);
-                let madj = unsafe { safe_read_usize(p + MEMBER_ADJ_20) }.unwrap_or(NULL);
-                let rf = reaches_factory(mfn);
-                if hits < HIT_CAP {
-                    append_autoload_debug(format_args!(
-                        "loadgame-scan: dialog+0x{off:x} MenuMemberFuncJob node=0x{p:x} member_fn=0x{mfn:x} reaches_factory={rf} back=0x{mdlg:x} adj=0x{madj:x}"
-                    ));
-                }
-                // The Load-Game run target: a MenuMemberFuncJob whose member_fn chains to the
-                // dialog factory. Latch the FIRST such node (run 0x1409aaba0 fires against it).
-                if rf && found_member_node.is_none() {
-                    found_member_node = Some(p);
-                }
-                hits += HIT_STEP;
-            } else if vt == functor_vt {
-                // (b) the d180 functor object itself.
-                if hits < HIT_CAP {
-                    append_autoload_debug(format_args!(
-                        "loadgame-scan: dialog+0x{off:x} -> d180 FUNCTOR object=0x{p:x} (vt 0x2ac3ea8)"
-                    ));
-                }
-                hits += HIT_STEP;
-            } else {
-                // (c) a MenuWindowJob whose +0xa8 holds the d180 functor = the Load-Game item.
-                let fa8 = unsafe { safe_read_usize(p + ITEM_FUNCTOR_A8) }.unwrap_or(NULL);
-                if fa8 != NULL && (fa8 & PTR_ALIGN_MASK) == QW_START && fa8 >= HEAP_LO {
-                    let fvt = unsafe { safe_read_usize(fa8) }.unwrap_or(NULL);
-                    if fvt == functor_vt {
-                        append_autoload_debug(format_args!(
-                            "loadgame-scan: dialog+0x{off:x} -> d180 MenuWindowJob item=0x{p:x} item_vt=0x{vt:x} functor=0x{fa8:x} -- LOAD-GAME candidate"
-                        ));
-                        if found_item.is_none() {
-                            found_item = Some(p);
-                        }
-                        hits += HIT_STEP;
-                    }
-                }
-            }
-        }
-        q += QW_STEP;
-    }
-    append_autoload_debug(format_args!(
-        "loadgame-scan: done hits={hits} found_member_node=0x{:x} found_item=0x{:x}",
-        found_member_node.unwrap_or(NULL),
-        found_item.unwrap_or(NULL)
-    ));
-    (found_member_node, found_item)
+    (None, None)
 }

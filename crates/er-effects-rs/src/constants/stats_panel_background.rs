@@ -69,7 +69,6 @@ pub(crate) const TITLE_STEP_BEGIN_LOGO: i32 = TitleStepState::BeginLogo as i32;
 /// Cleared value (0) for the BeginLogo list-build gate [owner+0xb8].
 pub(crate) const TITLE_OWNER_BEGINLOGO_GATE_CLEAR: u32 = false as u32;
 pub(crate) use er_title_flow::TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
-pub(crate) use er_title_flow::TITLE_OWNER_MENU_LIST_130_OFFSET;
 
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_OPEN_MENU_RVA;
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_VTABLE_RVA;

@@ -199,7 +199,7 @@ pub(crate) use er_telemetry_core::counters::TITLE_OWNER_SCAN_TABLE_REJECTS;
 pub(crate) use er_telemetry_core::counters::TITLE_OWNER_SCAN_VTABLE_HITS;
 pub(crate) static MENU_CONTINUE_ENTRY: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static MENU_CONTINUE_ITEM: AtomicUsize =
+pub(crate) static MENU_BACKSCREEN_OVERLAY_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_CTOR_HITS;
 pub(crate) use er_telemetry_core::counters::MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS;
@@ -337,7 +337,7 @@ pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_READY_PREDICATE_LAST_MA
 pub(crate) use er_telemetry_core::counters::TITLE_NATIVE_READY_PREDICATE_LAST_RET;
 pub(crate) static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
+pub(crate) static MENU_BACKSCREEN_OVERLAY_ITEM_FIELD_LOG_COUNT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static B80_DISPATCHER2_OBSERVE_COUNT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -476,15 +476,6 @@ pub(crate) struct NativeContinueEntry {
     pub(crate) cursor: i32,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct NativeContinueItemAction {
-    pub(crate) item: usize,
-    pub(crate) result: usize,
-    pub(crate) result_vt: usize,
-    pub(crate) functor: usize,
-    pub(crate) do_call: usize,
-}
-
 pub(crate) use er_title_flow::StartupModalBlockingState;
 
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
@@ -548,7 +539,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     // write (continue_confirm -> SetState5) is HARD-gated behind the step-6 guard AND the commit
     // sub-gate (default = VERIFY-ONLY). NO SetState forcing for boot, NO selector pump.
     if native_fullread_enabled() {
-        unsafe { native_fullread_tick(owner, base, n) };
+        unsafe { native_fullread_tick(owner, base, n, OWN_STEPPER_SLOT_NONE) };
         pass_through(false);
         return;
     }

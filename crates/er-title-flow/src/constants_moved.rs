@@ -197,7 +197,67 @@ pub static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755: AtomicUsize =
 /// CS::MenuMemberFuncJob<TitleTopDialog> vtable 0x142b265d0 (RVA): the registry-entry node the
 /// registrar 0x1409b24e0 inserts into [dialog+0xa48]; its run is MENU_MEMBER_FUNC_JOB_RUN_RVA.
 /// (Mirrors the local MEMBERFUNCJOB_VTABLE_RVA in scan_dialog_for_loadgame.)
+///
+/// The vtable is written by exactly ONE function -- `getXrefsTo 0x142b265d0` returns two rows,
+/// both inside `FUN_1409a6c70` (the `lea` and its store). So `[obj] == base + this` is a sound
+/// class test: nothing else in the image can produce it.
 pub const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
+
+/// `CS::MenuMemberFuncJob<CS::TitleTopDialog>` object layout, byte-verified against
+/// `eldenring-deobf.bin` (1.16.2, shift 0) at the sole constructor `FUN_1409a6c70`:
+///
+/// ```text
+/// 1409a6cab  ba 08 00 00 00        mov     edx,0x8              ; HeapAlloc align
+/// 1409a6cb0  8d 4a 20              lea     ecx,[rdx+0x20]       ; HeapAlloc size = 0x28
+/// 1409a6cc5  0f 10 06              movups  xmm0,[rsi]           ; rsi = the 16-byte MSVC PMF arg
+/// 1409a6cd6  48 8d 05 f3f81702     lea     rax,[0x142b265d0]    ; MEMBERFUNCJOB_VTABLE_RVA
+/// 1409a6cdd  48 89 03              mov     [rbx],rax            ; +0x00 vtable
+/// 1409a6ce0  48 89 6b 10           mov     [rbx+0x10],rbp       ; +0x10 owner (TitleTopDialog*)
+/// 1409a6ce9  0f 11 43 18           movups  [rbx+0x18],xmm0      ; +0x18..+0x27 the PMF
+/// ```
+///
+/// `+0x08` is the `DLReferenceCountObject` refcount written by the `CS::MenuJob` base ctor
+/// (`AtomicIncrement(&obj+0x8)` at 1409a6cf9). `+0x18` is the wrapped member function's CODE
+/// ADDRESS and `+0x20` its this-adjust word -- so `+0x18` is the runtime discriminator between
+/// two jobs of this class.
+pub const MEMBERFUNCJOB_OWNER_10_OFFSET: usize = 0x10;
+
+/// See [`MEMBERFUNCJOB_OWNER_10_OFFSET`]: the wrapped member function's code address.
+pub const MEMBERFUNCJOB_MEMBER_FN_18_OFFSET: usize = 0x18;
+
+/// See [`MEMBERFUNCJOB_OWNER_10_OFFSET`]: the MSVC pointer-to-member this-adjust word.
+pub const MEMBERFUNCJOB_MEMBER_ADJUST_20_OFFSET: usize = 0x20;
+
+/// See [`MEMBERFUNCJOB_OWNER_10_OFFSET`]: `HeapAlloc(0x28, 8, menuHeap)`.
+pub const MEMBERFUNCJOB_SIZE: usize = 0x28;
+
+/// COMPLETE CENSUS of `CS::MenuMemberFuncJob<CS::TitleTopDialog>` member functions (1.16.2).
+///
+/// `FUN_1409a6c70` has exactly three callers (`getFunctionByAddress 0x1409a6c70` -> callers
+/// `FUN_1409ad660`, `FUN_1409b24e0` x2), and each passes a literal PMF:
+///   * `FUN_1409b24e0` (`TitleTopDialog::open_menu`) builds one job with `+0x18 == 0x1409b2f00`
+///     and one with `+0x18 == 0x1409b35f0`;
+///   * `FUN_1409ad660` builds one job with `+0x18 == 0x1409b35f0`.
+///
+/// So at runtime `[job+0x18]` is one of exactly these two values, and NOTHING ELSE. Anything that
+/// requires a third value from an object of this class -- for example a predicate demanding that
+/// the member function reach `LIVE_DIALOG_FACTORY_RVA` (0x81ead0) -- is unsatisfiable by
+/// construction, not merely unlucky.
+///
+/// 0x9b2f00 is the LEAVE-the-title-menu step: it calls `CSServerInterface::StartLogOutJob`, then
+/// `FUN_14082d0d0` (`TitleFlowContext::Reset` -- rebuilds ~7 empty `CS::MenuString`s and zeroes
+/// `titleFlowStepId_`/`serverErrorCode`/`regulationVersion`), clears the menu-open latch
+/// `dialog+0xa40`, plays `"Loop"` on `dialog+0xa60`, and closes the `L"PRESS BUTTON"` measurement
+/// `open_menu` opened. It reads NO save slot: the `&CSMenuSystemSaveLoad::saveSlot` it passes to
+/// `FUN_14082d0d0` is used only as a base for the flag words at `+4`/`+8`; the slot field itself
+/// is never dereferenced there. It is NOT a character-load step.
+pub const TITLE_MEMBER_FN_LOGOUT_RESET_RVA: usize = 0x9b2f00;
+
+/// See [`TITLE_MEMBER_FN_LOGOUT_RESET_RVA`]. 0x1409b35f0 is a two-instruction thunk
+/// (`b2 01  mov dl,1` / `e9 09000000  jmp 0x1409b3600`), i.e. the `dl = 1` form of the
+/// `FUN_1409b3600(dialog, 0)` call at the tail of 0x1409b2f00. It does not reach
+/// `LIVE_DIALOG_FACTORY_RVA` through any jump chain.
+pub const TITLE_MEMBER_FN_MENU_SHOW_RVA: usize = 0x9b35f0;
 
 /// TitleTopDialog row registry [dialog+0xa48] (the FD4 delegate registry the registrar populates).
 /// Used as the live-menu readiness signal: populated == the menu rows are registered + rendered.
