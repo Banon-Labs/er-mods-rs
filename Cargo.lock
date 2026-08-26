@@ -2942,6 +2942,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-invasion-path"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-build-watermark-core",
+ "er-game-base",
+ "er-invasion-warp-core",
+ "fromsoftware-shared",
+ "hudhook",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-invasion-warp"
 version = "0.1.0"
 dependencies = [

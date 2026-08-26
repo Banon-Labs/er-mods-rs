@@ -50,6 +50,10 @@ members = [
   "crates/er-build-watermark",
   "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
+  # A walkable route to every other player in the session, drawn on the ground and following the
+  # terrain, with a direction arrow when the navmesh cannot reach them. Standalone shell: reads
+  # the roster, asks the engine's own Havok-AI navmesh, draws through the shared overlay host.
+  "crates/er-invasion-path",
   # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
   # no product dependency: every guard is a null-container intercept on a vanilla function.
   "crates/er-seamless-bugfixes",
