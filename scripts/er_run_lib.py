@@ -108,6 +108,19 @@ class DirectoryWatch:
         self.close()
 
 
+def game_dir() -> Path:
+    """The `ELDEN RING/Game` directory: where the game lives and where every loaded DLL logs.
+
+    One owner, because the path is machine-shaped: this repo now runs a NATIVE Linux Steam
+    install, the retired WSL2 layout put it under `C:\\SteamLibrary`, and a script carrying its
+    own copy of either silently resolves to nothing rather than erroring -- which reads as "the
+    file is missing" instead of "you looked in the wrong place". `ME3_STEAM_DIR` overrides it,
+    the same variable `~/Elden/launch.sh` derives from.
+    """
+    steam = Path(os.environ.get("ME3_STEAM_DIR", Path.home() / ".local/share/Steam"))
+    return steam / "steamapps/common/ELDEN RING/Game"
+
+
 def process_alive(pid: int) -> bool:
     """True if `pid` exists and is not a zombie. Reads /proc rather than shelling out.
 

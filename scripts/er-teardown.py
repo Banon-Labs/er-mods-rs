@@ -250,29 +250,72 @@ def cpu_ticks(pid: int) -> int | None:
         return None
 
 
-def game_health(prefix: str = DEFAULT_PREFIX, sample_ms: int = CPU_SAMPLE_MS) -> str:
-    """Is there a REAL game running -- threads and CPU, not merely a pid?"""
-    games = [row for row in survey(prefix) if row["comm"] == "eldenring.exe"]
-    if not games:
-        return "no eldenring.exe"
-    lines = []
-    for row in games:
+# The three verdicts `game_status` can reach. A caller that scores a launch decides on these
+# rather than on `survey()` rows, so the husk rule lives here and nowhere else.
+GAME_RUNNING = "running"
+GAME_HUSK = "husk"
+GAME_EXITED = "exited"
+
+
+def game_status(
+    prefix: str = DEFAULT_PREFIX, sample_ms: int = CPU_SAMPLE_MS
+) -> list[dict[str, object]]:
+    """Every `eldenring.exe` in the prefix, with the two facts that separate a game from a husk.
+
+    Machine-readable half of [`game_health`]. It exists because a tool that SCORES a launch --
+    an A/B, a bisect -- has to branch on the verdict, and re-deriving it from a formatted string
+    would put a second copy of the husk rule outside this module.
+    """
+    rows: list[dict[str, object]] = []
+    for row in (entry for entry in survey(prefix) if entry["comm"] == "eldenring.exe"):
         pid = int(row["pid"])
+        threads = int(row["threads"])
         before = cpu_ticks(pid)
         exited = wait_for_exit([pid], sample_ms)
         after = cpu_ticks(pid)
         if exited or before is None or after is None:
-            lines.append(f"pid={pid} EXITED during sampling -- it was already dying")
+            rows.append(
+                {
+                    "pid": pid,
+                    "threads": threads,
+                    "cpu_ticks": None,
+                    "verdict": GAME_EXITED,
+                }
+            )
             continue
         burned = after - before
-        threads = int(row["threads"])
+        rows.append(
+            {
+                "pid": pid,
+                "threads": threads,
+                "cpu_ticks": burned,
+                "verdict": (
+                    GAME_HUSK
+                    if threads <= HUSK_THREAD_CEILING or burned == 0
+                    else GAME_RUNNING
+                ),
+            }
+        )
+    return rows
+
+
+def game_health(prefix: str = DEFAULT_PREFIX, sample_ms: int = CPU_SAMPLE_MS) -> str:
+    """Is there a REAL game running -- threads and CPU, not merely a pid?"""
+    rows = game_status(prefix, sample_ms)
+    if not rows:
+        return "no eldenring.exe"
+    lines = []
+    for row in rows:
+        pid = row["pid"]
+        if row["verdict"] == GAME_EXITED:
+            lines.append(f"pid={pid} EXITED during sampling -- it was already dying")
+            continue
         verdict = (
-            "HUSK (wedged; tear down)"
-            if threads <= HUSK_THREAD_CEILING or burned == 0
-            else "running"
+            "HUSK (wedged; tear down)" if row["verdict"] == GAME_HUSK else GAME_RUNNING
         )
         lines.append(
-            f"pid={pid} threads={threads} cpu_ticks_in_{sample_ms}ms={burned} -> {verdict}"
+            f"pid={pid} threads={row['threads']} "
+            f"cpu_ticks_in_{sample_ms}ms={row['cpu_ticks']} -> {verdict}"
         )
     return "; ".join(lines)
 

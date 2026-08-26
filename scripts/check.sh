@@ -169,6 +169,7 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
 shellcheck "$repo_root/scripts/beads-prime.sh"
 shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 
@@ -345,6 +346,11 @@ python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
 python3 "$repo_root/scripts/er-run-branch.py" --selftest
+
+# Scoring a DLL by launching it alone. Its verdict is the husk oracle -- thread count and CPU
+# burn, not a pid existing -- and its selftest drives every branch of that classification,
+# including the two-thread husk that a naive check calls a pass. It launches nothing.
+python3 "$repo_root/scripts/er-release-bisect.py" --selftest
 
 # Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
 # er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
