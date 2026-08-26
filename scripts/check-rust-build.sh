@@ -75,6 +75,13 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	cargo xwin check --tests \
 		-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
+	# The ProfileSummary crate split. Not a default-member, so without this line its
+	# `#[cfg(windows)]` test module -- the runtime `ChrAsm` image reassembly, which is the one
+	# place a foreign save's bytes are rearranged into the layout the native copy expects --
+	# would compile for no target at all. The host `cargo test` in check.sh cannot see it.
+	echo "[check-rust-build] cargo xwin check --tests -p er-profile-summary-core --target $target"
+	cargo xwin check --tests -p er-profile-summary-core \
+		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# World-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). Same
 	# situation as the save-picker split: neither is a default-member and the DLL shell is
 	# not depended on by anything, so without this line nothing in any gate would compile
@@ -190,8 +197,12 @@ fi
 # `std::path` separator semantics, never under the windows target the crate actually ships to.
 if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin test --lib --target $target (via wine)"
+	# `-p` is explicit rather than relying on default-members (= er-effects-rs): the
+	# ProfileSummary crate's windows-only tests moved OUT of er-effects-rs, and a bare
+	# `--lib` would have quietly stopped running them.
 	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
-		cargo xwin test --lib --manifest-path "$repo_root/Cargo.toml" --target "$target"
+		cargo xwin test --lib -p er-effects-rs -p er-profile-summary-core \
+		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 else
 	echo "[check-rust-build] wine not found; skipping the windows-target unit-test RUN (compile check above still ran)" >&2
 fi

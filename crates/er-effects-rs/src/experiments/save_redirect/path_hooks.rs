@@ -23,9 +23,9 @@ use er_save_redirect::{
     staged_entry_fate, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
 };
 use er_telemetry_core::counters::{
-    SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN, SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED,
-    SAVE_DIRECT_STAGE_STALE_REMOVED, SAVE_REDIRECT_DETOUR_MAX_DEPTH,
-    SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
+    BOOT_SAVE_CONTAINER_MATCHES_RUNTIME, SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN,
+    SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED, SAVE_DIRECT_STAGE_STALE_REMOVED,
+    SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
 };
 use windows::{Win32::System::LibraryLoader::GetModuleHandleA, core::PCSTR};
 
@@ -607,6 +607,80 @@ pub(crate) fn missing_save_selection_pending() -> bool {
     MISSING_SAVE_DIALOG_GATE.is_pending()
 }
 
+/// Arm the missing-save picker AFTER boot, when a save the boot check accepted turns out to be
+/// unloadable.
+///
+/// The boot arm (`enforce_save_override_or_abort`) answers one question -- "is there a save source
+/// at all?" -- and answers it from the filesystem, before the game exists. It cannot answer the
+/// only question that finally matters: whether the game can actually LOAD what it was handed. When
+/// those two answers disagree the autoload used to have nowhere to go; this is where it goes. The
+/// reason is deliberately open-ended, because the recovery must not care WHY the load turned out
+/// impossible -- an empty slot, a container the runtime does not own, a save that reads but does
+/// not deserialize -- only that it did.
+///
+/// Everything downstream of the gate already follows it live and needs no help: the picker overlay
+/// arms itself off `missing_save_selection_pending()` from the Present hook and the game task
+/// (`boot_open_missing_save_picker_if_pending`), the title `SetState` detour starts denying world
+/// entry, and `TitleTopDialog::open_menu` starts being suppressed. All three are installed
+/// unconditionally and read the flag per call, so setting it here is the whole arm.
+///
+/// IDEMPOTENT BY CONSTRUCTION -- `MissingSaveGate::try_arm` is a compare-exchange from `Idle`, so a
+/// second call (later tick, other thread) neither restarts a browse already `Pending` nor revokes a
+/// save already `Ready`. Returns whether THIS call did the arming.
+pub(crate) fn arm_missing_save_picker_after_boot(reason: &str) -> bool {
+    // SUPERSEDE FIRST, ARM SECOND. Every reset below has to be in place before the gate opens,
+    // because the gate is what other threads watch: the Present hook and the game task both call
+    // `boot_open_missing_save_picker_if_pending` every frame, and either can be inside it the
+    // instant `try_arm` returns. Clearing a latch after that point would clobber a picker that had
+    // already opened on it.
+    //
+    // The rejected selection must leave nothing behind that could still steer the retry at the save
+    // we just gave up on:
+    //   * MISSING_SAVE_PICKER_SELECTED_SLOT is what `native_fullread_slot` and the product-core
+    //     callsite both consult FIRST, so any stale value here would outrank the user's new pick.
+    //     Cleared to the "none yet" sentinel so the picker's own character stage is the only thing
+    //     that can set it.
+    //   * OWN_STEPPER_EXPECTED_SLOT is the guard phase's identity check for a load already in
+    //     flight. The rejected attempt never got far enough to arm it -- the empty-profile branch
+    //     returns before it writes any slot register, so GameMan+0xb78/+0xac0 are untouched too --
+    //     but a retry must not inherit one from any earlier attempt either.
+    //   * SAVE_PICKER_OS_BOOT_STATE is the boot picker's one-shot open latch. IDLE is its "nobody
+    //     owns this pick" value and `boot_open_missing_save_picker_if_pending` compare-exchanges
+    //     out of it; if an earlier arm had already moved it, the picker would never open for this
+    //     one.
+    //
+    // REFUSE BEFORE RESETTING, THOUGH. The resets below are destructive to a selection that
+    // already exists, and `try_arm`'s compare-exchange refuses AFTER they would have run --
+    // too late to protect anything. The reachable case is not hypothetical: a user who picked
+    // a save at the boot picker leaves the gate `Ready` with their slot in
+    // MISSING_SAVE_PICKER_SELECTED_SLOT, and if THAT save is the one that fingerprints
+    // empty-like, this very branch escalates. Resetting first would wipe the pick and then
+    // decline to re-arm -- strictly worse than the dead end it replaces, and silent. So the
+    // gate is read first and a non-`Idle` gate leaves every latch untouched.
+    let state_before = MISSING_SAVE_DIALOG_GATE.state();
+    if state_before != er_save_redirect::MissingSaveState::Idle {
+        append_autoload_debug(format_args!(
+            "save-override: late missing-save picker arm DECLINED (reason={reason}) -- selection state is already {state_before:?}; a pick in flight or already made is never restarted, revoked, or cleared"
+        ));
+        return false;
+    }
+    er_telemetry_core::counters::MISSING_SAVE_PICKER_SELECTED_SLOT
+        .store(usize::MAX, Ordering::SeqCst);
+    OWN_STEPPER_EXPECTED_SLOT.store(OWN_STEPPER_SLOT_NONE, Ordering::SeqCst);
+    SAVE_PICKER_OS_BOOT_STATE.store(er_save_picker_core::BOOT_PICKER_IDLE, Ordering::SeqCst);
+    if !MISSING_SAVE_DIALOG_GATE.try_arm() {
+        append_autoload_debug(format_args!(
+            "save-override: late missing-save picker arm REFUSED (reason={reason}) -- selection state is already {:?}; a pick in flight or already made is never restarted or revoked",
+            MISSING_SAVE_DIALOG_GATE.state()
+        ));
+        return false;
+    }
+    append_autoload_debug(format_args!(
+        "save-override: *** REJECTING the boot-accepted save and ARMING the missing-save picker LATE (reason={reason}) *** -- the autoload could not load what the boot check accepted; the 05_010 file browser presents itself over the boot cover, world entry stays denied, and the user's pick supersedes this selection"
+    ));
+    true
+}
+
 /// True after an explicit loose save source (`er-effects.toml save_file` / ER_EFFECTS_SAVE_FILE) or
 /// the in-game picker has activated direct-file staging. In this mode the user's original save is a
 /// read-only source and native reads/writes target our private staged `%APPDATA%` tree. The load path
@@ -948,17 +1022,85 @@ fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
     None
 }
 
+/// `BOOT_SAVE_CONTAINER_MATCHES_RUNTIME`: the boot check accepted the container the runtime opens
+/// (or accepted nothing and armed the picker, which is equally correct).
+const BOOT_SAVE_CONTAINER_MATCH_YES: usize = 1;
+/// `BOOT_SAVE_CONTAINER_MATCHES_RUNTIME`: the boot check validated a container the runtime will
+/// never read. Unreachable once the check is container-exact; kept so a regression is visible.
+const BOOT_SAVE_CONTAINER_MATCH_MISMATCH: usize = 2;
+
+/// Container names the BOOT default-save check may accept, cached for the process.
+///
+/// NOT [`active_default_save_file_names`], and the difference is the fix for the 2026-08-26
+/// softlock. That list is the LOAD candidate set and its `.sl2` fallback under Seamless is right
+/// wherever staging rewrites the name (a save the user picks is written under every container
+/// name). The boot check has no redirect at all: it accepts a container and then the runtime opens
+/// the one IT wants by name. Under Seamless that is ERSC's container, so accepting `.sl2` there
+/// validates a file the runtime never reads -- which is exactly what happened:
+///
+/// ```text
+/// [+59ms]  Seamless save container resolved to 'ER0000.co2'
+/// [+84ms]  default save '...\ER0000.co2' has ZERO readable character slots; treating as no save
+/// [+98ms]  DEFAULT-USER-SAVE -- ... default save '...\ER0000.sl2' with no redirect
+/// ```
+///
+/// `missing_save_selection_pending()` therefore stayed false, the boot save-data `ShowProgressJob`
+/// was never held, and the title built its menu against an empty `ProfileSummary`. Accepting
+/// nothing instead arms the picker AT BOOT, which is the designed path.
+/// See `er_save_redirect::default_save_container_names_for` (host-tested).
+pub(crate) fn default_save_boot_container_names() -> &'static [&'static str] {
+    static VANILLA_ONLY: [&str; 1] = [er_save_redirect::VANILLA_SAVE_CONTAINER_NAME];
+    static SEAMLESS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    if !save_picker_seamless_mode_after_settle("default-save-boot-container-names") {
+        return &VANILLA_ONLY;
+    }
+    SEAMLESS.get_or_init(|| {
+        er_save_redirect::default_save_container_names_for(true, seamless_save_container_name())
+            .into_iter()
+            .map(|name| &*Box::leak(name.into_boxed_str()))
+            .collect()
+    })
+}
+
+/// Publish whether the boot check's answer names the container the runtime opens.
+///
+/// `accepted` is the container the check took, or `None` when it took nothing (picker armed --
+/// correct, not a mismatch). With [`default_save_boot_container_names`] in place a mismatch is
+/// unreachable; the oracle stays because it is the only thing that would have SHOWN the 2026-08-26
+/// failure from RAM instead of costing another run.
+fn record_boot_save_container_match(accepted: Option<&str>) {
+    let runtime = active_default_save_file_name();
+    let matches = er_save_redirect::boot_save_container_matches_runtime(accepted, runtime);
+    BOOT_SAVE_CONTAINER_MATCHES_RUNTIME.store(
+        if matches {
+            BOOT_SAVE_CONTAINER_MATCH_YES
+        } else {
+            BOOT_SAVE_CONTAINER_MATCH_MISMATCH
+        },
+        Ordering::SeqCst,
+    );
+    if !matches {
+        append_autoload_debug(format_args!(
+            "save-override: BOOT CONTAINER MISMATCH -- the default-save check accepted '{}' but the runtime opens '{runtime}'; that save will never be read",
+            accepted.unwrap_or("<none>")
+        ));
+    }
+}
+
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let root = default_save_root()?;
-    // Asymmetric mode lock: Seamless takes `.co2` then falls back to `.sl2`; vanilla takes only
-    // `.sl2`. First candidate that holds a readable character wins.
-    active_default_save_file_names().iter().find_map(|name| {
+    // Boot acceptance is container-EXACT: only the container this runtime opens can satisfy a
+    // no-redirect default save. See `default_save_boot_container_names`.
+    let found = default_save_boot_container_names().iter().find_map(|name| {
         validated_default_save_file(
             default_save_file_path(&root, steam_id, name),
             "active-default-save",
         )
         .and_then(default_save_with_character)
-    })
+        .map(|path| (path, *name))
+    });
+    record_boot_save_container_match(found.as_ref().map(|(_, name)| *name));
+    found.map(|(path, _)| path)
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -975,7 +1117,9 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .file_name()
                 .to_str()
                 .and_then(steam_id64_from_dir_name)?;
-            active_default_save_file_names()
+            // Same container-exact rule as `default_save_file_for_steam_id64`: this discovery
+            // also ends in a no-redirect DEFAULT-USER-SAVE.
+            default_save_boot_container_names()
                 .iter()
                 .find_map(|name| {
                     validated_default_save_file(
@@ -1142,7 +1286,7 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
     }
     append_autoload_debug(format_args!(
         "save-override: no usable autoload save (configured save missing/invalid, or no readable active default among {:?} exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
-        active_default_save_file_names(),
+        default_save_boot_container_names(),
         SAVE_OVERRIDE_EXPECTED_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));

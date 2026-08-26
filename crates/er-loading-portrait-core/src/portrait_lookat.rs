@@ -205,6 +205,15 @@ pub use er_telemetry_core::counters::PORTRAIT_SLOT_FLIP_CANDIDATE;
 pub use er_telemetry_core::counters::PORTRAIT_SLOT_FLIP_STREAK;
 pub use er_telemetry_core::counters::PORTRAIT_WINDOW_RETARGETS_SUPPRESSED;
 pub use er_telemetry_core::counters::PORTRAIT_WINDOW_TARGET_SLOT;
+pub use er_telemetry_core::counters::{
+    PORTRAIT_WINDOW_TARGET_FROM_PICK, PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS,
+};
+
+/// `PORTRAIT_WINDOW_TARGET_FROM_PICK`: this window's latch came from a guess.
+pub const PORTRAIT_WINDOW_TARGET_PICK_NO: usize = 0;
+/// `PORTRAIT_WINDOW_TARGET_FROM_PICK`: this window's latch came from the user's explicit pick, so
+/// nothing may replace it for the life of the window.
+pub const PORTRAIT_WINDOW_TARGET_PICK_YES: usize = 1;
 pub const PORTRAIT_SLOT_FLIP_ACCEPT_TICKS: usize = 60;
 /// DEPTH-KEY branch attribution (the black-background-on-reload bug): every key call ends in
 /// exactly one of applied-fresh / applied-cached / NO-MASK (fail-open, the black frames); the

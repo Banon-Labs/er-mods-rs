@@ -10,12 +10,12 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 48,265 |
-| excluding `startup_hooks/**` | 44 | 25,311 |
-| `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
-| lifecycle S10 split | 5 | 2,304 |
-| own-load S11 split | 5 | 2,909 |
-| save redirect | 3 | 2,357 |
+| all `experiments/**` | 76 | 47,658 |
+| excluding `startup_hooks/**` | 43 | 24,324 |
+| `startup_hooks/**` plus `startup_hooks.rs` | 33 | 23,334 |
+| lifecycle S10 split | 5 | 2,241 |
+| own-load S11 split | 5 | 2,905 |
+| save redirect | 3 | 2,501 |
 
 The `scripts/check-crate-extraction-roadmap.py` gate checks the paths, line counts, and required caller edges below. A source file add/remove/line-count change must refresh this ledger in the same change (`--refresh` does the mechanical part).
 
@@ -24,6 +24,36 @@ The `scripts/check-crate-extraction-roadmap.py` gate checks the paths, line coun
 The three files that left `experiments/**` are `startup_hooks/diagnostics/{msb_parse_trace,loadlist_wait_trace,dlc_roots_trace}.rs`, into the new `crates/er-diag-harness` cdylib. They were the only rows on the D4 list that a second image could take: each is observe-and-forward, none exports an `oracle_*` field, and none reads or writes a product static.
 
 The rest of D4 does **not** follow them, and the reason is measured rather than judged. `trace/**` (4,134 lines) cannot move: `install_continue_trace_hooks` runs on every normal product boot -- its gate is `trace_continue_enabled()`, which is `product_autoload_enabled()`, armed by default -- and `create_continue_trace_hook` is `er-title-flow`'s SOLE hook-install primitive for eight product hooks, wired in from `bootstrap.rs`. Inside those files, `map_mount_guard_flip_tick` and `blockres_phase2_hook` write game memory as corrective fixes, `cap_builder_hook` overrides the native LoadGame slot argument, and `cap_dialog_factory_hook` drives the own-stepper into STAGE2; seven of their statics are read by product code outside the family, and four feed `oracle_*` fields. `menu_diag/menu_observation.rs` is likewise blocked: `decode_thunk_hop` is on the live `er-title-flow` seam. `input_trace.rs` has no hooks of its own -- it borrows the XInput detour that `input_block.rs` installs for the save picker, and `input_block.rs:786` calls back into it -- so moving it would need that detour to become a `[[shared]]` hook-union anchor first.
+
+### ProfileSummary extraction accepted (2026-08-26): `er-profile-summary-core`
+
+`CS::ProfileSummary` -- the ten in-memory character records the game deserializes once at boot --
+was one concept holding four files of this shim, one verb each: `continue_load/slot_resolution.rs`
+had the live-record fingerprint, `loading_cover/loading_cover_save_slot.rs` had the summary pointer
+and the serialized-save reader that fills a record,
+`startup_hooks/quit_menu/save_swap_profile_table.rs` had the whole-table rebuild, and
+`continue_load/picked_summary_refresh.rs` -- a whole new module born in the shim, and the file this
+gate's ratchet was built to catch -- had the boot re-read that uses all three. All four moved to
+`crates/er-profile-summary-core`; the record LAYOUT stays in `er_game_base::profile_summary`, whose
+typed asserts pin the 1.16.2 ABI.
+
+The remaining halves stayed with the surfaces that own them, and each one is a measured boundary
+rather than a judgement call:
+
+* the System>Quit preview's snapshot/backout bookkeeping and its renderer refresh stayed in
+  `save_swap_profile_table.rs`: the two callers of the record transport want opposite things from a
+  snapshot (a preview is reversible, a boot re-read is not a preview at all);
+* `load_profile_slot_caches_from_bytes` stayed in
+  `loading_cover/title_resources_stats_text.rs` and crossed back as a host-seam field: it fills the
+  per-slot name / stats / saved-map / place-name caches the ProfileSelect ROWS read, which are a
+  different surface from the records;
+* `native_fullread_slot`, `direct_save_file_source_active` and
+  `active_save_file_for_system_quit` stayed and crossed back the same way -- slot policy and save
+  source are `continue_load/slot_resolution.rs` and `save_redirect`'s concepts, and taking them
+  would have meant depending on `er-title-flow`, which is this crate's natural CONSUMER and would
+  have closed a dependency cycle.
+
+Measured effect on the ledger: 48,740 -> 47,658 lines, 77 -> 76 files.
 
 ## 2. R1 ownership rules
 
@@ -101,9 +131,9 @@ Every row below is a current source file. `Current partition` is the exact prese
 | Current file | Lines | Current partition | Next node |
 |---|---:|---|---|
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
-| `continue_load.rs` | 9 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 563 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 739 | product slot-resolution policy | D5 and R14 |
+| `continue_load.rs` | 17 | product re-export facade | D5 |
+| `continue_load/product_continue.rs` | 602 | product continue/load policy | D5 |
+| `continue_load/slot_resolution.rs` | 726 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 468 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
@@ -137,16 +167,16 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,002 | save source/path policy and redirect adapters | R32-R37 |
-| `startup_hooks.rs` | 104 | product startup root and arming facade | `STAY` |
+| `save_redirect/path_hooks.rs` | 2,146 | save source/path policy and redirect adapters | R32-R37 |
+| `startup_hooks.rs` | 107 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 336 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,549 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 821 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 72 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 989 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,083 | title-flow and product modal families | R22 |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,104 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,419 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |
@@ -161,7 +191,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,895 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,523 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
-| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,244 | product profile renderer and quit swap families | R18-R19 |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,163 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,414 | System>Quit dialog implementation and picker adapter; the row TEXT layer moved to `er_quit_menu_core::row_text` | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 673 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,413 | ownership, telemetry, quit, and portrait families | R19 |

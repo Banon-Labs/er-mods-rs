@@ -31,6 +31,7 @@ pub(crate) use er_quit_menu_core::save_dest_identity::*;
 pub(crate) use er_quit_menu_core::save_flow_boxes::{
     SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision, save_flow_box_label,
 };
+pub(crate) use er_telemetry_core::counters::BOOT_SAVE_CONTAINER_MATCHES_RUNTIME;
 pub(crate) use er_telemetry_core::counters::CORRUPTED_SAVE_SEEN_COUNT;
 pub(crate) use er_telemetry_core::counters::NETWORK_CHECK_SHORTCIRCUIT_COUNT;
 pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_BAD_FRAMES;
@@ -82,6 +83,8 @@ pub(crate) use er_telemetry_core::counters::SAVE_PICKER_SURFACE;
 pub(crate) use er_telemetry_core::counters::TESTNET_FF_FIRED_EPOCH;
 pub(crate) use er_telemetry_core::counters::TESTNET_FF_LAST_MMS;
 pub(crate) use er_telemetry_core::counters::TESTNET_FF_STUCK_FRAMES;
+pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT;
+pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_PASSTHROUGH_COUNT;
 pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_SUPPRESSED_COUNT;
 pub(crate) use er_telemetry_core::counters::WINRECONFIG_CHANGE_DISPLAY_CALLS;
 pub(crate) use er_telemetry_core::counters::WINRECONFIG_CREATE_WINDOW_CALLS;

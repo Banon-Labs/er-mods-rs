@@ -111,12 +111,17 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     // (which the still-resident char-1 PGD then "validated" as live) under character 2's loading screen.
     // Same priority as portrait_target_slot(), keeping the boot-time best_active_slot fallback.
     let sel = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
-    let slot = if sel <= i32::MAX as usize
-        && (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&(sel as i32))
-    {
-        sel as i32
-    } else {
-        portrait_loaded_slot_confirmed().unwrap_or_else(|| unsafe { best_active_slot() })
+    let slot = match crate::portrait_identity::loading_screen_stats_slot_source(
+        sel,
+        portrait_loaded_slot_confirmed(),
+        TITLE_PROFILE_SLOT_COUNT as i32,
+    ) {
+        crate::portrait_identity::StatsSlotSource::SwitchSelection(slot)
+        | crate::portrait_identity::StatsSlotSource::PortraitWindow(slot) => slot,
+        // Only reached when nothing named a slot; the scan is unsafe and is paid for here alone.
+        crate::portrait_identity::StatsSlotSource::BestActiveFallback => unsafe {
+            best_active_slot()
+        },
     };
     let slot_u = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
         slot as usize

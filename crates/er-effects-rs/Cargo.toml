@@ -65,6 +65,11 @@ er-loading-bar-core = { path = "../er-loading-bar-core" }
 # overlay host), extracted in the portrait crate split. The product keeps bundling it;
 # product state crosses the seam via `er_loading_portrait_core::install_host` in bootstrap.rs.
 er-loading-portrait-core = { path = "../er-loading-portrait-core" }
+# `CS::ProfileSummary` reading + writing (the live-record fingerprint, the summary pointer, the
+# serialized-save reader that fills a record, the whole-table rebuild, and the picked-save
+# re-read), extracted from four files of this crate. Product state crosses the seam via
+# `er_profile_summary_core::host::install_host` in bootstrap.rs.
+er-profile-summary-core = { path = "../er-profile-summary-core" }
 er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"

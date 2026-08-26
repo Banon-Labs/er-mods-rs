@@ -1,3 +1,34 @@
+/// Route ONE direct-file (picked / loose `save_file`) autoload tick, and give the native Continue
+/// row a chance to become usable before deciding.
+///
+/// `refresh_direct_source_profile_summary` is idempotent and self-throttling -- it returns straight
+/// away once the live `CS::ProfileSummary` already describes the picked container -- so calling it
+/// per tick costs an atomic load on the settled path. The decision itself is the pure
+/// [`crate::autoload_route::title_autoload_route`], which carries the reasoning and the tests.
+fn direct_source_autoload_route() -> crate::autoload_route::TitleAutoloadRoute {
+    refresh_direct_source_profile_summary();
+    crate::autoload_route::title_autoload_route(true, direct_source_slot_summary_real())
+}
+
+/// Must this direct-file tick run the TITLE-TIME full read (submit/drain/deserialise at the title)?
+///
+/// Two ways in, and the second is not optional:
+///
+///   * the route says the native Continue row cannot be used -- no readable summary for the picked
+///     slot, so the Continue path would sit on an empty profile forever;
+///   * the full-read chain has already left `FULLREAD_PHASE_SUBMIT`, so it owns `FULLREAD_PHASE`
+///     **and** the native slot-request register `GameMan+0xb78`. Diverting a chain mid-flight would
+///     strand that register armed, and the in-game save manager services any `>= 0` request on the
+///     first frames after world arrival -- a SECOND full deserialize into the live world, which is
+///     precisely what `fullread_disarm_slot_request` exists to prevent. Only a DONE exit of the
+///     chain itself disarms it, so once it starts, it finishes.
+fn direct_source_runs_title_full_read() -> bool {
+    if FULLREAD_PHASE.load(Ordering::SeqCst) != FULLREAD_PHASE_SUBMIT {
+        return true;
+    }
+    direct_source_autoload_route().deserialises_at_title()
+}
+
 /// Per-frame PUMP for the built LoadGame job (bd drain-dialog-plus8-not-menujob-pump-our-job-directly).
 /// Runs from the recurring game task once `maybe_fire_tfc_continue` armed `TFC_DRAIN_JOB`. Calls
 /// `ExecuteMenuJob(rcx = &job_slot, rdx = &FD4Time)` DIRECTLY on our built job -- it invokes the job's
@@ -2080,7 +2111,12 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // Direct-file save sources own FULLREAD_PHASE via the native full-read chain (which reads the
         // staged save itself); let it run its own GUARD/COMMIT, not the Continue-item guard below.
         // This covers both the missing-save picker and explicit loose `save_file` config.
-        if direct_save_file_source_active() {
+        //
+        // NARROWED 2026-08-26: `direct_save_file_source_active()` alone is not the question. It says
+        // WHERE the bytes come from, not whether the native Continue row can be used -- and routing
+        // every picked save away from that row is what put the deserialize at the title, outside
+        // every precondition its only native caller establishes. Ask the route instead.
+        if direct_save_file_source_active() && direct_source_runs_title_full_read() {
             unsafe { native_fullread_tick(owner, module_base, tick) };
             return true;
         }
@@ -2407,7 +2443,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // the save-load gate 0x14067b200 accepts it), reads the staged save itself
         // (submit/drain/deserialize), and commits (continue_confirm -> SetState5) into the redirected
         // staged save. The user's original source save remains read-only.
-        if direct_save_file_source_active() {
+        //
+        // NARROWED 2026-08-26 (the routing fork itself): a picked save now takes this bypass ONLY
+        // while its slot still has no readable `CS::ProfileSummary` record. Once the summary
+        // re-read lands, it goes down the SAME native Continue path the default save uses -- which
+        // deserializes IN-WORLD from `CS::MoveMapStep::DoSaveStuff`, the only caller `0x14067b290`
+        // has. See `crate::autoload_route`.
+        if direct_save_file_source_active() && direct_source_runs_title_full_read() {
             unsafe { native_fullread_tick(owner, module_base, tick) };
             return true;
         }

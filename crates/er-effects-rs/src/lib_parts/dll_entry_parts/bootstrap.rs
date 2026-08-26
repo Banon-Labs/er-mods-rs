@@ -140,6 +140,18 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
         boot_view_render_frame: crate::experiments::boot_view_render_frame,
     });
+    // ProfileSummary crate split: wire the er-profile-summary-core seam before any hook install
+    // or task spawn can execute moved code. Its neutral defaults read NO summary and rebuild
+    // NOTHING, so this must land before the first autoload tick. Pure fn-pointer writes.
+    er_profile_summary_core::host::install_host(er_profile_summary_core::host::ProfileSummaryHost {
+        append_autoload_debug: crate::telemetry::append_autoload_debug,
+        game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
+        direct_save_file_source_active: crate::experiments::direct_save_file_source_active,
+        active_save_file_for_system_quit: crate::experiments::active_save_file_for_system_quit,
+        native_fullread_slot: crate::experiments::native_fullread_slot,
+        load_profile_slot_caches_from_bytes:
+            crate::experiments::load_profile_slot_caches_from_bytes,
+    });
     // Save-picker crate split: wire product (A)'s seam before any hook install or task spawn can
     // execute moved picker code. Pure fn-pointer writes; linking the crate still arms nothing by
     // itself.
@@ -177,6 +189,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         save_dest_set_target: crate::experiments::save_dest_set_target,
         save_flow_box_recipe_available: crate::experiments::save_flow_box_recipe_available,
         save_flow_box_clear: crate::experiments::save_flow_box_clear,
+        // ONE route to the summary: the quit menu reads the pointer through the crate that owns
+        // the `GameDataMan+0x78` walk, not through a second copy of it.
+        system_quit_profile_summary_ptr:
+            er_profile_summary_core::live_records::system_quit_profile_summary_ptr,
         ..er_quit_menu_core::QuitMenuHost::defaults()
     });
     // Title-flow crate split: wire the er-title-flow seam to the real product fns, same
@@ -215,6 +231,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         direct_save_file_source_active: crate::experiments::direct_save_file_source_active,
         missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
         save_override_telemetry_only: crate::experiments::save_override_telemetry_only,
+        refresh_direct_source_profile_summary:
+            crate::experiments::refresh_direct_source_profile_summary,
+        direct_source_slot_summary_real: crate::experiments::direct_source_slot_summary_real,
         create_continue_trace_hook: crate::experiments::create_continue_trace_hook,
         install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
         decode_thunk_hop: crate::experiments::decode_thunk_hop,

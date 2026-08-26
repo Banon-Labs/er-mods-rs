@@ -165,6 +165,15 @@ python3 "$repo_root/scripts/test-dll-byte-identical.py"
 python3 "$repo_root/scripts/test-release-workflow.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
+# THE EXPERIMENTS RATCHET. er-effects-rs is being extracted INTO crates until it is a thin
+# shim that bundles them, so the line total under crates/er-effects-rs/src/experiments/** may
+# shrink but never grow; the roadmap's ledger row is the high-water mark. It is a ratchet, not
+# a freeze: edits are free, only NET GROWTH is refused, and `--refresh` accepts growth in one
+# command -- the value is that accepting it becomes a reviewable diff to the ledger instead of
+# the invisible default. Measured on PR #367, 62% of 1,553 added lines already landed in
+# extracted crates with no enforcement, pulled there by the host-seam pattern; what that
+# pattern does NOT catch is a new module born inside the shim, which is what this refuses.
+# Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
@@ -244,6 +253,13 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait-core
 # once. `check-rust-build.sh` keeps all four building for the shipping target.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-save-picker-core -p er-save-picker -p er-quit-menu-core -p er-quit-menu
+
+# The ProfileSummary crate split. Its two host-portable decisions are the ones that were
+# untestable while they lived in the shim: whether a record describes a real character (the
+# predicate the whole autoload chain turns on) and the throttle standing between a ~26 MB file
+# read and a per-frame ~26 MB file read. `check-rust-build.sh` keeps the windows-only half --
+# the serialized-save reader and the record writer -- building and RUNNING on the shipping target.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-profile-summary-core
 
 # The world-map invasion-spawn warp crates (docs/plans/world-map-invasion-warp.md). The
 # catalog, the block grouping, the BlockId disk/memory byte-order conversion and the on-disk

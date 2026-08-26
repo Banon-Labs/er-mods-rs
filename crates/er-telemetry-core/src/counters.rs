@@ -145,6 +145,18 @@ pub static PORTRAIT_WINDOW_TARGET_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// retargets that were suppressed. Each one is a mid-load face change the user did not see.
 /// Nonzero proves the latch is load-bearing; it was 1 in the 2026-08-02 21:05 repro (slot 0 -> 9).
 pub static PORTRAIT_WINDOW_RETARGETS_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+/// Times a window latch adopted from a GUESS was promoted to the user's explicit pick.
+///
+/// The window latch exists so a committed face cannot change mid-load, but it was committing to
+/// whatever the boot autoload guessed before the user had picked anything -- and then refusing the
+/// pick as a "mid-window retarget". Measured 2026-08-26: latched slot 0 at +1061ms with
+/// `picker=None b78=None ac0=-1`, user picked slot 1 eighteen minutes later, retarget suppressed,
+/// and the loading screen showed slot 0's character. Exactly one promotion per window is possible
+/// (a latch that came FROM the pick never yields), so this counts windows the pick rescued.
+pub static PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Whether this window's latched portrait target came from the user's explicit pick (1) or from a
+/// guess (0). Reset with `PORTRAIT_WINDOW_TARGET_SLOT` on window close.
+pub static PORTRAIT_WINDOW_TARGET_FROM_PICK: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_RENDERER: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_LAST_CONFIRMED_SLOT: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_SLOT_FLIP_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
@@ -1312,6 +1324,14 @@ pub static SAVE_PICKER_OVERLAY_HELD_POLLS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_STAGE_CHARS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_CHAR_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static MISSING_SAVE_PICKER_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Consecutive ticks the product autoload has read an empty-like profile for its Continue slot.
+/// Reset by a single real read, so it measures an unbroken window rather than uptime; past
+/// `er_title_flow::boot_hold::EMPTY_PROFILE_ESCALATE_TICKS` the autoload rejects its own save
+/// selection and arms the missing-save picker.
+pub static PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: the empty-profile window has already handed the choice back to the user, so the
+/// loud hand-back line is never repeated (the arm itself is idempotent regardless).
+pub static PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ONTO_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);
@@ -1857,6 +1877,31 @@ pub static SHOW_PROGRESS_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SHOW_PROGRESS_TYPE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_OPEN_MENU_SUPPRESS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_OPEN_MENU_SUPPRESSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `TitleTopDialog::open_menu` calls the suppression detour let THROUGH.
+///
+/// The suppressed count alone cannot answer "did the native title ever open its menu again",
+/// because a pass-through is invisible: the detour only logged the calls it DROPPED. That
+/// ambiguity is what made the 2026-08-26 softlock unreadable from the log. Counting both sides
+/// makes the question a subtraction.
+pub static TITLE_OPEN_MENU_PASSTHROUGH_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Pass-throughs that happened AFTER at least one suppression, i.e. after the missing-save hold
+/// released.
+///
+/// **This is the decisive one.** If a late pick releases the hold and this stays 0, the native
+/// title never re-issued `open_menu` and its rows can never be rebuilt with the save present --
+/// the pick must then TRIGGER the open rather than wait for a retry. Nonzero says the title does
+/// retry on its own and the drop-and-retry model is sound.
+pub static TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Boot default-save check vs. the container the runtime opens: 0 = not decided yet,
+/// 1 = the accepted container IS the one the runtime opens (or nothing was accepted and the
+/// picker is armed, which is also correct), 2 = MISMATCH -- the check validated a file the
+/// runtime will never read.
+///
+/// 2 is the 2026-08-26 failure: under Seamless the blank `ER0000.co2` was rejected, the check
+/// fell back to `ER0000.sl2`, and reported "there is a save" while ersc.dll went on to open the
+/// blank `.co2`. It cost two runs while being invisible in RAM. See
+/// `er_save_redirect::boot_save_container_matches_runtime`.
+pub static BOOT_SAVE_CONTAINER_MATCHES_RUNTIME: AtomicUsize = AtomicUsize::new(0);
 pub static SCENE_OBJ_PROXY_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_MODE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REOPEN_PENDING: AtomicUsize = AtomicUsize::new(0);
@@ -2658,3 +2703,32 @@ pub static SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT: AtomicUsize = AtomicUsize::new(0
 /// [`er_save_suppress::save_job_completions`] sampled immediately before the forced request was
 /// fired. The teardown gate and the degraded completion test are both relative to this.
 pub static SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+
+// ---- picked/loose save source: title-time ProfileSummary re-read + deser accounting -------------
+//
+// A save the user picks after boot has no `CS::ProfileSummary` record: the boot save-data job that
+// would have read one already ran and passed through. Without a record the native Continue row has
+// nothing to load, which is why every picked save used to be routed into a TITLE-TIME deserialize
+// -- `0x14067b290`, a function whose only caller in the whole image is `CS::MoveMapStep::DoSaveStuff`
+// (in-world). These counters make both halves of that visible.
+
+/// Total autoload ticks that entered the direct-source summary refresh (throttle denominator).
+pub static PICKED_SUMMARY_REFRESH_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Real re-read attempts made (a file read + record rewrite), not ticks. Capped.
+pub static PICKED_SUMMARY_REFRESH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// How the picked container's summary came to be readable, if it did:
+/// 0 = not (yet) readable, 1 = the game's own boot save-data read had already populated it,
+/// 2 = this DLL re-read it from the staged container at the title.
+pub static PICKED_SUMMARY_REFRESH_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask of slots whose records the re-read rewrote (bit N = slot N).
+pub static PICKED_SUMMARY_REFRESH_SLOT_MASK: AtomicUsize = AtomicUsize::new(0);
+
+/// Calls into the TITLE-TIME save deserialize `0x14067b290` from the full-read chain.
+///
+/// **A correct run reports 0.** Non-zero means a save was deserialized at the boot title rather
+/// than in-world from `CS::MoveMapStep::DoSaveStuff`, which is the crash this counter exists to
+/// stop being silent about (`gaitemInsTable[-1]` AV at `0x67141a`). It counts the call being made,
+/// not the call surviving, so a run that dies inside the deserialize still leaves the 1 behind.
+pub static TITLE_TIME_DESER_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Slot (+1, so 0 means "never") passed to the most recent title-time deserialize.
+pub static TITLE_TIME_DESER_LAST_SLOT: AtomicUsize = AtomicUsize::new(0);

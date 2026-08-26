@@ -114,6 +114,25 @@ unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
 ///           commit sub-gate, stops at GUARD (VERIFY-ONLY: log only, NO continue_confirm/NO SetState5).
 /// Reuses cold_char_mount_drive's submit/lane/poll/deser CALLS (exact RVAs) but builds/pumps NO
 /// selector step (probe-12 crash) and forces NO SetState for boot. Logs b80/c30/level each frame.
+/// Record that the TITLE-TIME save deserialize `0x14067b290` is about to be called.
+///
+/// `0x14067b290` has exactly ONE caller in the image -- `CS::MoveMapStep::DoSaveStuff`, reachable
+/// only from `MoveMapStep::Update`, the IN-WORLD step. Calling it from the boot title is calling it
+/// outside every precondition that caller establishes, and a picked save died there. The routing
+/// fix (`er_title_flow::autoload_route`) sends a picked save down the native Continue row instead,
+/// so this must never fire on a correct run; the counter exists so a regression is loud in
+/// `oracle_title_time_deser_calls` rather than silent until the next crash.
+///
+/// It is bumped BEFORE the call, so a run that dies inside the deserialize still leaves the count.
+fn note_title_time_deser(slot: i32, reason: &str) {
+    let total =
+        er_telemetry_core::counters::TITLE_TIME_DESER_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    er_telemetry_core::counters::TITLE_TIME_DESER_LAST_SLOT
+        .store(slot as usize + 1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "native-fullread: TITLE-TIME DESER about to call 0x{DESERIALIZE_SLOT_RVA:x}(slot={slot}) reason={reason} -- call #{total}; a correct product run reports oracle_title_time_deser_calls=0, so this is either the narrow loose-save fallback or a routing regression"
+    ));
+}
 pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const WAIT_INC: usize = 1;
@@ -296,12 +315,14 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 ));
                 let deser: unsafe extern "system" fn(i32) -> i32 =
                     unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+                note_title_time_deser(slot, "switch-feed-fallback");
                 unsafe { deser(slot) }
             }
         } else {
             // Step 5: deserialize 0x14067b290(slot) ONCE at b80==3 -> writes GameMan+0xc30 = real map.
             let deser: unsafe extern "system" fn(i32) -> i32 =
                 unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+            note_title_time_deser(slot, "boot-fullread");
             unsafe { deser(slot) }
         };
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
@@ -419,40 +440,6 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         ));
         FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
     }
-}
-pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const BAD_I32: i32 = -1;
-    const ZERO_U32: u32 = 0;
-    const NAME_LEN_NONE: usize = 0;
-    const MIN_REAL_LEVEL: u32 = 1;
-    if slot < OWN_STEPPER_SLOT_ZERO {
-        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
-    }
-    let gdm = game_data_man_ptr_or_null();
-    if gdm == NULL {
-        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
-    }
-    let profile_summary =
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
-    if profile_summary == NULL {
-        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
-    }
-    let rec = profile_summary_record_address(profile_summary, slot as usize);
-    let profile_map = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_MAP_OFFSET) }
-        .map(|value| value as u32 as i32)
-        .unwrap_or(BAD_I32);
-    let profile_level = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }
-        .map(|value| value as u32)
-        .unwrap_or(ZERO_U32);
-    let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
-    let profile_name_empty = utf16_name_empty_like(&profile_name, profile_name_len);
-    (
-        profile_level >= MIN_REAL_LEVEL && !profile_name_empty,
-        profile_map,
-        profile_level,
-        profile_name_len,
-    )
 }
 /// The save slot to auto-load: the ACTIVE slot holding the most-progressed real character (highest level;
 /// lowest index on a tie). "Active/real" is judged by the RECORD-based `profile_slot_fingerprint`

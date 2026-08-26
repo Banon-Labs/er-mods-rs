@@ -6,7 +6,7 @@
 use std::sync::{Once, atomic::AtomicUsize};
 
 use eldenring::{
-    cs::{EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
+    cs::{EquipGameData, GameDataMan, GameMan, PlayerGameData},
     dlkr::DLAllocator,
 };
 use fromsoftware_shared::FromStatic;
@@ -135,6 +135,11 @@ pub(crate) use er_telemetry_core::counters::C30_WATCH_FRAME_COUNTER;
 // blocks moved to the er-loading-portrait-core crate (portrait crate split); the glob shim
 // re-exports them so every remaining flat-namespace reference keeps compiling unchanged.
 pub(crate) use er_loading_portrait_core::*;
+// `CS::ProfileSummary` reading + writing moved to `er_profile_summary_core` (the ProfileSummary
+// crate extraction): the live-record fingerprint, the summary pointer, the serialized-save reader
+// that fills a record, the whole-table rebuild, and the picked-save re-read. Same values, same
+// doc comments; this glob keeps the product's flat namespace unchanged.
+pub(crate) use er_profile_summary_core::*;
 
 // The autoload_state.rs / return_title.rs / own_load_pump.rs constant tables moved to the
 // er-title-flow crate (autoload/title-flow slice) alongside the code that reads them. Same glob

@@ -153,6 +153,28 @@ impl MissingSaveGate {
     pub fn is_pending(&self) -> bool {
         self.state() == MissingSaveState::Pending
     }
+
+    /// Arm the picker from `Idle`, and only from `Idle`.
+    ///
+    /// This is the LATE arm's primitive. `set` is a plain store, which is right for the boot path
+    /// (one caller, before any other thread can be looking) and wrong for every later one: the
+    /// autoload tick, the Present hook and the picker's own threads all read this gate, so a
+    /// re-arm that lands on a `Pending` selection would restart a browse the user is halfway
+    /// through, and one that lands on `Ready` would revoke a save they already chose and send the
+    /// boot back to the picker it had just left.
+    ///
+    /// The compare-exchange makes both impossible and makes the call idempotent by construction:
+    /// exactly one caller ever observes `true`, however many threads ask and however often.
+    pub fn try_arm(&self) -> bool {
+        self.state
+            .compare_exchange(
+                MissingSaveState::Idle.as_usize(),
+                MissingSaveState::Pending.as_usize(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
 }
 
 impl Default for MissingSaveGate {
@@ -1535,6 +1557,59 @@ pub fn active_save_container_names_for(seamless: bool, seamless_name: &str) -> V
     }
 }
 
+/// Container names the boot DEFAULT-save check may accept, in priority order.
+///
+/// **This is deliberately NARROWER than [`active_save_container_names_for`], and the difference is
+/// the whole point.** That list answers "which containers might hold this run's save", and its
+/// `.sl2` fallback under Seamless is correct wherever a redirect will normalise the name: a save
+/// the user PICKS is staged under every container name
+/// ([`staged_save_container_names_for`]), so picking a vanilla `.sl2` on a Seamless launch works
+/// and must keep working (bd `er-effects-rs-h6sh` -- refusing it there softlocked the loading
+/// screen on 2026-08-02).
+///
+/// The boot default-save check is the one place where that fallback is WRONG, because it accepts a
+/// container **with no redirect at all**. Whatever it accepts, the runtime then opens the container
+/// IT wants by name -- and under Seamless that is ERSC's container, not `.sl2`. So accepting a
+/// `.sl2` there validates a file the runtime will never read.
+///
+/// MEASURED, run br-20260826-190532-55e2 (this is the bug this function exists to remove):
+///
+/// ```text
+/// [+59ms]  save-override: Seamless save container resolved to 'ER0000.co2'
+/// [+84ms]  save-override: default save '...\ER0000.co2' has ZERO readable character slots
+///                         (native empty container); treating as no save
+/// [+98ms]  save-override: DEFAULT-USER-SAVE -- ... default save '...\ER0000.sl2' with no redirect
+/// ```
+///
+/// The live `.co2` was 28967888 bytes of ALL ZEROS (0% nonzero, valid BND4 header, no character
+/// names); the `.sl2` beside it was 19% nonzero with all ten characters. The check rejected the
+/// container the runtime opens, fell back to one it does not, and reported "there is a save" --
+/// so `missing_save_selection_pending()` stayed false, the boot save-data `ShowProgressJob` was
+/// never held (`show-progress: HOLD ...` = 0 occurrences, `PASS-THROUGH` = 6 from +14131ms), and
+/// the title built its whole menu against an empty `ProfileSummary`. Everything after that -- the
+/// disabled Continue row, the null `MENU_CONTINUE_ITEM`, the 65 s softlock -- was downstream of
+/// this one line. See bd `seamless-boot-accepts-sl2-while-game-opens-blank-co2-2026-08-26`.
+///
+/// Returning "no usable save" instead is not a degradation: it arms the missing-save picker AT
+/// BOOT, which is the originally designed path and the one where every downstream stage works by
+/// construction.
+///
+/// Vanilla is unchanged -- it only ever had `.sl2` -- so this narrows Seamless alone.
+pub fn default_save_container_names_for(seamless: bool, seamless_name: &str) -> Vec<String> {
+    vec![active_save_container_name_for(seamless, seamless_name)]
+}
+
+/// Does the container the boot default-save check ACCEPTED match the one the runtime will OPEN?
+///
+/// The telemetry form of the invariant [`default_save_container_names_for`] enforces, exposed as
+/// `oracle_boot_save_container_matches_runtime` so a mismatch is visible in RAM instead of costing
+/// another run. `None` (no default save accepted) is not a mismatch: nothing was accepted, so
+/// nothing disagrees -- that run arms the picker, which is the correct answer.
+#[must_use]
+pub fn boot_save_container_matches_runtime(accepted: Option<&str>, runtime_name: &str) -> bool {
+    accepted.is_none_or(|name| name.eq_ignore_ascii_case(runtime_name))
+}
+
 /// The container name the active runtime WRITES to -- the preferred load candidate.
 pub fn active_save_container_name_for(seamless: bool, seamless_name: &str) -> String {
     if seamless {
@@ -1768,6 +1843,33 @@ mod tests {
         assert!(gate.is_pending());
         gate.set(MissingSaveState::Ready);
         assert_eq!(gate.state(), MissingSaveState::Ready);
+    }
+
+    #[test]
+    fn try_arm_admits_one_caller_and_never_disturbs_a_pick_in_flight() {
+        let gate = MissingSaveGate::new();
+        assert!(gate.try_arm(), "the first arm from Idle must take");
+        assert!(gate.is_pending());
+        assert!(
+            !gate.try_arm(),
+            "a second arm must not re-arm a selection already pending"
+        );
+        assert!(gate.is_pending());
+
+        gate.set(MissingSaveState::Ready);
+        assert!(
+            !gate.try_arm(),
+            "a pick already made must never be revoked by a later arm"
+        );
+        assert_eq!(gate.state(), MissingSaveState::Ready);
+    }
+
+    #[test]
+    fn try_arm_is_the_only_transition_out_of_idle_it_performs() {
+        let gate = MissingSaveGate::new();
+        assert_eq!(gate.state(), MissingSaveState::Idle);
+        assert!(gate.try_arm());
+        assert_eq!(gate.state(), MissingSaveState::Pending);
     }
 
     #[test]
@@ -2441,6 +2543,91 @@ mod tests {
                 "a non-alphanumeric extension must not reach a staged filename: {hostile}"
             );
         }
+    }
+
+    /// The boot default-save check accepts ONLY the container the runtime opens.
+    ///
+    /// Regression for run br-20260826-190532-55e2: under Seamless the check accepted `ER0000.sl2`
+    /// after the configured `ER0000.co2` read as characterless, and reported DEFAULT-USER-SAVE
+    /// "with no redirect" -- validating a file ersc.dll never opens. Everything downstream (the
+    /// save-check hold never engaging, the menu building against an empty ProfileSummary, the
+    /// disabled Continue row, the softlock) followed from that.
+    #[test]
+    fn boot_default_save_check_accepts_only_the_container_the_runtime_opens() {
+        for extension in [DEFAULT_SEAMLESS_SAVE_FILE_EXTENSION, "coop2"] {
+            let seamless_name = save_container_name_for_extension(extension);
+
+            // Seamless: exactly one candidate, and it is ERSC's container. No `.sl2` fallback --
+            // that is the fallback that made the boot answer unfalsifiable.
+            assert_eq!(
+                default_save_container_names_for(true, &seamless_name),
+                vec![seamless_name.clone()],
+                "seamless boot check must not fall back past ERSC's container (ext={extension})"
+            );
+            assert!(
+                !default_save_container_names_for(true, &seamless_name)
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(VANILLA_SAVE_CONTAINER_NAME)),
+                "the `.sl2` fallback is the bug (ext={extension})"
+            );
+
+            // Vanilla is untouched: it only ever had `.sl2`.
+            assert_eq!(
+                default_save_container_names_for(false, &seamless_name),
+                vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()]
+            );
+
+            // Whatever the boot check accepts IS what the runtime writes/opens, both modes.
+            for seamless in [false, true] {
+                let accepted = default_save_container_names_for(seamless, &seamless_name);
+                let runtime = active_save_container_name_for(seamless, &seamless_name);
+                assert_eq!(accepted, vec![runtime.clone()]);
+                assert!(boot_save_container_matches_runtime(
+                    Some(&accepted[0]),
+                    &runtime
+                ));
+            }
+        }
+
+        // An ERSC configured with `sl2` IS the vanilla container -- one name, no duplicate.
+        assert_eq!(
+            default_save_container_names_for(true, VANILLA_SAVE_CONTAINER_NAME),
+            vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()]
+        );
+
+        // The PICKED-save path keeps its `.sl2` fallback: staging rewrites the name, so a picked
+        // vanilla container on a Seamless launch still loads (bd er-effects-rs-h6sh).
+        assert_eq!(
+            active_save_container_names_for(true, "ER0000.co2"),
+            vec!["ER0000.co2", "ER0000.sl2"]
+        );
+    }
+
+    /// The exact 2026-08-26 mismatch, as the oracle now reports it.
+    #[test]
+    fn boot_container_mismatch_is_visible_to_telemetry() {
+        // What the run did: accepted `.sl2` while the runtime opened `.co2`.
+        assert!(!boot_save_container_matches_runtime(
+            Some("ER0000.sl2"),
+            "ER0000.co2"
+        ));
+        // What it must do now: accept the runtime's own container, or accept nothing and arm the
+        // picker. Neither is a mismatch.
+        assert!(boot_save_container_matches_runtime(
+            Some("ER0000.co2"),
+            "ER0000.co2"
+        ));
+        assert!(boot_save_container_matches_runtime(None, "ER0000.co2"));
+        // Wine paths are case-insensitive; the oracle must not fire on case alone.
+        assert!(boot_save_container_matches_runtime(
+            Some("er0000.CO2"),
+            "ER0000.co2"
+        ));
+        // A vanilla launch accepting `.sl2` is correct, not a mismatch.
+        assert!(boot_save_container_matches_runtime(
+            Some("ER0000.sl2"),
+            "ER0000.sl2"
+        ));
     }
 
     /// THE naming rule. Whatever container the runtime resolves to once the Seamless mode has

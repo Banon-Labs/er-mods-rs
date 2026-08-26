@@ -20,92 +20,11 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
         };
     }
     let summary_snapshot = st.summary_snapshot.clone();
-    let fallback_slot = (0..TITLE_PROFILE_SLOT_COUNT).find(|slot| {
-        summary_snapshot
-            .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + *slot)
-            .copied()
-            .unwrap_or(0)
-            != 0
-    });
-    unsafe {
-        for (slot, face_hash) in PROFILE_PREVIEW_FACE_HASH
-            .iter()
-            .enumerate()
-            .take(TITLE_PROFILE_SLOT_COUNT)
-        {
-            let record = profile_summary_record_address(summary, slot);
-            core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
-            *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
-            face_hash.store(0, Ordering::SeqCst);
-        }
-    }
-    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     drop(st);
 
-    let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
-        append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: replacement preview refused -- active-slot bitmap unreadable"
-        ));
-        return 0;
+    let (mask, preview_stats) = unsafe {
+        write_profile_summary_records_from_save_bytes(base, summary, &summary_snapshot, bytes)
     };
-    let mut mask = 0usize;
-    let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
-    for (slot, slot_stats) in preview_stats.iter_mut().enumerate() {
-        if !active_slots.get(slot).copied().unwrap_or(false) {
-            continue;
-        }
-        if let Ok(body) = er_save_loader::bnd4::slot_body(bytes, slot) {
-            let slot_body = SerializedSaveSlot::new(body);
-            let Some(pgd) = slot_body.player_game_data() else {
-                continue;
-            };
-            let Some(saved_map) = slot_body.saved_map() else {
-                continue;
-            };
-            let fallback_src_slot = if summary_snapshot
-                .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
-                .copied()
-                .unwrap_or(0)
-                != 0
-            {
-                Some(slot)
-            } else {
-                fallback_slot
-            };
-            let fallback = fallback_src_slot.and_then(|src_slot| {
-                let start = profile_summary_record_offset(src_slot);
-                summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
-            });
-            let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
-            // The place name is NOT in the character body -- the game writes it from the front-end
-            // manager at save time. It IS in the save's own stored summary table, so take it from
-            // there rather than deriving one from the map id.
-            let place_name_id = er_save_loader::profile_summary::slot_place_name_id(bytes, slot);
-            let face_bytes = slot_body.face_data_buffer_bytes(pgd);
-            let chr_asm_image = slot_body.runtime_chr_asm_image(pgd);
-            if unsafe {
-                pgd.write_profile_summary_record(
-                    base,
-                    summary,
-                    slot,
-                    saved_map,
-                    place_name_id,
-                    playtime_ticks,
-                    fallback,
-                    face_bytes,
-                    chr_asm_image.as_ref(),
-                )
-            } {
-                append_autoload_debug(format_args!(
-                    "system-quit-load-save-profiles: preview slot {slot} playtime_ticks={playtime_ticks}"
-                ));
-                if let Some(stats) = pgd.stats_text_utf16() {
-                    *slot_stats = stats;
-                }
-                mask |= 1usize << slot;
-            }
-        }
-    }
     if mask != 0 {
         {
             let mut st = system_quit_save_swap_lock();
