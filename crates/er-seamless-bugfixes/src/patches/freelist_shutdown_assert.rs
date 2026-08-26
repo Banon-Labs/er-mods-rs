@@ -142,4 +142,66 @@ mod tests {
              advisory-break idiom the patch is argued from"
         );
     }
+
+    /// The displacement alone does not say what it is a displacement OF. `74` is `JZ rel8`, and
+    /// an `rel8` jump is measured from the END of its own two bytes -- so this recomputes the
+    /// landing address the way the CPU does and requires it to be the byte after the `INT3`. Had
+    /// the opcode been some other two-byte form, `+1` would land somewhere else entirely and the
+    /// safety argument would not hold, while the displacement test above would still pass.
+    #[test]
+    fn the_jump_is_a_rel8_jz_measured_from_its_own_end() {
+        const JZ_REL8: u8 = 0x74;
+        const JZ_REL8_LEN: usize = 2;
+        let jz_at = INT3_OFFSET - JZ_REL8_LEN;
+        assert_eq!(
+            FREELIST_SHUTDOWN_ASSERT_WINDOW[jz_at], JZ_REL8,
+            "the instruction before the INT3 must be JZ rel8"
+        );
+        let landing = jz_at + JZ_REL8_LEN + usize::from(FREELIST_SHUTDOWN_ASSERT_WINDOW[jz_at + 1]);
+        assert_eq!(
+            landing,
+            INT3_OFFSET + 1,
+            "the JZ must land on the instruction AFTER the INT3 -- that convergence is why \
+             removing the break is behaviour-preserving"
+        );
+        assert!(
+            landing < FREELIST_SHUTDOWN_ASSERT_WINDOW.len(),
+            "the instruction both paths converge on must be inside the verified window, or the \
+             window does not actually pin the far side of the branch"
+        );
+    }
+
+    /// The replacement has to be one byte wide AND do nothing. A multi-byte replacement would
+    /// shift the `MOV` the `JZ` targets; a one-byte replacement that is not a NOP would execute.
+    #[test]
+    fn the_replacement_is_a_one_byte_nop() {
+        const X86_NOP: u8 = 0x90;
+        assert_eq!(FREELIST_SHUTDOWN_ASSERT.replacement, X86_NOP);
+        assert_eq!(
+            FREELIST_SHUTDOWN_ASSERT.offset + 1,
+            INT3_OFFSET + 1,
+            "the patch must write at the INT3's own offset, so nothing after it moves"
+        );
+    }
+
+    /// The RVA is what the install path adds to the live module base, and it is written
+    /// separately from the VA `build.rs` ground-truths against `eldenring-deobf.bin`. If the two
+    /// ever disagree, the bytes get verified at one address and the write lands at another.
+    #[test]
+    fn the_rva_matches_the_va_the_window_was_generated_from() {
+        const PREFERRED_IMAGE_BASE: usize = 0x1_4000_0000;
+        assert_eq!(
+            PREFERRED_IMAGE_BASE + FREELIST_SHUTDOWN_ASSERT_RVA,
+            0x1_40c5_7670,
+            "the VA named in build.rs as FREELIST_SHUTDOWN_ASSERT_VA"
+        );
+        assert_eq!(FREELIST_SHUTDOWN_ASSERT.rva, FREELIST_SHUTDOWN_ASSERT_RVA);
+    }
+
+    /// A patch has no block counter, so `applied` is the only thing it ever reports. It must start
+    /// false, or a run that never reached the install path would still claim the byte changed.
+    #[test]
+    fn the_defused_flag_starts_false() {
+        assert!(!ASSERT_DEFUSED.load(core::sync::atomic::Ordering::Relaxed));
+    }
 }

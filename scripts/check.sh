@@ -245,6 +245,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # take the player's arrow keys away from the game, which is not a claim to leave to review.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 
+# er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
+# per-player colour assignment and the config parser. Every one of those can be wrong without
+# crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
+# broken" -- and none of it is reachable from any other gate: the crate is windows-only to ship,
+# and the workspace pins `default-members` to er-effects-rs, so a bare `cargo test` never selects
+# it. The near-plane trim regression this caught on the way in is exactly the class of bug that
+# otherwise costs a game launch to find.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-invasion-path
+
 # The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
 # grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
 # it had 23 tests, so the whole mapping could regress silently -- the game-side crates
@@ -260,6 +269,16 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
 # real coverage; the cross-compile check in check-rust-build.sh keeps it building for the shipping
 # target too.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
+
+# er-seamless-bugfixes' registries. The crate's own docs already said the `cfg(not(windows))` allow
+# exists so `cargo test -p er-seamless-bugfixes` can build -- but no gate ever RAN it, so all 23
+# tests were inert: `default-members` pins the workspace to er-effects-rs, and check-rust-build.sh
+# only LINKS this shell. What that left unchecked is the whole safety argument for the code patch.
+# The freelist patch rewrites one byte of live game code, and its licence to do so is that the `JZ`
+# two bytes earlier already lands past the `INT3`; these tests recompute that landing address the
+# way the CPU does, and require the write to be one NOP at the `INT3`'s own offset. The window
+# BYTES are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
 # HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
 # in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game

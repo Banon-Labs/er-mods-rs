@@ -304,6 +304,19 @@ above); nothing else it installs is claimed by another shell."""
 "er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
 "er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
 "er-invasion-warp" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
+"er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
+writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
+QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \
+(FUN_140bddfe0 / FUN_140bdec90 / FUN_140bdf610, the same request ring CS::CSAiFunc uses) -- and \
+draws lines. It claims no prologue, patches no param (which is what breaks Seamless invasions), \
+injects no input and opens no socket. Like er-build-watermark it draws through \
+er_build_watermark_core's `overlay_host`, so it HOSTS the process's single imgui context only if \
+nothing else has claimed it and otherwise registers a guest callback through the \
+`er_overlay_register_guest_v1` export; either way there is exactly one Present hook in the \
+process. The one thing it shares with the game rather than merely reading is the AI world's path \
+request ring, which is mutex-guarded by the engine and is consumed by every NPC in the map -- one \
+in-flight request per target, drained on the frame it completes, is the same traffic a handful of \
+extra NPCs would make."""
 "er-player-name-filter" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-effects-rs no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
 "er-quit-menu" = """System>Quit harness. Its detours route through `er_hook::register_union_hook` \
 rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
