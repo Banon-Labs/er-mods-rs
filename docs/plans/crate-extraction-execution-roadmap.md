@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 78 | 50,604 |
+| all `experiments/**` | 78 | 50,728 |
 | excluding `startup_hooks/**` | 44 | 25,311 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 27,026 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -139,16 +139,16 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,076 | save source/path policy and redirect adapters | R32-R37 |
-| `startup_hooks.rs` | 104 | product startup root and arming facade | `STAY` |
+| `save_redirect/path_hooks.rs` | 2,146 | save source/path policy and redirect adapters | R32-R37 |
+| `startup_hooks.rs` | 107 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 385 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,577 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,607 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 989 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,083 | title-flow and product modal families | R22 |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,104 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,419 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 473 | window-observation/final-geometry family | R9 |

@@ -262,9 +262,17 @@ The DLL resolves its autoload source once, at attach, in this order:
    see below), else `save_file` in the game-directory `er-effects.toml`.
 2. Otherwise, the active Steam user's valid default container:
    `%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2` for vanilla, or the configured
-   Seamless container when Seamless is active.
+   Seamless container when Seamless is active. **Exactly that container, with no
+   fallback to the other one.** This step accepts a save the game then opens by
+   name, with no redirect in between, so accepting a `.sl2` on a Seamless launch
+   would validate a file Seamless never reads -- which is how a boot that
+   reported "there is a save" could still reach the title with no character.
+   (A save you *pick* is different: it is staged under every container name, so
+   picking a vanilla `.sl2` on a Seamless launch still loads.)
 3. If neither source has a readable character, the DLL opens the missing-save
-   picker and refuses world entry until the user selects a valid save.
+   picker and refuses world entry until the user selects a valid save. On a
+   Seamless launch whose co-op container is absent or empty, this is the normal
+   path even when an `ER0000.sl2` full of characters is sitting beside it.
 
 An explicit source is read-only: the DLL stages it into a private native save
 root, so it never writes back to the selected file. Configure an explicit save

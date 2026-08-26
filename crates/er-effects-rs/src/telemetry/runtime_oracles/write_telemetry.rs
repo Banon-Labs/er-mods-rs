@@ -807,17 +807,39 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // tried to change the on-screen character mid-loading-screen and was refused -- each one is a
     // face change the user did NOT see. It was exactly 1 in the 2026-08-02 21:05 repro (0 -> 9).
     // `window_target_slot` is the committed slot +1, or 0 between windows.
+    // `pick_promotions` > 0 means a window latch adopted from a GUESS was replaced by the user's
+    // explicit pick. That promotion is what stops the boot window -- which commits at ~+1s, before
+    // the picker has been answered -- from pinning the loading screen to the autoload's guessed
+    // slot. Measured 2026-08-26: latched 0 at +1061ms with every source invalid, user picked 1 at
+    // +1084597ms, retarget refused, slot 0's character rendered. `target_from_pick` says which kind
+    // of source the CURRENT latch came from (1 = the user's pick, and then nothing may replace it).
     body.push_str(&format!(
-        "  \"oracle_portrait_window_target_slot\": {},\n  \"oracle_portrait_window_retargets_suppressed\": {},\n",
+        "  \"oracle_portrait_window_target_slot\": {},\n  \"oracle_portrait_window_retargets_suppressed\": {},\n  \"oracle_portrait_window_target_from_pick\": {},\n  \"oracle_portrait_window_target_pick_promotions\": {},\n",
         PORTRAIT_WINDOW_TARGET_SLOT.load(Ordering::SeqCst),
-        PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.load(Ordering::SeqCst)
+        PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.load(Ordering::SeqCst),
+        PORTRAIT_WINDOW_TARGET_FROM_PICK.load(Ordering::SeqCst),
+        PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS.load(Ordering::SeqCst)
     ));
     // Missing-save picker menu-open hold (bd er-effects-rs-ns4n follow-up): count > 0 proves the native
     // title auto-menu-open was suppressed while the pick was pending, so the menu rows build post-pick
     // with the save present. On a fast/early pick this stays 0 (nothing to suppress).
+    //
+    // The PASS-THROUGH side is what makes the suppressed count readable. A suppressed call is
+    // DROPPED, not queued, so "the menu will build post-pick" rests entirely on the native title
+    // re-issuing `open_menu` afterwards. `passthrough_after_suppress_count` is that claim as a
+    // number: 0 after a late pick means the title never asked again and the rows can never be
+    // rebuilt with the save present -- the pick would then have to TRIGGER the open itself.
+    //
+    // `boot_save_container_matches_runtime`: 0 = undecided, 1 = the boot default-save check
+    // accepted the container this runtime opens (or accepted nothing and armed the picker),
+    // 2 = MISMATCH. 2 is the 2026-08-26 failure -- the check took `ER0000.sl2` while ersc.dll went
+    // on to open a blank `ER0000.co2`, so the boot answer was about a file nothing would read.
     body.push_str(&format!(
-        "  \"oracle_title_open_menu_suppressed_count\": {},\n",
-        TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst)
+        "  \"oracle_title_open_menu_suppressed_count\": {},\n  \"oracle_title_open_menu_passthrough_count\": {},\n  \"oracle_title_open_menu_passthrough_after_suppress_count\": {},\n  \"oracle_boot_save_container_matches_runtime\": {},\n",
+        TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst),
+        TITLE_OPEN_MENU_PASSTHROUGH_COUNT.load(Ordering::SeqCst),
+        TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT.load(Ordering::SeqCst),
+        BOOT_SAVE_CONTAINER_MATCHES_RUNTIME.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_profile_back_opened\": {},\n  \"sq_repro_profile_back_done\": {},\n  \"sq_repro_profile_back_restore_count\": {},\n  \"sq_repro_profile_back_final_tab\": {},\n  \"sq_repro_profile_back_baseline_mask\": {},\n  \"sq_repro_profile_back_verify_mask\": {},\n  \"sq_repro_profile_back_mismatch_mask\": {},\n  \"system_quit_optionsetting_direct_visible_reapply_count\": {},\n  \"system_quit_optionsetting_direct_visible_last_tab\": {},\n  \"system_quit_optionsetting_direct_visible_last_old_current\": {},\n  \"system_quit_optionsetting_direct_visible_last_selected\": {},\n  \"system_quit_optionsetting_direct_refresh_count\": {},\n  \"system_quit_optionsetting_direct_refresh_last_selected\": {},\n",

@@ -536,13 +536,43 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
         0 => None,
         packed => Some((packed - 1) as i32),
     };
-    let (target, latching) =
-        er_loading_portrait_core::portrait_window_target_slot(latched, resolved);
-    if latching && let Some(slot) = target {
+    // Whether the WINNING source was the user's own pick, on each side of the latch. A latch
+    // adopted from a guess must yield once to a real pick; one adopted from the pick never yields.
+    // Without this the boot window commits to the autoload hint at ~+1s and then rejects the pick
+    // the user makes minutes later (measured 2026-08-26: latched 0, picked 1, rendered 0).
+    let latched_from_pick =
+        PORTRAIT_WINDOW_TARGET_FROM_PICK.load(Ordering::SeqCst) == PORTRAIT_WINDOW_TARGET_PICK_YES;
+    let resolved_from_pick = picker.is_some_and(|p| resolved == Some(p));
+    let decision = er_loading_portrait_core::portrait_window_target_slot_authoritative(
+        latched,
+        latched_from_pick,
+        resolved,
+        resolved_from_pick,
+    );
+    let target = decision.slot;
+    if decision.latching
+        && let Some(slot) = target
+    {
         PORTRAIT_WINDOW_TARGET_SLOT.store(slot as usize + 1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "loading-portrait: window LATCHED portrait target slot {slot} (picker={picker:?} b78={request:?} ac0={ac0}) -- held until this loading screen closes"
-        ));
+        PORTRAIT_WINDOW_TARGET_FROM_PICK.store(
+            if resolved_from_pick {
+                PORTRAIT_WINDOW_TARGET_PICK_YES
+            } else {
+                PORTRAIT_WINDOW_TARGET_PICK_NO
+            },
+            Ordering::SeqCst,
+        );
+        if decision.promoted_by_pick {
+            PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "loading-portrait: window PROMOTED portrait target {} -> {slot} on the user's pick (picker={picker:?} b78={request:?} ac0={ac0}) -- the earlier latch was a guess, not a choice",
+                latched.unwrap_or(-1)
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "loading-portrait: window LATCHED portrait target slot {slot} (picker={picker:?} b78={request:?} ac0={ac0} from_pick={resolved_from_pick}) -- held until this loading screen closes"
+            ));
+        }
     } else if let (Some(held), Some(fresh)) = (target, resolved)
         && held != fresh
         && PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.fetch_add(1, Ordering::SeqCst) == 0

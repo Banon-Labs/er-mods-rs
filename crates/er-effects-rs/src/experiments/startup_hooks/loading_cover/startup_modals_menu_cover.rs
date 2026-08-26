@@ -690,6 +690,9 @@ pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_SUPPRESS_INSTALLED;
 pub(crate) static TITLE_OPEN_MENU_SUPPRESS_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_SUPPRESSED_COUNT;
+pub(crate) use er_telemetry_core::counters::{
+    TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT, TITLE_OPEN_MENU_PASSTHROUGH_COUNT,
+};
 
 pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     rcx: usize,
@@ -707,6 +710,24 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
             ));
         }
         return 0;
+    }
+    // LOG THE PASS-THROUGH TOO. Only the DROPPED calls used to be recorded, which made "did the
+    // native title ever open its menu again after the hold released" unanswerable from the log --
+    // the ambiguity that cost the 2026-08-26 softlock its diagnosis. A pass-through counted AFTER a
+    // suppression is the decisive one: it proves the title re-issues `open_menu` on its own, so
+    // dropping a request is a deferral rather than a loss.
+    let suppressed = TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst);
+    let n = TITLE_OPEN_MENU_PASSTHROUGH_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    let after = if suppressed > 0 {
+        Some(TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT.fetch_add(1, Ordering::SeqCst) + 1)
+    } else {
+        None
+    };
+    if n == 1 || n.is_power_of_two() || after == Some(1) {
+        append_autoload_debug(format_args!(
+            "title-open-menu: PASS-THROUGH native open_menu #{n} (dialog=0x{rcx:x}) suppressed_so_far={suppressed} after_suppress={} -- the native title is building its menu now",
+            after.unwrap_or(0)
+        ));
     }
     let orig = TITLE_OPEN_MENU_SUPPRESS_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {

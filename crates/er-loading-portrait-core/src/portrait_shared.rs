@@ -356,6 +356,12 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // character. Without this reset the latch would pin the boot character's face across every
     // later System->Quit->Load switch -- the same wrong-face class in the opposite direction.
     PORTRAIT_WINDOW_TARGET_SLOT.store(0, Ordering::SeqCst);
+    // ...and its AUTHORITY with it. A stale `from_pick` would make the next window's guessed latch
+    // claim the user had chosen it, permanently disabling the one promotion a real pick is owed.
+    PORTRAIT_WINDOW_TARGET_FROM_PICK.store(
+        crate::portrait_lookat::PORTRAIT_WINDOW_TARGET_PICK_NO,
+        Ordering::SeqCst,
+    );
     // The kick-target name hash re-stamps at the next window's build kick (both modes).
     PORTRAIT_TARGET_NAME_HASH.store(0, Ordering::SeqCst);
     if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {

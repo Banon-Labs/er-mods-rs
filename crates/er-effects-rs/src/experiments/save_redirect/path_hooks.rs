@@ -23,9 +23,9 @@ use er_save_redirect::{
     staged_entry_fate, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
 };
 use er_telemetry_core::counters::{
-    SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN, SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED,
-    SAVE_DIRECT_STAGE_STALE_REMOVED, SAVE_REDIRECT_DETOUR_MAX_DEPTH,
-    SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
+    BOOT_SAVE_CONTAINER_MATCHES_RUNTIME, SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN,
+    SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED, SAVE_DIRECT_STAGE_STALE_REMOVED,
+    SAVE_REDIRECT_DETOUR_MAX_DEPTH, SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
 };
 use windows::{Win32::System::LibraryLoader::GetModuleHandleA, core::PCSTR};
 
@@ -1022,17 +1022,85 @@ fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
     None
 }
 
+/// `BOOT_SAVE_CONTAINER_MATCHES_RUNTIME`: the boot check accepted the container the runtime opens
+/// (or accepted nothing and armed the picker, which is equally correct).
+const BOOT_SAVE_CONTAINER_MATCH_YES: usize = 1;
+/// `BOOT_SAVE_CONTAINER_MATCHES_RUNTIME`: the boot check validated a container the runtime will
+/// never read. Unreachable once the check is container-exact; kept so a regression is visible.
+const BOOT_SAVE_CONTAINER_MATCH_MISMATCH: usize = 2;
+
+/// Container names the BOOT default-save check may accept, cached for the process.
+///
+/// NOT [`active_default_save_file_names`], and the difference is the fix for the 2026-08-26
+/// softlock. That list is the LOAD candidate set and its `.sl2` fallback under Seamless is right
+/// wherever staging rewrites the name (a save the user picks is written under every container
+/// name). The boot check has no redirect at all: it accepts a container and then the runtime opens
+/// the one IT wants by name. Under Seamless that is ERSC's container, so accepting `.sl2` there
+/// validates a file the runtime never reads -- which is exactly what happened:
+///
+/// ```text
+/// [+59ms]  Seamless save container resolved to 'ER0000.co2'
+/// [+84ms]  default save '...\ER0000.co2' has ZERO readable character slots; treating as no save
+/// [+98ms]  DEFAULT-USER-SAVE -- ... default save '...\ER0000.sl2' with no redirect
+/// ```
+///
+/// `missing_save_selection_pending()` therefore stayed false, the boot save-data `ShowProgressJob`
+/// was never held, and the title built its menu against an empty `ProfileSummary`. Accepting
+/// nothing instead arms the picker AT BOOT, which is the designed path.
+/// See `er_save_redirect::default_save_container_names_for` (host-tested).
+pub(crate) fn default_save_boot_container_names() -> &'static [&'static str] {
+    static VANILLA_ONLY: [&str; 1] = [er_save_redirect::VANILLA_SAVE_CONTAINER_NAME];
+    static SEAMLESS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    if !save_picker_seamless_mode_after_settle("default-save-boot-container-names") {
+        return &VANILLA_ONLY;
+    }
+    SEAMLESS.get_or_init(|| {
+        er_save_redirect::default_save_container_names_for(true, seamless_save_container_name())
+            .into_iter()
+            .map(|name| &*Box::leak(name.into_boxed_str()))
+            .collect()
+    })
+}
+
+/// Publish whether the boot check's answer names the container the runtime opens.
+///
+/// `accepted` is the container the check took, or `None` when it took nothing (picker armed --
+/// correct, not a mismatch). With [`default_save_boot_container_names`] in place a mismatch is
+/// unreachable; the oracle stays because it is the only thing that would have SHOWN the 2026-08-26
+/// failure from RAM instead of costing another run.
+fn record_boot_save_container_match(accepted: Option<&str>) {
+    let runtime = active_default_save_file_name();
+    let matches = er_save_redirect::boot_save_container_matches_runtime(accepted, runtime);
+    BOOT_SAVE_CONTAINER_MATCHES_RUNTIME.store(
+        if matches {
+            BOOT_SAVE_CONTAINER_MATCH_YES
+        } else {
+            BOOT_SAVE_CONTAINER_MATCH_MISMATCH
+        },
+        Ordering::SeqCst,
+    );
+    if !matches {
+        append_autoload_debug(format_args!(
+            "save-override: BOOT CONTAINER MISMATCH -- the default-save check accepted '{}' but the runtime opens '{runtime}'; that save will never be read",
+            accepted.unwrap_or("<none>")
+        ));
+    }
+}
+
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let root = default_save_root()?;
-    // Asymmetric mode lock: Seamless takes `.co2` then falls back to `.sl2`; vanilla takes only
-    // `.sl2`. First candidate that holds a readable character wins.
-    active_default_save_file_names().iter().find_map(|name| {
+    // Boot acceptance is container-EXACT: only the container this runtime opens can satisfy a
+    // no-redirect default save. See `default_save_boot_container_names`.
+    let found = default_save_boot_container_names().iter().find_map(|name| {
         validated_default_save_file(
             default_save_file_path(&root, steam_id, name),
             "active-default-save",
         )
         .and_then(default_save_with_character)
-    })
+        .map(|path| (path, *name))
+    });
+    record_boot_save_container_match(found.as_ref().map(|(_, name)| *name));
+    found.map(|(path, _)| path)
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -1049,7 +1117,9 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .file_name()
                 .to_str()
                 .and_then(steam_id64_from_dir_name)?;
-            active_default_save_file_names()
+            // Same container-exact rule as `default_save_file_for_steam_id64`: this discovery
+            // also ends in a no-redirect DEFAULT-USER-SAVE.
+            default_save_boot_container_names()
                 .iter()
                 .find_map(|name| {
                     validated_default_save_file(
@@ -1216,7 +1286,7 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
     }
     append_autoload_debug(format_args!(
         "save-override: no usable autoload save (configured save missing/invalid, or no readable active default among {:?} exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
-        active_default_save_file_names(),
+        default_save_boot_container_names(),
         SAVE_OVERRIDE_EXPECTED_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));

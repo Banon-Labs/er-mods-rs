@@ -126,6 +126,50 @@ pub fn portrait_target_slot_from_sources(
         .or(valid(save_slot))
 }
 
+/// Which source names the slot whose character the loading-screen STATS panel describes.
+///
+/// Extracted from `read_loading_screen_stats` so the answer is testable without game memory: the
+/// panel rendering the wrong character is a decision bug, and it was one (2026-08-26 -- picked slot
+/// 1, panel showed slot 0's `angrE RL 100`). `BestActiveFallback` is a distinct outcome rather than
+/// a resolved slot because computing it is an unsafe scan the caller must not pay for when a
+/// stronger source already answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatsSlotSource {
+    /// A System->Quit->Load switch selection, known at the confirm press -- before the deserialize
+    /// flips `save_slot`, so it outranks everything the game infers.
+    SwitchSelection(i32),
+    /// This loading window's committed portrait target, i.e. the character on screen. Includes the
+    /// user's boot pick, which reaches it through the window latch.
+    PortraitWindow(i32),
+    /// Nothing named a slot: the caller must scan for the best active one.
+    BestActiveFallback,
+}
+
+/// Resolve the stats panel's slot source. `switch_selected_wire` is the raw
+/// `SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT` word, whose unset form is `usize::MAX`.
+///
+/// The panel and the portrait must never disagree, so the second term is the WINDOW target rather
+/// than a fresh precedence evaluation -- otherwise the face and the stats under it could name two
+/// different characters within one loading screen.
+#[must_use]
+pub fn loading_screen_stats_slot_source(
+    switch_selected_wire: usize,
+    window_target: Option<i32>,
+    slot_count: i32,
+) -> StatsSlotSource {
+    let valid = |slot: i32| (0..slot_count).contains(&slot);
+    if switch_selected_wire <= i32::MAX as usize {
+        let selected = switch_selected_wire as i32;
+        if valid(selected) {
+            return StatsSlotSource::SwitchSelection(selected);
+        }
+    }
+    match window_target.filter(|&slot| valid(slot)) {
+        Some(slot) => StatsSlotSource::PortraitWindow(slot),
+        None => StatsSlotSource::BestActiveFallback,
+    }
+}
+
 /// STABILITY over freshness, for the duration of ONE loading-screen window.
 ///
 /// [`portrait_target_slot_from_sources`] is a precedence ordering evaluated fresh on every kick,
@@ -154,13 +198,91 @@ pub fn portrait_window_target_slot(
     latched: Option<i32>,
     resolved: Option<i32>,
 ) -> (Option<i32>, bool) {
+    portrait_window_target_slot_authoritative(latched, false, resolved, false).into_pair()
+}
+
+/// What one window's portrait target should be, and whether it is newly latching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortraitWindowTarget {
+    /// The slot this window should use, or `None` while nothing has named one.
+    pub slot: Option<i32>,
+    /// True when this call is what commits the window to `slot`.
+    pub latching: bool,
+    /// True when the commit REPLACED a latch that had been adopted from a guess, because the user
+    /// has now explicitly picked. Counted as `PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS`.
+    pub promoted_by_pick: bool,
+}
+
+impl PortraitWindowTarget {
+    /// The legacy `(slot, latching)` pair, for callers that do not track latch authority.
+    #[must_use]
+    pub const fn into_pair(self) -> (Option<i32>, bool) {
+        (self.slot, self.latching)
+    }
+}
+
+/// [`portrait_window_target_slot`], plus the one exception the stability rule needs.
+///
+/// **THE LATCH MUST NOT OUTRANK THE USER, AND THAT IS THE BUG THIS FIXES.** "Stability over
+/// freshness" is right when it stops a USER-CONFIRMED target sliding to a game-inferred one. It is
+/// wrong when the thing being defended is itself a guess. The boot loading window opens long before
+/// the missing-save picker is answered, so it commits to whatever the autoload hint happens to say
+/// -- and then rejects the user's actual pick as a "mid-window retarget".
+///
+/// MEASURED, run br-20260826-190532-55e2:
+///
+/// ```text
+/// [+1061ms]     loading-portrait: window LATCHED portrait target slot 0
+///               (picker=None b78=None ac0=-1) -- held until this loading screen closes
+/// [+1084597ms]  loading-portrait: SUPPRESSED a mid-window retarget 0 -> 1
+///               (picker=Some(1) b78=Some(-1) ac0=-1)
+/// ```
+///
+/// Every source was invalid at latch time -- `picker=None b78=None ac0=-1` -- so slot 0 came from
+/// the autoload's default hint, i.e. from nothing. Eighteen minutes later the user picked slot 1
+/// and the latch refused it, so the loading screen rendered slot 0's character (`angrE RL 100`)
+/// while slot 1 (level 90) was the one being loaded. A row index is not a slot and a guess is not a
+/// choice; this is the second shape of the same confusion (bd
+/// `profileselect-cursor-is-a-row-index-not-a-slot-2026-08-25`).
+///
+/// The exception is deliberately the narrowest one that can work: a latch adopted from a guess
+/// yields EXACTLY ONCE, and only to the user's own pick. A latch that came from the pick never
+/// yields -- so the 2026-08-02 repro this whole mechanism exists for (picked slot 0, precedence
+/// later fell through to `save_slot = 9`, window retargeted mid-load) still cannot happen.
+#[must_use]
+pub fn portrait_window_target_slot_authoritative(
+    latched: Option<i32>,
+    latched_from_pick: bool,
+    resolved: Option<i32>,
+    resolved_from_pick: bool,
+) -> PortraitWindowTarget {
     match (latched, resolved) {
+        // A guessed latch yields to the user's explicit pick, once.
+        (Some(held), Some(fresh)) if !latched_from_pick && resolved_from_pick && held != fresh => {
+            PortraitWindowTarget {
+                slot: Some(fresh),
+                latching: true,
+                promoted_by_pick: true,
+            }
+        }
         // Window already committed: keep it, whatever the sources say now.
-        (Some(held), _) => (Some(held), false),
+        (Some(held), _) => PortraitWindowTarget {
+            slot: Some(held),
+            latching: false,
+            promoted_by_pick: false,
+        },
         // First resolution of this window: adopt it.
-        (None, Some(fresh)) => (Some(fresh), true),
+        (None, Some(fresh)) => PortraitWindowTarget {
+            slot: Some(fresh),
+            latching: true,
+            promoted_by_pick: false,
+        },
         // Nothing named a slot yet; stay uncommitted rather than inventing one.
-        (None, None) => (None, false),
+        (None, None) => PortraitWindowTarget {
+            slot: None,
+            latching: false,
+            promoted_by_pick: false,
+        },
     }
 }
 
@@ -468,6 +590,186 @@ mod tests {
         let (second, latching) = portrait_window_target_slot(None, Some(9));
         assert_eq!(second, Some(9));
         assert!(latching);
+    }
+
+    /// THE 2026-08-26 REGRESSION, replayed with that run's literal values: a boot window that
+    /// latched a GUESS must yield to the user's pick.
+    ///
+    /// At +1061ms every source was invalid (`picker=None b78=None ac0=-1`), so the latch came from
+    /// the autoload's default hint -- slot 0, i.e. from nothing. At +1084597ms the user picked slot
+    /// 1 and the latch refused it, so the loading screen showed slot 0's character (`angrE RL 100`)
+    /// while slot 1 (level 90) was the one loading.
+    #[test]
+    fn a_guessed_window_latch_yields_to_the_users_pick() {
+        // +1061ms: nothing names a slot. Precedence returns None; the caller's autoload-hint
+        // fallback supplies slot 0.
+        assert_eq!(
+            portrait_target_slot_from_sources(None, None, Some(-1), 10),
+            None,
+            "picker=None b78=None ac0=-1 names no slot -- slot 0 here is a guess, not a choice"
+        );
+        let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
+        assert_eq!(boot.slot, Some(0));
+        assert!(boot.latching);
+        assert!(!boot.promoted_by_pick);
+
+        // +1084597ms: the user picks slot 1. Precedence now names it, from the picker term.
+        let resolved = portrait_target_slot_from_sources(Some(1), Some(-1), Some(-1), 10);
+        assert_eq!(resolved, Some(1));
+
+        let picked = portrait_window_target_slot_authoritative(boot.slot, false, resolved, true);
+        assert_eq!(
+            picked.slot,
+            Some(1),
+            "the pick must replace a latch that was adopted from a guess"
+        );
+        assert!(picked.latching);
+        assert!(picked.promoted_by_pick);
+
+        // And the promotion is spent: the window is now committed FROM the pick and holds.
+        let after = portrait_window_target_slot_authoritative(picked.slot, true, Some(9), false);
+        assert_eq!(after.slot, Some(1));
+        assert!(!after.latching);
+        assert!(!after.promoted_by_pick);
+    }
+
+    /// The exception must not reopen the 2026-08-02 defect: a latch that came FROM the pick never
+    /// yields, not even to another pick-shaped resolution.
+    #[test]
+    fn a_picked_window_latch_never_yields() {
+        let picked = portrait_window_target_slot_authoritative(None, false, Some(0), true);
+        assert_eq!(picked.slot, Some(0));
+        assert!(picked.latching);
+
+        for (resolved, from_pick) in [(Some(9), false), (Some(9), true), (None, false)] {
+            let held =
+                portrait_window_target_slot_authoritative(picked.slot, true, resolved, from_pick);
+            assert_eq!(
+                held.slot,
+                Some(0),
+                "a window committed from the user's pick keeps it (resolved={resolved:?} from_pick={from_pick})"
+            );
+            assert!(!held.latching);
+            assert!(!held.promoted_by_pick);
+        }
+    }
+
+    /// A pick that AGREES with the guessed latch is not a promotion -- nothing changed, so nothing
+    /// should be counted or re-latched.
+    #[test]
+    fn a_pick_matching_the_guess_is_not_a_promotion() {
+        let boot = portrait_window_target_slot_authoritative(None, false, Some(4), false);
+        assert_eq!(boot.slot, Some(4));
+        let same = portrait_window_target_slot_authoritative(boot.slot, false, Some(4), true);
+        assert_eq!(same.slot, Some(4));
+        assert!(!same.latching);
+        assert!(!same.promoted_by_pick);
+    }
+
+    /// A guessed latch still refuses every NON-pick source, which is the whole reason the latch
+    /// exists: only the user outranks it.
+    #[test]
+    fn a_guessed_window_latch_still_refuses_game_inferred_retargets() {
+        let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
+        for resolved in [Some(9), Some(1), None] {
+            let held = portrait_window_target_slot_authoritative(boot.slot, false, resolved, false);
+            assert_eq!(
+                held.slot,
+                Some(0),
+                "ac0/b78 must never move a committed window (resolved={resolved:?})"
+            );
+            assert!(!held.latching);
+        }
+    }
+
+    /// The legacy two-argument form keeps its exact old behaviour, so callers that do not track
+    /// latch authority are unchanged.
+    #[test]
+    fn the_legacy_pair_form_is_unchanged() {
+        assert_eq!(portrait_window_target_slot(None, Some(3)), (Some(3), true));
+        assert_eq!(
+            portrait_window_target_slot(Some(0), Some(1)),
+            (Some(0), false)
+        );
+        assert_eq!(portrait_window_target_slot(None, None), (None, false));
+    }
+
+    /// THE PARENT-REQUESTED GATE: a picked slot N != 0 must produce slot N's stats.
+    ///
+    /// Composed end to end from the 2026-08-26 run's literal values so it fails on the real bug:
+    /// boot window latches the autoload's guessed slot 0, the user picks slot 1, and the stats
+    /// panel must follow the pick. Before the latch-authority fix the last assertion read `0`, and
+    /// the loading screen showed `angrE RL 100` (slot 0) while slot 1 (level 90) was loading.
+    #[test]
+    fn a_picked_slot_other_than_zero_drives_the_stats_panel() {
+        const SLOTS: i32 = 10;
+        // `SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT` is unset on a boot autoload -- the run reported
+        // 18446744073709551615 -- so the switch term must not claim the answer.
+        const SWITCH_UNSET: usize = usize::MAX;
+        assert_eq!(
+            loading_screen_stats_slot_source(SWITCH_UNSET, None, SLOTS),
+            StatsSlotSource::BestActiveFallback
+        );
+
+        // +1061ms: boot window latches slot 0 from the autoload hint (no source named a slot).
+        let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
+        assert_eq!(
+            loading_screen_stats_slot_source(SWITCH_UNSET, boot.slot, SLOTS),
+            StatsSlotSource::PortraitWindow(0)
+        );
+
+        // +1084597ms: the user picks slot 1.
+        let resolved = portrait_target_slot_from_sources(Some(1), Some(-1), Some(-1), SLOTS);
+        let picked = portrait_window_target_slot_authoritative(boot.slot, false, resolved, true);
+        assert!(picked.promoted_by_pick);
+        assert_eq!(
+            loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, SLOTS),
+            StatsSlotSource::PortraitWindow(1),
+            "the stats panel must describe the character the user picked, not the boot guess"
+        );
+
+        // Every non-zero slot behaves the same -- slot 1 is not a special case.
+        for slot in 1..SLOTS {
+            let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
+            let picked =
+                portrait_window_target_slot_authoritative(boot.slot, false, Some(slot), true);
+            assert_eq!(
+                loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, SLOTS),
+                StatsSlotSource::PortraitWindow(slot)
+            );
+        }
+    }
+
+    /// A System->Quit switch selection still outranks the window target, and its unset/out-of-range
+    /// wire forms must not be mistaken for slot 0 -- `usize::MAX as i32` is -1, not a slot.
+    #[test]
+    fn the_switch_selection_outranks_the_window_and_its_sentinels_do_not() {
+        const SLOTS: i32 = 10;
+        assert_eq!(
+            loading_screen_stats_slot_source(3, Some(7), SLOTS),
+            StatsSlotSource::SwitchSelection(3)
+        );
+        for sentinel in [
+            usize::MAX,
+            usize::MAX - 1,
+            SLOTS as usize,
+            i32::MAX as usize,
+        ] {
+            assert_eq!(
+                loading_screen_stats_slot_source(sentinel, Some(7), SLOTS),
+                StatsSlotSource::PortraitWindow(7),
+                "sentinel {sentinel} must fall through, never resolve to a slot"
+            );
+        }
+        // An out-of-range window target is not a slot either.
+        assert_eq!(
+            loading_screen_stats_slot_source(usize::MAX, Some(SLOTS), SLOTS),
+            StatsSlotSource::BestActiveFallback
+        );
+        assert_eq!(
+            loading_screen_stats_slot_source(usize::MAX, Some(-1), SLOTS),
+            StatsSlotSource::BestActiveFallback
+        );
     }
 
     /// A window that has not resolved any slot yet must stay uncommitted rather than latch a
