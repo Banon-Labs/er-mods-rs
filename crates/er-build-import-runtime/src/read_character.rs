@@ -135,11 +135,18 @@ pub struct ReadSlot {
     /// for something that does not upgrade at all (ammunition). Measured off the live
     /// `ReinforceParamWeapon` table, and the only sound way to tell somber from regular.
     pub max_upgrade: Option<u16>,
-    /// The instance this slot names, as `(selector, category)` off its `GaitemHandle`. Present for
-    /// armaments only, and only so a carried armament can be matched to the equipment slot holding
-    /// it: several copies of one armament share an item id and differ only by the ash mounted on
-    /// them, so the id cannot pick a copy and the handle can.
-    pub gaitem_handle: Option<(u32, u8)>,
+    /// The instance this slot names: its `GaitemHandle`, WHOLE, exactly as the engine stores it.
+    ///
+    /// Present for armaments only, and for two jobs -- matching a carried armament to the
+    /// equipment slot holding it (several copies of one armament share an item id and differ only
+    /// by the ash on them, so the id cannot pick a copy), and asking that instance which gem it
+    /// carries.
+    ///
+    /// NOT rebuilt from parts. A handle packs a selector, a category and an indexed flag, and a
+    /// version of this that reassembled `(category << 28) | (1 << 31) | selector` silently dropped
+    /// bits 27:24 -- which resolves a DIFFERENT instance, and a different instance's ash of war is
+    /// how an armament ends up reported carrying a skill it cannot take.
+    pub gaitem_handle: Option<u32>,
     /// Position within its category, which is also the planner's `equipIndex` -- `None` for an
     /// item the character is merely CARRYING.
     pub equip_index: Option<u32>,
@@ -308,7 +315,7 @@ unsafe fn read_slot(
 /// # Safety
 ///
 /// Game thread; `module_base` the loaded image base.
-unsafe fn worn_armament_handle(module_base: usize, slot: i32) -> Option<(u32, u8)> {
+unsafe fn worn_armament_handle(module_base: usize, slot: i32) -> Option<u32> {
     // Safety: fault-checked reads of the singleton slot and one offset inside it.
     let world =
         unsafe { er_game_base::mem::safe_read_usize(module_base + WORLD_CHR_MAN_GLOBAL_RVA) }?;
@@ -322,20 +329,7 @@ unsafe fn worn_armament_handle(module_base: usize, slot: i32) -> Option<(u32, u8
         return None;
     }
     // Safety: the caller's contract; the slot came from the caller's fixed table.
-    let handle = unsafe { worn_weapon_handle(module_base, player, slot) }?;
-    Some((
-        handle & GAITEM_HANDLE_SELECTOR_MASK,
-        GAITEM_HANDLE_CATEGORY_OF(handle),
-    ))
-}
-
-/// Bits 23:0 of a `GaitemHandle` -- the selector, which is what identifies the instance.
-const GAITEM_HANDLE_SELECTOR_MASK: u32 = 0x00FF_FFFF;
-
-/// Bits 30:28 of a `GaitemHandle` -- its category.
-#[allow(non_snake_case)]
-const fn GAITEM_HANDLE_CATEGORY_OF(handle: u32) -> u8 {
-    ((handle >> 28) & 0x7) as u8
+    unsafe { worn_weapon_handle(module_base, player, slot) }
 }
 
 /// The ash of war on the armament in `slot`, named -- see [`worn_armament`] for how it is read.
@@ -720,18 +714,20 @@ unsafe fn read_carried(module_base: usize, msg: usize, egd: usize, out: &mut Cha
                 if split.row == UNARMED_ARMAMENT_ROW {
                     continue;
                 }
-                let handle = (
-                    entry.gaitem_handle.selector(),
-                    entry.gaitem_handle.category_raw(),
-                );
+                // The raw 32 bits, read off the entry itself: `EquipInventoryDataListEntry` is
+                // `#[repr(C)]` with the handle first, so this is the field, not a reconstruction.
+                // Safety: `entry` is a live engine record and the read is of its first word.
+                let handle = unsafe {
+                    *(std::ptr::from_ref::<eldenring::cs::EquipInventoryDataListEntry>(entry)
+                        .cast::<u32>())
+                };
                 // Safety: the handle came out of the engine's own inventory entry, and the whole
                 // lookup chain is null-checked inside.
                 let weapon_art = unsafe {
                     mounted_ash(
                         module_base,
                         msg,
-                        handle.0,
-                        handle.1,
+                        handle,
                         known.map(|facts| facts.default_arts),
                         &ashes,
                     )
@@ -1067,12 +1063,10 @@ const UNARMED_ARMAMENT_ROW: u32 = 110_000;
 unsafe fn mounted_ash(
     module_base: usize,
     msg: usize,
-    selector: u32,
-    category: u8,
+    handle: u32,
     default_arts: Option<u32>,
     ashes: &std::collections::BTreeSet<u32>,
 ) -> Option<String> {
-    let handle = (u32::from(category) << 28) | GAITEM_HANDLE_CATEGORY_FLAG | selector;
     // Safety: the caller's contract; the record is the engine's own and the chain is null-checked.
     let mut lookup = unsafe { GaitemLookupResult::from_handle(module_base, handle) }?;
     // Safety: as above.
@@ -1098,9 +1092,6 @@ fn is_ash_of_war(
 ) -> bool {
     ashes.contains(&arts_id) && default_arts != Some(arts_id)
 }
-
-/// Bit 31 of a `GaitemHandle`, which the engine sets alongside the category on every real handle.
-const GAITEM_HANDLE_CATEGORY_FLAG: u32 = 1 << 31;
 
 /// Merge the WORN list into the HELD one: every held item, with the worn ones carrying their
 /// equip index.

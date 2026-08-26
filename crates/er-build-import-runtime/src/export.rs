@@ -315,10 +315,20 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
     // entirely. Logged as their own line because they are the two things a reader of the last
     // export's evidence most needs to check.
     crate::log_line(&format!(
-        "[build-export] armaments {:?}; face data {}",
+        "[build-export] worn or ash-carrying armaments (name, +level, equip slot, ash, gaitem \
+         handle) {:?}; face data {}",
         read.armaments
             .iter()
-            .map(|item| (item.name.as_str(), item.upgrade, item.equip_index))
+            .filter(|item| item.weapon_art.is_some() || item.equip_index.is_some())
+            .map(|item| {
+                (
+                    item.name.as_str(),
+                    item.upgrade,
+                    item.equip_index,
+                    item.weapon_art.as_deref(),
+                    item.gaitem_handle.map(|handle| format!("{handle:#010x}")),
+                )
+            })
             .collect::<Vec<_>>(),
         match read.face_data.as_deref() {
             Some(bytes) => format!("{} bytes", bytes.len()),
