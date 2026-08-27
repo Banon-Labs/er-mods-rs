@@ -1,8 +1,8 @@
 # Crate-extraction execution roadmap
 
 **Current baseline:** `466c2896` (`origin/main`, 2026-08-14)
-**Parent planning PR:** [#193](https://github.com/Banon-Labs/er-effects-rs/pull/193)
-**R1 scope:** publish the current ownership, function-partition, and caller ledger for every Rust file below `crates/er-effects-rs/src/experiments/`. This is a documentation/tooling checkpoint. It changes no runtime code and authorizes no extraction.
+**Parent planning PR:** [#193](https://github.com/Banon-Labs/er-mods-rs/pull/193)
+**R1 scope:** publish the current ownership, function-partition, and caller ledger for every Rust file below `crates/er-quickload/src/experiments/`. This is a documentation/tooling checkpoint. It changes no runtime code and authorizes no extraction.
 
 The earlier planning analyses remain historical evidence in PR #193. This document is the execution record for the current baseline; source functions and caller boundaries below supersede stale line-range plans.
 
@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 47,658 |
+| all `experiments/**` | 76 | 47,665 |
 | excluding `startup_hooks/**` | 43 | 24,324 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 23,334 |
 | lifecycle S10 split | 5 | 2,241 |
@@ -142,7 +142,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `gpu_readback/boot_progress.rs` | 2,974 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
 | `input_block.rs` | 1,390 | product input ownership | `STAY` |
-| `input_trace.rs` | 924 | product diagnostic | D4 |
+| `input_trace.rs` | 926 | product diagnostic | D4 |
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 114 | product install ordering | `STAY` |
 | `lifecycle/save_flow.rs` | 1,523 | System>Quit save-flow implementation | R20 |
@@ -167,7 +167,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,146 | save source/path policy and redirect adapters | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,149 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 107 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 336 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
@@ -176,7 +176,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 989 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,104 | title-flow and product modal families | R22 |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,106 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,419 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |

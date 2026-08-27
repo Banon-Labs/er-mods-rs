@@ -3,7 +3,7 @@
 # via me3 (the observer DLL loaded as an me3 native; LazyLoader removed 2026-07-04),
 # and runs NO readiness watcher -- so the user can drive a normal load at their own
 # pace while the DLL's recurring observer logs world-stream state to
-# GAME_DIR/er-effects-autoload-debug.log.
+# GAME_DIR/er-quickload-autoload-debug.log.
 # Tear down with: pkill -x eldenring.exe  (the script also self-kills at SAFETY_SECONDS).
 # Save-safety is the caller's responsibility (back up + restore the .sl2).
 set -uo pipefail
@@ -12,7 +12,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
 # shellcheck source=scripts/me3-launch-lib.sh
 source "$REPO_ROOT/scripts/me3-launch-lib.sh"
-DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 SAFETY_SECONDS="${SAFETY_SECONDS:-300}"
 OBSERVE_DIR="${OBSERVE_DIR:-$REPO_ROOT/target/runtime-probe/golden-observe-$(date +%Y%m%d-%H%M%S)}"
 
@@ -28,8 +28,8 @@ fi
 
 # Stage the observer DLL as an me3 native (per-run immutable payload).
 mkdir -p "$OBSERVE_DIR"
-cp -f "$DLL" "$OBSERVE_DIR/er_effects_rs.dll"
-me3_write_profile "$OBSERVE_DIR/er-effects-observe.me3" "$OBSERVE_DIR/er_effects_rs.dll"
+cp -f "$DLL" "$OBSERVE_DIR/er_quickload.dll"
+me3_write_profile "$OBSERVE_DIR/er-quickload-observe.me3" "$OBSERVE_DIR/er_quickload.dll"
 
 echo "run-golden-observe: launching offline eldenring.exe (observer-only, no watcher); safety kill in ${SAFETY_SECONDS}s"
 
@@ -47,7 +47,7 @@ echo "run-golden-observe: launching offline eldenring.exe (observer-only, no wat
 SAFETY_PID=$!
 
 cd "$GAME_DIR" || fatal "cannot cd to $GAME_DIR"
-me3_launch "$OBSERVE_DIR/er-effects-observe.me3"
+me3_launch "$OBSERVE_DIR/er-quickload-observe.me3"
 RC=$?
 
 # me3 returned (game exited or was killed): cancel the safety timer.

@@ -23,7 +23,7 @@ def main() -> int:
         print("usage: boot-profile-stacks.py <run_dir> <t0_ms> <t1_ms>", file=sys.stderr)
         return 2
     run, t0, t1 = Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-    lines = (run / "er-effects-profile.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = (run / "er-quickload-profile.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
     samples = [json.loads(l) for l in lines[1:] if l.strip()]
 
     # Busiest thread = main.

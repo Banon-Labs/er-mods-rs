@@ -106,8 +106,8 @@ def main() -> int:
     ).stdout.split()
     if len(pairs) < 10:
         failures.append(f"me3-dll-list parsed only {len(pairs)} cdylibs; expected the full shipped set")
-    if not any(pair.startswith("er-effects-rs:") for pair in pairs):
-        failures.append("me3-dll-list omitted the product crate er-effects-rs")
+    if not any(pair.startswith("er-quickload:") for pair in pairs):
+        failures.append("me3-dll-list omitted the product crate er-quickload")
     # The four crates that override [lib] name must keep both halves distinct.
     overrides = {"er-better-refills": "er_better_refills", "mushroom-man-runtime": "mushroom_man"}
     for package, artifact in overrides.items():

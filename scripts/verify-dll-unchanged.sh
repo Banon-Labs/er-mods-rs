@@ -3,7 +3,7 @@
 #
 # Why this exists: the save-picker crate-extraction epic (docs/plans/save-picker-crate-extraction.md)
 # lands in slices whose headline claim is "the product behaves byte-for-byte as before". A file list
-# showing no `crates/er-effects-rs/src/` change is INDIRECT evidence -- a workspace member, a feature
+# showing no `crates/er-quickload/src/` change is INDIRECT evidence -- a workspace member, a feature
 # unification, or a Cargo.lock bump can move the shipping bytes without touching a product source
 # file. This does the direct measurement: build the DLL at both refs and compare the bytes.
 #
@@ -32,7 +32,7 @@ fi
 cd "$TREE" || exit 2
 
 TARGET=x86_64-pc-windows-msvc
-DLL="$TREE/target/$TARGET/release/er_effects_rs.dll"
+DLL="$TREE/target/$TARGET/release/er_quickload.dll"
 
 dirty=$(git status --porcelain | wc -l)
 if [ "$dirty" -ne 0 ]; then

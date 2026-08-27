@@ -48,14 +48,14 @@ from dataclasses import dataclass, field
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-TELEMETRY_NAME = "er-effects-telemetry.json"
+TELEMETRY_NAME = "er-quickload-telemetry.json"
 # Every DLL log a predicate may name. Each product DLL writes its OWN file next to the
 # executable, and reading only the first one makes the gate structurally blind to any predicate
 # owned by another DLL -- it would score that predicate against a log its evidence can never
 # appear in, and report NEVER OBSERVED forever. The legacy-converter census lives in
 # er-invasion-warp.log, so a gate that reads only the autoload log can never pass it.
 DEBUG_LOG_NAMES = (
-    "er-effects-autoload-debug.log",
+    "er-quickload-autoload-debug.log",
     "er-invasion-warp.log",
 )
 
@@ -65,11 +65,11 @@ DEBUG_LOG_NAMES = (
 # er-invasion-warp.log, and any predicate they own would read NEVER OBSERVED forever.
 # Missing files are skipped silently: absence is what "no run has looked yet" looks like.
 EXTRA_EVIDENCE_PATHS = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl",
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-vtable-trace.jsonl",
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/ersc-session-trace.jsonl",
 )
 
@@ -182,7 +182,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "the park satisfies it without ever exercising the code path"
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
         feature="reload-system-quit",
@@ -204,7 +204,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "satisfier that can actually run is in the build."
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(case7-savedrain-satisfy) / crates/er-title-flow/src/title_tick_cover.rs "
             "(reload-drain-b80)"
         ),
@@ -228,7 +228,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "every warp after the first reload stays dead"
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
         feature="reload-system-quit",
@@ -395,7 +395,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "YK0J per-frame loop"
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs "
+            "crates/er-quickload/src/experiments/save_redirect/path_hooks.rs "
             "(OWN_LOAD_SAVE_REJECTION) / experiments/own_load/drive.rs"
         ),
         feature="save-load-continue",

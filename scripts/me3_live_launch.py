@@ -15,7 +15,7 @@ HOST LAYOUT IS DETECTED, NEVER ASSUMED (2026-08-11):
     WSL2 + Windows Steam            me3.exe is a NATIVE WINDOWS process started from WSL. It
                                     loads this repo's build output IN PLACE from the Windows
                                     spelling of the WSL path (`wslpath -w`, e.g.
-                                    `\\\\wsl.localhost\\<distro>\\home\\...\\er_effects_rs.dll`).
+                                    `\\\\wsl.localhost\\<distro>\\home\\...\\er_quickload.dll`).
                                     Windows LoadLibraryW over the WSL filesystem was verified
                                     reliable (5/5), so the old "must copy to a C:\\ tree first"
                                     belief does not hold. (The real UNC hazard is log WRITES from
@@ -39,7 +39,7 @@ No-teardown stdin trick (INTENTIONAL, do not "fix"):
     running. There is no taskkill and no runtime cap here: `p.wait()` returns only when
     the USER closes the game. This is a manual-inspection helper, not an autoresearch probe.
 
-Note: the real DLL debug log is `er-effects-autoload-debug.log` in the game directory,
+Note: the real DLL debug log is `er-quickload-autoload-debug.log` in the game directory,
 not anything this script writes. We let me3's stdout/stderr inherit to the console so
 launch errors stay visible.
 """
@@ -58,7 +58,7 @@ from pathlib import Path
 
 # --- Repo build output (derived from THIS script's location) -----------------------------
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILT_DLL = REPO_ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "er_effects_rs.dll"
+BUILT_DLL = REPO_ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "er_quickload.dll"
 STEAM_HELPER = REPO_ROOT / "scripts" / "steam-running.sh"
 DETECT_PROC = REPO_ROOT / "scripts" / "detect-proc.py"
 

@@ -1,10 +1,10 @@
 //! Constants, statics, and plain data types moved VERBATIM out of the root
-//! er-effects-rs crate for the title-flow extraction (Stage B of
+//! er-quickload crate for the title-flow extraction (Stage B of
 //! docs/plans/title-flow-crate-extraction.md). Each item's original site now
 //! carries a `pub(crate) use er_title_flow::NAME;` shim, so the root crate and
 //! this crate share the single definition below. Only visibility changed
 //! (`pub(crate)` -> `pub`); bodies and doc comments are untouched.
-// PARITY: DEBT -- verbatim transcription of constants moved out of er-effects-rs, kept
+// PARITY: DEBT -- verbatim transcription of constants moved out of er-quickload, kept
 // import-for-import identical to keep that move reviewable as a pure move. The unused
 // imports are the cost of that fidelity and should go once the move stops being audited.
 #![allow(unused_imports)]
@@ -23,13 +23,13 @@ use er_telemetry_core::counters::*;
 #[cfg(windows)]
 use fromsoftware_shared::F32Vector4;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants.rs =====
 
 pub const NULL_MODULE_BASE: usize = 0;
 
 pub const HOOK_FALSE_RETURN: u8 = 0;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/anti_debug.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/anti_debug.rs =====
 
 pub const TITLE_OWNER_VTABLE_RVA: usize = TitleSessionRva::TitleOwnerVtable as usize;
 
@@ -192,7 +192,7 @@ pub static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754: AtomicUsize =
 pub static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/autoload_state.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/autoload_state.rs =====
 
 /// CS::MenuMemberFuncJob<TitleTopDialog> vtable 0x142b265d0 (RVA): the registry-entry node the
 /// registrar 0x1409b24e0 inserts into [dialog+0xa48]; its run is MENU_MEMBER_FUNC_JOB_RUN_RVA.
@@ -414,7 +414,7 @@ pub const MENU_JOB_SUBMIT_RVA: u32 = 0x7a9250;
 /// Live/deobf native menu-job queue idle predicate (`FUN_1407a9320` dump -> live `0x1407a9230`).
 pub const MENU_JOB_QUEUE_READY_RVA: u32 = 0x7a9230;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/gaitem_restore.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/gaitem_restore.rs =====
 
 /// Direct poke of the streaming-enable flag [resmgr+0xb7c1]=1 (the virtual enabler
 /// 0x14066e2e4 crashes -- wrong receiver). The virtual also builds session singletons
@@ -557,7 +557,7 @@ pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
 /// `owner+0x8`).
 ///
 /// CORRECTED 2026-08-01 -- the two safety properties this doc used to assert are BOTH FALSE, and
-/// the transmute at `er-effects-rs .../own_load/loaders.rs` cites them as its justification:
+/// the transmute at `er-quickload .../own_load/loaders.rs` cites them as its justification:
 ///   * "does NOT ... zero `*src`" -- it DOES. The tail Unrefs the caller's reference and then
 ///     executes `*param_2 = 0`, clearing the source slot.
 ///   * "is overflow-safe (NOT the cap-8 FixOrderJobSequence)" -- the insert it delegates to,
@@ -573,7 +573,7 @@ pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
 /// bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
 pub const MENUJOB_PUSHBACK_RVA: usize = MENU_JOB_SUBMIT_RVA as usize;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/own_load_pump.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/own_load_pump.rs =====
 
 /// `FD4::FD4Time` size (dump `/FD4/FD4Time` len 16): `+0x0 vtable ptr`, `+0x8 f32 time` (the frame
 /// delta the map-stream sub-job advances on). Run only READS `time+8`. Pass a 16-byte buffer with the
@@ -721,7 +721,7 @@ pub static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
 
 pub static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/player_correctness.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/player_correctness.rs =====
 
 pub static OBSERVE_MENU_OPEN_EMITTED: AtomicUsize = AtomicUsize::new(OBSERVE_MARKER_NOT_EMITTED);
 
@@ -731,7 +731,7 @@ pub const OBSERVE_MARKER_EMITTED: usize = 1;
 
 pub static OWN_STEPPER_BASE: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/profile_render.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/profile_render.rs =====
 
 pub const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
 
@@ -757,14 +757,14 @@ pub const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
 /// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
 pub const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/render_handoff.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/render_handoff.rs =====
 
 /// `CSMenuMan+0x728` -- `loadingScreenData.mode` written by deobf `FUN_14067a410` via the helper at
 /// `0x140860d80`: `CSMenuMan+0x720+8 = mode`.
 #[allow(dead_code)]
 pub const CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET: usize = 0x728;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/return_title.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/return_title.rs =====
 
 /// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
 pub const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
@@ -1000,7 +1000,7 @@ pub static SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG: AtomicUsize = Atomi
 /// directly is the dismiss lever. 0 = none captured.
 pub static CONNECTION_ERROR_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/stage2_menu_drive.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/stage2_menu_drive.rs =====
 
 /// PHASE 6 (S2 INVOKE): fire d180's +0xa8 action functor to build the ProfileLoadDialog.
 pub const OWN_STEPPER_PHASE_S2_INVOKE: usize = OwnStepperPhase::S2Invoke as usize;
@@ -1072,7 +1072,7 @@ pub static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_S
 /// re-fire. Readers still treat "not `TITLE_NATIVE_JOB_NOT_CALLED`" as "the menu stage has run".
 pub static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/stats_panel_background.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/stats_panel_background.rs =====
 
 pub const TITLE_STEP_BEGIN_NEW_GAME: i32 = TitleStepState::BeginNewGame as i32;
 
@@ -1191,7 +1191,7 @@ pub const TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340;
 pub static TITLE_PRESS_START_GFX_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/stats_panel_text.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/stats_panel_text.rs =====
 
 pub static TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -1313,7 +1313,7 @@ pub const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING: usize = 1;
 
 pub const INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET: usize = 0xe8;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/switch_liveness.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/switch_liveness.rs =====
 
 /// inputmgr keystate bitmap offset (inputmgr = [0x143d6b7b0]); bit0 = pressed-this-frame (edge).
 pub const INPUTMGR_BITMAP_90_OFFSET: usize = 0x90;
@@ -1330,7 +1330,7 @@ pub const AUTO_CONFIRM_SET_FRAMES: u64 = 3;
 
 pub const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/system_quit.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/system_quit.rs =====
 
 /// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
 pub const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
@@ -1452,7 +1452,7 @@ pub static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =
 pub static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_COUNTDOWN_READY);
 
-// ===== moved verbatim from crates/er-effects-rs/src/experiments/mod/own_stepper_idx6_memory.rs =====
+// ===== moved verbatim from crates/er-quickload/src/experiments/mod/own_stepper_idx6_memory.rs =====
 
 /// Pseudo-handle for the current process (GetCurrentProcess() is constant -1).
 pub const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
@@ -1462,7 +1462,7 @@ pub const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 /// fault-tolerant scan fast -- a syscall per 8-byte cursor would stall the thread.
 pub const SCAN_CHUNK_SIZE: usize = 0x10000;
 
-// ===== moved verbatim from crates/er-effects-rs/src/experiments/mod/product_core_own_stepper.rs =====
+// ===== moved verbatim from crates/er-quickload/src/experiments/mod/product_core_own_stepper.rs =====
 
 pub const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
 
@@ -1629,7 +1629,7 @@ pub struct TitleDialogState {
     pub menu_opened_latch: usize,
 }
 
-// ===== moved verbatim from crates/er-effects-rs/src/experiments/own_load/drive.rs =====
+// ===== moved verbatim from crates/er-quickload/src/experiments/own_load/drive.rs =====
 
 /// How often (in own_stepper frames) the OWN-LOAD world-stream stall telemetry emits a throttled
 /// debug line. The oracle_* atomics are refreshed EVERY frame; only the human-readable log is
@@ -1638,7 +1638,7 @@ pub const OWN_LOAD_STREAM_LOG_INTERVAL: u64 = 30;
 
 // ===== wave 2: layout/enum types the wave-1 constants reference (moved verbatim) =====
 
-// ----- from crates/er-effects-rs/src/constants/anti_debug.rs -----
+// ----- from crates/er-quickload/src/constants/anti_debug.rs -----
 
 #[repr(usize)]
 pub enum TitleSessionRva {
@@ -1707,7 +1707,7 @@ pub enum TitleNativeJobTiming {
     FrameRate = 60,
 }
 
-// ----- from crates/er-effects-rs/src/constants/autoload_state.rs -----
+// ----- from crates/er-quickload/src/constants/autoload_state.rs -----
 
 #[repr(C)]
 pub struct GameManAutoloadFlagCluster {
@@ -1732,7 +1732,7 @@ pub struct MsgBoxDialogLayout {
     pub button_count: i32,
 }
 
-// ----- from crates/er-effects-rs/src/constants/own_load_pump.rs -----
+// ----- from crates/er-quickload/src/constants/own_load_pump.rs -----
 
 #[repr(usize)]
 pub enum OwnStepperPhase {
@@ -1748,7 +1748,7 @@ pub enum OwnStepperPhase {
     S2Confirm,
 }
 
-// ----- from crates/er-effects-rs/src/constants/stage2_menu_drive.rs -----
+// ----- from crates/er-quickload/src/constants/stage2_menu_drive.rs -----
 
 #[repr(usize)]
 pub enum ProfileLoadMenuRva {
@@ -1818,7 +1818,7 @@ pub struct MenuSaveDataSummaryLayout {
     pub save_slot: i32,
 }
 
-// ----- from crates/er-effects-rs/src/constants/stats_panel_background.rs -----
+// ----- from crates/er-quickload/src/constants/stats_panel_background.rs -----
 
 #[repr(i32)]
 pub enum TitleStepState {
@@ -1887,7 +1887,7 @@ pub struct TitleTopDialogLayout {
     pub state_machine: usize,
 }
 
-// ----- from crates/er-effects-rs/src/constants/switch_liveness.rs -----
+// ----- from crates/er-quickload/src/constants/switch_liveness.rs -----
 
 /// Front-end menu event ids (verified): Confirm/OK, and the two vertical-move candidates (one is
 /// Down, one Up -- we inject both; only Down moves the cursor down, Up saturates at the top so it
@@ -1899,7 +1899,7 @@ pub enum MenuEventId {
     MoveB = 0x45,
 }
 
-// ----- from crates/er-effects-rs/src/constants.rs (autoload/title-flow slice) -----
+// ----- from crates/er-quickload/src/constants.rs (autoload/title-flow slice) -----
 
 /// Sentinel for a MinHook trampoline slot that has not been filled yet. Read by every
 /// `*_ORIG: AtomicUsize` initializer in `constants_own_load_pump.rs` /
@@ -1928,13 +1928,13 @@ pub enum RuntimeGlobalRva {
     DluidInputManager = 0x485dc18,
 }
 
-// ----- from crates/er-effects-rs/src/constants/render_handoff.rs -----
+// ----- from crates/er-quickload/src/constants/render_handoff.rs -----
 
 /// MoveMap child wrapper (`InGameStep+0xe0`) AFTER WorldRes is resident; may skip STEP_Finish teardown,
 /// so prefer satisfying the real sub-gate. Verify state before use.
 pub const EZ_CHILDSTEP_REQUEST_FINISH_RVA: usize = 0xeb5570;
 
-// ----- from crates/er-effects-rs/src/constants/stats_panel_text.rs -----
+// ----- from crates/er-quickload/src/constants/stats_panel_text.rs -----
 
 /// `mov eax,[owner+0xbc]` and feeds it through submit -> validate -> pair, which
 /// writes the value to GameMan+0x14 (the load value). The +0xac0 save slot only

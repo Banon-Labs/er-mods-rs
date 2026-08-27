@@ -1,7 +1,7 @@
 //! Read one save container slot's serialized `PlayerGameData`, and write it into a live
 //! `CS::ProfileSummary` record.
 //!
-//! Moved verbatim from er-effects-rs
+//! Moved verbatim from er-quickload
 //! `experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs`. It lives in the
 //! ProfileSummary crate because [`SerializedPlayerGameData::write_profile_summary_record`] is its
 //! terminal operation: everything above it -- the section walk, the `FACE` locator, the runtime

@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: One paragraph of prose per turn, injected before the answer instead of scolded after it
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: LOW
 #   id: ER-EFFECTS-WALL-OF-TEXT

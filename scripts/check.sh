@@ -165,8 +165,8 @@ python3 "$repo_root/scripts/test-dll-byte-identical.py"
 python3 "$repo_root/scripts/test-release-workflow.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
-# THE EXPERIMENTS RATCHET. er-effects-rs is being extracted INTO crates until it is a thin
-# shim that bundles them, so the line total under crates/er-effects-rs/src/experiments/** may
+# THE EXPERIMENTS RATCHET. er-quickload is being extracted INTO crates until it is a thin
+# shim that bundles them, so the line total under crates/er-quickload/src/experiments/** may
 # shrink but never grow; the roadmap's ledger row is the high-water mark. It is a ratchet, not
 # a freeze: edits are free, only NET GROWTH is refused, and `--refresh` accepts growth in one
 # command -- the value is that accepting it becomes a reviewable diff to the ledger instead of
@@ -272,8 +272,8 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 
 # er-net-effects's host-portable modules. Six of them are ungated with a comment saying
 # "so its tests run on the host" -- and until this line existed NOTHING ran them: the workspace
-# pins `default-members` to er-effects-rs, so a bare `cargo test` never selects this crate and the
-# windows-target `cargo xwin test --lib` in check-rust-build.sh selects er-effects-rs only. 42
+# pins `default-members` to er-quickload, so a bare `cargo test` never selects this crate and the
+# windows-target `cargo xwin test --lib` in check-rust-build.sh selects er-quickload only. 42
 # tests sat inert. The load-bearing one now is `selector_gate`: it decides whether this DLL may
 # take the player's arrow keys away from the game, which is not a claim to leave to review.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
@@ -282,13 +282,13 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 # per-player colour assignment and the config parser. Every one of those can be wrong without
 # crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
 # broken" -- and none of it is reachable from any other gate: the crate is windows-only to ship,
-# and the workspace pins `default-members` to er-effects-rs, so a bare `cargo test` never selects
+# and the workspace pins `default-members` to er-quickload, so a bare `cargo test` never selects
 # it. The near-plane trim regression this caught on the way in is exactly the class of bug that
 # otherwise costs a game launch to find.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-invasion-path
 
 # The build importer's HOST half: planner-JSON parsing, the name -> item-id catalogue lookup, the
-# grant/equip plan, and the `er-effects.toml` `build_url` scan. It was absent from this gate while
+# grant/equip plan, and the `er-quickload.toml` `build_url` scan. It was absent from this gate while
 # it had 23 tests, so the whole mapping could regress silently -- the game-side crates
 # (er-build-import-runtime, er-build-import) are windows-only and prove none of it. There is
 # nothing to run here for those two: `check-rust-build.sh` keeps them building for the shipping
@@ -296,7 +296,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-invasion-path
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
 
 # er-telemetry-core's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
-# windows-target `cargo xwin test --lib` below selects er-effects-rs ONLY and never ran these -- a
+# windows-target `cargo xwin test --lib` below selects er-quickload ONLY and never ran these -- a
 # telemetry-crate test module could be added and silently never execute in any gate. The load-count
 # consistency logic is pure integer arithmetic with no platform semantics, so the host run is the
 # real coverage; the cross-compile check in check-rust-build.sh keeps it building for the shipping
@@ -305,7 +305,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 
 # er-seamless-bugfixes' registries. The crate's own docs already said the `cfg(not(windows))` allow
 # exists so `cargo test -p er-seamless-bugfixes` can build -- but no gate ever RAN it, so all 23
-# tests were inert: `default-members` pins the workspace to er-effects-rs, and check-rust-build.sh
+# tests were inert: `default-members` pins the workspace to er-quickload, and check-rust-build.sh
 # only LINKS this shell. What that left unchecked is the whole safety argument for the code patch.
 # The freelist patch rewrites one byte of live game code, and its licence to do so is that the `JZ`
 # two bytes earlier already lands past the `INT3`; these tests recompute that landing address the
@@ -314,10 +314,10 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
 # er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
-# er_effects_rs.dll among them, so a defect in a byte-patch primitive here is a defect in all of
+# er_quickload.dll among them, so a defect in a byte-patch primitive here is a defect in all of
 # them at once -- and it is the crate LEAST able to report one: it carries a crate-level
 # `#![allow(dead_code, ...)]` for MinHook binding parity, so an unused or wrong primitive draws no
-# warning, and `default-members` pins a bare `cargo test` to er-effects-rs so nothing ever selected
+# warning, and `default-members` pins a bare `cargo test` to er-quickload so nothing ever selected
 # it. The tests cover what a compile check cannot see about `write_code_byte`: that the page is
 # relocked to the protection it actually had rather than left `PAGE_EXECUTE_READWRITE`, and that a
 # refused `VirtualProtect` returns before the store instead of writing anyway. Each assertion was
@@ -338,15 +338,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-refill-all
 # (measured 2026-08-23), and the cost was misdirection -- an agent or human reaching for a host
 # `cargo test` saw a wall of errors that looked like their own change.
 #
-# `-p er-effects-rs --lib` is the reproducer itself: the crate's host build is a single stub fn,
+# `-p er-quickload --lib` is the reproducer itself: the crate's host build is a single stub fn,
 # so this compiles nothing but the dependency graph, which is the surface that rots.
 # `-p er-title-flow --lib` additionally RUNS boot_hold's predicates -- the crate's only
 # host-portable logic, and untestable at all until the gates landed.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-effects-rs -p er-title-flow --lib
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quickload -p er-title-flow --lib
 
 # Rust format + Windows-target BUILD of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including
-# any pre-existing rust breakage -- are caught here, producing the linked er_effects_rs.dll.
+# any pre-existing rust breakage -- are caught here, producing the linked er_quickload.dll.
 # The linking gate above is only as good as its list. `check-rust-build.sh` carries an
 # `me3_shells` array of every ME3-loadable cdylib and links each one, but that array was kept
 # correct by a COMMENT saying "keep this list in sync" -- so adding a new DLL crate would leave
@@ -391,7 +391,7 @@ python3 "$repo_root/scripts/er-run-branch.py" --selftest
 python3 "$repo_root/scripts/er-release-bisect.py" --selftest
 
 # Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
-# er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
+# er_quickload.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
 # the default build, staged product payload, or required ME3 native list.
 python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py"

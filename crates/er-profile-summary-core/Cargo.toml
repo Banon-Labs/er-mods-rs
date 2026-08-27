@@ -3,7 +3,7 @@
 # title's native Continue row, the System>Quit "Load Character"/"Load Character from File" rows,
 # the ProfileSelect list, and the loading-screen portrait.
 #
-# The concept used to be smeared across four files inside the `er-effects-rs` shim -- the record
+# The concept used to be smeared across four files inside the `er-quickload` shim -- the record
 # writer in `quit_menu/save_swap_profile_table.rs`, the live-record fingerprint in
 # `continue_load/slot_resolution.rs`, the summary pointer + the serialized-save reader that feeds
 # the writer in `loading_cover/loading_cover_save_slot.rs`, and the picked-save re-read in

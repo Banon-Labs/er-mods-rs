@@ -111,15 +111,15 @@ bash_event_with_worktrees(cmd, branch, worktrees) := {
 }
 
 worktree_fixture := concat("\n", [
-	"worktree /home/banon/projects/er-effects-rs",
+	"worktree /home/banon/projects/er-mods-rs",
 	"HEAD 0000000000000000000000000000000000000000",
 	"branch refs/heads/main",
 	"",
-	"worktree /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate",
+	"worktree /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate",
 	"HEAD 1111111111111111111111111111111111111111",
 	"branch refs/heads/feature/portrait-stats-crate",
 	"",
-	"worktree /home/banon/projects/er-effects-rs/.worktrees/detached-probe",
+	"worktree /home/banon/projects/er-mods-rs/.worktrees/detached-probe",
 	"HEAD 2222222222222222222222222222222222222222",
 	"detached",
 	"",
@@ -127,7 +127,7 @@ worktree_fixture := concat("\n", [
 
 test_allow_git_c_commit_nonmain_worktree_from_main_session if {
 	denials := guard.deny with input as bash_event_with_worktrees(
-		"git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m ok",
+		"git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m ok",
 		"main\n", worktree_fixture,
 	)
 	count(denials) == 0
@@ -135,7 +135,7 @@ test_allow_git_c_commit_nonmain_worktree_from_main_session if {
 
 test_allow_git_c_commit_quoted_worktree_path_from_main_session if {
 	denials := guard.deny with input as bash_event_with_worktrees(
-		"git -C \"/home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate\" commit -F - <<'EOF'\nsummary line\n\nbody text\nEOF",
+		"git -C \"/home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate\" commit -F - <<'EOF'\nsummary line\n\nbody text\nEOF",
 		"main\n", worktree_fixture,
 	)
 	count(denials) == 0
@@ -143,7 +143,7 @@ test_allow_git_c_commit_quoted_worktree_path_from_main_session if {
 
 test_deny_git_c_commit_main_worktree_from_main_session if {
 	denials := guard.deny with input as bash_event_with_worktrees(
-		"git -C /home/banon/projects/er-effects-rs commit -m bad",
+		"git -C /home/banon/projects/er-mods-rs commit -m bad",
 		"main\n", worktree_fixture,
 	)
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
@@ -159,7 +159,7 @@ test_deny_git_c_commit_unregistered_path_from_main_session if {
 
 test_deny_git_c_commit_detached_worktree_from_main_session if {
 	denials := guard.deny with input as bash_event_with_worktrees(
-		"git -C /home/banon/projects/er-effects-rs/.worktrees/detached-probe commit -m bad",
+		"git -C /home/banon/projects/er-mods-rs/.worktrees/detached-probe commit -m bad",
 		"main\n", worktree_fixture,
 	)
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
@@ -167,7 +167,7 @@ test_deny_git_c_commit_detached_worktree_from_main_session if {
 
 test_deny_git_c_commit_chained_with_bare_commit_from_main_session if {
 	denials := guard.deny with input as bash_event_with_worktrees(
-		"git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m ok && git commit -m sneak",
+		"git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m ok && git commit -m sneak",
 		"main\n", worktree_fixture,
 	)
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
@@ -183,7 +183,7 @@ test_deny_git_c_commit_variable_path_from_main_session if {
 
 test_deny_git_c_commit_without_worktree_signal_from_main_session if {
 	denials := guard.deny with input as bash_event(
-		"git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m bad",
+		"git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m bad",
 		"main\n",
 	)
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
@@ -268,7 +268,7 @@ test_allow_wrapped_commit_on_feature_branch if {
 # commit in a wrapper.
 test_deny_worktree_commit_chained_with_wrapped_commit if {
 	denials := guard.deny with input as bash_event_with_worktrees(
-		"git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m ok && bash -c 'git commit -m bad'",
+		"git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m ok && bash -c 'git commit -m bad'",
 		"main\n", worktree_fixture,
 	)
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
@@ -277,7 +277,7 @@ test_deny_worktree_commit_chained_with_wrapped_commit if {
 # ... and it still works THROUGH a wrapper.
 test_allow_wrapped_worktree_commit_from_main_session if {
 	denials := guard.deny with input as bash_event_with_worktrees(
-		"bash -c 'git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m ok'",
+		"bash -c 'git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m ok'",
 		"main\n", worktree_fixture,
 	)
 	count(denials) == 0

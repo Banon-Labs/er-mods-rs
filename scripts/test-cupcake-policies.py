@@ -29,11 +29,11 @@ DEFAULT_BASH_TIMEOUT_MS = 30000
 # `git worktree list --porcelain`-shaped fixture for the worktree-target
 # exception cases in the main-commit/main-push guards.
 WORKTREE_FIXTURE = (
-    "worktree /home/banon/projects/er-effects-rs\n"
+    "worktree /home/banon/projects/er-mods-rs\n"
     "HEAD 0000000000000000000000000000000000000000\n"
     "branch refs/heads/main\n"
     "\n"
-    "worktree /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate\n"
+    "worktree /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate\n"
     "HEAD 1111111111111111111111111111111111111111\n"
     "branch refs/heads/feature/portrait-stats-crate\n"
 )
@@ -202,7 +202,7 @@ def main() -> int:
         # (bd guard-blocks-worktree-commits-from-main-session-cwd-2026-07-29).
         PolicyCase(
             "allow-git-c-commit-nonmain-worktree-from-main-session",
-            'git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m "ok"',
+            'git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m "ok"',
             True,
             extra_event={
                 "signals": {
@@ -225,7 +225,7 @@ def main() -> int:
         ),
         PolicyCase(
             "allow-git-c-push-feature-from-nonmain-worktree-main-session",
-            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push -u origin feature/portrait-stats-crate",
+            "git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate push -u origin feature/portrait-stats-crate",
             True,
             extra_event={
                 "signals": {
@@ -236,7 +236,7 @@ def main() -> int:
         ),
         PolicyCase(
             "deny-git-c-push-main-refspec-from-nonmain-worktree",
-            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push origin HEAD:main",
+            "git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate push origin HEAD:main",
             False,
             "Do not push directly to main",
             extra_event={
@@ -478,7 +478,7 @@ def main() -> int:
         # rather than deleting it, so a quoted operand still parses.
         PolicyCase(
             "allow-git-c-push-with-quoted-worktree-path-from-main-session",
-            'git -C "/home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate" push -u origin feature/portrait-stats-crate',
+            'git -C "/home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate" push -u origin feature/portrait-stats-crate',
             True,
             extra_event={
                 "signals": {
@@ -1054,18 +1054,18 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
         ),
         # Restoring the USER's game-installed co-op DLL (same-path rename that
-        # only strips the repo's .er-effects-staged suffix) is the opposite of
+        # only strips the repo's .er-quickload-staged suffix) is the opposite of
         # bundling and is allowed (bd er-effects-rs-gkqa).
         PolicyCase(
             "allow-mv-restore-staged-ersc-dll-same-gameinstall-path",
-            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
             " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
             True,
         ),
         # ... but the same staged source moved to any OTHER destination denies.
         PolicyCase(
             "deny-mv-staged-ersc-dll-into-target-bundle",
-            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
             " 'target/release-bundle/ersc.dll'",
             False,
             "blocked this Seamless Co-op DLL bundling command",
@@ -1098,7 +1098,7 @@ def main() -> int:
         PolicyCase(
             "allow-sha256sum-compare-staged-and-gameinstall-ersc-dll",
             'G="/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop"\n'
-            'sha256sum "$G/ersc.dll.er-effects-staged" /home/banon/Elden/ersc.dll'
+            'sha256sum "$G/ersc.dll.er-quickload-staged" /home/banon/Elden/ersc.dll'
             " | sed 's|/home/banon|~|'",
             True,
         ),
@@ -1124,7 +1124,7 @@ def main() -> int:
         # second statement.
         PolicyCase(
             "deny-mv-restore-staged-ersc-dll-chained-with-ls",
-            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
             " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'"
             " && ls -la '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
             False,
@@ -1306,7 +1306,7 @@ def main() -> int:
                 # Footer present -> allow.
                 PolicyCase(
                     "allow-gh-pr-edit-heredoc-substitution-body-with-footer",
-                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    'gh pr edit 19 --repo Banon-Labs/er-mods-rs --body "$(cat <<\'EOF\'\n'
                     "Body text describing the change.\n\n"
                     "\U0001f916 Written by Claude Fable 5, authorized by @chozandrias76\n"
                     'EOF\n)"',
@@ -1316,7 +1316,7 @@ def main() -> int:
                 # command fallback must not weaken the guard).
                 PolicyCase(
                     "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
-                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    'gh pr edit 19 --repo Banon-Labs/er-mods-rs --body "$(cat <<\'EOF\'\n'
                     "Body text without attribution.\n"
                     'EOF\n)"',
                     False,

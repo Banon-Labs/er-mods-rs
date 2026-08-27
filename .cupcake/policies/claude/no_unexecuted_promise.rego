@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Ban ending a turn on a promise nothing is going to keep
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-UNEXECUTED-PROMISE

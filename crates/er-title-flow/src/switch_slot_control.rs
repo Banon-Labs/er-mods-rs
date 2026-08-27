@@ -3,7 +3,7 @@
 // same `title` module (experiments/title.rs), so module scope is identical to the original.
 /// Path of the harness control file carrying the next switch's target slot (a decimal slot index).
 fn switch_slot_control_path() -> Option<std::path::PathBuf> {
-    game_directory_path().map(|d| d.join("er-effects-switch-slot.txt"))
+    game_directory_path().map(|d| d.join("er-quickload-switch-slot.txt"))
 }
 
 /// Eligibility of the in-world session for a programmatic switch, plus a best-effort MoveMapStep step

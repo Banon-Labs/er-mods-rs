@@ -75,7 +75,7 @@ DEFAULT_OUT = _default_out()
 
 #: A key no Seamless host publishes. Deliberately namespaced so it cannot collide with a real key
 #: if Seamless ever adds one, and so it is obvious in a capture that it came from this probe.
-PROBE_KEY = "er_effects_probe_absent_key"
+PROBE_KEY = "er_quickload_probe_absent_key"
 PROBE_VALUE = "1"
 
 AGENT = r"""

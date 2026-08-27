@@ -203,7 +203,7 @@ def scan_contract() -> list[Finding]:
                 0,
                 "missing-runtime-driver-guard",
                 "<missing>",
-                "The smoke driver must exist and require ER_EFFECTS_ALLOW_RUNTIME_DRIVER=1 before drive side effects.",
+                "The smoke driver must exist and require ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER=1 before drive side effects.",
             )
         )
     else:
@@ -211,14 +211,14 @@ def scan_contract() -> list[Finding]:
         drive_index = driver_text.find("drive() {")
         guard_index = driver_text.find("require_runtime_driver_opt_in", drive_index + 1)
         preflight_index = driver_text.find("preflight", drive_index + 1)
-        if "ER_EFFECTS_ALLOW_RUNTIME_DRIVER" not in driver_text:
+        if "ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER" not in driver_text:
             findings.append(
                 Finding(
                     relative(SMOKE_DRIVER_PATH),
                     0,
                     "runtime-driver-missing-explicit-opt-in",
-                    "ER_EFFECTS_ALLOW_RUNTIME_DRIVER missing",
-                    "The drive command must require ER_EFFECTS_ALLOW_RUNTIME_DRIVER=1 before any build/install/launch/attach side effect.",
+                    "ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER missing",
+                    "The drive command must require ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER=1 before any build/install/launch/attach side effect.",
                 )
             )
         if drive_index == -1 or guard_index == -1 or preflight_index == -1 or guard_index > preflight_index:
@@ -336,8 +336,8 @@ def scan_contract() -> list[Finding]:
             snippet
             for snippet in (
                 "VISUAL_RESOURCE_MUTATION_ENVS",
-                "ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX",
-                "ER_EFFECTS_TITLE_05_000_MEMORY_GFX",
+                "ER_QUICKLOAD_TITLE_RESOURCE_MEMORY_GFX",
+                "ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX",
                 "visual_resource_mutation_envs_set",
                 "RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)",
             )

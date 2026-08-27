@@ -5,7 +5,7 @@ export const meta = {
 }
 
 const GHIDRA = [
-  'GHIDRA ACCESS (er-effects-rs, /home/choza/projects/er-effects-rs):',
+  'GHIDRA ACCESS (er-quickload, /home/choza/projects/er-mods-rs):',
   '- scripts/ghidra-query.sh <PostScript>.java [args] runs analyzeHeadless on /home/banon/ghidra_maporch/proj program ermaporch (1.16.1 runtime dump, real symbols/types), about 5s. Reusable Java postScripts go in scripts/ghidra/ (examples: DecompAddr.java, DecompAt.java, XrefsToAddr.java, StructAt.java, FindFieldWrite.java, FindFieldAccess.java). Batch all decompiles for one question into ONE script.',
   '- Dump is for SEMANTICS (names, decompiled C, struct layouts). Decompile by dump VA directly.',
   '- If the project is LOCKED (user GUI open): try Ghidra MCP tools (ghidra_decompile_function_by_address, xrefs) before offline disasm; use scripts/disas-deobf.sh / er_disasm only as last resort.',

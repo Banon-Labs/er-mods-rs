@@ -24,7 +24,7 @@ allow if {
 
 deny contains message if {
 	input.env_gate_count > 0
-	message := "reload trace DLL must not contain std::env::var or ER_EFFECTS_* runtime env gates"
+	message := "reload trace DLL must not contain std::env::var or ER_QUICKLOAD_* runtime env gates"
 }
 
 deny contains message if {

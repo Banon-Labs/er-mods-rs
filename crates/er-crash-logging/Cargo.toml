@@ -1,6 +1,6 @@
 # Thin ME3-loadable shell for the reusable er-crash-logging-core crate.
 # Ships as a standalone native DLL that can be listed beside ersc.dll to capture
-# process crash breadcrumbs without loading the product er-effects DLL.
+# process crash breadcrumbs without loading the product er-quickload DLL.
 [package]
 name = "er-crash-logging"
 version = "0.1.0"

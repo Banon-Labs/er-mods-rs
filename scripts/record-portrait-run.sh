@@ -5,7 +5,7 @@
 set -u
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
-OUT=${ER_EFFECTS_PORTRAIT_VIDEO_OUT:-"$REPO_ROOT/target/portrait-video"}
+OUT=${ER_QUICKLOAD_PORTRAIT_VIDEO_OUT:-"$REPO_ROOT/target/portrait-video"}
 # Clear IN PLACE (do NOT rm -rf the dir -- that swaps the inode and any open file-manager window goes empty).
 mkdir -p "$OUT/frames"
 rm -f "$OUT"/frames/*.jpg "$OUT"/run-60fps-native.mkv "$OUT"/*.log 2>/dev/null || true

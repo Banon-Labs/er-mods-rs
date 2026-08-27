@@ -2,8 +2,8 @@
 # Autonomous repeatable-multi-save-load PROOF runner (docs/goals/repeatable-multi-save-load-acceptance.md).
 #
 # Composes the proven pieces into ONE push-button run:
-#   1. resolves GAME_DIR (the Linux dir the game's er-effects.toml + control files live in);
-#   2. stages the boot er-effects.toml (save_file+slot) so the initial auto-load is a chosen character
+#   1. resolves GAME_DIR (the Linux dir the game's er-quickload.toml + control files live in);
+#   2. stages the boot er-quickload.toml (save_file+slot) so the initial auto-load is a chosen character
 #      loaded read-only via the save_redirect DirectFile in-memory redirect;
 #   3. arms the System->Quit switch autopilot + the switch-count control file for N back-to-back
 #      genuine cross-character reloads (FIX: the arm-while-player-present discriminator lets these
@@ -29,7 +29,7 @@ BOOT_SLOT="${BOOT_SLOT:-4}"                    # boot a slot NOT in TARGET_SLOTS
 TARGET_SLOTS="${TARGET_SLOTS:-0,1,2}"
 SWITCHES="$(python3 -c "import sys;print(len([x for x in '$TARGET_SLOTS'.replace(',',' ').split()]))")"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/multi-save-load-$(date +%Y%m%d-%H%M%S)}"
-BUILT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+BUILT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 
 fail() { echo "run-multi-save-load-proof: $*" >&2; exit 2; }
 
@@ -60,11 +60,11 @@ echo "boot: $BOOT_FILE slot=$BOOT_SLOT ; switches=$SWITCHES ; artifacts=$ARTIFAC
 
 # This box: WSL2 + Windows-native Steam. The game is loaded by the WINDOWS me3.exe with a .me3
 # profile; the Linux run-product-continue-direct-probe.sh (--steam-dir) does not apply here. The DLL
-# reads er-effects.toml + control files from game_directory_path() (= GAME_DIR) and writes telemetry/
+# reads er-quickload.toml + control files from game_directory_path() (= GAME_DIR) and writes telemetry/
 # debug log there, so we stage into GAME_DIR and monitor GAME_DIR.
 ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
 [[ -f "$ME3" ]] || fail "Windows me3.exe not found at $ME3 (set ME3=<path to me3.exe>)"
-DLL_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
+DLL_GAMEDIR="$GAME_DIR/er_quickload.dll"
 
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
 
@@ -75,23 +75,23 @@ PROFILE="$ARTIFACT_DIR/multi-save-load.me3"
 echo "staged DLL -> $DLL_GAMEDIR ; profile -> $PROFILE"
 
 # --- 2. boot TOML (in-memory read-only redirect) in GAME_DIR (back up the existing one) ---
-[[ -f "$GAME_DIR/er-effects.toml" ]] && cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
-{ echo "# staged by run-multi-save-load-proof.sh for the initial auto-load"; echo "save_file = '$(win_path "$BOOT_FILE")'"; echo "slot = $BOOT_SLOT"; } > "$GAME_DIR/er-effects.toml"
+[[ -f "$GAME_DIR/er-quickload.toml" ]] && cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
+{ echo "# staged by run-multi-save-load-proof.sh for the initial auto-load"; echo "save_file = '$(win_path "$BOOT_FILE")'"; echo "slot = $BOOT_SLOT"; } > "$GAME_DIR/er-quickload.toml"
 echo "staged boot TOML (save_file=$(win_path "$BOOT_FILE") slot=$BOOT_SLOT)"
 
 # --- 3. autopilot + switch-count + target-slots control files in GAME_DIR ---
 # PROGRAMMATIC mode (default): the monitor drives each reload by writing the next slot to the DLL
-# control file er-effects-switch-slot.txt (the DLL polls it in-world and arms a menu-free switch --
+# control file er-quickload-switch-slot.txt (the DLL polls it in-world and arms a menu-free switch --
 # zero simulated input). Start from a clean slate so no stale request fires. The legacy simulated-input
 # autopilot markers are only armed when DRIVE_MODE=autopilot.
-SWITCH_SLOT_FILE="$GAME_DIR/er-effects-switch-slot.txt"
-SWITCH_FILE_OVERRIDE="$GAME_DIR/er-effects-switch-save-file.txt"  # cross-file: target save FILE per switch
+SWITCH_SLOT_FILE="$GAME_DIR/er-quickload-switch-slot.txt"
+SWITCH_FILE_OVERRIDE="$GAME_DIR/er-quickload-switch-save-file.txt"  # cross-file: target save FILE per switch
 rm -f "$SWITCH_SLOT_FILE" "$SWITCH_FILE_OVERRIDE" 2>/dev/null
 if [[ "${DRIVE_MODE:-programmatic}" == "autopilot" ]]; then
-  printf '1\n' > "$GAME_DIR/er-effects-system-quit-repro.txt"
-  printf '1\n' > "$GAME_DIR/er-effects-system-quit-load-switch.txt"
-  printf '%s\n' "$SWITCHES" > "$GAME_DIR/er-effects-sq-target-switches.txt"
-  printf '%s\n' "$TARGET_SLOTS" > "$GAME_DIR/er-effects-sq-target-slots.txt"
+  printf '1\n' > "$GAME_DIR/er-quickload-system-quit-repro.txt"
+  printf '1\n' > "$GAME_DIR/er-quickload-system-quit-load-switch.txt"
+  printf '%s\n' "$SWITCHES" > "$GAME_DIR/er-quickload-sq-target-switches.txt"
+  printf '%s\n' "$TARGET_SLOTS" > "$GAME_DIR/er-quickload-sq-target-slots.txt"
   echo "armed AUTOPILOT markers (switches=$SWITCHES; target-slots=[$TARGET_SLOTS])"
 else
   echo "PROGRAMMATIC drive: monitor will write reload slots to $SWITCH_SLOT_FILE (target-slots=[$TARGET_SLOTS])"
@@ -100,10 +100,10 @@ fi
 cleanup() {
   taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
   taskkill.exe /F /IM me3.exe >/dev/null 2>&1
-  rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
-        "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
+  rm -f "$GAME_DIR/er-quickload-system-quit-repro.txt" "$GAME_DIR/er-quickload-system-quit-load-switch.txt" \
+        "$GAME_DIR/er-quickload-sq-target-switches.txt" "$GAME_DIR/er-quickload-sq-target-slots.txt" \
         "$SWITCH_SLOT_FILE" "$SWITCH_FILE_OVERRIDE" 2>/dev/null
-  [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+  [[ -f "$ARTIFACT_DIR/er-quickload.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-quickload.toml.bak" "$GAME_DIR/er-quickload.toml"
 }
 trap cleanup EXIT
 
@@ -143,7 +143,7 @@ print(f'read-only baseline: {len(snap)} source saves snapshotted')
 "
 
 # --- 6. record debug-log start offset (shared append-log), launch via Windows me3.exe, monitor GAME_DIR ---
-OFFSET="$(stat -c%s "$GAME_DIR/er-effects-autoload-debug.log" 2>/dev/null || echo 0)"
+OFFSET="$(stat -c%s "$GAME_DIR/er-quickload-autoload-debug.log" 2>/dev/null || echo 0)"
 echo "launching ER via Windows me3.exe (offline) ..."
 "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" > "$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 LAUNCH_PID=$!
@@ -179,10 +179,10 @@ else
 fi
 
 # capture my-run artifacts before teardown clears markers
-cp -f "$GAME_DIR/er-effects-telemetry.json" "$ARTIFACT_DIR/er-effects-telemetry.json" 2>/dev/null
+cp -f "$GAME_DIR/er-quickload-telemetry.json" "$ARTIFACT_DIR/er-quickload-telemetry.json" 2>/dev/null
 python3 -c "
 off=$OFFSET
-with open('$GAME_DIR/er-effects-autoload-debug.log','rb') as f: f.seek(off); d=f.read()
+with open('$GAME_DIR/er-quickload-autoload-debug.log','rb') as f: f.seek(off); d=f.read()
 open('$ARTIFACT_DIR/my-run-debug.log','wb').write(d)
 " 2>/dev/null
 # --- read-only invariant assertion (acceptance SS5): every source save's mtime+size must be unchanged ---

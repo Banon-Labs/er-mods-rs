@@ -168,7 +168,7 @@ def changed_rust_files() -> list[str]:
 
 def base_ref_path(path: str) -> str:
     """Map the relocated runtime crate back to its historical root-src path."""
-    prefix = "crates/er-effects-rs/src/"
+    prefix = "crates/er-quickload/src/"
     if path.startswith(prefix):
         return "src/" + path[len(prefix) :]
     return path
@@ -407,8 +407,8 @@ def read_repo_text(path: str) -> str:
 
 
 def deleted_const_is_proven(path: str, name: str, old_const: ConstantDef, new_source: str) -> bool:
-    lib = read_repo_text("crates/er-effects-rs/src/lib.rs")
-    telemetry = read_repo_text("crates/er-effects-rs/src/telemetry.rs")
+    lib = read_repo_text("crates/er-quickload/src/lib.rs")
+    telemetry = read_repo_text("crates/er-quickload/src/telemetry.rs")
     combined = new_source + "\n" + lib + "\n" + telemetry
     if name in combined:
         return False
@@ -430,7 +430,7 @@ def deleted_const_is_proven(path: str, name: str, old_const: ConstantDef, new_so
             "pub(crate) fn runtime_heap_allocator_ptr_or_null()" in lib
             and "DLAllocator::runtime_heap_allocator()" in lib
         )
-    if path in {"src/telemetry.rs", "crates/er-effects-rs/src/telemetry.rs"} and name == "NOW_LOADING_UNKNOWN":
+    if path in {"src/telemetry.rs", "crates/er-quickload/src/telemetry.rs"} and name == "NOW_LOADING_UNKNOWN":
         sentinel = re.search(r"const\s+READ_FAIL_SENTINEL:\s+i32\s*=\s*(-?\d+)\s*;", telemetry)
         return sentinel is not None and int(sentinel.group(1)) == old_const.value
     return False

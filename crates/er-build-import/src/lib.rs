@@ -1,8 +1,8 @@
-//! ME3 shell that runs the `er-effects.toml` build once, at character load -- import, export, or
+//! ME3 shell that runs the `er-quickload.toml` build once, at character load -- import, export, or
 //! both.
 //!
 //! All of the work lives in `er-build-import-runtime`; this crate is the standalone trigger for it.
-//! The product DLL (`er-effects-rs`) drives the SAME runtime from its System>Quit "Load Build from
+//! The product DLL (`er-quickload`) drives the SAME runtime from its System>Quit "Load Build from
 //! URL" row instead, so the two must never share a profile -- see `scripts/me3-dll-conflicts.toml`.
 //!
 //! Nothing here sleeps: `DllMain` spawns two threads and returns, the fetch blocks in WinHTTP, and
@@ -66,7 +66,7 @@ fn module_path() -> Option<PathBuf> {
 
 /// The DLL-adjacent per-run overlay: `<this dll's stem>.toml`.
 ///
-/// A file the caller who staged this run owns, rather than the game-directory `er-effects.toml`,
+/// A file the caller who staged this run owns, rather than the game-directory `er-quickload.toml`,
 /// which belongs to the player. A harness that rewrote the player's config to arm itself would be
 /// a harness nobody could safely run twice.
 fn sidecar_path() -> Option<PathBuf> {

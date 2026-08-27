@@ -1,7 +1,7 @@
 // STEP_LoadListWait GATE TRACE -- which of the three conditions blocks the DLC virtual-root refill.
 //
 // MOVED VERBATIM out of the product DLL's
-// `crates/er-effects-rs/src/experiments/startup_hooks/diagnostics/loadlist_wait_trace.rs` on
+// `crates/er-quickload/src/experiments/startup_hooks/diagnostics/loadlist_wait_trace.rs` on
 // 2026-08-25. There it was installed UNCONDITIONALLY at process attach, on a step that runs every
 // frame, for a log nothing in the product read back. The verdict logic, the short-circuit order and
 // every log string are unchanged; only the sink moved and the counters are now this crate's own.

@@ -1,6 +1,6 @@
 //! Rebuild EVERY live `CS::ProfileSummary` record from one save container's own bytes.
 //!
-//! Moved from er-effects-rs `experiments/startup_hooks/quit_menu/save_swap_profile_table.rs`, whose
+//! Moved from er-quickload `experiments/startup_hooks/quit_menu/save_swap_profile_table.rs`, whose
 //! remaining half (the System>Quit preview's snapshot/backout bookkeeping and the renderer refresh)
 //! stayed behind with the menu it belongs to. This is the transport both callers share: the
 //! System>Quit foreign-save preview, and the boot autoload's re-read of a picked container.

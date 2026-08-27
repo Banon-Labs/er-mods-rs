@@ -1,5 +1,5 @@
 //! Reverse-engineered layout constants, hook-original slots, and observer statics moved
-//! from er-effects-rs (constants/anti_debug.rs, constants/stats_panel_text.rs,
+//! from er-quickload (constants/anti_debug.rs, constants/stats_panel_text.rs,
 //! constants/gaitem_restore.rs, experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs,
 //! experiments/startup_hooks/title_resources_stats_text.rs) in the portrait crate split.
 //! Values are byte-identical to the product originals; the product re-imports them

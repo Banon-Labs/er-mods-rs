@@ -1,6 +1,6 @@
 //! Post-release cover watch + in-game-menu open stamps + the log/telemetry clock map.
 //!
-//! Moved verbatim from er-effects-rs `telemetry/cover_after_release.rs` with the loading-cover
+//! Moved verbatim from er-quickload `telemetry/cover_after_release.rs` with the loading-cover
 //! crate extraction. The product functions it reads -- the debug-log sink, the JSON emitter, the
 //! log clock, the boot-view clock and the game's own cover-plate read -- cross the seam through
 //! [`crate::loading_cover_host`]; every call site keeps its original name.
@@ -71,7 +71,7 @@ const COVER_AFTER_RELEASE_WATCH_MS: u64 = 30_000;
 /// from the next.
 ///
 /// The job runs once per presented frame while that menu is up. Measured cadence in the shipped
-/// DLL's own log of a real session (2026-08-22 11:41:30, game-dir `er-effects-autoload-debug.log`):
+/// DLL's own log of a real session (2026-08-22 11:41:30, game-dir `er-quickload-autoload-debug.log`):
 /// 47-62 ms apart early, 21-23 ms apart later -- i.e. the frame period at ~16 fps and ~45 fps. One
 /// second is more than an order of magnitude above that, so a slow frame or a hitch cannot be
 /// mistaken for the menu having closed and reopened.

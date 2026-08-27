@@ -3,7 +3,7 @@
 
 Nothing here touches shared state. The profile is a fresh temp file the run owns outright,
 and the save selection goes into `<dll-stem>.toml` beside the staged DLL rather than into the
-game directory's `er-effects.toml` -- which is hand-edited, shared across every launch, and
+game directory's `er-quickload.toml` -- which is hand-edited, shared across every launch, and
 outlives every run.
 
 ersc.dll IS ALWAYS LISTED
@@ -45,7 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXIT_OK = 0
 EXIT_ERROR = 1
 
-PRODUCT_ARTIFACT = "er_effects_rs.dll"
+PRODUCT_ARTIFACT = "er_quickload.dll"
 
 # The evidence class every random-save run carries. AGENTS.md's 2026-07-08 standing order
 # deprecates the explicit-save-source path for release/autoload validation, and picking a
@@ -72,7 +72,7 @@ def sha256_of(path: Path) -> str:
 
 
 def sidecar_for(dll: Path) -> Path:
-    """`er_effects_rs.dll` -> `er_effects_rs.toml`, matching `config.rs::sidecar_config_path`."""
+    """`er_quickload.dll` -> `er_quickload.toml`, matching `config.rs::sidecar_config_path`."""
     return dll.with_suffix(".toml")
 
 
@@ -171,8 +171,8 @@ def render_sidecar(save: dict | None, run_id: str, use_default_save: bool) -> st
     lines = [
         f"# GENERATED per-run overlay for run {run_id} -- scripts/er-gen-me3-profile.py",
         "#",
-        "# Read by er-effects-rs from beside the loaded DLL and OVERLAID onto the",
-        "# game-directory er-effects.toml key by key. Your own settings there",
+        "# Read by er-quickload from beside the loaded DLL and OVERLAID onto the",
+        "# game-directory er-quickload.toml key by key. Your own settings there",
         "# (os_native_save_picker, preferred_save_picker_dir, boot_background_image)",
         "# are untouched -- only the keys below are overridden, and only for this run.",
         "",
@@ -265,12 +265,12 @@ def selftest() -> int:
         print(("  ok   " if condition else "  FAIL ") + label)
 
     check(
-        sidecar_for(Path("/x/er_effects_rs.dll")) == Path("/x/er_effects_rs.toml"),
+        sidecar_for(Path("/x/er_quickload.dll")) == Path("/x/er_quickload.toml"),
         "the sidecar name is derived from the DLL, matching config.rs::sidecar_config_path",
     )
     check(
-        sidecar_for(Path("/x/er_effects_rs.dll")).name != "er-effects.toml",
-        "the sidecar cannot collide with the legacy DLL-adjacent er-effects.toml",
+        sidecar_for(Path("/x/er_quickload.dll")).name != "er-quickload.toml",
+        "the sidecar cannot collide with the legacy DLL-adjacent er-quickload.toml",
     )
 
     closure = {
@@ -278,7 +278,7 @@ def selftest() -> int:
         "merge_base": "b" * 40,
         "base_ref": "origin/main",
         "dirty": True,
-        "artifacts": ["er_effects_rs.dll"],
+        "artifacts": ["er_quickload.dll"],
         "excluded": [
             {
                 "artifact": "er_loading_portrait.dll",
@@ -299,7 +299,7 @@ def selftest() -> int:
 
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
-        dll = tmp / "er_effects_rs.dll"
+        dll = tmp / "er_quickload.dll"
         dll.write_bytes(b"MZ fake")
         text = render_profile(
             closure, save, [dll], "r-test", tmp / "ersc.dll", EVIDENCE_EXPLICIT, sidecar_for(dll)

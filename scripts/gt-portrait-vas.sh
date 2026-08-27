@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ground-truth deobf VAs for the now-loading portrait-cover bind path.
-cd /home/banon/projects/er-effects-rs
+cd /home/banon/projects/er-mods-rs
 echo "=== CreateTpfResCap (reverse deobf 0x140b83680) ==="
 python3 scripts/dump-deobf-shift.py --reverse 0x140b83680 2>&1 | tail -5
 echo "=== FUN_140b83ec0 (reverse deobf 0x140b83dd0) ==="

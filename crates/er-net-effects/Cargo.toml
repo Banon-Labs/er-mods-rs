@@ -17,7 +17,7 @@ er-hotkey-config = { path = "../er-hotkey-config" }
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
-er-effects-data = { path = "../effects-data" }
+er-quickload-data = { path = "../effects-data" }
 er-hook = { path = "../er-hook" }
 # Tier A only (zero external deps): the fresh-per-process log writer, so the run log and the
 # crash-telemetry log each describe exactly one run.

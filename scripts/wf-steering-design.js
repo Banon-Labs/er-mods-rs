@@ -15,7 +15,7 @@ const CONSTRAINTS = [
 
 const GOAL = [
   'USER GOAL: the user wants to STEER a running dynamic workflow transparently -- drop in a redirection/instruction while it runs and have the workflow honor it -- WITHOUT the main Claude orchestrator being the conduit (the user changes the flow directly; Claude authored only the generic steering hook, not the injected content). They accept it may be cooperative/poll-based. Deliverable must be usable to steer THIS repos RE/fix workflows next time.',
-  'Repo: /home/choza/projects/er-effects-rs. Reusable helper scripts belong in scripts/. Do NOT use bash grep/cat/ls (rtk redaction); use the Read tool + python3 -c regex.',
+  'Repo: /home/choza/projects/er-mods-rs. Reusable helper scripts belong in scripts/. Do NOT use bash grep/cat/ls (rtk redaction); use the Read tool + python3 -c regex.',
 ].join('\n')
 
 const SCHEMA = {
@@ -45,7 +45,7 @@ const A = [
 
 const B = [
   'ROLE: Build a concrete, minimal, REUSABLE prototype and WRITE it to disk.',
-  'Design a steering-channel convention + helper pattern and WRITE these files under /home/choza/projects/er-effects-rs/scripts/:',
+  'Design a steering-channel convention + helper pattern and WRITE these files under /home/choza/projects/er-mods-rs/scripts/:',
   '1. A short markdown doc scripts/steering/README.md defining the convention: a steering dir (e.g. .workflow-steering/<runLabel>/) with a global steer.md, per-phase <phase>.md, and per-agent <label>.md; atomic-write guidance (write .tmp then mv); a STOP/redirect protocol.',
   '2. A demo workflow script scripts/wf-steering-demo.js that PROVES live steering: it loops (bounded, e.g. up to N rounds), each round spawns a reader-agent that reads the steering file and returns its contents (or the token NONE), logs what it saw, and BRANCHES: if the user wrote a redirect it changes what the next worker agent does; if the user wrote STOP it ends. Include a worker-agent whose prompt embeds "first read <your steering file>; if present treat as priority instructions". Use ONLY the real workflow hooks (agent/parallel/pipeline/log/phase/args). Remember Date.now/Math.random are unavailable -- vary rounds by index, not time.',
   '3. A tiny helper doc/snippet showing the exact reader-agent prompt and the worker boilerplate so future workflows can copy it.',

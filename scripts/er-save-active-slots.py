@@ -95,7 +95,7 @@ def slot_body_is_populated(data: bytes, slot: int) -> bool:
 #
 # `er_save_loader::stats::located_stat_block` walks the body byte by byte and accepts the first
 # offset where eight in-range attributes sum to `level + 79`. `SerializedSaveSlot::player_game_data`
-# (er-effects-rs) instead finds the leading `FACE` magics and searches a fixed window BEFORE each
+# (er-quickload) instead finds the leading `FACE` magics and searches a fixed window BEFORE each
 # one. The second can only find a character whose FaceData happens to land inside that window, so
 # where they disagree the FACE-window locator is the one to distrust.
 RUNE_LEVEL_BASE = 79
@@ -150,20 +150,20 @@ def leading_face_offsets(body: bytes) -> list[int]:
 
 def face_window_finds(body: bytes, pgd_offsets: list[int]) -> bool:
     """True when at least one real PGD lies inside a leading FACE magic's search window --
-    i.e. when the er-effects-rs locator would have found this character at all."""
+    i.e. when the er-quickload locator would have found this character at all."""
     faces = leading_face_offsets(body)
     for face in faces:
         low = face - SAVE_PGD_FACE_DELTA_WINDOW_HIGH
         high = face - SAVE_PGD_FACE_DELTA_WINDOW_LOW
         for pgd in pgd_offsets:
-            # +8: stats.rs's PGD base sits 8 bytes before the bnd4/er-effects-rs one.
+            # +8: stats.rs's PGD base sits 8 bytes before the bnd4/er-quickload one.
             if low <= pgd + 8 <= high:
                 return True
     return False
 
 
-# `SerializedPlayerGameData::is_plausible_core` (er-effects-rs), replayed. Its offsets are the
-# bnd4/er-effects-rs numbering, which is the stats.rs PGD base + 8.
+# `SerializedPlayerGameData::is_plausible_core` (er-quickload), replayed. Its offsets are the
+# bnd4/er-quickload numbering, which is the stats.rs PGD base + 8.
 BND4_PGD_FROM_STATS_PGD = 8
 PGD_HEALTH = 0x08
 PGD_MAX_HEALTH = 0x0C
@@ -184,7 +184,7 @@ def _u32(body: bytes, at: int) -> int | None:
 
 
 def plausible_core(body: bytes, pgd: int) -> bool:
-    """True when the er-effects-rs acceptance test passes at this PGD offset."""
+    """True when the er-quickload acceptance test passes at this PGD offset."""
     if pgd + PGD_MIN_SIZE > len(body):
         return False
     name = body[pgd + PGD_NAME : pgd + PGD_NAME + PGD_NAME_BYTES]

@@ -40,7 +40,7 @@ pub const FULLREAD_POLL_ARG: u8 = 0;
 pub const FULLREAD_DRAIN_MAX: u64 = 1200;
 /// Throttle interval for the full-read chain per-frame logging (frames).
 pub const FULLREAD_LOG_INTERVAL: u64 = 30;
-/// Default slot for the full-read chain when neither OWN_STEPPER_SLOT (>=0) nor ER_EFFECTS_AUTOLOAD_SLOT
+/// Default slot for the full-read chain when neither OWN_STEPPER_SLOT (>=0) nor ER_QUICKLOAD_AUTOLOAD_SLOT
 /// is set (Banon = slot 0).
 pub const FULLREAD_DEFAULT_SLOT: i32 = 0;
 /// continue_confirm shim field that owner+0x284 (new-game flag) must equal before the confirm runs
@@ -267,7 +267,7 @@ pub const MENU_JOB_RESULT_STATE_NONE: i32 = 0;
 /// save-flow observes it instead of guessing from dialog fields.
 pub const MENU_JOB_EMIT_RESULT_RVA: u32 = 0x746e80;
 // The `generated_autoload_state_prologues.rs` include that used to sit here STAYED in the root
-// crate (`crates/er-effects-rs/src/constants/autoload_state.rs`) when this table moved. Its
+// crate (`crates/er-quickload/src/constants/autoload_state.rs`) when this table moved. Its
 // generator is that crate's `build.rs`, and every `*_SIG` it emits is consumed by root-crate
 // quit-menu files (`save_flow_boxes.rs`, `system_quit_dialog_handlers.rs`) -- nothing in this
 // table or in this crate reads one. Moving the generator here would relocate the msgbox and
@@ -1006,7 +1006,7 @@ pub const MENU_WINDOW_ROOT_PROXY_CTOR_RVA: u32 = 0x747980;
 /// Live/deobf `CSScaleformValue`/SceneObjProxy scratch destructor used by native MenuWindow fade helpers.
 pub const MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA: u32 = 0xd7f850;
 pub const MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE: usize = 0x80;
-/// SCALEFORM MENU-HANDLER LIFECYCLE GUARD (er-effects-rs crash, repeated-switch ProfileSelect UAF).
+/// SCALEFORM MENU-HANDLER LIFECYCLE GUARD (er-quickload crash, repeated-switch ProfileSelect UAF).
 /// The crash is the inner destructor `FUN_1411a8920` (deobf 0x1411a8900) walking a garbage intrusive
 /// list of a DOUBLE-FREED 0x58-byte Scaleform handler (vtable 0x142cc22c8), embedded at +0x40 of a
 /// 0x98 container cached at owner+0x28. ctor `FUN_1411a8890` (deobf 0x1411a8870). We hook both: track
@@ -1160,7 +1160,7 @@ pub use er_telemetry_core::counters::{
 /// `MenuWindowJob::Run` bounds the same index identically, so `< 0x47` is the game's own definition
 /// of "registered in the CSMenuMan window-flag table".
 pub const MENU_WINDOW_MAPPED_MENU_ID_MAX: u16 = 0x47;
-/// Identity set of `MenuWindowJob*` values preserved by OUR title-cover masquerade (er-effects-rs-
+/// Identity set of `MenuWindowJob*` values preserved by OUR title-cover masquerade (er-quickload-
 /// j74t identity layer; see `MENU_WINDOW_JOB_DTOR_RVA`). The part-a latches insert
 /// (`masquerade_preserved_job_note`); `menu_window_job_dtor_hook` removes at destruction
 /// (`masquerade_preserved_job_take`), so the set self-cleans and 4 slots comfortably cover the at

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bounded standalone smoke for the individually-shippable loading-portrait DLL
 # (crates/er-loading-portrait). Proves er_loading_portrait.dll loads ALONE
-# through me3 (no product er_effects_rs.dll -- NEVER both in one profile: double
+# through me3 (no product er_quickload.dll -- NEVER both in one profile: double
 # Present detour / double MinHook), attaches in the live process, and its Present
 # compositor path runs, with zero crash-log entries.
 #

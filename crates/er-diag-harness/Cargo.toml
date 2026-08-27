@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 # PRESENCE (no env var, no marker file), and omitted from a production profile.
 #
 # It exists because these three detours used to be installed UNCONDITIONALLY by the shipping
-# `er_effects_rs.dll` -- from `DllMain` -> `install_profile_and_system_quit_hooks` ->
+# `er_quickload.dll` -- from `DllMain` -> `install_profile_and_system_quit_hooks` ->
 # `install_system_quit_duplicate_button_hook`, with no gate at all. Every player was carrying a
 # detour on the sole `msbResCap` writer (fires once per MSB on every boot), on `STEP_LoadListWait`
 # (a per-frame step), and on the three DLC virtual-root entry points, purely so an agent could

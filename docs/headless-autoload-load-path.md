@@ -7,7 +7,7 @@ On-disk decrypted binary used as the disassembly oracle:
 `.rdata/.data VA = file_offset + 0x140000000`.
 
 This documents the runtime-validated path by which the injected DLL
-(`er_effects_rs.dll`, own-stepper mode) drives an otherwise-vanilla offline Elden
+(`er_quickload.dll`, own-stepper mode) drives an otherwise-vanilla offline Elden
 Ring from boot to a loaded, *correct* character, and the one remaining gap to full
 zero-input automation. Addresses are given so the flow can be labeled in Ghidra.
 

@@ -15,11 +15,11 @@ Artifacts (data only) go to /tmp; this source lives in-repo per script-authoring
 import subprocess, sys, time, json
 
 ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
-DLL = r"C:\Users\choza\build\y22i\guard\er-effects-rs\target\x86_64-pc-windows-msvc\release\er_effects_rs.dll"
+DLL = r"C:\Users\choza\build\y22i\guard\er-mods-rs\target\x86_64-pc-windows-msvc\release\er_quickload.dll"
 CWD = "/mnt/c/Users/choza/build/y22i"
 GAMEDIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-LOG = GAMEDIR + "/er-effects-autoload-debug.log"
-TELE = GAMEDIR + "/er-effects-telemetry.json"
+LOG = GAMEDIR + "/er-quickload-autoload-debug.log"
+TELE = GAMEDIR + "/er-quickload-telemetry.json"
 TASKLIST = "/mnt/c/Windows/System32/tasklist.exe"
 TASKKILL = "/mnt/c/Windows/System32/taskkill.exe"
 POLL_SECS = 3.0
@@ -33,7 +33,7 @@ def up(name):
 def run_start_offset():
     try:
         lines = open(LOG, encoding="utf-8", errors="replace").readlines()
-        idx = [i for i, l in enumerate(lines) if "er-effects log opened" in l]
+        idx = [i for i, l in enumerate(lines) if "er-quickload log opened" in l]
         return idx[-1] if idx else 0
     except FileNotFoundError:
         return 0

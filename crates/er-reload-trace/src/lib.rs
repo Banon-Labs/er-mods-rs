@@ -74,13 +74,13 @@ const HOOK_ORIGINAL_UNSET: usize = 0;
 
 type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
-/// C-ABI shape of the product DLL's `er_effects_union_register` export (crates/er-effects-rs/src/mh.rs).
+/// C-ABI shape of the product DLL's `er_effects_union_register` export (crates/er-quickload/src/mh.rs).
 /// (target_addr, handler, *mut orig_slot) -> 0 ok / -1 null-slot / positive MH_STATUS on failure.
 /// `TraceHookFn` is exactly the product's `UnionFn`, so our detours plug into its union unchanged.
 type UnionRegisterFn = unsafe extern "system" fn(usize, TraceHookFn, *mut usize) -> i32;
 
 /// The product DLL's module base name as me3 loads it (matched by base name, not full path).
-const PRODUCT_DLL_NAME: &[u8] = b"er_effects_rs.dll\0";
+const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
 const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
 /// Bounded wait for the product DLL to map + export the registrar (both natives load together under
 /// me3; this only covers install-thread ordering). ~3s at 50ms cadence.
@@ -908,7 +908,7 @@ fn install_hooks() {
         log_line(format_args!("install abort: game module base unresolved"));
         return;
     };
-    // CROSS-DLL HOOK UNION (2026-07-18, user-directed): when the product DLL (er_effects_rs.dll) is
+    // CROSS-DLL HOOK UNION (2026-07-18, user-directed): when the product DLL (er_quickload.dll) is
     // co-loaded, route EVERY trace hook through its `er_effects_union_register` export so a SINGLE
     // MinHook instance owns every address and our observers CHAIN with the product's own detours on
     // shared addresses (0xb0e180 continue-confirm, 0xb0d960 title-SetState, etc.). Two independent

@@ -41,7 +41,7 @@ if ($nativeCount -ne 2) { throw "expected exactly two native entries (ersc.dll +
 if ($packageCount -ne 0) { throw "expected zero package entries, got $packageCount" }
 if ($dllMentionCount -ne 1) { throw "expected exactly one er_net_effects mention, got $dllMentionCount" }
 if ($erscMentionCount -ne 1) { throw "expected exactly one ersc.dll mention, got $erscMentionCount" }
-if ($profileText -match 'er_inventory_sort|er-cutscene-replacer|mushroom_man|er_effects_rs\.dll') {
+if ($profileText -match 'er_inventory_sort|er-cutscene-replacer|mushroom_man|er_quickload\.dll') {
   throw "isolated profile contains an unrelated native/package entry"
 }
 

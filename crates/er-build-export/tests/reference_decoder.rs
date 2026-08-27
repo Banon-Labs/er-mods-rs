@@ -27,7 +27,7 @@ const REFERENCE_JS_ENV: &str = "ER_LZUTF8_REFERENCE_JS";
 
 /// Where the extraction currently lives, when the environment says nothing. Session-local by
 /// nature -- set [`REFERENCE_JS_ENV`] rather than editing this.
-const DEFAULT_REFERENCE_JS: &str = "/tmp/claude-1000/-home-banon-projects-er-effects-rs/8d5dd91e-259b-4e1d-a494-54b1e1472bfe/scratchpad/planner/lzutf8_extract.js";
+const DEFAULT_REFERENCE_JS: &str = "/tmp/claude-1000/-home-banon-projects-er-mods-rs/8d5dd91e-259b-4e1d-a494-54b1e1472bfe/scratchpad/planner/lzutf8_extract.js";
 
 /// Seconds the script gives itself before bailing out.
 ///

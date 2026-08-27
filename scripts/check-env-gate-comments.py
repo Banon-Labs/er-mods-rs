@@ -4,7 +4,7 @@
 POLICY (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19)
 =========================================================================
 User directive: "we don't want any env gated features." An "env gate" is any read of
-`std::env::var("ER_EFFECTS_...")` in `crates/er-effects-rs/src/**/*.rs`. The former
+`std::env::var("ER_QUICKLOAD_...")` in `crates/er-quickload/src/**/*.rs`. The former
 grandfathering allowlists (`sanctioned_env_vars`, `sanctioned_env_gate_locations`,
 `baseline`) are DEPRECATED: they are kept in the baseline JSON only so their emptiness
 is explicit, and this checker FAILS if any of them is non-empty. With the behavioral
@@ -15,7 +15,7 @@ allowlist empty, EVERY env gate hard-fails UNLESS its exact stable key
 `diagnostic_gates` is the ONLY permitted exception and is reserved for genuinely
 diagnostic reads that change NO game behavior -- passive logging/telemetry/trace,
 read-only sampling, or a pure diagnostic OUTPUT-PATH / tuning override (e.g.
-`ER_EFFECTS_INPUT_TRACE`, `ER_EFFECTS_PROFILE`, `ER_EFFECTS_*_PATH`). A behavioral
+`ER_QUICKLOAD_INPUT_TRACE`, `ER_QUICKLOAD_PROFILE`, `ER_QUICKLOAD_*_PATH`). A behavioral
 feature must be DEFAULT behavior (gated only on a real runtime condition) or removed;
 it may never be re-added as an env gate. Adding a `diagnostic_gates` entry is a
 deliberate reviewed act that shows in the diff and must carry a justification.
@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+SRC_DIR = REPO_ROOT / "crates" / "er-quickload" / "src"
 # The er-loading-portrait-core feature crate is product DLL code (portrait crate split, 2026-07-29):
 # its env reads are policed exactly like the root crate's. Scanned only when SRC_DIR is the
 # real product tree, so the fixture-based regression tests stay hermetic.
@@ -51,7 +51,7 @@ DEPRECATED_ALLOWLIST_KEYS = (
     "baseline",
 )
 
-ENV_READ_RE = re.compile(r'std::env::var\(\s*"(ER_EFFECTS_[A-Za-z0-9_]*)"')
+ENV_READ_RE = re.compile(r'std::env::var\(\s*"(ER_QUICKLOAD_[A-Za-z0-9_]*)"')
 FN_DEF_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+)*fn\s+([A-Za-z0-9_]+)"
 )
@@ -267,7 +267,7 @@ def main() -> int:
     if findings:
         print("Env-gate policy violations found.", file=sys.stderr)
         print(
-            'Env feature gates (std::env::var("ER_EFFECTS_...")) are forbidden; only justified '
+            'Env feature gates (std::env::var("ER_QUICKLOAD_...")) are forbidden; only justified '
             "diagnostic reads listed in `diagnostic_gates` are allowed. "
             "See .auto/env_gate_comment_policy.rego.\n",
             file=sys.stderr,

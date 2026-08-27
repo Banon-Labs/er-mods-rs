@@ -299,14 +299,14 @@ fn an_out_of_range_position_is_reported_rather_than_silently_clamped() {
     assert!(plan.rejected[0].reason.contains("out of range"));
 }
 
-// ------------------------------------------------------------------ er-effects.toml `build_url`
+// ------------------------------------------------------------------ er-quickload.toml `build_url`
 
-/// The exact block `er-effects-rs`'s `boilerplate_config` writes into a fresh `er-effects.toml`,
+/// The exact block `er-quickload`'s `boilerplate_config` writes into a fresh `er-quickload.toml`,
 /// minus the picker block. This is the file a player actually edits, so the scanner is held to it
 /// rather than to a convenient shape: the commented example must NOT be read as a value, and the
 /// key must survive being surrounded by the other keys' comments.
 const PRODUCT_BOILERPLATE: &str = "\
-# er-effects-rs runtime config (auto-created next to the game executable).
+# er-quickload runtime config (auto-created next to the game executable).
 # All keys are optional; uncomment and edit as needed.
 #
 # save_file = 'C:\\path\\to\\ER0000.sl2'  # explicit read-only source

@@ -21,7 +21,7 @@ one, so `er-build-import-runtime` and `er-invasion-warp-telemetry` are left alon
 
 Usage: python3 scripts/rename-dll-crates.py [--apply] [--profiles-dir DIR]
        Default is a dry run that prints the file/line counts it would change.
-Env:   ER_EFFECTS_REPO_ROOT, ELDEN_PROFILES_DIR (default ~/Elden) override the defaults.
+Env:   ER_MODS_REPO_ROOT, ELDEN_PROFILES_DIR (default ~/Elden) override the defaults.
 """
 
 import os
@@ -148,7 +148,7 @@ def main() -> int:
         return 2
 
     root = os.environ.get(
-        "ER_EFFECTS_REPO_ROOT",
+        "ER_MODS_REPO_ROOT",
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
     profiles_dir = os.environ.get(

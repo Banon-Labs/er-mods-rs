@@ -1,6 +1,6 @@
 //! Standalone ME3-loadable loading-bar DLL shell.
 //!
-//! This is deliberately separate from the product `er-effects-rs` DLL. It proves
+//! This is deliberately separate from the product `er-quickload` DLL. It proves
 //! the loading-bar crate can be built and loaded as its own native DLL without
 //! dragging product hooks, autoload, save picking, portrait replacement, or
 //! product runtime state into the reusable crate. The D3D12 Present compositor

@@ -5,7 +5,7 @@
 //! marker file, the `er-input-harness` contract); omit it from the profile for production.
 //!
 //! WHY IT EXISTS. Five MinHook detours -- three traces' worth -- used to be installed
-//! UNCONDITIONALLY by the shipping `er_effects_rs.dll`, from `DllMain` ->
+//! UNCONDITIONALLY by the shipping `er_quickload.dll`, from `DllMain` ->
 //! `install_profile_and_system_quit_hooks` -> `install_system_quit_duplicate_button_hook`, with no
 //! gate of any kind:
 //!

@@ -1,5 +1,5 @@
 //! `CS::PlayerGameData` / `CS::GameDataMan` typed offsets moved from
-//! er-effects-rs constants/player_correctness.rs in the portrait crate split.
+//! er-quickload constants/player_correctness.rs in the portrait crate split.
 //! Bound to the upstream `eldenring` typed layout via `offset_of!` exactly as before.
 
 use eldenring::cs::{GameDataMan, PlayerGameData};

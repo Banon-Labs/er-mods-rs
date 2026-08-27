@@ -19,7 +19,7 @@
 //!   are read by the ROWS, so the row surface keeps them.
 //!
 //! A cross-call whose only consumers are inside this crate is a MOVE, not a seam entry (the
-//! 2026-07-30 rule that no extracted crate reaches back into `er-effects-rs`).
+//! 2026-07-30 rule that no extracted crate reaches back into `er-quickload`).
 
 use std::path::PathBuf;
 use std::sync::OnceLock;

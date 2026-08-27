@@ -7,11 +7,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DRIVE = ROOT / "crates/er-effects-rs/src/experiments/own_load/drive.rs"
-LOAD_DRIVE = ROOT / "crates/er-effects-rs/src/experiments/own_load/loaders/load_drive.rs"
-SWITCH_RELOAD = ROOT / "crates/er-effects-rs/src/experiments/own_load/loaders/switch_reload.rs"
-STATS = ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs"
-PATH_HOOKS = ROOT / "crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs"
+DRIVE = ROOT / "crates/er-quickload/src/experiments/own_load/drive.rs"
+LOAD_DRIVE = ROOT / "crates/er-quickload/src/experiments/own_load/loaders/load_drive.rs"
+SWITCH_RELOAD = ROOT / "crates/er-quickload/src/experiments/own_load/loaders/switch_reload.rs"
+STATS = ROOT / "crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs"
+PATH_HOOKS = ROOT / "crates/er-quickload/src/experiments/save_redirect/path_hooks.rs"
 SHARED = ROOT / "crates/er-save-redirect/src/lib.rs"
 CHECK_SH = ROOT / "scripts/check.sh"
 

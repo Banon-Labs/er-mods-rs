@@ -1,6 +1,6 @@
 //! Standalone ELDEN RING save-disable DLL.
 //!
-//! Deliberately decoupled from the product `er-effects-rs` cdylib: separate crate,
+//! Deliberately decoupled from the product `er-quickload` cdylib: separate crate,
 //! separate ME3 `[[natives]]` entry, separate log and telemetry files, no shared
 //! state. The product already manipulates save-adjacent state during System->Quit
 //! (it clears `CSMenuMan->disableSaveMenu` at +0x13c); keeping this DLL independent
@@ -20,7 +20,7 @@
 //! every native observer sees the state a real successful save leaves. Loads are
 //! untouched, so Continue and Load Game still read the real file.
 //!
-//! **NEVER load this DLL together with `er_effects_rs.dll` in one me3 profile.** The
+//! **NEVER load this DLL together with `er_quickload.dll` in one me3 profile.** The
 //! product DLL now installs the same `er-save-suppress` hooks itself; each DLL carries
 //! its own MinHook instance, so loading both would double-detour `0x140e6fb50` /
 //! `0x140e6e430` and corrupt each other's trampolines. The census probe profile stays

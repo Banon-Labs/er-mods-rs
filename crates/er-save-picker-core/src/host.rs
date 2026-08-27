@@ -5,7 +5,7 @@
 //! crate-internal wrappers bearing the EXACT names the moved code already calls.
 //!
 //! Every field below is one MEASURED outbound reference from the files this crate will
-//! own into the rest of `er-effects-rs`. Nothing else leaves the crate: drawing goes
+//! own into the rest of `er-quickload`. Nothing else leaves the crate: drawing goes
 //! through `er-loading-bar-core`, save-container parsing through `er-save-loader`, counters
 //! through `er-telemetry-core`.
 

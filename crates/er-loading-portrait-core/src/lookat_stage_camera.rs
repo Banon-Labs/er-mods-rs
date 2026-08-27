@@ -189,7 +189,7 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
 }
 
 /// DRAW-PHASE SWEEP diagnostic, run from a FrameBegin task (ticks every frame). Throttled: (1) re-read
-/// the live phase selector `er-effects-lookat-phase.txt` (a single integer index 0..LOOKAT_DRAW_PHASE_COUNT)
+/// the live phase selector `er-quickload-lookat-phase.txt` (a single integer index 0..LOOKAT_DRAW_PHASE_COUNT)
 /// into `PROFILE_LOOKAT_SELECTED_PHASE` so the active draw phase can be switched without recompiling; and
 /// (2) log each candidate phase's per-frame tick count + the draw count, so one run reveals which phases
 /// actually tick per-frame at the menu (the world-gated GameSceneDraw does not). No-op unless look-at is on.
@@ -246,10 +246,10 @@ pub fn profile_lookat_phase_diag_tick() {
     }
     let n = PROFILE_LOOKAT_PHASE_DIAG_COUNTER.fetch_add(1, Ordering::SeqCst);
     if n.is_multiple_of(60) {
-        // Live phase selector: a single integer in er-effects-lookat-phase.txt picks the active draw phase.
+        // Live phase selector: a single integer in er-quickload-lookat-phase.txt picks the active draw phase.
         let path = game_directory_path()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("er-effects-lookat-phase.txt");
+            .join("er-quickload-lookat-phase.txt");
         if let Ok(s) = std::fs::read_to_string(&path)
             && let Ok(idx) = s.trim().parse::<usize>()
             && idx < LOOKAT_DRAW_PHASE_COUNT

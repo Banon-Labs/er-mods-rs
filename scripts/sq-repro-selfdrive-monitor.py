@@ -25,21 +25,21 @@ import sys
 import time
 
 GAMEDIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-LOG = os.path.join(GAMEDIR, "er-effects-autoload-debug.log")
+LOG = os.path.join(GAMEDIR, "er-quickload-autoload-debug.log")
 ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
-BUILT_DLL = "/home/choza/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
-DEPLOY_DIR_WSL = "/mnt/c/Users/choza/er-effects-live"
-DEPLOY_DLL_WSL = os.path.join(DEPLOY_DIR_WSL, "er_effects_rs.dll")
-DEPLOY_DLL_WIN = r"C:\Users\choza\er-effects-live\er_effects_rs.dll"
+BUILT_DLL = "/home/choza/projects/er-mods-rs/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
+DEPLOY_DIR_WSL = "/mnt/c/Users/choza/er-quickload-live"
+DEPLOY_DLL_WSL = os.path.join(DEPLOY_DIR_WSL, "er_quickload.dll")
+DEPLOY_DLL_WIN = r"C:\Users\choza\er-quickload-live\er_quickload.dll"
 MARKERS = [
-    os.path.join(GAMEDIR, "er-effects-system-quit-repro.txt"),
-    # Select the PROFILE-LOAD-SWITCH mode. NOT er-effects-system-quit-allow-profile-load.txt: that
+    os.path.join(GAMEDIR, "er-quickload-system-quit-repro.txt"),
+    # Select the PROFILE-LOAD-SWITCH mode. NOT er-quickload-system-quit-allow-profile-load.txt: that
     # opt-in makes the ProfileSelect slot-activate FORWARD to the guarded native load instead of
     # DIRECT-ARMING the save-safe switch, so quickload_phase never advances and the switch never runs.
-    os.path.join(GAMEDIR, "er-effects-system-quit-load-switch.txt"),
+    os.path.join(GAMEDIR, "er-quickload-system-quit-load-switch.txt"),
     # STAY-ACTIVE: force ER's input-accept flag every tick (headless launch leaves the window
     # unfocused). Combined with the foreground-force + SendInput, this lets keyboard input route.
-    os.path.join(GAMEDIR, "er-effects-stay-active.txt"),
+    os.path.join(GAMEDIR, "er-quickload-stay-active.txt"),
 ]
 START_OFFSET = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 360

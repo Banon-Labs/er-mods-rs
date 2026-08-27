@@ -107,7 +107,7 @@ fn store_session(session: &Session) {
     let contents = serde_json::json!({
         "session": session.session_id,
         "user": session.user_id,
-        "note": "Anonymous er-build-planner account, made by er-effects-rs so shared builds have \
+        "note": "Anonymous er-build-planner account, made by er-quickload so shared builds have \
                  an owner. Delete this file to be given a new one.",
     });
     if let Err(err) = std::fs::write(&path, contents.to_string()) {

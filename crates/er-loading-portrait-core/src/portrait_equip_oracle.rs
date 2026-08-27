@@ -1,6 +1,6 @@
 //! Unsafe sampling + telemetry publication half of the loading-screen portrait armor oracle.
 //!
-//! Moved verbatim from er-effects-rs `experiments/startup_hooks/loading_cover/
+//! Moved verbatim from er-quickload `experiments/startup_hooks/loading_cover/
 //! portrait_equip_oracle.rs` with the loading-cover extraction. The pure classification logic it
 //! calls has lived in [`crate::portrait_equip`] since the portrait crate split; this is the half
 //! that reads live game memory and folds each frame into the per-window accumulators.

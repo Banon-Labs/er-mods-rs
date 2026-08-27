@@ -1,5 +1,5 @@
 //! The addresses and log budgets the three traces own, moved verbatim out of the product's
-//! `crates/er-effects-rs/src/constants/autoload_state.rs`.
+//! `crates/er-quickload/src/constants/autoload_state.rs`.
 //!
 //! They moved WITH the code rather than being copied: one game address must have exactly one
 //! literal declaration (`scripts/check-rva-alias-drift.py`), because divergent names for one

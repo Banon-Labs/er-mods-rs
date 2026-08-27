@@ -19,15 +19,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+SRC_ROOT = REPO_ROOT / "crates" / "er-quickload" / "src"
 # The er-loading-portrait-core feature crate is product render code linked into
-# er_effects_rs.dll (portrait crate split, 2026-07-29); it hosts native_overlay.rs and is
+# er_quickload.dll (portrait crate split, 2026-07-29); it hosts native_overlay.rs and is
 # scanned with the same Vulkan/Proton bans. Only scanned when SRC_ROOT is the real product
 # tree, so the fixture-based regression tests stay hermetic.
 PRODUCT_SRC_ROOT = SRC_ROOT
 PORTRAIT_SRC_ROOT = REPO_ROOT / "crates" / "er-loading-portrait-core" / "src"
 SCRIPTS_ROOT = REPO_ROOT / "scripts"
-DEFAULT_DLL = REPO_ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "er_effects_rs.dll"
+DEFAULT_DLL = REPO_ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "er_quickload.dll"
 
 BANNED_IMPORT_DLLS = {"vulkan-1.dll"}
 

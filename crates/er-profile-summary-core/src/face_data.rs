@@ -1,7 +1,7 @@
 //! `CS::FaceData` / `FaceDataBuffer` layout, and the two native copy helpers a ProfileSummary
 //! record's visual blocks must be filled through.
 //!
-//! Moved verbatim from er-effects-rs `constants/player_correctness.rs`, same values and the same
+//! Moved verbatim from er-quickload `constants/player_correctness.rs`, same values and the same
 //! doc comments -- the same move `CHR_ASM_*` already made into
 //! `er_loading_portrait_core::chr_asm_layout`. The root re-exports every name through its
 //! `constants.rs` glob, so the product's flat namespace is unchanged.

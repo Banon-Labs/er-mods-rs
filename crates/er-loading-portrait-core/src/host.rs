@@ -1,7 +1,7 @@
 //! The dependency-injection seam between this feature crate and its host DLL.
 //!
 //! The moved pipeline used to read product state (gates, slot resolution, logging, the
-//! shared boot-view rasterizer) directly out of the er-effects-rs flat namespace. Those
+//! shared boot-view rasterizer) directly out of the er-quickload flat namespace. Those
 //! reads now go through function pointers installed once at DLL attach via
 //! [`install_host`] (the same pattern as `er_d3d12_compositor::set_frame_provider`).
 //! Crate-internal wrapper fns keep the EXACT original names/signatures, so the moved code
@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use crate::layout::STATS_ATTR_COUNT;
 
 /// The rendered boot/loading frame: CPU RGBA plus where to place it on a `bw`x`bh`
-/// backbuffer. (Moved from er-effects-rs `experiments/gpu_readback/boot_progress.rs`;
+/// backbuffer. (Moved from er-quickload `experiments/gpu_readback/boot_progress.rs`;
 /// the product's shared boot-view rasterizer still constructs it, through the shim.)
 pub struct BootViewFrame {
     pub rgba: Vec<u8>,

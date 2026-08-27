@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Ban ending a turn on a claim that an artifact exists when nothing was written
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-UNBACKED-CLAIM

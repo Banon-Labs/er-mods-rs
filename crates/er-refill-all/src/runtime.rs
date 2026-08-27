@@ -37,7 +37,7 @@
 //! | scalar-deleting destructor | `0x1408d6430` | `(this, u64 flags) -> this` | vtable slot 1, this class only |
 //!
 //! Both are registered through [`er_hook::register_shared_hook`], which chains into
-//! `er_effects_rs.dll`'s single union when the product is co-loaded and uses this DLL's own union
+//! `er_quickload.dll`'s single union when the product is co-loaded and uses this DLL's own union
 //! when it is not -- so no handler can ever be silently dropped, here or in another mod.
 //!
 //! Per-frame work does not need a hook at all: it runs from a `CSTaskImp` `FrameBegin` task, the
@@ -145,7 +145,7 @@ pub(crate) fn install(base: usize) {
     // THROUGH THE UNION, NEVER A BARE `MhHook`. MinHook binds one detour per address, and the
     // second `MH_CreateHook` on an address gets `MH_ERROR_ALREADY_CREATED`: the loser reports
     // installed, never runs, and logs nothing. `register_shared_hook` chains into the product
-    // DLL's single union when `er_effects_rs.dll` is co-loaded and uses this DLL's own union when
+    // DLL's single union when `er_quickload.dll` is co-loaded and uses this DLL's own union when
     // it is not, so a standalone run behaves identically and no handler is ever dropped. Both
     // targets take integer arguments only, which is exactly what the union's four-`usize` ABI
     // models -- see the module header for why the `MenuWindow::Update` prologue could not be.

@@ -6,10 +6,10 @@ it is for no-auto-teardown user play sessions where the agent only needs to know
 when the game exits and to collect a semaphore timeline for post-run analysis.
 
 - Waits for eldenring.exe to appear (boot grace), then watches until it exits.
-- Every 2s stats the er-effects-* log files; records size/mtime changes as
+- Every 2s stats the er-quickload-* log files; records size/mtime changes as
   timestamped events so post-run analysis can correlate wall-clock time with
   log growth (e.g. "user was in the blank menu around HH:MM:SS").
-- Copies er-effects-telemetry.json to a numbered snapshot each time it changes,
+- Copies er-quickload-telemetry.json to a numbered snapshot each time it changes,
   building a semaphore timeline across the session.
 - Hard cap (default 3600s) so this background job can never go stale; if the
   cap fires while the game is still up, the caller restarts the watcher.
@@ -33,13 +33,13 @@ BLANK_THRESHOLD = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 BOOT_GRACE_SECONDS = 180
 
 FILES = [
-    "er-effects-telemetry.json",
-    "er-effects-autoload-debug.log",
-    "er-effects-continue-trace.log",
-    "er-effects-bootstrap.jsonl",
-    "er-effects-bootstrap-state.json",
-    "er-effects-crash-log.txt",
-    "er-effects-crash.log",
+    "er-quickload-telemetry.json",
+    "er-quickload-autoload-debug.log",
+    "er-quickload-continue-trace.log",
+    "er-quickload-bootstrap.jsonl",
+    "er-quickload-bootstrap-state.json",
+    "er-quickload-crash-log.txt",
+    "er-quickload-crash.log",
 ]
 
 
@@ -75,9 +75,9 @@ def teardown():
 
 def blank_detected_count():
     # RAM-read semaphore is the run-stopping oracle: the DLL's oracle_optionsetting_pane_blank_detected_count
-    # in er-effects-telemetry.json. Non-visual; fires the instant the blank Game Options pane reproduces.
+    # in er-quickload-telemetry.json. Non-visual; fires the instant the blank Game Options pane reproduces.
     try:
-        d = json.load(open(os.path.join(GAME, "er-effects-telemetry.json")))
+        d = json.load(open(os.path.join(GAME, "er-quickload-telemetry.json")))
         # REAL signal: healthy pane seen THEN went hidden (cannot false-fire on boot/preload).
         return int(d.get("oracle_optionsetting_real_blank_detected_count", 0))
     except (OSError, ValueError, json.JSONDecodeError):
@@ -164,7 +164,7 @@ while True:
     # RAM-semaphore run-stopping oracle: the instant the blank pane reproduces, capture + tear down.
     if seen_game and alive and BLANK_THRESHOLD >= 1 and blank_detected_count() >= BLANK_THRESHOLD:
         emit("blank_detected_semaphore", count=blank_detected_count())
-        p = os.path.join(GAME, "er-effects-telemetry.json")
+        p = os.path.join(GAME, "er-quickload-telemetry.json")
         try:
             shutil.copyfile(p, os.path.join(OUT, "telemetry-blank-detected.json"))
         except OSError:
@@ -190,7 +190,7 @@ while True:
                     size=cur[0] if cur else None,
                     mtime=ts(cur[1]) if cur else None,
                 )
-            if name == "er-effects-telemetry.json" and cur and not first:
+            if name == "er-quickload-telemetry.json" and cur and not first:
                 snap_idx += 1
                 try:
                     shutil.copyfile(

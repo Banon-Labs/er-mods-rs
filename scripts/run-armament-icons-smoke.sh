@@ -132,7 +132,7 @@ cp -f "$GAME_DIR/er-harness-drive-mode.txt" "$ARTIFACT_DIR/er-harness-drive-mode
 export ER_ARMAMENT_ICONS_FORCE_ICON="${FORCE_ICON:-}"
 export ER_ARMAMENT_ICONS_TARGET="${TARGET:-}"
 # NO save redirect: pure APPDATA vanilla save (whatever character is last-active).
-[[ -f "$GAME_DIR/er-effects.toml" ]] && mv -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
+[[ -f "$GAME_DIR/er-quickload.toml" ]] && mv -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
 # Sweep stale logs/markers so a prior run cannot pollute this one.
 rm -f "$GAME_DIR"/er-armament-icons.log "$GAME_DIR"/er-input-harness.log \
 	"$GAME_DIR"/er-input-harness-phases.jsonl "$GAME_DIR"/er-telemetry-timeseries.jsonl \
@@ -195,7 +195,7 @@ cleanup() {
 		done
 	done
 	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-icon.txt" "$GAME_DIR/er-armament-icons-target.txt" 2>/dev/null
-	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+	[[ -f "$ARTIFACT_DIR/er-quickload.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-quickload.toml.bak" "$GAME_DIR/er-quickload.toml"
 }
 trap cleanup EXIT
 
@@ -235,7 +235,7 @@ RC=$?
 # provenance + harness phases to the report it wrote.
 trap - EXIT
 rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-armament-icons-force-icon.txt" "$GAME_DIR/er-armament-icons-target.txt" 2>/dev/null
-[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+[[ -f "$ARTIFACT_DIR/er-quickload.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-quickload.toml.bak" "$GAME_DIR/er-quickload.toml"
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
 	for d in er_input_harness.dll er_telemetry.dll er_armament_icons.dll; do

@@ -3,7 +3,7 @@
 # (bd multi-dll-separate-crates-per-feature-single-me3-profile-2026-07-19). Sibling of
 # run-samechar-3x-twodll.sh; the difference is a THIRD native and NO env/marker arming.
 #
-#   1. er_effects_rs.dll         (PRODUCT): boot autoload = load1; owns the single MinHook instance +
+#   1. er_quickload.dll         (PRODUCT): boot autoload = load1; owns the single MinHook instance +
 #                                the er_effects_union_register export; its ProfileSelect hooks arm the
 #                                native reload from menu transitions.
 #   2. er_reload_trace.dll   (COMPANION, log-only): unions its load/menu trace hooks through the
@@ -20,7 +20,7 @@
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# SAVE SOURCE IS ALWAYS THE GAME'S DEFAULT APPDATA SAVE (staged-save/ER_EFFECTS_SAVE_FILE was
+# SAVE SOURCE IS ALWAYS THE GAME'S DEFAULT APPDATA SAVE (staged-save/ER_QUICKLOAD_SAVE_FILE was
 # deprecated 2026-07-08 and stripped from this harness). BOOT_FILE used to select a corpus save,
 # but nothing staged it anymore -- it was validated + echoed and silently ignored (observed
 # 2026-07-29: BOOT_FILE=100-Lilbro run mounted the APPDATA Banon save). Fail closed instead of lying.
@@ -32,7 +32,7 @@ if [[ -n "${BOOT_FILE:-}" ]]; then
 fi
 BOOT_SLOT="${BOOT_SLOT:-0}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/samechar-3x-threedll-$(date +%Y%m%d-%H%M%S)}"
-PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace.dll"
 HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.dll"
 # TELEMETRY (semaphore DLL): standalone read-side oracle -- writes er-telemetry-timeseries.jsonl with
@@ -41,8 +41,8 @@ HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.d
 # -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
 LAUNCH_ENV_VARS=(
-	"ER_EFFECTS_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-effects-autoload-debug.log"
-	"ER_EFFECTS_CRASH_LOG_PATH=$ARTIFACT_DIR/er-effects-crash.log"
+	"ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-quickload-autoload-debug.log"
+	"ER_QUICKLOAD_CRASH_LOG_PATH=$ARTIFACT_DIR/er-quickload-crash.log"
 )
 # RENDERDOC=1: the Windows RenderDoc DLL, loaded as a me3 native to hook ER's D3D12 device.
 RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
@@ -112,7 +112,7 @@ me3_profile_arg() {
 }
 
 # --- stage ALL THREE DLLs to GAME_DIR + a THREE-native me3 profile (product FIRST) ---
-PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
+PRODUCT_GAMEDIR="$GAME_DIR/er_quickload.dll"
 TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
 HARNESS_GAMEDIR="$GAME_DIR/er_input_harness.dll"
 TELEM_GAMEDIR="$GAME_DIR/er_telemetry.dll"
@@ -168,38 +168,38 @@ PROFILE="$ARTIFACT_DIR/samechar-3x-threedll.me3"
 # Use the current title/product direct-menu request path for the initial autoload, not the old
 # save_requested TOML route. The latter is now a known blocker for this proof: it sits at the hidden
 # title/fake-loading surface with requestCode=0 and never gets to a drawable/movable load1.
-[[ -f "$GAME_DIR/er-effects.toml" ]] && cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
-cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.effective" 2>/dev/null || true
+[[ -f "$GAME_DIR/er-quickload.toml" ]] && cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
+cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.effective" 2>/dev/null || true
 {
 	echo "slot=$BOOT_SLOT"
 	echo "method=direct_menu_load"
 	echo "require_title_bootstrap=false"
-} >"$GAME_DIR/er-effects-autoload.txt"
-cp -f "$GAME_DIR/er-effects-autoload.txt" "$ARTIFACT_DIR/autoload-request.txt"
-LAUNCH_ENV_VARS+=("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1")
+} >"$GAME_DIR/er-quickload-autoload.txt"
+cp -f "$GAME_DIR/er-quickload-autoload.txt" "$ARTIFACT_DIR/autoload-request.txt"
+LAUNCH_ENV_VARS+=("ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD=1")
 
 # NO env/marker arming: the input-harness DLL is enabled purely by its PRESENCE in the profile above.
 # Sweep any stale legacy sq-repro/probe markers so a prior run cannot pollute this one.
-rm -f "$GAME_DIR"/er-effects-system-quit-repro.txt "$GAME_DIR"/er-effects-system-quit-load-switch.txt \
-	"$GAME_DIR"/er-effects-sq-target-switches.txt "$GAME_DIR"/er-effects-sq-target-slots.txt \
-	"$GAME_DIR"/er-effects-prove-movement.txt "$GAME_DIR"/er-effects-stay-active.txt \
-	"$GAME_DIR"/er-effects-probe-foreground.txt "$GAME_DIR"/er-effects-input-trace.txt 2>/dev/null
+rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-system-quit-load-switch.txt \
+	"$GAME_DIR"/er-quickload-sq-target-switches.txt "$GAME_DIR"/er-quickload-sq-target-slots.txt \
+	"$GAME_DIR"/er-quickload-prove-movement.txt "$GAME_DIR"/er-quickload-stay-active.txt \
+	"$GAME_DIR"/er-quickload-probe-foreground.txt "$GAME_DIR"/er-quickload-input-trace.txt 2>/dev/null
 
 # Movement-proof gate: deterministic control-file reloads still wait for the product's in-DLL
 # can-move probe to inject a forward stick and prove Havok movement in each load epoch. This is proof-only
 # and absent from normal user sessions. Observe-only runs intentionally do not drive movement.
 if [[ "${OBSERVE_ONLY:-0}" != "1" && "${PROVE_MOVEMENT:-1}" == "1" ]]; then
-	printf '1\n' >"$GAME_DIR/er-effects-prove-movement.txt"
-	printf '1\n' >"$GAME_DIR/er-effects-stay-active.txt"
-	printf '1\n' >"$GAME_DIR/er-effects-input-trace.txt"
-	[[ "${PROBE_FOREGROUND:-0}" == "1" ]] && printf '1\n' >"$GAME_DIR/er-effects-probe-foreground.txt"
+	printf '1\n' >"$GAME_DIR/er-quickload-prove-movement.txt"
+	printf '1\n' >"$GAME_DIR/er-quickload-stay-active.txt"
+	printf '1\n' >"$GAME_DIR/er-quickload-input-trace.txt"
+	[[ "${PROBE_FOREGROUND:-0}" == "1" ]] && printf '1\n' >"$GAME_DIR/er-quickload-probe-foreground.txt"
 elif [[ "${PROVE_MOVEMENT:-1}" != "1" ]]; then
-	rm -f "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
+	rm -f "$GAME_DIR/er-quickload-prove-movement.txt" 2>/dev/null
 fi
 
 # --- CLEAN SLATE: recreate every log so no PRIOR run pollutes this one. ---
-rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-input-harness.log \
-	"$GAME_DIR"/er-effects-telemetry.json 2>/dev/null
+rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-input-harness.log \
+	"$GAME_DIR"/er-quickload-telemetry.json 2>/dev/null
 
 # SAFETY (bd never-blanket-kill-eldenring-killed-user-game-2026-07-22): capture the eldenring.exe/me3
 # PIDs that already exist BEFORE we launch (a user's live game, another agent's run) so teardown can
@@ -247,11 +247,11 @@ cleanup() {
 	for pid in $(native_pids_for me3); do
 		[[ " $PRE_NATIVE_ME3_PIDS " == *" $pid "* ]] || kill -TERM "$pid" >/dev/null 2>&1 || true
 	done
-	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+	[[ -f "$ARTIFACT_DIR/er-quickload.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-quickload.toml.bak" "$GAME_DIR/er-quickload.toml"
 	rm -f "$GAME_DIR/er-harness-drive-mode.txt" "$GAME_DIR/er-harness-force-drive.txt" \
-		"$GAME_DIR/er-effects-prove-movement.txt" "$GAME_DIR/er-effects-stay-active.txt" \
-		"$GAME_DIR/er-effects-probe-foreground.txt" "$GAME_DIR/er-effects-input-trace.txt" \
-		"$GAME_DIR/er-effects-autoload.txt" 2>/dev/null || true
+		"$GAME_DIR/er-quickload-prove-movement.txt" "$GAME_DIR/er-quickload-stay-active.txt" \
+		"$GAME_DIR/er-quickload-probe-foreground.txt" "$GAME_DIR/er-quickload-input-trace.txt" \
+		"$GAME_DIR/er-quickload-autoload.txt" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -309,7 +309,7 @@ if [[ "${OBSERVE_ONLY:-0}" == "1" ]]; then
 else
 	CAPTURE_ARGS+=(--require-reload-settled)
 	# DETERMINISTIC SWITCH DRIVER (2026-07-21, bd DETERMINISTIC-switch-trigger-recipe): drive each
-	# subsequent load by writing the product control file (er-effects-switch-slot.txt) once the prior
+	# subsequent load by writing the product control file (er-quickload-switch-slot.txt) once the prior
 	# load proves movement, instead of the flaky input-harness menu-nav. DRIVE_RELOAD_SLOTS default
 	# '0,0' = load2+load3 reload angrE slot 0 (the 3x-angrE goal); set DRIVE_RELOAD_SLOTS='' to fall
 	# back to the legacy menu-nav. DRIVE_CROSS_SAVE_FILE (Windows path to a NON-angrE .sl2/.co2) +
@@ -342,7 +342,7 @@ if [[ "${RENDERDOC:-0}" == "1" ]]; then
 		[[ -f "$r" ]] || continue
 		mv -f "$r" "$ARTIFACT_DIR/" && rdc_n=$((rdc_n + 1))
 	done
-	echo "== RenderDoc: $rdc_n .rdc capture(s) -> $ARTIFACT_DIR (0 = renderdoc.dll did not hook / TriggerCapture never fired -- check er-effects-telemetry oracle_renderdoc_captures)"
+	echo "== RenderDoc: $rdc_n .rdc capture(s) -> $ARTIFACT_DIR (0 = renderdoc.dll did not hook / TriggerCapture never fired -- check er-quickload-telemetry oracle_renderdoc_captures)"
 	if [[ -f "$GAME_DIR/er-antiarxan.txt" ]]; then
 		cp -f "$GAME_DIR/er-antiarxan.txt" "$ARTIFACT_DIR/"
 		echo "== antiarxan: $(cat "$GAME_DIR/er-antiarxan.txt")"
@@ -357,8 +357,8 @@ fi
 REL_DIR="$REPO_ROOT/target/x86_64-pc-windows-msvc/release"
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-	echo "dll_build_id: $(grep -oE 'dll:[0-9a-f]{6,}' "$ARTIFACT_DIR/er-effects-autoload-debug.log" 2>/dev/null | head -1 || echo '?')"
-	for d in er_effects_rs.dll er_reload_trace.dll er_input_harness.dll; do
+	echo "dll_build_id: $(grep -oE 'dll:[0-9a-f]{6,}' "$ARTIFACT_DIR/er-quickload-autoload-debug.log" 2>/dev/null | head -1 || echo '?')"
+	for d in er_quickload.dll er_reload_trace.dll er_input_harness.dll; do
 		if [[ -f "$REL_DIR/$d" ]]; then
 			echo "$d: mtime=$(date -r "$REL_DIR/$d" +%Y%m%d-%H%M%S 2>/dev/null) sha=$(sha256sum "$REL_DIR/$d" 2>/dev/null | cut -c1-16)"
 		fi

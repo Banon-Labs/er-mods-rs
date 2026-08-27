@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
-use er_effects_data::embedded_effects;
+use er_quickload_data::embedded_effects;
 use er_soulsformats::{ParamRowsResponse, SoulsFormats, recon::parse_recon_report};
 
 const PROGRAM_NAME: &str = "er-param-inspect";

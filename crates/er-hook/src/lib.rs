@@ -1,12 +1,12 @@
 //! Shared MinHook FFI wrapper + cross-DLL hook union.
 //!
-//! Extracted verbatim from `er-effects-rs/src/mh.rs` (consolidation only, behavior-preserving):
+//! Extracted verbatim from `er-quickload/src/mh.rs` (consolidation only, behavior-preserving):
 //! the MinHook-generic FFI (`MH_*` externs, `MH_STATUS`), the `MhHook` wrapper, and the hook union
 //! (`register_union_hook` + the cross-DLL chaining) now live here so the three game cdylibs share one
 //! copy and MinHook's C source is compiled once (build.rs) instead of in each crate.
 //!
 //! The product-specific `#[no_mangle] er_effects_union_register` C export is deliberately NOT here --
-//! it stays defined in `er-effects-rs` so only `er_effects_rs.dll` exports that cross-DLL symbol.
+//! it stays defined in `er-quickload` so only `er_quickload.dll` exports that cross-DLL symbol.
 // PARITY: this crate transcribes MinHook's C ABI, so its names, casing and the items it
 // declares-but-does-not-call are the upstream header's shape rather than this repo's.
 // A per-item allow would mean annotating essentially every line of a binding file.
@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // LOGGING SEAM. `mh.rs` logged union-chain and registry-collision events through the product DLL's
 // `telemetry::append_autoload_debug`. That sink is product-specific, so this shared crate calls
 // through a function pointer the product installs at startup via `set_hook_logger`. Default is a
-// no-op (no logger installed). `er-effects-rs` installs its telemetry sink in DllMain BEFORE any hook
+// no-op (no logger installed). `er-quickload` installs its telemetry sink in DllMain BEFORE any hook
 // is registered, so every line the old in-product union code emitted is still emitted, to the same
 // log. Crates that only use the raw `MH_*` externs (er-reload-trace, er-input-harness) never
 // touch the union and never install a logger; the seam stays inert for them.
@@ -187,7 +187,7 @@ pub unsafe fn register_union_hook(
 // `MH_ERROR_ALREADY_CREATED`: the loser reports installed, never runs, and every feature behind
 // it looks unimplemented -- nothing crashes and nothing logs an error.
 //
-// That is measured, not hypothetical. `er-effects-rs` and `er-armament-icons` both detour
+// That is measured, not hypothetical. `er-quickload` and `er-armament-icons` both detour
 // `TITLE_SCALEFORM_FILE_OPEN_RVA` (0x11ced80); in an eleven-native profile the product reported
 // `file_open_observer_installed = true` with `file_open_hits = 0` for an entire session and every
 // GFx swap it owns went silently vanilla, while the same build loaded ALONE reported 113 hits
@@ -201,7 +201,7 @@ pub unsafe fn register_union_hook(
 // ============================================================================
 
 /// C-ABI shape of the product DLL's `er_effects_union_register` export
-/// (`crates/er-effects-rs/src/mh.rs`): `(target, handler, *mut orig_slot) -> 0 ok | -1 null slot |
+/// (`crates/er-quickload/src/mh.rs`): `(target, handler, *mut orig_slot) -> 0 ok | -1 null slot |
 /// positive `MH_STATUS` on MinHook failure`.
 pub type UnionRegisterFn = unsafe extern "system" fn(usize, UnionFn, *mut usize) -> i32;
 
@@ -210,7 +210,7 @@ pub type UnionRegisterFn = unsafe extern "system" fn(usize, UnionFn, *mut usize)
 /// may be about to lose a trampoline race".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookRoute {
-    /// Chained into `er_effects_rs.dll`'s single union -- the product is co-loaded.
+    /// Chained into `er_quickload.dll`'s single union -- the product is co-loaded.
     ProductUnion,
     /// This DLL's own union -- the product is absent, or this IS the product.
     LocalUnion,
@@ -218,7 +218,14 @@ pub enum HookRoute {
 
 /// The product DLL as me3 loads it, matched by base name rather than by path.
 #[cfg(windows)]
-const PRODUCT_DLL_NAME: &[u8] = b"er_effects_rs.dll\0";
+const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
+// DELIBERATELY STILL `er_effects_`, after the 2026-08-26 rename of the crate to `er-quickload`
+// and the repo to `er-mods-rs`. This name is an ABI, not branding: seven crates resolve it out of
+// the product DLL by string through GetProcAddress, and users install these DLLs one at a time
+// from separate releases. Renaming it would make an already-downloaded `er_invasion_warp.dll`
+// fail to find the union next to a freshly built product, fall back to its own MinHook instance,
+// and corrupt the shared trampoline -- with nothing in any gate to say so. The exports that DID
+// move (`er_quickload_loading_screen_data`) have exactly one consumer, built in the same pass.
 #[cfg(windows)]
 const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
 
@@ -506,7 +513,7 @@ impl MhHook {
 }
 
 // ============================================================================
-// RAW CODE-PATCH PRIMITIVES (moved from `er-effects-rs/src/experiments/mem.rs`,
+// RAW CODE-PATCH PRIMITIVES (moved from `er-quickload/src/experiments/mem.rs`,
 // docs/plans/experiments-crate-targets.md S5). Behaviour-preserving move: the bodies are the
 // product's, and every log string is unchanged. They belong here because they are the same
 // "reach into the game image and rewrite bytes" capability MinHook itself provides, and both

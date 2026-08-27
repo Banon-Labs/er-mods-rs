@@ -1473,7 +1473,7 @@ pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> Sav
 ///
 /// The staleness sweep only ever deletes inside a directory carrying this component, so the
 /// constant is the containment proof as much as it is the path builder.
-pub const DIRECT_STAGE_ROOT_DIR_NAME: &str = "er-effects-save-redirect-stage";
+pub const DIRECT_STAGE_ROOT_DIR_NAME: &str = "er-quickload-save-redirect-stage";
 
 pub fn direct_stage_case_dirs(root: &Path) -> [PathBuf; 2] {
     [root.join("eldenring"), root.join("EldenRing")]
@@ -2174,7 +2174,7 @@ mod tests {
     #[test]
     fn plans_save_path_telemetry_kind_and_bucket() {
         let staged = wide_path(
-            r"Z:\tmp\er-effects-save-redirect-stage\eldenring\76561197960265729\ER0000.sl2",
+            r"Z:\tmp\er-quickload-save-redirect-stage\eldenring\76561197960265729\ER0000.sl2",
         );
         let plan = plan_save_path_telemetry(&staged);
         assert_eq!(plan.kind, SavePathKind::StageSaveFile);
@@ -2742,7 +2742,7 @@ mod tests {
             StagedEntryFate::Keep
         );
         assert_eq!(
-            staged_entry_fate("er-effects-autoload-debug.log", &staged),
+            staged_entry_fate("er-quickload-autoload-debug.log", &staged),
             StagedEntryFate::Keep
         );
     }
@@ -2750,7 +2750,7 @@ mod tests {
     #[test]
     fn stage_deletes_are_confined_to_the_private_stage_tree() {
         assert!(is_inside_direct_stage_root(Path::new(
-            "/home/u/save-files/125-Frenzy/er-effects-save-redirect-stage/eldenring/765/"
+            "/home/u/save-files/125-Frenzy/er-quickload-save-redirect-stage/eldenring/765/"
         )));
         assert!(!is_inside_direct_stage_root(Path::new(
             "/home/u/save-files/125-Frenzy"
@@ -2820,7 +2820,7 @@ mod tests {
         assert!(save_file_writeback_allowed(save, Some(default_root)));
 
         let staged = Path::new(
-            r"Z:\tmp\er-effects-save-redirect-stage\eldenring\76561197960265729\ER0000.sl2",
+            r"Z:\tmp\er-quickload-save-redirect-stage\eldenring\76561197960265729\ER0000.sl2",
         );
         assert!(!save_file_writeback_allowed(staged, Some(default_root)));
         assert!(!save_file_writeback_allowed(save, None));
@@ -2834,9 +2834,9 @@ mod tests {
             plan,
             SaveSourcePlan::DirectFile {
                 file: path,
-                stage_root: PathBuf::from("/tmp/picked/er-effects-save-redirect-stage"),
+                stage_root: PathBuf::from("/tmp/picked/er-quickload-save-redirect-stage"),
                 root_wide: WineRootWide(
-                    "Z:\\tmp\\picked\\er-effects-save-redirect-stage"
+                    "Z:\\tmp\\picked\\er-quickload-save-redirect-stage"
                         .encode_utf16()
                         .collect(),
                 ),

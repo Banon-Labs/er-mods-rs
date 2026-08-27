@@ -7,7 +7,7 @@ Two MinHook instances on one prologue overwrite each other's trampolines. The DL
 does not crash, does not log an error, and reports its hook as installed -- it simply never
 runs. Every feature behind that detour then looks unimplemented.
 
-That is not hypothetical. Measured 2026-08-23: `er-effects-rs` and `er-armament-icons` both
+That is not hypothetical. Measured 2026-08-23: `er-quickload` and `er-armament-icons` both
 detour the Scaleform file-open wrapper at `TITLE_SCALEFORM_FILE_OPEN_RVA` (0x11ced80). In an
 eleven-native profile the product DLL reported `file_open_observer_installed = true` and
 `file_open_hits = 0` for an entire session; the System>Quit tab rendered vanilla, the title
@@ -298,7 +298,7 @@ def selftest() -> int:
     # THE REGRESSION THIS GATE IS NAMED FOR -- and a NEGATIVE CONTROL for the gate itself.
     # Asserting only that the table lists the pair would pass even if the scan stopped finding
     # it, which is precisely how the first narrowing shipped green while detecting nothing.
-    measured = frozenset({"er-effects-rs", "er-armament-icons"})
+    measured = frozenset({"er-quickload", "er-armament-icons"})
     case("the measured pair is declared", measured in declared_pairs())
     crates = cdylib_crates()
     claims: dict[str, set[str]] = {}
@@ -307,7 +307,7 @@ def selftest() -> int:
             claims.setdefault(target, set()).add(crate_name)
     case(
         "the scan still SEES the measured pair",
-        {"er-effects-rs", "er-armament-icons"}
+        {"er-quickload", "er-armament-icons"}
         <= claims.get("TITLE_SCALEFORM_FILE_OPEN_RVA", set()),
     )
     # The pair is declared SHARED (co-loadable), not merely declared -- and the mechanism holds.

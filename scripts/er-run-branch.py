@@ -15,7 +15,7 @@ Pipeline, in order, each step refusing rather than guessing:
   5. SAVE -- scripts/er-pick-save.py. Random, but DECODED FIRST: the character's name, level
      and slot are known and printed before anything launches (AGENTS.md's Autoload Identity
      Launch Gate). `--seed` reproduces a pick exactly.
-  6. STAGE -- a temp .me3 plus a DLL-adjacent sidecar toml. The game-directory er-effects.toml
+  6. STAGE -- a temp .me3 plus a DLL-adjacent sidecar toml. The game-directory er-quickload.toml
      is never written.
   7. LAUNCH -- ~/Elden/launch.sh with ME3_PROFILE, detached into its own session.
   8. TESTIMONY -- the block is printed only after the DLL says, in its own debug log, that it
@@ -67,10 +67,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
 LAUNCHER = Path.home() / "Elden" / "launch.sh"
 PROFILE_DIR = Path.home() / "Elden"
-AUTOLOAD_LOG_NAME = "er-effects-autoload-debug.log"
+AUTOLOAD_LOG_NAME = "er-quickload-autoload-debug.log"
 # The log above belongs to THIS DLL and no other. The sidecar-testimony contract is only
 # available when it is loaded, because it is the only shell that reads the sidecar at all.
-PRODUCT_DLL_NAME = "er_effects_rs.dll"
+PRODUCT_DLL_NAME = "er_quickload.dll"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -234,7 +234,7 @@ def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float)
     """Weaker witness, for a run whose DLL set does not include the product shell.
 
     WHY THIS EXISTS. The sidecar line proves three things at once -- process up, our DLL in it,
-    our config read -- but only `er_effects_rs.dll` writes it, because it is the only shell that
+    our config read -- but only `er_quickload.dll` writes it, because it is the only shell that
     reads the sidecar. Once the launcher/watchdog/guard work merged to main, the closure started
     selecting DLL sets that legitimately EXCLUDE that shell, and the gate went on waiting for a
     witness the run never loaded. It then condemned a perfectly healthy game: run
@@ -323,7 +323,7 @@ def running_block(context: dict) -> str:
             "  PROVEN BY     the DLL's own log line, not by the process existing:"
             if context.get("witness") != "weak"
             else "  PROVEN BY     one of this run's DLLs writing its log, not by the process\n"
-            "                existing. This run does not load er_effects_rs.dll, which is the\n"
+            "                existing. This run does not load er_quickload.dll, which is the\n"
             "                only shell that reports a sidecar, so the sidecar was NOT verified:"
         ),
         f"    {context['testimony'][:96]}",
@@ -512,7 +512,7 @@ def launch(args) -> int:
     process = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
-        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         env={**os.environ, "ME3_PROFILE": staged["profile"]},
         stdout=subprocess.DEVNULL,
@@ -660,8 +660,8 @@ def selftest() -> int:
         print(("  ok   " if condition else "  FAIL ") + label)
 
     check(
-        normalize_path("Z:\\home\\banon\\x\\er_effects_rs.toml")
-        == normalize_path("/home/banon/x/er_effects_rs.toml"),
+        normalize_path("Z:\\home\\banon\\x\\er_quickload.toml")
+        == normalize_path("/home/banon/x/er_quickload.toml"),
         "a Wine Z:\\ path and its Linux path compare equal",
     )
     check(
@@ -670,13 +670,13 @@ def selftest() -> int:
     )
 
     line = (
-        "runtime-config: loaded 'Z:/game/er-effects.toml' sidecar=Z:/t/er_effects_rs.toml "
+        "runtime-config: loaded 'Z:/game/er-quickload.toml' sidecar=Z:/t/er_quickload.toml "
         "save_file=Z:/c/ER0000.sl2 slot=3 method=<unset>"
     )
     fields = parse_loaded_line(line)
     check(fields.get("slot") == "3", "the slot is parsed out of the loaded line")
     check(
-        normalize_path(fields.get("sidecar", "")) == normalize_path("/t/er_effects_rs.toml"),
+        normalize_path(fields.get("sidecar", "")) == normalize_path("/t/er_quickload.toml"),
         "the sidecar path is parsed and normalises to the staged path",
     )
     check(parse_loaded_line("runtime-config: loaded 'x'") == {}, "a line with no fields yields none")
@@ -720,15 +720,15 @@ def selftest() -> int:
         partial.write_text("", encoding="utf-8")
         partial_tail = LogTail(partial)
         with partial.open("a", encoding="utf-8") as handle:
-            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+            handle.write("runtime-config: loaded 'S:/g/er-quickload.toml' side")
         check(
             partial_tail.new_text() == "",
             "a half-written line is withheld until its newline arrives",
         )
         with partial.open("a", encoding="utf-8") as handle:
-            handle.write("car=Z:/t/er_effects_rs.toml slot=4\n")
+            handle.write("car=Z:/t/er_quickload.toml slot=4\n")
         check(
-            "sidecar=Z:/t/er_effects_rs.toml" in partial_tail.new_text(),
+            "sidecar=Z:/t/er_quickload.toml" in partial_tail.new_text(),
             "the completed line is delivered whole on the next read",
         )
 
@@ -742,7 +742,7 @@ def selftest() -> int:
             "merge_base": "b" * 40,
             "base_ref": "origin/main",
             "dirty": False,
-            "dlls": [("er_effects_rs.dll", "c" * 64)],
+            "dlls": [("er_quickload.dll", "c" * 64)],
             "ersc": "/game/ersc.dll",
             "excluded": [{"artifact": "er_loading_bar.dll", "kind": "present-compositor"}],
             "save": {
@@ -755,7 +755,7 @@ def selftest() -> int:
                 "seed": 7,
             },
             "profile": "/p.me3",
-            "sidecar": "/t/er_effects_rs.toml",
+            "sidecar": "/t/er_quickload.toml",
             "evidence_class": "explicit-save-source",
             "testimony": "runtime-config: loaded ...",
         }
@@ -782,11 +782,11 @@ def selftest() -> int:
         log.write_text("", encoding="utf-8")
         tail = LogTail(log)
         log.write_text(
-            "runtime-config: loaded 'S:/g/er-effects.toml' sidecar=<none> "
+            "runtime-config: loaded 'S:/g/er-quickload.toml' sidecar=<none> "
             "save_file=Z:/other/ER0000.sl2 slot=0\n",
             encoding="utf-8",
         )
-        verdict = await_testimony(log, tail, Path("/t/er_effects_rs.toml"), os.getpid())
+        verdict = await_testimony(log, tail, Path("/t/er_quickload.toml"), os.getpid())
         check(
             verdict["status"] == "wrong-sidecar",
             f"a loaded-but-different-sidecar line is 'wrong-sidecar', not silence (got {verdict['status']})",
@@ -800,15 +800,15 @@ def selftest() -> int:
         log2.write_text("", encoding="utf-8")
         tail2 = LogTail(log2)
         log2.write_text(
-            "runtime-config: loaded 'S:/g/er-effects.toml' sidecar=Z:/t/er_effects_rs.toml slot=3\n",
+            "runtime-config: loaded 'S:/g/er-quickload.toml' sidecar=Z:/t/er_quickload.toml slot=3\n",
             encoding="utf-8",
         )
-        verdict2 = await_testimony(log2, tail2, Path("/t/er_effects_rs.toml"), os.getpid())
+        verdict2 = await_testimony(log2, tail2, Path("/t/er_quickload.toml"), os.getpid())
         check(verdict2["status"] == "confirmed", "a matching sidecar line confirms the run")
 
         # THE FALSE NEGATIVE THAT CONDEMNED A RUNNING GAME, br-20260817-184836-d6a7. Once the
         # launcher/watchdog/guard commits merged to main, the closure legitimately stopped
-        # selecting er_effects_rs.dll -- the only shell that writes a `runtime-config: loaded`
+        # selecting er_quickload.dll -- the only shell that writes a `runtime-config: loaded`
         # line. The gate kept waiting for it and printed ELDEN RING DID NOT START while
         # eldenring.exe was up and the invasion DLL was heartbeating into its own log.
         weak_dir = Path(raw) / "weakwitness"
@@ -832,7 +832,7 @@ def selftest() -> int:
             writer_weak.join(timeout=2)
         check(
             weak["status"] == "confirmed-weak",
-            f"a run without er_effects_rs.dll confirms from any DLL's log (got {weak['status']})",
+            f"a run without er_quickload.dll confirms from any DLL's log (got {weak['status']})",
         )
         check(
             weak.get("log") == "er-net-effects.log",
@@ -877,18 +877,18 @@ def selftest() -> int:
 
         split_tail = SignallingTail(split_log)
         with split_log.open("a", encoding="utf-8") as handle:
-            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+            handle.write("runtime-config: loaded 'S:/g/er-quickload.toml' side")
 
         def finish_line() -> None:
             observed_partial.wait(timeout=5)
             with split_log.open("a", encoding="utf-8") as handle:
-                handle.write("car=Z:/t/er_effects_rs.toml save_file=Z:/c/ER0000.sl2 slot=4\n")
+                handle.write("car=Z:/t/er_quickload.toml save_file=Z:/c/ER0000.sl2 slot=4\n")
 
         writer = threading.Thread(target=finish_line, daemon=True)
         writer.start()
         try:
             verdict_split = await_testimony(
-                split_log, split_tail, Path("/t/er_effects_rs.toml"), os.getpid()
+                split_log, split_tail, Path("/t/er_quickload.toml"), os.getpid()
             )
         finally:
             writer.join(timeout=2)
@@ -924,7 +924,7 @@ def selftest() -> int:
         try:
             started_at = time.monotonic()
             verdict3 = await_testimony(
-                quiet_log, tail3, Path("/t/er_effects_rs.toml"), os.getpid()
+                quiet_log, tail3, Path("/t/er_quickload.toml"), os.getpid()
             )
             elapsed = time.monotonic() - started_at
         finally:

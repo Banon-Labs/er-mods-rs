@@ -6,7 +6,7 @@ Reads the newest onscreen-capture log (or argv[1]) and prints, in ms from proces
 import sys, glob, os, re
 
 log = sys.argv[1] if len(sys.argv) > 1 else sorted(
-    glob.glob("target/runtime-probe/onscreen-capture-*/er-effects-autoload-debug.log"),
+    glob.glob("target/runtime-probe/onscreen-capture-*/er-quickload-autoload-debug.log"),
     key=os.path.getmtime)[-1]
 lines = open(log, encoding="utf-8", errors="replace").read().splitlines()
 

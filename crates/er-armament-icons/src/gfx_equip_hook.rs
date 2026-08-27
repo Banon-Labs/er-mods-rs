@@ -49,7 +49,7 @@ const PARSE_SIG: &str =
 /// File-open observer (logs the `.gfx` open sequence AND provides a live loader to resolve
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
 ///
-/// SHARED WITH THE PRODUCT DLL. `er-effects-rs` detours this same prologue for its title / stats /
+/// SHARED WITH THE PRODUCT DLL. `er-quickload` detours this same prologue for its title / stats /
 /// System>Quit / text-input GFx swaps. Because a statically linked crate's statics are per-DLL,
 /// each of us owns a SEPARATE MinHook instance, and two instances on one prologue overwrite each
 /// other's trampolines: the loser reports installed, never fires, and its whole feature looks
@@ -675,7 +675,7 @@ pub(crate) fn install(base: usize) {
     }
 
     // SHARED prologue -- never a bare MhHook here. `register_shared_hook` chains us into the
-    // product DLL's single MinHook instance when `er_effects_rs.dll` is co-loaded, and falls back
+    // product DLL's single MinHook instance when `er_quickload.dll` is co-loaded, and falls back
     // to our own union when it is not, so a standalone run of this DLL is unchanged. Which route
     // it took is logged, because "LOCAL while the product is present" is precisely the state that
     // used to silently break both DLLs.
@@ -684,7 +684,7 @@ pub(crate) fn install(base: usize) {
     } {
         Ok(route) => log_message(format_args!(
             "gfx-equip: file-open observer @0x{:x} registered via {route:?} \
-             (shared prologue with er_effects_rs.dll)",
+             (shared prologue with er_quickload.dll)",
             base + FILE_OPEN_RVA
         )),
         Err(status) => log_message(format_args!(

@@ -9,7 +9,7 @@
 #
 # Product state crosses the seam through `host::install_host` function pointers (the
 # `er-loading-portrait-core` / `er-quit-menu-core` pattern). This crate must NOT depend on the root
-# `er-effects-rs` crate.
+# `er-quickload` crate.
 #
 # Most of the crate is deliberately platform-independent so the catalog, the block grouping,
 # the on-disk `.aip` decoder and the coordinate/yaw math are provable by `cargo test` on the

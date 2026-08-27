@@ -62,11 +62,11 @@ def render_ready_but_dead_tel(play_ms_fixed: int) -> dict:
 
 
 def run_case(name: str, writer, deadline: float, expect_pass: bool, expect_verdict_contains: str) -> bool:
-    art = Path("/tmp/claude-1000/-home-choza-projects-er-effects-rs/"
+    art = Path("/tmp/claude-1000/-home-choza-projects-er-quickload/"
                "63ff0ecb-1f92-48f1-880d-c6dd62f7f1ca/scratchpad") / f"mlpm-test-{name}"
     art.mkdir(parents=True, exist_ok=True)
-    telem = art / "er-effects-telemetry.json"
-    (art / "er-effects-autoload-debug.log").write_text("")  # empty log, no crash markers
+    telem = art / "er-quickload-telemetry.json"
+    (art / "er-quickload-autoload-debug.log").write_text("")  # empty log, no crash markers
     telem.write_text(json.dumps(frozen_tel()))  # start frozen
     stop = threading.Event()
 

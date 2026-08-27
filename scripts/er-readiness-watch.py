@@ -2811,7 +2811,7 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
             elif telemetry is not None:
                 # Reset the world-stable dwell ONLY on a GENUINE not-loaded read (telemetry present but
                 # the world-loaded oracle is false). A transient None telemetry -- the fast poll loop
-                # (~hundreds/s) caught a partial write while the DLL flushed er-effects-telemetry.json,
+                # (~hundreds/s) caught a partial write while the DLL flushed er-quickload-telemetry.json,
                 # so read_json returned None -- is NOT evidence the world unloaded. Resetting on it
                 # prevented headless world-stable from ever accumulating its 5s dwell even though the
                 # in-process oracles showed a stable in-world character the whole time. The oracles are

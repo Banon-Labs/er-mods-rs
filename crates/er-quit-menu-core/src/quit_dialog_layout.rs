@@ -1,7 +1,7 @@
 //! RAM layout of the `PropertyEditDialog` the System>Quit tab builds, plus the two native input
 //! predicates its rows are classified with.
 //!
-//! Moved out of `er-effects-rs`'s `constants::autoload_state` with the row-identity code that is
+//! Moved out of `er-quickload`'s `constants::autoload_state` with the row-identity code that is
 //! their only reader; that module now re-exports them from here, so each address and offset still
 //! has exactly ONE declaration (`scripts/check-rva-alias-drift.py`).
 

@@ -15,7 +15,7 @@ import sys
 import time
 import threading
 
-LOG = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/er-effects-autoload-debug.log"
+LOG = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/er-quickload-autoload-debug.log"
 START = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP = int(sys.argv[2]) if len(sys.argv) > 2 else 300
 SUSTAIN = int(sys.argv[3]) if len(sys.argv) > 3 else 45

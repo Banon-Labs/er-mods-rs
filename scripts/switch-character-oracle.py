@@ -29,7 +29,7 @@ Verdict + exit code:
 
 The loaded side is a RAM semaphore; the expected side is the exact save staged into
 the run. Screenshots are never consulted. Designed to be polled against the live
-`er-effects-telemetry.json` (rewritten every ~250ms) during a no-teardown probe, or
+`er-quickload-telemetry.json` (rewritten every ~250ms) during a no-teardown probe, or
 run once post-hoc against a captured telemetry file.
 """
 from __future__ import annotations
@@ -261,7 +261,7 @@ def _selftest() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--save", type=Path, help="staged ER0000.sl2 (the save copied into the run)")
-    parser.add_argument("--telemetry", type=Path, help="er-effects-telemetry.json to evaluate")
+    parser.add_argument("--telemetry", type=Path, help="er-quickload-telemetry.json to evaluate")
     parser.add_argument("--json", action="store_true", help="emit the full verdict as JSON")
     parser.add_argument("--selftest", action="store_true", help="validate the oracle against the gold save and exit")
     args = parser.parse_args(argv[1:])

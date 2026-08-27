@@ -21,7 +21,7 @@ CRATE_PATH = REPO_ROOT / "crates" / "er-reload-trace"
 POLICY_PATH = REPO_ROOT / ".auto" / "reload_trace_policy.rego"
 OPA_TIMEOUT_SECONDS = 10
 
-ENV_GATE_SNIPPETS = ("std::env::var", "ER_EFFECTS_")
+ENV_GATE_SNIPPETS = ("std::env::var", "ER_QUICKLOAD_")
 INPUT_API_SNIPPETS = (
     "SendInput",
     "PostMessageW",

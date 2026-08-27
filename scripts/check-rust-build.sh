@@ -11,7 +11,7 @@
 #   4. the resulting Windows unit-test binaries, RUN under wine when wine is installed
 #
 # A BUILD (not just `cargo check`) is used deliberately so the produced
-# `target/x86_64-pc-windows-msvc/<profile>/er_effects_rs.dll` is proven to link, catching
+# `target/x86_64-pc-windows-msvc/<profile>/er_quickload.dll` is proven to link, catching
 # codegen/link regressions a metadata-only check would miss.
 #
 # Env:
@@ -58,7 +58,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin check --tests --target $target"
 	cargo xwin check --tests --manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# er-telemetry-core is a workspace member but NOT a default-member, so the line above (which
-	# honours default-members = er-effects-rs) never compiles its test modules. It owns the
+	# honours default-members = er-quickload) never compiles its test modules. It owns the
 	# load-count consistency logic, so keep its tests building for the shipping target; check.sh
 	# RUNS them on the host.
 	echo "[check-rust-build] cargo xwin check --tests -p er-telemetry-core --target $target"
@@ -100,7 +100,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# the only step in any gate that produces the artifact a profile can load.
 	# EVERY ME3-LOADABLE SHELL MUST LINK. `cargo xwin check` stops at metadata and never
 	# invokes the linker, and the bare `cargo xwin build` above builds only `default-members`
-	# (= crates/er-effects-rs). So before this step, 13 of the 15 cdylibs that export a
+	# (= crates/er-quickload). So before this step, 13 of the 15 cdylibs that export a
 	# `DllMain` -- i.e. every DLL a user can list in an me3 `[[natives]]` entry except the
 	# product itself -- were never linked by ANY gate. A shell that cannot link (missing
 	# `#[no_mangle] DllMain`, wrong crate-type, an unresolved import inside a `cfg(windows)`
@@ -178,7 +178,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	#
 	# `scripts/check-lint-parity.py` asserts the configuration; this asserts the code.
 	echo "[check-rust-build] cargo xwin clippy --all-targets (lint parity with ../fromsoftware-rs)"
-	cargo xwin clippy --release "${shell_pkg_args[@]}" -p er-effects-rs --all-targets \
+	cargo xwin clippy --release "${shell_pkg_args[@]}" -p er-quickload --all-targets \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# FEATURE MATRIX. `er-quit-menu-core` takes `er-save-picker-core` with `default-features = false`
 	# so a standalone quit-menu DLL links the OS-native fallback surface WITHOUT the boot
@@ -197,11 +197,11 @@ fi
 # `std::path` separator semantics, never under the windows target the crate actually ships to.
 if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then
 	echo "[check-rust-build] cargo xwin test --lib --target $target (via wine)"
-	# `-p` is explicit rather than relying on default-members (= er-effects-rs): the
-	# ProfileSummary crate's windows-only tests moved OUT of er-effects-rs, and a bare
+	# `-p` is explicit rather than relying on default-members (= er-quickload): the
+	# ProfileSummary crate's windows-only tests moved OUT of er-quickload, and a bare
 	# `--lib` would have quietly stopped running them.
 	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
-		cargo xwin test --lib -p er-effects-rs -p er-profile-summary-core \
+		cargo xwin test --lib -p er-quickload -p er-profile-summary-core \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 else
 	echo "[check-rust-build] wine not found; skipping the windows-target unit-test RUN (compile check above still ran)" >&2

@@ -2,7 +2,7 @@
 
 Branch `fix/portrait-publish-race`, worktree `.worktrees/portrait-race-fix`.
 All evidence from the live run
-`.worktrees/portrait-stats-crate/target/runtime-probe/product-continue-direct-20260729-194759/er-effects-autoload-debug.log`
+`.worktrees/portrait-stats-crate/target/runtime-probe/product-continue-direct-20260729-194759/er-quickload-autoload-debug.log`
 (read it directly; timestamps below are its `[+Nms]` values).
 
 ## Measured failure (switch1, confirm at +134157ms)

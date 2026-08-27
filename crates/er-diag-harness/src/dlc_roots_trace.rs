@@ -1,7 +1,7 @@
 // DLC VIRTUAL ROOT BLANK/REFILL TRACE -- why the reload's roots stay empty.
 //
 // MOVED VERBATIM out of the product DLL's
-// `crates/er-effects-rs/src/experiments/startup_hooks/diagnostics/dlc_roots_trace.rs` on
+// `crates/er-quickload/src/experiments/startup_hooks/diagnostics/dlc_roots_trace.rs` on
 // 2026-08-25. There all three detours were installed UNCONDITIONALLY at process attach for a log
 // nothing in the product read back. The bodies, the sampling order and every log string are
 // unchanged; only the sink moved and the counters are now this crate's own.

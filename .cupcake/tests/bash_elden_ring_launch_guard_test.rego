@@ -266,7 +266,7 @@ test_allow_python_heredoc_editing_docstring_flattened if {
 # A worktree `cd` prefix before the same edit is still an edit.
 test_allow_cd_prefixed_python_heredoc_editing_repo_file if {
 	cmd := concat("\n", [
-		"cd /home/banon/projects/er-effects-rs && python3 - <<'PY'",
+		"cd /home/banon/projects/er-mods-rs && python3 - <<'PY'",
 		"from pathlib import Path",
 		"p = Path('scripts/frida-dump-module.py')",
 		"p.write_text(p.read_text().replace('Refuses start_protected_game.exe / EAC, ', ''))",
@@ -778,7 +778,7 @@ test_allow_proc_comm_scan_sigterm_sigkill_cleanup_naming_eac_launcher if {
 # The exact denied command.
 test_allow_steam_helper_then_proc_comm_scan_exact_false_positive if {
 	cmd := concat("\n", [
-		`cd /home/banon/projects/er-effects-rs; bash -c 'source scripts/steam-running.sh && if steam_running; then echo "STEAM: running"; else echo "STEAM: NOT running"; fi'`,
+		`cd /home/banon/projects/er-mods-rs; bash -c 'source scripts/steam-running.sh && if steam_running; then echo "STEAM: running"; else echo "STEAM: NOT running"; fi'`,
 		`python3 -c "`,
 		"import os,glob",
 		"hits=[]",
@@ -812,7 +812,7 @@ test_allow_proc_comm_scan_python_c_double_quoted_program if {
 
 # The live engine delivers the command whitespace-flattened; same verdict.
 test_allow_steam_helper_then_proc_comm_scan_flattened if {
-	cmd := `cd /home/banon/projects/er-effects-rs; bash -c 'source scripts/steam-running.sh && if steam_running; then echo "STEAM: running"; else echo "STEAM: NOT running"; fi' python3 -c " import os,glob hits=[] for p in glob.glob('/proc/[0-9]*'): try: comm=open(os.path.join(p,'comm')).read().strip() except Exception: continue if comm in ('eldenring.exe','me3','start_protected_game.exe'): hits.append(comm) print('game running:', hits if hits else 'none') "`
+	cmd := `cd /home/banon/projects/er-mods-rs; bash -c 'source scripts/steam-running.sh && if steam_running; then echo "STEAM: running"; else echo "STEAM: NOT running"; fi' python3 -c " import os,glob hits=[] for p in glob.glob('/proc/[0-9]*'): try: comm=open(os.path.join(p,'comm')).read().strip() except Exception: continue if comm in ('eldenring.exe','me3','start_protected_game.exe'): hits.append(comm) print('game running:', hits if hits else 'none') "`
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
 }
@@ -1265,7 +1265,7 @@ test_allow_git_commit_stdin_heredoc_message_mentioning_eac_launcher if {
 # (2026-07-28, the `/home/banon/...` literal in bd_text_command).
 test_allow_git_commit_stdin_heredoc_with_dash_c_worktree_path if {
 	cmd := concat("\n", [
-		"git -C /home/banon/projects/er-effects-rs add .cupcake/policies/claude/bash_elden_ring_launch_guard.rego && git -C /home/banon/projects/er-effects-rs commit -q -F - <<'EOF'",
+		"git -C /home/banon/projects/er-mods-rs add .cupcake/policies/claude/bash_elden_ring_launch_guard.rego && git -C /home/banon/projects/er-mods-rs commit -q -F - <<'EOF'",
 		"guard: close two EAC launcher gaps",
 		"",
 		"The bare start_protected_game.exe form fell between two clauses.",
@@ -1420,7 +1420,7 @@ test_allow_sha256sum_of_installed_ersc_dll if {
 test_allow_heredoc_doc_arrow_notation_mentioning_ersc_dll if {
 	cmd := concat("\n", [
 		"cat > docs/seamless-compat.md <<'EOF'",
-		"load order: me3 profile -> ersc.dll -> er_effects_rs.dll",
+		"load order: me3 profile -> ersc.dll -> er_quickload.dll",
 		"EOF",
 	])
 	denials := guard.deny with input as bash_event(cmd)
@@ -1521,51 +1521,51 @@ test_deny_bd_home_var_substitution_ersc_copy if {
 #
 # Re-validated 2026-07-30 via opa eval before fixing: this exact command was
 # denied by the file-moving arms even though the destination is the same
-# game-install path the DLL came from -- only the repo's `.er-effects-staged`
+# game-install path the DLL came from -- only the repo's `.er-quickload-staged`
 # suffix is removed, which is the opposite of bundling.
 
 test_allow_mv_restore_staged_ersc_dll_same_gameinstall_path if {
-	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'`
+	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'`
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
 }
 
 test_allow_mv_restore_staged_ersc_dll_double_quoted if {
-	cmd := `mv -f "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged" "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"`
+	cmd := `mv -f "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged" "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"`
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
 }
 
 test_allow_mv_restore_staged_ersc_dll_no_flags if {
-	cmd := `mv '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'`
+	cmd := `mv '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'`
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
 }
 
 # Destination scoping: the SAME staged source moved anywhere else stays denied.
 test_deny_mv_staged_ersc_dll_into_target_bundle if {
-	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' 'target/release-bundle/ersc.dll'`
+	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged' 'target/release-bundle/ersc.dll'`
 	denials := guard.deny with input as bash_event(cmd)
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
 
 test_deny_mv_staged_ersc_dll_into_me3_profile_dir if {
-	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/home/banon/Elden/profile/ersc.dll'`
+	cmd := `mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged' '/home/banon/Elden/profile/ersc.dll'`
 	denials := guard.deny with input as bash_event(cmd)
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
 
 # A restore rename with a second command riding along stays denied.
 test_deny_mv_restore_then_chained_ersc_copy if {
-	cmd := `mv -f '/mnt/d/er/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/d/er/Game/SeamlessCoop/ersc.dll' && cp '/mnt/d/er/Game/SeamlessCoop/ersc.dll' dist/`
+	cmd := `mv -f '/mnt/d/er/Game/SeamlessCoop/ersc.dll.er-quickload-staged' '/mnt/d/er/Game/SeamlessCoop/ersc.dll' && cp '/mnt/d/er/Game/SeamlessCoop/ersc.dll' dist/`
 	denials := guard.deny with input as bash_event(cmd)
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
 
-# The STAGING direction (plain name -> .er-effects-staged) is not the restore
+# The STAGING direction (plain name -> .er-quickload-staged) is not the restore
 # shape and keeps denying; only the suffix-stripping restore is exempt.
 test_deny_mv_ersc_dll_to_staged_name if {
-	cmd := `mv -f '/mnt/d/er/Game/SeamlessCoop/ersc.dll' '/mnt/d/er/Game/SeamlessCoop/ersc.dll.er-effects-staged'`
+	cmd := `mv -f '/mnt/d/er/Game/SeamlessCoop/ersc.dll' '/mnt/d/er/Game/SeamlessCoop/ersc.dll.er-quickload-staged'`
 	denials := guard.deny with input as bash_event(cmd)
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
@@ -1596,7 +1596,7 @@ test_allow_bash_script_scan_gameinstall_ersc_dll if {
 
 # The read-only staged SIBLING may be scanned alongside the installed DLL.
 test_allow_python_scan_gameinstall_ersc_dll_and_staged_sibling if {
-	cmd := `python3 scripts/cmp_dll.py /mnt/d/er/Game/SeamlessCoop/ersc.dll /mnt/d/er/Game/SeamlessCoop/ersc.dll.er-effects-staged`
+	cmd := `python3 scripts/cmp_dll.py /mnt/d/er/Game/SeamlessCoop/ersc.dll /mnt/d/er/Game/SeamlessCoop/ersc.dll.er-quickload-staged`
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
 }

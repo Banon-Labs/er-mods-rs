@@ -1,6 +1,6 @@
 //! The portrait frame bridge: the worker publishes the captured, alpha-keyed character
 //! head here; display hosts (product Wine composite, product native overlay, standalone
-//! DLL compositor) read it. Moved from er-effects-rs constants/anti_debug.rs.
+//! DLL compositor) read it. Moved from er-quickload constants/anti_debug.rs.
 //! Host-buildable on purpose (std + er-telemetry-core only) so host tests can exercise the
 //! publish/composite path.
 

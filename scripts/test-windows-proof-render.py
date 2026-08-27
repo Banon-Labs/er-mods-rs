@@ -143,7 +143,7 @@ def test_movement_probe_and_oracle_use_semantic_render_ready() -> None:
     task_registration = (
         REPO_ROOT
         / "crates"
-        / "er-effects-rs"
+        / "er-quickload"
         / "src"
         / "lib_parts"
         / "dll_entry_parts"
@@ -160,7 +160,7 @@ def test_movement_probe_and_oracle_use_semantic_render_ready() -> None:
     write_oracle = (
         REPO_ROOT
         / "crates"
-        / "er-effects-rs"
+        / "er-quickload"
         / "src"
         / "telemetry"
         / "runtime_oracles"

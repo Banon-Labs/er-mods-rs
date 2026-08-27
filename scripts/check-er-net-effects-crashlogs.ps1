@@ -63,9 +63,9 @@ Write-Output "== Application crash/hang/WER events =="
 $events = Get-WinEvent -FilterHashtable @{LogName = 'Application'; StartTime = $since; Level = 1, 2, 3} |
   Where-Object {
     ($_.ProviderName -match 'Application Error|Windows Error Reporting|Application Hang|\.NET Runtime') -or
-    ($_.Message -match 'elden|er_net_effects|er-effects|modengine|me3|d3d12|dxgi|ersc')
+    ($_.Message -match 'elden|er_net_effects|er-quickload|modengine|me3|d3d12|dxgi|ersc')
   } |
-  Where-Object { $_.Message -match 'elden|er_net_effects|er-effects|modengine|me3|d3d12|dxgi|vkd3d|ersc|exception|fault|crash|hang' } |
+  Where-Object { $_.Message -match 'elden|er_net_effects|er-quickload|modengine|me3|d3d12|dxgi|vkd3d|ersc|exception|fault|crash|hang' } |
   Sort-Object TimeCreated -Descending |
   Select-Object -First 20
 if ($events) {
@@ -91,7 +91,7 @@ $reports = foreach ($root in $werRoots) {
 $matched = @()
 foreach ($report in ($reports | Sort-Object LastWriteTime -Descending)) {
   $text = Get-Content -LiteralPath $report.FullName -Raw
-  if ($text -match 'elden|er_net_effects|er-effects|modengine|me3|d3d12|dxgi|ersc') {
+  if ($text -match 'elden|er_net_effects|er-quickload|modengine|me3|d3d12|dxgi|ersc') {
     $matched += $report
     Write-Output "--- WER mtime=$($report.LastWriteTime.ToString('o')) path=$($report.FullName) ---"
     $keys = 'AppName=|FriendlyEventName=|EventType=|Sig\[0\]=|Sig\[1\]=|Sig\[2\]=|Sig\[3\]=|Sig\[4\]=|Sig\[5\]=|Sig\[6\]=|Sig\[7\]=|DynamicSig\[1\]=|DynamicSig\[2\]=|LoadedModule\[|FaultingModule|ExceptionCode|CabGuid='

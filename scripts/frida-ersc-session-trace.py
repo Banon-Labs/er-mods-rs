@@ -75,7 +75,7 @@ Wine/Proton: frida.attach() sees nothing. frida-gadget.dll is loaded into the ga
 [[natives]] entry and listens on 127.0.0.1:27042; connect to it as a REMOTE DEVICE. Use a
 gadget-bearing profile, e.g. /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3
 
-    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-ersc-session-trace.py
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-ersc-session-trace.py
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ import threading
 
 GADGET = "127.0.0.1:27042"
 DEFAULT_OUT = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/ersc-session-trace.jsonl"
 )
 
@@ -641,7 +641,7 @@ def main() -> int:
         print(
             "ERROR: frida is not importable. uv provisions it per-run:\n"
             "  uv run --with frida python3 "
-            "/home/banon/projects/er-effects-rs/scripts/frida-ersc-session-trace.py",
+            "/home/banon/projects/er-mods-rs/scripts/frida-ersc-session-trace.py",
             file=sys.stderr,
         )
         return 7
