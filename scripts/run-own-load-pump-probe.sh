@@ -2,7 +2,7 @@
 # PATH B moment-of-truth: build the LoadGame MenuJob with real mss-derived ctx and PRIVATELY PUMP its
 # Run every frame (own_load_pump lever) until Success -> guarded SetState5 transition -> the player
 # world streams. Zero simulated input. Save-safe (deser reads; only the gated SetState5 writes). Crash
-# logging ON; overlay OFF (er-effects-no-overlay.txt); world-load deadline OFF so a real load isn't cut.
+# logging ON; overlay OFF (er-quickload-no-overlay.txt); world-load deadline OFF so a real load isn't cut.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 set -a

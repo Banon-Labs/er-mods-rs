@@ -1,4 +1,4 @@
-# er-effects-rs docs
+# er-quickload docs
 
 Reference notes and external resources for the Elden Ring runtime effects experiment.
 

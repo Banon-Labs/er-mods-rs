@@ -1,6 +1,6 @@
 ---
 name: frida-gadget-proton-debugging
-description: Use in er-effects-rs when debugging prose asks to use Frida, poke a live failed Elden Ring state, inspect runtime memory, attach to Proton/Wine Elden Ring, or asks "WSL? Windows?" during runtime diagnosis. Loads Frida Gadget as a Windows x64 ME3 native and connects with native Linux Python Frida instead of native-attaching to wine64-preloader.
+description: Use in er-quickload when debugging prose asks to use Frida, poke a live failed Elden Ring state, inspect runtime memory, attach to Proton/Wine Elden Ring, or asks "WSL? Windows?" during runtime diagnosis. Loads Frida Gadget as a Windows x64 ME3 native and connects with native Linux Python Frida instead of native-attaching to wine64-preloader.
 ---
 
 # Frida Gadget Proton Debugging
@@ -32,7 +32,7 @@ If the user says any of these while debugging this repo, load and follow this sk
 Use `uv` to provision Python Frida ephemerally; do not require a global Python package install.
 
 ```bash
-cd /home/banon/projects/er-effects-rs
+cd /home/banon/projects/er-mods-rs
 uv run --with frida python3 - <<'PY'
 import frida
 print(frida.__version__)
@@ -42,7 +42,7 @@ PY
 Fetch the matching Windows x64 Gadget release and write a listen config:
 
 ```bash
-cd /home/banon/projects/er-effects-rs
+cd /home/banon/projects/er-mods-rs
 uv run --with frida python3 - <<'PY'
 import frida, hashlib, json, lzma, pathlib, urllib.request
 ver = frida.__version__
@@ -74,7 +74,7 @@ PY
 
 1. Create an artifact directory under `target/runtime-probe/<meaningful-name>`.
 2. Copy `/home/banon/Elden/quicksave.me3` into that artifact directory before editing.
-3. Add Gadget as a temporary native entry. Keep `er_effects_rs.dll` first; put Gadget before Seamless unless the current hypothesis needs a different order.
+3. Add Gadget as a temporary native entry. Keep `er_quickload.dll` first; put Gadget before Seamless unless the current hypothesis needs a different order.
 4. Restore the original profile after the Frida probe. Gadget must not remain in the product profile.
 
 Minimal debug profile shape:
@@ -87,10 +87,10 @@ Minimal debug profile shape:
  game = "eldenring"
 
  [[natives]]
- path = '/home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll'
+ path = '/home/banon/projects/er-mods-rs/target/x86_64-pc-windows-msvc/release/er_quickload.dll'
 
  [[natives]]
- path = '/home/banon/projects/er-effects-rs/target/frida-gadget/frida-gadget.dll'
+ path = '/home/banon/projects/er-mods-rs/target/frida-gadget/frida-gadget.dll'
 
  [[natives]]
  path = '/home/banon/.steam/steam/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'
@@ -99,7 +99,7 @@ Minimal debug profile shape:
 Launch through the approved user launcher:
 
 ```bash
-cd /home/banon/projects/er-effects-rs
+cd /home/banon/projects/er-mods-rs
 source scripts/steam-running.sh
 steam_running || { echo 'Steam helper reports Steam absent'; exit 2; }
 /home/banon/Elden/launch.sh > target/runtime-probe/<run>/me3-live.log 2>&1 &
@@ -112,10 +112,10 @@ Use a loud user-visible launch banner immediately before launching.
 Check ports `27042..27051`. Do not trust stale telemetry; check telemetry mtime before deciding the run reached a state.
 
 ```bash
-cd /home/banon/projects/er-effects-rs
+cd /home/banon/projects/er-mods-rs
 uv run --with frida python3 - <<'PY'
 import json, pathlib, socket, time
-tele = pathlib.Path('/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/er-effects-telemetry.json')
+tele = pathlib.Path('/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/er-quickload-telemetry.json')
 for _ in range(120):
     ports = []
     for port in range(27042, 27052):
@@ -156,7 +156,7 @@ Important Frida 17 API details observed in this repo:
 Snapshot template:
 
 ```bash
-cd /home/banon/projects/er-effects-rs
+cd /home/banon/projects/er-mods-rs
 uv run --with frida python3 - <<'PY'
 import frida, json
 mgr = frida.get_device_manager()

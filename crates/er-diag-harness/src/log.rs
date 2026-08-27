@@ -1,6 +1,6 @@
 //! Fresh-per-run trace log, modeled on `er-input-harness`/`er-reload-trace`'s log helper.
 //!
-//! The three traces used to write into the product's `er-effects-crash.log` through
+//! The three traces used to write into the product's `er-quickload-crash.log` through
 //! `append_crash_log`. They cannot any more -- they live in a different image, and a second
 //! appender on one path interleaves two processes' opinions into one file. They get their own
 //! file instead, and it describes exactly ONE process run: `er_game_base::log` truncates on this

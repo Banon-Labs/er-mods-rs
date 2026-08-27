@@ -13,7 +13,7 @@
 //! # Why it is one crate
 //!
 //! Because until this crate existed it was one concept smeared across four files of the
-//! `er-effects-rs` shim, each holding one verb of it:
+//! `er-quickload` shim, each holding one verb of it:
 //!
 //! | was in | held |
 //! |---|---|

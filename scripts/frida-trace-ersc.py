@@ -40,12 +40,12 @@ So the game must be launched with a profile that includes the gadget. There is o
 normal invasion-warp Seamless profile plus the gadget DLL.
 
 RUN IT (frida is provisioned ephemerally by uv; nothing is installed system-wide):
-    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --hooks
-    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --hooks --rva 0x8f4b0
-    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --stalker
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks --rva 0x8f4b0
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --stalker
 
 SELFTEST (no game, no frida):
-    python3 /home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --selftest
+    python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --selftest
 
 SAFETY
 ------
@@ -180,7 +180,7 @@ def main() -> int:
             "ERROR: frida is not importable. It is not installed system-wide here on purpose; "
             "uv provisions it per-run:\n"
             "  uv run --with frida python3 "
-            "/home/banon/projects/er-effects-rs/scripts/frida-trace-ersc.py --hooks",
+            "/home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks",
             file=sys.stderr,
         )
         return 7

@@ -449,8 +449,8 @@ static LOADING_SCREEN_DATA: AtomicUsize = AtomicUsize::new(0);
 
 /// Publish the current `CS::LoadingScreenData*`. Pass 0 when the screen goes away.
 ///
-/// Only needed by a host that is not `er_effects_rs.dll`; when the product is present its
-/// `er_effects_loading_screen_data` export is polled directly and nothing has to push.
+/// Only needed by a host that is not `er_quickload.dll`; when the product is present its
+/// `er_quickload_loading_screen_data` export is polled directly and nothing has to push.
 #[cfg(windows)]
 pub fn publish_loading_screen_data(pointer: usize) {
     LOADING_SCREEN_DATA.store(pointer, Ordering::Relaxed);
@@ -458,9 +458,9 @@ pub fn publish_loading_screen_data(pointer: usize) {
 
 /// Name of the product export that hands over the live `CS::LoadingScreenData*`.
 #[cfg(windows)]
-const LOADING_SCREEN_DATA_EXPORT: &[u8] = b"er_effects_loading_screen_data\0";
+const LOADING_SCREEN_DATA_EXPORT: &[u8] = b"er_quickload_loading_screen_data\0";
 #[cfg(windows)]
-const PRODUCT_MODULE_NAME: &str = "er_effects_rs.dll";
+const PRODUCT_MODULE_NAME: &str = "er_quickload.dll";
 
 /// Cached resolution of the product export: 0 = not looked up, 1 = looked up and absent.
 #[cfg(windows)]

@@ -3,7 +3,7 @@
 //! texture+upload+SRV slot creator, SRV handle math, and the close/execute/fence-wait
 //! submit helper.
 //!
-//! Moved verbatim from er-effects-rs `experiments/gpu_readback/gpu_draw_shared.rs` with the
+//! Moved verbatim from er-quickload `experiments/gpu_readback/gpu_draw_shared.rs` with the
 //! loading-cover crate extraction (bd er-effects-rs-f9mq had relocated it out of the deleted
 //! path-A overlay composite before that). The only edit is visibility: the helpers were
 //! `pub(super)` inside the root's flat `gpu_readback` namespace and are `pub` here, because
@@ -231,7 +231,7 @@ unsafe fn compile_overlay_shader(entry: &'static [u8], target: &'static [u8]) ->
         D3DCompile(
             OVERLAY_SHADER_HLSL.as_ptr() as *const c_void,
             OVERLAY_SHADER_HLSL.len(),
-            s!("er-effects-present-overlay"),
+            s!("er-quickload-present-overlay"),
             None,
             None::<&ID3DInclude>,
             PCSTR::from_raw(entry.as_ptr()),

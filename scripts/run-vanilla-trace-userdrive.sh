@@ -52,10 +52,10 @@ PROFILE="$ARTIFACT_DIR/vanilla-trace.me3"
 } >"$PROFILE"
 
 # --- PURE VANILLA: back up + remove any product save-redirect TOML so nothing redirects the save ---
-if [[ -f "$GAME_DIR/er-effects.toml" ]]; then
-	cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
-	rm -f "$GAME_DIR/er-effects.toml"
-	echo "== backed up + removed er-effects.toml (pure vanilla, no save redirect) -> $ARTIFACT_DIR/er-effects.toml.bak"
+if [[ -f "$GAME_DIR/er-quickload.toml" ]]; then
+	cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
+	rm -f "$GAME_DIR/er-quickload.toml"
+	echo "== backed up + removed er-quickload.toml (pure vanilla, no save redirect) -> $ARTIFACT_DIR/er-quickload.toml.bak"
 fi
 
 # --- clean slate: reset the trace log so this run is isolated ---

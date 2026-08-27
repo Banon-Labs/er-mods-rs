@@ -4,7 +4,7 @@ import rego.v1
 
 # Marker-text-file FEATURE GATES are forbidden
 # (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19). A "marker-file gate" is any
-# .join("er-effects-<name>.txt") in crates/er-effects-rs/src/**/*.rs consumed by .exists() -- the
+# .join("er-quickload-<name>.txt") in crates/er-quickload/src/**/*.rs consumed by .exists() -- the
 # boolean on/off toggle shape, SEMANTICALLY IDENTICAL to an env-var gate. User directive: "we don't
 # want any env/marker gated features."
 #
@@ -33,7 +33,7 @@ allow if {
 
 deny contains message if {
 	not input.marker_diagnostic_sanctioned
-	message := "marker feature gates (`<game_dir>/er-effects-*.txt` consumed by `.exists()`) are forbidden. Make the behavior DEFAULT (gated only on the genuine runtime condition) or remove it. Only a genuinely-diagnostic toggle that changes NO game behavior may be added to `diagnostic_gates` in .auto/marker_file_gate_baseline.json as a reviewed exception; a behavioral fn is rejected even if listed."
+	message := "marker feature gates (`<game_dir>/er-quickload-*.txt` consumed by `.exists()`) are forbidden. Make the behavior DEFAULT (gated only on the genuine runtime condition) or remove it. Only a genuinely-diagnostic toggle that changes NO game behavior may be added to `diagnostic_gates` in .auto/marker_file_gate_baseline.json as a reviewed exception; a behavioral fn is rejected even if listed."
 }
 
 deny contains message if {

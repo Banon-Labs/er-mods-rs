@@ -7,7 +7,7 @@ per-DLL sha256/size plus the repo HEAD. Fails closed if any expected DLL is miss
 from the build output (run the release build first).
 
 Usage: python3 scripts/sync-dlls-to-elden-main.py [--dry-run] [--help]
-Env:   ELDEN_MAIN_DIR, ER_EFFECTS_REPO_ROOT override the defaults.
+Env:   ELDEN_MAIN_DIR, ER_MODS_REPO_ROOT override the defaults.
 
 An unrecognised argument is an ERROR, not a silent full deploy: this script had no argument
 parsing at all, so `--help` copied ten DLLs and rewrote the manifest instead of printing usage.
@@ -26,7 +26,7 @@ DLLS = {
     "amd_ags_x64.dll": "er-ags-stub",
     "er_armament_icons.dll": "er-armament-icons",
     "er_better_refills.dll": "er-better-refills",
-    "er_effects_rs.dll": "er-effects-rs",
+    "er_quickload.dll": "er-quickload",
     "er_input_harness.dll": "er-input-harness",
     "er_inventory_sort.dll": "er-inventory-sort",
     "er_invasion_warp.dll": "er-invasion-warp",
@@ -51,7 +51,7 @@ def main() -> int:
         return 2
     dry_run = "--dry-run" in args
     repo = os.environ.get(
-        "ER_EFFECTS_REPO_ROOT",
+        "ER_MODS_REPO_ROOT",
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
     release_dir = os.path.join(repo, "target", "x86_64-pc-windows-msvc", "release")

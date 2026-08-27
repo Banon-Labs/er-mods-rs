@@ -284,7 +284,7 @@ def main() -> int:
         p
         for p in sorted(root.rglob("ER0000.*"))
         if p.suffix.lower().lstrip(".") in ("sl2", "co2")
-        and "er-effects-save-redirect-stage" not in p.as_posix()
+        and "er-quickload-save-redirect-stage" not in p.as_posix()
     ]
     # Stream each match the instant its file decodes (flush=True) so a background
     # run can be monitored live for the expected name instead of blocking to the end.

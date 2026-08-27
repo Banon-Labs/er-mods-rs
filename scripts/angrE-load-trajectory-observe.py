@@ -3,13 +3,13 @@
 mms_step, return-title-chain waits, and log growth. Pure observation, no teardown.
 
 Usage: python3 scripts/angrE-load-trajectory-observe.py [cap_seconds=200]
-Env: ER_EFFECTS_TELEMETRY_PATH, ER_EFFECTS_AUTOLOAD_DEBUG_PATH (default: Windows game dir).
+Env: ER_QUICKLOAD_TELEMETRY_PATH, ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH (default: Windows game dir).
 """
 import json, os, re, subprocess, sys, time
 
 GD = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-TEL = os.environ.get("ER_EFFECTS_TELEMETRY_PATH", os.path.join(GD, "er-effects-telemetry.json"))
-LOG = os.environ.get("ER_EFFECTS_AUTOLOAD_DEBUG_PATH", os.path.join(GD, "er-effects-autoload-debug.log"))
+TEL = os.environ.get("ER_QUICKLOAD_TELEMETRY_PATH", os.path.join(GD, "er-quickload-telemetry.json"))
+LOG = os.environ.get("ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH", os.path.join(GD, "er-quickload-autoload-debug.log"))
 CAP = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score one `er_effects_rs.dll` by launching it ALONE and asking whether the game really lived.
+"""Score one `er_quickload.dll` by launching it ALONE and asking whether the game really lived.
 
 WHY THIS EXISTS
 ---------------
@@ -32,7 +32,7 @@ it.
 Usage:
     python3 scripts/er-release-bisect.py                       # newest main-* releases, in order
     python3 scripts/er-release-bisect.py --tag main-abc1234
-    python3 scripts/er-release-bisect.py --dll path/to/er_effects_rs.dll --label tree
+    python3 scripts/er-release-bisect.py --dll path/to/er_quickload.dll --label tree
     python3 scripts/er-release-bisect.py --selftest
 """
 
@@ -76,9 +76,9 @@ er_teardown = _load_teardown()
 
 LAUNCHER = Path.home() / "Elden" / "launch.sh"
 WORK = REPO_ROOT / "target" / "release-bisect"
-AUTOLOAD_LOG_NAME = "er-effects-autoload-debug.log"
+AUTOLOAD_LOG_NAME = "er-quickload-autoload-debug.log"
 RELEASE_TAG_PREFIX = "main-"
-PRODUCT_DLL_NAME = "er_effects_rs.dll"
+PRODUCT_DLL_NAME = "er_quickload.dll"
 
 # Agent-shell subprocess ceiling (scripts/check-no-timeouts.py, MAX_TIMEOUT_SECONDS = 30). These
 # are `gh` calls, not the game, so they get the tight limit and fail fast.

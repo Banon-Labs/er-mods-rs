@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Type text / send keys into a libvirt guest via `virsh send-key` (Linux keycodes).
 
-Autonomous VM driving for the y22i Windows-crash validation: the er-effects-win11 guest has no
+Autonomous VM driving for the y22i Windows-crash validation: the er-quickload-win11 guest has no
 qemu-guest-agent and no host->guest port forward, so the only host-driven input channel is
 virsh send-key. Verify effects out-of-band (host virsh screenshot pixel telemetry, or the host
 HTTP-server access log when a typed command fetches from 10.0.2.2).
@@ -10,11 +10,11 @@ Usage:
   vm-sendkeys.py text "some string"     # type a literal string (maps chars -> keycodes)
   vm-sendkeys.py key KEY_ENTER          # one keycode
   vm-sendkeys.py chord KEY_LEFTMETA KEY_R   # keys pressed together (Win+R)
-Env: DOMAIN (default er-effects-win11), LIBVIRT_DEFAULT_URI (default qemu:///system), HOLDTIME ms.
+Env: DOMAIN (default er-quickload-win11), LIBVIRT_DEFAULT_URI (default qemu:///system), HOLDTIME ms.
 """
 import os, subprocess, sys, time
 
-DOMAIN = os.environ.get('DOMAIN', 'er-effects-win11')
+DOMAIN = os.environ.get('DOMAIN', 'er-quickload-win11')
 os.environ.setdefault('LIBVIRT_DEFAULT_URI', 'qemu:///system')
 HOLD = os.environ.get('HOLDTIME', '40')
 

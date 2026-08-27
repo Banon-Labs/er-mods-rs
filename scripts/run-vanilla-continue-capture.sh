@@ -2,7 +2,7 @@
 # VANILLA-CONTINUE oracle-reference capture (user 2026-07-20): the correct baseline to diff load2
 # against is the NATIVE menu-driven Continue, NOT our custom autoload (load1). This run:
 #   - loads the PRODUCT + trace DLLs (so the rich oracle_* telemetry is emitted), but
-#   - sets ER_EFFECTS_TELEMETRY_ONLY=1, which DISARMS the custom autoload
+#   - sets ER_QUICKLOAD_TELEMETRY_ONLY=1, which DISARMS the custom autoload
 #     (product_autoload_gates.rs:62 arms only if !save_override_telemetry_only()), so the game boots
 #     to the TITLE normally with NO autoload/redirect, and
 #   - records the full telemetry timeseries in OBSERVE-ONLY mode (no probe/verdict/stall teardowns).
@@ -13,7 +13,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/vanilla-continue-$(date +%Y%m%d-%H%M%S)}"
-PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace.dll"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 300)"
 OBSERVE_SECONDS="${OBSERVE_SECONDS:-280}"
@@ -49,7 +49,7 @@ ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
 mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
 
-PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
+PRODUCT_GAMEDIR="$GAME_DIR/er_quickload.dll"
 TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
 cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
@@ -69,21 +69,21 @@ PROFILE="$ARTIFACT_DIR/vanilla-continue.me3"
 
 # TELEMETRY-ONLY: disarms the custom autoload; product still emits oracle_* telemetry. NO save redirect
 # (pure vanilla APPDATA save -- the user's real save; they Continue/Load-Game into angrE).
-printf '1\n' >"$GAME_DIR/er-effects-telemetry-only.txt"
-rm -f "$GAME_DIR/er-effects.toml" 2>/dev/null
+printf '1\n' >"$GAME_DIR/er-quickload-telemetry-only.txt"
+rm -f "$GAME_DIR/er-quickload.toml" 2>/dev/null
 # Sweep every autoload-drive / harness / move-probe / sq-repro marker so nothing drives the run.
-rm -f "$GAME_DIR"/er-effects-system-quit-repro.txt "$GAME_DIR"/er-effects-system-quit-load-switch.txt \
-	"$GAME_DIR"/er-effects-sq-target-switches.txt "$GAME_DIR"/er-effects-sq-target-slots.txt \
-	"$GAME_DIR"/er-effects-prove-movement.txt "$GAME_DIR"/er-effects-stay-active.txt \
-	"$GAME_DIR"/er-effects-probe-foreground.txt "$GAME_DIR"/er-effects-switch-slot.txt 2>/dev/null
+rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-system-quit-load-switch.txt \
+	"$GAME_DIR"/er-quickload-sq-target-switches.txt "$GAME_DIR"/er-quickload-sq-target-slots.txt \
+	"$GAME_DIR"/er-quickload-prove-movement.txt "$GAME_DIR"/er-quickload-stay-active.txt \
+	"$GAME_DIR"/er-quickload-probe-foreground.txt "$GAME_DIR"/er-quickload-switch-slot.txt 2>/dev/null
 # Clean slate for logs/telemetry so this run is not polluted by a prior one.
-rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-effects-telemetry.json 2>/dev/null
+rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-quickload-telemetry.json 2>/dev/null
 
 # shellcheck disable=SC2317
 cleanup() {
 	taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
 	taskkill.exe /F /IM me3.exe >/dev/null 2>&1
-	rm -f "$GAME_DIR/er-effects-telemetry-only.txt" 2>/dev/null
+	rm -f "$GAME_DIR/er-quickload-telemetry-only.txt" 2>/dev/null
 }
 trap cleanup EXIT
 

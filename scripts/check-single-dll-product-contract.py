@@ -2,7 +2,7 @@
 """Enforce the shipped single-DLL product contract.
 
 The customized System>Quit implementation lives in the `er-quit-menu-core` library, but the
-required product remains one ME3 native: `er_effects_rs.dll`. The standalone
+required product remains one ME3 native: `er_quickload.dll`. The standalone
 `er-quit-menu` package may exist as a test harness; it must never become a product
 dependency, default workspace artifact, staged release DLL, or required profile native.
 
@@ -24,15 +24,15 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_MANIFEST = REPO_ROOT / "Cargo.toml"
-PRODUCT_MANIFEST = REPO_ROOT / "crates" / "er-effects-rs" / "Cargo.toml"
+PRODUCT_MANIFEST = REPO_ROOT / "crates" / "er-quickload" / "Cargo.toml"
 QUIT_MENU_MANIFEST = REPO_ROOT / "crates" / "er-quit-menu-core" / "Cargo.toml"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 
-PRODUCT_PACKAGE = "er-effects-rs"
+PRODUCT_PACKAGE = "er-quickload"
 QUIT_MENU_PACKAGE = "er-quit-menu-core"
 HARNESS_PACKAGE = "er-quit-menu"
-PRODUCT_DLL = "er_effects_rs.dll"
-PRODUCT_PROFILE = "er-effects.me3"
+PRODUCT_DLL = "er_quickload.dll"
+PRODUCT_PROFILE = "er-quickload.me3"
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -82,7 +82,7 @@ def check_cargo_contract(
     expected_member = str(product_manifest_path.parent.relative_to(workspace_root))
     harness_member = str(Path("crates") / HARNESS_PACKAGE)
     if expected_member not in default_members:
-        failures.append("workspace default-members must include crates/er-effects-rs")
+        failures.append("workspace default-members must include crates/er-quickload")
     if harness_member in default_members:
         failures.append(
             "workspace default-members must exclude er-quit-menu; the harness requires "
@@ -91,7 +91,7 @@ def check_cargo_contract(
 
     product_crate_types = product.get("lib", {}).get("crate-type", [])
     if product_crate_types != ["cdylib"]:
-        failures.append("er-effects-rs must emit exactly one cdylib product artifact")
+        failures.append("er-quickload must emit exactly one cdylib product artifact")
 
     product_dependencies = dependency_tables(product)
     quit_entries: list[Any] = []
@@ -100,15 +100,15 @@ def check_cargo_contract(
             package = package_for_dependency(name, value)
             if package == HARNESS_PACKAGE:
                 failures.append(
-                    "er-effects-rs must not depend on er-quit-menu; the DLL is harness-only"
+                    "er-quickload must not depend on er-quit-menu; the DLL is harness-only"
                 )
             if package == QUIT_MENU_PACKAGE:
                 quit_entries.append(value)
 
     if len(quit_entries) != 1:
         failures.append(
-            "er-effects-rs must have exactly one direct er-quit-menu-core dependency so quit behavior "
-            "is linked into er_effects_rs.dll"
+            "er-quickload must have exactly one direct er-quit-menu-core dependency so quit behavior "
+            "is linked into er_quickload.dll"
         )
     else:
         dependency = quit_entries[0]
@@ -163,10 +163,10 @@ def check_staged_product(stage_dir: Path) -> list[str]:
 
 
 def stage_live_product(stage_dir: Path) -> None:
-    dummy_dll = stage_dir.parent / "source-er_effects_rs.dll"
+    dummy_dll = stage_dir.parent / "source-er_quickload.dll"
     dummy_dll.write_bytes(b"single-dll-contract-test\n")
     env = os.environ.copy()
-    env["ER_EFFECTS_DLL"] = str(dummy_dll)
+    env["ER_QUICKLOAD_DLL"] = str(dummy_dll)
     subprocess.run(
         ["bash", str(STAGE_SCRIPT), "--no-build", "--output", str(stage_dir)],
         cwd=REPO_ROOT,
@@ -196,19 +196,19 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         workspace = root / "Cargo.toml"
-        product = root / "crates" / "er-effects-rs" / "Cargo.toml"
+        product = root / "crates" / "er-quickload" / "Cargo.toml"
         quit_menu = root / "crates" / "er-quit-menu-core" / "Cargo.toml"
         stage = root / "stage"
         stage.mkdir()
 
         write_manifest(
             workspace,
-            '[workspace]\nmembers = ["crates/er-effects-rs", "crates/er-quit-menu-core", '
-            '"crates/er-quit-menu"]\ndefault-members = ["crates/er-effects-rs"]\n',
+            '[workspace]\nmembers = ["crates/er-quickload", "crates/er-quit-menu-core", '
+            '"crates/er-quit-menu"]\ndefault-members = ["crates/er-quickload"]\n',
         )
         write_manifest(
             product,
-            '[package]\nname = "er-effects-rs"\n[lib]\ncrate-type = ["cdylib"]\n'
+            '[package]\nname = "er-quickload"\n[lib]\ncrate-type = ["cdylib"]\n'
             "[target.'cfg(windows)'.dependencies]\n"
             'er-quit-menu-core = { path = "../er-quit-menu-core" }\n',
         )
@@ -233,8 +233,8 @@ def selftest() -> int:
         write_manifest(
             workspace,
             original_workspace.replace(
-                'default-members = ["crates/er-effects-rs"]',
-                'default-members = ["crates/er-effects-rs", "crates/er-quit-menu"]',
+                'default-members = ["crates/er-quickload"]',
+                'default-members = ["crates/er-quickload", "crates/er-quit-menu"]',
             ),
         )
         problems = check_cargo_contract(workspace, product, quit_menu)
@@ -325,7 +325,7 @@ def main() -> int:
 
     print(
         "[check-single-dll-product-contract] ok -- er-quit-menu-core is linked into "
-        "er_effects_rs.dll; staged product has one DLL and one native entry"
+        "er_quickload.dll; staged product has one DLL and one native entry"
     )
     return 0
 

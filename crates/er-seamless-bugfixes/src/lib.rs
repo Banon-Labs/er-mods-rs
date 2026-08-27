@@ -31,7 +31,7 @@
 //! them on the stack. Its union dispatcher would forward only the register four and drop the rest,
 //! which corrupts the call rather than protecting it -- worse than the crash being guarded.
 //!
-//! So both guards use this DLL's own MinHook instance, which is safe because no er-effects DLL
+//! So both guards use this DLL's own MinHook instance, which is safe because no er-quickload DLL
 //! hooks either address (searched repo-wide), and because the install-time prologue check is itself
 //! the collision detector: a second MinHook instance that got there first would have replaced the
 //! entry with a jump, the byte comparison would fail, and the guard would disarm loudly instead of

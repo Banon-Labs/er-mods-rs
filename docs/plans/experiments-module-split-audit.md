@@ -2,7 +2,7 @@
 
 Audit date: 2026-08-01. Baseline: `main` @ `7ebfeef8`.
 
-Scope measured: 70 files / ~54,900 lines under `crates/er-effects-rs/src/experiments`, plus
+Scope measured: 70 files / ~54,900 lines under `crates/er-quickload/src/experiments`, plus
 everything it reaches across the 36 workspace crates. Produced by a seven-cluster parallel
 sweep, each cluster re-checked by an adversarial verifier against the source, then a
 completeness critic over the whole tree.
@@ -126,7 +126,7 @@ Still unresolved (need decompiles): `0x3d68078`, `0x3d856a0`, `0x7499e0`. Also u
 `RuntimeGlobalRva::Fd4IoPool = 0x4853048`, the sibling of the mis-titled entry above.
 
 **Landed:** `0x67b750` renamed `CONTINUE_LOAD_RVA` -> `SAVE_WRITE_TO_SLOT_RVA`. It writes a
-save; it does not load one. `er-save-suppress` had it right; `er-effects-rs` and
+save; it does not load one. `er-save-suppress` had it right; `er-quickload` and
 `er-save-loader` had it wrong. See bd `rva-67b750-is-save-write-not-continue-load-2026-08-01`
 and the P1 bug filed for `DirectTraceSequence` calling the save writer as a load step.
 

@@ -1,7 +1,7 @@
 // MSB PARSE TRACE -- the one measurement that collapses the phase-2 reload freeze.
 //
 // MOVED VERBATIM out of the product DLL's
-// `crates/er-effects-rs/src/experiments/startup_hooks/diagnostics/msb_parse_trace.rs` on
+// `crates/er-quickload/src/experiments/startup_hooks/diagnostics/msb_parse_trace.rs` on
 // 2026-08-25. There it was installed UNCONDITIONALLY at process attach, so every player carried a
 // detour on this callback for the sake of a log nothing in the product read back. The body, the
 // sampling order and every log string are unchanged; only the sink moved (`er-diag-harness.log`

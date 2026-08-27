@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build er_effects_rs.dll from the CURRENT tree, then score it exactly like a release artifact.
+# Build er_quickload.dll from the CURRENT tree, then score it exactly like a release artifact.
 #
 # The scoring -- launch it alone, wait, decide from thread count and CPU burn rather than from a
 # pid existing -- lives in scripts/er-release-bisect.py and is not repeated here. This exists only
@@ -17,12 +17,12 @@ set -euo pipefail
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 LABEL=${1:?usage: er-tree-bisect-run.sh <label> [alive-seconds]}
 ALIVE=${2:-45}
-DLL="$REPO/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+DLL="$REPO/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 BUILD_LOG="$REPO/target/release-bisect/tree-build.log"
 
 mkdir -p -- "$(dirname -- "$BUILD_LOG")"
 
-if ! bash "$REPO/scripts/er-build-dlls.sh" er-effects-rs >"$BUILD_LOG" 2>&1; then
+if ! bash "$REPO/scripts/er-build-dlls.sh" er-quickload >"$BUILD_LOG" 2>&1; then
 	echo "$LABEL: BUILD FAILED (see $BUILD_LOG)" >&2
 	tail -5 -- "$BUILD_LOG" >&2
 	exit 1

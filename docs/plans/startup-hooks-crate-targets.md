@@ -24,7 +24,7 @@ had already shed **364** lines, not 373, and the two files together shed **1,250
 2,141, not 1,259. This is a re-measurement error in SS0.1, not drift; nothing moved.
 
 **Scope:** at baseline, 32 files / 20,834 lines under
-`crates/er-effects-rs/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
+`crates/er-quickload/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
 in-directory, plus `startup_hooks.rs` (197) = **25,525** (SS0.1 said 25,516; corrected above). The rest of `experiments/` is covered by
 `docs/plans/experiments-crate-targets.md`.
 
@@ -160,7 +160,7 @@ Four facts shape every slice:
 
 ## 3. Per-file assignment -- all 32 analysed files (+ 2 unanalysed)
 
-Paths relative to `crates/er-effects-rs/src/experiments/startup_hooks/`. **`plan` is the line count
+Paths relative to `crates/er-quickload/src/experiments/startup_hooks/`. **`plan` is the line count
 the destination split was measured against (`f15cce1a`); `now` is `877f1261`.** Where they differ,
 the destinations still hold but the line *quantities* -- and any offset derived from them -- do not.
 

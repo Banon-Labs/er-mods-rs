@@ -245,7 +245,7 @@ where
 {
     // WARNING (corrected 2026-08-01 against the 1.16.2 Ghidra dump): 0x67b750 is
     // `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot)` -- it WRITES a save, it does
-    // not read one. It was named `CONTINUE_LOAD_RVA` here and in er-effects-rs, but
+    // not read one. It was named `CONTINUE_LOAD_RVA` here and in er-quickload, but
     // `SAVE_DISPATCH_CHAR_RVA` in er-save-suppress (which hooks it precisely to SWALLOW
     // saves); er-save-suppress had it right. Decompile: bails on `CanShowSaveMenu()`,
     // requires `saveState == 0`, resolves slot -1 to `GameMan->saveSlot`, allocates
@@ -531,7 +531,7 @@ mod tests {
         // The file-driven path passes `experimental_direct_menu_load=true`; that alone must keep the
         // DirectMenuLoad method regardless of env/flag-file state, so the host request then satisfies the
         // DLL arming condition `request.method() == DirectMenuLoad`. (The product/portrait smoke instead
-        // arms the gate via the `er-effects-experimental-direct-menu-load.txt` flag file, which
+        // arms the gate via the `er-quickload-experimental-direct-menu-load.txt` flag file, which
         // `experimental_direct_menu_load_gate_enabled` now also honors for the env-method path.)
         let mut request = SaveLoadRequest {
             method: SaveLoadMethod::DirectMenuLoad,

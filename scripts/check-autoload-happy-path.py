@@ -8,11 +8,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# `experiments` is a directory module (crates/er-effects-rs/src/experiments/{mod,save_redirect,trace,
+# `experiments` is a directory module (crates/er-quickload/src/experiments/{mod,save_redirect,trace,
 # startup_hooks,input_block,own_load,...}.rs). The autoload happy-path tokens and
 # function bodies may live in any submodule, so treat the whole module as one
 # concatenated source for these fail-closed string/fn-body checks.
-RUNTIME_SRC = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+RUNTIME_SRC = REPO_ROOT / "crates" / "er-quickload" / "src"
 EXPERIMENTS_DIR = RUNTIME_SRC / "experiments"
 EXPERIMENTS = RUNTIME_SRC / "experiments.rs"  # legacy single-file fallback
 # The title/autoload/switch cluster moved into the er-title-flow crate
@@ -84,7 +84,7 @@ def read_title_flow() -> str:
     """The er-title-flow crate, which now owns part of what these checks assert on.
 
     The title/autoload cluster is being extracted crate by crate, so a name this gate pins can
-    legitimately move from `er-effects-rs/src` into `er-title-flow/src` without anything about the
+    legitimately move from `er-quickload/src` into `er-title-flow/src` without anything about the
     feature changing. Both the `experiments` and the `lib` blobs therefore include this crate: a
     substring assertion that stops matching because a declaration moved is the checker reporting a
     refactor as feature removal, which is exactly what `read_module_tree` was introduced to stop.
@@ -355,7 +355,7 @@ def main() -> int:
     if direct_menu_load_gate is not None:
         require(
             "std::env::var" not in direct_menu_load_gate
-            and "er-effects-" not in direct_menu_load_gate,
+            and "er-quickload-" not in direct_menu_load_gate,
             "direct_menu_load/product_core experiment must not be env/marker-gated; it is a disabled "
             "experiment, neither product default nor a runtime knob",
             failures,
@@ -381,7 +381,7 @@ def main() -> int:
         "!save_override_telemetry_only()" in title_cover_gate
         and "autoload_disabled()" in title_cover_gate
         and "std::env::var" not in title_cover_gate
-        and "er-effects-" not in title_cover_gate,
+        and "er-quickload-" not in title_cover_gate,
         "title native visual suppression must be default-on for real autoload runs without a new env/file gate",
         failures,
     )
@@ -787,20 +787,20 @@ def main() -> int:
     # after the me3 production smoke passed: run me3-product-smoke-20260704-110507).
     require('profileVersion = "v1"' in stage, "release staging must write a v1 me3 ModProfile", failures)
     require("[[natives]]" in stage, "release staging profile must load the DLL as an me3 native", failures)
-    require("path = 'er_effects_rs.dll'" in stage, "release staging profile must reference the DLL relative to the profile (relocatable payload)", failures)
+    require("path = 'er_quickload.dll'" in stage, "release staging profile must reference the DLL relative to the profile (relocatable payload)", failures)
     require("dinput8.dll" not in stage, "release staging must not ship the removed LazyLoader proxy", failures)
     require("lazyLoad.ini" not in stage, "release staging must not ship the removed LazyLoader config", failures)
     require("dllModFolderName" not in stage, "release staging must not recreate the LazyLoader dllMods layout", failures)
     require("er_skip_splash_screens.dll" not in stage, "release staging must not include stale skip-splash DLLs", failures)
-    require("er-effects-autoload.txt.example" in stage, "release staging must include an autoload request example", failures)
+    require("er-quickload-autoload.txt.example" in stage, "release staging must include an autoload request example", failures)
     require(
         re.search(r"method=direct_menu_load", stage) is None,
         "release staging autoload example must not arm experimental direct_menu_load/product_core by default",
         failures,
     )
     require(
-        "er-effects-native-continue.txt.example" in stage
-        and "er-effects-pab-advance.txt.example" in stage,
+        "er-quickload-native-continue.txt.example" in stage
+        and "er-quickload-pab-advance.txt.example" in stage,
         "release staging must document the supported native Continue + PAB zero-input gates",
         failures,
     )

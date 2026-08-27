@@ -3,7 +3,7 @@
 
 The PRODUCT DLL drives the loads (boot autoload = load1; sq-repro XInput autopilot drives 2 same-slot
 reloads = load2, load3, with the load-2 freeze force-advanced to the load-3 recovery by the DLL's
-freeze-recovery deadline). This script does NOT drive input -- it OBSERVES er-effects-telemetry.json,
+freeze-recovery deadline). This script does NOT drive input -- it OBSERVES er-quickload-telemetry.json,
 records the per-load RAM-oracle signature (render-ready / can-see + havok motion + freeze markers),
 captures the mandatory loading-screen-portrait image at the frozen-load-2 moment, and tears down after
 load-3 reaches a held render-ready dwell OR the runtime cap. It is the "logging" half of the two-DLL
@@ -349,7 +349,7 @@ def capture_portrait(artifact_dir: Path) -> None:
 def _load_semaphore_rows(artifact_dir: Path, game_dir: Path) -> list[dict]:
     paths = [
         artifact_dir / "load-semaphore-trace.jsonl",
-        game_dir / "er-effects-input-trace.jsonl",
+        game_dir / "er-quickload-input-trace.jsonl",
     ]
     trace_path = next((p for p in paths if p.exists()), paths[0])
     rows: list[dict] = []
@@ -756,12 +756,12 @@ def teardown() -> None:
 def write_switch_trigger(game_dir: Path, slot: int, save_file: str | None) -> None:
     """Deterministically trigger the product's programmatic switch to (save_file, slot).
 
-    Writes er-effects-switch-save-file.txt (the source override; empty/absent = keep active save) then
-    er-effects-switch-slot.txt (the mtime-triggered slot). The product's poll_switch_slot_control_file
+    Writes er-quickload-switch-save-file.txt (the source override; empty/absent = keep active save) then
+    er-quickload-switch-slot.txt (the mtime-triggered slot). The product's poll_switch_slot_control_file
     consumes the fresh mtime and arms switch_slot_arm_programmatic when the world is eligible. bd
     DETERMINISTIC-switch-trigger-recipe-write-slot-control-file-not-menu-nav-2026-07-21.
     """
-    save_ctl = game_dir / "er-effects-switch-save-file.txt"
+    save_ctl = game_dir / "er-quickload-switch-save-file.txt"
     if save_file:
         save_ctl.write_text(save_file, encoding="utf-8")
     else:
@@ -770,13 +770,13 @@ def write_switch_trigger(game_dir: Path, slot: int, save_file: str | None) -> No
             if save_ctl.exists():
                 save_ctl.write_text("", encoding="utf-8")
     # The slot file's fresh mtime is the trigger; write it LAST (after the source override is in place).
-    (game_dir / "er-effects-switch-slot.txt").write_text(str(slot), encoding="utf-8")
+    (game_dir / "er-quickload-switch-slot.txt").write_text(str(slot), encoding="utf-8")
 
 
 def _try_parse_crash_dump(artifact_dir: Path, since_epoch: float) -> str | None:
     """Best-effort: auto-parse any Windows minidump written during this run into a deep crash trace.
 
-    The in-process VEH (crates/er-effects-rs/src/crashlog/) cannot see a fault that happens BEFORE our
+    The in-process VEH (crates/er-quickload/src/crashlog/) cannot see a fault that happens BEFORE our
     DLL loads -- e.g. a me3-loader boot crash (observed 2026-07-24: eldenring.exe crashed ~3s after
     launch in me3_mod_host/ntdll heap code, our DLL never initialised). The Windows minidump is then the
     only record. This shells scripts/parse-crash-dump.py to auto-find the newest eldenring.exe.<pid>.dmp
@@ -809,7 +809,7 @@ def main() -> int:
         "--game-dir",
         type=Path,
         required=True,
-        help="dir with er-effects-telemetry.json + logs",
+        help="dir with er-quickload-telemetry.json + logs",
     )
     ap.add_argument("--artifact-dir", type=Path, required=True)
     ap.add_argument(
@@ -871,8 +871,8 @@ def main() -> int:
         ),
     )
     # DETERMINISTIC SWITCH DRIVER (2026-07-21, bd DETERMINISTIC-switch-trigger-recipe): drive each
-    # subsequent load by WRITING the product's control file (er-effects-switch-slot.txt, +
-    # er-effects-switch-save-file.txt for cross-save) once the current load proves movement -- instead of
+    # subsequent load by WRITING the product's control file (er-quickload-switch-slot.txt, +
+    # er-quickload-switch-save-file.txt for cross-save) once the current load proves movement -- instead of
     # the flaky input-harness menu-nav. The product's poll_switch_slot_control_file arms the switch
     # programmatically when the world is eligible (player present + live menu job). The input-harness DLL
     # is still loaded to drive the 3s FORWARD-MOVEMENT proof; only the SWITCH trigger moves to the file.
@@ -915,12 +915,12 @@ def main() -> int:
     # run. Real triggers overwrite it with a valid slot after each load proves movement.
     if switch_plan:
         with contextlib.suppress(OSError):
-            (args.game_dir / "er-effects-switch-save-file.txt").write_text("", encoding="utf-8")
-            (args.game_dir / "er-effects-switch-slot.txt").write_text("-1", encoding="utf-8")
+            (args.game_dir / "er-quickload-switch-save-file.txt").write_text("", encoding="utf-8")
+            (args.game_dir / "er-quickload-switch-slot.txt").write_text("-1", encoding="utf-8")
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     run_start_epoch = time.time()  # crash-dump filter: only parse minidumps written after the run began
-    telemetry_path = args.game_dir / "er-effects-telemetry.json"
+    telemetry_path = args.game_dir / "er-quickload-telemetry.json"
 
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
     epochs: dict[int, dict] = {}
@@ -1472,8 +1472,8 @@ def main() -> int:
 
     # Snapshot artifacts before teardown clears live state.
     for name in (
-        "er-effects-telemetry.json",
-        "er-effects-autoload-debug.log",
+        "er-quickload-telemetry.json",
+        "er-quickload-autoload-debug.log",
         "er-reload-trace.log",
     ):
         src = args.game_dir / name

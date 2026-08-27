@@ -1,6 +1,6 @@
 // DLL-drawn startup save-file picker overlay.
 //
-// Moved from `er-effects-rs/src/experiments/gpu_readback/save_picker_overlay.rs` as S4 of
+// Moved from `er-quickload/src/experiments/gpu_readback/save_picker_overlay.rs` as S4 of
 // the save-picker extraction. Product/game state crosses through `host.rs`; raster primitives
 // come from `er-loading-bar-core`, matching the boot bar's glyphs and rectangles.
 

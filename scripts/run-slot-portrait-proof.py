@@ -10,8 +10,8 @@ in the switch window; the small-capture publish gate then rejected all of them -
 (and before that gate, the same 256 captures published -> the pixelated/naked portrait reports).
 
 This driver validates the fix END TO END, fully agent-driven (no menu nav, no input):
-  load1 = the configured boot autoload (game-dir er-effects.toml, untouched by this script);
-  load2 = the product's own deterministic control file (er-effects-switch-slot.txt), the same
+  load1 = the configured boot autoload (game-dir er-quickload.toml, untouched by this script);
+  load2 = the product's own deterministic control file (er-quickload-switch-slot.txt), the same
           code path the user's ProfileSelect click reaches (switch_slot_arm_programmatic).
 
 PASS semaphores for the load2 window (all RAM/native, screenshots are user evidence only):
@@ -60,10 +60,10 @@ GAME_DIR = Path(
     )
 )
 LAUNCHER = Path(os.environ.get("ER_LAUNCHER", str(Path.home() / "Elden/launch.sh")))
-TELEMETRY = GAME_DIR / "er-effects-telemetry.json"
-DEBUG_LOG = GAME_DIR / "er-effects-autoload-debug.log"
-SWITCH_SLOT = GAME_DIR / "er-effects-switch-slot.txt"
-SWITCH_SAVE = GAME_DIR / "er-effects-switch-save-file.txt"
+TELEMETRY = GAME_DIR / "er-quickload-telemetry.json"
+DEBUG_LOG = GAME_DIR / "er-quickload-autoload-debug.log"
+SWITCH_SLOT = GAME_DIR / "er-quickload-switch-slot.txt"
+SWITCH_SAVE = GAME_DIR / "er-quickload-switch-save-file.txt"
 CAPTURE = REPO / "scripts/capture-er-window.py"
 CAP_FILE = REPO / ".auto/runtime_timeout_cap_seconds"
 
@@ -319,7 +319,7 @@ def main() -> int:
         log("FATAL: an eldenring.exe is ALREADY running; refusing to disturb it.")
         return 2
 
-    toml = GAME_DIR / "er-effects.toml"
+    toml = GAME_DIR / "er-quickload.toml"
     verdict["toml"] = toml.read_text() if toml.exists() else None
     for f in (SWITCH_SLOT, SWITCH_SAVE):
         if f.exists():
@@ -330,7 +330,7 @@ def main() -> int:
     proc = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
-        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         cwd=str(LAUNCHER.parent),
         stdout=open(art / "launcher.log", "w"),
@@ -406,7 +406,7 @@ def main() -> int:
             sw: dict = {"slot": slot, "index": idx}
             base_s = snap(read_telemetry())
             SWITCH_SLOT.write_text(f"{slot}\n")
-            log(f"[switch {idx}/{len(chain)}] WROTE er-effects-switch-slot.txt = {slot}")
+            log(f"[switch {idx}/{len(chain)}] WROTE er-quickload-switch-slot.txt = {slot}")
             switch_t0 = time.time()
             deadline = switch_t0 + cap
             window_seen_at = 0.0

@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Reinforce no-questionnaire-during-goal-work every turn (advisory, non-blocking)
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: LOW
 #   id: ER-EFFECTS-BLOCK-ASKUSERQUESTION-REMINDER

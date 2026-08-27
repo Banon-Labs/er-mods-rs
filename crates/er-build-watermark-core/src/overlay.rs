@@ -31,7 +31,7 @@ const REBUILD_EVERY_RENDERS: usize = 120;
 /// A named kernel object is visible across every module in the process, which is exactly the
 /// scope the question has. `Local\` keeps it per-session rather than machine-wide.
 const OWNER_MUTEX_NAME: windows::core::PCWSTR =
-    windows::core::w!("Local\\er-effects-build-watermark-owner");
+    windows::core::w!("Local\\er-quickload-build-watermark-owner");
 
 /// Renders the roster. State is the cached rows plus the counter that ages them out.
 struct WatermarkOverlay {

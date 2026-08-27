@@ -20,7 +20,7 @@ mod hang;
 /// Publish the live `CS::LoadingScreenData*` for the hang watchdog's loading-screen oracle.
 ///
 /// Re-exported because `mod hang` is private: the function is documented as the entry point for a
-/// host DLL that is not `er_effects_rs.dll`, and such a host is by definition another crate.
+/// host DLL that is not `er_quickload.dll`, and such a host is by definition another crate.
 pub use hang::publish_loading_screen_data;
 
 const DEFAULT_LOG_FILE: &str = "er-crash-log.txt";

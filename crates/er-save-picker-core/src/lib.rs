@@ -3,7 +3,7 @@
 //!
 //! The save-picker crate extraction has moved the host-testable row model, config keys,
 //! slot parser, reusable OS common-file-dialog mechanism, and DLL-drawn boot overlay here.
-//! Product entrypoints still live under `er-effects-rs/src/experiments/startup_hooks/save_picker/`
+//! Product entrypoints still live under `er-quickload/src/experiments/startup_hooks/save_picker/`
 //! until the remaining quit-menu seams are extracted.
 //!
 //! Contents and remaining planned moves:
@@ -34,11 +34,11 @@
 //!   (`os_open_save_picker_load`, `os_open_save_dest_picker`) are not here -- they are
 //!   quit-menu callers and still live in the product shim for now.
 //! * `config` -- the three picker keys and their plumbing, moved out of
-//!   `er-effects-rs/src/config.rs`: `preferred_save_picker_dir`,
+//!   `er-quickload/src/config.rs`: `preferred_save_picker_dir`,
 //!   `autoupdate_preferred_picker_dir` and `os_native_save_picker` (with its
 //!   `use_os_file_picker` / `save_picker.os_native` aliases), their parse + validation,
 //!   the generated boilerplate doc text, and `remember_preferred_save_picker_dir`. Only
-//!   picker code reads them, so they move with the picker; the product's `er-effects.toml`
+//!   picker code reads them, so they move with the picker; the product's `er-quickload.toml`
 //!   parser keeps one file and delegates those keys here.
 //! * `surface` -- the pure surface/outcome routing types (`PickerOpenRequest`,
 //!   `PickerSurface`, `PickerOpenOutcome`) and destination target routing (`DestRoute`).

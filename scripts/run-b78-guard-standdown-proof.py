@@ -26,10 +26,10 @@ fix ENGAGED:
 Fully agent-driven, no menu navigation and no simulated input: each switch is armed by writing the
 product's own control files, the same code path the user's ProfileSelect click reaches
 (poll_switch_slot_control_file -> switch_slot_arm_programmatic):
-    er-effects-switch-save-file.txt   the target save FILE (Windows path) -- cross-save only
-    er-effects-switch-slot.txt        the target slot, mtime-triggered -- this is "the menu click"
+    er-quickload-switch-save-file.txt   the target save FILE (Windows path) -- cross-save only
+    er-quickload-switch-slot.txt        the target slot, mtime-triggered -- this is "the menu click"
 
-load1 is the game-dir er-effects.toml boot autoload, left untouched.
+load1 is the game-dir er-quickload.toml boot autoload, left untouched.
 
 Per the loading-screen-portrait protocol, scripts/capture-er-window.py fires at the portrait moment
 of every switch. The agent never reads those images; they are user evidence. Stop/continue decisions
@@ -37,7 +37,7 @@ come only from the RAM oracles above, telemetry-freeze detection, process exit, 
 
 Usage:
   python3 scripts/run-b78-guard-standdown-proof.py \
-      --chain '0,/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2:0' \
+      --chain '0,/home/banon/projects/er-mods-rs/save-files/150-Banon/ER0000.sl2:0' \
       --label pr127
 """
 
@@ -64,11 +64,11 @@ GAME_DIR = Path(
     )
 )
 LAUNCHER = Path(os.environ.get("ER_LAUNCHER", str(Path.home() / "Elden/launch.sh")))
-TELEMETRY = GAME_DIR / "er-effects-telemetry.json"
-DEBUG_LOG = GAME_DIR / "er-effects-autoload-debug.log"
-SWITCH_SLOT = GAME_DIR / "er-effects-switch-slot.txt"
-SWITCH_SAVE = GAME_DIR / "er-effects-switch-save-file.txt"
-BOOT_TOML = GAME_DIR / "er-effects.toml"
+TELEMETRY = GAME_DIR / "er-quickload-telemetry.json"
+DEBUG_LOG = GAME_DIR / "er-quickload-autoload-debug.log"
+SWITCH_SLOT = GAME_DIR / "er-quickload-switch-slot.txt"
+SWITCH_SAVE = GAME_DIR / "er-quickload-switch-save-file.txt"
+BOOT_TOML = GAME_DIR / "er-quickload.toml"
 CAPTURE = REPO / "scripts/capture-er-window.py"
 CAP_FILE = REPO / ".auto/runtime_timeout_cap_seconds"
 SLOT_DUMPER = REPO / "scripts/dump-save-slots.py"
@@ -256,7 +256,7 @@ def slot_identity(save: str, slot: int) -> tuple[str, int]:
 
 
 def boot_target() -> tuple[str, int]:
-    """The boot autoload comes from the game-dir er-effects.toml, which this driver never edits."""
+    """The boot autoload comes from the game-dir er-quickload.toml, which this driver never edits."""
     save, slot = None, 0
     for line in BOOT_TOML.read_text().splitlines():
         if line.strip().startswith("save_file"):
@@ -348,7 +348,7 @@ def main() -> int:
     proc = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
-        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         cwd=str(LAUNCHER.parent),
         stdout=open(art / "launcher.log", "w"),

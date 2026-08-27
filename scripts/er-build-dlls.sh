@@ -4,7 +4,7 @@
 # WHY THIS EXISTS RATHER THAN A BARE CARGO CALL
 # ---------------------------------------------
 # `cargo xwin build --release --target x86_64-pc-windows-msvc` honours
-#     default-members = ["crates/er-effects-rs"]
+#     default-members = ["crates/er-quickload"]
 # so it builds ONLY the product and exits 0 in a fraction of a second having compiled none of
 # the other fifteen shells. That is indistinguishable from a successful incremental build,
 # and the stale DLL from last week stays exactly where it was. So every package is named with
@@ -17,7 +17,7 @@
 # compiled. scripts/er-run-branch.py refuses to launch an artifact without it.
 #
 # Usage:
-#   scripts/er-build-dlls.sh er-effects-rs er-armament-icons     # named packages
+#   scripts/er-build-dlls.sh er-quickload er-armament-icons     # named packages
 #   scripts/er-build-dlls.sh --all                               # every shipped shell
 #   scripts/er-build-dlls.sh --closure closure.json              # packages from a closure
 #

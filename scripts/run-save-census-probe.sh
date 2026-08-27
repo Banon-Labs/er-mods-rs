@@ -125,7 +125,7 @@ cmd_start() {
 
 	(
 		cd "$game_dir" || exit 1
-		nohup env ER_EFFECTS_SAVE_MODE_HINT=vanilla "$ME3_BIN" \
+		nohup env ER_QUICKLOAD_SAVE_MODE_HINT=vanilla "$ME3_BIN" \
 			--steam-dir "$ME3_STEAM_DIR" launch \
 			-p "$profile" -g eldenring -e "$GAME_EXE" \
 			>"$artifact/me3.log" 2>&1 &

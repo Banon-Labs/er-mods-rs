@@ -759,7 +759,7 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
 /// convert it to a PNG offline and visually confirm it is the loaded character's head (not the
 /// depth buffer / garbage). Best-effort; gated by the same default-OFF readback path.
 pub fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
-    let dir = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
+    let dir = std::env::var("ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH")
         .ok()
         .and_then(|p| PathBuf::from(p).parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));

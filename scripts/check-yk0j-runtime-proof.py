@@ -25,9 +25,9 @@ def file_sha256(path: Path) -> str:
 def validate(artifact_dir: Path) -> list[str]:
     failures: list[str] = []
     contract_path = artifact_dir / "yk0j-probe-contract.json"
-    telemetry_path = artifact_dir / "er-effects-telemetry.json"
+    telemetry_path = artifact_dir / "er-quickload-telemetry.json"
     result_path = artifact_dir / "runtime-probe.out"
-    debug_path = artifact_dir / "er-effects-autoload-debug.log"
+    debug_path = artifact_dir / "er-quickload-autoload-debug.log"
     for path in (contract_path, telemetry_path, result_path, debug_path):
         if not path.is_file():
             failures.append(f"missing proof artifact: {path}")
@@ -119,16 +119,16 @@ def selftest() -> int:
             "oracle_char_name": "Test",
             "oracle_char_level": 1,
         }
-        (root / "er-effects-telemetry.json").write_text(json.dumps(telemetry))
+        (root / "er-quickload-telemetry.json").write_text(json.dumps(telemetry))
         (root / "runtime-probe.out").write_text(
             json.dumps({"ready": True, "reason": "player_available"})
         )
-        (root / "er-effects-autoload-debug.log").write_text("own-load: YK0J PROBE armed\n")
+        (root / "er-quickload-autoload-debug.log").write_text("own-load: YK0J PROBE armed\n")
         if validate(root):
             print("selftest valid fixture failed")
             return 1
         telemetry["oracle_own_load_save_repeated_identical_rejections"] = 1
-        (root / "er-effects-telemetry.json").write_text(json.dumps(telemetry))
+        (root / "er-quickload-telemetry.json").write_text(json.dumps(telemetry))
         if not validate(root):
             print("selftest failed to reject repeated identical rejection")
             return 1

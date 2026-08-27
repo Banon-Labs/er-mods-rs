@@ -1,6 +1,6 @@
 //! Standalone ME3-loadable loading-portrait DLL shell.
 //!
-//! This is deliberately separate from the product `er-effects-rs` DLL (same pattern as
+//! This is deliberately separate from the product `er-quickload` DLL (same pattern as
 //! `er-loading-bar`): it proves the `er-loading-portrait-core` feature crate can be built
 //! and loaded as its own native DLL without dragging product hooks, autoload, save
 //! picking, or product runtime state along. On attach it installs a standalone host seam
@@ -8,7 +8,7 @@
 //! observer + tip-suppression hooks, and a portrait+stats-only display host: the isolated
 //! native-overlay window on native Windows, the in-swapchain Present compositor on Wine.
 //!
-//! NEVER load this DLL alongside `er_effects_rs.dll` in one me3 profile (double Present
+//! NEVER load this DLL alongside `er_quickload.dll` in one me3 profile (double Present
 //! detour / double MinHook) -- see Cargo.toml.
 
 // Everything this shell does -- the log writer, the gates, the host seam it installs, the

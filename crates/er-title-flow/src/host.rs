@@ -2,7 +2,7 @@
 //!
 //! The moved title/autoload/switch cluster used to call product functions (gates, slot
 //! resolution, logging, hook installers, the own-stepper drivers) directly out of the
-//! er-effects-rs flat namespace. Those calls now go through function pointers installed
+//! er-quickload flat namespace. Those calls now go through function pointers installed
 //! once at DLL attach via [`install_host`] (the er-loading-portrait-core `PortraitHost`
 //! precedent). Crate-internal wrapper fns keep the EXACT original names/signatures, so
 //! the moved code compiles unchanged. Until a host installs, every seam answers a

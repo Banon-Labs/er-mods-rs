@@ -40,7 +40,7 @@ use std::sync::Mutex;
 ///
 /// The invariant is that `<name>.prev` holds the run IMMEDIATELY before the live file,
 /// or does not exist. Several harnesses delete the log before launching (`rm -f
-/// "$GAME_DIR"/er-effects-*.log`), which leaves nothing to rotate; the older `.prev` is
+/// "$GAME_DIR"/er-quickload-*.log`), which leaves nothing to rotate; the older `.prev` is
 /// dropped in that case rather than left sitting next to a fresh log looking one run
 /// old when it is three. Keeping a run means copying it somewhere of your own.
 pub const PREVIOUS_RUN_SUFFIX: &str = ".prev";

@@ -3,7 +3,7 @@
 Plan of record for bd `er-effects-rs-mz7q`. Baseline: `main` @ `1175610b` (PRs #99-#106
 merged). Phase 1 (this document + the crate scaffolding) changes no product behavior.
 
-**Goal.** Decouple two features completely out of `er-effects-rs` into crates that can be
+**Goal.** Decouple two features completely out of `er-quickload` into crates that can be
 bundled into other products AND shipped as independent ME3 DLLs, following the
 `er-loading-portrait-core` / `er-loading-portrait` precedent: the feature crate holds the
 logic, a thin `cdylib` shell makes it loadable alone, and a fn-pointer host struct
@@ -27,7 +27,7 @@ The two products, as the user named them:
    mechanism is used by the extracted crates but NOT by the rest of the product, it moves
    into one of the pairs (or becomes its own crate). A host-seam entry is only legitimate
    when a consumer OUTSIDE the extracted features genuinely still needs the thing.
-2. **`er-effects-rs` stays byte-for-byte behaviorally identical at every slice.** This is a
+2. **`er-quickload` stays byte-for-byte behaviorally identical at every slice.** This is a
    refactor, not a rewrite -- with **no exceptions**. An earlier draft carved out one, the
    boot dialog's dim, but PR #109 has since landed that behavior on `main`, so every slice
    including S5 is now pure motion. See SS5.3.
@@ -125,12 +125,12 @@ they support is unaffected: B is several times A, and far more than "three butto
 
 ### 1.4 Product code vs agent-harness code
 
-Separating these was explicitly required. Classification evidence: no `ER_EFFECTS_*` env
+Separating these was explicitly required. Classification evidence: no `ER_QUICKLOAD_*` env
 var is read by any of these files; every remaining gate is a compile-time `false`, a
 module-presence check (`harness_dll_present()` = `GetModuleHandleA("er_input_harness.dll")`),
 or a control file.
 
-**STAYS in `er-effects-rs` as diagnostics / harness (~1950 lines).** These are agent-only
+**STAYS in `er-quickload` as diagnostics / harness (~1950 lines).** These are agent-only
 and must not be dragged into a shipped feature crate:
 
 | Block | Why |
@@ -368,9 +368,9 @@ What the code shows, as supporting evidence:
 
 * **Merging it would revert a different extraction.** The branch predates the
   `er-loading-portrait-core` split (PR #98) and still carries those sources under
-  `crates/er-effects-rs/src/` -- a `git diff origin/main origin/feature/save-game-flow`
+  `crates/er-quickload/src/` -- a `git diff origin/main origin/feature/save-game-flow`
   shows them as renames BACK into the product
-  (`crates/{er-loading-portrait-core/src => er-effects-rs/src/constants}/portrait_lookat.rs`,
+  (`crates/{er-loading-portrait-core/src => er-quickload/src/constants}/portrait_lookat.rs`,
   `.../stats_loading_text.rs`, `.../resource_readback.rs`, `.../portrait_semaphores.rs`)
   plus a 2346-line `gpu_readback/overlay_composite.rs` main no longer has. This, not the
   already-landed save-flow work, is the real hazard in merging it.
@@ -393,9 +393,9 @@ owner when the product is absent.**
 * The union that solves this **already exists** in `crates/er-hook/src/lib.rs`
   (`register_union_hook`, the 96-slot dispatcher pool, `HOOK_REGISTRY`). The gap is
   ownership: the `#[no_mangle] er_effects_union_register` entry point lives ONLY in
-  `crates/er-effects-rs/src/mh.rs:37`, deliberately ("keeping it in this crate ensures ONLY
-  `er_effects_rs.dll` exports it"), and companions resolve it by the hard-coded module name
-  `er_effects_rs.dll` (`er-reload-trace/src/lib.rs:77`, `resolve_union_register` :898).
+  `crates/er-quickload/src/mh.rs:37`, deliberately ("keeping it in this crate ensures ONLY
+  `er_quickload.dll` exports it"), and companions resolve it by the hard-coded module name
+  `er_quickload.dll` (`er-reload-trace/src/lib.rs:77`, `resolve_union_register` :898).
   In the user's "neither" case -- the two new DLLs and no product -- nothing exports it and
   no one owns the shared addresses. SS6 closes that.
 * There is a **second**, distinct collision the union does not solve: if the product
@@ -445,14 +445,14 @@ exported entry point is in the wrong place.
    (`er_hook::export_union_registrar!();`). The symbol name, C ABI and semantics of
    `er_effects_union_register(target, handler, *mut orig_slot) -> i32` are **unchanged**, so
    `er-reload-trace` and `er-input-harness` keep working untouched, product present
-   or not. `er-effects-rs/src/mh.rs` keeps re-exporting for source compatibility.
+   or not. `er-quickload/src/mh.rs` keeps re-exporting for source compatibility.
 2. **Elect one owner per process, first-loader-wins.** At `DllMain`, each of our cdylibs:
    a. creates/opens a named OS primitive (`CreateMutexW(L"Local\\ErEffectsHookUnionOwner")`);
       the creator (i.e. `GetLastError() != ERROR_ALREADY_EXISTS`) is the owner and calls
       `MH_Initialize()` exactly once;
    b. a non-owner **discovers the live owner by scanning loaded modules for the export**
       (`EnumProcessModules` + `GetProcAddress`), never by filename. This removes the
-      hard-coded `er_effects_rs.dll` lookup and with it the "product must be listed FIRST"
+      hard-coded `er_quickload.dll` lookup and with it the "product must be listed FIRST"
       profile constraint documented at `scripts/me3-launch-lib.sh:115`.
 3. **Feature-ownership election, one layer up.** Each extractable feature declares a name
    (`"save-picker-boot"`, `"quit-menu"`). Arming takes a named claim through the same
@@ -510,7 +510,7 @@ runtime-affecting and this phase runs no game. Recorded on the bd issue.
 
 ## 5. Landable slices
 
-Each slice keeps `er-effects-rs` behaviorally identical when bundled, ends green on
+Each slice keeps `er-quickload` behaviorally identical when bundled, ends green on
 `bash scripts/check.sh`, and is its own PR.
 
 | # | Slice | Behavior risk | Gate |
@@ -518,7 +518,7 @@ Each slice keeps `er-effects-rs` behaviorally identical when bundled, ends green
 | **S0** | **This PR.** Crate skeletons, workspace members, host-seam stubs, gate coverage (host tests + windows-target check + the feature matrix). Nothing depends on the new crates | **none** -- no product file is touched | `check.sh` |
 | S1 | Hook-ownership election in `er-hook`: move the export behind a macro, module-scan discovery, named-mutex election, feature claims. Product keeps exporting the same symbol | none (same symbol, same ABI) | host tests in `er-hook`; runtime matrix rows 1, 7 |
 | S2 | Delete the ~640 dead lines from SS1.4 | none by construction (zero callers) -- but audit each before deleting | `check.sh` + one product smoke |
-| S3 | Move the row model + `SaveSlotInfo`/`parse_save_character_slots` + the three config keys -> `er-save-picker-core`. `er-effects-rs` re-exports under the old paths so no call site changes | none | ~960 lines of tests become host-runnable -- the biggest single win |
+| S3 | Move the row model + `SaveSlotInfo`/`parse_save_character_slots` + the three config keys -> `er-save-picker-core`. `er-quickload` re-exports under the old paths so no call site changes | none | ~960 lines of tests become host-runnable -- the biggest single win |
 | S4 | Move the boot overlay -> `er-save-picker-core`, behind `arm_boot_picker()` | low | boot-with-no-save smoke |
 | S5 | **This branch.** Split `save_picker_os_dialog.rs`: mechanism + tests -> `er-save-picker-core::os_dialog`; entry points stay in the product shim for now; the caller-supplied cover is the `PickerCoverFactory` seam (SS5.3) | **none** -- the caller-decides shape was already on main and is preserved across the crate seam | all three surfaces: boot, load, save-as |
 | S6 | `er-save-picker` becomes real + its standalone smoke script | none to the product | matrix rows 2, 4 |
@@ -563,7 +563,7 @@ dialog being undimmed is current, intended, user-directed behavior.
 ## 6. Decisions that remain user-gated
 
 **Later resolution (roadmap D3):** the product keeps bundling B as the `er-quit-menu-core` library
-inside the single shipped `er_effects_rs.dll`. `er-quit-menu` is an optional harness only and
+inside the single shipped `er_quickload.dll`. `er-quit-menu` is an optional harness only and
 is never a required native in the product ME3 profile. This supersedes open item 2 below.
 
 Everything the user has already settled is folded in above and is **not** re-opened here:
@@ -580,7 +580,7 @@ Still open, and each blocks the slice named:
    behavior either way, so the user should confirm the intent.
 2. **RESOLVED by roadmap D3:** the product keeps bundling B through its `er-quit-menu-core`
    library dependency. The standalone DLL is harness-only; a plain product profile lists only
-   `er_effects_rs.dll`.
+   `er_quickload.dll`.
 3. **Should the ~1950 lines of System>Quit diagnostics (SS1.4) stay, or be deleted?** They
    are agent-only and gated on the input-harness DLL's presence. Keeping them is free but
    leaves ~1300 lines of autopilot in the product; deleting them removes the ability to

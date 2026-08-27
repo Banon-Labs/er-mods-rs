@@ -10,7 +10,7 @@
 //! # Shared core, one host DLL per process
 //!
 //! This crate is the suppression core linked by BOTH the standalone
-//! `er-save-disable` (census/proof DLL) and the product `er-effects-rs` cdylib
+//! `er-save-disable` (census/proof DLL) and the product `er-quickload` cdylib
 //! (save-game-flow WP1). The host DLL wires the seams before `install`:
 //!
 //! - [`set_log_sink`]: where human-readable lines go (the standalone's
@@ -20,7 +20,7 @@
 //!   census snapshot writer through the witness reentrancy guard; the product wires a
 //!   no-op because its periodic telemetry writer exports the counters on its own cadence.
 //!
-//! NEVER load `er_save_disable.dll` alongside `er_effects_rs.dll` in one me3 profile:
+//! NEVER load `er_save_disable.dll` alongside `er_quickload.dll` in one me3 profile:
 //! each carries its own MinHook instance and both would detour `0x140e6fb50` /
 //! `0x140e6e430`, corrupting each other's trampolines.
 //!
@@ -769,7 +769,7 @@ pub fn load_consumer_slot_after() -> Option<SlRequestSlot> {
 const SAVE_DISPATCH_COMBINED_RVA: usize = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA;
 /// `FUN_14067b750` -- character-slot-only dispatcher (b72 set, b73 clear).
 ///
-/// Same address as `SAVE_WRITE_TO_SLOT_RVA` in er-effects-rs and er-save-loader, where it
+/// Same address as `SAVE_WRITE_TO_SLOT_RVA` in er-quickload and er-save-loader, where it
 /// was called `CONTINUE_LOAD_RVA` until 2026-08-01. This crate's name was the correct one:
 /// the 1.16.2 dump shows it writes a save (serializes via `SAVE_SERIALIZE_CHAR_RVA` below,
 /// then submits through the IO device and sets `saveState = 1`). Deliberately NOT renamed to
@@ -1745,7 +1745,7 @@ pub fn install(disarm_for_census: bool) -> usize {
 /// WHY THIS EXISTS (2026-08-04). The observers are pure diagnostics -- every one of them calls its
 /// original and only counts -- but they were reachable solely from [`install`], which arms
 /// suppression. Suppression is default-off in product (`save_suppression_enabled` in
-/// `er-effects.toml`), so in every normal run `dispatch_observers_installed()` reported 0 and
+/// `er-quickload.toml`), so in every normal run `dispatch_observers_installed()` reported 0 and
 /// `oracle_save_dispatch_last_decline_reason` reported `unsampled`. That is the one field that names
 /// WHY the save lane refused, and it was unavailable in exactly the configuration users run.
 ///

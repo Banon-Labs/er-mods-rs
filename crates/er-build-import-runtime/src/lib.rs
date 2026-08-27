@@ -21,8 +21,8 @@
 //! There are two callers with the same needs and different triggers:
 //!
 //! * `er-build-import` -- a standalone ME3 shell that imports the build named in
-//!   `er-effects.toml` once, as soon as a character is in the world.
-//! * `er-effects-rs` -- the product DLL, whose System>Quit **Load Build from URL** row imports on
+//!   `er-quickload.toml` once, as soon as a character is in the world.
+//! * `er-quickload` -- the product DLL, whose System>Quit **Load Build from URL** row imports on
 //!   demand, as many times as the player asks.
 //!
 //! The second is why [`request`] exists at all: the original code ran exactly once per process,
@@ -60,10 +60,10 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 pub use er_build_import_core::BUILD_URL_KEY;
 
 /// The config file, beside the game executable.
-pub const CONFIG_FILE_NAME: &str = "er-effects.toml";
+pub const CONFIG_FILE_NAME: &str = "er-quickload.toml";
 
 /// Identifies this client to the API owner, who runs the service for free.
-pub(crate) const USER_AGENT: &str = "er-effects-rs build-import (+github.com/Banon-Labs)";
+pub(crate) const USER_AGENT: &str = "er-mods-rs build-import (+github.com/Banon-Labs)";
 
 /// Log file name, written next to the game executable.
 const LOG_NAME: &str = "er-build-import.log";
@@ -181,7 +181,7 @@ fn set_error(reason: String) {
 
 // ------------------------------------------------------------------ config
 
-/// Read `build_url` out of the game-directory `er-effects.toml`.
+/// Read `build_url` out of the game-directory `er-quickload.toml`.
 ///
 /// The file lookup lives here because it needs the game directory; the PARSING lives in
 /// `er-build-import-core`, which `cargo test` can reach.
@@ -191,7 +191,7 @@ pub fn configured_build_url() -> Option<String> {
     er_build_import_core::build_url_from_config(&contents).map(str::to_owned)
 }
 
-/// Whether the game-directory `er-effects.toml` asks the STANDALONE shell to export one build link
+/// Whether the game-directory `er-quickload.toml` asks the STANDALONE shell to export one build link
 /// at character load. Never consulted by the product DLL -- see
 /// [`er_build_import_core::EXPORT_ON_LOAD_KEY`].
 pub fn configured_export_on_load() -> bool {
@@ -267,7 +267,7 @@ pub fn request(url: &str) -> Result<(), RequestError> {
     Ok(())
 }
 
-/// Start importing the build configured in `er-effects.toml`, if there is one. Returns `Ok(false)`
+/// Start importing the build configured in `er-quickload.toml`, if there is one. Returns `Ok(false)`
 /// when the key is absent, which is the normal state for a player who has not set one.
 pub fn request_configured() -> Result<bool, RequestError> {
     let Some(url) = configured_build_url() else {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded vanilla (-v, no DLL) control run for the Windows-crash A/B.
 
-Launches `~/Elden/launch.sh -v` (me3 offline, NO er_effects_rs.dll), watches the
+Launches `~/Elden/launch.sh -v` (me3 offline, NO er_quickload.dll), watches the
 `eldenring.exe` process lifetime, then tears down ER + me3. Data artifacts go to
 target/runtime-probe/ (repo-local /tmp writes for artifacts are allowed; only
 source belongs in the repo).
@@ -18,7 +18,7 @@ import json, os, signal, subprocess, sys, time, glob
 # ersc.dll by default, so NO flag now means a Seamless run -- not the DLL-only control arm.
 LABEL = sys.argv[1] if len(sys.argv) > 1 else 'boot-ab'
 LAUNCH_ARGS = sys.argv[2:]
-ART = f"/home/banon/projects/er-effects-rs/target/runtime-probe/{LABEL}"
+ART = f"/home/banon/projects/er-mods-rs/target/runtime-probe/{LABEL}"
 os.makedirs(ART, exist_ok=True)
 GAME_RUNTIME_CAP = 60   # seconds to observe the game process once it appears
 LAUNCH_GRACE = 45       # seconds to allow me3 setup + logos before expecting the process

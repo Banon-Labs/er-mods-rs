@@ -2,7 +2,7 @@
 //!
 //! S7 has moved the pure decision core for rows, save-destination identity/commit helper
 //! decisions, and save-flow confirm-box decisions into this crate. Runtime-native hook surfaces
-//! still live in `er-effects-rs` shims until S8/S9.
+//! still live in `er-quickload` shims until S8/S9.
 //!
 //! Planned contents, moved from the root DLL in slices (line counts are from the extraction plan,
 //! and the per-file product/diagnostic split is in the plan doc -- several of these files move

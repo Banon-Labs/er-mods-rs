@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""RATCHET `crates/er-effects-rs/src/experiments/**` and verify the critical caller ledger.
+"""RATCHET `crates/er-quickload/src/experiments/**` and verify the critical caller ledger.
 
-`er-effects-rs` is being extracted INTO crates until it is a thin shim that bundles them, so
+`er-quickload` is being extracted INTO crates until it is a thin shim that bundles them, so
 the line count under `experiments/**` is a number that may SHRINK but must never GROW. The
 ledger row in the roadmap is the high-water mark; this gate fails when measured source has
 climbed past it.
@@ -36,8 +36,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPERIMENTS = ROOT / "crates/er-effects-rs/src/experiments"
-SOURCE = ROOT / "crates/er-effects-rs/src"
+EXPERIMENTS = ROOT / "crates/er-quickload/src/experiments"
+SOURCE = ROOT / "crates/er-quickload/src"
 ROADMAP = ROOT / "docs/plans/crate-extraction-execution-roadmap.md"
 ROW = re.compile(r"^\| `([^`]+\.rs)` \| ([0-9,]+) \|", re.MULTILINE)
 TOTAL = re.compile(r"^\| all `experiments/\*\*` \| ([0-9,]+) \| ([0-9,]+) \|$", re.MULTILINE)
@@ -173,7 +173,7 @@ def ratchet(
             errors.append(
                 f"experiments/** GREW past the ledger: {ledger_lines:,} -> {current_lines:,} lines "
                 f"(+{current_lines - ledger_lines:,}), {ledger_files} -> {len(current)} files.\n"
-                "er-effects-rs is being extracted INTO crates, so this number may shrink but "
+                "er-quickload is being extracted INTO crates, so this number may shrink but "
                 f"never grow.\n{detail}"
             )
         elif current_lines < ledger_lines:

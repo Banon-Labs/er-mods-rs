@@ -525,7 +525,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // BEFORE own_load rebuilds fresh. It is NOT applied at AUTOLOAD_HANDOFF (the incoming/vanilla load),
         // honoring the 2026-07-21 directive. `active_switch` (phase >= RETURN_TITLE_REQUESTED) is the
         // switch-reload gate: on the boot autoload (LOAD1, phase IDLE) this drive never fires. OPT-IN via
-        // er-effects-enable-outgoing-teardown.txt (default-off; reverted after run angre-phase3fix-1).
+        // er-quickload-enable-outgoing-teardown.txt (default-off; reverted after run angre-phase3fix-1).
         let finalize_forcing_enabled = crate::compat::gating::outgoing_teardown_enabled()
             && active_switch
             && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
@@ -1450,7 +1450,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // waits on it forever. Force b80->0 ONLY at the exact stuck signature -- AUTOLOAD_HANDOFF,
         // MoveMapStep step 18, finalize substate live (1..=9), b80==3 RESIDENT, player present (world
         // genuinely resident+live) -- so a healthy load (b80 already draining) is never touched.
-        // Marker-gated (er-effects-reload-drainb80.txt) for A/B against the stuck baseline.
+        // Marker-gated (er-quickload-reload-drainb80.txt) for A/B against the stuck baseline.
         let b80_now = if gm != null {
             unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
         } else {

@@ -20,7 +20,7 @@ worktree `.worktrees/portrait-stats-crate`
    - `crates/er-loading-portrait` -- thin standalone ME3-loadable cdylib
      shell (own DllMain, VEH crash logger, log file), individually shippable.
      Follows `er-loading-bar` exactly (cdylib+rlib, host-testable).
-   - `er-effects-rs` keeps bundling the feature by depending on
+   - `er-quickload` keeps bundling the feature by depending on
      `er-loading-portrait-core`, product behavior unchanged (same arming, no new
      env gates -- bd `no-new-env-gated-features`).
 
@@ -128,7 +128,7 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
   DLL registers a portrait+stats-only provider and, on Wine, uses
   `er_d3d12_compositor::install_loading_bar_present_compositor` as its host
   exactly like `er-loading-bar`.
-- The standalone DLL must never be loaded alongside `er_effects_rs.dll` in one
+- The standalone DLL must never be loaded alongside `er_quickload.dll` in one
   me3 profile (double Present detour / double MinHook) -- document this in its
   Cargo.toml like the er-save-suppress warning.
 

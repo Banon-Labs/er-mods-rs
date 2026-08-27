@@ -8,11 +8,11 @@ its cache-hit branch, which returns early WITHOUT calling `PushFileCap` -- so no
 and `FUN_1406157f0` (case 2) polls `FD4FileCap::loadState == 4` forever with no timeout.
 
 The candidate fix is the existing opt-in Phase-3 outgoing-world teardown
-(`er-effects-enable-outgoing-teardown.txt`), which routes the outgoing world through
+(`er-quickload-enable-outgoing-teardown.txt`), which routes the outgoing world through
 `CS::InGameStep::_Common_Finalize` so the map FD4FileCap is released and the next `AddEntry` MISSES.
 
 Both arms are DETERMINISTIC and fully agent-driven: load 1 is the configured autoload, and load 2 is
-triggered by the product's own control file (`er-effects-switch-slot.txt`, polled every in-world
+triggered by the product's own control file (`er-quickload-switch-slot.txt`, polled every in-world
 frame), which is the same code path the user's menu click reaches. No input harness, no menu nav.
 
   ARM off  -> expect FROZEN  (reproduces the bug)
@@ -23,7 +23,7 @@ Usage:
   python3 scripts/run-reload-freeze-ab.py --teardown on  --label fix
 
 Save safety: the configured source save is opened READ-ONLY by the DLL (staged into a private tree);
-this script never writes it. It backs up and restores the game-dir er-effects.toml and the marker.
+this script never writes it. It backs up and restores the game-dir er-quickload.toml and the marker.
 """
 
 from __future__ import annotations
@@ -49,12 +49,12 @@ GAME_DIR = Path(
     )
 )
 LAUNCHER = Path(os.environ.get("ER_LAUNCHER", str(Path.home() / "Elden/launch.sh")))
-TELEMETRY = GAME_DIR / "er-effects-telemetry.json"
-DEBUG_LOG = GAME_DIR / "er-effects-autoload-debug.log"
-TOML = GAME_DIR / "er-effects.toml"
-MARKER = GAME_DIR / "er-effects-enable-outgoing-teardown.txt"
-SWITCH_SLOT = GAME_DIR / "er-effects-switch-slot.txt"
-SWITCH_SAVE = GAME_DIR / "er-effects-switch-save-file.txt"
+TELEMETRY = GAME_DIR / "er-quickload-telemetry.json"
+DEBUG_LOG = GAME_DIR / "er-quickload-autoload-debug.log"
+TOML = GAME_DIR / "er-quickload.toml"
+MARKER = GAME_DIR / "er-quickload-enable-outgoing-teardown.txt"
+SWITCH_SLOT = GAME_DIR / "er-quickload-switch-slot.txt"
+SWITCH_SAVE = GAME_DIR / "er-quickload-switch-save-file.txt"
 
 # The GAME runtime portion is bounded by the single canonical cap; never hardcode it here.
 CAP_FILE = REPO / ".auto/runtime_timeout_cap_seconds"
@@ -67,7 +67,7 @@ class GameDirWatch:
     """Block until the DLL WRITES something, instead of sleeping on a guess.
 
     The repo bans sleep-as-synchronization (scripts/check-no-timeouts.py `python-sleep-or-wait-for`).
-    The DLL rewrites er-effects-telemetry.json and appends the debug log every frame, so an inotify
+    The DLL rewrites er-quickload-telemetry.json and appends the debug log every frame, so an inotify
     watch on the game dir is the deterministic readiness primitive for "new state exists": each wait
     returns as soon as the game produces evidence, and the budget is only a backstop for a dead game.
     """
@@ -299,7 +299,7 @@ def main() -> int:
     proc = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
-        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         cwd=str(LAUNCHER.parent),
         stdout=open(art / "launcher.log", "w"),
@@ -363,10 +363,10 @@ def main() -> int:
         # write is what arms the switch and own_load resolves the source at arm time.
         if args.switch_save:
             SWITCH_SAVE.write_text(win_path(Path(args.switch_save)) + "\n")
-            log(f"WROTE er-effects-switch-save-file.txt = {win_path(Path(args.switch_save))}")
+            log(f"WROTE er-quickload-switch-save-file.txt = {win_path(Path(args.switch_save))}")
         SWITCH_SLOT.write_text(f"{args.slot_b}\n")
         t_switch = time.time()
-        log(f"WROTE er-effects-switch-slot.txt = {args.slot_b}  (this is the menu click)")
+        log(f"WROTE er-quickload-switch-slot.txt = {args.slot_b}  (this is the menu click)")
 
         # ---- phase 3: watch for freeze or completion ----------------------------------
         # Reuse the SAME handle from phase 1 -- reopening would re-read load1's oracle lines and

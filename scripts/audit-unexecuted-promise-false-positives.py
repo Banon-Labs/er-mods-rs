@@ -35,7 +35,7 @@ SIGNAL = REPO_ROOT / ".cupcake" / "signals" / "last_assistant_unexecuted_promise
 # fire MORE than in production -- the safe direction for a false-positive audit.
 WINDOW = 400
 
-FAKE_PROJECT = "/fake/project/er-effects-rs"
+FAKE_PROJECT = "/fake/project/er-quickload"
 DEFAULT_TRANSCRIPT_COUNT = 3
 
 

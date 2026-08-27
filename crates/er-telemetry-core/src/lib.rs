@@ -5,7 +5,7 @@
 //! write_oracle / game_man_snapshot / bootstrap / save_policy_logs) is migrated
 //! here file-group by file-group as the ~900-symbol ownership inversion described
 //! in the extraction plan is completed. This crate depends ONLY on er-game-base +
-//! upstream game libs, never on er-effects-rs (product).
+//! upstream game libs, never on er-quickload (product).
 //!
 //! Per-tick product data enters via [`TelemetryFrameInput`] rather than a direct
 //! read of the product's `EffectsState` behind its `Arc<Mutex<>>` lock, so
@@ -32,7 +32,7 @@ pub struct TelemetryFrameInput {
 }
 
 /// CWD-relative artifact written by the standalone telemetry-only DLL. Distinct
-/// from the product's `er-effects-telemetry.json` so a combined run keeps both.
+/// from the product's `er-quickload-telemetry.json` so a combined run keeps both.
 const STANDALONE_JSON: &str = "er-telemetry-timeseries.jsonl";
 
 fn standalone_json_path() -> PathBuf {
@@ -282,10 +282,10 @@ fn renderdoc_slow_ms() -> f32 {
     if c != u32::MAX {
         return f32::from_bits(c);
     }
-    // Prefer a GAME-DIR MARKER file (er-effects-rdoc-slow-ms.txt): env does NOT propagate through
+    // Prefer a GAME-DIR MARKER file (er-quickload-rdoc-slow-ms.txt): env does NOT propagate through
     // me3/Proton to the game process (bd CORRECTION-RenderDoc...), so a marker is the reliable way to set a
     // low threshold that captures the FAST vanilla/mod reload (16-18ms) for the per-pass GPU A/B diff.
-    let v = std::fs::read_to_string("er-effects-rdoc-slow-ms.txt")
+    let v = std::fs::read_to_string("er-quickload-rdoc-slow-ms.txt")
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
         .or_else(|| {

@@ -46,7 +46,7 @@ use crate::compat::*;
 
 pub fn arm_product_autoload_from_request(request: &SaveLoader) {
     // Product autoload is the release/default behavior. Do not make it depend on smoke-only env
-    // variables, `er-effects-autoload.txt`, or the experimental DirectMenuLoad method: the title/menu
+    // variables, `er-quickload-autoload.txt`, or the experimental DirectMenuLoad method: the title/menu
     // visual suppression is also default-on for real runs, so leaving the load driver unarmed creates
     // a release soft lock (hidden native menu with no product-core load tick). Explicit no-autoload,
     // telemetry-only, and native-profile-capture runs remain opt-out/diagnostic paths.
@@ -345,7 +345,7 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
 /// OURSELVES so a run needs no real button press. When the live TitleTopDialog (owner+0xe0) is settled
 /// in the FD4 `Loop` state with the menu-opened latch (dialog+0xa40) still 0, call the native open-menu
 /// registrar `0x1409b24e0(rcx=dialog)` -- the exact action a button press triggers -- to open the menu
-/// (sets a40=1). Requires online-disable (`er-effects-offline.txt`) so the connection modal is skipped
+/// (sets a40=1). Requires online-disable (`er-quickload-offline.txt`) so the connection modal is skipped
 /// and the SM reaches Loop. One-shot. Then `maybe_fire_tfc_continue` (gated a40==1) fires Continue. No
 /// input. (Same self-fire the own_stepper STAGE1d uses, extracted for the tfc flow.)
 pub unsafe fn maybe_auto_open_menu(base: usize) {

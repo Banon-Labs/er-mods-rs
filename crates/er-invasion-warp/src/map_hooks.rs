@@ -43,7 +43,7 @@
 //! # Hooking rules this module obeys
 //!
 //! * Every detour goes through the `er_hook` UNION, never a bare `MhHook`. Two MinHook instances
-//!   patching one prologue corrupt each other's trampolines, and `er_effects_rs.dll` may be
+//!   patching one prologue corrupt each other's trampolines, and `er_quickload.dll` may be
 //!   loaded alongside this DLL.
 //! * Nothing is patched until [`crate::map_seams::verify_seam`] has re-read the live prologue.
 //! * A handler that finds no trampoline does NOT invent a return value -- see

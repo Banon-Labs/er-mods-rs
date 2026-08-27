@@ -3,7 +3,7 @@
 # Sources the gated env, launches the approved offline eldenring.exe Proton probe with the
 # cold_char_mount autoload request, and lets the readiness watcher tear down on evidence.
 set -uo pipefail
-cd /home/banon/projects/er-effects-rs
+cd /home/banon/projects/er-mods-rs
 set -a
 # shellcheck disable=SC1091
 source .envs/savedir-fix-probe.env

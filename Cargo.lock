@@ -2872,46 +2872,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-effects-data"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "er-effects-rs"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.13.1",
- "eldenring",
- "er-boot-profiler",
- "er-build-import-core",
- "er-build-import-runtime",
- "er-d3d12-compositor",
- "er-game-base",
- "er-gfx",
- "er-hook",
- "er-loading-bar-core",
- "er-loading-portrait-core",
- "er-profile-summary-core",
- "er-quit-menu-core",
- "er-save-loader",
- "er-save-picker-core",
- "er-save-redirect",
- "er-save-suppress",
- "er-scaleform-hooks",
- "er-telemetry-core",
- "er-title-flow",
- "er-tpf",
- "erpx-rs",
- "fromsoftware-shared",
- "iced-x86",
- "pelite",
- "windows 0.62.2",
-]
-
-[[package]]
 name = "er-flver"
 version = "0.1.0"
 dependencies = [
@@ -3048,10 +3008,10 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-build-watermark-core",
- "er-effects-data",
  "er-game-base",
  "er-hook",
  "er-hotkey-config",
+ "er-quickload-data",
  "fromsoftware-shared",
  "hudhook",
  "windows 0.62.2",
@@ -3077,7 +3037,7 @@ dependencies = [
 name = "er-param-inspect"
 version = "0.1.0"
 dependencies = [
- "er-effects-data",
+ "er-quickload-data",
  "er-soulsformats",
 ]
 
@@ -3100,6 +3060,46 @@ dependencies = [
  "er-loading-portrait-core",
  "er-save-loader",
  "er-telemetry-core",
+]
+
+[[package]]
+name = "er-quickload"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "eldenring",
+ "er-boot-profiler",
+ "er-build-import-core",
+ "er-build-import-runtime",
+ "er-d3d12-compositor",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-loading-bar-core",
+ "er-loading-portrait-core",
+ "er-profile-summary-core",
+ "er-quit-menu-core",
+ "er-save-loader",
+ "er-save-picker-core",
+ "er-save-redirect",
+ "er-save-suppress",
+ "er-scaleform-hooks",
+ "er-telemetry-core",
+ "er-title-flow",
+ "er-tpf",
+ "erpx-rs",
+ "fromsoftware-shared",
+ "iced-x86",
+ "pelite",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-quickload-data"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

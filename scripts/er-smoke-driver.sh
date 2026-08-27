@@ -14,10 +14,10 @@ SCREENSHOT_HELPER="${SCREENSHOT_HELPER:-/home/banon/projects/scripts/hypr-window
 # shellcheck source=scripts/me3-launch-lib.sh
 source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/smoke/driver-$(date +%Y%m%d-%H%M%S)}"
-TELEMETRY_PATH="${TELEMETRY_PATH:-$GAME_DIR/er-effects-telemetry.json}"
-COMMAND_PATH="${COMMAND_PATH:-$GAME_DIR/er-effects-command.txt}"
-AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
-AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$GAME_DIR/er-effects-autoload-debug.log}"
+TELEMETRY_PATH="${TELEMETRY_PATH:-$GAME_DIR/er-quickload-telemetry.json}"
+COMMAND_PATH="${COMMAND_PATH:-$GAME_DIR/er-quickload-command.txt}"
+AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-quickload-autoload.txt}"
+AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$GAME_DIR/er-quickload-autoload-debug.log}"
 YDOTOOL_SOCKET="${YDOTOOL_SOCKET:-/run/user/$(id -u)/.ydotool_socket}"
 SCREENSHOT_EXT="${SCREENSHOT_EXT:-jpg}"
 SCREENSHOT_MAX_WIDTH="${SCREENSHOT_MAX_WIDTH:-900}"
@@ -38,21 +38,21 @@ usage() {
 Usage: $0 [drive|preflight] [options]
 
 The drive command is runtime-disruptive and is disabled fail-closed unless
-ER_EFFECTS_ALLOW_RUNTIME_DRIVER=1 is set for the exact invocation.
+ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER=1 is set for the exact invocation.
 
 Options:
   --artifact-dir DIR    Capture/log output directory (default: target/smoke/driver-<timestamp>)
   --game-dir DIR        Elden Ring Game directory
-  --telemetry PATH      JSON telemetry path written by er_effects_rs.dll
-  --command-path PATH   Text command path consumed by er_effects_rs.dll
-  --autoload-path PATH  Text autoload request path consumed by er_effects_rs.dll
-  --autoload-debug PATH Debug log path written by er_effects_rs.dll autoload path
+  --telemetry PATH      JSON telemetry path written by er_quickload.dll
+  --command-path PATH   Text command path consumed by er_quickload.dll
+  --autoload-path PATH  Text autoload request path consumed by er_quickload.dll
+  --autoload-debug PATH Debug log path written by er_quickload.dll autoload path
   --max-nudges N        Max Enter nudges while waiting (default: 0; disabled)
   --allow-pointer-input Allow legacy center-click OK fallback (default: off)
   --call-index N        Overlay named-call index to toggle for proof (default: 0)
   --screenshot-ext EXT  Screenshot extension: jpg (default) or png
   --no-build            Skip cargo xwin build
-  --no-install          Skip staging er_effects_rs.dll into the me3 profile
+  --no-install          Skip staging er_quickload.dll into the me3 profile
   --launch-mode MODE    direct (default) only; Steam/protected launcher modes are policy-blocked
   --no-launch           Skip launch and drive existing game process/window
 EOF
@@ -84,11 +84,11 @@ log() { printf '[er-smoke-driver] %s\n' "$*"; }
 require() { command -v "$1" >/dev/null 2>&1 || { echo "missing required command: $1" >&2; exit 127; }; }
 
 require_runtime_driver_opt_in() {
-  if [[ "${ER_EFFECTS_ALLOW_RUNTIME_DRIVER:-0}" != "1" ]]; then
+  if [[ "${ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER:-0}" != "1" ]]; then
     cat >&2 <<'EOF'
 Runtime driver execution is disabled fail-closed.
 
-Set ER_EFFECTS_ALLOW_RUNTIME_DRIVER=1 only for a deliberate non-autoresearch
+Set ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER=1 only for a deliberate non-autoresearch
 runtime validation with observable completion/failure evidence. Do not use
 outer agent/tool wall-clock budgets as the safety mechanism.
 EOF
@@ -120,8 +120,8 @@ telemetry_source_path() {
     printf '%s\n' "$TELEMETRY_PATH"
     return 0
   fi
-  if [[ -s "$GAME_DIR/er-effects-telemetry.json" ]]; then
-    printf '%s\n' "$GAME_DIR/er-effects-telemetry.json"
+  if [[ -s "$GAME_DIR/er-quickload-telemetry.json" ]]; then
+    printf '%s\n' "$GAME_DIR/er-quickload-telemetry.json"
     return 0
   fi
   printf '%s\n' "$TELEMETRY_PATH"
@@ -195,8 +195,8 @@ await_telemetry_event() {
 copy_runtime_logs() {
   [[ -d "$ARTIFACT_DIR" ]] || return 0
   cp -f "$(telemetry_source_path)" "$ARTIFACT_DIR/telemetry.json" 2>/dev/null || true
-  cp -f "$GAME_DIR/er-effects-autoload-debug.log" "$ARTIFACT_DIR/autoload-debug-default.log" 2>/dev/null || true
-  cp -f "$GAME_DIR/er-effects-continue-trace.log" "$ARTIFACT_DIR/continue-trace.log" 2>/dev/null || true
+  cp -f "$GAME_DIR/er-quickload-autoload-debug.log" "$ARTIFACT_DIR/autoload-debug-default.log" 2>/dev/null || true
+  cp -f "$GAME_DIR/er-quickload-continue-trace.log" "$ARTIFACT_DIR/continue-trace.log" 2>/dev/null || true
 }
 
 capture() {
@@ -300,14 +300,14 @@ drive() {
   AUTOLOAD_PATH=$(realpath -m "$AUTOLOAD_PATH")
   AUTOLOAD_DEBUG_PATH=$(realpath -m "$AUTOLOAD_DEBUG_PATH")
   mkdir -p "$ARTIFACT_DIR"
-  rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_PATH" "$AUTOLOAD_DEBUG_PATH" "$GAME_DIR/chains-debug.log" "$GAME_DIR/er-effects-telemetry.json" "$GAME_DIR/er-effects-autoload-debug.log" "$GAME_DIR/er-effects-continue-trace.log"
+  rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_PATH" "$AUTOLOAD_DEBUG_PATH" "$GAME_DIR/chains-debug.log" "$GAME_DIR/er-quickload-telemetry.json" "$GAME_DIR/er-quickload-autoload-debug.log" "$GAME_DIR/er-quickload-continue-trace.log"
   trap copy_runtime_logs EXIT
 
-  if [[ -n "${ER_EFFECTS_AUTOLOAD_SAVE_EXT:-}${ER_EFFECTS_AUTOLOAD_SLOT:-}${ER_EFFECTS_AUTOLOAD_METHOD:-}" ]]; then
+  if [[ -n "${ER_QUICKLOAD_AUTOLOAD_SAVE_EXT:-}${ER_QUICKLOAD_AUTOLOAD_SLOT:-}${ER_QUICKLOAD_AUTOLOAD_METHOD:-}" ]]; then
     {
-      [[ -z "${ER_EFFECTS_AUTOLOAD_SAVE_EXT:-}" ]] || printf 'save_ext=%s\n' "$ER_EFFECTS_AUTOLOAD_SAVE_EXT"
-      [[ -z "${ER_EFFECTS_AUTOLOAD_SLOT:-}" ]] || printf 'slot=%s\n' "$ER_EFFECTS_AUTOLOAD_SLOT"
-      [[ -z "${ER_EFFECTS_AUTOLOAD_METHOD:-}" ]] || printf 'method=%s\n' "$ER_EFFECTS_AUTOLOAD_METHOD"
+      [[ -z "${ER_QUICKLOAD_AUTOLOAD_SAVE_EXT:-}" ]] || printf 'save_ext=%s\n' "$ER_QUICKLOAD_AUTOLOAD_SAVE_EXT"
+      [[ -z "${ER_QUICKLOAD_AUTOLOAD_SLOT:-}" ]] || printf 'slot=%s\n' "$ER_QUICKLOAD_AUTOLOAD_SLOT"
+      [[ -z "${ER_QUICKLOAD_AUTOLOAD_METHOD:-}" ]] || printf 'method=%s\n' "$ER_QUICKLOAD_AUTOLOAD_METHOD"
     } > "$AUTOLOAD_PATH"
     cp -f "$AUTOLOAD_PATH" "$ARTIFACT_DIR/autoload-request.txt"
   fi
@@ -319,8 +319,8 @@ drive() {
 
   if (( INSTALL )); then
     log "staging DLL as an me3 native (LazyLoader removed 2026-07-04)"
-    cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$ARTIFACT_DIR/er_effects_rs.dll"
-    me3_write_profile "$ARTIFACT_DIR/er-effects-driver.me3" "$ARTIFACT_DIR/er_effects_rs.dll"
+    cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll" "$ARTIFACT_DIR/er_quickload.dll"
+    me3_write_profile "$ARTIFACT_DIR/er-quickload-driver.me3" "$ARTIFACT_DIR/er_quickload.dll"
   fi
 
   if (( LAUNCH )); then
@@ -329,7 +329,7 @@ drive() {
       exit 2
     fi
     log "launching Elden Ring through me3 (DLL as me3 native)"
-    (cd "$GAME_DIR" && ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-effects-driver.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$ARTIFACT_DIR/me3-launch.pid")
+    (cd "$GAME_DIR" && ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" ER_QUICKLOAD_COMMAND_PATH="$COMMAND_PATH" ER_QUICKLOAD_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-quickload-driver.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$ARTIFACT_DIR/me3-launch.pid")
   fi
 
   wait_window

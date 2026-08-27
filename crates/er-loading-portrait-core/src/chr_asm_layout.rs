@@ -1,6 +1,6 @@
 //! `CS::ChrAsm` member offsets the loading-portrait pipeline reads out of live game memory.
 //!
-//! Moved verbatim from er-effects-rs `constants/player_correctness.rs` with the loading-cover
+//! Moved verbatim from er-quickload `constants/player_correctness.rs` with the loading-cover
 //! extraction; the root re-exports every name through its `constants.rs` glob, so the flat
 //! namespace is unchanged. Every offset is derived from the typed `fromsoftware-rs` layout
 //! rather than hard-coded, so struct drift upstream fails the build instead of reading a

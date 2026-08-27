@@ -28,7 +28,7 @@ SIGNAL = REPO_ROOT / ".cupcake" / "signals" / "last_assistant_unexecuted_promise
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from cupcake_turn_scan import RECENT_TURNS  # noqa: E402  (staleness bound, kept in one place)
 
-PROJECT_DIR = "/fake/project/er-effects-rs"
+PROJECT_DIR = "/fake/project/er-quickload"
 
 # The verbatim turn-ending that prompted the guard (user report 2026-08-22).
 THE_INSTANCE = "I'll re-record the directive with the shell metacharacters escaped rather than leave it unsaved."

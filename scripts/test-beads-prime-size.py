@@ -48,7 +48,7 @@ elif args[:1] == ["memories"]:
             %% (i %% 40, i, 1 + (i %% 12), day)] = body
     json.dump(out, sys.stdout)
 elif args[:1] == ["ready"]:
-    json.dump([{"id": "er-effects-rs-%%04x" %% i, "priority": i %% 4,
+    json.dump([{"id": "er-quickload-%%04x" %% i, "priority": i %% 4,
                 "title": "A deliberately long ready-queue title that would blow the "
                          "budget if every row were emitted, number %%d" %% i,
                 "description": "d" * 2000} for i in range(%(r)d)], sys.stdout)
@@ -122,7 +122,7 @@ def main():
             fail(f"index holds {len(titles)} titles, expected {N_MEMORIES}")
 
         # A ready queue of 250 must not drag the whole list in.
-        if proc.stdout.count("er-effects-rs-") > 20:
+        if proc.stdout.count("er-quickload-") > 20:
             fail("the ready queue was inlined wholesale instead of topped")
 
         # A bd that fails outright must still produce a usable, small file: the hook is

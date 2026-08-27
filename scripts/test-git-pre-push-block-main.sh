@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 guard="$repo_root/scripts/git-pre-push-block-main.sh"
-tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/er-effects-pre-push-main-guard.XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/er-quickload-pre-push-main-guard.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT
 
 repo="$tmp_dir/main-repo"

@@ -12,13 +12,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILDER = REPO_ROOT / "scripts" / "build-user-release-package.py"
 OUT_DIR = REPO_ROOT / "target" / "check-user-release-package"
-FORBIDDEN_EXACT = {"er_effects_rs.dll", "ER0000.sl2", "ER0000.co2", "ersc.dll"}
+FORBIDDEN_EXACT = {"er_quickload.dll", "ER0000.sl2", "ER0000.co2", "ersc.dll"}
 FORBIDDEN_SUFFIXES = {".dll", ".sl2", ".co2", ".bak"}
 REQUIRED = {
     "README.md",
-    "run-er-effects-release.sh",
+    "run-er-quickload-release.sh",
     "quicksave.me3.template",
-    "er-effects.toml.example",
+    "er-quickload.toml.example",
     "SHA256SUMS.txt",
     "PACKAGE-MANIFEST.txt",
 }
@@ -68,7 +68,7 @@ def main() -> int:
             text = zf.read(name).decode("utf-8", errors="replace")
             if "savefile = \"\"" in text or "savefile = ''" in text:
                 raise AssertionError(f"{name} contains empty ME3 savefile override")
-    subprocess.run(["shellcheck", str(stage_dir / "run-er-effects-release.sh")], check=True, timeout=30)
+    subprocess.run(["shellcheck", str(stage_dir / "run-er-quickload-release.sh")], check=True, timeout=30)
     print(f"user release package audit passed: {zip_path}")
     return 0
 

@@ -1599,7 +1599,7 @@ player_name_filter.valid.names = ['x']
     #[test]
     fn unknown_top_level_key_names_the_line() {
         let err = parse("save_file = 'not owned by this DLL'\n")
-            .expect_err("standalone config must not silently accept er-effects keys");
+            .expect_err("standalone config must not silently accept er-quickload keys");
         assert!(
             err.contains("unknown config key")
                 && err.contains("line 1")

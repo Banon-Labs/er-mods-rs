@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline load1-vs-load2(+) semaphore comparator for er-effects-input-trace.jsonl.
+"""Offline load1-vs-load2(+) semaphore comparator for er-quickload-input-trace.jsonl.
 
 Reuses capture-samechar-3x.py's epoch/checkpoint helpers, but adds the SIDE-BY-SIDE
 ordered MoveMapStep/checkpoint sequences per load epoch -- the view that actually shows
@@ -9,7 +9,7 @@ write_semaphore_diff only reports the first-divergent checkpoint + timing deltas
 Usage:
   python3 scripts/loadcmp-diff.py <trace.jsonl> [--full-diff]
 
-`<trace.jsonl>` is an er-effects-input-trace.jsonl (or load-semaphore-trace.jsonl) with
+`<trace.jsonl>` is an er-quickload-input-trace.jsonl (or load-semaphore-trace.jsonl) with
 {"t":"sem",...} rows carrying load_epoch. --full-diff also writes the standard
 write_semaphore_diff artifacts next to the trace.
 
@@ -55,10 +55,10 @@ def main(argv: list[str]) -> int:
 
     m = _load_helpers()
     # capture-samechar reads either artifact_dir/load-semaphore-trace.jsonl or
-    # game_dir/er-effects-input-trace.jsonl; point both at the trace's own directory
+    # game_dir/er-quickload-input-trace.jsonl; point both at the trace's own directory
     # after normalizing its name so _load_semaphore_rows finds it.
     art = trace.parent
-    if trace.name not in ("load-semaphore-trace.jsonl", "er-effects-input-trace.jsonl"):
+    if trace.name not in ("load-semaphore-trace.jsonl", "er-quickload-input-trace.jsonl"):
         alias = art / "load-semaphore-trace.jsonl"
         if not alias.exists():
             alias.write_bytes(trace.read_bytes())

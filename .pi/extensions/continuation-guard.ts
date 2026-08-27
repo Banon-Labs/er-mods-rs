@@ -1,5 +1,5 @@
 /**
- * Project continuation guard for er-effects-rs Pi sessions.
+ * Project continuation guard for er-quickload Pi sessions.
  *
  * Failure class: after a delegated side quest or unblocker completes, the agent
  * sometimes ends the turn with pause/noise instead of resuming the original

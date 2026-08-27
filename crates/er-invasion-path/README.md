@@ -31,7 +31,7 @@ path = 'er_invasion_path.dll'
 ```
 
 The bare `cargo xwin build --release --target x86_64-pc-windows-msvc` builds **only**
-`er-effects-rs` -- the workspace pins `default-members` -- so the `-p` is not optional. It exits
+`er-quickload` -- the workspace pins `default-members` -- so the `-p` is not optional. It exits
 zero in a fraction of a second having compiled nothing otherwise, which reads exactly like a
 successful incremental build. Check the hash before you stage it:
 

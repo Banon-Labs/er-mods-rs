@@ -68,7 +68,7 @@ fi
   # record-er-window-wf.py wait for the real mapped steam_app_1245620 geometry to stabilize.
   if [[ "${RECORD_ALLOW_HYPR_PLACER:-0}" != "1" ]]; then
     # shellcheck disable=SC2034 # exported by set -a for run-product-continue-direct-probe.sh
-    ER_EFFECTS_HYPR_PLACE_WINDOW=0
+    ER_QUICKLOAD_HYPR_PLACE_WINDOW=0
   fi
   # The env file may carry an older ARTIFACT_DIR. Force the stable/latest
   # directory after sourcing so the launcher, Hypr placer, recorder, logs,

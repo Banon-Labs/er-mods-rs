@@ -18,7 +18,7 @@
 //! Nothing here can start, fake or spoof invasion/multiplayer/session state -- the feature
 //! reads one coordinate table.
 //!
-//! Unlike `er-loading-portrait` this DLL is safe to load ALONGSIDE `er_effects_rs.dll`:
+//! Unlike `er-loading-portrait` this DLL is safe to load ALONGSIDE `er_quickload.dll`:
 //! it owns no Present detour and no MinHook instance. That stays true only while it installs
 //! nothing; the first detour it adds must go through the `er-hook` union.
 

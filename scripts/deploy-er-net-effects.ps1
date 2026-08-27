@@ -1,6 +1,6 @@
 param(
   [string]$Destination = "X:\Documents\me3 profiles\er_net_effects.dll",
-  [string]$Profile = "X:\Documents\me3 profiles\er_effects_rs.me3",
+  [string]$Profile = "X:\Documents\me3 profiles\er_quickload.me3",
   [string]$GameDir = "C:\SteamLibrary\steamapps\common\ELDEN RING\Game",
   [string]$SeamlessCoopDllPath = "C:\SteamLibrary\steamapps\common\ELDEN RING\Game\SeamlessCoop\ersc.dll",
   [switch]$ClearCrashTelemetry,

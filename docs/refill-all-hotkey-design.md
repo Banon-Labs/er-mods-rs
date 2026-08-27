@@ -183,7 +183,7 @@ comparing `*this` against its vtable. It worked live. It was still the wrong pro
 
 Both replacement targets take integer arguments only, which is exactly what the union's ABI models,
 so both are registered through **`er_hook::register_shared_hook`** — chaining into
-`er_effects_rs.dll`'s single union when the product is co-loaded, and using this DLL's own union
+`er_quickload.dll`'s single union when the product is co-loaded, and using this DLL's own union
 when it is not. No handler can be silently dropped, here or in another mod.
 
 ## 7. The input half, as built

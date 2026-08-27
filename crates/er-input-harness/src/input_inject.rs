@@ -10,7 +10,7 @@
 //!     assert for a couple frames then gap for a clean single edge (no auto-repeat). Verified event
 //!     ids (RE 2026-06-17, `frontend-menu-input-injection-ids-2026`): vertical-move = 0x00 AND 0x45
 //!     (inject both; only Down advances, Up saturates), Confirm/OK = 0x3d. Mirrors the product's
-//!     `menu_input_probe` (crates/er-effects-rs/src/experiments/continue_load/product_continue.rs).
+//!     `menu_input_probe` (crates/er-quickload/src/experiments/continue_load/product_continue.rs).
 //!
 //!  2. STAY-ACTIVE (unfocused input) -- ER clears `[DLUID+0x88d]` every frame it is not
 //!     `GetActiveWindow`; re-setting it to 1 lets the injected input apply while the window is

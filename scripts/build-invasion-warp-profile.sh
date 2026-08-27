@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS. `scripts/check-rust-build.sh` type-checks the invasion-warp crates with
 # `cargo xwin check --tests`, which NEVER LINKS a cdylib, and `default-members` is only
-# `crates/er-effects-rs`, so the documented `cargo xwin build --release` does not build this
+# `crates/er-quickload`, so the documented `cargo xwin build --release` does not build this
 # DLL either. Before this script the only way to obtain a loadable artifact was an ad-hoc
 # `-p` invocation, and no profile in the repo referenced it -- so a green gate could coexist
 # with a DLL that does not link and cannot be loaded (bd er-effects-rs-5es review).
@@ -20,7 +20,7 @@
 #   bash scripts/build-invasion-warp-profile.sh [OUT_DIR]
 #
 # Env:
-#   INVASION_WARP_WITH_PRODUCT=0   omit er_effects_rs.dll (invasion-warp alone)
+#   INVASION_WARP_WITH_PRODUCT=0   omit er_quickload.dll (invasion-warp alone)
 #   INVASION_WARP_WITH_SEAMLESS=1  also load the game-installed SeamlessCoop/ersc.dll
 #   SEAMLESS_DLL                   override the Seamless DLL path
 set -euo pipefail
@@ -55,7 +55,7 @@ if [[ "$with_seamless" == "1" ]]; then
   natives+=("$seamless_dll")
 fi
 if [[ "$with_product" == "1" ]]; then
-  product_dll="$release_dir/er_effects_rs.dll"
+  product_dll="$release_dir/er_quickload.dll"
   [[ -f "$product_dll" ]] || fatal "product DLL missing: $product_dll (build: cargo xwin build --release --target $target)"
   natives+=("$product_dll")
 fi

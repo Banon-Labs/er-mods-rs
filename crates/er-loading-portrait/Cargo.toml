@@ -2,12 +2,12 @@
 # (portrait crate split): own DllMain, VEH crash logger, own log file, individually
 # shippable. Modeled on er-loading-bar.
 #
-# WARNING: NEVER load er_loading_portrait.dll alongside er_effects_rs.dll in one
+# WARNING: NEVER load er_loading_portrait.dll alongside er_quickload.dll in one
 # me3 profile. Both install a D3D12 Present detour and their own MinHook instance;
 # two instances patching the same prologues (Present, the now-loading observer RVAs,
 # the tip-suppression RVAs) would double-detour and corrupt each other's trampolines
 # -- the same class of silent race as the er-save-suppress warning in
-# er-effects-rs/Cargo.toml.
+# er-quickload/Cargo.toml.
 [package]
 name = "er-loading-portrait"
 version = "0.1.0"

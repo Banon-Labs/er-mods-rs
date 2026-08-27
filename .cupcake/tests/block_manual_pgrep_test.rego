@@ -237,7 +237,7 @@ test_allow_git_add_then_commit_heredoc_message_mentioning_pgrep if {
 # work, so it must not disable the exemption.
 test_allow_git_c_worktree_commit_heredoc_message_mentioning_pgrep if {
 	not denied(concat("\n", [
-		"git -C /home/banon/projects/er-effects-rs/.worktrees/guard commit -F - <<'EOF'",
+		"git -C /home/banon/projects/er-mods-rs/.worktrees/guard commit -F - <<'EOF'",
 		"scripts: replace pgrep -x steam with scripts/steam-running.sh",
 		"EOF",
 	]))

@@ -5,10 +5,10 @@ edition = "2024"
 publish = false
 
 # Save-write suppression CORE, shared by the standalone `er-save-disable` and the
-# product `er-effects-rs` cdylib. Plain rlib: it never ships as its own DLL -- exactly one
+# product `er-quickload` cdylib. Plain rlib: it never ships as its own DLL -- exactly one
 # host DLL links it per process, wires the log/publish sinks, and calls `install`.
 #
-# NEVER load `er_save_disable.dll` and `er_effects_rs.dll` together in one me3 profile:
+# NEVER load `er_save_disable.dll` and `er_quickload.dll` together in one me3 profile:
 # each DLL carries its own MinHook instance, so both would detour the same game prologues
 # (`0x140e6fb50` / `0x140e6e430`) and corrupt each other's trampolines.
 #

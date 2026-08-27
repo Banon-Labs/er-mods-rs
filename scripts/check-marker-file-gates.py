@@ -4,7 +4,7 @@
 POLICY (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19)
 =========================================================================
 User directive: "we don't want any env/marker gated features." A "marker-file gate" is
-any `.join("er-effects-<name>.txt")` in `crates/er-effects-rs/src/**/*.rs` whose result
+any `.join("er-quickload-<name>.txt")` in `crates/er-quickload/src/**/*.rs` whose result
 is consumed by `.exists()` -- the boolean on/off toggle shape, SEMANTICALLY IDENTICAL to
 an env-var gate. (Data control files read with `read_to_string`, e.g. a slot number, are
 NOT toggles and are out of scope.)
@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+SRC_DIR = REPO_ROOT / "crates" / "er-quickload" / "src"
 AUTO_DIR = REPO_ROOT / ".auto"
 BASELINE_PATH = AUTO_DIR / "marker_file_gate_baseline.json"
 POLICY_PATH = AUTO_DIR / "marker_file_gate_policy.rego"
@@ -57,7 +57,7 @@ DEPRECATED_ALLOWLIST_KEYS = (
     "migrate_to_default",
 )
 
-MARKER_JOIN_RE = re.compile(r'\.join\(\s*"(er-effects-[a-z0-9._-]+\.txt)"\s*\)')
+MARKER_JOIN_RE = re.compile(r'\.join\(\s*"(er-quickload-[a-z0-9._-]+\.txt)"\s*\)')
 FN_DEF_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+|extern\s+(?:\"[^\"]*\"\s+)?)*fn\s+([A-Za-z0-9_]+)"
 )
@@ -365,7 +365,7 @@ def main() -> int:
     if findings:
         print("Marker-file gate policy violations found.", file=sys.stderr)
         print(
-            "Marker feature gates (`<game_dir>/er-effects-*.txt` consumed by `.exists()`) are "
+            "Marker feature gates (`<game_dir>/er-quickload-*.txt` consumed by `.exists()`) are "
             "forbidden; only justified diagnostic toggles listed in `diagnostic_gates` are allowed. "
             "See .auto/marker_file_gate_policy.rego.\n",
             file=sys.stderr,

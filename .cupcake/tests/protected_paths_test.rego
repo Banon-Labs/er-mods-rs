@@ -99,7 +99,7 @@ test_allow_relative_delete_with_overapproximated_root if {
 # --------------------------------------------------------------------------
 
 commit_message_heredoc_command := concat("\n", [
-	"git add crates/er-effects-rs/src/lib.rs docs/save/save-machinery-1162.md && git commit -q -F - <<'EOF' && git log --oneline -4 && git status --porcelain",
+	"git add crates/er-quickload/src/lib.rs docs/save/save-machinery-1162.md && git commit -q -F - <<'EOF' && git log --oneline -4 && git status --porcelain",
 	"save-flow: install the save-write suppression, making Save Game the only writer",
 	"",
 	"Both DLLs would detour `0x140e6fb50` / `0x140e6e430`, corrupting each other's",
@@ -112,10 +112,10 @@ commit_message_heredoc_command := concat("\n", [
 
 test_allow_git_commit_message_heredoc_with_prose_verb_and_bare_slash if {
 	affected := [
-		"/home/banon/projects/er-effects-rs/crates/er-effects-rs/src/lib.rs",
-		"/home/banon/projects/er-effects-rs",
+		"/home/banon/projects/er-mods-rs/crates/er-quickload/src/lib.rs",
+		"/home/banon/projects/er-mods-rs",
 		"/",
-		"/home/banon/projects/er-effects-rs/3/4",
+		"/home/banon/projects/er-mods-rs/3/4",
 	]
 	denials := protected.halt with input as bash_event(commit_message_heredoc_command, affected)
 	count(denials) == 0
@@ -184,7 +184,7 @@ test_deny_system_directory_recursive_chown if {
 # for this shape, so the parent rule is silent and the protected-path REFERENCE
 # rule owns the denial. Asserted here so the split stays visible.
 test_deny_move_into_etc_by_reference_rule if {
-	affected := ["/home/banon/projects/er-effects-rs/my.conf", "/etc/my.conf"]
+	affected := ["/home/banon/projects/er-mods-rs/my.conf", "/etc/my.conf"]
 	denials := protected.halt with input as bash_event("mv ./my.conf /etc/my.conf", affected)
 	"BUILTIN-PROTECTED-PATHS" in rule_ids(denials)
 }

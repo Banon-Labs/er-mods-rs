@@ -801,7 +801,7 @@ Seamless, the `.aip`-derived pins do not describe where an invader lands.
 ## 5d. The warp was dead after any reload, and it was our own product DLL (2026-08-04)
 
 **Symptom reported:** "I'm not able to warp to any of the locations again after I have loaded my
-character a second time." **Cause:** `er-effects-rs`, not the invasion-warp feature. Full evidence in
+character a second time." **Cause:** `er-quickload`, not the invasion-warp feature. Full evidence in
 bd `cvar10-warp-clear-had-no-product-release-broke-all-warps-2026-08-04`; the short version:
 
 `system_quit_hooks.rs` zeroes `GameMan+0x10` (`warpRequested`) on every frame of a map move while

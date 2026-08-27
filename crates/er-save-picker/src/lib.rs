@@ -1,6 +1,6 @@
 //! Standalone ME3-loadable shell for product (A), the DLL-drawn boot save picker.
 //!
-//! This DLL is deliberately separate from the product `er_effects_rs.dll`, following the
+//! This DLL is deliberately separate from the product `er_quickload.dll`, following the
 //! `er-loading-bar` / `er-loading-portrait` shape: the feature crate owns the picker
 //! logic, this thin shell installs a standalone host seam and arms the boot picker when loaded
 //! by ME3.
@@ -156,7 +156,7 @@ fn standalone_remember_picker_dir(dir: &Path) {
 
 #[cfg(windows)]
 fn product_dll_present() -> bool {
-    unsafe { GetModuleHandleA(PCSTR(c"er_effects_rs.dll".as_ptr().cast::<u8>())).is_ok() }
+    unsafe { GetModuleHandleA(PCSTR(c"er_quickload.dll".as_ptr().cast::<u8>())).is_ok() }
 }
 
 #[cfg(windows)]

@@ -13,12 +13,12 @@
 //!     `QueryThreadCycleTime` + `GetThreadTimes` reads -> safe, cannot perturb the game. This
 //!     answers "where does wall-clock go and is each phase CPU-bound or wait-bound, and is it
 //!     parallelized".
-//!   * RIP sampling (`ER_EFFECTS_PROFILE_RIP=1`, OFF by default): `SuspendThread`+`GetThreadContext`
+//!   * RIP sampling (`ER_QUICKLOAD_PROFILE_RIP=1`, OFF by default): `SuspendThread`+`GetThreadContext`
 //!     to capture each thread's Rip -> hot-function attribution (symbolized offline via the Ghidra
 //!     dump). Suspension is heavier and could be noticed by anti-tamper, so it is opt-in.
 //!
-//! Output: one JSON object per sample, newline-delimited, to `ER_EFFECTS_PROFILE_PATH`
-//! (default `<game_dir>/er-effects-profile.jsonl`). The offline renderer
+//! Output: one JSON object per sample, newline-delimited, to `ER_QUICKLOAD_PROFILE_PATH`
+//! (default `<game_dir>/er-quickload-profile.jsonl`). The offline renderer
 //! (`scripts/boot-profile-render.py`) diffs consecutive samples per thread.
 
 #![cfg(windows)]
@@ -67,38 +67,40 @@ use windows::Win32::{
 /// generic `CONTEXT_CONTROL` for x86; on x86_64 the value is `0x0010_0001`. We only need `Rip`.
 const CONTEXT_CONTROL_AMD64: u32 = 0x0010_0001;
 
-/// Profiler master switch: env `ER_EFFECTS_PROFILE=1` or `<game_dir>/er-effects-profile.txt`.
+/// Profiler master switch: env `ER_QUICKLOAD_PROFILE=1` or `<game_dir>/er-quickload-profile.txt`.
 pub fn profiler_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_PROFILE").as_deref(), Ok("1"))
+    matches!(std::env::var("ER_QUICKLOAD_PROFILE").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-profile.txt")
+            .join("er-quickload-profile.txt")
             .exists()
 }
 
-/// RIP-sampling sub-switch (suspends threads). OFF unless `ER_EFFECTS_PROFILE_RIP=1` or the file.
+/// RIP-sampling sub-switch (suspends threads). OFF unless `ER_QUICKLOAD_PROFILE_RIP=1` or the file.
 pub(crate) fn profiler_rip_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_PROFILE_RIP").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-profile-rip.txt")
-            .exists()
+    matches!(
+        std::env::var("ER_QUICKLOAD_PROFILE_RIP").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-quickload-profile-rip.txt")
+        .exists()
 }
 
 fn profile_path() -> PathBuf {
-    std::env::var("ER_EFFECTS_PROFILE_PATH")
+    std::env::var("ER_QUICKLOAD_PROFILE_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             game_directory_path()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("er-effects-profile.jsonl")
+                .join("er-quickload-profile.jsonl")
         })
 }
 
 /// Sampling cadence (ms). `QueryThreadCycleTime` is high-resolution so ~25ms gives a smooth
 /// utilization curve without flooding the file (whole boot ~40s -> ~1600 samples).
 fn sample_interval_ms() -> u64 {
-    std::env::var("ER_EFFECTS_PROFILE_INTERVAL_MS")
+    std::env::var("ER_QUICKLOAD_PROFILE_INTERVAL_MS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&v| v >= 1)
@@ -107,7 +109,7 @@ fn sample_interval_ms() -> u64 {
 
 /// Sample RIP every Nth CPU sample (suspension is heavier). Default: every 4th (~100ms at 25ms base).
 fn rip_every_n() -> u64 {
-    std::env::var("ER_EFFECTS_PROFILE_RIP_EVERY")
+    std::env::var("ER_QUICKLOAD_PROFILE_RIP_EVERY")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&v| v >= 1)
@@ -116,7 +118,7 @@ fn rip_every_n() -> u64 {
 
 /// Hard stop for the sampler (s). Bounds the file even if teardown is missed. Default 120s.
 fn max_runtime_s() -> u64 {
-    std::env::var("ER_EFFECTS_PROFILE_MAX_S")
+    std::env::var("ER_QUICKLOAD_PROFILE_MAX_S")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&v| v >= 1)
@@ -209,7 +211,7 @@ unsafe fn scan_stack(rsp: u64, base: u64) -> Vec<u64> {
 /// Public entry: spawn the sampler daemon thread. Idempotent via the `Once` in the caller.
 pub fn spawn_boot_profiler(log: fn(std::fmt::Arguments<'_>)) {
     let _ = std::thread::Builder::new()
-        .name("er-effects-profiler".to_owned())
+        .name("er-quickload-profiler".to_owned())
         .spawn(move || profiler_main(log));
 }
 

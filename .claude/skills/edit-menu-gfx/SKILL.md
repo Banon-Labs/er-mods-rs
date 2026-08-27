@@ -51,7 +51,7 @@ where you have not confirmed a symbol, say "verify" rather than assert it.
 
 - **Runtime application (load-time swap)** -- the DLL intercepts a specific Scaleform GFX load and
   substitutes edited bytes without touching game files. Reference pattern:
-  `crates/er-effects-rs/src/experiments/startup_hooks/profile_table_gfx_files.rs`
+  `crates/er-quickload/src/experiments/startup_hooks/profile_table_gfx_files.rs`
   (the `05_000_title.gfx` / `title_05_010` MemoryFile-swap path: a FileOpener/MemoryFile hook reads the
   native movie's own vanilla payload, applies the edit, and hands back the edited buffer, cached for
   process lifetime). To intercept a different `menu/NN_xxx.gfx`, mirror that path: match the URL, read

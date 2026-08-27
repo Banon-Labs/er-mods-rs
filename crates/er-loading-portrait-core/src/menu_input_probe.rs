@@ -1,6 +1,6 @@
 //! The d180 leaf-tick counter.
 //!
-//! Moved from er-effects-rs `constants/loading_cover.rs` with the loading-cover crate extraction
+//! Moved from er-quickload `constants/loading_cover.rs` with the loading-cover crate extraction
 //! and renamed to what it holds (the old filename predates the split of the title-cover constants
 //! out of it). The root re-exports every name through its `constants.rs` glob.
 //!

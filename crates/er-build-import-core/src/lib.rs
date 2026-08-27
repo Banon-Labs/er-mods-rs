@@ -52,16 +52,16 @@ pub fn build_path(share_id: &str) -> String {
     format!("/inventories/{share_id}")
 }
 
-/// Config key naming the build to import, in the game-directory `er-effects.toml`.
+/// Config key naming the build to import, in the game-directory `er-quickload.toml`.
 ///
 /// A key in the file the product already ships rather than an environment variable: a
 /// runtime-affecting product lever behind an agent-only env var is not a product lever.
 pub const BUILD_URL_KEY: &str = "build_url";
 
-/// Pull `build_url` out of an `er-effects.toml`'s text.
+/// Pull `build_url` out of an `er-quickload.toml`'s text.
 ///
 /// A deliberate one-key scan rather than a TOML dependency. The product's own parser is private to
-/// `er-effects-rs`, and pulling a whole TOML crate into a crate that needs exactly one string would
+/// `er-quickload`, and pulling a whole TOML crate into a crate that needs exactly one string would
 /// be the larger sin -- but the scan still has to agree with the file the product writes, which is
 /// why it lives here, where `cargo test` can hold it to that.
 ///
@@ -80,7 +80,7 @@ pub fn build_url_from_config(contents: &str) -> Option<&str> {
     config_value(contents, BUILD_URL_KEY)
 }
 
-/// Pull one key's value out of an `er-effects.toml`'s text.
+/// Pull one key's value out of an `er-quickload.toml`'s text.
 ///
 /// The generic form of [`build_url_from_config`], and the same deliberate one-key scan rather than
 /// a TOML dependency -- see that function for why. Returns `None` for an absent or empty value, so

@@ -235,8 +235,8 @@ REWRITE_CASES = [
     # A trailing backslash JOINS two lines. It is not a boundary and must not become `;`.
     RewriteCase(
         "line-continuation-preserved",
-        "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-effects-rs",
-        "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-effects-rs",
+        "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-quickload",
+        "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-quickload",
     ),
     # An EVEN number of backslashes is an escaped backslash, not a continuation.
     RewriteCase(
@@ -370,7 +370,7 @@ DECISION_CASES = [
     ),
     DecisionCase(
         "allow-line-continuation-splitting-one-command",
-        "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-effects-rs",
+        "cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-quickload",
         "allow",
         "a continuation joins lines; it is not a boundary",
     ),

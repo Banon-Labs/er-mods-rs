@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Watch er-effects runtime telemetry and self-report soft locks while the DLL runs.
+"""Watch er-quickload runtime telemetry and self-report soft locks while the DLL runs.
 
 This is a sidecar for agent/runtime proofs: start it before launching ME3/Elden Ring.
 It samples telemetry quickly enough to catch the first bad branch instead of waiting for
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_GAME_DIR = Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game"
-DEFAULT_TELEMETRY = DEFAULT_GAME_DIR / "er-effects-telemetry.json"
+DEFAULT_TELEMETRY = DEFAULT_GAME_DIR / "er-quickload-telemetry.json"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRIAGE_SCRIPT = REPO_ROOT / "scripts/triage-er-softlock.sh"
 

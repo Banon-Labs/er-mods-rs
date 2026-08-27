@@ -433,7 +433,7 @@ pub use er_telemetry_core::counters::PROFILE_LOOKAT_RENDER_DRIVES;
 /// task-group phases; every registration bumps its own `PROFILE_LOOKAT_PHASE_TICKS[i]` each frame, but
 /// only the phase whose index == `PROFILE_LOOKAT_SELECTED_PHASE` actually drives the draw. This lets one
 /// run measure which phases tick per-frame at the menu (vs GameSceneDraw, world-gated ~11%) AND switch
-/// the active draw phase live (write the index to `er-effects-lookat-phase.txt`) without recompiling,
+/// the active draw phase live (write the index to `er-quickload-lookat-phase.txt`) without recompiling,
 /// until one renders the portrait smoothly every frame. Order MUST match `LOOKAT_DRAW_PHASE_NAMES` and
 /// the registration array in `spawn_game_task`. Default = AdhocDraw (index 5): adjacent to GameSceneDraw
 /// (same draw region -> live GX pool) but not world-scene-gated, so the best first bet for per-frame.

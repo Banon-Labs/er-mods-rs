@@ -73,15 +73,15 @@ def test_samechar_runner_arms_product_movement_for_deterministic_reload_driver()
     assert 'DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS-0,0}"' in runner
     assert 'WORLD_STABLE_TIMEOUT_S="${WORLD_STABLE_TIMEOUT_S:-90}"' in runner
     assert 'export WORLD_STABLE_TIMEOUT_S' in runner
-    assert 'printf \'1\\n\' >"$GAME_DIR/er-effects-prove-movement.txt"' in runner
-    assert 'printf \'1\\n\' >"$GAME_DIR/er-effects-stay-active.txt"' in runner
-    assert 'printf \'1\\n\' >"$GAME_DIR/er-effects-input-trace.txt"' in runner
+    assert 'printf \'1\\n\' >"$GAME_DIR/er-quickload-prove-movement.txt"' in runner
+    assert 'printf \'1\\n\' >"$GAME_DIR/er-quickload-stay-active.txt"' in runner
+    assert 'printf \'1\\n\' >"$GAME_DIR/er-quickload-input-trace.txt"' in runner
     assert 'if [[ "${OBSERVE_ONLY:-0}" != "1" && ( -z "$DRIVE_RELOAD_SLOTS" || "${FORCE_HARNESS_DRIVE:-0}" == "1" ) ]]; then' in runner
     assert 'if [[ "${OBSERVE_ONLY:-0}" != "1" ]]; then\n\tprintf \'%s\\n\' "${HARNESS_DRIVE_MODE:-full}"' not in runner
 
 
 def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
-    hooks = (REPO_ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
+    hooks = (REPO_ROOT / "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
     assert "let boot_epoch = epoch == 0;" in hooks
     assert "if boot_epoch {" in hooks
     assert "mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX" in hooks
@@ -92,10 +92,10 @@ def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
     assert "ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst)" in hooks
     assert "SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst)" in hooks
     assert "No reload committed yet -> this is load1; never force" not in hooks
-    telemetry = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
+    telemetry = (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
     assert 'oracle_testnet_ff_stuck_frames' in telemetry
     assert 'oracle_testnet_ff_fired_epoch' in telemetry
-    oracle = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_oracle.rs").read_text()
+    oracle = (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles/write_oracle.rs").read_text()
     assert 'oracle_mms_next_step_4c' in oracle
     assert 'oracle_mms_done_flag_50' in oracle
     assert 'oracle_mms_advance_gate_lo_4b8' in oracle
@@ -121,17 +121,17 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
     assert "pub static OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS" in counters
     assert "pub static TFC_FORCED_CONTINUE_HANDOFF_MS" in counters
 
-    product_core = (REPO_ROOT / "crates/er-effects-rs/src/experiments/mod/product_core_own_stepper.rs").read_text()
+    product_core = (REPO_ROOT / "crates/er-quickload/src/experiments/mod/product_core_own_stepper.rs").read_text()
     assert "pub(crate) fn mark_own_load_forced_continue_handoff()" in product_core
     assert "OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.compare_exchange" in product_core
     assert "pub(crate) fn mark_tfc_forced_continue_handoff()" in product_core
     assert "TFC_FORCED_CONTINUE_HANDOFF_MS.compare_exchange" in product_core
 
-    present = (REPO_ROOT / "crates/er-effects-rs/src/experiments/present_overlay.rs").read_text()
+    present = (REPO_ROOT / "crates/er-quickload/src/experiments/present_overlay.rs").read_text()
     assert "fn set_boot_view_pump_stop_reason" in present
     assert "BOOT_VIEW_PUMP_STOP_MS.store" in present
 
-    game_oracles = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_game_module_oracles.rs").read_text()
+    game_oracles = (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles/write_game_module_oracles.rs").read_text()
     assert '"oracle_boot_view_pump_stop_ms"' in game_oracles
     assert '"oracle_boot_view_dark_gap_failures"' in game_oracles
     assert '"oracle_boot_view_missed_handoff_failures"' in game_oracles
@@ -156,8 +156,8 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
     assert "oracle_boot_view_present_cover_failures" in readiness_watch
     assert "boot_view_present_cover_failure" in readiness_watch
     assert "boot_view_pre_world_stop_failure" in readiness_watch
-    boot_progress = (REPO_ROOT / "crates/er-effects-rs/src/experiments/gpu_readback/boot_progress.rs").read_text()
-    present_overlay = (REPO_ROOT / "crates/er-effects-rs/src/experiments/present_overlay.rs").read_text()
+    boot_progress = (REPO_ROOT / "crates/er-quickload/src/experiments/gpu_readback/boot_progress.rs").read_text()
+    present_overlay = (REPO_ROOT / "crates/er-quickload/src/experiments/present_overlay.rs").read_text()
     assert "BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur" in present_overlay
     assert "cur != 0" in present_overlay
     assert "crate::experiments::is_native_windows() && idx >= 8" not in boot_progress
@@ -176,7 +176,7 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
     assert "CAN_MOVE_CONFIRMED" in game_oracles
     assert "MOVE_PROBE_EPOCH" in game_oracles
     assert "is_render_group_enabled" in game_oracles
-    telemetry = (REPO_ROOT / "crates/er-effects-rs/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
+    telemetry = (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
     assert 'oracle_own_load_forced_continue_handoff_ms' in telemetry
     assert 'oracle_tfc_forced_continue_handoff_ms' in telemetry
 

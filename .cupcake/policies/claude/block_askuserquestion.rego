@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: AskUserQuestion questionnaire tool -- goal-active gate (currently inert; see companion reminder)
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-BLOCK-ASKUSERQUESTION

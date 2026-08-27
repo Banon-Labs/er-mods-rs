@@ -1,6 +1,6 @@
 //! In-memory TPF (Tier-4) texture wire-up constants for the title/loading cover.
 //!
-//! Moved verbatim from er-effects-rs `constants/tpf_textures.rs` with the loading-cover crate
+//! Moved verbatim from er-quickload `constants/tpf_textures.rs` with the loading-cover crate
 //! extraction, together with `CREATE_TPF_RESCAP_RVA` from `constants/anti_debug.rs` (an RVA has
 //! exactly one literal declaration in this workspace -- `scripts/check-rva-alias-drift.py` -- so it
 //! moved rather than being copied). The root re-exports every name through its `constants.rs` glob.
@@ -25,7 +25,7 @@ pub const CREATE_TPF_RES_CAP_RVA: usize = CREATE_TPF_RESCAP_RVA;
 /// In-memory TPF -> TpfResCap factory `CreateTpfResCap` (dump 0x140b83770 -> deobf 0x140b83680).
 /// `fn(tpfRepo /rcx = *GLOBAL_TpfRepository/, name: *const u16 /rdx/, bytes: *const u8 /r8/, size: u64
 /// /r9/, flag: u8 /stack=0/, extra: u32 /stack=0/) -> *mut TpfResCap` (0xb8; +0x78 count, +0x80 array).
-/// Moved here from er-effects-rs `constants/anti_debug.rs`; its only readers are the loading-cover
+/// Moved here from er-quickload `constants/anti_debug.rs`; its only readers are the loading-cover
 /// texture paths.
 pub const CREATE_TPF_RESCAP_RVA: usize = 0xb83680;
 /// `GLOBAL_TpfRepository` singleton pointer (dump 0x143d73fb8; data RVA = dump_va - 0x140000000, the

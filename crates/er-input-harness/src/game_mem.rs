@@ -2,7 +2,7 @@
 //!
 //! CROSS-DLL STATE (constraint #1): separate DLLs do NOT share Rust statics, so this harness cannot
 //! read the product DLL's `SYSTEM_QUIT_INGAME_TOP_WINDOW` / `SYSTEM_QUIT_QUICKLOAD_PHASE` /
-//! menu-window latches (those live in `er_effects_rs.dll`'s image). Those product statics are
+//! menu-window latches (those live in `er_quickload.dll`'s image). Those product statics are
 //! themselves derived from GAME memory, so the harness re-derives what it needs the same way
 //! `er-reload-trace` reads the game: `GetModuleHandleA(NULL)` for the image base, then
 //! fault-safe `ReadProcessMemory` walks of the known singletons.
@@ -21,7 +21,7 @@ use crate::win32::{GetModuleHandleA, read_usize};
 
 // RVAs/offsets ported verbatim from the product's constant tree (image base 0x140000000):
 //   GAME_DATA_MAN_GLOBAL_RVA / +0x08 PlayerGameData -- er-reload-trace src/lib.rs
-//   CS_MENU_MAN_GLOBAL_RVA / CS_MENU_MAN_MENU_DATA_OFFSET -- crates/er-effects-rs/src/constants/*
+//   CS_MENU_MAN_GLOBAL_RVA / CS_MENU_MAN_MENU_DATA_OFFSET -- crates/er-quickload/src/constants/*
 // They are plain integer literals (addresses the DLL reads), not shared statics.
 const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
@@ -37,11 +37,11 @@ pub fn game_base() -> Option<usize> {
     (base != 0).then_some(base)
 }
 
-/// True when the PRODUCT DLL (`er_effects_rs.dll`) is loaded in this process -- a REAL runtime condition
+/// True when the PRODUCT DLL (`er_quickload.dll`) is loaded in this process -- a REAL runtime condition
 /// (not a marker file): when the product is present the harness is a COMPANION (the product owns the
 /// drive), so the standalone boot/menu drive must stand down and not fight it.
 pub fn product_dll_present() -> bool {
-    let name = b"er_effects_rs.dll\0";
+    let name = b"er_quickload.dll\0";
     (unsafe { GetModuleHandleA(name.as_ptr().cast()) } as usize) != 0
 }
 
@@ -375,7 +375,7 @@ pub fn force_drive_requested() -> bool {
 /// initial load goes through the menu path (run49 PARITY) rather than the product's menu-free
 /// `own_load_continue` (which leaves the ~4-6fps epoch1 render residual). Opt-in marker while validating;
 /// intended to become the product default once the pure-default smoke reaches parity. The product's own
-/// autoload must stand down (er-effects-diag-no-autoload.txt) so the two do not compete for the boot load.
+/// autoload must stand down (er-quickload-diag-no-autoload.txt) so the two do not compete for the boot load.
 pub fn companion_autoload_requested() -> bool {
     matches!(
         std::env::var("ER_HARNESS_COMPANION_AUTOLOAD").as_deref(),

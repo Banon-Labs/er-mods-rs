@@ -1,4 +1,4 @@
-//! Loading-screen portrait + character-stats feature crate (er-effects-rs portrait crate
+//! Loading-screen portrait + character-stats feature crate (er-quickload portrait crate
 //! split, path B + capture pipeline).
 //!
 //! Contents, moved verbatim from the root DLL:

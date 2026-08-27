@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Block Local Commits on Main
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: CRITICAL
 #   id: ER-EFFECTS-BLOCK-MAIN-COMMIT

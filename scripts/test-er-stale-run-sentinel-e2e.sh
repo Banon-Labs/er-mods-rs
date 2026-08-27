@@ -50,7 +50,7 @@ profileVersion = "v1"
 [[supports]]
 game = "eldenring"
 [[natives]]
-path = '/nonexistent/er_effects_rs.dll'
+path = '/nonexistent/er_quickload.dll'
 [[natives]]
 path = '/nonexistent/er_invasion_warp.dll'
 TOML

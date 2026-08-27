@@ -10,7 +10,7 @@ use std::{
 };
 
 use eldenring::cs::{ChrInsExt, PlayerIns};
-use er_effects_data::{
+use er_quickload_data::{
     EffectKindSpec, parse_effect_hotkeys_json, parse_effect_id_catalog_json,
     parse_effect_master_catalog_json,
 };

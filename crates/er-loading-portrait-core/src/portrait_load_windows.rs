@@ -1,6 +1,6 @@
 //! Per-load-window portrait verdict semaphores.
 //!
-//! Moved verbatim from er-effects-rs `telemetry/portrait_load_windows.rs` with the loading-cover
+//! Moved verbatim from er-quickload `telemetry/portrait_load_windows.rs` with the loading-cover
 //! crate extraction. The product functions it reads -- the debug-log sink, the JSON emitter and the
 //! boot-view clock -- cross the seam through [`crate::host`] and [`crate::loading_cover_host`];
 //! every call site keeps its original name.

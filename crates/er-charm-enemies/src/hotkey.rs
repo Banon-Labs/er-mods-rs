@@ -216,7 +216,7 @@ fn observe_keyboard_state(hr: i32, size: u32, data: *mut u8) {
 
 /// Install the keyboard hook. Fails until `dinput8.dll` is loaded, so the caller retries.
 ///
-/// The detour goes in through [`register_shared_hook`], never a bare `MhHook`: `er-effects-rs`
+/// The detour goes in through [`register_shared_hook`], never a bare `MhHook`: `er-quickload`
 /// and `er-net-effects` both detour this same `GetDeviceState` slot, and two separately
 /// linked MinHook instances on one prologue silently overwrite each other's trampolines -- the
 /// loser reports installed and never runs. Routing through the product's union when the product

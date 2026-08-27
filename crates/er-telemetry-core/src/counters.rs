@@ -986,7 +986,7 @@ pub static SWITCH_TRIGGER_DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_SLOT_CONTROL_MTIME: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
 /// Set to 1 by poll_switch_slot_control_file the moment the switch control file
-/// (er-effects-switch-slot.txt) EXISTS, marking that the DETERMINISTIC control-file driver owns the
+/// (er-quickload-switch-slot.txt) EXISTS, marking that the DETERMINISTIC control-file driver owns the
 /// switch. The product's sq-repro menu-nav switch driver stands down when this is set, so the two
 /// drivers never fight (which was arming extra switches AND suppressing the move-probe). 0 = not seen.
 pub static DETERMINISTIC_SWITCH_DRIVER_ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -1433,7 +1433,7 @@ pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize:
 // pause/System menu -- the window Escape opens. The job runs once per frame WHILE that menu is up
 // and not at all otherwise, so a tick after a gap IS the open. Ground truth for both halves of
 // that claim, from the shipped DLL's own log of a real session (2026-08-22 11:41:30 run, game-dir
-// `er-effects-autoload-debug.log`): zero `02_000_IngameTop` `MenuWindowJob::Run` lines through the
+// `er-quickload-autoload-debug.log`): zero `02_000_IngameTop` `MenuWindowJob::Run` lines through the
 // first 39.9 s of boot, character load and gameplay, then a first line at `[+39905ms]` carrying
 // `prev=0x0`, followed by lines every ~20-60 ms -- one per presented frame -- while the menu was
 // open.
@@ -1918,7 +1918,7 @@ pub static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0)
 pub static SAVE_PICKER_LIST_BUILDER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Which file-picker surface this session runs: 0 = the in-game `05_010` browser (default),
-/// 1 = the OS common file dialog (`er-effects.toml os_native_save_picker = true`).
+/// 1 = the OS common file dialog (`er-quickload.toml os_native_save_picker = true`).
 ///
 /// A LATCH set once from `init_runtime_config`, not a lazy read, so it is exported even in a
 /// session where no picker ever opens. Every other `SAVE_PICKER_OS_*` counter is only meaningful
@@ -2001,7 +2001,7 @@ pub static SAVE_PICKER_OS_BOOT_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// and the game is quitting.
 ///
 /// Only trustworthy when `SAVE_PICKER_BOOT_TELEMETRY_FLUSHED` reads 1. When it reads 0 this field
-/// is whatever it was before the cancel, and `er-effects-bootstrap.jsonl`'s
+/// is whatever it was before the cancel, and `er-quickload-bootstrap.jsonl`'s
 /// `boot_picker_cancel_exit` record is the outcome instead.
 pub static SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 1 once the picker thread is calling `ExitProcess(0)`.
@@ -2022,7 +2022,7 @@ pub static SAVE_PICKER_OS_BOOT_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
 ///
 /// `1` the file you are reading describes the cancel. `0` the flush could not run (the state mutex
 /// was held by a thread that is not giving it back), so **every other field in this file predates
-/// the cancel** and only `er-effects-bootstrap.jsonl` plus the debug log describe the outcome.
+/// the cancel** and only `er-quickload-bootstrap.jsonl` plus the debug log describe the outcome.
 ///
 /// THIS FIELD EXISTS BECAUSE ITS ABSENCE COST A DIAGNOSIS. In run pr109-boot-oscancel-20260730-110704
 /// the cancel worked perfectly and the telemetry showed `boot_state = OPEN`, `cancel_exit_count = 0`

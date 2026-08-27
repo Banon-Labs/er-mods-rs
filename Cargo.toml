@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "crates/er-effects-rs",
+  "crates/er-quickload",
   # One vocabulary for naming a key in a config file, plus the reload decision that makes an
   # edit take effect without a restart. Extracted after a hard-coded VK_F7 in er-invasion-warp
   # collided with another mod's default and warped a live session, with no config key on either
@@ -51,14 +51,14 @@ members = [
   # Save-picker crate extraction (docs/plans/save-picker-crate-extraction.md).
   # (A) the DLL-drawn boot picker + the shared row model + the OS-native dialog surface;
   # (B) the customized System>Quit menu, which depends on (A) one way. The product links
-  # er-quit-menu-core into er_effects_rs.dll; er-quit-menu is an optional harness only.
+  # er-quit-menu-core into er_quickload.dll; er-quit-menu is an optional harness only.
   "crates/er-save-picker-core",
   "crates/er-save-picker",
   "crates/er-save-redirect",
   "crates/er-quit-menu-core",
   # `CS::ProfileSummary` -- the ten in-memory character records every character-identity
   # surface reads (the title Continue row, the System>Quit load rows, the ProfileSelect list,
-  # the loading-screen portrait). Was four files of the er-effects-rs shim, one verb each.
+  # the loading-screen portrait). Was four files of the er-quickload shim, one verb each.
   "crates/er-profile-summary-core",
   "crates/er-quit-menu",
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
@@ -94,7 +94,7 @@ members = [
   "crates/erpx-rs",
   "crates/soulsformats",
   # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
-  # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
+  # `er-quickload` cdylib, so `cargo xwin check` (which selects only the root
   # package) never cross-compiles them into the game DLL; built only when
   # targeted explicitly (`cargo check -p er-shaderkit ...`).
   "crates/er-shaderkit",
@@ -106,7 +106,7 @@ members = [
   "tools/er-shader-viewer",
 ]
 resolver = "2"
-default-members = ["crates/er-effects-rs"]
+default-members = ["crates/er-quickload"]
 
 # LINT PARITY WITH `../fromsoftware-rs` (2026-08-21).
 #

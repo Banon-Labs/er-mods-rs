@@ -11,7 +11,7 @@ name = "er_save_disable"
 # exactly the parts that must not rely on a game run to be verified.
 crate-type = ["cdylib", "rlib"]
 
-# Standalone save-disable DLL. Deliberately DECOUPLED from the product `er-effects-rs`
+# Standalone save-disable DLL. Deliberately DECOUPLED from the product `er-quickload`
 # cdylib: it shares no state with the product's System->Quit save handling (which clears
 # CSMenuMan->disableSaveMenu +0x13c) and is loaded through its own ME3 `[[natives]]` entry.
 # Before it suppresses anything it must first PROVE, from the bottom up, every call site

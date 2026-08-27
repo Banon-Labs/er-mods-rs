@@ -86,7 +86,7 @@ for plan_id, mapped_issues in sorted(plan_to_issue.items()):
         continue
     issue = mapped_issues[0]
     external_ref = issue.get("external_ref") or ""
-    match = re.search(r"(?:github\.com/Banon-Labs/er-effects-rs/(?:pull|issues)/|repo:Banon-Labs/er-effects-rs#|github:Banon-Labs/er-effects-rs#)(\d+)", external_ref)
+    match = re.search(r"(?:github\.com/Banon-Labs/er-mods-rs/(?:pull|issues)/|repo:Banon-Labs/er-mods-rs#|github:Banon-Labs/er-mods-rs#)(\d+)", external_ref)
     if not match:
         continue
     number = int(match.group(1))
