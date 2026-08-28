@@ -230,6 +230,13 @@ type CrashExitTarget = (
 /// which game code requested the exit.
 pub(crate) fn install_crash_logger() {
     CRASH_LOGGER_INSTALLED.call_once(|| {
+        // Stamped before anything else can fail, so that "no exit record" later reads as "no exit
+        // path ran" instead of being indistinguishable from "this logger never installed".
+        mark_run_started();
+        // The only signal that distinguishes "died BY this fault" from "somebody quit": an
+        // exception nothing claimed. Registered before the VEH so a fault during install is still
+        // classified.
+        install_fatal_exception_filter();
         unsafe { AddVectoredExceptionHandler(VECTORED_FIRST_HANDLER, crash_vectored_handler) };
         match unsafe { MH_Initialize() } {
             MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}

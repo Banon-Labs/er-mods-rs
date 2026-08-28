@@ -46,10 +46,142 @@ pub(crate) fn deliberate_fail_fast_enabled() -> bool {
     false
 }
 
+/// One-line file naming HOW the run ended, written beside the game executable.
+///
+/// It exists because "the process is gone" is not a diagnosis and reading it as one is expensive:
+/// on 2026-08-28 a player quitting to desktop was reported as three crashes, and 26 hook addresses
+/// were quarantined on that inference before the crash log was read properly (it held 8 records,
+/// every one `fatal=false`). The crash log cannot settle it either -- `note_process_detach` says so
+/// in its own doc comment: a detach with no fatal record means "shut down OR killed from outside".
+///
+/// THE EXIT CODE DOES NOT SEPARATE THEM ON THIS TARGET. That was this file's first design and it
+/// was wrong: the user quit to desktop and the run was recorded as `fault`, because a normal
+/// ELDEN RING quit under Wine/Proton exits through `NtTerminateProcess` carrying `0xc0000005` --
+/// the same code an access violation would carry. An exit code is not a diagnosis here.
+///
+/// What DOES separate them is whether an exception went UNHANDLED, which is the one thing a
+/// first-chance handler structurally cannot tell you and the only thing that means "the process is
+/// dying BY this fault". So [`fatal_exception_filter`] stamps the file the moment the top-level
+/// filter is reached, and that stamp wins:
+///
+/// * `fatal-exception` -- an exception reached the unhandled filter. This one really crashed.
+/// * `clean-exit` -- an exit path ran with code 0.
+/// * `exit-unclassified` -- an exit path ran with a non-zero code and NO fatal exception was seen.
+///   Recorded verbatim and left uninterpreted, because on this target that is what a quit looks
+///   like. Across every run of 2026-08-28 the fatal filter fired ZERO times while several runs
+///   exited `0xc0000005`; reading those as crashes produced a bisect whose verdicts were noise.
+///
+/// The file is also written ONCE AT INSTALL as `outcome=running`, which is what makes its later
+/// states readable. Without that, two very different things looked identical -- the process being
+/// killed from outside, and these hooks never installing at all -- and a reader has no way to tell
+/// which. So:
+///
+/// * `running`, after the process is gone -- no exit path ran: killed from outside (an agent
+///   teardown, `wineserver`, the OOM killer) or died without reaching any exit API.
+/// * file ABSENT -- this logger never installed, so the file says nothing about the game and the
+///   reader should go looking for why the DLL did not start.
+const RUN_OUTCOME_FILE_NAME: &str = "er-run-outcome.txt";
+/// Value written at install, before anything can go wrong.
+const RUN_OUTCOME_RUNNING: &str = "outcome=running api=- code=-\n";
+
+/// Set once the unhandled-exception filter has stamped the outcome, so the exit hook that follows
+/// it a few microseconds later cannot overwrite a real diagnosis with an uninterpretable code.
+static FATAL_OUTCOME_STAMPED: AtomicUsize = AtomicUsize::new(0);
+/// Whatever unhandled-exception filter was registered before ours, so it still gets its turn.
+static PREVIOUS_UNHANDLED_FILTER: AtomicUsize = AtomicUsize::new(0);
+/// `EXCEPTION_CONTINUE_SEARCH` as returned from a top-level filter.
+const EXCEPTION_CONTINUE_SEARCH_RESULT: i32 = 0;
+
+unsafe extern "system" {
+    fn SetUnhandledExceptionFilter(filter: usize) -> usize;
+}
+
+/// Register [`fatal_exception_filter`]. Idempotent: the first registration wins, and the previous
+/// filter is remembered so the chain is preserved.
+pub(crate) fn install_fatal_exception_filter() {
+    let previous = unsafe { SetUnhandledExceptionFilter(fatal_exception_filter as *const () as usize) };
+    let _ = PREVIOUS_UNHANDLED_FILTER.compare_exchange(
+        0,
+        previous,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+}
+
+/// Classify an exit code -- WITHOUT pretending a non-zero code means a fault. See the module note:
+/// a normal quit exits `0xc0000005` on this target, so the only honest split here is "zero" and
+/// "not zero, and I am not going to guess".
+fn classify_exit_code(code: u32) -> &'static str {
+    if code == 0 {
+        "clean-exit"
+    } else {
+        "exit-unclassified"
+    }
+}
+
+/// Stamp `outcome=running` as soon as the exit hooks are armed, so a later absence of any exit
+/// record is readable as "no exit path ran" rather than "nothing was watching".
+pub(crate) fn mark_run_started() {
+    let Some(directory) = er_game_base::log::game_directory_path() else {
+        return;
+    };
+    let _ = std::fs::write(directory.join(RUN_OUTCOME_FILE_NAME), RUN_OUTCOME_RUNNING);
+}
+
+fn write_run_outcome(api: &str, code: u32) {
+    let Some(directory) = er_game_base::log::game_directory_path() else {
+        return;
+    };
+    let outcome = classify_exit_code(code);
+    // Deliberately one line and self-describing: the reader is usually an agent deciding whether a
+    // run proved anything, and a format that needs parsing invites the guess this file replaces.
+    let _ = std::fs::write(
+        directory.join(RUN_OUTCOME_FILE_NAME),
+        format!("outcome={outcome} api={api} code=0x{code:x}\n"),
+    );
+}
+
+/// Top-level filter: reached only when nothing in the process claimed the exception, which is the
+/// definition of fatal. It observes and chains on -- Seamless Co-op's crashpad, the game's own
+/// filter and WER all still get their turn.
+pub(crate) unsafe extern "system" fn fatal_exception_filter(info: *mut ExceptionPointersMin) -> i32 {
+    FATAL_OUTCOME_STAMPED.store(1, Ordering::SeqCst);
+    let (code, address) = if info.is_null() {
+        (0, 0)
+    } else {
+        let record = unsafe { (*info).exception_record };
+        if record.is_null() {
+            (0, 0)
+        } else {
+            (unsafe { (*record).exception_code }, unsafe {
+                (*record).exception_address as usize
+            })
+        }
+    };
+    if let Some(directory) = er_game_base::log::game_directory_path() {
+        let _ = std::fs::write(
+            directory.join(RUN_OUTCOME_FILE_NAME),
+            format!("outcome=fatal-exception code=0x{code:x} rip=0x{address:x}\n"),
+        );
+    }
+    let previous = PREVIOUS_UNHANDLED_FILTER.load(Ordering::SeqCst);
+    if previous != HOOK_ORIGINAL_UNSET && previous != 0 {
+        let chained: unsafe extern "system" fn(*mut ExceptionPointersMin) -> i32 =
+            unsafe { std::mem::transmute(previous) };
+        return unsafe { chained(info) };
+    }
+    EXCEPTION_CONTINUE_SEARCH_RESULT
+}
+
 pub(crate) fn log_process_exit(api: &str, code: u32, handle: usize) {
     // Log only the first terminator -- the one that actually quits the game.
     if PROCESS_EXIT_LOGGED.swap(true, Ordering::SeqCst) {
         return;
+    }
+    // A fatal stamp is a diagnosis; an exit code on this target is not. Never overwrite the former
+    // with the latter.
+    if FATAL_OUTCOME_STAMPED.load(Ordering::SeqCst) == 0 {
+        write_run_outcome(api, code);
     }
     append_crash_log(format_args!(
         "process-exit via {api} code=0x{code:x} handle=0x{handle:x} {}",

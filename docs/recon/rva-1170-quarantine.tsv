@@ -1,0 +1,25 @@
+# Verified 1.16.2 -> 1.17 mappings that are NOT translated, and why.
+#
+# `scripts/verify-rva-map-1170.py` answers one question: is the code at the mapped address the
+# same function? A row here answers the OTHER question it cannot: even so, is our HANDLER still
+# right on 1.17? A handler reads struct fields and calls virtuals by slot, and 1.17 moved plenty
+# of both, so a correct address can still deliver a detour to a handler that faults.
+#
+# Format: 1.16.2 RVA <TAB> reason. Read by crates/er-hook/build.rs, which drops these rows from
+# the generated translation table; the address then refuses, so the feature stays inert.
+#
+# WHAT COUNTS AS EVIDENCE FOR A ROW HERE -- and nothing else does:
+# an `outcome=fatal-exception` stamp in <game dir>/er-run-outcome.txt, or a `fatal=true` record in
+# er-crash-latest.txt, attributable to that address's handler. Both mean an exception reached the
+# UNHANDLED filter, which is the only signal that says the process died BY the fault.
+#
+# TWO THINGS THAT LOOK LIKE EVIDENCE AND ARE NOT, both learned here on 2026-08-28:
+#   * "the process is gone" -- a player quitting to desktop is indistinguishable from a crash by
+#     process state. 26 addresses were quarantined on that inference, then reverted.
+#   * a non-zero EXIT CODE -- a normal ELDEN RING quit under Wine/Proton exits through
+#     NtTerminateProcess carrying 0xc0000005, the same code an access violation carries. A whole
+#     bisect was run on that oracle and its verdicts were noise; the row for 0x9a6180 (title-logo
+#     ctor hook) came from it and has been RETRACTED rather than kept on bad evidence.
+# Across every run of 2026-08-28 the unhandled filter fired ZERO times: no crash was ever observed.
+#
+# Empty until a fatal record names a handler.
