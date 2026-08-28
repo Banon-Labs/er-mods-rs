@@ -115,6 +115,9 @@ pub unsafe fn register_union_hook(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
+    if !detours_allowed(target, &format!("register_union_hook 0x{target:x}")) {
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    }
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         s => return Err(s),
@@ -296,6 +299,9 @@ pub unsafe fn register_shared_hook(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<HookRoute, MH_STATUS> {
+    if !detours_allowed(target, &format!("register_shared_hook 0x{target:x}")) {
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    }
     unsafe {
         register_shared_hook_with_budget(
             target,
@@ -325,6 +331,12 @@ pub unsafe fn register_shared_hook_with_budget(
     tries: u32,
     sleep_ms: u32,
 ) -> Result<HookRoute, MH_STATUS> {
+    if !detours_allowed(
+        target,
+        &format!("register_shared_hook_with_budget 0x{target:x}"),
+    ) {
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    }
     if let Some(register) = resolve_product_union_register(tries, sleep_ms) {
         // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
         // own static is sound; our image outlives every dispatch.
@@ -469,6 +481,51 @@ impl MH_STATUS {
     }
 }
 
+// ============================================================================
+// BUILD GATE (2026-08-28). Every game address in this workspace is a 1.16.2 RVA. ELDEN RING 1.17
+// moved code, and a detour installed at a stale RVA does not fail -- it lands mid-function and
+// corrupts the game: `0x1407ada40` is a real prologue in 1.16.2 and `xor r15d, r15d` in 1.17, and
+// hooking it killed a boot with an access violation whose backtrace blames game code.
+//
+// MinHook cannot catch this. It refuses only what it cannot DECODE (several hooks did come back
+// MH_ERROR_UNSUPPORTED_FUNCTION on 1.17); mid-function bytes that happen to decode are installed
+// happily. So the check has to be "is this the build these addresses came from", asked once, here,
+// where every detour in every DLL of this workspace passes through.
+//
+// Scope is deliberately the DETOUR installers only. The raw byte primitives below
+// (`write_code_byte`, `patch_3byte_stub`, `apply_xor_ret_stub`) stay ungated: the last two
+// validate the byte they overwrite and abort on a mismatch, and `write_code_byte` is what
+// `er-ersc-sigshim` uses to repair Seamless Co-op on exactly the builds this gate calls
+// unsupported -- gating it would break the one thing that currently works on 1.17.
+// ============================================================================
+
+/// Whether a detour on `target` may be installed.
+///
+/// Only addresses INSIDE the game image carry a version assumption. The Win32 detours in this
+/// workspace -- `CreateWindowExW`, `SetWindowPos`, `ExitProcess`, the DirectInput
+/// `GetDeviceState` slots -- are resolved through `GetProcAddress` at runtime and are equally
+/// correct on every ELDEN RING build; gating them would break window handling and input for no
+/// reason. Measured: of the 69 addresses this gate first refused on 1.17, 19 were OS-DLL
+/// addresses that never needed refusing.
+///
+/// Logged once per refusal rather than once per process, because the useful thing in a log is
+/// *which* hook was skipped -- a single startup line would leave every later "feature did
+/// nothing" unexplained.
+fn detours_allowed(target: usize, what: &str) -> bool {
+    if !er_game_base::game_build::is_game_image_address(target) {
+        return true;
+    }
+    if er_game_base::game_build::is_supported_build() {
+        return true;
+    }
+    hook_log(format_args!(
+        "HOOK REFUSED ({what}): {} -- every RVA in this DLL is from the supported build, so \
+         installing here would detour whatever code now occupies that address",
+        er_game_base::game_build::describe_build()
+    ));
+    false
+}
+
 /// Original address, hook function address, and trampoline for a given hook.
 pub struct MhHook {
     addr: *mut c_void,
@@ -481,6 +538,9 @@ impl MhHook {
     ///
     /// Installs native code detours; caller must ensure ABI and lifetime are valid.
     pub unsafe fn new(addr: *mut c_void, hook_impl: *mut c_void) -> Result<Self, MH_STATUS> {
+        if !detours_allowed(addr as usize, &format!("MhHook::new 0x{:x}", addr as usize)) {
+            return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+        }
         let mut trampoline = null_mut();
         let status = unsafe { MH_CreateHook(addr, hook_impl, &mut trampoline) };
         registry_record(addr as usize, hook_impl as usize, status);

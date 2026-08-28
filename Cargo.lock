@@ -2909,6 +2909,7 @@ name = "er-hook"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "er-game-base",
 ]
 
 [[package]]

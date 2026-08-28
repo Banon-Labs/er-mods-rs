@@ -17,6 +17,11 @@ pub mod build_id;
 /// live below both rather than being copied into the second one.
 pub mod filecap;
 pub mod fnv1a;
+/// Tier A: which ELDEN RING this DLL is loaded into, read from the running image's own
+/// version resource. Every game address here is a 1.16.2 RVA, and 1.17 moved code, so the
+/// question "is this the build these addresses came from" has to be answerable BEFORE a
+/// detour goes in -- see the module docs for the crash that motivated it.
+pub mod game_build;
 /// Tier A: one blocking HTTPS GET over WinHTTP. Lives here rather than in the importer that
 /// first needed it because a second caller appeared -- the build watermark's release lookup --
 /// and a hand-declared WinHTTP ABI is exactly the kind of thing this crate exists to hold once.
