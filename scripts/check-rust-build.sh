@@ -124,6 +124,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-crash-logging:er_crash_logging
 		er-death-persist:er_death_persist
 		er-diag-harness:er_diag_harness
+		er-ersc-sigshim:er_ersc_sigshim
 		er-input-harness:er_input_harness
 		er-build-watermark:er_build_watermark
 		er-invasion-path:er_invasion_path
