@@ -212,13 +212,11 @@ fn register_task() {
     use eldenring::fd4::FD4TaskData;
     use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
-    let task = loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(task) => break task,
-            // No sleep (banned by scripts/check-no-timeouts.py): yield and re-poll, the same shape
-            // er-invasion-warp and er-telemetry use.
-            Err(_) => std::thread::yield_now(),
-        }
+    // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop starved the
+    // wineserver and hung a boot.
+    let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+    else {
+        return;
     };
     er_build_import_runtime::log_line(
         "[build-import] CSTaskImp resolved; registering FrameBegin import task",

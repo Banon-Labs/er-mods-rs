@@ -130,24 +130,26 @@ fn spawn_better_refills_task(module_base: usize) {
                 unsafe { crashlog::force_crash_for_smoke() };
             }
             let mut attempts = 0_u64;
-            loop {
-                match game_module_base() {
-                    Ok(base) => {
-                        GAME_BASE.store(base, Ordering::SeqCst);
-                        install_better_refills_hooks(base);
-                        break;
+            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
+            let found = er_game_base::wait::poll_until(|| match game_module_base() {
+                Ok(base) => Some(base),
+                Err(err) => {
+                    if attempts == 0 || attempts.is_multiple_of(4096) {
+                        log_message(format_args!("install: waiting for game module base: {err}"));
                     }
-                    Err(err) => {
-                        if attempts == 0 || attempts.is_multiple_of(4096) {
-                            log_message(format_args!(
-                                "install: waiting for game module base: {err}"
-                            ));
-                        }
-                        attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
-                    }
+                    attempts = attempts.saturating_add(1);
+                    None
                 }
-            }
+            });
+            let Some(base) = found else {
+                log_message(format_args!(
+                    "install: no game module base; nothing installed"
+                ));
+                return;
+            };
+            GAME_BASE.store(base, Ordering::SeqCst);
+            install_better_refills_hooks(base);
         });
 }
 

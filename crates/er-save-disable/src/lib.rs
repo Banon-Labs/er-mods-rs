@@ -134,9 +134,11 @@ fn spawn_census_task() {
         .name("er-save-disable".to_owned())
         .spawn(|| {
             let mut attempts = 0_u64;
-            let base = loop {
-                match er_game_base::mem::game_module_base() {
-                    Ok(base) => break base,
+            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
+            let found =
+                er_game_base::wait::poll_until(|| match er_game_base::mem::game_module_base() {
+                    Ok(base) => Some(base),
                     Err(err) => {
                         if attempts == 0 || attempts.is_multiple_of(4096) {
                             log_message(format_args!(
@@ -144,9 +146,14 @@ fn spawn_census_task() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
+                        None
                     }
-                }
+                });
+            let Some(base) = found else {
+                log_message(format_args!(
+                    "install: no game module base; nothing installed"
+                ));
+                return;
             };
             witness::set_game_base(base);
             // Wire the shared suppression core's seams to THIS DLL's surfaces before

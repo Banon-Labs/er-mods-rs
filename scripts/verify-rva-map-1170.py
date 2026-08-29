@@ -41,6 +41,77 @@ DECODE_BYTES = 0x400
 # Below this many compared instructions the verdict is reported as thin evidence regardless of
 # how well it matched -- several ELDEN RING getters are 6 instructions long and identical.
 THIN_EVIDENCE = 12
+# Entry-evidence verdicts, written into the table's last column and required by
+# er-game-base/build.rs before a row may carry a DETOUR.
+ENTRY_BOTH = "BOTH-ENTRIES"
+ENTRY_DEST_NOT = "DEST-NOT-ENTRY"
+ENTRY_SRC_NOT = "SRC-NOT-ENTRY"
+ENTRY_NEITHER = "NEITHER-ENTRY"
+
+
+def function_extents(image):
+    """`{begin RVA: end RVA}` for every function the image's .pdata declares.
+
+    The end is what makes a SHORT function verifiable. `compare` stops at the first `ret` and
+    reports how many instructions it managed, which reads as thin evidence -- but a 21-byte
+    function compared over all 21 bytes has been compared COMPLETELY, and calling that thin
+    confuses "few instructions" with "not much of the function". The extent is how the two are
+    told apart.
+    """
+    import struct
+
+    e_lfanew = struct.unpack_from("<I", image, 0x3C)[0]
+    magic = struct.unpack_from("<H", image, e_lfanew + 24)[0]
+    directories = e_lfanew + 24 + (112 if magic == 0x20B else 96)
+    table_rva, table_size = struct.unpack_from("<II", image, directories + 3 * 8)
+    extents = {}
+    for offset in range(table_rva, table_rva + table_size, 12):
+        begin, end, _unwind = struct.unpack_from("<III", image, offset)
+        if begin or end:
+            extents[begin] = end
+    return extents
+
+
+def function_starts(image):
+    """Every address the image itself declares as a function start, from its .pdata.
+
+    x86-64 PE stores one RUNTIME_FUNCTION per function in the exception directory: begin RVA,
+    end RVA, unwind info. That table is the image's OWN answer to "does a function start here",
+    written by the linker for stack unwinding, and it is not a heuristic the way counting
+    forward references is. A detour needs its target to be a function entry -- MinHook relocates
+    the first five bytes and they had better be a prologue -- so this is the check that
+    `scripts/audit-1170-hook-targets.py` was approximating.
+
+    What it does NOT say: that the function is the SAME function. That is what `compare` is for,
+    and the two are required together.
+    """
+    import struct
+
+    e_lfanew = struct.unpack_from("<I", image, 0x3C)[0]
+    magic = struct.unpack_from("<H", image, e_lfanew + 24)[0]
+    # PE32+ optional header is 112 bytes before the data directories; PE32 is 96.
+    directories = e_lfanew + 24 + (112 if magic == 0x20B else 96)
+    # Data directory 3 is IMAGE_DIRECTORY_ENTRY_EXCEPTION.
+    table_rva, table_size = struct.unpack_from("<II", image, directories + 3 * 8)
+    starts = set()
+    for offset in range(table_rva, table_rva + table_size, 12):
+        begin, end, _unwind = struct.unpack_from("<III", image, offset)
+        if begin or end:
+            starts.add(begin)
+    return starts
+
+
+def entry_evidence(old_starts, new_starts, old_va, new_va):
+    """Which side of the pair the image declares to be a function start."""
+    src = (old_va - BASE) in old_starts
+    dst = (new_va - BASE) in new_starts
+    if src and dst:
+        return ENTRY_BOTH
+    if src:
+        return ENTRY_DEST_NOT
+    if dst:
+        return ENTRY_SRC_NOT
+    return ENTRY_NEITHER
 
 
 def normalise(insn):
@@ -81,7 +152,34 @@ def decode(image, va, limit=DECODE_LIMIT):
     return out
 
 
-def compare(old_image, new_image, old_va, new_va):
+def whole_function_bytes(image, extents, va):
+    """The function's entire body, or `None` when the image does not declare one here."""
+    begin = va - BASE
+    end = extents.get(begin)
+    if end is None or end <= begin:
+        return None
+    return bytes(image[begin:end])
+
+
+def compare(old_image, new_image, old_va, new_va, old_extents=None, new_extents=None):
+    # A whole-function byte comparison, where both images declare an extent, settles the question
+    # outright: same length, same bytes, nothing left to interpret. It is worth trying first
+    # because the normalised comparison deliberately throws away displacements and immediates, so
+    # it can only ever say "the same up to what 1.17 was expected to change" -- a weaker claim
+    # than the one available for free when a function did not change at all.
+    if old_extents is not None and new_extents is not None:
+        left_body = whole_function_bytes(old_image, old_extents, old_va)
+        right_body = whole_function_bytes(new_image, new_extents, new_va)
+        if left_body and right_body and left_body == right_body:
+            return {
+                "verdict": "BYTE-IDENTICAL",
+                "ratio": 1.0,
+                "compared": len(left_body),
+                "first_diff": None,
+                "left_len": len(left_body),
+                "right_len": len(right_body),
+                "whole_body": True,
+            }
     left = decode(old_image, old_va)
     right = decode(new_image, new_va)
     if not left or not right:
@@ -90,8 +188,22 @@ def compare(old_image, new_image, old_va, new_va):
     first_diff = next((i for i in range(compared) if left[i] != right[i]), None)
     same = sum(1 for i in range(compared) if left[i] == right[i])
     ratio = same / compared
+    # Did the decode reach the end of BOTH declared functions? If it did, a low instruction count
+    # is the function being short, not the evidence being partial.
+    whole_body = False
+    if old_extents is not None and new_extents is not None:
+        left_body = whole_function_bytes(old_image, old_extents, old_va)
+        right_body = whole_function_bytes(new_image, new_extents, new_va)
+        whole_body = bool(
+            left_body
+            and right_body
+            and len(left_body) <= DECODE_BYTES
+            and len(right_body) <= DECODE_BYTES
+        )
     if first_diff is None and len(left) == len(right):
-        verdict = "IDENTICAL" if compared >= THIN_EVIDENCE else "IDENTICAL-SHORT"
+        verdict = (
+            "IDENTICAL" if compared >= THIN_EVIDENCE or whole_body else "IDENTICAL-SHORT"
+        )
     elif ratio >= 0.95:
         verdict = "NEAR"
     else:
@@ -103,6 +215,7 @@ def compare(old_image, new_image, old_va, new_va):
         "first_diff": first_diff,
         "left_len": len(left),
         "right_len": len(right),
+        "whole_body": whole_body,
     }
 
 
@@ -154,13 +267,25 @@ def main():
         default=1.0,
         help="ratio at or above which a pair is listed as accepted (default 1.0)",
     )
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="assert the verdicts that the 2026-08-29 crash bisect established",
+    )
     args = parser.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     for image in (OLD_IMAGE, NEW_IMAGE):
         if not os.path.exists(image):
             sys.exit(f"missing image: {image}")
     old_image = open(OLD_IMAGE, "rb").read()
     new_image = open(NEW_IMAGE, "rb").read()
+    old_starts = function_starts(old_image)
+    new_starts = function_starts(new_image)
+    old_extents = function_extents(old_image)
+    new_extents = function_extents(new_image)
 
     pairs = load_map(args.map)
     if args.vas:
@@ -171,12 +296,16 @@ def main():
 
     rows = []
     for old_va, new_va, how in pairs:
-        result = compare(old_image, new_image, old_va, new_va)
+        result = compare(
+            old_image, new_image, old_va, new_va, old_extents, new_extents
+        )
+        result["entry"] = entry_evidence(old_starts, new_starts, old_va, new_va)
         rows.append((old_va, new_va, how, result))
         diff = "" if result["first_diff"] is None else f", first diff at insn {result['first_diff']}"
         print(
             f"{old_va:#x} -> {new_va:#x}  {result['verdict']:<16} "
-            f"{result['ratio']:.2f} over {result['compared']} insns{diff}   [{how}]"
+            f"{result['ratio']:.2f} over {result['compared']} insns{diff}  "
+            f"{result['entry']}   [{how}]"
         )
 
     accepted = [r for r in rows if r[3]["ratio"] >= args.min_ratio and r[3]["compared"] >= THIN_EVIDENCE]
@@ -189,19 +318,97 @@ def main():
 
     if args.tsv:
         with open(args.tsv, "w", encoding="utf-8") as handle:
-            handle.write("# 1.16.2 VA\t1.17 VA\tverdict\tratio\tinsns compared\thow it was mapped\n")
+            handle.write(
+                "# 1.16.2 VA\t1.17 VA\tverdict\tratio\tinsns compared\thow it was mapped\tentry\n"
+            )
             handle.write(
                 "# Generated by scripts/verify-rva-map-1170.py. A verdict is evidence, not\n"
                 "# permission: IDENTICAL means the normalised instruction sequences agree, which\n"
                 "# cannot see a change in what a called function does.\n"
+                "#\n"
+                "# The last column is the OTHER half of a detour's licence: whether each image's own\n"
+                "# .pdata declares a function to start at that address. er-game-base/build.rs\n"
+                "# requires BOTH-ENTRIES before a row may carry a detour, because IDENTICAL over a\n"
+                "# body says the code is the same and says nothing about whether MinHook may\n"
+                "# relocate the five bytes it is about to overwrite.\n"
             )
             for old_va, new_va, how, result in rows:
                 handle.write(
                     f"{old_va:#x}\t{new_va:#x}\t{result['verdict']}\t{result['ratio']:.3f}\t"
-                    f"{result['compared']}\t{how}\n"
+                    f"{result['compared']}\t{how}\t{result['entry']}\n"
                 )
         print(f"wrote {args.tsv}")
     return 0
+
+
+def selftest():
+    """Re-derive the verdicts the crash bisect of 2026-08-29 established.
+
+    er-armament-icons installed five detours and the game died at the first overlay draw. Four of
+    the five targets are the same function in 1.17; the fifth, `HUD_WEAPON_SLOT_UPDATE`, is not --
+    the signature map paired it with a function whose body shares 18% of its instruction shape.
+    A promotion rule that cannot separate those two cases would put that crash straight back, so
+    the separation is asserted here rather than described in a comment.
+    """
+    old_image = open(OLD_IMAGE, "rb").read()
+    new_image = open(NEW_IMAGE, "rb").read()
+    old_starts = function_starts(old_image)
+    new_starts = function_starts(new_image)
+    old_extents = function_extents(old_image)
+    new_extents = function_extents(new_image)
+
+    failures = []
+
+    def check(name, got, want):
+        if got != want:
+            failures.append(f"{name}: got {got!r}, want {want!r}")
+
+    check("1.16.2 .pdata is populated", len(old_starts) > 200_000, True)
+    check("1.17 .pdata is populated", len(new_starts) > 200_000, True)
+
+    # The four that are genuinely the same function, and the one that is not.
+    same = {
+        0x1408D0900: 0x1408D1AA0,  # HUD_SCENE_UPDATE
+        0x1408D1D00: 0x1408D2EA0,  # HUD_WEAPON_SLOT_CTOR
+        0x1408D1E30: 0x1408D2FD0,  # HUD_CHILD_BINDER
+        0x1408FF470: 0x140900610,  # TILE_POPULATE
+    }
+    for old_va, new_va in same.items():
+        result = compare(
+            old_image, new_image, old_va, new_va, old_extents, new_extents
+        )
+        check(f"{old_va:#x} verdict", result["verdict"], "IDENTICAL")
+        check(
+            f"{old_va:#x} entry",
+            entry_evidence(old_starts, new_starts, old_va, new_va),
+            ENTRY_BOTH,
+        )
+
+    killer = compare(
+        old_image, new_image, 0x1408D2110, 0x1408D32B0, old_extents, new_extents
+    )
+    check("HUD_WEAPON_SLOT_UPDATE verdict", killer["verdict"], "DIVERGES")
+    check("HUD_WEAPON_SLOT_UPDATE is rejected", killer["ratio"] < 1.0, True)
+
+    # Short functions the extent rule rescues: 21 and 38 bytes, byte-for-byte unchanged in 1.17.
+    # Before extents were read these were IDENTICAL-SHORT over 7 instructions and excluded, which
+    # is what left er-armament-icons' PROXY_IS_BOUND detour refused on a function that did not
+    # change at all.
+    for old_va, new_va in ((0x140733150, 0x140733FA0), (0x140733EF0, 0x140734D40)):
+        whole = compare(
+            old_image, new_image, old_va, new_va, old_extents, new_extents
+        )
+        check(f"{old_va:#x} whole-function verdict", whole["verdict"], "BYTE-IDENTICAL")
+
+    # A mid-function address is not an entry, whatever the bytes around it say. Five bytes into a
+    # known function start is by construction not a function start.
+    midway = entry_evidence(old_starts, new_starts, 0x1408D0905, 0x1408D1AA5)
+    check("mid-function pair", midway, ENTRY_NEITHER)
+
+    for line in failures:
+        print(f"selftest FAIL {line}")
+    print(f"selftest: {len(failures)} failure(s)")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

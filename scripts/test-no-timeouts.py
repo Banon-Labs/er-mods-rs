@@ -70,7 +70,19 @@ def main() -> int:
         ("good-find-read.sh", "#!/usr/bin/env bash\nfind . -type f | while IFS= read -r f; do echo \"$f\"; done\n", set()),
         # subprocess.Popen takes no timeout= kwarg (timeout belongs on .communicate()/.wait()).
         ("good-popen.py", "import subprocess\np = subprocess.Popen(['x'], stdout=subprocess.PIPE)\n", set()),
-        ("good-rust.rs", "fn f() { std::thread::yield_now(); let _interval = Duration::from_millis(250); }\n", set()),
+        # The bounded helpers are the sanctioned wait; a bare `yield_now()` per attempt is not.
+        # MEASURED 2026-08-29: two `loop { yield_now() }` threads saturated the wineserver and the
+        # game managed 104 CPU ticks in three minutes with no window and no crash record.
+        (
+            "good-rust.rs",
+            "fn f() { er_game_base::wait::back_off(1); let _interval = Duration::from_millis(250); }\n",
+            set(),
+        ),
+        (
+            "bad-yield-spin.rs",
+            "fn f() { loop { if ready() { break } std::thread::yield_now(); } }\n",
+            {"rust-unbounded-yield-spin"},
+        ),
         ("good-python.py", "event.wait(); process.wait()\n", set()),
         ("good-js.ts", "await readiness; emitter.once('ready', resolve);\n", set()),
     ]

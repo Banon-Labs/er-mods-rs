@@ -330,11 +330,14 @@ fn spawn_install_thread() {
             // Wait for the game's task manager the way the sibling DLLs do (yield, no sleep):
             // its readiness implies the game image and its statics are mapped, before the
             // tile-populate draw hook (whose draw path uses live game state).
-            loop {
-                match unsafe { CSTaskImp::instance() } {
-                    Ok(_) => break,
-                    Err(_) => std::thread::yield_now(),
-                }
+            // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
+            // starved the wineserver and hung a boot. A give-up means the draw hook is not
+            // installed, which is an inert overlay rather than a dead game.
+            if er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok()).is_none() {
+                log_message(format_args!(
+                    "install: CSTaskImp never appeared; tile-populate draw hook NOT installed"
+                ));
+                return;
             }
             install_tile_populate_hook(base);
             hud_badge::install(base);

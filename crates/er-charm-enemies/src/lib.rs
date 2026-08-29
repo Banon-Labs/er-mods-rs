@@ -73,13 +73,12 @@ static LAST_APPLY_LOG_TICK: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_REMOVED: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(windows)]
-fn wait_for_task_instance() -> &'static CSTaskImp {
-    loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(_) => std::thread::yield_now(),
-        }
-    }
+fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
+    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
+    // three minutes while these threads burned 19,000 each, half of it system time. See
+    // er_game_base::wait for the measurement.
+    er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
 }
 
 /// Consume the presses the hook queued. An even number is a press and a release of the toggle, so
@@ -196,7 +195,12 @@ fn spawn_game_task() {
         .name("er-charm-enemies-task".to_owned())
         .spawn(move || {
             charm_log(format_args!("game task thread waiting for CSTaskImp"));
-            let task = wait_for_task_instance();
+            let Some(task) = wait_for_task_instance() else {
+                charm_log(format_args!(
+                    "CSTaskImp never appeared; this shell stays inert rather than spinning"
+                ));
+                return;
+            };
             charm_log(format_args!("game task registering FrameBegin tick"));
             task.run_recurring(
                 move |_data: &FD4TaskData| tick(),

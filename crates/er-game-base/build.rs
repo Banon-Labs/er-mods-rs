@@ -112,9 +112,15 @@ fn git(repo: &Path, args: &[&str]) -> Option<String> {
 /// `scripts/verify-rva-map-1170.py`, and read here rather than transcribed: a hand-copied address
 /// table is the exact failure this whole migration is about.
 const VERIFIED_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.verified.tsv";
-/// Only rows the verifier judged the SAME FUNCTION -- normalised instruction sequences identical
-/// over at least this many instructions. `NEAR`, `DIVERGES` and `IDENTICAL-SHORT` rows are left
-/// out on purpose: an address that merely looks similar is how a detour lands mid-function.
+/// How much of a body an `IDENTICAL` verdict must cover before it counts. `NEAR`, `DIVERGES` and
+/// `IDENTICAL-SHORT` rows are left out on purpose: an address that merely looks similar is how a
+/// detour lands mid-function.
+///
+/// It does not apply to `BYTE-IDENTICAL`, where the verifier compared the function's entire
+/// `.pdata` extent and found it unchanged. That distinction matters: it is what stopped short
+/// functions being refused for being short. `PROXY_IS_BOUND` (0x733150) is 21 bytes and identical
+/// in 1.17, and counting its 7 instructions as thin evidence kept an er-armament-icons detour
+/// refused on a function that had not changed at all.
 const MIN_VERIFIED_INSNS: u32 = 12;
 /// Mappings held back despite verifying, because the HANDLER at that address is what turned out
 /// to be stale. See the file's own header for the distinction it exists to record.
@@ -160,6 +166,103 @@ const DATA_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.data.tsv";
 /// and its opening five bytes relocate. 187 of 277 candidates pass; the 90 that do not stay out,
 /// and their reasons are recorded in the file.
 const AUDITED_DETOURS: &str = "../../docs/recon/rva-1170-detour-audited.tsv";
+/// The needed map, put through the SAME byte comparison the verified map gets.
+///
+/// This is what makes a detour promotable. `FUNCTION_MAP` says where a signature re-occurs, which
+/// is enough to call; this file says the normalised instruction sequences agree over the body AND
+/// what each image's own `.pdata` declares about the two endpoints. Both claims are required
+/// before a row reaches `DETOUR_SAFE_1162_TO_1170`.
+///
+/// MEASURED, and the reason the byte comparison is not optional: of the five detours
+/// er-armament-icons installed when the game died at the first overlay draw on 2026-08-29, four
+/// are the same function in 1.17 and one -- `HUD_WEAPON_SLOT_UPDATE`, 1.16.2 `0x8d2110` -- was
+/// paired by signature with a function sharing 18% of its instruction shape. The entry-and-
+/// prologue audit passed it. This comparison rejects it, and `scripts/verify-rva-map-1170.py
+/// --selftest` asserts that separation so it cannot quietly regress.
+const NEEDED_VERIFIED_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.needed-verified.tsv";
+
+/// Entry evidence a row must carry before it may hold a detour, from the verdict table's last
+/// column.
+///
+/// `BOTH-ENTRIES` is the ordinary case: both images' `.pdata` declare a function starting there.
+/// `NEITHER-ENTRY` is accepted too, and deliberately: `SCALEFORM_HANDLER_CTOR_RVA` (0x11a8870)
+/// sits 0x20 bytes before the entry Ghidra names, in BOTH builds, and that symmetry is itself
+/// evidence the pair is aligned. What is refused is an ASYMMETRIC verdict -- a source that is an
+/// entry paired with a destination that is not, or the reverse -- because that is precisely the
+/// shape of a mapping that landed mid-function.
+const DETOURABLE_ENTRY_EVIDENCE: [&str; 2] = ["BOTH-ENTRIES", "NEITHER-ENTRY"];
+
+/// 1.16.2 RVAs a verdict table says are paired with the WRONG 1.17 function.
+///
+/// This is not the same as an unverified row. The whole-image signature map carries hundreds of
+/// pairs nobody has compared, and they stay -- an unexamined pair is the ordinary case and the
+/// calls need the coverage. A `DIVERGES` verdict is different: the comparison ran and disagreed,
+/// so the row is positive evidence of a wrong address, and a wrong address reached as a CALL is
+/// how `0x1405eefb0` took a boot down. Those are dropped from the call map as well as the detour
+/// one.
+fn refuted_sources(path: &Path) -> Vec<u32> {
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut out = Vec::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    for line in text.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 3 || fields[2] != "DIVERGES" {
+            continue;
+        }
+        if let Ok(va) = u64::from_str_radix(fields[0].trim().trim_start_matches("0x"), 16) {
+            out.push((va - 0x140000000) as u32);
+        }
+    }
+    out
+}
+
+/// Pairs from a `verify-rva-map-1170.py` verdict table that are good enough to DETOUR.
+fn detourable_pairs(path: &Path) -> Vec<(u32, u32)> {
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut rows = Vec::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return rows;
+    };
+    for line in text.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        // Seven columns: the entry evidence is the seventh, and a table written before it existed
+        // is refused rather than assumed safe.
+        if fields.len() < 7 {
+            continue;
+        }
+        match fields[2] {
+            // The whole function, byte for byte, in both images. There is no minimum to impose:
+            // the comparison covered everything there was, and a 21-byte function proved that way
+            // is proved harder than a 400-byte one sampled over 120 instructions.
+            "BYTE-IDENTICAL" => {}
+            // Normalised instruction sequences agree. How MUCH of the body they agree over is the
+            // whole question, hence the floor.
+            "IDENTICAL" => {
+                if fields[4].trim().parse::<u32>().unwrap_or(0) < MIN_VERIFIED_INSNS {
+                    continue;
+                }
+            }
+            _ => continue,
+        }
+        if !DETOURABLE_ENTRY_EVIDENCE.contains(&fields[6].trim()) {
+            continue;
+        }
+        let parse = |s: &str| u64::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok();
+        if let (Some(old), Some(new)) = (parse(fields[0]), parse(fields[1])) {
+            // Stored as RVAs: the table has to survive a relocated image base.
+            rows.push(((old - 0x140000000) as u32, (new - 0x140000000) as u32));
+        }
+    }
+    rows
+}
 
 /// 1.16.2 RVAs excluded from translation.
 fn quarantined(root_dir: &str) -> Vec<u32> {
@@ -183,32 +286,14 @@ fn quarantined(root_dir: &str) -> Vec<u32> {
 
 /// Emit the translation table `er-hook` consults when the running build is not 1.16.2.
 fn emit_address_map(root_dir: &str) {
-    let map_path = Path::new(root_dir).join(VERIFIED_MAP);
-    println!("cargo:rerun-if-changed={}", map_path.display());
-    let mut rows: Vec<(u32, u32)> = Vec::new();
-    if let Ok(text) = std::fs::read_to_string(&map_path) {
-        for line in text.lines() {
-            if line.starts_with('#') || line.trim().is_empty() {
-                continue;
-            }
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields.len() < 5 || fields[2] != "IDENTICAL" {
-                continue;
-            }
-            let compared: u32 = fields[4].trim().parse().unwrap_or(0);
-            if compared < MIN_VERIFIED_INSNS {
-                continue;
-            }
-            let parse = |s: &str| u64::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok();
-            if let (Some(old), Some(new)) = (parse(fields[0]), parse(fields[1])) {
-                // Stored as RVAs: the table has to survive a relocated image base.
-                rows.push(((old - 0x140000000) as u32, (new - 0x140000000) as u32));
-            }
-        }
-    }
-    // Everything gathered so far came from the byte-comparison verifier, and only those rows may
-    // carry a DETOUR. See `emit_address_map`'s tail for why the distinction is load-bearing.
-    let detour_safe: Vec<(u32, u32)> = rows.clone();
+    let mut rows: Vec<(u32, u32)> = detourable_pairs(&Path::new(root_dir).join(VERIFIED_MAP));
+    // Both verdict tables feed the DETOUR set. They differ only in which candidate map they were
+    // run over -- the byte-search one and the whole-image one -- and a row from either has passed
+    // the same two tests, so there is no reason to trust one and not the other.
+    let mut detour_safe: Vec<(u32, u32)> = rows.clone();
+    detour_safe.extend(detourable_pairs(
+        &Path::new(root_dir).join(NEEDED_VERIFIED_MAP),
+    ));
     let verified: Vec<u32> = rows.iter().map(|(old, _)| *old).collect();
     let function_map = Path::new(root_dir).join(FUNCTION_MAP);
     println!("cargo:rerun-if-changed={}", function_map.display());
@@ -249,26 +334,30 @@ fn emit_address_map(root_dir: &str) {
             }
         }
     }
-    let held_back = quarantined(root_dir);
+    let mut held_back = quarantined(root_dir);
+    // A comparison that ran and disagreed is evidence against the pair, wherever it would be used.
+    held_back.extend(refuted_sources(
+        &Path::new(root_dir).join(NEEDED_VERIFIED_MAP),
+    ));
+    held_back.extend(refuted_sources(&Path::new(root_dir).join(VERIFIED_MAP)));
     rows.retain(|(old, _)| !held_back.contains(old));
     rows.sort_unstable();
     rows.dedup_by_key(|(old, _)| *old);
-    // NOT WIRED IN, and the measurement is why.
+    // STILL NOT WIRED IN, and now superseded rather than merely distrusted.
     //
-    // `--promote` audits the 277 signature/reference-mapped rows and passes 187: each is a real
-    // function entry by the image's own forward references, with a relocatable five-byte
-    // prologue. Feeding those into the detour table put the crash straight back -- the full
-    // profile died again, one rust_panic, where the 27-row table had survived twenty seconds
-    // with none.
+    // `--promote` audits the 277 signature/reference-mapped rows and passes 187 on entry-and-
+    // prologue grounds: each destination is a real function entry by the image's own forward
+    // references. Feeding those into the detour table put the crash straight back. The reason is
+    // visible in one row: `HUD_WEAPON_SLOT_UPDATE` (0x8d2110) passed that audit and is paired
+    // with a 1.17 function sharing 18% of its instruction shape -- a safe place to land inside
+    // the wrong function.
     //
-    // So entry-and-prologue safety is NECESSARY and not SUFFICIENT. Those checks answer "may
-    // MinHook write here"; they cannot answer "is this the same function the hook was written
-    // for". A signature-paired sibling hooks perfectly and then does the wrong thing, and the
-    // detour fires into a handler expecting different arguments.
+    // What replaced it answers both questions with better evidence for each. Semantic identity
+    // comes from the byte comparison in NEEDED_VERIFIED_MAP, which rejects that row. Entry
+    // evidence comes from the same file's last column, read out of each image's `.pdata` -- the
+    // linker's own record of where functions begin, rather than a count of forward references.
     //
-    // The audited file stays as the work list: promoting a row needs evidence of semantic
-    // identity -- a byte comparison through scripts/verify-rva-map-1170.py, or an RTTI/name
-    // anchor -- and not merely somewhere safe to land.
+    // The audited file stays only as a reading aid for the rows that remain refused.
     let _ = AUDITED_DETOURS;
     let mut detour_rows = detour_safe;
     detour_rows.retain(|(old, _)| !held_back.contains(old));
@@ -284,12 +373,14 @@ fn emit_address_map(root_dir: &str) {
          // VERIFIED_1162_TO_1170 is every pair from all three sources: byte-verified, whole-image\n\
          // signature pairing, and code-reference carrying. Good enough to CALL or to READ.\n\
          //\n\
-         // DETOUR_SAFE_1162_TO_1170 is the subset that has also been shown to be a real function\n\
-         // ENTRY with a relocatable five-byte prologue -- currently the byte-verified rows, which\n\
-         // scripts/audit-1170-hook-targets.py checks. MEASURED on 2026-08-29: when the weaker rows\n\
-         // were allowed to carry detours, er-armament-icons installed five of them and the game\n\
-         // died ~2.0s in, at the first overlay draw. Before those rows existed the same hooks were\n\
-         // refused and the game lived. Nothing about a signature match says MinHook may patch there.\n",
+         // DETOUR_SAFE_1162_TO_1170 is the subset carrying BOTH claims a detour needs: the\n\
+         // normalised instruction sequences agree over the body (same function), and each image\'s\n\
+         // own .pdata agrees about where the two endpoints sit relative to a function start\n\
+         // (somewhere MinHook may write). MEASURED on 2026-08-29: when rows holding only the\n\
+         // second claim were allowed to carry detours, er-armament-icons installed five of them\n\
+         // and the game died ~2.0s in, at the first overlay draw -- one of the five is paired with\n\
+         // a function sharing 18% of its instruction shape. Nothing about a signature match, or\n\
+         // about a safe place to land, says the code there does the same job.\n",
     );
     out.push_str(&format!(
         "pub(crate) const VERIFIED_1162_TO_1170: [(u32, u32); {}] = [\n",

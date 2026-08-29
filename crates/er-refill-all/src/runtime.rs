@@ -614,16 +614,15 @@ unsafe fn flip_existing_entry(tracker: usize, item_id: i32, state: bool) -> bool
 
 /// Wait for the game module, then install. Called once from `DllMain`.
 /// Wait for the task scheduler. Only ever called from the spawned thread, never the loader lock.
-fn wait_for_task_instance() -> &'static eldenring::cs::CSTaskImp {
+fn wait_for_task_instance() -> Option<&'static eldenring::cs::CSTaskImp> {
     // `instance()` comes from this trait, not from the type.
     use fromsoftware_shared::FromStatic;
 
-    loop {
-        match unsafe { eldenring::cs::CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(_) => std::thread::yield_now(),
-        }
-    }
+    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
+    // three minutes while these threads burned 19,000 each, half of it system time. See
+    // er_game_base::wait for the measurement.
+    er_game_base::wait::poll_until(|| unsafe { eldenring::cs::CSTaskImp::instance() }.ok())
 }
 
 pub(crate) fn spawn(_module_base: usize) {
@@ -635,27 +634,34 @@ pub(crate) fn spawn(_module_base: usize) {
         .name("er-refill-all".to_owned())
         .spawn(move || {
             let mut attempts = 0u64;
-            loop {
-                match game_module_base() {
-                    Ok(base) => {
-                        install(base);
-                        break;
+            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
+            let found = er_game_base::wait::poll_until(|| match game_module_base() {
+                Ok(base) => Some(base),
+                Err(err) => {
+                    if attempts == 0 || attempts.is_multiple_of(4096) {
+                        refill_log(format_args!("install: waiting for game module base: {err}"));
                     }
-                    Err(err) => {
-                        if attempts == 0 || attempts.is_multiple_of(4096) {
-                            refill_log(format_args!(
-                                "install: waiting for game module base: {err}"
-                            ));
-                        }
-                        attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
-                    }
+                    attempts = attempts.saturating_add(1);
+                    None
                 }
-            }
+            });
+            let Some(base) = found else {
+                refill_log(format_args!(
+                    "install: no game module base; nothing installed"
+                ));
+                return;
+            };
+            install(base);
             // Per-frame work is a game task, not a hook: it owns no prologue and so can contend
             // with nothing, and FrameBegin is a thread where `GetAsyncKeyState` actually reports
             // the user's keys under Wine/Proton.
-            let task = wait_for_task_instance();
+            let Some(task) = wait_for_task_instance() else {
+                refill_log(format_args!(
+                    "install: CSTaskImp never appeared; this shell stays inert rather than spinning"
+                ));
+                return;
+            };
             refill_log(format_args!("install: registering FrameBegin tick"));
             task.run_recurring(
                 move |_data: &FD4TaskData| tick(),

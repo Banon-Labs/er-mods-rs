@@ -146,11 +146,12 @@ fn spawn_inventory_sort_task() {
             };
             use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
-            let task = loop {
-                match unsafe { CSTaskImp::instance() } {
-                    Ok(task) => break task,
-                    Err(_) => std::thread::yield_now(),
-                }
+            // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
+            // starved the wineserver and hung a boot.
+            let Some(task) =
+                er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+            else {
+                return;
             };
             log_message(format_args!(
                 "task: CSTaskImp ready; registering FrameBegin tick"

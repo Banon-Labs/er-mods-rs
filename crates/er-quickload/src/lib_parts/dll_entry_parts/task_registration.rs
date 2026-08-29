@@ -113,7 +113,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_THREAD_STARTED,
             BOOTSTRAP_DETAIL_START,
         );
-        let cs_task = wait_for_task_instance();
+        let Some(cs_task) = wait_for_task_instance() else {
+            // The product without its per-frame task is a product that does nothing, which is
+            // still strictly better than the alternative this replaced: a thread spinning on
+            // `yield_now` hard enough to stop the game from ever reaching a window.
+            append_autoload_debug(format_args!(
+                "game task: CSTaskImp never appeared -- no per-frame tick registered; the DLL \
+                 stays inert rather than spinning"
+            ));
+            return;
+        };
         write_bootstrap_event(
             BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY,
             BOOTSTRAP_DETAIL_DONE,

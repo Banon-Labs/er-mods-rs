@@ -465,7 +465,10 @@ fn spawn_save_suppress_install() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
+                        // BOUNDED (2026-08-29): user-space backoff instead of a bare yield, which
+                        // hammered the wineserver hard enough to hang a boot. The enclosing loop
+                        // waits on GetModuleHandleA(NULL) and has never been observed to spin.
+                        er_game_base::wait::back_off(attempts);
                     }
                 }
             }
@@ -503,7 +506,10 @@ fn spawn_save_observers_only() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
+                        // BOUNDED (2026-08-29): user-space backoff instead of a bare yield, which
+                        // hammered the wineserver hard enough to hang a boot. The enclosing loop
+                        // waits on GetModuleHandleA(NULL) and has never been observed to spin.
+                        er_game_base::wait::back_off(attempts);
                     }
                 }
             }
@@ -520,19 +526,25 @@ fn spawn_save_observers_only() {
 /// `spawn_save_suppress_install`.
 const SAVE_SUPPRESS_WAIT_LOG_INTERVAL: u64 = 4096;
 
-pub(crate) fn wait_for_task_instance() -> &'static CSTaskImp {
+/// The game's task manager, or `None` if it never turns up.
+///
+/// BOUNDED (2026-08-29). This used to be `loop { yield_now() }`. On 1.17 the singleton did not
+/// appear promptly and two shells running the same loop saturated the wineserver: the game
+/// managed 104 CPU ticks in three minutes while those two threads burned 19,000 each, and around
+/// thirty of our own threads never got scheduled at all. `er_game_base::wait` spins in user space
+/// between attempts and gives up, so a missing singleton costs the product its per-frame task
+/// rather than costing the user their game.
+pub(crate) fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
     let mut wait_attempts = 0_u64;
-    loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(InstanceError::NotFound(_)) | Err(InstanceError::Null(_)) => {
-                wait_attempts = wait_attempts.saturating_add(1);
-                if wait_attempts == 1 || wait_attempts.is_multiple_of(TASK_INSTANCE_WAIT_LOG_INTERVAL) {
-                    let detail = format!("attempts={wait_attempts}");
-                    write_bootstrap_event(BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE, &detail);
-                }
-                std::thread::yield_now()
+    er_game_base::wait::poll_until(|| match unsafe { CSTaskImp::instance() } {
+        Ok(instance) => Some(instance),
+        Err(InstanceError::NotFound(_)) | Err(InstanceError::Null(_)) => {
+            wait_attempts = wait_attempts.saturating_add(1);
+            if wait_attempts == 1 || wait_attempts.is_multiple_of(TASK_INSTANCE_WAIT_LOG_INTERVAL) {
+                let detail = format!("attempts={wait_attempts}");
+                write_bootstrap_event(BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE, &detail);
             }
+            None
         }
-    }
+    })
 }

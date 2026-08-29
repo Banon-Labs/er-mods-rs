@@ -81,11 +81,11 @@ fn install() {
         "er-input-harness attach: TITLE-ACTIVE CSTaskImp FrameBegin self-drive (fires at title + in-world); direct input-memory injection (keystate bitmap + DLUID + accept byte); no SendInput/XInput"
     );
     // Wait for the game's task manager (no sleep: yield + re-poll, the product's wait pattern).
-    let task = loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(t) => break t,
-            Err(_) => std::thread::yield_now(),
-        }
+    // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop starved
+    // the wineserver and hung a boot.
+    let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+    else {
+        return;
     };
     let base = resolve_base();
     input_inject::log_resolution(base);

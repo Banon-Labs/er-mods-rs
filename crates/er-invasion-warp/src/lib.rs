@@ -134,14 +134,12 @@ fn spawn_catalog_task() {
     let _ = std::thread::Builder::new()
         .name("er-invasion-warp".to_owned())
         .spawn(|| {
-            let task = loop {
-                match unsafe { CSTaskImp::instance() } {
-                    Ok(task) => break task,
-                    // No sleep (banned by scripts/check-no-timeouts.py): yield to the game
-                    // threads and re-poll, exactly as er-telemetry and the product's
-                    // wait_for_task_instance do.
-                    Err(_) => std::thread::yield_now(),
-                }
+            // BOUNDED (2026-08-29): the unbounded form of this loop starved the wineserver and
+            // hung a boot. er_game_base::wait backs off in user space and gives up.
+            let Some(task) =
+                er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+            else {
+                return;
             };
             standalone_log(format_args!(
                 "CSTaskImp resolved; registering the invasion-warp catalog sampler on FrameBegin"

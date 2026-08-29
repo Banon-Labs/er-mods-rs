@@ -81,11 +81,15 @@ fn install() {
     // Wait for the game image to be mapped before resolving any RVA. No sleep: yield + re-poll,
     // the product's own wait pattern. `game_module_base` is a PE-header read, not a loader call,
     // so this is safe off the loader lock.
-    let base = loop {
-        match er_game_base::mem::game_module_base() {
-            Ok(base) if base != 0 => break base,
-            _ => std::thread::yield_now(),
-        }
+    // BOUNDED (2026-08-29): see er_game_base::wait -- an unbounded `loop { yield_now() }` starved
+    // the wineserver and hung a whole boot.
+    let Some(base) = er_game_base::wait::poll_until(|| {
+        er_game_base::mem::game_module_base()
+            .ok()
+            .filter(|base| *base != 0)
+    }) else {
+        diag_log!("er-diag-harness: no game module base; this shell stays inert");
+        return;
     };
     diag_log!("er-diag-harness: game module base 0x{base:x}");
 

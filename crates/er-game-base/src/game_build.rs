@@ -393,10 +393,22 @@ fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
 /// resolve against.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn already_translated(rva: u32) -> bool {
-    let is_destination = VERIFIED_1162_TO_1170
+    already_translated_in(&VERIFIED_1162_TO_1170, rva)
+}
+
+/// [`already_translated`], asked of a particular table.
+///
+/// Both tables need this rule and they need the SAME rule. The detour table used to ask a looser
+/// question -- is this address any row's destination -- which at 27 rows was safe by accident:
+/// nothing was both. At 216 rows two addresses are (`0x6156c0` and `0x7ad710`), and the loose
+/// form would hand back a stale 1.16.2 source untranslated on the grounds that some other row
+/// moved a different function onto it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn already_translated_in(table: &[(u32, u32)], rva: u32) -> bool {
+    let is_destination = table
         .iter()
         .any(|(from, moved)| *moved == rva && *from != rva);
-    let is_source_of_a_move = VERIFIED_1162_TO_1170
+    let is_source_of_a_move = table
         .iter()
         .any(|(from, moved)| *from == rva && *moved != rva);
     is_destination && !is_source_of_a_move
@@ -427,10 +439,7 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     }
     let base = crate::mem::game_module_base().ok()?;
     let rva = (address - base) as u32;
-    if DETOUR_SAFE_1162_TO_1170
-        .iter()
-        .any(|(from, moved)| *moved == rva && from != moved)
-    {
+    if already_translated_in(&DETOUR_SAFE_1162_TO_1170, rva) {
         return Some(address);
     }
     if let Some((_, moved)) = DETOUR_SAFE_1162_TO_1170
@@ -445,18 +454,33 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
         ));
         return Some(translated);
     }
-    // Say WHICH refusal this is. An address that resolves for a call but not for a detour is a
-    // different situation from one nothing can place, and conflating them sends the next reader
-    // hunting for a mapping that already exists.
+    // Say WHICH refusal this is. There are three of them and they send a reader to three
+    // different places, so reporting them as one wasted a day: 65 addresses were investigated as
+    // missing map coverage when they were already-translated addresses arriving for a second
+    // opinion, and the map that produced them was sitting right there.
     let call_only = resolve_on_running_build_quiet(rva).is_some();
+    let arrived_translated = VERIFIED_1162_TO_1170
+        .iter()
+        .find(|(from, moved)| *moved == rva && *from != rva)
+        .map(|(from, _)| *from);
     address_log(format_args!(
         "ADDRESS REFUSED FOR DETOUR ({what}): 0x{address:x} -- {}, and {}",
         describe_build(),
-        if call_only {
-            "while this address HAS a mapping good enough to call, it has not been audited as a \
-             detour target: a signature match does not say MinHook may write five bytes there"
-        } else {
-            "this address has no mapping at all for the running build"
+        match (arrived_translated, call_only) {
+            // A caller resolved this through `game_rva` before asking to hook it, so the address
+            // is right and the question is only whether its ROW may carry a detour.
+            (Some(source), _) => format!(
+                "this is already the translation of 1.16.2 0x{:x}, whose row is not detour-safe: \
+                 the pair is not verified identical over the body, or the two images disagree \
+                 about where a function starts there",
+                source as usize + base
+            ),
+            (None, true) =>
+                "while this address HAS a mapping good enough to call, it has not been audited as \
+                 a detour target: a signature match does not say MinHook may write five bytes \
+                 there"
+                    .to_string(),
+            (None, false) => "this address has no mapping at all for the running build".to_string(),
         }
     ));
     None
@@ -486,7 +510,60 @@ pub fn verified_translation_count() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::VERIFIED_1162_TO_1170;
+    use super::{DETOUR_SAFE_1162_TO_1170, VERIFIED_1162_TO_1170};
+
+    /// A hook and a call on the SAME function must reach the same address.
+    ///
+    /// The two tables are generated from different files and nothing about their construction
+    /// forces them to agree. If they ever disagree, a feature that both calls a function and
+    /// detours it installs its hook at one address and invokes another -- the trampoline never
+    /// fires, and the symptom is a silently inert feature rather than a crash, which is worse.
+    #[test]
+    fn every_detour_row_agrees_with_the_call_map() {
+        let disagreements: Vec<(u32, u32, Option<u32>)> = DETOUR_SAFE_1162_TO_1170
+            .iter()
+            .map(|(from, moved)| {
+                let called = VERIFIED_1162_TO_1170
+                    .iter()
+                    .find(|(other, _)| other == from)
+                    .map(|(_, other_moved)| *other_moved);
+                (*from, *moved, called)
+            })
+            .filter(|(_, moved, called)| *called != Some(*moved))
+            .collect();
+        assert!(
+            disagreements.is_empty(),
+            "detour rows the call map places elsewhere (from, detour, call): {disagreements:#x?}"
+        );
+    }
+
+    /// The shortcut rule has to hold on the DETOUR table too, and it is a different table.
+    #[test]
+    fn detour_table_translation_wins_over_the_shortcut() {
+        let shadowed: Vec<(u32, u32)> = DETOUR_SAFE_1162_TO_1170
+            .iter()
+            .filter(|(from, moved)| from != moved)
+            .filter(|(from, _)| super::already_translated_in(&DETOUR_SAFE_1162_TO_1170, *from))
+            .copied()
+            .collect();
+        assert!(
+            shadowed.is_empty(),
+            "these detour rows would be swallowed by the already-translated shortcut: {shadowed:#x?}"
+        );
+    }
+
+    /// One source, one answer -- on the detour table as on the call one.
+    #[test]
+    fn detour_map_has_one_answer_per_source() {
+        let mut seen: Vec<u32> = DETOUR_SAFE_1162_TO_1170
+            .iter()
+            .map(|(from, _)| *from)
+            .collect();
+        seen.sort_unstable();
+        let before = seen.len();
+        seen.dedup();
+        assert_eq!(before, seen.len(), "the detour table names a source twice");
+    }
 
     /// Every row that MOVED must still be reachable as a source.
     ///

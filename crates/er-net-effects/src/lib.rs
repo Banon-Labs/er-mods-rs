@@ -67,13 +67,12 @@ fn state_or_recover(
 }
 
 #[cfg(windows)]
-fn wait_for_task_instance() -> &'static CSTaskImp {
-    loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(_) => std::thread::yield_now(),
-        }
-    }
+fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
+    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
+    // three minutes while these threads burned 19,000 each, half of it system time. See
+    // er_game_base::wait for the measurement.
+    er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
 }
 
 #[cfg(windows)]
@@ -88,7 +87,12 @@ fn spawn_game_task(state: Arc<Mutex<NetEffectsState>>) {
         .name("er-net-effects-task".to_owned())
         .spawn(move || {
             net_effects_log(format_args!("game task thread waiting for CSTaskImp"));
-            let task = wait_for_task_instance();
+            let Some(task) = wait_for_task_instance() else {
+                net_effects_log(format_args!(
+                    "CSTaskImp never appeared; this shell stays inert rather than spinning"
+                ));
+                return;
+            };
             net_effects_log(format_args!("game task registering FrameBegin tick"));
             task.run_recurring(
                 move |_data: &FD4TaskData| {

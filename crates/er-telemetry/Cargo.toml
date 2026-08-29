@@ -16,6 +16,9 @@ crate-type = ["cdylib"]
 #
 # Owns standalone telemetry hooks; product DLL should not need diagnostic/logging hooks.
 [target.'cfg(windows)'.dependencies]
+# For the BOUNDED singleton wait. This shell's unbounded `loop { yield_now() }` was one of the two
+# that saturated the wineserver and hung a boot on 2026-08-29 -- see er_game_base::wait.
+er-game-base = { path = "../er-game-base" }
 er-hook = { path = "../er-hook" }
 er-telemetry-core = { path = "../er-telemetry-core" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

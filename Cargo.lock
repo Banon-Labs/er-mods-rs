@@ -2776,6 +2776,7 @@ dependencies = [
  "eldenring",
  "er-build-import-core",
  "er-build-import-runtime",
+ "er-game-base",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]
@@ -3278,6 +3279,7 @@ name = "er-telemetry"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-hook",
  "er-telemetry-core",
  "fromsoftware-shared",

@@ -29,10 +29,16 @@ pub mod game_build;
 pub mod http;
 pub mod log;
 pub mod mem;
+/// Tier A: turn a Rust panic in a mod DLL from an anonymous `0xe06d7363` record into a logged
+/// line naming the message and the source location. See the module docs for the boot it cost.
+pub mod panic_report;
 #[cfg(all(windows, feature = "game-types"))]
 pub mod pgd;
 pub mod profile_summary;
 pub mod rva;
+/// Tier A: bounded, wineserver-friendly polling for a game singleton. The unbounded
+/// `loop { yield_now() }` every shell used instead deadlocked a whole boot -- see the module.
+pub mod wait;
 
 /// Tier B typed-binding re-export facade. Only compiled when `game-types` is
 /// enabled (product + er-telemetry-core); the zero-dep mini-DLLs never pull this in.

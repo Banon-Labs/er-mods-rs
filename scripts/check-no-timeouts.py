@@ -85,6 +85,17 @@ PYTHON_SUBPROCESS_FUNCTIONS = {
 }
 
 
+# Files allowed to call `thread::yield_now()` directly, and why each one is not the hazard the
+# `rust-unbounded-yield-spin` rule exists to catch.
+YIELD_SPIN_ALLOWED = {
+    # The helper itself: one yield per backed-off round IS the fix.
+    Path("crates/er-game-base/src/wait.rs"),
+    # Already bounded by an `Instant` deadline a few milliseconds out, not by hope.
+    Path("crates/er-loading-portrait-core/src/portrait_shared.rs"),
+    Path("crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_swap_profile_table.rs"),
+}
+
+
 @dataclass(frozen=True)
 class Rule:
     code: str
@@ -122,6 +133,15 @@ RULES = [
         re.compile(r"\b(?:std::)?thread::sleep\s*\("),
         {".rs"},
         "Replace thread sleep with a readiness/event handshake, task-frame callback, channel receive, or explicit driver acknowledgement.",
+    ),
+    Rule(
+        "rust-unbounded-yield-spin",
+        re.compile(r"\b(?:std::)?thread::yield_now\s*\(\s*\)"),
+        {".rs"},
+        "Use er_game_base::wait::poll_until (bounded) or ::back_off (user-space spin between "
+        "yields). A bare yield_now() per attempt is a wineserver round trip per attempt: on "
+        "2026-08-29 two such loops starved the wineserver and the game managed 104 CPU ticks in "
+        "three minutes -- no window, no crash, nothing in any log.",
     ),
     Rule(
         "rust-async-sleep",
@@ -411,6 +431,8 @@ def scan_file(path: Path) -> list[Finding]:
             continue
         for rule in RULES:
             if suffix not in rule.applies_to:
+                continue
+            if rule.code == "rust-unbounded-yield-spin" and relative in YIELD_SPIN_ALLOWED:
                 continue
             if rule.pattern.search(searchable):
                 findings.append(Finding(relative, line_number, rule, line))
