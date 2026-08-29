@@ -31,6 +31,17 @@ use crate::face_data::{
 };
 use crate::host::append_autoload_debug;
 
+/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function.
+///
+/// The two calls below copy a character's face data and ChrAsm out of a serialized slot. A
+/// hand-built `base + rva` would call the 1.16.2 address on ELDEN RING 1.17 -- whatever now
+/// occupies it -- and a MAPPED constant is no safer that way, because the map knows the new
+/// address and `base + rva` never asks it.
+#[cfg(windows)]
+fn gated_summary_fn(rva: usize, what: &'static str) -> Option<usize> {
+    er_game_base::mem::game_rva_named(rva as u32, what).ok()
+}
+
 pub const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
 #[allow(dead_code)] // Retained: Save-format fact beside the live SAVE_FACE_MAGIC.
 pub const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
@@ -515,7 +526,7 @@ impl<'a> SerializedPlayerGameData<'a> {
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn write_profile_summary_record(
         &self,
-        base: usize,
+        _base: usize,
         profile_summary: usize,
         slot: usize,
         saved_map: i32,
@@ -577,9 +588,22 @@ impl<'a> SerializedPlayerGameData<'a> {
             // wrapper header does not match the live one, so CopyFromBuffer -- never a raw memcpy.
             if let (Some(face), Some(chr_asm_image)) = (face_bytes, chr_asm_image) {
                 let copy_face_data_from_buffer: unsafe extern "system" fn(usize, usize) =
-                    std::mem::transmute(base + FACE_DATA_COPY_FROM_BUFFER_RVA);
+                    std::mem::transmute(
+                        match gated_summary_fn(
+                            FACE_DATA_COPY_FROM_BUFFER_RVA,
+                            "FACE_DATA_COPY_FROM_BUFFER_RVA",
+                        ) {
+                            Some(address) => address,
+                            None => return false,
+                        },
+                    );
                 let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize =
-                    std::mem::transmute(base + CHR_ASM_COPY_RVA);
+                    std::mem::transmute(
+                        match gated_summary_fn(CHR_ASM_COPY_RVA, "CHR_ASM_COPY_RVA") {
+                            Some(address) => address,
+                            None => return false,
+                        },
+                    );
                 copy_face_data_from_buffer(
                     slot_data.wrapping_add(PROFILE_SUMMARY_FACE_DATA_OFFSET),
                     face.as_ptr() as usize,

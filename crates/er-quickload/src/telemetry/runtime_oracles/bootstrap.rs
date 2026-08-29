@@ -168,6 +168,6 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
     let current_frame: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(base + TITLE_LOGO_GFX_CURRENT_FRAME_RVA) };
+        unsafe { std::mem::transmute(match crate::experiments::gated_game_fn(TITLE_LOGO_GFX_CURRENT_FRAME_RVA, "TITLE_LOGO_GFX_CURRENT_FRAME_RVA") { Some(address) => address, None => return 0 }) };
     unsafe { current_frame(value) }
 }

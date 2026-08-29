@@ -50,8 +50,12 @@ pub(crate) unsafe fn own_load_reset_gaitem_singleton(base: usize) -> Option<(u32
         return None;
     }
     let slack_before = RING_USABLE.saturating_sub(free_count(head0, end0));
-    let remove_ins: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + CSGAITEM_REMOVE_INS_RVA) };
+    let remove_ins: unsafe extern "system" fn(usize, usize) = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            CSGAITEM_REMOVE_INS_RVA,
+            "CSGAITEM_REMOVE_INS_RVA",
+        )?)
+    };
     let mut released: u32 = 0;
     for i in 0..CSGAITEM_TABLE_CAPACITY {
         let slot = gaitem + CSGAITEM_INS_TABLE_OFFSET + i * core::mem::size_of::<usize>();
@@ -131,8 +135,14 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     let c30_before =
         unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
     OWN_LOAD_GATE.store(true, Ordering::SeqCst);
-    let parser: unsafe extern "system" fn(i32) -> i32 =
-        unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+    let parser: unsafe extern "system" fn(i32) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA") {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let pret = unsafe { parser(want_slot) };
     OWN_LOAD_GATE.store(false, Ordering::SeqCst);
     let fed = OWN_LOAD_FED_BYTES.load(Ordering::SeqCst);
@@ -237,17 +247,44 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
         null
     };
     if summary != null {
-        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
-            unsafe { std::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_MARK_SLOT_USED_RVA,
+                    "PROFILE_MARK_SLOT_USED_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { mark(summary, picked) };
     }
     // Resolve OUR slot + submit the full read (type-0xa; sets b80=2).
     unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = picked };
-    let set_save_slot: unsafe extern "system" fn(i32) =
-        unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { set_save_slot(picked) };
-    let submit: unsafe extern "system" fn(i32) -> i32 =
-        unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
+    let submit: unsafe extern "system" fn(i32) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                B80_FULL_LOAD_INITIATOR_RVA,
+                "B80_FULL_LOAD_INITIATOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     // NOT `submit(picked)`: the argument is a flag the game always passes as 0, and the slot was
     // already set by `set_save_slot` above. Passing the slot here is what refused every non-zero
     // slot and soft-locked System->Quit->Load Character. See `B80_FULL_LOAD_SUBMIT_FLAG`.
@@ -261,12 +298,24 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
 
 /// One DRAIN tick: pump the b80 IO lane + poll (exact boot native-fullread calls) and return the
 /// current GameMan+0xb80 so the caller can detect RESIDENT(3).
-unsafe fn own_load_fd4io_drain_tick(base: usize, gm: usize) -> i32 {
-    let lane: unsafe extern "system" fn() -> i32 =
-        unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+unsafe fn own_load_fd4io_drain_tick(_base: usize, gm: usize) -> i32 {
+    let lane: unsafe extern "system" fn() -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(B80_LANE1_DRIVER_RVA, "B80_LANE1_DRIVER_RVA") {
+                Some(address) => address,
+                None => return 0,
+            },
+        )
+    };
     let _ = unsafe { lane() };
-    let poll: unsafe extern "system" fn(u8, u8) -> i32 =
-        unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+    let poll: unsafe extern "system" fn(u8, u8) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(B80_POLL_RVA, "B80_POLL_RVA") {
+                Some(address) => address,
+                None => return 0,
+            },
+        )
+    };
     let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
     unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
 }

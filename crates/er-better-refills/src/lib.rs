@@ -267,8 +267,17 @@ unsafe extern "system" fn set_item_replenish_state_hook(item_id: *mut i32) {
     }
 
     type ShouldReplenishItemFn = unsafe extern "system" fn(usize, *mut i32) -> bool;
+    // Through the 1.17 gate. `base + rva` calls the 1.16.2 address on a build that moved the
+    // function, and nothing refuses it -- the map knowing the new address is no help to a call
+    // that never asks.
+    let Ok(should_replenish_addr) = er_game_base::mem::game_rva_named(
+        SHOULD_REPLENISH_ITEM_RVA as u32,
+        "SHOULD_REPLENISH_ITEM_RVA",
+    ) else {
+        return;
+    };
     let should_replenish: ShouldReplenishItemFn =
-        unsafe { std::mem::transmute(base + SHOULD_REPLENISH_ITEM_RVA) };
+        unsafe { std::mem::transmute(should_replenish_addr) };
     if !unsafe { should_replenish(tracker, item_id) } {
         let skipped = SKIPPED_DISABLED_AFTER_TOGGLE.fetch_add(1, Ordering::SeqCst) + 1;
         let raw_item_id = unsafe { item_id.read_unaligned() };
@@ -329,9 +338,19 @@ unsafe extern "system" fn move_map_step_update_player_info_hook(this: *mut core:
         false
     } else {
         type IsItemReplanishFromChestRequestedFn = unsafe extern "system" fn() -> bool;
-        let is_requested: IsItemReplanishFromChestRequestedFn =
-            unsafe { std::mem::transmute(base + IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA) };
-        unsafe { is_requested() }
+        match er_game_base::mem::game_rva_named(
+            IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA as u32,
+            "IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA",
+        ) {
+            Ok(address) => {
+                let is_requested: IsItemReplanishFromChestRequestedFn =
+                    unsafe { std::mem::transmute(address) };
+                unsafe { is_requested() }
+            }
+            // No verified address means we cannot know; "no vanilla request pending" is the
+            // conservative answer, and it is what an unhooked build reports anyway.
+            Err(_) => false,
+        }
     };
 
     let orig = ORIG_MOVE_MAP_STEP_UPDATE_PLAYER_INFO.load(Ordering::SeqCst);
@@ -423,20 +442,63 @@ fn deposit_inventory_item_to_storage(raw_item_id: i32) -> DepositBackResult {
         unsafe extern "system" fn(i32, usize, usize, i32, bool);
     type UpdateTrophyStatsFn = unsafe extern "system" fn(usize, *mut i32);
 
+    // All seven through the 1.17 gate, resolved together and BEFORE any of them runs: this
+    // function moves items between inventories, so half a deposit is worse than none.
+    let (
+        Ok(get_main_inventory_addr),
+        Ok(get_storage_inventory_addr),
+        Ok(get_quantity_addr),
+        Ok(get_item_idx_addr),
+        Ok(change_amount_addr),
+        Ok(transfer_item_addr),
+        Ok(update_trophy_addr),
+    ) = (
+        er_game_base::mem::game_rva_named(
+            GET_EQUIP_INVENTORY_DATA_RVA as u32,
+            "GET_EQUIP_INVENTORY_DATA_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA as u32,
+            "GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            GET_QUANTITY_BY_ITEM_ID_RVA as u32,
+            "GET_QUANTITY_BY_ITEM_ID_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            GET_ITEM_INVENTORY_IDX_RVA as u32,
+            "GET_ITEM_INVENTORY_IDX_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            CHANGE_AMOUNT_IN_BOX_RVA as u32,
+            "CHANGE_AMOUNT_IN_BOX_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA as u32,
+            "TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            UPDATE_TROPHY_STATS_RVA as u32,
+            "UPDATE_TROPHY_STATS_RVA",
+        ),
+    )
+    else {
+        return DepositBackResult::Skipped {
+            reason: "inventory transfer functions have no verified address for this build",
+        };
+    };
     let get_main_inventory: GetEquipInventoryDataFn =
-        unsafe { std::mem::transmute(base + GET_EQUIP_INVENTORY_DATA_RVA) };
+        unsafe { std::mem::transmute(get_main_inventory_addr) };
     let get_storage_inventory: GetMainPlayerStorageBoxInventoryFn =
-        unsafe { std::mem::transmute(base + GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA) };
-    let get_quantity: GetQuantityByItemIdFn =
-        unsafe { std::mem::transmute(base + GET_QUANTITY_BY_ITEM_ID_RVA) };
-    let get_item_idx: GetItemInventoryIdxFn =
-        unsafe { std::mem::transmute(base + GET_ITEM_INVENTORY_IDX_RVA) };
+        unsafe { std::mem::transmute(get_storage_inventory_addr) };
+    let get_quantity: GetQuantityByItemIdFn = unsafe { std::mem::transmute(get_quantity_addr) };
+    let get_item_idx: GetItemInventoryIdxFn = unsafe { std::mem::transmute(get_item_idx_addr) };
     let change_amount_in_box: ChangeAmountInBoxFn =
-        unsafe { std::mem::transmute(base + CHANGE_AMOUNT_IN_BOX_RVA) };
+        unsafe { std::mem::transmute(change_amount_addr) };
     let transfer_item: TransferItemBetweenInventoryDatasFn =
-        unsafe { std::mem::transmute(base + TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA) };
+        unsafe { std::mem::transmute(transfer_item_addr) };
     let update_trophy_stats: UpdateTrophyStatsFn =
-        unsafe { std::mem::transmute(base + UPDATE_TROPHY_STATS_RVA) };
+        unsafe { std::mem::transmute(update_trophy_addr) };
 
     let main_inventory = unsafe { get_main_inventory(equip_game_data) };
     if main_inventory == 0 {
@@ -535,8 +597,13 @@ fn call_native_refill(source: &str) -> bool {
     }
 
     type ReplanishItemsFromChestFn = unsafe extern "system" fn();
-    let refill: ReplanishItemsFromChestFn =
-        unsafe { std::mem::transmute(base + REPLANISH_ITEMS_FROM_CHEST_RVA) };
+    let Ok(refill_addr) = er_game_base::mem::game_rva_named(
+        REPLANISH_ITEMS_FROM_CHEST_RVA as u32,
+        "REPLANISH_ITEMS_FROM_CHEST_RVA",
+    ) else {
+        return false;
+    };
+    let refill: ReplanishItemsFromChestFn = unsafe { std::mem::transmute(refill_addr) };
     unsafe { refill() };
     true
 }

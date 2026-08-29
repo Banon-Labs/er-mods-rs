@@ -1266,8 +1266,13 @@ unsafe fn push_text_on_resolved_02_990_field(
             "component 0x{comp:x} has been DESTROYED (GetValue slot is the pure-virtual trap 0x{slot_fn:x})"
         ));
     }
+    let Some(settext_addr) =
+        crate::experiments::gated_game_fn(PROFILE_SETTEXT_RVA, "PROFILE_SETTEXT_RVA")
+    else {
+        return Err("SetText has no verified address for this build".to_owned());
+    };
     let settext: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+        unsafe { std::mem::transmute(settext_addr) };
     unsafe { settext(component_slot, utf16.as_ptr() as usize) };
     Ok(())
 }
@@ -1331,8 +1336,14 @@ unsafe fn set_text_field_caret_to_end(base: usize, cs_value: usize) -> Result<St
             "GFx object at 0x{text_object:x} is kind {kind}, not text-field kind {GFX_TEXT_OBJECT_KIND_TEXT_FIELD}"
         ));
     }
+    let Some(set_selection_addr) = crate::experiments::gated_game_fn(
+        GFX_TEXT_FIELD_SET_SELECTION_RVA,
+        "GFX_TEXT_FIELD_SET_SELECTION_RVA",
+    ) else {
+        return Err("GFx SetSelection has no verified address for this build".to_owned());
+    };
     let set_selection: unsafe extern "system" fn(usize, i64, i64) =
-        unsafe { std::mem::transmute(base + GFX_TEXT_FIELD_SET_SELECTION_RVA) };
+        unsafe { std::mem::transmute(set_selection_addr) };
     unsafe {
         set_selection(
             text_object,
@@ -1686,9 +1697,18 @@ unsafe fn resolve_row_child_proxy(
     }
 }
 
-unsafe fn destroy_resolved_row_child_proxy(base: usize, proxy: usize) {
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+unsafe fn destroy_resolved_row_child_proxy(_base: usize, proxy: usize) {
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                CSSCALEFORMVALUE_DTOR_RVA,
+                "CSSCALEFORMVALUE_DTOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { dtor(proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
     unsafe {
         drop(Box::from_raw(
@@ -1808,8 +1828,12 @@ unsafe fn set_text_field_width_probe(
     unsafe {
         ((text_doc + GFX_TEXT_DOC_SOURCE_RIGHT_OFFSET) as *mut f32).write_unaligned(new_right);
     }
-    let reflow: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + GFX_TEXT_DOC_REFLOW_RVA) };
+    let Some(reflow_addr) =
+        crate::experiments::gated_game_fn(GFX_TEXT_DOC_REFLOW_RVA, "GFX_TEXT_DOC_REFLOW_RVA")
+    else {
+        return Err("GFx text-doc reflow has no verified address for this build".to_owned());
+    };
+    let reflow: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(reflow_addr) };
     unsafe { reflow(text_doc) };
     let new_layout_left =
         unsafe { safe_read_f32(text_doc + GFX_TEXT_DOC_LAYOUT_LEFT_OFFSET) }.unwrap_or(f32::NAN);
@@ -1831,20 +1855,38 @@ unsafe fn set_text_field_width_probe(
     ))
 }
 
-unsafe fn set_scaleform_value_position(base: usize, cs_value: usize, x: f32, y: f32) -> bool {
-    let set_position: unsafe extern "system" fn(usize, f32, f32) -> usize =
-        unsafe { std::mem::transmute(base + TITLE_GFX_VALUE_SET_POSITION_RVA) };
+unsafe fn set_scaleform_value_position(_base: usize, cs_value: usize, x: f32, y: f32) -> bool {
+    let set_position: unsafe extern "system" fn(usize, f32, f32) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_GFX_VALUE_SET_POSITION_RVA,
+                "TITLE_GFX_VALUE_SET_POSITION_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     (unsafe { set_position(cs_value, x, y) }) != 0
 }
 
 unsafe fn set_scaleform_value_scale(
-    base: usize,
+    _base: usize,
     cs_value: usize,
     x_percent: f32,
     y_percent: f32,
 ) -> bool {
-    let set_scale: unsafe extern "system" fn(usize, *const f32) -> usize =
-        unsafe { std::mem::transmute(base + TITLE_GFX_VALUE_SET_SCALE_RVA) };
+    let set_scale: unsafe extern "system" fn(usize, *const f32) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_GFX_VALUE_SET_SCALE_RVA,
+                "TITLE_GFX_VALUE_SET_SCALE_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let scale = [x_percent, y_percent];
     (unsafe { set_scale(cs_value, scale.as_ptr()) }) != 0
 }

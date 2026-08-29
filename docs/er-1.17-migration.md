@@ -424,3 +424,59 @@ map already carried `0xb0c2a0 -> 0xb0d940`; both functions are `0x294` bytes in 
 at `+0xbd` is `0x74` in both images behind the same `bf b8 00 00 00 00` prefix; and the verifier
 scores it `IDENTICAL 1.000 over 120 insns, BOTH-ENTRIES`. The `+0x16a0` delta is the same one the
 `CS::TitleStep` vtable slots move by, so the region shifted as a block.
+
+## Per-DLL 1.17 readiness, and the one property worth guarding hardest (2026-08-29)
+
+`scripts/audit-1170-readiness.py` scores every cdylib on a single question: **can a stale 1.16.2
+address still reach ELDEN RING 1.17 from this DLL without the gate having a say?** Three ways it
+can, and they are not equally dangerous, which is the whole reason the tool separates them:
+
+| bucket | what happens on 1.17 |
+|---|---|
+| **EXEC** | `transmute(base + SOME_RVA)` then call it. Control transfers into whatever now occupies the address. Nothing refuses, nothing logs. WORST. |
+| **WRITE** | a raw store at `base + SOME_RVA`. Corrupts the image for every later reader, not just this caller. |
+| read/compare | `safe_read_usize(base + rva)`, or `vt != base + SOME_VTABLE_RVA`. Fault-safe: a wrong answer, never a fault. The SILENT class -- the feature quietly stops working. |
+
+**A MAPPED constant is not safe when used this way.** The map knows exactly where the function
+went; `base + rva` simply never asks it. Counting only the unmapped ones undercounted the hazard
+by half, which is how the first pass of this audit got it wrong.
+
+### Where it stands
+
+    ungated EXEC   210  ->  0    ALL 27 cdylibs
+    ungated WRITE    0  ->  0    ALL 27 cdylibs, before and after
+
+**Every game call in this tree now goes through the 1.17 gate.** A function the patch moved and
+nothing verified produces a refusal and a named log line, not a jump into whatever now occupies
+the address. That is a property of the whole DLL set, not of the DLLs someone remembered to fix.
+
+**0 ungated WRITEs is the property worth guarding hardest**: it means no DLL in this tree can
+corrupt the running 1.17 image with a stale address. `--check` is wired into `scripts/check.sh`
+and fails when any per-cdylib count RISES, so that stays true by construction rather than by
+memory. It divides with `scripts/check-stale-rva-calls.py`, which is the authority on the repo-wide
+CALL set; this one adds per-cdylib attribution (a flat repo total hides one DLL regressing while
+another improves) and the WRITE/read buckets that nothing else measures. The two independently
+written detectors agree to within one site, which is the closest thing to a cross-check available.
+
+### What the conversion looks like
+
+`scripts/gate-stale-rva-calls.py` did 197 of them mechanically, and its value is mostly in what it
+REFUSES to touch:
+
+* never inside an `extern "system"` function -- those are detours, and a detour that returns early
+  never calls its original, which deletes the game's own behaviour instead of adding ours.
+  `hud_weapon_update_hook` needed `return ret`, not `return`;
+* only where the return type has an obvious did-nothing value (`()`, `bool`, an integer, `f32`);
+  `Result<String, String>` and `Option<(f32, f32)>` are printed for a human rather than guessed at.
+
+The 13 it refused were then done by hand, and the refusals were right every time: three
+`Result<_, String>` functions wanted an `Err` carrying a reason, and two were detours where the
+correct degraded behaviour is to skip only the ADDED work and still let the game's own body run.
+A blind transform would have deleted vanilla behaviour in both detours.
+
+### Runtime evidence lives in a file, never in the audit's head
+
+`docs/recon/dll-1170-runtime-results.json` records the launch outcome per cdylib, and the audit
+prints it as a column. It is populated only by an actual launch: a DLL with zero ungated sites is
+NOT thereby "working on 1.17", and the tool never infers one from the other. Rows tagged
+`(pre-gating)` were measured before their crate was converted and are due a re-run.

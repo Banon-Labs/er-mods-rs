@@ -1266,7 +1266,14 @@ mod windows_runtime {
             return false;
         };
         unsafe { release_dl_string(&mut menu_string.dl_string) };
-        let copy: super::DlStringCopyFn = unsafe { std::mem::transmute(base + DL_STRING_COPY_RVA) };
+        // Through the 1.17 gate: `base + rva` calls the 1.16.2 address on a build that moved
+        // DLString::copy, and this one writes through a caller-owned string.
+        let Ok(copy_addr) =
+            er_game_base::mem::game_rva_named(DL_STRING_COPY_RVA as u32, "DL_STRING_COPY_RVA")
+        else {
+            return false;
+        };
+        let copy: super::DlStringCopyFn = unsafe { std::mem::transmute(copy_addr) };
         unsafe { copy(&mut menu_string.dl_string, source) };
         menu_string.raw_string = std::ptr::null_mut();
         true
@@ -1295,9 +1302,16 @@ mod windows_runtime {
             ));
             return None;
         }
+        // Resolve BEFORE the allocation, so a refusal does not leak the box it would have filled.
+        let Ok(from_u16_addr) = er_game_base::mem::game_rva_named(
+            DL_STRING_FROM_U16_ARRAY_RVA as u32,
+            "DL_STRING_FROM_U16_ARRAY_RVA",
+        ) else {
+            return None;
+        };
         let built: *mut RawDlStringWide = Box::into_raw(Box::new(unsafe { std::mem::zeroed() }));
         let from_u16_array: super::DlStringFromU16ArrayFn =
-            unsafe { std::mem::transmute(base + DL_STRING_FROM_U16_ARRAY_RVA) };
+            unsafe { std::mem::transmute(from_u16_addr) };
         unsafe { from_u16_array(built, units.as_ptr(), allocator) };
         cache.insert(text.to_owned(), built as usize);
         Some(built)

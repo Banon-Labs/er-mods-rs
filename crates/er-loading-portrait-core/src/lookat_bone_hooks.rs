@@ -1,5 +1,18 @@
 use crate::prelude::*;
 
+/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function and
+/// nothing verified where to.
+///
+/// Every portrait call below used to transmute a hand-built `base + rva`, which on ELDEN RING 1.17
+/// calls the 1.16.2 address -- whatever now occupies it -- with nothing to refuse it. A mapped
+/// constant is no safer that way: the map knows the new address, and `base + rva` never asks it.
+/// A refusal costs one portrait frame; the alternative executes an arbitrary address on the
+/// render path.
+#[cfg(windows)]
+fn portrait_fn(rva: usize, what: &'static str) -> Option<usize> {
+    er_game_base::mem::game_rva_named(rva as u32, what).ok()
+}
+
 /// Read a `BoneData` quaternion (4 f32 at `addr`) with fault-guarded reads; `None` on unmapped memory.
 ///
 /// # Safety
@@ -451,9 +464,10 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // proven: find_d3d12_resource(off)==find_d3d12_resource(srv_gx)), so clearing it every frame WIPES the
     // rendered head before GFx samples it -> the now-loading background reads mostly-black. Once our own
     // table is built, SKIP the clear so the last-rendered portrait persists in the sampleable texture.
-    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
-        let draw_step: unsafe extern "system" fn() =
-            unsafe { core::mem::transmute(base + PROFILE_DRAW_STEP_RVA) };
+    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0
+        && let Some(address) = portrait_fn(PROFILE_DRAW_STEP_RVA, "PROFILE_DRAW_STEP_RVA")
+    {
+        let draw_step: unsafe extern "system" fn() = unsafe { core::mem::transmute(address) };
         unsafe { draw_step() };
         PROFILE_LOOKAT_RENDER_DRIVES.fetch_add(1, Ordering::SeqCst);
     }
@@ -646,9 +660,14 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                         // next phase.)
                         let _ = crate::portrait_alpha0_clear;
                         let _ = &PROFILE_ALPHA0_CLEARS;
-                        let update: unsafe extern "system" fn(usize, usize) =
-                            unsafe { core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA) };
-                        unsafe { update(r, td) };
+                        if let Some(address) = portrait_fn(
+                            PROFILE_MODEL_UPDATE_TASK_RVA,
+                            "PROFILE_MODEL_UPDATE_TASK_RVA",
+                        ) {
+                            let update: unsafe extern "system" fn(usize, usize) =
+                                unsafe { core::mem::transmute(address) };
+                            unsafe { update(r, td) };
+                        }
                         // The draw task is the fn per_frame_push_hook detours; calling the hook
                         // directly applies the look-at then runs the original body via its
                         // trampoline.
@@ -760,10 +779,20 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                         let l755 = unsafe { safe_read_u8(r + 0x755) }.unwrap_or(0xff);
                         let l756 = unsafe { safe_read_u8(r + 0x756) }.unwrap_or(0xff);
                         let fd_neq = {
-                            let get_buf: unsafe extern "system" fn(usize, u8) -> usize =
-                                unsafe { core::mem::transmute(base + PROFILE_FACEDATA_BUFFER_RVA) };
-                            let buf =
-                                unsafe { get_buf(r + PROFILE_RENDERER_FACEDATA_OBJ_OFFSET, 1) };
+                            let get_buf_addr = portrait_fn(
+                                PROFILE_FACEDATA_BUFFER_RVA,
+                                "PROFILE_FACEDATA_BUFFER_RVA",
+                            )
+                            .unwrap_or(0);
+                            // No verified address means the comparison cannot be made; "not
+                            // different" is the answer that changes nothing downstream.
+                            let buf = if get_buf_addr == 0 {
+                                0
+                            } else {
+                                let get_buf: unsafe extern "system" fn(usize, u8) -> usize =
+                                    unsafe { core::mem::transmute(get_buf_addr) };
+                                unsafe { get_buf(r + PROFILE_RENDERER_FACEDATA_OBJ_OFFSET, 1) }
+                            };
                             if buf != 0 && buf != null {
                                 let a = unsafe {
                                     std::slice::from_raw_parts(
@@ -820,8 +849,14 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                             let mut outcome = 2usize;
                             let mut bound_id = -1i32;
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let bind_addr =
+                                    portrait_fn(PROFILE_ANIM_BIND_RVA, "PROFILE_ANIM_BIND_RVA")
+                                        .unwrap_or(0);
+                                if bind_addr == 0 {
+                                    return;
+                                }
                                 let bind: unsafe extern "system" fn(usize, *const i32, u8, u8) =
-                                    unsafe { core::mem::transmute(base + PROFILE_ANIM_BIND_RVA) };
+                                    unsafe { core::mem::transmute(bind_addr) };
                                 for &id in PORTRAIT_IDLE_ANIM_IDS.iter() {
                                     PORTRAIT_ANIM_BIND_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
                                     unsafe { bind(r, &id, 1, 0) };

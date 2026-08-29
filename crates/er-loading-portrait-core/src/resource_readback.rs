@@ -335,8 +335,22 @@ pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     if !valid(gx) {
         return false;
     }
-    let pop: unsafe extern "system" fn(usize) -> usize =
-        unsafe { core::mem::transmute(base + GX_FRAME_CTX_POP_RVA) };
+    // All three through the 1.17 gate, resolved BEFORE the pop: pop and release must balance
+    // exactly like the engine's own body, so refusing halfway would leak a frame context.
+    let (Ok(pop_addr), Ok(clear_addr), Ok(release_addr)) = (
+        er_game_base::mem::game_rva_named(GX_FRAME_CTX_POP_RVA as u32, "GX_FRAME_CTX_POP_RVA"),
+        er_game_base::mem::game_rva_named(
+            GX_CLEAR_RTV_WRAPPER_RVA as u32,
+            "GX_CLEAR_RTV_WRAPPER_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            GX_FRAME_CTX_RELEASE_RVA as u32,
+            "GX_FRAME_CTX_RELEASE_RVA",
+        ),
+    ) else {
+        return false;
+    };
+    let pop: unsafe extern "system" fn(usize) -> usize = unsafe { core::mem::transmute(pop_addr) };
     let frame = unsafe { pop(gx) };
     if !valid(frame) {
         return false;
@@ -345,7 +359,7 @@ pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     let ok = if valid(sub) {
         let color: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
         let clear: unsafe extern "system" fn(usize, usize, *const f32) =
-            unsafe { core::mem::transmute(base + GX_CLEAR_RTV_WRAPPER_RVA) };
+            unsafe { core::mem::transmute(clear_addr) };
         unsafe { clear(sub, rtv, color.as_ptr()) };
         true
     } else {
@@ -354,7 +368,7 @@ pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     // Release the popped frame context even when the subcontext was missing -- the pop/release
     // pair must balance exactly like the engine's own body.
     let release: unsafe extern "system" fn(usize, usize) =
-        unsafe { core::mem::transmute(base + GX_FRAME_CTX_RELEASE_RVA) };
+        unsafe { core::mem::transmute(release_addr) };
     unsafe { release(gx, frame) };
     ok
 }

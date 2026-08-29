@@ -735,7 +735,7 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
 ///
 /// `slot` is range-checked against `TITLE_PROFILE_SLOT_COUNT` before it indexes the
 /// per-slot baseline.
-pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
+pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if renderer == 0 || renderer == null {
         return false;
@@ -851,8 +851,20 @@ pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: 
     }
     // Rebuild the view matrix with the engine's own builder (correct handedness/basis), then copy the 16
     // floats into the renderer's matrix slot (== the CSPersCam view matrix).
+    // Both through the 1.17 gate, resolved before the matrix is built: writing a view matrix the
+    // push can never deliver would leave the renderer half-updated.
+    let (Ok(build_addr), Ok(push_addr)) = (
+        er_game_base::mem::game_rva_named(
+            PROFILE_CAM_BUILD_MATRIX_RVA as u32,
+            "PROFILE_CAM_BUILD_MATRIX_RVA",
+        ),
+        er_game_base::mem::game_rva_named(PROFILE_CAM_PUSH_RVA as u32, "PROFILE_CAM_PUSH_RVA"),
+    ) else {
+        PROFILE_CAM_LAST_MATRIX_OK.store(0, Ordering::SeqCst);
+        return false;
+    };
     let build: unsafe extern "system" fn(usize, *mut f32) -> *mut f32 =
-        unsafe { core::mem::transmute(base + PROFILE_CAM_BUILD_MATRIX_RVA) };
+        unsafe { core::mem::transmute(build_addr) };
     let mut matrix = [0f32; 16];
     unsafe { build(renderer, matrix.as_mut_ptr()) };
     if !matrix.iter().all(|f| f.is_finite()) {
@@ -867,8 +879,7 @@ pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: 
         );
     }
     // Push the CSPersCam into the offscreen render so the next offscreen frame uses our camera.
-    let push: unsafe extern "system" fn(usize, usize) =
-        unsafe { core::mem::transmute(base + PROFILE_CAM_PUSH_RVA) };
+    let push: unsafe extern "system" fn(usize, usize) = unsafe { core::mem::transmute(push_addr) };
     unsafe { push(renderer, renderer + PROFILE_CAM_PERSCAM_OFFSET) };
     PROFILE_CAM_APPLY_CALLS.fetch_add(1, Ordering::SeqCst);
     PROFILE_CAM_LAST_SLOT.store(idx, Ordering::SeqCst);

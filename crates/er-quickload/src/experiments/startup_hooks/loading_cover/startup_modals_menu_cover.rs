@@ -79,8 +79,15 @@ pub(crate) fn force_dismiss_startup_dialog() {
     // CLOSES the dialog and emits its result so the title flow PROCEEDS. This is what a real OK
     // does; OnDecide/field-writes/input-injection all failed to close it. Runs each frame on every
     // captured MessageBoxDialog -> skips ALL of them (connection-error, starting-offline, ...).
-    let ok_handler: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + MSGBOX_OK_HANDLER_RVA) };
+    let ok_handler: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(MSGBOX_OK_HANDLER_RVA, "MSGBOX_OK_HANDLER_RVA")
+            {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { ok_handler(dialog) };
     let n = DISMISS_WRITE_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     if n % AUTO_ACCEPT_LOG_INTERVAL == null {
@@ -492,7 +499,7 @@ pub(crate) unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str
     if unsafe { PlayerIns::local_player_mut() }.is_ok() {
         return;
     }
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return;
     };
     let gm = game_man_ptr_or_null();
@@ -504,8 +511,17 @@ pub(crate) unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str
     if ac0_before == picked {
         return;
     }
-    let set_save_slot: unsafe extern "system" fn(i32) =
-        unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { set_save_slot(picked) };
     let ac0_after = unsafe { safe_read_i32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) }
         .unwrap_or(OWN_STEPPER_SLOT_NONE);
@@ -861,8 +877,17 @@ pub(crate) unsafe fn build_profile_select_cover_job(
         return;
     }
     let mut cover_slot = null;
-    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
     let cover_job = cover_slot;
     TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
@@ -890,8 +915,17 @@ pub(crate) unsafe fn build_black_cover_job(
         return;
     }
     let mut cover_slot = null;
-    let cover_builder: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA) };
+    let cover_builder: unsafe extern "system" fn(usize, usize) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA,
+                "TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx) };
     let cover_job = cover_slot;
     TITLE_CUSTOM_COVER_BLACK_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);

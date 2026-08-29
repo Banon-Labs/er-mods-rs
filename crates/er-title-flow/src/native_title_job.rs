@@ -52,7 +52,7 @@ pub unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool 
     task_data[TITLE_NATIVE_JOB_DELTA_OFFSET_START..TITLE_NATIVE_JOB_DELTA_OFFSET_END]
         .copy_from_slice(&frame_delta.to_le_bytes());
     let title_menu_job: unsafe extern "system" fn(*mut u8, *mut c_void) =
-        unsafe { std::mem::transmute(module_base + TITLE_MENU_JOB_WAIT_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_MENU_JOB_WAIT_RVA, "TITLE_MENU_JOB_WAIT_RVA") { Some(address) => address, None => return false }) };
     append_autoload_debug(format_args!(
         "native_title_job: ENTER owner={owner:p} state_before={state_before} tick={tick}"
     ));

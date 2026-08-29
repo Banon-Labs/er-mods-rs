@@ -371,19 +371,29 @@ unsafe fn player_ins(base: usize) -> Option<usize> {
 
 /// Ash-of-War icon id for the weapon in `slot`, or `None` when that hand holds no weapon or the
 /// weapon has no ash.
+use crate::icons_fn;
+
 unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
     let player = unsafe { player_ins(base) }?;
 
-    let get_handle: GetWeaponHandleFn =
-        unsafe { std::mem::transmute(base + GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA) };
+    let get_handle: GetWeaponHandleFn = unsafe {
+        std::mem::transmute(icons_fn(
+            GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA,
+            "GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA",
+        )?)
+    };
     let mut handle: u32 = 0;
     unsafe { get_handle(player, &mut handle, slot) };
     if handle == 0 {
         return None; // empty hand -- the game writes 0 before validating the slot
     }
 
-    let get_ins: GetGaitemInsFn =
-        unsafe { std::mem::transmute(base + GET_GAITEM_INS_BY_HANDLE_RVA) };
+    let get_ins: GetGaitemInsFn = unsafe {
+        std::mem::transmute(icons_fn(
+            GET_GAITEM_INS_BY_HANDLE_RVA,
+            "GET_GAITEM_INS_BY_HANDLE_RVA",
+        )?)
+    };
     let mut gaitem = GaitemLookupResult {
         handle,
         ..Default::default()
@@ -395,8 +405,12 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
         return None; // handle did not resolve to a live gaitem
     }
 
-    let get_arts: GetArtsForWeaponFn =
-        unsafe { std::mem::transmute(base + GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA) };
+    let get_arts: GetArtsForWeaponFn = unsafe {
+        std::mem::transmute(icons_fn(
+            GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA,
+            "GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA",
+        )?)
+    };
     let mut result = SwordArtsLookupResult {
         param_id: 0,
         _pad: 0,
@@ -432,15 +446,37 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
 }
 
 /// Bind our badge child under `parent_clip` and remember it for `component`.
-unsafe fn bind_badge(base: usize, component: usize, parent_clip: usize) {
+unsafe fn bind_badge(_base: usize, component: usize, parent_clip: usize) {
     let Some(entry) = registry_claim(component) else {
         return;
     };
-    let assign: AssignFn =
-        unsafe { std::mem::transmute(base + crate::ASSIGN_COMPONENT_WITH_NAME_RVA) };
-    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + crate::PROXY_IS_BOUND_RVA) };
-    let value_dtor: ScaleformValueDtorFn =
-        unsafe { std::mem::transmute(base + crate::SCALEFORM_VALUE_DTOR_RVA) };
+    let assign: AssignFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(
+                crate::ASSIGN_COMPONENT_WITH_NAME_RVA,
+                "ASSIGN_COMPONENT_WITH_NAME_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let is_bound: IsBoundFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(crate::PROXY_IS_BOUND_RVA, "PROXY_IS_BOUND_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let value_dtor: ScaleformValueDtorFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(crate::SCALEFORM_VALUE_DTOR_RVA, "SCALEFORM_VALUE_DTOR_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
 
     // Release a previous binding for this component before overwriting it: the proxy owns a
     // ref-counted CSScaleformValue, and dropping the storage without the dtor leaks a movie
@@ -470,8 +506,14 @@ unsafe fn bind_badge(base: usize, component: usize, parent_clip: usize) {
         // Hide on bind. The movie already places the HUD badge with `visible = 0`, so this is
         // belt-and-braces -- but it costs one call and it means a slot that is bound and then
         // never updated (a HUD scene torn down mid-frame) cannot flash its un-set placeholder.
-        let set_visible: SetVisibleFn =
-            unsafe { std::mem::transmute(base + crate::PROXY_SET_VISIBLE_RVA) };
+        let set_visible: SetVisibleFn = unsafe {
+            std::mem::transmute(
+                match crate::icons_fn(crate::PROXY_SET_VISIBLE_RVA, "PROXY_SET_VISIBLE_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_visible(storage.as_mut_ptr(), false) };
         let n = BINDER_BOUND.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= SAMPLE_LOGS {
@@ -612,8 +654,14 @@ unsafe extern "system" fn hud_weapon_update_hook(
         return ret;
     };
 
-    let set_visible: SetVisibleFn =
-        unsafe { std::mem::transmute(base + crate::PROXY_SET_VISIBLE_RVA) };
+    let set_visible: SetVisibleFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(crate::PROXY_SET_VISIBLE_RVA, "PROXY_SET_VISIBLE_RVA") {
+                Some(address) => address,
+                None => return ret,
+            },
+        )
+    };
     let storage = unsafe { &mut *entry.proxy.get() };
 
     // Not one of the two weapon slots: `Arts` and the `ItemPanel2` items bind a badge because
@@ -626,10 +674,22 @@ unsafe extern "system" fn hud_weapon_update_hook(
 
     match unsafe { arts_icon_for_slot(base, slot) } {
         Some(icon_id) => {
-            let build_icon_info: IconInfoBuilderFn =
-                unsafe { std::mem::transmute(base + crate::ICON_INFO_BUILDER_RVA) };
-            let icon_setter: IconSetterFn =
-                unsafe { std::mem::transmute(base + crate::ICON_SETTER_RVA) };
+            let build_icon_info: IconInfoBuilderFn = unsafe {
+                std::mem::transmute(
+                    match crate::icons_fn(crate::ICON_INFO_BUILDER_RVA, "ICON_INFO_BUILDER_RVA") {
+                        Some(address) => address,
+                        None => return ret,
+                    },
+                )
+            };
+            let icon_setter: IconSetterFn = unsafe {
+                std::mem::transmute(
+                    match crate::icons_fn(crate::ICON_SETTER_RVA, "ICON_SETTER_RVA") {
+                        Some(address) => address,
+                        None => return ret,
+                    },
+                )
+            };
             let mut icon_info = [0u8; ICON_INFO_SIZE];
             unsafe { build_icon_info(icon_info.as_mut_ptr(), icon_id) };
             unsafe { icon_setter(storage.as_mut_ptr(), icon_info.as_ptr()) };

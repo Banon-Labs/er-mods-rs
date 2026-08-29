@@ -67,7 +67,7 @@ pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
     let mut job_slot: usize = job;
     let slot_ptr = (&raw mut job_slot) as usize;
     let exec: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + EXECUTE_MENU_JOB_RVA) };
+        unsafe { std::mem::transmute(match title_fn(EXECUTE_MENU_JOB_RVA, "EXECUTE_MENU_JOB_RVA") { Some(address) => address, None => return }) };
     let exec_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         exec(slot_ptr, time_ptr)
     }));
@@ -156,7 +156,7 @@ pub unsafe fn title_dialog_state(dialog: usize, base: usize) -> TitleDialogState
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return TitleDialogState { in_loop: false, in_textfadeout: false, menu_opened_latch: TITLE_OWNER_SCAN_START_ADDRESS } }) };
     let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
         unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
@@ -198,7 +198,7 @@ pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     }
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return false }) };
     let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
         unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
@@ -289,7 +289,7 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
     let value = proxy + 0x18;
     TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
     let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_PRESS_START_SET_VISIBLE_RVA, "TITLE_PRESS_START_SET_VISIBLE_RVA") { Some(address) => address, None => return }) };
     unsafe { set_visible(proxy, 0) };
     let prev = TITLE_PRESS_START_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
     TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
@@ -325,7 +325,7 @@ pub unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAuto
         return;
     }
     let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA, "TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA") { Some(address) => address, None => return }) };
     unsafe { set_visible(logo, 0) };
     let prev = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
     TITLE_LOGO_GFX_HIDE_LAST_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
@@ -428,9 +428,9 @@ pub unsafe fn maybe_refresh_title_profile_cover(
         return;
     }
     let init: unsafe extern "system" fn() =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA") { Some(address) => address, None => return }) };
     let refresh: unsafe extern "system" fn() =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA") { Some(address) => address, None => return }) };
     unsafe { init() };
     unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
     unsafe { refresh() };

@@ -207,21 +207,48 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             NULL
         };
         if summary != NULL {
-            let mark: unsafe extern "system" fn(usize, i32) -> u8 =
-                unsafe { std::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+            let mark: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        PROFILE_MARK_SLOT_USED_RVA,
+                        "PROFILE_MARK_SLOT_USED_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             let _ = unsafe { mark(summary, slot) };
         }
         // Step 1 (NEW): set the slot-resolve global GameMan+0xb78=slot (resolver 0x1406793c0 returns
         // *(u32*)(gm+0xb78)) so the native chain resolves OUR slot. Save-safe (an in-memory selector).
         unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
         // Step 2: set_save_slot 0x14067a810(slot) -> GameMan+0xac0=slot.
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_save_slot(slot) };
         // Step 3: submit the full read 0x14067b1a0(slot) (type-0xa; sets GameMan+0xb80=2, the
         // deserialize arm). At the LIVE menu the FD4 IO worker pool is live so this DRAINS.
-        let submit: unsafe extern "system" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
+        let submit: unsafe extern "system" fn(i32) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_FULL_LOAD_INITIATOR_RVA,
+                    "B80_FULL_LOAD_INITIATOR_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         // NOT `submit(slot)`: the argument is a flag the game always passes as 0, and the slot
         // was already set by `set_save_slot` above. See `B80_FULL_LOAD_SUBMIT_FLAG`.
         let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
@@ -247,11 +274,26 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     if phase == FULLREAD_PHASE_DRAIN {
         // Step 4: tick lane 0x140679510 (b80==1/2 IO tick) + poll 0x140679180 each frame until
         // GameMan+0xb80==3 (RESIDENT, the 0x280000 buffer drained). Reuses cold_char_mount's calls.
-        let lane: unsafe extern "system" fn() -> i32 =
-            unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+        let lane: unsafe extern "system" fn() -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_LANE1_DRIVER_RVA,
+                    "B80_LANE1_DRIVER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { lane() };
-        let poll: unsafe extern "system" fn(u8, u8) -> i32 =
-            unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+        let poll: unsafe extern "system" fn(u8, u8) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(B80_POLL_RVA, "B80_POLL_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
         let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
@@ -313,15 +355,33 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 append_autoload_debug(format_args!(
                     "native-fullread: DESER-path FEED of picked slot {picked} FAILED -- falling back to native deser"
                 ));
-                let deser: unsafe extern "system" fn(i32) -> i32 =
-                    unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+                let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
+                    std::mem::transmute(
+                        match crate::experiments::gated_game_fn(
+                            DESERIALIZE_SLOT_RVA,
+                            "DESERIALIZE_SLOT_RVA",
+                        ) {
+                            Some(address) => address,
+                            None => return,
+                        },
+                    )
+                };
                 note_title_time_deser(slot, "switch-feed-fallback");
                 unsafe { deser(slot) }
             }
         } else {
             // Step 5: deserialize 0x14067b290(slot) ONCE at b80==3 -> writes GameMan+0xc30 = real map.
-            let deser: unsafe extern "system" fn(i32) -> i32 =
-                unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+            let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        DESERIALIZE_SLOT_RVA,
+                        "DESERIALIZE_SLOT_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             note_title_time_deser(slot, "boot-fullread");
             unsafe { deser(slot) }
         };
@@ -417,8 +477,17 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let shim = &raw mut OWN_STEPPER_SHIM;
         unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner_obj };
         let shim_ptr = shim as usize;
-        let confirm: unsafe extern "system" fn(usize) =
-            unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+        let confirm: unsafe extern "system" fn(usize) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    CONTINUE_CONFIRM_RVA,
+                    "CONTINUE_CONFIRM_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         append_autoload_debug(format_args!(
             "native-fullread: *** COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={level} owner+0x284={new_game_flag} -- SetState5 (AUTOSAVES) ***",
             base + CONTINUE_CONFIRM_RVA
@@ -633,7 +702,7 @@ pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
 /// current_slot_load and deserializes the REAL slot character (sets
 /// GameMan+0x10=1), also building the world singletons. owner is a synthetic
 /// buffer with +0x12c = slot. Never writes the force flag 0x143d856a0.
-pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u64) {
+pub(crate) unsafe fn continue_drive_tick(_module_base: usize, slot: i32, tick: u64) {
     // Log readiness before the fixed drive gate: recent runs exit before the
     // drive can fire, so the next runtime must tell us when GameMan first became
     // available instead of turning the gate into another blind threshold knob.
@@ -690,8 +759,17 @@ pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u6
     // dispatcher selects current_slot_load and begins. The begin is gated on
     // b80==0, so re-arming after it starts cannot re-submit.
     if !CONTINUE_DRIVE_BEGUN.load(Ordering::SeqCst) {
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_save_slot(slot) };
         unsafe {
             *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *mut u8) = GAME_MAN_B73_FLAG_SET;
@@ -707,8 +785,17 @@ pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u6
             "continue_drive: FIRST dispatcher before slot={slot} b80={load_progress} b73={b73_before} real_done={real_done} map14={map14} tick={tick} gate_tick={drive_gate_tick}"
         ));
     }
-    let dispatcher: unsafe extern "system" fn(*mut u8) -> usize =
-        unsafe { std::mem::transmute(module_base + MOVEMAP_DISPATCHER_RVA) };
+    let dispatcher: unsafe extern "system" fn(*mut u8) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                MOVEMAP_DISPATCHER_RVA,
+                "MOVEMAP_DISPATCHER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let _ = unsafe { dispatcher(owner) };
     if first_attempt
         || tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64

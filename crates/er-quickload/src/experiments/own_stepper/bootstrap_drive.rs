@@ -199,8 +199,14 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // so the device read an EMPTY buffer (deserialize gave c30=0xffffffff + garbage char).
         // Save-safe (sets a path + reads metadata; NO save write).
         const SLOT_MGR_PEEK_RVA: usize = 0x678a50;
-        let peek: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + SLOT_MGR_PEEK_RVA) };
+        let peek: unsafe extern "system" fn() = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(SLOT_MGR_PEEK_RVA, "SLOT_MGR_PEEK_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { peek() };
         append_autoload_debug(format_args!(
             "cold-char-mount: slot-mgr peek 0x{:x}() -> set save-file path before mount (GameMan+0xe70 ready)",
@@ -220,8 +226,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             null
         };
         if profile_summary != null {
-            let activate: unsafe extern "system" fn(usize, i32) =
-                unsafe { std::mem::transmute(base + PROFILE_SLOT_ACTIVATE_RVA) };
+            let activate: unsafe extern "system" fn(usize, i32) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        PROFILE_SLOT_ACTIVATE_RVA,
+                        "PROFILE_SLOT_ACTIVATE_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { activate(profile_summary, want_slot) };
             let abyte = unsafe {
                 *((profile_summary + SLOT_ACTIVE_BYTE_BASE + want_slot as usize) as *const u8)
@@ -242,8 +257,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         unsafe {
             *((stub_ptr + SYNTHETIC_STEP_STATE_OFFSET) as *mut i32) = WORLD_WORKER_BUILD_STATE
         };
-        let worker_build: unsafe extern "system" fn(usize) -> usize =
-            unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
+        let worker_build: unsafe extern "system" fn(usize) -> usize = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    WORLD_WORKER_BUILD_RVA,
+                    "WORLD_WORKER_BUILD_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { worker_build(stub_ptr) };
         let worker = crate::runtime_heap_allocator_ptr_or_null();
         // (1.5) DEVICE MOUNT/BIND (b80-mount-routine-0x140e6e8d0-recipe-...). ROOT CAUSE of
@@ -279,11 +303,26 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let (dev40_before, dev30_before) = read_dev(iodev_before);
         // The getter returns the iodev (lazily creating it if null) -- the exact value the
         // native boot passes to the mount.
-        let iodev_getter: unsafe extern "system" fn() -> usize =
-            unsafe { std::mem::transmute(base + IODEV_GETTER_RVA) };
+        let iodev_getter: unsafe extern "system" fn() -> usize = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(IODEV_GETTER_RVA, "IODEV_GETTER_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let iodev = unsafe { iodev_getter() };
-        let mount: unsafe extern "system" fn(usize) -> u8 =
-            unsafe { std::mem::transmute(base + IODEV_MOUNT_OPEN_RVA) };
+        let mount: unsafe extern "system" fn(usize) -> u8 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    IODEV_MOUNT_OPEN_RVA,
+                    "IODEV_MOUNT_OPEN_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let mount_al = if iodev != null {
             unsafe { mount(iodev) }
         } else {
@@ -369,11 +408,29 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // b80 reaches RESIDENT before deserializing.
         unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = want_slot };
         let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_save_slot(want_slot) };
-        let submit: unsafe extern "system" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
+        let submit: unsafe extern "system" fn(i32) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_FULL_LOAD_INITIATOR_RVA,
+                    "B80_FULL_LOAD_INITIATOR_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         // NOT `submit(want_slot)`: the argument is a flag the game always passes as 0, and the
         // slot was already set by `set_save_slot` above. See `B80_FULL_LOAD_SUBMIT_FLAG`.
         let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
@@ -444,8 +501,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // and cap=7 (empty SSO) first. [u64;8] guarantees 8-byte alignment for the field writes.
         let mut wrapper = [0u64; 8];
         let wbase = wrapper.as_mut_ptr() as usize;
-        let alloc_getter: unsafe extern "system" fn() -> usize =
-            unsafe { std::mem::transmute(base + SAVE_DIR_ALLOC_GETTER_RVA) };
+        let alloc_getter: unsafe extern "system" fn() -> usize = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    SAVE_DIR_ALLOC_GETTER_RVA,
+                    "SAVE_DIR_ALLOC_GETTER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let allocator = unsafe { alloc_getter() };
         unsafe {
             *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
@@ -462,8 +528,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         }
         .unwrap_or(null);
         if steam_iface != null && allocator != null {
-            let builder: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(base + SAVE_DIR_BUILDER_RVA) };
+            let builder: unsafe extern "system" fn(usize) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        SAVE_DIR_BUILDER_RVA,
+                        "SAVE_DIR_BUILDER_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { builder(wbase) };
         }
         let dir_cap = unsafe { *((wbase + U16STRING_CAP_OFFSET) as *const usize) };
@@ -479,8 +554,15 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         ));
         // Install on the LIVE path-DB slot-0 directory. The setter COPIES our buffer into the slot
         // entry's std::u16string at entry+0xb0 (via 0x14240dce0), so our stack wrapper can be dropped.
-        let setter: unsafe extern "system" fn(usize, i32, usize) =
-            unsafe { std::mem::transmute(base + SAVE_DIR_SETTER_RVA) };
+        let setter: unsafe extern "system" fn(usize, i32, usize) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(SAVE_DIR_SETTER_RVA, "SAVE_DIR_SETTER_RVA")
+                {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let set_fired =
             io20 != null && dir_data != null && dir_size > 0 && dir_size <= REQ_DIR_SANE_MAX_CU;
         if set_fired {
@@ -500,8 +582,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             0
         };
         let entry = if coll != null && set_fired {
-            let lookup: unsafe extern "system" fn(usize, i32) -> usize =
-                unsafe { std::mem::transmute(base + SAVE_DIR_SLOT_LOOKUP_RVA) };
+            let lookup: unsafe extern "system" fn(usize, i32) -> usize = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        SAVE_DIR_SLOT_LOOKUP_RVA,
+                        "SAVE_DIR_SLOT_LOOKUP_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { lookup(coll, key) }
         } else {
             null
@@ -553,8 +644,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             usize::MAX
         };
         let fsm_index = if io20 != null {
-            let idx_getter: unsafe extern "system" fn(usize) -> i32 =
-                unsafe { std::mem::transmute(base + STATE_INDEX_GETTER_RVA) };
+            let idx_getter: unsafe extern "system" fn(usize) -> i32 = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        STATE_INDEX_GETTER_RVA,
+                        "STATE_INDEX_GETTER_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { idx_getter(io20) }
         } else {
             -1
@@ -573,8 +673,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // resident. It keeps b80=1 while in-progress and resets b80=0 once the read completes (the
         // registered+ticked worker is what makes that completion happen). When b80==0, the iodev
         // request is resident; fire LoadSaveData 0x67b200 to re-enter the b80=2 lane (populates io18).
-        let lane: unsafe extern "system" fn() -> i32 =
-            unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+        let lane: unsafe extern "system" fn() -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_LANE1_DRIVER_RVA,
+                    "B80_LANE1_DRIVER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { lane() };
         let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
@@ -585,8 +694,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             ));
         }
         if b80 == B80_IDLE {
-            let loadsave: unsafe extern "system" fn(i32) -> i32 =
-                unsafe { std::mem::transmute(base + B80_LOAD_SAVE_DATA_INITIATOR_RVA) };
+            let loadsave: unsafe extern "system" fn(i32) -> i32 = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        B80_LOAD_SAVE_DATA_INITIATOR_RVA,
+                        "B80_LOAD_SAVE_DATA_INITIATOR_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             let lret = unsafe { loadsave(want_slot) };
             let (io10, io18, io20) = iodev_summary();
             append_autoload_debug(format_args!(
@@ -613,11 +731,26 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // the cold async full read completes EMPTY (b80->0, never resident=3) -- the worker is
         // registered+scheduler-ticked but does no actual 0x280000 disk IO. Next suspect: the df0
         // fast-path ([mgr+0xdf0]!=0 -> 0x67b100 skips the read).
-        let lane: unsafe extern "system" fn() -> i32 =
-            unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+        let lane: unsafe extern "system" fn() -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_LANE1_DRIVER_RVA,
+                    "B80_LANE1_DRIVER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { lane() };
-        let poll: unsafe extern "system" fn(u8, u8) -> i32 =
-            unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+        let poll: unsafe extern "system" fn(u8, u8) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(B80_POLL_RVA, "B80_POLL_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { poll(POLL_ARG, POLL_ARG) };
         let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
@@ -660,8 +793,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
                 (null, null)
             };
             if owner != null {
-                let finalizer: unsafe extern "system" fn(usize) =
-                    unsafe { std::mem::transmute(base + NODE_FINALIZER_RVA) };
+                let finalizer: unsafe extern "system" fn(usize) = unsafe {
+                    std::mem::transmute(
+                        match crate::experiments::gated_game_fn(
+                            NODE_FINALIZER_RVA,
+                            "NODE_FINALIZER_RVA",
+                        ) {
+                            Some(address) => address,
+                            None => return,
+                        },
+                    )
+                };
                 unsafe { finalizer(owner) };
             }
             let o20_post = if owner != null {
@@ -768,8 +910,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let df0 = unsafe { *((gm + DF0_OFFSET) as *const usize) };
         let job18 = unsafe { *((gm + ASYNC_JOB_18_OFFSET) as *const usize) };
         let c30_gate = unsafe { *((base + C30_WRITE_GATE_RVA) as *const usize) };
-        let deser: unsafe extern "system" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+        let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    DESERIALIZE_SLOT_RVA,
+                    "DESERIALIZE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let dret = unsafe { deser(want_slot) };
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);

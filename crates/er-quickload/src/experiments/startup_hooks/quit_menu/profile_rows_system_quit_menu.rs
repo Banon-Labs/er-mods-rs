@@ -1604,8 +1604,17 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign_addr) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                CSSCALEFORMVALUE_DTOR_RVA,
+                "CSSCALEFORMVALUE_DTOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let root_proxy = option_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
 
     // The pane CONTAINER: its resolved-but-not-visible state IS the direct blank-pane signature.

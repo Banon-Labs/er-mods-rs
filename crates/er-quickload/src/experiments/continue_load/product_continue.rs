@@ -285,8 +285,17 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         };
         unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_save_slot(slot) };
         OWN_STEPPER_EXPECTED_SLOT.store(slot, Ordering::SeqCst);
         OWN_STEPPER_CONFIRMED.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
@@ -363,8 +372,17 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             let shim = &raw mut OWN_STEPPER_SHIM;
             unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner };
             let shim_ptr = shim as usize;
-            let confirm: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+            let confirm: unsafe extern "system" fn(usize) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        CONTINUE_CONFIRM_RVA,
+                        "CONTINUE_CONFIRM_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             append_autoload_debug(format_args!(
                 "product-core-autoload: MODAL-CONFIRM-DISABLED loaded evidence ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true(profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={}) b80={b80} owner+0x284={new_game_flag} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x} (no confirm input)",
                 slot_identity.profile_summary,
@@ -571,9 +589,21 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
         *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
             *((pgd + PGD_RUNE_MEMORY_70_OFFSET) as *const i32);
         let copy_face_data_from_buffer: unsafe extern "system" fn(usize, usize) =
-            std::mem::transmute(base + FACE_DATA_COPY_FROM_BUFFER_RVA);
-        let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize =
-            std::mem::transmute(base + CHR_ASM_COPY_RVA);
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FACE_DATA_COPY_FROM_BUFFER_RVA,
+                    "FACE_DATA_COPY_FROM_BUFFER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return false,
+                },
+            );
+        let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize = std::mem::transmute(
+            match crate::experiments::gated_game_fn(CHR_ASM_COPY_RVA, "CHR_ASM_COPY_RVA") {
+                Some(address) => address,
+                None => return false,
+            },
+        );
         copy_face_data_from_buffer(
             slot_data.wrapping_add(PROFILE_SUMMARY_FACE_DATA_OFFSET),
             pgd + PGD_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET,

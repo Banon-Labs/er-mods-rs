@@ -11,7 +11,7 @@ use super::*;
 /// pump feeds the leaf). Returns the built dialog at [item+0x130], if any.
 pub(crate) unsafe fn drive_menu_item_update(
     item: usize,
-    base: usize,
+    _base: usize,
     framectx: usize,
 ) -> Option<usize> {
     const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
@@ -26,8 +26,12 @@ pub(crate) unsafe fn drive_menu_item_update(
     if functor == null || ctx != null || pre130 != null {
         return None;
     }
-    let update: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + MENU_ITEM_UPDATE_RVA as usize) };
+    let update: unsafe extern "system" fn(usize, usize, usize) -> usize = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            MENU_ITEM_UPDATE_RVA as usize,
+            "MENU_ITEM_UPDATE_RVA",
+        )?)
+    };
     // 16-byte writable StepResult out-slot ([0]=status, [4]=payload) the leaf Update writes.
     let mut out = [OUT_ZERO, OUT_ZERO];
     let _ = unsafe { update(item, out.as_mut_ptr() as usize, framectx) };
@@ -524,8 +528,17 @@ pub(crate) unsafe fn own_stepper_stage2(
         if (live_dialog_enabled() || product_autoload_enabled())
             && expected_slot != OWN_STEPPER_SLOT_NONE
         {
-            let set_save_slot: unsafe extern "system" fn(i32) =
-                unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+            let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                        "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { set_save_slot(expected_slot) };
             let slot_after = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
             append_autoload_debug(format_args!(
@@ -567,8 +580,17 @@ pub(crate) unsafe fn own_stepper_stage2(
             let step = OWN_STEPPER_SELECTOR_STEP.load(Ordering::SeqCst);
             let selector_ctx = OWN_STEPPER_SELECTOR_CTX.load(Ordering::SeqCst);
             if step != null && selector_ctx != null {
-                let tick: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
-                    unsafe { std::mem::transmute(base + SELECTOR_TICK_RVA) };
+                let tick: unsafe extern "system" fn(usize, usize, usize, usize) -> usize = unsafe {
+                    std::mem::transmute(
+                        match crate::experiments::gated_game_fn(
+                            SELECTOR_TICK_RVA,
+                            "SELECTOR_TICK_RVA",
+                        ) {
+                            Some(address) => address,
+                            None => return,
+                        },
+                    )
+                };
                 let mut result = [TITLE_OWNER_SCAN_START_ADDRESS; SELECTOR_RESULT_QWORDS];
                 let result_ptr = result.as_mut_ptr() as usize;
                 let tick_ret = unsafe { tick(step, selector_ctx, result_ptr, null) };
@@ -696,8 +718,17 @@ pub(crate) unsafe fn own_stepper_stage2(
             let shim = &raw mut OWN_STEPPER_SHIM;
             unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner };
             let shim_ptr = shim as usize;
-            let confirm: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+            let confirm: unsafe extern "system" fn(usize) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        CONTINUE_CONFIRM_RVA,
+                        "CONTINUE_CONFIRM_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-CONFIRM-GUARD-PASS ac0={ac0} c30=0x{c30:x} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x}"
             ));

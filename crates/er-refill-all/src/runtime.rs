@@ -47,7 +47,7 @@
 use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::{
-    mem::{game_module_base, safe_read_usize},
+    mem::{game_module_base, game_rva_named, safe_read_usize},
     rva::{GAME_DATA_MAN_GLOBAL_RVA, REPLANISH_ITEMS_FROM_CHEST_RVA, SHOULD_REPLENISH_ITEM_RVA},
 };
 
@@ -498,9 +498,24 @@ unsafe fn run_cycle(
         return;
     }
 
+    // Through the 1.17 gate, not `base + rva`: the map knowing where a function went is no help
+    // if the call never asks it. A refusal here costs the press; calling the 1.16.2 address on a
+    // build that moved the function costs the process.
+    let (Ok(should_replenish_addr), Ok(set_state_addr)) = (
+        game_rva_named(
+            SHOULD_REPLENISH_ITEM_RVA as u32,
+            "SHOULD_REPLENISH_ITEM_RVA",
+        ),
+        game_rva_named(SET_STATE_RVA as u32, "SET_STATE_RVA"),
+    ) else {
+        refill_log(format_args!(
+            "{source}: press ignored: ShouldReplenishItem/SetState have no verified address for this build"
+        ));
+        return;
+    };
     let should_replenish: ShouldReplenishItemFn =
-        unsafe { std::mem::transmute(base + SHOULD_REPLENISH_ITEM_RVA) };
-    let set_state: SetStateFn = unsafe { std::mem::transmute(base + SET_STATE_RVA) };
+        unsafe { std::mem::transmute(should_replenish_addr) };
+    let set_state: SetStateFn = unsafe { std::mem::transmute(set_state_addr) };
 
     // Ask the game, rather than reading entries: `ShouldReplenishItem` applies the per-type
     // defaults for an item that has no entry at all (type 2 defaults ON, type 1 OFF), so it is the
@@ -567,24 +582,44 @@ unsafe fn run_cycle(
     // Marking alone moves nothing: the transfer is `ReplanishItemsFromChest`, which vanilla runs
     // at a grace or after a load.
     if refill_immediately && target && outcome.wrote_anything() {
-        let replenish: ReplanishItemsFromChestFn =
-            unsafe { std::mem::transmute(base + REPLANISH_ITEMS_FROM_CHEST_RVA) };
-        unsafe { replenish() };
-        refill_log(format_args!(
-            "{source}: cycle#{cycles} ran ReplanishItemsFromChest"
-        ));
+        match game_rva_named(
+            REPLANISH_ITEMS_FROM_CHEST_RVA as u32,
+            "REPLANISH_ITEMS_FROM_CHEST_RVA",
+        ) {
+            Ok(address) => {
+                let replenish: ReplanishItemsFromChestFn = unsafe { std::mem::transmute(address) };
+                unsafe { replenish() };
+                refill_log(format_args!(
+                    "{source}: cycle#{cycles} ran ReplanishItemsFromChest"
+                ));
+            }
+            Err(why) => refill_log(format_args!(
+                "{source}: cycle#{cycles} could not run ReplanishItemsFromChest -- {why}"
+            )),
+        }
     }
 
     // Repaint. The rows were built BEFORE the write, so without this they keep showing the old
     // icons and the whole feature reads as inert -- which is exactly how it presented the first
     // time it was tested live. Vanilla calls the same function after its own single-item toggle,
     // so any cursor movement this causes is the game's own behaviour rather than something new.
-    let refresh: DepositoryRefreshFn =
-        unsafe { std::mem::transmute(base + DEPOSITORY_DIALOG_REFRESH_RVA) };
-    unsafe { refresh(dialog, 1) };
-    refill_log(format_args!(
-        "{source}: cycle#{cycles} rebuilt the storage list"
-    ));
+    match game_rva_named(
+        DEPOSITORY_DIALOG_REFRESH_RVA as u32,
+        "DEPOSITORY_DIALOG_REFRESH_RVA",
+    ) {
+        Ok(address) => {
+            let refresh: DepositoryRefreshFn = unsafe { std::mem::transmute(address) };
+            unsafe { refresh(dialog, 1) };
+            refill_log(format_args!(
+                "{source}: cycle#{cycles} rebuilt the storage list"
+            ));
+        }
+        // Without the repaint the rows keep showing the old icons and the feature reads as inert,
+        // so say so rather than leaving the user to conclude the press did nothing.
+        Err(why) => refill_log(format_args!(
+            "{source}: cycle#{cycles} wrote the flags but could not rebuild the storage list -- {why}"
+        )),
+    }
 }
 
 /// Read `tracker->count`.

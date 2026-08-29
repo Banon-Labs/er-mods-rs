@@ -280,7 +280,7 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
     // code set the latch to 1, which the disasm proves aborts the load.)
     let latch_before = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
     let set_save_slot: unsafe extern "system" fn(i32) =
-        unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        unsafe { std::mem::transmute(match title_fn(FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA, "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA") { Some(address) => address, None => return }) };
     unsafe { set_save_slot(slot) };
     let slot_after = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
     unsafe {
@@ -324,7 +324,7 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
         return;
     }
     let cleanup: unsafe extern "system" fn(usize) -> usize =
-        unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_CLEANUP_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_CLEANUP_RVA, "TITLE_TOP_DIALOG_CLEANUP_RVA") { Some(address) => address, None => return }) };
     let ret = unsafe { cleanup(dialog) };
     let mut remaining_slots = TITLE_OWNER_SCAN_START_ADDRESS;
     let mut idx = ACTIVE_SCREEN_SLOT_START;
@@ -378,7 +378,7 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     // node flags&0x8f>=2 and bails if not settled (FadeIn would no-op / corrupt). Read-only probe.
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return }) };
     let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
     if !in_loop {
         return;
@@ -399,7 +399,7 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
         ));
     }
     let open_menu: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA") { Some(address) => address, None => return }) };
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         open_menu(dialog)
     }));
@@ -476,7 +476,7 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     // while not-in-Loop preserves the one-shot so the byte is set once the title genuinely settles.
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return }) };
     let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
     if !in_loop {
         return; // not settled (e.g. return-title teardown) -> wait; do NOT consume the one-shot
@@ -700,7 +700,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     let mut out_job: [usize; 4] = [0; 4];
     let out_ptr = out_job.as_mut_ptr() as usize;
     let selector: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + TITLE_CONTINUE_SELECTOR_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_CONTINUE_SELECTOR_RVA, "TITLE_CONTINUE_SELECTOR_RVA") { Some(address) => address, None => return }) };
     let sel_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         selector(dialog_slot, out_ptr)
     }));
@@ -763,7 +763,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     let mut scratch: usize = 0;
     let mut src: usize = job;
     let assign: unsafe extern "system" fn(usize, usize, usize) =
-        unsafe { std::mem::transmute(base + MENU_JOB_ASSIGN3_RVA) };
+        unsafe { std::mem::transmute(match title_fn(MENU_JOB_ASSIGN3_RVA, "MENU_JOB_ASSIGN3_RVA") { Some(address) => address, None => return }) };
     let scratch_ptr = (&raw mut scratch) as usize;
     let src_ptr = (&raw mut src) as usize;
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {

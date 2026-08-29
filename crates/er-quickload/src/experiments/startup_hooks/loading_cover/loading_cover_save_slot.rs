@@ -232,8 +232,17 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // CSMenuProfModelRend self-registers its ResMan model build/draw tasks, so it builds + OWNS its own
     // model with our lifetime -- not borrowed from the torn-down menu. Self-contained off process-lifetime
     // singletons (RE-confirmed).
-    let builder: unsafe extern "system" fn() =
-        unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
+    let builder: unsafe extern "system" fn() = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_TABLE_BUILDER_RVA,
+                "PROFILE_TABLE_BUILDER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { builder() };
     // The loading-cover observer (CSNowLoadingHelperImp ctor/update) is the overlay's PRIMARY end-of-cover
     // signal (update pulses stop == the game dismissed the tips+bar screen). Install it here, at the start
@@ -292,7 +301,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
 /// the natural never-configured state (flags 0, stepper idle -- the same state empty slots hold forever).
 /// Returns true when the kick fired. Fault-guarded reads; skips when the slot was already requested.
 pub(crate) unsafe fn kick_target_profile_slot(
-    base: usize,
+    _base: usize,
     summary: usize,
     renderer: usize,
     slot: i32,
@@ -325,30 +334,120 @@ pub(crate) unsafe fn kick_target_profile_slot(
     {
         return false;
     }
-    let record_of: unsafe extern "system" fn(usize, i32) -> usize =
-        unsafe { core::mem::transmute(base + PROFILE_SUMMARY_RECORD_RVA) };
+    let record_of: unsafe extern "system" fn(usize, i32) -> usize = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_SUMMARY_RECORD_RVA,
+                "PROFILE_SUMMARY_RECORD_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let record = unsafe { record_of(summary, slot) };
     if !valid(record) {
         return false;
     }
-    let set_model_source: unsafe extern "system" fn(usize, usize) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_MODEL_SOURCE_RVA) };
-    let facedata_buffer: unsafe extern "system" fn(usize, u8) -> usize =
-        unsafe { core::mem::transmute(base + PROFILE_FACEDATA_BUFFER_RVA) };
-    let set_facedata: unsafe extern "system" fn(usize, usize) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_FACEDATA_RVA) };
-    let set_byte290: unsafe extern "system" fn(usize, u8) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_BYTE290_RVA) };
-    let set_flag_one: unsafe extern "system" fn(usize, u8) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_FLAG_ONE_RVA) };
-    let set_byte294: unsafe extern "system" fn(usize, u8) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_BYTE294_RVA) };
-    let set_stream_index: unsafe extern "system" fn(usize, u32) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_STREAM_INDEX_RVA) };
-    let set_req_754: unsafe extern "system" fn(usize) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_REQ_754_RVA) };
-    let set_req_755: unsafe extern "system" fn(usize) =
-        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_REQ_755_RVA) };
+    let set_model_source: unsafe extern "system" fn(usize, usize) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_MODEL_SOURCE_RVA,
+                "PROFILE_RENDERER_SET_MODEL_SOURCE_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let facedata_buffer: unsafe extern "system" fn(usize, u8) -> usize = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_FACEDATA_BUFFER_RVA,
+                "PROFILE_FACEDATA_BUFFER_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let set_facedata: unsafe extern "system" fn(usize, usize) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_FACEDATA_RVA,
+                "PROFILE_RENDERER_SET_FACEDATA_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let set_byte290: unsafe extern "system" fn(usize, u8) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_BYTE290_RVA,
+                "PROFILE_RENDERER_SET_BYTE290_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let set_flag_one: unsafe extern "system" fn(usize, u8) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_FLAG_ONE_RVA,
+                "PROFILE_RENDERER_SET_FLAG_ONE_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let set_byte294: unsafe extern "system" fn(usize, u8) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_BYTE294_RVA,
+                "PROFILE_RENDERER_SET_BYTE294_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let set_stream_index: unsafe extern "system" fn(usize, u32) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_STREAM_INDEX_RVA,
+                "PROFILE_RENDERER_SET_STREAM_INDEX_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let set_req_754: unsafe extern "system" fn(usize) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_REQ_754_RVA,
+                "PROFILE_RENDERER_SET_REQ_754_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let set_req_755: unsafe extern "system" fn(usize) = unsafe {
+        core::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                PROFILE_RENDERER_SET_REQ_755_RVA,
+                "PROFILE_RENDERER_SET_REQ_755_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let b290 = unsafe { safe_read_u8(record + PROFILE_SUMMARY_GENDER_OFFSET) }.unwrap_or(0);
     let b294 = unsafe { safe_read_u8(record + PROFILE_SUMMARY_FIELD_294_OFFSET) }.unwrap_or(0);
     // LATCH SEMANTICS (static RE 2026-07-03): the state machine is Wait_Request --754--> build

@@ -182,9 +182,18 @@ pub(crate) unsafe fn save_picker_stage_row_records(
     }
     let staged = unsafe { save_picker_write_row_records(model, summary) };
     SAVE_PICKER_STAGED_ROW_COUNT.store(staged, Ordering::SeqCst);
-    if let Ok(base) = game_module_base() {
-        let refresh: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+    if let Ok(_base) = game_module_base() {
+        let refresh: unsafe extern "system" fn() = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_RENDERER_REFRESH_RVA,
+                    "PROFILE_RENDERER_REFRESH_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return false,
+                },
+            )
+        };
         unsafe { refresh() };
     }
     append_autoload_debug(format_args!(
@@ -797,11 +806,15 @@ unsafe fn save_picker_event_point(event: usize) -> Option<(f32, f32)> {
     if event == 0 {
         return None;
     }
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return None;
     };
-    let point_fn: unsafe extern "system" fn(usize, *mut u64) -> *mut u64 =
-        unsafe { std::mem::transmute(base + MENU_VIEWER_EVENT_POINT_RVA) };
+    let point_fn: unsafe extern "system" fn(usize, *mut u64) -> *mut u64 = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            MENU_VIEWER_EVENT_POINT_RVA,
+            "MENU_VIEWER_EVENT_POINT_RVA",
+        )?)
+    };
     let mut packed = 0_u64;
     unsafe { point_fn(event, &mut packed as *mut u64) };
     let x = f32::from_bits(packed as u32);
@@ -1311,11 +1324,20 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
             | crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK,
     );
     let pressed = drive_strip_pressed_mask(prev_down, down_mask, nav_edges);
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return;
     };
-    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    let cursor_getter: unsafe extern "system" fn(usize) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                MENU_ITEM_LIST_CURSOR_GETTER_RVA,
+                "MENU_ITEM_LIST_CURSOR_GETTER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
         if pressed != 0 {
@@ -2075,11 +2097,20 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
         SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(EDGE_SCROLL_NO_PREV_CURSOR, Ordering::SeqCst);
         return;
     }
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return;
     };
-    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    let cursor_getter: unsafe extern "system" fn(usize) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                MENU_ITEM_LIST_CURSOR_GETTER_RVA,
+                "MENU_ITEM_LIST_CURSOR_GETTER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     unsafe { save_picker_log_grid_geometry_once(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     // Remember where the selection was BEFORE this tick's key was read. The native list moves and

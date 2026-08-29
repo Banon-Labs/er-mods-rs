@@ -25,7 +25,7 @@ unsafe fn title_dialog_sm_state(
     }
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+        unsafe { std::mem::transmute(title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA")?) };
     let in_fadein =
         unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) } != OWN_STEPPER_FALSE;
     let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
@@ -88,7 +88,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
         return; // lost the one-shot race
     }
     let set_state: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + TITLE_FD4_SETSTATE_RVA) };
+        unsafe { std::mem::transmute(match title_fn(TITLE_FD4_SETSTATE_RVA, "TITLE_FD4_SETSTATE_RVA") { Some(address) => address, None => return }) };
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
     append_autoload_debug(format_args!(

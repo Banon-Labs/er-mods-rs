@@ -1144,8 +1144,12 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     // SAVE-DIR BUILD step, reusing the native builder so the path matches the engine's.
     let mut wrapper = [0u64; 8];
     let wbase = wrapper.as_mut_ptr() as usize;
-    let alloc_getter: unsafe extern "system" fn() -> usize =
-        unsafe { std::mem::transmute(base + SAVE_DIR_ALLOC_GETTER_RVA) };
+    let alloc_getter: unsafe extern "system" fn() -> usize = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            SAVE_DIR_ALLOC_GETTER_RVA,
+            "SAVE_DIR_ALLOC_GETTER_RVA",
+        )?)
+    };
     let allocator = unsafe { alloc_getter() };
     unsafe {
         *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
@@ -1167,8 +1171,12 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
         ));
         return None;
     }
-    let builder: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + SAVE_DIR_BUILDER_RVA) };
+    let builder: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            SAVE_DIR_BUILDER_RVA,
+            "SAVE_DIR_BUILDER_RVA",
+        )?)
+    };
     unsafe { builder(wbase) };
     let dir_cap = unsafe { *((wbase + U16STRING_CAP_OFFSET) as *const usize) };
     let dir_size = unsafe { *((wbase + U16STRING_SIZE_OFFSET) as *const usize) };

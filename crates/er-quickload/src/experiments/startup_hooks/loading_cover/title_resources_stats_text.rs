@@ -562,10 +562,12 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
         TITLE_PRESS_START_BIND_LAST_CONTEXT.store(context, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
         record_title_text_gfx_value(value);
-        let base = game_module_base().unwrap_or(null);
-        if base != null {
+        if let Some(set_visible_addr) = crate::experiments::gated_game_fn(
+            TITLE_PRESS_START_SET_VISIBLE_RVA,
+            "TITLE_PRESS_START_SET_VISIBLE_RVA",
+        ) {
             let set_visible: unsafe extern "system" fn(usize, u8) =
-                unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+                unsafe { std::mem::transmute(set_visible_addr) };
             unsafe { set_visible(out_proxy, 0) };
             let calls = TITLE_PRESS_START_BIND_HIDE_CALLS
                 .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -1364,8 +1366,12 @@ unsafe fn row_child_gfx_value_type(base: usize, row_proxy: usize, name: &str) ->
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            CSSCALEFORMVALUE_DTOR_RVA,
+            "CSSCALEFORMVALUE_DTOR_RVA",
+        )?)
+    };
     let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
     let out = unsafe {
         assign(
@@ -1432,10 +1438,25 @@ pub(crate) unsafe fn push_stats_text_on_row(
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
-    let settext: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let settext: unsafe extern "system" fn(usize, usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(PROFILE_SETTEXT_RVA, "PROFILE_SETTEXT_RVA") {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                CSSCALEFORMVALUE_DTOR_RVA,
+                "CSSCALEFORMVALUE_DTOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     // The binder fully constructs the out proxy without reading it (RE: assignComponentWithName
     // ctor-or-resolve paths both initialize before use); a zeroed buffer mirrors the native
     // uninitialized 0x70-byte stack slot with headroom. The name is a plain string (the binder
@@ -1534,8 +1555,14 @@ pub(crate) unsafe fn push_stats_text_on_resolved_field(
     label: &str,
     utf16: &[u16],
 ) -> bool {
-    let settext: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+    let settext: unsafe extern "system" fn(usize, usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(PROFILE_SETTEXT_RVA, "PROFILE_SETTEXT_RVA") {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let component_slot = field_proxy + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
     let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
     let comp_vt = if comp != 0 && comp != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -1620,10 +1647,28 @@ pub(crate) unsafe fn set_row_field_visible(
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let set_visible: unsafe extern "system" fn(usize, u8) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_PRESS_START_SET_VISIBLE_RVA,
+                "TITLE_PRESS_START_SET_VISIBLE_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                CSSCALEFORMVALUE_DTOR_RVA,
+                "CSSCALEFORMVALUE_DTOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
     let out = unsafe {
         assign(

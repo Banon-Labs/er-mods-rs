@@ -355,6 +355,18 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # confirmed to go red against a deliberately broken implementation.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hook --lib
 
+# THE 1.17 UNGATED-ADDRESS RATCHET. `er_game_base::game_build` translates or REFUSES a known 1.16.2
+# address on the running build, and `er-hook`'s `MhHook::new` routes detours through it -- so a hook
+# on a function the patch moved fails loudly instead of corrupting the image. That protection only
+# covers addresses that go through it, and a hand-built `transmute(base + SOME_RVA)` does not: it
+# calls the 1.16.2 address on 1.17 with nothing to refuse it, EVEN WHEN the map already knows where
+# that function went. This counts those per cdylib and fails when a count RISES.
+#
+# The property worth protecting most: 0 ungated WRITEs across all 27 cdylibs, so no DLL can corrupt
+# the 1.17 image with a stale address. Measured 2026-08-29; this is what keeps it true.
+python3 "$repo_root/scripts/audit-1170-readiness.py" --selftest
+python3 "$repo_root/scripts/audit-1170-readiness.py" --check
+
 # er-game-base: the shared re-entrancy latch and the bounded wait helpers. Both are load-bearing
 # for whether the game SURVIVES, not for what it computes -- `wait::poll_until` is what stops an
 # unbounded `yield_now` spin from starving the serializing wineserver, and `reentry::ReentryLatch`

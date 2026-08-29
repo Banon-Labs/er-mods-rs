@@ -42,7 +42,7 @@ unsafe fn product_profile_select_load_flow(owner: usize, base: usize, slot: i32,
     // until captured or the tick cap. Fail-open at the cap.
     if PORTRAIT_RENDER_WINDOW_DONE.load(Ordering::SeqCst) == 0 {
         let refresh: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+            unsafe { std::mem::transmute(match title_fn(PROFILE_RENDERER_REFRESH_RVA, "PROFILE_RENDERER_REFRESH_RVA") { Some(address) => address, None => return }) };
         unsafe { refresh() };
         if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
@@ -457,7 +457,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
             if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
                 let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
                 let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-                    unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+                    unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return }) };
                 let textfadeout =
                     unsafe { is_in_state(sm, module_base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) }
                         != OWN_STEPPER_FALSE;
@@ -736,7 +736,7 @@ pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
     if load_in_progress == TITLE_NATIVE_JOB_TASK_DATA_ZERO {
         // Re-arm each frame: persist the slot against the title's reset, set latch.
         let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+            unsafe { std::mem::transmute(match title_fn(FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA, "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA") { Some(address) => address, None => return }) };
         unsafe { set_save_slot(slot) };
         unsafe {
             *((module_base + SELECTBOT_LOAD_GATE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;

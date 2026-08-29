@@ -423,8 +423,13 @@ pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
         if base == 0 || base == null || this == 0 || this == null {
             return;
         }
+        let Ok(settext_addr) =
+            er_game_base::mem::game_rva_named(PROFILE_SETTEXT_RVA as u32, "PROFILE_SETTEXT_RVA")
+        else {
+            return;
+        };
         let settext: unsafe extern "system" fn(usize, usize) =
-            unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+            unsafe { std::mem::transmute(settext_addr) };
         let empty = [0u16; 1];
         unsafe {
             settext(

@@ -1,3 +1,15 @@
+
+/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function.
+///
+/// The title flow's calls were hand-built `base + rva` function pointers. On ELDEN RING 1.17 that
+/// transfers control into whatever now occupies the 1.16.2 address, with nothing to refuse it --
+/// and a MAPPED constant is no safer that way, because the map knows the new address and
+/// `base + rva` never asks it. `CS::CSFadeImp`-adjacent title code is exactly where the 1.17 boot
+/// fault lives, so refusing here is worth a dead title feature.
+#[cfg(windows)]
+pub(crate) fn title_fn(rva: usize, what: &'static str) -> Option<usize> {
+    er_game_base::mem::game_rva_named(rva as u32, what).ok()
+}
 // ---------------------------------------------------------------------------
 // NATIVE-LOAD gate (observe-only own_stepper; corrected-autoload-design-observe-not-force-native-load-2026).
 // A SEPARATE gate from own_stepper: when enabled, the idx10 handler does NOT force the title

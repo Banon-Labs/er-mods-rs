@@ -58,8 +58,17 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
         if let Some(target) = er_quit_menu_core::profile_rows::preview_cursor_slot(mask as u32) {
             SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_SLOT.store(target, Ordering::SeqCst);
         }
-        let refresh: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        let refresh: unsafe extern "system" fn() = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_RENDERER_REFRESH_RVA,
+                    "PROFILE_RENDERER_REFRESH_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return 0,
+                },
+            )
+        };
         unsafe { refresh() };
     }
     mask
@@ -118,9 +127,18 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
                 st.summary_snapshot.len(),
             );
         }
-        if let Ok(base) = game_module_base() {
-            let refresh: unsafe extern "system" fn() =
-                unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        if let Ok(_base) = game_module_base() {
+            let refresh: unsafe extern "system" fn() = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        PROFILE_RENDERER_REFRESH_RVA,
+                        "PROFILE_RENDERER_REFRESH_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { refresh() };
         }
         append_autoload_debug(format_args!(
@@ -616,8 +634,17 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // and it re-resolves the pool pointer itself on every call.
     unsafe { portrait_equip_oracle_sample(base, summary, target_slot) };
     {
-        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
-            unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
+            core::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_MARK_SLOT_USED_RVA,
+                    "PROFILE_MARK_SLOT_USED_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let mut kicked = 0u32;
         let mut kicked_mask = 0u32;
         for s in 0..10i32 {
@@ -673,8 +700,17 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     }
     if counter.is_multiple_of(240) || (feed_window && counter.is_multiple_of(8)) {
         let log_this = counter.is_multiple_of(240); // throttle the in-window feed log to once per 240
-        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
-            unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
+            core::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_MARK_SLOT_USED_RVA,
+                    "PROFILE_MARK_SLOT_USED_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let mut marked = 0u32;
         for s in 0..10i32 {
             // ONE SLOT (GX-overflow revert, user 2026-07-03): build ONLY the autoload target. Rendering
@@ -1099,16 +1135,17 @@ pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
         }
         if null_mask == PROFILE_TABLE_ALL_SLOTS_MASK
             && PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) != 0
+            && let Some(build_addr) =
+                crate::experiments::gated_game_fn(PROFILE_TABLE_BUILDER_RVA, "PROFILE_TABLE_BUILDER_RVA")
         {
-            let build: unsafe extern "system" fn() =
-                unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
+            let build: unsafe extern "system" fn() = unsafe { core::mem::transmute(build_addr) };
             unsafe { build() };
             let n = PROFILE_SELECT_TABLE_REPAIR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             let (revalid_mask, renull_mask) = scan_table(&mut ptrs);
             null_mask = renull_mask;
             append_crash_log(format_args!(
                 "PROFILESELECT-TABLE-REPAIR #{n}: fully-empty renderer table at native builder entry -> re-ran native table setup 0x{:x}; post-repair valid_mask=0x{revalid_mask:x} null_mask=0x{renull_mask:x} (er-effects-rs-j3r)",
-                base + PROFILE_TABLE_BUILDER_RVA
+                build_addr
             ));
             append_autoload_debug(format_args!(
                 "profileselect-table-repair #{n}: rebuilt empty 10-slot renderer table via native setup before the native builder walked it; post-repair valid_mask=0x{revalid_mask:x} (er-effects-rs-j3r)"
