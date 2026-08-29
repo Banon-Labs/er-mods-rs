@@ -148,7 +148,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         "  \"oracle_privacy_policy_gate\": {privacy_policy_gate},\n"
     ));
     // SPLASH-SKIP SEMAPHORE (splash-skip-correctness): the only failure mode of the BeginLogo logo
-    // skip is the je->jg branch flip at base+SPLASH_SKIP_RVA not being live (never applied, or
+    // skip is the je->jg branch flip inside STEP_BeginLogo not being live (never applied, or
     // reverted by Arxan / another mod). So read that .text byte directly each telemetry frame:
     //   jg (0x7f) = patch LIVE -> STEP_BeginLogo falls through past the ESRB/illegal-copy logo build
     //               (the logos are skipped, the title advances SetState(2)->(3) without them);
@@ -157,9 +157,8 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // apply_splash_skip runs at DLL attach (before the title runs state 2), so by the time telemetry
     // writes (at the title/menu) a live jg means the skip already executed this boot. This is the
     // in-process detector that was MISSING for "are we correctly skipping the splash screens".
-    if let Ok(base) = crate::experiments::game_module_base() {
-        let splash_byte =
-            unsafe { crate::experiments::safe_read_u8(base + crate::SPLASH_SKIP_RVA) }.unwrap_or(0);
+    if let Some(address) = er_title_flow::splash_skip_je_address() {
+        let splash_byte = unsafe { crate::experiments::safe_read_u8(address) }.unwrap_or(0);
         body.push_str(&format!(
             "  \"oracle_splash_skip_armed\": {},\n  \"oracle_splash_skip_patch_byte\": \"{:#x}\",\n",
             splash_byte == crate::SPLASH_SKIP_REPLACEMENT_JG,

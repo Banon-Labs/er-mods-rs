@@ -178,11 +178,47 @@ pub const INPUTMGR_PENDING_13C_OFFSET: usize = 0x13c;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const RENDER_PROBE_INTERVAL: usize = 120;
 /// Splash-skip static patch (ports chozandrias76/er-skip-splash-screens to 1.16.1):
-/// inside STEP_BeginLogo 0x140b0c2a0, the branch `cmp [rdi+0xb8],0; je 0x140b0c3b2`
-/// at RVA 0xb0c35d plays the logo when the byte is 0; flipping je(0x74)->jg(0x7f)
-/// falls through to the SetState(state 3) advance instead, skipping the logo via
-/// the game's own flow. Applied early (DLL attach) before the title runs state 2.
-pub const SPLASH_SKIP_RVA: usize = 0xb0c35d;
+/// inside `STEP_BeginLogo`, the branch `cmp [rdi+0xb8],0; je ...` plays the logo when the byte is
+/// 0; flipping je(0x74)->jg(0x7f) falls through to the SetState(state 3) advance instead, skipping
+/// the logo via the game's own flow. Applied early (DLL attach) before the title runs state 2.
+///
+/// # Why this is a function plus an offset and not one address
+///
+/// It used to be the single mid-function RVA `0xb0c35d`, and that address is UNMAPPABLE: the 1.17
+/// address gate is keyed on `.pdata` function starts, and a byte in the middle of a function is not
+/// one, so the selector in `scripts/select-needed-1170-rows.py` never saw it and the patch went out
+/// ungated. On 1.17 `0xb0c35d` holds `0x4a` -- the first displacement byte of a `lea` -- and writing
+/// `0x7f` there would have corrupted an unrelated instruction. Nothing was corrupted only because
+/// `apply_splash_skip` checks the opcode before it writes, and it logged
+/// `splash-skip: ABORT -- byte at 0x140b0c35d is 0x4a, expected 0x74` on 2026-08-29.
+///
+/// Naming the FUNCTION start makes the pair mappable, and the offset then rides along. The pair is
+/// corroborated three independent ways: the whole-image masked-signature map already carries
+/// `0xb0c2a0 -> 0xb0d940`; both functions are `0x294` bytes long in `.pdata`; and the byte at
+/// `+0xbd` is `0x74` in BOTH images behind the same `bf b8 00 00 00 00` prefix. The `+0x16a0` delta
+/// is the same one the `CS::TitleStep` vtable slots move by, so the whole region shifted together.
+pub const SPLASH_SKIP_FN_RVA: usize = 0xb0c2a0;
+/// Offset of the `je` within [`SPLASH_SKIP_FN_RVA`]. Same in 1.16.2 and 1.17.
+pub const SPLASH_SKIP_JE_OFFSET: usize = 0xbd;
+/// Address of the splash-skip `je`, for the running build, or `None` when this build has no
+/// verified `STEP_BeginLogo`.
+///
+/// Lives here, beside the constants, so the patcher and the telemetry oracle that reads the byte
+/// back can never disagree about which byte that is -- they used to compute `base + <mid-function
+/// RVA>` independently, which is two places to get the 1.17 move wrong instead of none.
+#[cfg(windows)]
+pub fn splash_skip_je_address() -> Option<usize> {
+    let base = er_game_base::mem::game_module_base().ok().filter(|&b| b != 0)?;
+    er_game_base::game_build::resolve_game_address(base + SPLASH_SKIP_FN_RVA, "SPLASH_SKIP_FN_RVA")
+        .map(|resolved| resolved + SPLASH_SKIP_JE_OFFSET)
+}
+
+/// Host builds have no game image to resolve against.
+#[cfg(not(windows))]
+pub fn splash_skip_je_address() -> Option<usize> {
+    None
+}
+
 pub const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub const SPLASH_PATCH_LEN: usize = 1;

@@ -294,24 +294,48 @@ descending a constant `0x12c0` each** -- every one a fresh top-level raise, our 
 already returned. The recursion is in Wine's exception dispatch. The latch stays as correct
 defensive code for a real hazard; it is not this bug.
 
-### The split
+### The split -- nine launches
 
 Each row is one launch of one `.me3` profile through `~/Elden/launch.sh -s`, watching
 `/proc/<pid>/stat` field 3 for the thread-group leader.
 
-| profile | DLLs | result |
-|---|---|---|
-| `control-quickload-only.me3` | sigshim + ersc + quickload | leader `Z`; CSFadeImp execute AV at +1.7s |
-| `control-quickload-noersc.me3` | quickload ALONE | **identical** fault, same address, same chain |
-| `control-telemetry-only.me3` | er_telemetry (6 crates) | boots clean, leader `R` at 38s |
-| `control-quitmenu-only.me3` | er_quit_menu (12 crates) | boots clean, leader `R` at 38s |
-| `control-loading-portrait-only.me3` | er_loading_portrait (11 crates) | process VANISHES ~4s after its first Present, and leaves NO crash record -- a SECOND, different 1.17 failure |
+| profile | crates | outcome | fault signature |
+|---|---|---|---|
+| sigshim + ersc + quickload | -- | leader `Z` | `0xc0000005` EXECUTE at `0x3cb67a0` (`CS::CSFadeImp`), +1.7s |
+| **er_quickload ALONE** | 23 | leader `Z` | **identical** -- same address, same chain |
+| er_telemetry | 6 | boots | -- |
+| er_quit_menu | 12 | boots | -- |
+| er_loading_bar | 5 | boots | -- |
+| er_save_picker | 9 | boots | -- |
+| er_save_disable | 4 | boots | -- |
+| er_loading_portrait | 11 | vanishes ~4s after its first Present | NO crash record at all |
+| er_armament_icons | 4 | vanishes ~+38s | `0xc000001d` ILLEGAL_INSTRUCTION at `game+0x32ee2b5`; 3 hooks correctly REFUSED by the gate first |
 
-So: Seamless Co-op 1.9.9 is exonerated. The shared base -- `er-game-base`, `er-hook`,
-`er-crash-logging-core`, `er-telemetry-core` -- is exonerated (er_telemetry links all of it and
-boots). The shared title/quit/save-picker feature crates are exonerated (er_quit_menu links them
-and boots). **The CSFadeImp fault belongs to a quickload-specific feature**, and er_loading_portrait
-has a separate problem of its own.
+**"Died" is not a usable signal on 1.17 -- the fault SIGNATURE is.** Three shells die and they die
+three different ways; only er_quickload produces the CSFadeImp execute fault. A bisect that scores
+rows as live/dead instead of comparing signatures would have convicted the wrong crate twice.
+
+Exonerated outright: Seamless Co-op 1.9.9; the shared base (`er-game-base`, `er-hook`,
+`er-crash-logging-core`, `er-telemetry-core` -- er_telemetry links all of it and boots); the shared
+title/quit feature crates (er_quit_menu); the Present hook (er_loading_bar hooks Present and boots,
+which kills the tempting 2x2 where both Present-hooking shells died); `er-save-redirect`
+(er_save_picker); `er-save-suppress` (er_save_disable). Also cleared by reading rather than
+running: quickload's own VMT-swap path, whose `swapchain_vtable_matches` demands an exact
+slot-8-and-22 match against addresses resolved from a dummy swapchain, and whose run log records
+`exact vtable match` -- it cannot have patched a CSFadeImp.
+
+### What is left, and why the shell axis is now exhausted
+
+Crate-set arithmetic (`cargo metadata` closures, dying minus living) leaves these carried by NO
+other cdylib, so no further profile can test them without editing quickload itself:
+
+    er-quickload (379 files of experiments)   er-title-flow      er-scaleform-hooks
+    er-boot-profiler                          er-tpf             er-profile-summary-core
+
+and three shared only with the OTHER dying shell, so unproven either way: `er-gfx`,
+`er-loading-portrait-core`, `erpx-rs`. (`er_armament_icons` carries er-gfx and does die -- but with
+a different signature, so it neither convicts nor clears it.) `CS::CSFadeImp` is title/fade
+machinery, which points at er-title-flow and er-scaleform-hooks first.
 
 ### Reading the evidence without being misled
 
@@ -343,3 +367,60 @@ one of 218 changed size, `0x140af7cf0 -> 0x140af9000` (`MOVEMAPSTEP_STEP_MOVEMAP
 verifier normalises away, so `IDENTICAL` is the right verdict and the 8 bytes are elsewhere in the
 tail. Worth re-running after any map regeneration -- a size change is the cheapest signal that a
 "verified same function" pair deserves a second look.
+
+## How much of the migration is actually left (2026-08-29)
+
+`367` `const *_RVA` declarations exist under `crates/`. `182` are mapped for 1.17. The other `185`
+break down like this -- and the shape of the split is the point, because only one bucket is the
+"the mapper could not find it" problem everyone assumes:
+
+| count | why it is unmapped |
+|---|---|
+| 141 | **not in `.text` at all** -- vtable, global or other `.data`/`.rdata` address. The gate is keyed on `.pdata` function starts, so these were never candidates. This is the silent-wrong-answer class. |
+| 29 | a real function start, but the masked-signature mapper found no unique pair |
+| 11 | **mid-function, and the containing function IS already mapped** -- mechanically fixable |
+| 4 | mid-function, containing function also unmapped |
+
+`er-title-flow` (38) and `er-loading-portrait-core` (30) hold the most unmapped constants after
+er-quickload (58) -- the same two crates that sit in the shells that die.
+
+### The eleven mechanical ones
+
+A mid-function address cannot be mapped, but the function that contains it can, and the offset
+within it survives the move. So the fix is to declare the FUNCTION as the `*_RVA` constant (which
+puts it in front of `scripts/select-needed-1170-rows.py`) and add the offset at the use site:
+
+| constant | 1.16.2 | containing fn -> 1.17 | offset |
+|---|---|---|---|
+| `TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA` | `0x744e02` | `0x744dd0` -> `0x745c20` | `+0x32` |
+| `TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA` | `0x7acbf0` | `0x7acb00` -> `0x7ad980` | `+0xf0` |
+| `TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA` | `0x7ad530` | `0x7ad1c0` -> `0x7ae040` | `+0x370` |
+| `GX_COMMAND_QUEUE_RVA` | `0x8012a8` | `0x8012a0` -> `0x802120` | `+0x8` |
+| `SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA` | `0x958a20` | `0x958910` -> `0x959ab0` | `+0x110` |
+| `SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA` | `0x958b37` | `0x958910` -> `0x959ab0` | `+0x227` |
+| `FREELIST_SHUTDOWN_ASSERT_RVA` | `0xc57670` | `0xc57666` -> `0xc58d36` | `+0xa` |
+| `GX_CMD_QUEUE_WRAPPER_RVA_MIN` | `0x1aea900` | `0x1aea880` -> `0x1aec680` | `+0x80` |
+
+(`SHOW_RVA`, `INVADE_ACTION_RVA` and `CANCEL_ACTION_RVA` also land in this bucket but their
+"containing function" maps to itself, which means they are not `eldenring.exe` RVAs at all -- check
+what module they are relative to before touching them.)
+
+### Worked example: `SPLASH_SKIP_RVA`, done
+
+It was `0xb0c35d`, a byte in the middle of `STEP_BeginLogo`, patched `je(0x74)` -> `jg(0x7f)` with a
+raw `VirtualProtect` + store that never went near the address gate. On 1.17 that byte is `0x4a` --
+the first displacement byte of a `lea` -- so the write would have corrupted an unrelated
+instruction in the title path. **It corrupted nothing only because `apply_splash_skip` compares the
+opcode before it writes**, and on 2026-08-29 it logged:
+
+    splash-skip: ABORT -- byte at 0x140b0c35d is 0x4a, expected 0x74
+
+That is the pattern to copy for every raw byte patch: a signature check makes a stale address a
+refusal instead of corruption. The address is now `SPLASH_SKIP_FN_RVA = 0xb0c2a0` plus
+`SPLASH_SKIP_JE_OFFSET = 0xbd`, resolved through `resolve_game_address`, with the resolver living in
+`er-title-flow` beside the constants so the patcher and the telemetry oracle that reads the byte
+back cannot disagree about which byte it is. The pair is corroborated four ways: the whole-image
+map already carried `0xb0c2a0 -> 0xb0d940`; both functions are `0x294` bytes in `.pdata`; the byte
+at `+0xbd` is `0x74` in both images behind the same `bf b8 00 00 00 00` prefix; and the verifier
+scores it `IDENTICAL 1.000 over 120 insns, BOTH-ENTRIES`. The `+0x16a0` delta is the same one the
+`CS::TitleStep` vtable slots move by, so the region shifted as a block.

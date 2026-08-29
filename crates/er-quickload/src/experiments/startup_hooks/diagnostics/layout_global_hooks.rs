@@ -177,16 +177,17 @@ pub(crate) fn install_menu_window_latch_hook() {
 /// the expected opcode first (aborts if the binary differs), and restores page
 /// protection after. Spawned early at DLL attach so it lands before state 2 runs.
 pub(crate) fn apply_splash_skip() {
-    let Ok(base) = game_module_base() else {
-        append_autoload_debug(format_args!("splash-skip: module base unavailable"));
+    let Some(address) = er_title_flow::splash_skip_je_address() else {
+        append_autoload_debug(format_args!(
+            "splash-skip: STEP_BeginLogo has no verified address for this build -- not patching"
+        ));
         return;
     };
-    let target = (base + SPLASH_SKIP_RVA) as *mut u8;
+    let target = address as *mut u8;
     let existing = unsafe { *target };
     if existing != SPLASH_SKIP_EXPECTED_JE {
         append_autoload_debug(format_args!(
-            "splash-skip: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{SPLASH_SKIP_EXPECTED_JE:x}",
-            base + SPLASH_SKIP_RVA
+            "splash-skip: ABORT -- byte at 0x{address:x} is 0x{existing:x}, expected 0x{SPLASH_SKIP_EXPECTED_JE:x}"
         ));
         return;
     }
@@ -214,8 +215,7 @@ pub(crate) fn apply_splash_skip() {
         )
     };
     append_autoload_debug(format_args!(
-        "splash-skip: patched 0x{:x} 0x{SPLASH_SKIP_EXPECTED_JE:x}->0x{SPLASH_SKIP_REPLACEMENT_JG:x}",
-        base + SPLASH_SKIP_RVA
+        "splash-skip: patched 0x{address:x} 0x{SPLASH_SKIP_EXPECTED_JE:x}->0x{SPLASH_SKIP_REPLACEMENT_JG:x}"
     ));
 }
 
