@@ -270,3 +270,76 @@ This is the part that cost the most, so it is written down rather than rediscove
   capture needs longer than that.
 * Under gdb the death is DELAYED, because every breakpoint trap slows the process down. An 80
   second window was not enough and 240 was.
+
+## Which DLL actually breaks: a five-profile split (2026-08-29)
+
+The boot death was being blamed on "the mod set". It is one DLL, and the crash log named the
+fault all along -- 216 `access-violation` lines of which exactly ONE matters:
+
+| | fault |
+|---|---|
+| 1 x | EXECUTE at `0x3cb67a0` -- a heap object whose vtable is game rva `0x2b6d728`, RTTI `CS::CSFadeImp` |
+| 215 x | identical NULL read at `ntdll+0x3969c`, `rsp` marching DOWN `0x1260` a line, `0x2fc50` -> `0x13a50` |
+
+4704 bytes a level against a 1 MiB stack is dead after ~220 levels, and `MAX_AV_LOG_LINES` is 256,
+so the line budget could never stop it. The thread then takes a SIGSEGV Wine cannot report --
+`virtual_setup_exception` needs stack to build the exception frame, has none, and calls
+`abort_thread` -- which is why the process died with no fatal record and no minidump.
+
+**The amplifier is NOT our handler re-entering itself.** That hypothesis was implemented
+(`er_game_base::reentry::ReentryLatch` on both `crash_vectored_handler`s) and falsified by its own
+oracle in one run: the descent reproduced exactly with `oracle_veh_reentrant_refusals = 0`. A gdb
+catch on `KiUserExceptionDispatcher` then counted **218 raises on the initial thread with `rsp`
+descending a constant `0x12c0` each** -- every one a fresh top-level raise, our previous invocation
+already returned. The recursion is in Wine's exception dispatch. The latch stays as correct
+defensive code for a real hazard; it is not this bug.
+
+### The split
+
+Each row is one launch of one `.me3` profile through `~/Elden/launch.sh -s`, watching
+`/proc/<pid>/stat` field 3 for the thread-group leader.
+
+| profile | DLLs | result |
+|---|---|---|
+| `control-quickload-only.me3` | sigshim + ersc + quickload | leader `Z`; CSFadeImp execute AV at +1.7s |
+| `control-quickload-noersc.me3` | quickload ALONE | **identical** fault, same address, same chain |
+| `control-telemetry-only.me3` | er_telemetry (6 crates) | boots clean, leader `R` at 38s |
+| `control-quitmenu-only.me3` | er_quit_menu (12 crates) | boots clean, leader `R` at 38s |
+| `control-loading-portrait-only.me3` | er_loading_portrait (11 crates) | process VANISHES ~4s after its first Present, and leaves NO crash record -- a SECOND, different 1.17 failure |
+
+So: Seamless Co-op 1.9.9 is exonerated. The shared base -- `er-game-base`, `er-hook`,
+`er-crash-logging-core`, `er-telemetry-core` -- is exonerated (er_telemetry links all of it and
+boots). The shared title/quit/save-picker feature crates are exonerated (er_quit_menu links them
+and boots). **The CSFadeImp fault belongs to a quickload-specific feature**, and er_loading_portrait
+has a separate problem of its own.
+
+### Reading the evidence without being misled
+
+* `modbt=[...]` in an `access-violation` line is a **stack SCAN**, not an unwind. It mixes dead
+  frames with live ones. Chasing its frame 0 here led to `eldenring.exe+0xb3d2e8`, whose preceding
+  call is a three-instruction atomic increment that cannot fault -- a stale frame. Do not chain it.
+* What IS trustworthy in that line: `raw=[...]` (the actual qwords at `rsp`), the `vt=` probe (feed
+  the rva to the RTTI reader below), and the register values.
+* Resolving a vtable rva to a class name, offline, in both images -- `vtable[-1]` is the
+  RTTICompleteObjectLocator, whose `pTypeDescriptor` rva + 16 is the mangled name:
+
+  ```python
+  col = struct.unpack_from('<Q', image, vt_rva - 8)[0] - 0x140000000
+  ptd = struct.unpack_from('<IIIII', image, col)[3]
+  name = image[ptd+16:ptd+16+120].split(b'\0')[0]
+  ```
+
+  This is how `0x2b6d728` was named `CS::CSFadeImp`, and it also proves the region MOVED: in 1.16.2
+  that same rva is not a vtable at all, and `0x2b63bb0` -- which the tree hard-codes as
+  `TITLE_OWNER_VTABLE_RVA` in three crates -- is `CS::TitleStep` in 1.16.2 and nothing in 1.17.
+  Those scans now silently find nothing. Read-only and fault-safe, so not a crash, but the features
+  behind them are dead until the constants are re-pointed.
+
+### Function lengths as a cheap map audit
+
+Comparing `.pdata` extents for every pair in `rva-map-1162-to-1170.needed-verified.tsv`: exactly
+one of 218 changed size, `0x140af7cf0 -> 0x140af9000` (`MOVEMAPSTEP_STEP_MOVEMAP_RVA`),
+`0x120b -> 0x1213`. Its first differing byte is a rip-relative displacement at +0x42, which the
+verifier normalises away, so `IDENTICAL` is the right verdict and the 8 bytes are elsewhere in the
+tail. Worth re-running after any map regeneration -- a size change is the cheapest signal that a
+"verified same function" pair deserves a second look.

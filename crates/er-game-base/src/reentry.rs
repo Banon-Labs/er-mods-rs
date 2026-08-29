@@ -116,7 +116,9 @@ mod tests {
     static TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serialize() -> std::sync::MutexGuard<'static, ()> {
-        TESTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn enter() -> Option<ReentryToken> {
