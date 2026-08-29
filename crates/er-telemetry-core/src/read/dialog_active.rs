@@ -270,7 +270,11 @@ fn scan_chunk(
 /// Only called on the throttle boundary while no active dialog is cached.
 fn scan_for_dialog(base: usize) -> Option<ActiveDialog> {
     let want_a = base.checked_add(MSGBOX_DIALOG_VTABLE_RVA)?;
-    let want_b = base.checked_add(SAVE_RETRY_DIALOG_VTABLE_RVA)?;
+    let want_b = er_game_base::mem::game_data_addr(
+        base,
+        SAVE_RETRY_DIALOG_VTABLE_RVA,
+        "SAVE_RETRY_DIALOG_VTABLE_RVA",
+    );
     let mut buf = vec![0u8; SCAN_CHUNK];
     let mut address: usize = 0;
     while address < SCAN_MAX {

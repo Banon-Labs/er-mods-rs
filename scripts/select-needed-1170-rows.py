@@ -31,6 +31,15 @@ from pathlib import Path
 
 BASE = 0x140000000
 CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9a-fA-F_]+)")
+# `pub const FOO_RVA: usize = SomeEnum::Variant as usize;` -- the value lives on the enum, not at
+# the declaration, so a `= 0x...` scan cannot see it. 37 constants are written this way and the
+# selector was blind to every one. It cost a black screen: TITLE_TOP_DIALOG_IS_IN_STATE_RVA
+# (`TitleDialogRva::IsInState = 0x749b20`) never reached the map, so the running game REFUSED it,
+# `title_dialog_state` could not tell whether the title had reached Loop, and the boot cover --
+# which releases on that observation -- never released. 37 `boot-view DECISION` lines, every one
+# `own_menu=false render_ready=false`, in front of a title screen that was rendering fine underneath.
+ALIAS = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(\w+)::(\w+)\s+as\s+usize")
+VARIANT = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9a-fA-F_]+)\s*,", re.M)
 # Names that describe a RANGE rather than an address. `AV_GAME_TEXT_RVA_MIN` is
 # 0x1000, which is where .text begins and therefore also where a function
 # begins -- so it pairs cleanly and means nothing. Translating a bound would be
@@ -45,14 +54,34 @@ OBSERVED = "docs/recon/rva-1170-observed-refusals.txt"
 
 
 def declared_rvas(repo: Path) -> dict[str, int]:
-    """Every `*_RVA` constant declared under crates/, by name."""
+    """Every `*_RVA` constant declared under crates/, by name.
+
+    Two declaration forms, and missing the second one is what let a refused address black-screen
+    the game: a literal `= 0x...`, and an alias onto an enum variant whose value lives elsewhere.
+    """
     out: dict[str, int] = {}
+    aliases: dict[str, tuple[str, str]] = {}
+    variants: dict[tuple[str, str], int] = {}
+    enum_of_variant: dict[str, int] = {}
     for path in sorted(repo.glob("crates/**/*.rs")):
         text = path.read_text(encoding="utf-8", errors="replace")
         for name, value in CONST.findall(text):
             if BOUND.search(name):
                 continue
             out.setdefault(name, int(value.replace("_", ""), 16))
+        for name, enum_name, variant in ALIAS.findall(text):
+            if not BOUND.search(name):
+                aliases.setdefault(name, (enum_name, variant))
+        for variant, value in VARIANT.findall(text):
+            # Variant names are matched without their enum -- the declaration and the enum body are
+            # routinely in different files, and a variant name is unique enough in practice. A
+            # collision would only ever re-point a constant the verifier then rejects.
+            enum_of_variant.setdefault(variant, int(value.replace("_", ""), 16))
+    del variants
+    for name, (_enum_name, variant) in aliases.items():
+        value = enum_of_variant.get(variant)
+        if value is not None:
+            out.setdefault(name, value)
     return out
 
 
@@ -160,6 +189,13 @@ def main() -> int:
         if len(names) < 50:
             failures.append(f"only {len(names)} *_RVA constants found; the scan is not seeing the sources")
         # The crash of 2026-08-29 is the case this must never silently drop.
+        # The alias form, asserted by the constant whose absence black-screened the game on
+        # 2026-08-29: `TITLE_TOP_DIALOG_IS_IN_STATE_RVA = TitleDialogRva::IsInState as usize`.
+        if names.get("TITLE_TOP_DIALOG_IS_IN_STATE_RVA") != 0x749B20:
+            failures.append(
+                "enum-alias constants are invisible again -- "
+                "TITLE_TOP_DIALOG_IS_IN_STATE_RVA did not resolve to 0x749b20"
+            )
         if names.get("GET_CURRENT_MAP_ID_RVA") != 0x5EEFB0:
             failures.append("GET_CURRENT_MAP_ID_RVA did not parse to 0x5eefb0")
         rows, _missing = select(args.repo)

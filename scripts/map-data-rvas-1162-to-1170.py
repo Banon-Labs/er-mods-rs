@@ -229,6 +229,14 @@ def rtti_confirms(old_image: bytes, new_image: bytes, src_rva: int, dst_rva: int
 
 
 CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9a-fA-F_]+)")
+# `pub const FOO_RVA: usize = SomeEnum::Variant as usize;` -- the value lives on the enum, so a
+# literal scan never sees it. SESSION_SINGLETON_144588E98_RVA is written this way, wrapped across
+# two lines, and its absence from this map stalled the 1.17 autoload at `session=0x0`: the title
+# owner was found, state 10/10, and core readiness then waited forever on a singleton whose
+# address had no 1.17 mapping. It maps cleanly once seen -- 0x4588e98 -> 0x458cf18, 28 agreeing
+# references -- so the only thing missing was the scanner looking for this spelling.
+ALIAS = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(\w+)::(\w+)\s+as\s+usize")
+VARIANT = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9a-fA-F_]+)\s*,", re.M)
 BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 DATA_MAP = "docs/recon/rva-map-1162-to-1170.data.tsv"
 
@@ -256,11 +264,22 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
     text_va, text_size = old.text
     done = already_mapped(repo)
     targets: dict[str, int] = {}
+    # Enum variant values first: an alias and its enum are routinely in different files.
+    enum_variants: dict[str, int] = {}
+    for path in sorted((repo / "crates").glob("**/*.rs")):
+        for variant, value in VARIANT.findall(path.read_text(encoding="utf-8", errors="replace")):
+            enum_variants.setdefault(variant, int(value.replace("_", ""), 16))
+
     for path in sorted(repo.glob("crates/**/*.rs")):
-        for name, value in CONST.findall(path.read_text(encoding="utf-8", errors="replace")):
+        source = path.read_text(encoding="utf-8", errors="replace")
+        literals = [(n, int(v.replace("_", ""), 16)) for n, v in CONST.findall(source)]
+        for n, _enum, variant in ALIAS.findall(source):
+            value = enum_variants.get(variant)
+            if value is not None:
+                literals.append((n, value))
+        for name, rva in literals:
             if BOUND.search(name):
                 continue
-            rva = int(value.replace("_", ""), 16)
             if rva in done:
                 continue
             # `.text` IS EXCLUDED, and the exclusion was tested rather than assumed.

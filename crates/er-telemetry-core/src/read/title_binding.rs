@@ -180,8 +180,13 @@ fn scan_chunk(
 /// Bounded, fault-safe full address-space walk for the title owner. Only called on
 /// the throttle boundary while the owner is not yet cached.
 fn scan_for_owner(base: usize) -> Option<usize> {
-    let want_vtable = base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
-    let want_table = base.checked_add(INNER_TITLE_STATE_TABLE_RVA)?;
+    let want_vtable =
+        er_game_base::mem::game_data_addr(base, TITLE_OWNER_VTABLE_RVA, "TITLE_OWNER_VTABLE_RVA");
+    let want_table = er_game_base::mem::game_data_addr(
+        base,
+        INNER_TITLE_STATE_TABLE_RVA,
+        "INNER_TITLE_STATE_TABLE_RVA",
+    );
     let mut buf = vec![0u8; SCAN_CHUNK];
     let mut address: usize = 0;
     while address < SCAN_MAX {

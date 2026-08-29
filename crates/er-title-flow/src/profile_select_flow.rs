@@ -802,7 +802,7 @@ pub unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
 }
 pub unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     TITLE_OWNER_SCAN_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
-    let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
+    let target_vtable = er_game_base::mem::game_data_addr(module_base, TITLE_OWNER_VTABLE_RVA, "TITLE_OWNER_VTABLE_RVA");
     let mut scan_buf = vec![MOVIE_SKIP_FLAG_CLEAR; SCAN_CHUNK_SIZE];
     let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
     while address < TITLE_OWNER_SCAN_MAX_ADDRESS {

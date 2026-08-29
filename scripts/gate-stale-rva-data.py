@@ -57,6 +57,15 @@ SITE = re.compile(
     r"(?P<base>\$?\b(?:base|module_base|image_base|game_base)\b)\s*\+\s*"
     r"(?P<prefix>(?:\w+::)*)(?P<const>[A-Z0-9_]*RVA[A-Z0-9_]*)\b"
 )
+# `base.checked_add(FOO_RVA)?` is the SAME hand-built address wearing a different costume, and the
+# `base + FOO_RVA` pattern walked straight past six of them. That gap black-screened the game on
+# 2026-08-29: `find_title_owner_by_vtable` ended up comparing a RESOLVED state table against a RAW
+# 1.16.2 vtable, so the scan could never match, the autoload waited forever for a title owner that
+# would never be found, and the boot cover -- which holds until the game's own loading screen
+# lights -- never released. A converter that covers one spelling of an idiom covers none of it.
+CHECKED_ADD_SITE = re.compile(
+    r"(?P<base>\b\w+)\.checked_add\(\s*(?P<prefix>(?:\w+::)*)(?P<const>[A-Z0-9_]*RVA[A-Z0-9_]*)\s*\)\?"
+)
 ALREADY_GATED = re.compile(r"game_data_addr|game_rva|resolve_game_address|game_ptr")
 # A HOOK TARGET must stay a raw `base + rva`: `MhHook::new` resolves it itself, through the DETOUR
 # resolver, which is a stricter test than the call one. Pre-resolving it does one of two bad
@@ -128,7 +137,7 @@ def rewrite(path: str, mapped: set[str], dry_run: bool) -> int:
             constant = match.group("prefix") + match.group("const")
             return f'{RESOLVER}({match.group("base")}, {constant}, "{match.group("const")}")'
 
-        out.append(SITE.sub(replace, line))
+        out.append(CHECKED_ADD_SITE.sub(replace, SITE.sub(replace, line)))
     if changed and not dry_run:
         open(path, "w", encoding="utf-8").write("".join(out))
     return changed
@@ -145,6 +154,9 @@ def selftest() -> int:
     match = SITE.search("if vt == $base + FOO_VTABLE_RVA {")
     if not match or match.group("base") != "$base":
         failures.append("SITE lost the `$` on a macro base -- the rewrite would not compile")
+    checked = CHECKED_ADD_SITE.search("let want = base.checked_add(FOO_VTABLE_RVA)?;")
+    if not checked or checked.group("const") != "FOO_VTABLE_RVA":
+        failures.append("CHECKED_ADD_SITE missed `base.checked_add(FOO_RVA)?` -- six such sites once black-screened the game")
     if not ALREADY_GATED.search("game_data_addr(base, FOO_RVA, \"FOO_RVA\")"):
         failures.append("ALREADY_GATED would rewrite an already-gated site twice")
     if not HOOK_TARGET.search("let hook = unsafe { MhHook::new(target as *mut c_void, detour) };"):
