@@ -68,6 +68,9 @@ SCRIPTS = REPO_ROOT / "scripts"
 LAUNCHER = Path.home() / "Elden" / "launch.sh"
 PROFILE_DIR = Path.home() / "Elden"
 AUTOLOAD_LOG_NAME = "er-quickload-autoload-debug.log"
+# me3's own stdout/stderr for the run, kept beside the run state. See the comment at the Popen
+# that writes it: this used to be DEVNULL, which cost a diagnosis.
+LAUNCHER_LOG_NAME = "me3-launcher.log"
 # The log above belongs to THIS DLL and no other. The sidecar-testimony contract is only
 # available when it is loaded, because it is the only shell that reads the sidecar at all.
 PRODUCT_DLL_NAME = "er_quickload.dll"
@@ -335,6 +338,7 @@ def running_block(context: dict) -> str:
             "                save the DLLs actually read."
         ),
         f"                re-check later: scripts/er-run-branch.py --status {context['run_id']}",
+        f"  me3 log       {context.get('launcher_log', '(not captured)')}",
         "  cleanup       automatic when the game exits; the next launch collects it otherwise.",
         "=======================================================",
         "```",
@@ -509,18 +513,28 @@ def launch(args) -> int:
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # Monotonic-free on purpose: compared against file mtimes, which are wall clock.
     launched_at = time.time()
+    # KEEP me3's OUTPUT. It used to go to DEVNULL, and on 2026-08-29 that was the difference
+    # between diagnosing a run and guessing at it: the game exited ~2.2s in with no coredump, no
+    # OOM, no fatal record and no exit-hook stamp -- meaning nothing faulted and something asked
+    # the process to stop. The only witness to that is me3's own stdout/stderr, and it was being
+    # thrown away. Discarding the loader's output on a probe whose entire purpose is evidence is
+    # a contradiction; this file is small, per-run, and reaped with the rest.
+    launcher_log = er_run_lib.RUN_STATE_ROOT / run_id / LAUNCHER_LOG_NAME
+    launcher_log.parent.mkdir(parents=True, exist_ok=True)
+    launcher_out = launcher_log.open("wb")
     process = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
         # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         env={**os.environ, "ME3_PROFILE": staged["profile"]},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=launcher_out,
+        stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
         start_new_session=True,  # survives this shell, and this agent turn
         cwd=str(REPO_ROOT),
     )
+    launcher_out.close()  # the child holds its own duplicate of the descriptor
     state.pid = process.pid
     state.save()
 
@@ -602,6 +616,7 @@ def launch(args) -> int:
                 "sidecar": staged["sidecar"],
                 "evidence_class": staged["evidence_class"],
                 "testimony": testimony["line"],
+                "launcher_log": str(launcher_log),
                 "witness": "weak" if testimony["status"] == "confirmed-weak" else "strong",
             }
         )
