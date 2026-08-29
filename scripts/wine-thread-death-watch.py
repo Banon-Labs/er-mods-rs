@@ -201,7 +201,36 @@ class MemReader:
 
     def __init__(self, pid: int):
         self.pid = pid
-        self.fd = os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+        self.fd = self._open_through_a_live_thread(pid)
+
+    @staticmethod
+    def _open_through_a_live_thread(pid: int) -> int:
+        """`/proc/<pid>/mem`, falling back to a live thread's when the LEADER is a zombie.
+
+        `/proc/<pid>/mem` IS `/proc/<pid>/task/<leader>/mem`, so once the thread-group leader
+        becomes a zombie that open fails with ESRCH -- while the process is alive and every other
+        thread is readable. This tool's whole subject is a game whose initial thread dies and
+        leaves ~60 threads running, i.e. exactly that state, and the failure was silent: it
+        printed "not readable ... Kernel/yama denies it for non-Proton processes" and disabled
+        stack scans, which reads as a permissions problem rather than "you asked the corpse".
+        Measured 2026-08-29.
+        """
+        try:
+            return os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+        except OSError:
+            pass
+        for task in sorted(glob.glob(f"/proc/{pid}/task/*")):
+            try:
+                with open(f"{task}/stat", encoding="utf-8") as handle:
+                    if handle.read().split()[2] == "Z":
+                        continue
+            except (OSError, IndexError):
+                continue
+            try:
+                return os.open(f"{task}/mem", os.O_RDONLY)
+            except OSError:
+                continue
+        raise OSError(f"no readable thread memory for pid {pid}")
 
     def read(self, addr: int, size: int) -> bytes:
         os.lseek(self.fd, addr, os.SEEK_SET)

@@ -48,6 +48,11 @@ IGNORED_FILES = {
     # contents -- and their deadlines are backstops, never the synchronisation.
     Path("scripts/frida-lobby-watch-members.py"),
     Path("scripts/frida-hunt-drive-query.py"),
+    # Stack sampler for a wedged game, same class as wine-thread-death-watch.py above: its
+    # `time.sleep` is the CPU SAMPLE PERIOD, and its stop condition is an observed state (the
+    # process flatlining, or its leader going Z), never a timer. There is no readiness primitive
+    # for "the game has stopped doing work" -- measuring whether it has IS the tool.
+    Path("scripts/er-wedge-stacks.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",

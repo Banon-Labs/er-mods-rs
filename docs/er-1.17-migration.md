@@ -177,3 +177,56 @@ say so.
    commit, once enough addresses are re-pointed that the gates are meaningful again.
 4. Re-validate the param/save data (#8, #9), which is the only part that can change what a player
    sees without any address being involved.
+
+## The wedge: er-quickload kills the game's main thread (open, 2026-08-29)
+
+The crash classes are closed -- the full eighteen-DLL profile loads with zero panics and three
+detour refusals -- and what is left is not a crash. With `er_quickload.dll` loaded, ELDEN RING
+1.17's **initial thread exits** a few seconds into boot. `/proc/<pid>/stat` shows the thread-group
+leader in state `Z` while ~81 workers stay alive and asleep, so the process lingers as a husk with
+a mapped window and ~0 CPU until it finally goes away. That husk is the "black screen".
+
+### What is measured, and what it rules out
+
+| profile | result |
+|---|---|
+| no natives at all | 112 threads, 784 CPU ticks/3s -- healthy |
+| `ersc.dll` + `er_ersc_sigshim` | 106 threads, ~350 ticks/3s -- healthy, so **Seamless is not it** |
+| the same plus `er_quickload.dll` | leader `Z`, workers idle -- **wedged** |
+
+Both healthy profiles and the wedged one were launched the same way, through `~/Elden/launch.sh`
+with hand-written profiles in `~/Elden/` (`control-no-natives.me3`, `control-ersc-only.me3`,
+`control-quickload-only.me3`). That matters: for eight runs every death was staged by
+`scripts/er-run-branch.py` and every survival came from `launch.sh`, so the launcher and the DLL
+set were changing together and neither could be blamed. The third profile broke the tie and
+exonerated the runner.
+
+### Six hypotheses, each falsified by its own launch -- do not re-test these
+
+1. the boot pump's foreign-thread self-present (`self_present_safe` forced false)
+2. the early foreign-thread window move (`apply_startup_window_final_geometry`)
+3. the swapchain VMT swap (`try_install_game_present_hook` made a no-op)
+4. our ~200 game-image detours (`DETOUR_SAFE_1162_TO_1170` emptied in `er-game-base/build.rs`)
+5. `er-crash-logging`'s vectored handler (excluded from the profile)
+6. `scripts/er-stale-run-sentinel.sh` -- its log records `killed=-` on every line; it never fired
+
+### The trap that cost four stack captures
+
+`/proc/<pid>/mem` **is** `/proc/<pid>/task/<leader>/mem`, so a zombie leader makes it unopenable:
+the open fails with `ESRCH` "No such process" while the process is alive and burning 195 ticks per
+three seconds. Read `/proc/<pid>/task/<live-tid>/mem` instead. Both
+`scripts/er-wedge-stacks.py` and `scripts/wine-thread-death-watch.py` now do, and the former
+prints the leader state as its headline so the state is never inferred from a failed read again.
+
+### Where it stands, and the next step
+
+`scripts/wine-thread-death-watch.py` caught the death: over its last 400 samples the initial
+thread was in state **R -- running in userspace -- for 368 of them**, CPU still climbing, and then
+it was gone. Not blocked, and no fatal record from the vectored handler in the runs that carried
+one. A thread that runs hot and then exits cleanly points at a deliberate thread termination, not
+a fault.
+
+Naming the site needs the tool's `--gdb` tier, which breaks on `NtTerminateThread` /
+`RtlExitUserThread` / `abort_thread`. Attaching after the fact cannot work -- gdb refuses a zombie
+-- and the thread dies within about six seconds of launch, which is too early to attach by hand.
+The way in is me3's `suspend` option: start the game suspended, attach, then resume.
