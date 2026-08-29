@@ -98,6 +98,75 @@ makes TO the address -- and passes 27/27 on that same known-good input while sti
 deliberate mid-function control. Calibrate a new check on data whose answer you already know
 before you point it at data you do not.
 
+## The sibling checkout is part of this migration, and git does not know it
+
+`eldenring::rva::get()` in `../fromsoftware-rs` resolves a `LazyLock<RvaBundle>`
+through `ERGameVersion::detect()`, and until 2026-08-29 that function accepted
+exactly two strings: `"2.6.2.0"` and `"2.6.2.1"`. The installed game is
+`2.7.0.0`, so it took the `.unwrap_or_else(|e| panic!("{e}"))` arm.
+
+That one line of data was the whole 1.17 boot death. **Eight** product DLLs --
+er-quickload, er-invasion-warp, er-inventory-sort, er-refill-all,
+er-charm-enemies, er-telemetry, er-invasion-path, er-net-effects -- each threw
+a `rust_panic` within five milliseconds of each other at
+`ms_since_install=869..898`, each on its own thread, each with an identical
+frame shape. The panic happens inside a `LazyLock`, on whichever thread first
+touches any singleton, so nothing logged the message and nothing named the
+DLL: the crash record says `cpp_throw_type=rust_panic` and stops. It cost
+eight game launches to find, and the shape of it -- "a companion DLL is
+involved, because er-quickload alone gets further" -- was a red herring
+produced by nothing more than which thread happened to touch a singleton
+first.
+
+The fix is three edits in the sibling checkout:
+
+| file | change |
+|---|---|
+| `crates/eldenring/mapper-profile.toml` | `title_step_state_table`'s pattern, see below |
+| `crates/eldenring/src/rva/rva_ww_270.rs` | new, generated, 96 RVAs |
+| `crates/eldenring/src/rva.rs` | `Ww270` variant accepting `(LANG_ID_EN, "2.7.0.0")` |
+
+Regenerate the bundle with the project's own generator rather than by diffing
+addresses. 62 of the 96 fields are vtables resolved by RTTI class name, which
+is version-independent and needs no work at all; the rest come from AOB
+patterns. For comparison, `scripts/map-rvas-1162-to-1170.py` resolved 2 of the
+first 5 code addresses -- byte-diffing is the wrong tool for a whole bundle.
+
+```bash
+cd ../fromsoftware-rs
+# `windows-future` cannot build for a Linux target at all, so the generator is
+# cross-compiled and run under wine rather than built natively.
+cargo xwin build --release -p binary-mapper --target x86_64-pc-windows-msvc
+WINEDEBUG=-all wine target/x86_64-pc-windows-msvc/release/binary-mapper.exe map \
+  --profile 'Z:\home\banon\projects\fromsoftware-rs\crates\eldenring\mapper-profile.toml' \
+  --exe 'Z:\home\banon\.local\share\Steam\steamapps\common\ELDEN RING\Game\eldenring.exe' \
+  --output rust
+```
+
+**Check every field for zero before believing the output.** `MapperProfilePattern::find`
+records a miss as RVA `0`, prints no warning, and `0` resolves at runtime to the
+PE header -- a silent wrong answer that looks like a successful generation.
+On the first 1.17 run exactly one field came back zero, `title_step_state_table`,
+because 1.17 emits a `nop` between the `call` and the vftable store that the
+pattern's fixed `[4]` skip could not cross. Two things about the replacement
+are worth keeping: the `mov byte [rdi+0xb8], 0` suffix is load-bearing, since
+without it fifteen sibling state-machine constructors match on both versions
+and `find` silently takes the first; and pelite 0.10's range skip `[4-5]`
+parses fine but does not match here, so the pattern uses an alternation
+`( 90 48 8d 05 | 48 8d 05 )` instead. The result is calibrated rather than
+fitted: on 2.6.2.0 the new pattern still yields `0x3d71580`, the value already
+checked in.
+
+`scripts/check-game-version-supported.py` is the gate that makes this
+discoverable without a game. It reads the PE product version off
+`eldenring.exe`, reads the accepted versions out of the sibling's `rva.rs`, and
+fails when they disagree -- printing the exact panic text the mismatch will
+produce. It skips, rather than fails, when either side is absent.
+
+None of the sibling's edits are tracked by this repository. A fresh clone of
+`fromsoftware-rs` reintroduces the boot death, and the gate above is what will
+say so.
+
 ## The order to do the rest in
 
 1. Capture a 1.17 runtime dump and stand up `ermaporch1170` (#1). Items 2, 4, 5 and 9 all reduce to

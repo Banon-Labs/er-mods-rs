@@ -199,6 +199,14 @@ python3 "$repo_root/scripts/check-hook-log-sink.py"
 # implementation of the entry check called 20 of those mid-function, and calibration is what
 # caught it.
 python3 "$repo_root/scripts/audit-1170-hook-targets.py" --selftest
+# THE VERSION GATE. On 2026-08-29 every product DLL died within a second of loading, and it took
+# eight game launches to find out why: `ERGameVersion::from_lang_version` in the sibling
+# fromsoftware-rs checkout accepted only "2.6.2.0" and "2.6.2.1", the game had become 2.7.0.0, and
+# `eldenring::rva::get()` therefore panicked inside a LazyLock on whichever thread first touched a
+# singleton -- surfacing as eight unattributed rust_panics with the message nowhere a human looks.
+# Both halves of that comparison are readable off the disk, so it never needed a game to catch.
+python3 "$repo_root/scripts/check-game-version-supported.py" --selftest
+python3 "$repo_root/scripts/check-game-version-supported.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/.githooks/pre-push"
