@@ -214,7 +214,17 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
         exe = _link(f"{entry}/exe")
         in_prefix = prefix in exe or prefix in _link(f"{entry}/cwd")
         by_appid = _has_appid(entry)
-        if not (by_appid or (comm in PREFIX_COMMS and in_prefix) or comm in LAUNCHER_COMMS):
+        # THE GAME ITSELF NEEDS NO CORROBORATION, and twice it has been missed for want of some.
+        # Launched through the Steam Linux Runtime the game's /proc/<pid>/exe and cwd are inside
+        # the bwrap container, not the prefix, and the appid env is not always readable -- so both
+        # of the other rules can be false for a process whose comm is literally `eldenring.exe`.
+        # Measured twice on 2026-08-29: `--status` reported "no eldenring.exe" while pid 829287
+        # (86 threads) sat there with a mapped 3068x1703 window on screen. There is one ELDEN RING
+        # on this machine; its name is enough.
+        by_name = comm == "eldenring.exe"
+        if not (
+            by_appid or by_name or (comm in PREFIX_COMMS and in_prefix) or comm in LAUNCHER_COMMS
+        ):
             continue
         # Hard exclusion, applied after classification so it cannot be reasoned around.
         if int(pid_text) in protected:
@@ -230,7 +240,11 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
                 "in_prefix": in_prefix,
                 # Which rule caught it, so a survey that misses something is diagnosable rather
                 # than merely short.
-                "matched_by": "appid" if by_appid else ("prefix" if in_prefix else "launcher"),
+                "matched_by": (
+                    "appid"
+                    if by_appid
+                    else ("name" if by_name else ("prefix" if in_prefix else "launcher"))
+                ),
                 "exe": exe.rsplit("/", 1)[-1],
             }
         )

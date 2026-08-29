@@ -22,6 +22,10 @@ pub mod fnv1a;
 /// question "is this the build these addresses came from" has to be answerable BEFORE a
 /// detour goes in -- see the module docs for the crash that motivated it.
 pub mod game_build;
+/// Tier A: does this process have a real, sized, top-level window yet? An overlay that installs
+/// its Present hook before the answer is yes can be handed a dead HWND and abort -- see the
+/// module for the two runs that died that way and the third that did not.
+pub mod game_window;
 /// Tier A: one blocking HTTPS GET over WinHTTP. Lives here rather than in the importer that
 /// first needed it because a second caller appeared -- the build watermark's release lookup --
 /// and a hand-declared WinHTTP ABI is exactly the kind of thing this crate exists to hold once.

@@ -801,6 +801,10 @@ mod windows_runtime {
     }
 
     fn install_player_name_filter(module: *mut c_void) {
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-player-name-filter", log_message);
         er_hook::set_hook_logger(log_message);
         let module_path = match module_path(module) {
             Ok(path) => path,

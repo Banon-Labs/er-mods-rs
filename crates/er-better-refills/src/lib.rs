@@ -107,6 +107,10 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
         // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-better-refills", log_message);
         er_hook::set_hook_logger(log_message);
         let module_base = module as usize;
         START.call_once(|| spawn_better_refills_task(module_base));

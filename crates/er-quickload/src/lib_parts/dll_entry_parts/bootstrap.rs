@@ -110,6 +110,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // Route the shared er-hook union/registry-collision logging to this DLL's autoload debug log --
     // the exact sink the union used before it moved into the er-hook crate. Installed here, before any
     // hook is registered, so no union-chain or collision line is ever missed.
+    // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+    // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+    // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+    er_game_base::panic_report::report_panics_to("er-quickload", crate::telemetry::append_autoload_debug);
     er_hook::set_hook_logger(crate::telemetry::append_autoload_debug);
     // Portrait crate split: wire the er-loading-portrait-core seam to the real product fns
     // BEFORE any hook install or task spawn can execute moved code (the crate's neutral

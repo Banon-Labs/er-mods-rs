@@ -142,6 +142,27 @@ pub fn claim_owner() -> bool {
     use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
     use windows::Win32::System::Threading::CreateMutexW;
 
+    // WAIT FOR THE GAME'S WINDOW FIRST, and do it here because this is the one function every
+    // would-be host calls -- er-build-watermark, er-net-effects and er-invasion-path all route
+    // their `Hudhook::apply()` through this claim, so the precondition belongs here rather than
+    // in three copies that can drift apart.
+    //
+    // hudhook builds its pipeline on the first Present it INTERCEPTS, and that starts with
+    // `GetClientRect(swap_chain.GetDesc().OutputWindow).unwrap()`. Hook Present before the game
+    // has a window and the first Present intercepted can carry an OutputWindow that is not a live
+    // window: GetClientRect returns 0x80070578, the unwrap panics, and a panic crossing an
+    // `extern "system"` callback is an abort.
+    //
+    // MEASURED 2026-08-29, in two different modules and therefore not a property of either:
+    // er_build_watermark died that way 229 ms after the first backbuffer draw, and with that shell
+    // excluded er_net_effects -- the next module to win this very claim -- died identically at
+    // +2060 ms. A third run of the same binaries did NOT die and reached a mapped window, which is
+    // what makes it a race against window creation, and what makes waiting the fix rather than a
+    // hope. The wait is bounded; a window that never appears costs a claim, not a process.
+    if !er_game_base::game_window::wait_for_process_window() {
+        return false;
+    }
+
     // SAFETY: a named-mutex creation with a static name; the handle is intentionally never closed.
     let Ok(_handle) = (unsafe { CreateMutexW(None, true, OWNER_MUTEX_NAME) }) else {
         return false;
