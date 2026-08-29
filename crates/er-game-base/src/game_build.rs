@@ -377,6 +377,82 @@ fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
     None
 }
 
+/// The address to DETOUR for `address` on the running build, or `None`.
+///
+/// # Why this is not [`resolve_game_address`]
+///
+/// Being the right address and being a safe place to write five bytes are different claims, and
+/// only one of them is established by matching a function's signature. `resolve_game_address`
+/// answers the first: it will happily return a pair carried by the whole-image `.pdata` map or
+/// by counting code references, which is exactly what a CALL or a READ needs. A detour needs the
+/// second as well -- that the destination is a real function ENTRY with a relocatable five-byte
+/// prologue -- and nothing in a signature match speaks to that.
+///
+/// MEASURED, 2026-08-29. When the weaker rows were allowed to carry detours, er-armament-icons
+/// installed five of them and the game died ~2.0s in, at the first overlay draw. Bisected over
+/// eighteen DLLs: adding that one DLL to an otherwise-surviving set was the difference. Before
+/// those rows existed the same five hooks were refused as unmapped and the game lived, so the
+/// regression arrived with the coverage.
+///
+/// To promote a row into this table, `scripts/audit-1170-hook-targets.py` has to accept it.
+#[cfg(windows)]
+pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
+    if !is_game_image_address(address) || is_supported_build() {
+        return Some(address);
+    }
+    let base = crate::mem::game_module_base().ok()?;
+    let rva = (address - base) as u32;
+    if DETOUR_SAFE_1162_TO_1170
+        .iter()
+        .any(|(from, moved)| *moved == rva && from != moved)
+    {
+        return Some(address);
+    }
+    if let Some((_, moved)) = DETOUR_SAFE_1162_TO_1170
+        .iter()
+        .find(|(from, _)| *from == rva)
+    {
+        let translated = base + *moved as usize;
+        address_log(format_args!(
+            "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
+             (byte-verified same function AND audited as a detour target)",
+            describe_build()
+        ));
+        return Some(translated);
+    }
+    // Say WHICH refusal this is. An address that resolves for a call but not for a detour is a
+    // different situation from one nothing can place, and conflating them sends the next reader
+    // hunting for a mapping that already exists.
+    let call_only = resolve_on_running_build_quiet(rva).is_some();
+    address_log(format_args!(
+        "ADDRESS REFUSED FOR DETOUR ({what}): 0x{address:x} -- {}, and {}",
+        describe_build(),
+        if call_only {
+            "while this address HAS a mapping good enough to call, it has not been audited as a \
+             detour target: a signature match does not say MinHook may write five bytes there"
+        } else {
+            "this address has no mapping at all for the running build"
+        }
+    ));
+    None
+}
+
+/// Host builds have no game to detour.
+#[cfg(not(windows))]
+pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
+    let _ = what;
+    Some(address)
+}
+
+/// Does `rva` have ANY mapping? Used only to word a refusal accurately; logs nothing.
+#[cfg(windows)]
+fn resolve_on_running_build_quiet(rva: u32) -> Option<u32> {
+    VERIFIED_1162_TO_1170
+        .iter()
+        .find(|(from, _)| *from == rva)
+        .map(|(_, moved)| *moved)
+}
+
 /// How many verified translations this build carries. Read by the product's startup line so a log
 /// says how much of the migration is actually present, rather than leaving it to be inferred.
 pub fn verified_translation_count() -> usize {

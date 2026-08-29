@@ -581,7 +581,9 @@ fn resolve_target(target: usize, what: &str) -> Option<usize> {
     // reachable as a direct CALL as it is as a detour, and one copy of the rule is the only way
     // both paths can agree. The hook log keeps its own line so a reader of the hook log is not
     // sent to a second file to find out that an address was moved.
-    let resolved = er_game_base::game_build::resolve_game_address(target, what);
+    // The DETOUR resolver, not the call one. A row good enough to call is not automatically a
+    // safe place for MinHook to write five bytes; see `resolve_detour_address`.
+    let resolved = er_game_base::game_build::resolve_detour_address(target, what);
     match resolved {
         Some(address) if address != target => {
             hook_log(format_args!(
