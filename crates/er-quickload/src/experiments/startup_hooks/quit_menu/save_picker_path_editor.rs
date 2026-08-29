@@ -938,7 +938,13 @@ unsafe fn submit_software_keyboard(
         unsafe { validator_dtor(validator_ptr) };
         return PathEditorSubmit::Rejected;
     };
-    let allocator = match unsafe { safe_read_usize(base + GLOBAL_MENU_HEAP_ALLOCATOR_RVA) } {
+    let allocator = match unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GLOBAL_MENU_HEAP_ALLOCATOR_RVA,
+            "GLOBAL_MENU_HEAP_ALLOCATOR_RVA",
+        ))
+    } {
         Some(allocator) if allocator != 0 && allocator != TITLE_OWNER_SCAN_START_ADDRESS => {
             allocator
         }

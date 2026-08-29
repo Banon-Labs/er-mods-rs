@@ -209,8 +209,14 @@ pub(crate) unsafe extern "system" fn title_flow_context_record_regulation_fix_ho
     } else {
         0
     };
-    let reg_manager =
-        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    let reg_manager = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GLOBAL_CS_REGULATION_MANAGER_RVA,
+            "GLOBAL_CS_REGULATION_MANAGER_RVA",
+        ))
+    }
+    .unwrap_or(0);
     let manager44 = if reg_manager > OWNER_CTX_MIN_PLAUSIBLE_PTR
         && reg_manager < OWNER_CTX_MAX_PLAUSIBLE_PTR
     {
@@ -380,7 +386,14 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     }
     let base = game_module_base().unwrap_or(null);
     let cs_menu_man = if base != null {
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null)
+        unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .unwrap_or(null)
     } else {
         null
     };

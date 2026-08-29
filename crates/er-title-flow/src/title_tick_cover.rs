@@ -118,7 +118,7 @@ pub fn auto_confirm_tap() {
         return;
     }
     let inputmgr =
-        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, SELECTBOT_INPUT_MANAGER_GLOBAL_RVA, "SELECTBOT_INPUT_MANAGER_GLOBAL_RVA")) }.unwrap_or(null);
     if inputmgr == null {
         return;
     }
@@ -179,7 +179,7 @@ pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     let table =
         unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
     let session =
-        unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }.unwrap_or(null);
+        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, SESSION_SINGLETON_144588E98_RVA, "SESSION_SINGLETON_144588E98_RVA")) }.unwrap_or(null);
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
     let dialog_vt = if dialog != null {
@@ -224,14 +224,14 @@ pub unsafe fn product_core_autoload_ready(
     let table =
         unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
     let session =
-        unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }.unwrap_or(null);
+        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, SESSION_SINGLETON_144588E98_RVA, "SESSION_SINGLETON_144588E98_RVA")) }.unwrap_or(null);
     let game_data_man = game_data_man_ptr_or_null();
     let profile_summary = if game_data_man != null {
         unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
     } else {
         null
     };
-    let iodev = unsafe { safe_read_usize(base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+    let iodev = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA")) }.unwrap_or(null);
     let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
@@ -503,7 +503,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let cfin = cmms
             .and_then(|m| unsafe { safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) })
             .unwrap_or(0xff);
-        let cmenu = unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }
+        let cmenu = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(module_base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
             .filter(|&m| m > 0x10000)
             .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
             .filter(|&d| d > 0x10000);
@@ -1260,7 +1260,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let ig_pnext = ig_ptr
             .and_then(|ig| unsafe { safe_read_i32(ig + INGAMESTEP_NEXT_STATE_OFFSET) })
             .unwrap_or(-1);
-        let menudata = unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }
+        let menudata = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(module_base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
             .filter(|&m| m > 0x10000)
             .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
             .filter(|&d| d > 0x10000);
@@ -1273,7 +1273,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .map(|b| b as i32)
             .unwrap_or(-1);
         let ending_force =
-            unsafe { safe_read_u8(module_base + ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA) }
+            unsafe { safe_read_u8(er_game_base::mem::game_data_addr(module_base, ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA, "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA")) }
                 .map(|b| b as i32)
                 .unwrap_or(-1);
         // Remaining cVar10 ending-request INPUTS read straight off GameMan (the load-in signals): 0xb7c,
@@ -1300,7 +1300,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .map(|b| b as i32)
             .unwrap_or(-1);
         let delay_delete =
-            unsafe { safe_read_usize(module_base + CS_DELAY_DELETE_MAN_GLOBAL_RVA) }.unwrap_or(0);
+            unsafe { safe_read_usize(er_game_base::mem::game_data_addr(module_base, CS_DELAY_DELETE_MAN_GLOBAL_RVA, "CS_DELAY_DELETE_MAN_GLOBAL_RVA")) }.unwrap_or(0);
         let dd40 = if delay_delete != null {
             unsafe { safe_read_i32(delay_delete + CS_DELAY_DELETE_PENDING_40_OFFSET) }.unwrap_or(-1)
         } else {
@@ -1497,7 +1497,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
             let warp_req = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
             if warp_req == 0
-                && let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
+                && let Some(md) = (unsafe { safe_read_usize(er_game_base::mem::game_data_addr(module_base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
                     .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
@@ -1846,7 +1846,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         if world_up && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING
         {
             let cs_menu_man =
-                unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null);
+                unsafe { safe_read_usize(er_game_base::mem::game_data_addr(module_base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }.unwrap_or(null);
             if cs_menu_man != null && unsafe { is_heap_aligned_ptr(cs_menu_man) } {
                 let dsm = (cs_menu_man + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) as *mut u8;
                 let prev = unsafe { core::ptr::read_volatile(dsm) };
@@ -2189,7 +2189,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .unwrap_or(TITLE_STATE_OWNER_GONE);
         let table =
             unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
-        let session = unsafe { safe_read_usize(module_base + SESSION_SINGLETON_144588E98_RVA) }
+        let session = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(module_base, SESSION_SINGLETON_144588E98_RVA, "SESSION_SINGLETON_144588E98_RVA")) }
             .unwrap_or(null);
         let game_data_man = game_data_man_ptr_or_null();
         let profile_summary = if game_data_man != null {
@@ -2198,7 +2198,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         } else {
             null
         };
-        let iodev = unsafe { safe_read_usize(module_base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+        let iodev = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(module_base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA")) }.unwrap_or(null);
         let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
         let dialog =
             unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);

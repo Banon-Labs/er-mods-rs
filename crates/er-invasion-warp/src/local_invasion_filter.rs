@@ -2194,7 +2194,13 @@ fn read_join_progress() -> Option<er_invasion_warp_core::join_progress::JoinProg
     };
 
     let base = er_game_base::mem::game_module_base().ok()?;
-    let manager = unsafe { er_game_base::mem::safe_read_usize(base + SESSION_MANAGER_GLOBAL_RVA) }?;
+    let manager = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SESSION_MANAGER_GLOBAL_RVA,
+            "SESSION_MANAGER_GLOBAL_RVA",
+        ))
+    }?;
     if manager == 0 {
         return None;
     }

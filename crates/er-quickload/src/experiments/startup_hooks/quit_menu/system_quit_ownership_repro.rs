@@ -8,7 +8,13 @@ use super::*;
 /// filling the GX command queue.
 pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
     let base = game_rva(0).ok()?;
-    let man = unsafe { safe_read_usize(base + DELAY_DELETE_MAN_SINGLETON_PTR_RVA) }?;
+    let man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            DELAY_DELETE_MAN_SINGLETON_PTR_RVA,
+            "DELAY_DELETE_MAN_SINGLETON_PTR_RVA",
+        ))
+    }?;
     if man < 0x10000 {
         return None;
     }
@@ -89,7 +95,14 @@ pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
     {
         return false;
     }
-    let man = unsafe { safe_read_usize(base + DELAY_DELETE_MAN_SINGLETON_PTR_RVA) }.unwrap_or(0);
+    let man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            DELAY_DELETE_MAN_SINGLETON_PTR_RVA,
+            "DELAY_DELETE_MAN_SINGLETON_PTR_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if man < 0x10000 {
         return false;
     }
@@ -891,7 +904,14 @@ pub(crate) fn install_system_quit_window_list_push_hook() {
 /// teardown (the world unload drops it); it stays resident through loads. Reproduces the game's own
 /// check (`GetParamResCap(repo, MenuOffscrRendParam, 0) == NULL`) read-only.
 pub(crate) unsafe fn menu_offscr_rend_param_table_absent(base: usize) -> bool {
-    let repo = unsafe { safe_read_usize(base + SOLO_PARAM_REPOSITORY_PTR_RVA) }.unwrap_or(0);
+    let repo = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SOLO_PARAM_REPOSITORY_PTR_RVA,
+            "SOLO_PARAM_REPOSITORY_PTR_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if repo == 0 {
         return false; // repo itself not up yet -> not the quit-teardown condition; forward.
     }

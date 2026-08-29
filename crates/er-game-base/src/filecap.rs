@@ -268,9 +268,14 @@ pub unsafe fn dlio_virtual_roots_summary(base: usize) -> String {
     if base == 0 {
         return String::from("<nobase>");
     }
-    let Some(manager) = (unsafe { safe_read_usize(base + DL_FILE_DEVICE_MANAGER_SINGLETON_RVA) })
-        .filter(|&v| v > PTR_SANITY_MIN)
-    else {
+    let Some(manager) = (unsafe {
+        safe_read_usize(crate::mem::game_data_addr(
+            base,
+            DL_FILE_DEVICE_MANAGER_SINGLETON_RVA,
+            "DL_FILE_DEVICE_MANAGER_SINGLETON_RVA",
+        ))
+    })
+    .filter(|&v| v > PTR_SANITY_MIN) else {
         return String::from("<mgrnull>");
     };
     let roots = manager + DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;

@@ -5,7 +5,7 @@
 # entry is a direct transfer of control to a 1.16.2 address on a build that moved the
 # code. Convert a site by resolving through er_game_base::mem::game_rva and handling
 # the Err, then re-run --refresh to record the smaller set.
-# Currently 159 sites in 35 files.
+# Currently 142 sites in 33 files.
 crates/er-armament-icons/src/hud_badge.rs	GET_GAITEM_INS_BY_HANDLE_RVA
 crates/er-armament-icons/src/hud_badge.rs	GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA
 crates/er-armament-icons/src/hud_badge.rs	GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA
@@ -33,23 +33,7 @@ crates/er-better-refills/src/lib.rs	TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA
 crates/er-better-refills/src/lib.rs	UPDATE_TROPHY_STATS_RVA
 crates/er-game-base/src/game_build.rs	RVA
 crates/er-input-harness/src/input_inject.rs	POPUP_SUBMIT_TOP_JOB_RVA
-crates/er-invasion-warp-core/src/msb_invasion_points.rs	CS_MSB_POINT_COMPUTE_POSITION_RVA
-crates/er-invasion-warp-core/src/msb_invasion_points.rs	CS_MSB_POINT_CTOR_RVA
-crates/er-invasion-warp-core/src/msb_invasion_points.rs	CS_MSB_POINT_DTOR_RVA
-crates/er-invasion-warp-core/src/msb_invasion_points.rs	CS_MSB_POINT_GET_ANGLE_RVA
-crates/er-invasion-warp-core/src/msb_invasion_points.rs	CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA
-crates/er-invasion-warp-core/src/msb_invasion_points.rs	GET_POINT_DATA_SECTION_ITEM_COUNT_RVA
-crates/er-invasion-warp-core/src/warp.rs	CHR_INS_GET_PHYSICS_POSITION_RVA
-crates/er-invasion-warp-core/src/warp.rs	CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA
-crates/er-invasion-warp-core/src/warp.rs	GET_CURRENT_MAP_ID_RVA
-crates/er-invasion-warp-core/src/warp.rs	GET_EXPLICIT_SPAWN_FLAG_RVA
-crates/er-invasion-warp-core/src/warp.rs	GET_EXPLICIT_SPAWN_RVA
-crates/er-invasion-warp-core/src/warp.rs	SETUP_MAP_REENTRY_RVA
-crates/er-invasion-warp-core/src/warp.rs	SET_DISABLE_MAP_ENTER_ANIM_RVA
-crates/er-invasion-warp-core/src/warp.rs	SET_EXPLICIT_SPAWN_RVA
-crates/er-invasion-warp-core/src/warp.rs	SET_INITIAL_AREA_ENTITY_ID_RVA
-crates/er-invasion-warp-core/src/warp.rs	SET_MOVE_MAP_STEP_BLOCK_ID_RVA
-crates/er-invasion-warp-core/src/warp.rs	WARP_NEXT_STAGE_KICK_RVA
+crates/er-invasion-warp-core/src/lib.rs	SOME_RVA
 crates/er-loading-portrait-core/src/lookat_bone_hooks.rs	PROFILE_ANIM_BIND_RVA
 crates/er-loading-portrait-core/src/lookat_bone_hooks.rs	PROFILE_DRAW_STEP_RVA
 crates/er-loading-portrait-core/src/lookat_bone_hooks.rs	PROFILE_FACEDATA_BUFFER_RVA
@@ -121,7 +105,6 @@ crates/er-quickload/src/experiments/startup_hooks/loading_cover/loading_cover_sa
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs	PROFILE_RENDERER_SET_STREAM_INDEX_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs	PROFILE_SUMMARY_RECORD_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs	PROFILE_TABLE_BUILDER_RVA
-crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs	CREATE_TPF_RESCAP_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs	FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs	MSGBOX_OK_HANDLER_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs	TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA

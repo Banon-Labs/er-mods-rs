@@ -397,7 +397,14 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             core::mem::offset_of!(DluidInputManagerLayout, input_active);
         const INPUT_ACTIVE: u8 = true as u8;
         const NULL_DLUID: usize = NULL_MODULE_BASE;
-        let dluid = unsafe { safe_read_usize(base + DLUID_SINGLETON_RVA) }.unwrap_or(NULL_DLUID);
+        let dluid = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                DLUID_SINGLETON_RVA,
+                "DLUID_SINGLETON_RVA",
+            ))
+        }
+        .unwrap_or(NULL_DLUID);
         // Defensive: only write once the flag byte is confirmed READABLE (so a
         // not-yet-initialized or bad singleton ptr can never fault the game thread).
         if dluid != NULL_DLUID

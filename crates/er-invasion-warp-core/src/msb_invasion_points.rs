@@ -477,8 +477,13 @@ mod native {
             // the player actually goes there.
             return None;
         }
-        let get_count: GetPointCountFn =
-            unsafe { core::mem::transmute(base + GET_POINT_DATA_SECTION_ITEM_COUNT_RVA) };
+        let get_count: GetPointCountFn = unsafe {
+            core::mem::transmute(crate::game_call(
+                base,
+                GET_POINT_DATA_SECTION_ITEM_COUNT_RVA,
+                "GET_POINT_DATA_SECTION_ITEM_COUNT_RVA",
+            )?)
+        };
         let count = unsafe { get_count(msb_res_cap, MSB_POINT_TYPE_INVASION_POINT) };
         if count > MAX_POINTS_PER_MAP {
             // NOT an answer. The doc above this constant says such a map "is skipped and reported",
@@ -497,14 +502,41 @@ mod native {
             });
         }
 
-        let ctor: MsbPointCtorFn = unsafe { core::mem::transmute(base + CS_MSB_POINT_CTOR_RVA) };
-        let dtor: MsbPointDtorFn = unsafe { core::mem::transmute(base + CS_MSB_POINT_DTOR_RVA) };
-        let has_no_shape_data: HasNoShapeDataFn =
-            unsafe { core::mem::transmute(base + CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA) };
-        let compute_position: OutVectorFn =
-            unsafe { core::mem::transmute(base + CS_MSB_POINT_COMPUTE_POSITION_RVA) };
-        let get_angle: OutVectorFn =
-            unsafe { core::mem::transmute(base + CS_MSB_POINT_GET_ANGLE_RVA) };
+        let ctor: MsbPointCtorFn = unsafe {
+            core::mem::transmute(crate::game_call(
+                base,
+                CS_MSB_POINT_CTOR_RVA,
+                "CS_MSB_POINT_CTOR_RVA",
+            )?)
+        };
+        let dtor: MsbPointDtorFn = unsafe {
+            core::mem::transmute(crate::game_call(
+                base,
+                CS_MSB_POINT_DTOR_RVA,
+                "CS_MSB_POINT_DTOR_RVA",
+            )?)
+        };
+        let has_no_shape_data: HasNoShapeDataFn = unsafe {
+            core::mem::transmute(crate::game_call(
+                base,
+                CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA,
+                "CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA",
+            )?)
+        };
+        let compute_position: OutVectorFn = unsafe {
+            core::mem::transmute(crate::game_call(
+                base,
+                CS_MSB_POINT_COMPUTE_POSITION_RVA,
+                "CS_MSB_POINT_COMPUTE_POSITION_RVA",
+            )?)
+        };
+        let get_angle: OutVectorFn = unsafe {
+            core::mem::transmute(crate::game_call(
+                base,
+                CS_MSB_POINT_GET_ANGLE_RVA,
+                "CS_MSB_POINT_GET_ANGLE_RVA",
+            )?)
+        };
 
         let mut points = Vec::with_capacity(count as usize);
         for index in 0..count {
@@ -565,9 +597,13 @@ mod native {
         let Ok(base) = er_game_base::mem::game_module_base() else {
             return Vec::new();
         };
-        let Some(field_area) =
-            (unsafe { er_game_base::mem::safe_read_usize(base + FIELD_AREA_PTR_RVA) })
-        else {
+        let Some(field_area) = (unsafe {
+            er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                FIELD_AREA_PTR_RVA,
+                "FIELD_AREA_PTR_RVA",
+            ))
+        }) else {
             return Vec::new();
         };
         if field_area < 0x1_0000 {

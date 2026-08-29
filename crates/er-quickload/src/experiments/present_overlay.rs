@@ -749,7 +749,19 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
         log_find_miss(stage);
         None
     };
-    let Some(ctx) = read_nn(base + G_GX_DRAW_CONTEXT_RVA) else {
+    // Resolved, not added. This is a 1.16.2 DATA address and every `.data` global moved on
+    // 1.17, so read raw it names some other object -- which is why the find reported
+    // `stage=1 candidate=0x0 vt_module=<none>` for 1200 consecutive tries: it never got past
+    // the ROOT. With the vanilla title surfaces hidden and no overlay able to draw, that is a
+    // black screen with a live process behind it. The carry is unusually well evidenced --
+    // 965 of 966 referencing sites agree on 0x47f33e0.
+    let Some(ctx_slot) = er_game_base::game_build::resolve_game_address(
+        base + G_GX_DRAW_CONTEXT_RVA,
+        "GX_DRAW_CONTEXT_RVA",
+    ) else {
+        return miss(FIND_STAGE_CTX_NULL);
+    };
+    let Some(ctx) = read_nn(ctx_slot) else {
         return miss(FIND_STAGE_CTX_NULL);
     };
     // Precise chain: output-vector begin -> entry[0] output object -> output[0] swapchain.

@@ -106,7 +106,7 @@ fn title_menu_window_id_flags(base: usize, window: usize) -> (usize, usize, bool
     if menu_id >= 0x47 {
         return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
     }
-    let cs_menu_man = unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+    let cs_menu_man = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
         .unwrap_or(NULL_PTR);
     if cs_menu_man == NULL_PTR {
         return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);

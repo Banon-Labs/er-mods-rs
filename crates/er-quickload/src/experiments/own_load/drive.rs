@@ -1153,7 +1153,14 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     }
     // The builder derefs the Steam interface (*0x143b48ff0) for the account id; bail (logging) if it
     // is null cold (Steam not live) rather than crashing.
-    let steam_iface = unsafe { safe_read_usize(base + STEAM_INTERFACE_GUARD_RVA) }.unwrap_or(null);
+    let steam_iface = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            STEAM_INTERFACE_GUARD_RVA,
+            "STEAM_INTERFACE_GUARD_RVA",
+        ))
+    }
+    .unwrap_or(null);
     if steam_iface == null || allocator == null {
         append_autoload_debug(format_args!(
             "own-load: SAVE-DIR build skipped steam_iface=0x{steam_iface:x} allocator=0x{allocator:x} (need both non-null) -- cannot locate .sl2"

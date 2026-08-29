@@ -325,8 +325,13 @@ unsafe fn read_slot(
 /// Game thread; `module_base` the loaded image base.
 unsafe fn worn_armament_handle(module_base: usize, slot: i32) -> Option<u32> {
     // Safety: fault-checked reads of the singleton slot and one offset inside it.
-    let world =
-        unsafe { er_game_base::mem::safe_read_usize(module_base + WORLD_CHR_MAN_GLOBAL_RVA) }?;
+    let world = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            module_base,
+            WORLD_CHR_MAN_GLOBAL_RVA,
+            "WORLD_CHR_MAN_GLOBAL_RVA",
+        ))
+    }?;
     if world == 0 {
         return None;
     }
@@ -430,8 +435,13 @@ impl WornArmament {
 pub unsafe fn worn_armament(module_base: usize, slot: i32) -> Option<WornArmament> {
     let player = {
         // Safety: a fault-checked read of the singleton slot and one offset inside it.
-        let world =
-            unsafe { er_game_base::mem::safe_read_usize(module_base + WORLD_CHR_MAN_GLOBAL_RVA) }?;
+        let world = unsafe {
+            er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                WORLD_CHR_MAN_GLOBAL_RVA,
+                "WORLD_CHR_MAN_GLOBAL_RVA",
+            ))
+        }?;
         if world == 0 {
             return None;
         }

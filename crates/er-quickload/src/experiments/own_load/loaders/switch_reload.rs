@@ -18,7 +18,14 @@ use super::*;
 pub(crate) unsafe fn own_load_reset_gaitem_singleton(base: usize) -> Option<(u32, u32, u32)> {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const RING_USABLE: u32 = (CSGAITEM_TABLE_CAPACITY as u32) - 1; // 0x13ff (one sentinel slot)
-    let gaitem = unsafe { safe_read_usize(base + GLOBAL_CSGAITEM_SINGLETON_RVA) }.unwrap_or(NULL);
+    let gaitem = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GLOBAL_CSGAITEM_SINGLETON_RVA,
+            "GLOBAL_CSGAITEM_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     if gaitem == NULL || !unsafe { is_heap_aligned_ptr(gaitem) } {
         append_autoload_debug(format_args!(
             "gaitem-reset: GLOBAL_CSGaitem not resident/aligned (0x{gaitem:x}) -- declining pristine-restore (no-op)"
@@ -454,8 +461,14 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
 /// fault-tolerant read failure. Pure reads.
 pub(crate) unsafe fn resolve_menu_system_save_load(base: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let gdm = unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }
-        .filter(|&v| v != null && v != 0)?;
+    let gdm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }
+    .filter(|&v| v != null && v != 0)?;
     unsafe { safe_read_usize(gdm + GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET) }
         .filter(|&v| v != null && v != 0)
 }
@@ -495,7 +508,13 @@ pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
     }
     // Native `FUN_14082d090` checks this singleton before comparing regulation versions; our readiness
     // predicate must not claim the title/load context is usable before the same singleton exists.
-    let regulation_manager =
-        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    let regulation_manager = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GLOBAL_CS_REGULATION_MANAGER_RVA,
+            "GLOBAL_CS_REGULATION_MANAGER_RVA",
+        ))
+    }
+    .unwrap_or(0);
     regulation_manager != 0 && regulation_manager != null
 }

@@ -169,16 +169,46 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
     }
     // Both repos non-null == graphics/repos initialized. Bail (retry next tick) if not ready yet; do
     // NOT consume any register attempt, so boot-time nulls never burn a slot.
-    let tpf_repo = unsafe { safe_read_usize(base + GLOBAL_TPF_REPOSITORY_RVA) }.unwrap_or(0);
+    // Resolved, not added. These are 1.16.2 DATA addresses and every `.data` global moved on
+    // 1.17; read raw, the pointer that comes back is whatever now occupies the old slot, and it
+    // went into `CreateTpfResCap` and divided by zero 894ms into boot. `safe_read_usize` cannot
+    // catch that -- the read SUCCEEDS, it is the answer that is wrong.
+    let Some(tpf_repo_slot) = er_game_base::game_build::resolve_game_address(
+        base + GLOBAL_TPF_REPOSITORY_RVA,
+        "GLOBAL_TPF_REPOSITORY_RVA",
+    ) else {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TPF_REPO_NULL, Ordering::SeqCst);
+        return;
+    };
+    let tpf_repo = unsafe { safe_read_usize(tpf_repo_slot) }.unwrap_or(0);
     if tpf_repo == 0 || tpf_repo == null {
         STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TPF_REPO_NULL, Ordering::SeqCst);
         return;
     }
-    let tex_repo = unsafe { safe_read_usize(base + GLOBAL_TEX_REPOSITORY_RVA) }.unwrap_or(0);
+    let Some(tex_repo_slot) = er_game_base::game_build::resolve_game_address(
+        base + GLOBAL_TEX_REPOSITORY_RVA,
+        "GLOBAL_TEX_REPOSITORY_RVA",
+    ) else {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TEX_REPO_NULL, Ordering::SeqCst);
+        return;
+    };
+    let tex_repo = unsafe { safe_read_usize(tex_repo_slot) }.unwrap_or(0);
     if tex_repo == 0 || tex_repo == null {
         STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TEX_REPO_NULL, Ordering::SeqCst);
         return;
     }
+    // MEASURED, 2026-08-29: called raw, this took the game down ~925ms after load. 0xb83680 is
+    // `CreateTpfResCap` on 1.16.2 and a different function on 1.17, which faulted reading
+    // [null+0x25] -- and the crash's own caller frames were 0xb83680 / 0xb836a0, naming the stale
+    // address outright. The translation exists (0xb83680 -> 0xb84d30), so resolving here does not
+    // cost the feature; it is what makes the feature work on this build at all.
+    let Some(create_rescap_address) = er_game_base::game_build::resolve_game_address(
+        base + CREATE_TPF_RESCAP_RVA,
+        "CREATE_TPF_RESCAP_RVA",
+    ) else {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_BASE_UNRESOLVED, Ordering::SeqCst);
+        return;
+    };
     let create_rescap: unsafe extern "system" fn(
         usize,
         *const u16,
@@ -186,7 +216,7 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
         u64,
         u8,
         u32,
-    ) -> usize = unsafe { std::mem::transmute(base + CREATE_TPF_RESCAP_RVA) };
+    ) -> usize = unsafe { std::mem::transmute(create_rescap_address) };
     for (slot, systex_key) in STATS_PANEL_SYSTEX_KEYS
         .iter()
         .enumerate()

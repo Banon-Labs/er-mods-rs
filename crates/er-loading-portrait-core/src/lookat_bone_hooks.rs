@@ -610,7 +610,14 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 // Fence check MUST come after the busy-flag store (Dekker order): the teardown
                 // either already sees us busy and is waiting (we bail out immediately), or it
                 // raised the fence first and we never touch the renderer this frame.
-                let cs_cloth = unsafe { safe_read_usize(base + CS_CLOTH_GLOBAL_RVA) }.unwrap_or(0);
+                let cs_cloth = unsafe {
+                    safe_read_usize(er_game_base::mem::game_data_addr(
+                        base,
+                        CS_CLOTH_GLOBAL_RVA,
+                        "CS_CLOTH_GLOBAL_RVA",
+                    ))
+                }
+                .unwrap_or(0);
                 if PROFILE_RENDERER_TEARDOWN_FENCE.load(Ordering::SeqCst) != 0 {
                     PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
                     PROFILE_DRIVE_FENCE_SKIPS.fetch_add(1, Ordering::SeqCst);
@@ -791,10 +798,15 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                         if PORTRAIT_ANIM_BOUND_RENDERER.load(Ordering::SeqCst) != r
                             || PORTRAIT_ANIM_BOUND_LOC.load(Ordering::SeqCst) != loc
                         {
-                            let sentinel =
-                                unsafe { safe_read_usize(base + PROFILE_ANIM_NULL_HANDLE_RVA) }
-                                    .unwrap_or(0)
-                                    & 0xffff_ffff;
+                            let sentinel = unsafe {
+                                safe_read_usize(er_game_base::mem::game_data_addr(
+                                    base,
+                                    PROFILE_ANIM_NULL_HANDLE_RVA,
+                                    "PROFILE_ANIM_NULL_HANDLE_RVA",
+                                ))
+                            }
+                            .unwrap_or(0)
+                                & 0xffff_ffff;
                             PORTRAIT_ANIM_SENTINEL.store(sentinel, Ordering::SeqCst);
                             let handle_at = |r: usize| {
                                 unsafe { safe_read_usize(r + PROFILE_ANIM_HANDLE_OFFSET) }

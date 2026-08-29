@@ -538,7 +538,13 @@ fn call_native_refill(source: &str) -> bool {
 #[cfg(windows)]
 unsafe fn resolve_player_game_data() -> Option<usize> {
     let base = GAME_BASE.load(Ordering::SeqCst);
-    let game_data_man = unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }?;
+    let game_data_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }?;
     unsafe { safe_read_usize(game_data_man + 0x8) }
         .filter(|&player_game_data| player_game_data != 0)
 }

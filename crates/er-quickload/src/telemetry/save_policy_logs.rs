@@ -62,13 +62,13 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         core::mem::offset_of!(IoDeviceSnapshotLayout, inflight);
     const IO_DEVICE_REQHANDLE_20_OFFSET: usize =
         core::mem::offset_of!(IoDeviceSnapshotLayout, request_handle);
-    let io_pool = unsafe { crate::experiments::safe_read_usize(base + FD4_IO_POOL_RVA) }
+    let io_pool = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_POOL_RVA, "FD4_IO_POOL_RVA")) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_worker_manager =
-        unsafe { crate::experiments::safe_read_usize(base + FD4_IO_WORKER_MANAGER_RVA) }
+        unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_WORKER_MANAGER_RVA, "FD4_IO_WORKER_MANAGER_RVA")) }
             .unwrap_or(NULL_POINTER_VALUE);
     let stream_task = crate::runtime_heap_allocator_ptr_or_null();
-    let io_device = unsafe { crate::experiments::safe_read_usize(base + IO_DEVICE_SINGLETON_RVA) }
+    let io_device = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, IO_DEVICE_SINGLETON_RVA, "IO_DEVICE_SINGLETON_RVA")) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_inflight = if io_device == NULL_POINTER_VALUE {
         None

@@ -116,8 +116,14 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         safe_read_usize(base + CONTINUE_MANAGER_GLOBAL_RVA + FULLREAD_OWNER_GDM_08_OFFSET)
     }
     .unwrap_or(null);
-    let manager_vtable =
-        unsafe { safe_read_usize(base + CONTINUE_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+    let manager_vtable = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CONTINUE_MANAGER_GLOBAL_RVA,
+            "CONTINUE_MANAGER_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(null);
     let game_data_man = game_data_man_ptr_or_null();
     let gdm8 = if game_data_man == null {
         null

@@ -400,9 +400,15 @@ fn input_trace_semaphores() -> TraceSem {
     };
     let base = game_module_base().unwrap_or(null);
     let menu_man = if base != null {
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
-            .filter(|mm| *mm != null)
-            .unwrap_or(null)
+        unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .filter(|mm| *mm != null)
+        .unwrap_or(null)
     } else {
         null
     };

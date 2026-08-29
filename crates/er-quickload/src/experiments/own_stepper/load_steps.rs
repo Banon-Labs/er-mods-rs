@@ -362,7 +362,14 @@ pub(crate) unsafe fn own_stepper_stage2(
     } else {
         OWN_STEPPER_B80_IDLE
     };
-    let iodev = unsafe { safe_read_usize(base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+    let iodev = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            IODEV_GLOBAL_RVA,
+            "IODEV_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(null);
     let (_io10, io18, io20) = if iodev != null {
         (
             unsafe { safe_read_usize(iodev + IODEV_INFLIGHT_10_OFFSET) }.unwrap_or(null),

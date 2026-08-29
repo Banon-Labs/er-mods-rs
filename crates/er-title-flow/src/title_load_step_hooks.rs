@@ -678,7 +678,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
         };
         let (md5d, md5e) = game_module_base()
             .ok()
-            .and_then(|base| unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) })
+            .and_then(|base| unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) })
             .filter(|&m| m > PAB_MIN_HEAP_PTR)
             .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
             .filter(|&m| m > PAB_MIN_HEAP_PTR)

@@ -2376,7 +2376,13 @@ fn read_save_state() -> Option<u32> {
     const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 
     let base = er_game_base::mem::game_module_base().ok()?;
-    let game_man = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }?;
+    let game_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }?;
     if game_man < 0x10000 {
         return None;
     }
@@ -2459,7 +2465,13 @@ fn read_quit_phase() -> Option<usize> {
     const GAME_MAN_QUIT_PHASE_BC4_OFFSET: usize = 0xbc4;
 
     let base = er_game_base::mem::game_module_base().ok()?;
-    let game_man = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }?;
+    let game_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }?;
     if game_man < 0x10000 {
         return None;
     }

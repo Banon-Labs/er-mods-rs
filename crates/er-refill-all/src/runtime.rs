@@ -415,7 +415,13 @@ const fn keyboard_edge(_chord: er_hotkey_config::keys::Chord, _was_down: &mut bo
 
 /// `GameDataMan -> mainPlayerGameData -> equipGameData.itemReplenishStateTracker`.
 unsafe fn resolve_tracker(base: usize) -> Option<usize> {
-    let game_data_man = unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }?;
+    let game_data_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }?;
     let player =
         unsafe { safe_read_usize(game_data_man + GAME_DATA_MAN_MAIN_PLAYER_GAME_DATA_OFFSET) }?;
     unsafe { safe_read_usize(player + PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET) }

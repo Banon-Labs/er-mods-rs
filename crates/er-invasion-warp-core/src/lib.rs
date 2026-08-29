@@ -46,6 +46,22 @@
 //! `eldenring-deobf.bin` (`python3 scripts/check-dump-deobf-identity.py <va>`); see
 //! `docs/plans/world-map-invasion-warp.md` for the evidence table.
 
+/// The address to call for a 1.16.2 `rva` on the RUNNING build, or `None` when there is none.
+///
+/// Every game call in this crate used to be a bare `transmute(base + SOME_RVA)`. On a build the
+/// RVAs were not derived against that is not a wrong answer, it is a dead process: on 1.17,
+/// `GET_CURRENT_MAP_ID_RVA` lands on the second byte of a five-byte `call`, and the `9a` there is
+/// a far call -- invalid in long mode, so #UD, so a game that died 491ms after load on
+/// 2026-08-29 with this crate's frames on the stack.
+///
+/// `resolve_game_address` hands back the address unchanged on the build the RVAs came from,
+/// translates it where a mapping exists, and refuses otherwise. Refusing costs a feature; calling
+/// costs the session.
+#[cfg(windows)]
+pub(crate) fn game_call(base: usize, rva: usize, what: &'static str) -> Option<usize> {
+    er_game_base::game_build::resolve_game_address(base + rva, what)
+}
+
 pub mod host;
 pub use host::*;
 

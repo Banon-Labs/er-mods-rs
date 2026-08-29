@@ -324,7 +324,14 @@ pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     if !valid(rtv) {
         return false;
     }
-    let gx = unsafe { safe_read_usize(base + GX_DRAW_CONTEXT_RVA) }.unwrap_or(0);
+    let gx = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GX_DRAW_CONTEXT_RVA,
+            "GX_DRAW_CONTEXT_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if !valid(gx) {
         return false;
     }

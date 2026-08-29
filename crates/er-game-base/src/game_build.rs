@@ -354,8 +354,9 @@ fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
     // the honest answer is to refuse -- which is how a correctly translated address got REFUSED on
     // its second pass through, costing `er-armament-icons` its file-open observer at 0x1411ced80.
     // The call graph no longer resolves twice; this makes a future double-resolve harmless rather
-    // than merely unlikely. Sound because no 1.17 value is also a 1.16.2 key -- the intersection is
-    // empty, and `verified_map_is_idempotent` fails the build's test run if that ever changes.
+    // than merely unlikely. Sound because the only addresses that are BOTH a 1.17 destination and
+    // a 1.16.2 source are the ones that did not move, where both answers are the same address;
+    // `verified_map_is_idempotent` fails the build's test run if a row ever makes that untrue.
     if VERIFIED_1162_TO_1170.iter().any(|(_, moved)| *moved == rva) {
         return Some(address);
     }
@@ -386,23 +387,52 @@ pub fn verified_translation_count() -> usize {
 mod tests {
     use super::VERIFIED_1162_TO_1170;
 
-    /// No 1.17 destination may also be a 1.16.2 source, or the "already translated" shortcut in
-    /// `resolve_game_address` would swallow a real translation. Empty today; asserted so that a
-    /// future row cannot make the shortcut silently wrong.
+    /// A 1.17 destination that is also a 1.16.2 source makes the "already translated" shortcut in
+    /// `resolve_game_address` swallow a real translation: the shortcut sees the address as a
+    /// destination and hands it back untouched, so the row that should have moved it never runs.
+    ///
+    /// An address that did NOT move between versions is the harmless case -- it appears on both
+    /// sides of its own row, and the shortcut returns exactly what translating it would return.
+    /// The whole-image function map contributes a number of those (ten at the time of writing),
+    /// and they are worth keeping rather than dropping: an absent row means REFUSE, so the
+    /// identity row is what records "confirmed still valid on 1.17" as distinct from "unknown".
+    ///
+    /// So the invariant is not that the intersection is empty; it is that everything in the
+    /// intersection maps to itself.
     #[test]
     fn verified_map_is_idempotent() {
-        let sources: Vec<u32> = VERIFIED_1162_TO_1170
+        let clashes: Vec<(u32, u32)> = VERIFIED_1162_TO_1170
             .iter()
-            .map(|(from, _)| *from)
-            .collect();
-        let clashes: Vec<u32> = VERIFIED_1162_TO_1170
-            .iter()
-            .map(|(_, moved)| *moved)
-            .filter(|moved| sources.contains(moved))
+            .filter(|(from, moved)| from != moved)
+            .filter(|(_, moved)| {
+                VERIFIED_1162_TO_1170
+                    .iter()
+                    .any(|(other, _)| other == moved)
+            })
+            .copied()
             .collect();
         assert!(
             clashes.is_empty(),
-            "a translated destination is also a source RVA: {clashes:#x?}"
+            "a translated destination is also the source of a DIFFERENT row, so the \
+             already-translated shortcut would swallow that row: {clashes:#x?}"
         );
+    }
+
+    /// The table has to be usable by the resolver's linear scans without a duplicate source
+    /// silently shadowing a later row. Two sources that agree would be harmless; two that
+    /// disagree would make the answer depend on row order.
+    #[test]
+    fn verified_map_has_one_answer_per_source() {
+        let mut seen: Vec<(u32, u32)> = Vec::new();
+        for (from, moved) in VERIFIED_1162_TO_1170 {
+            if let Some((_, first)) = seen.iter().find(|(other, _)| *other == from) {
+                assert_eq!(
+                    *first, moved,
+                    "0x{from:x} appears twice with different destinations"
+                );
+            } else {
+                seen.push((from, moved));
+            }
+        }
     }
 }

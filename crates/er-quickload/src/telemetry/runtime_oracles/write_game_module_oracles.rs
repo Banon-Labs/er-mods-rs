@@ -152,7 +152,7 @@ fn write_game_module_oracles(body: &mut String) {
                 "Finish",
             ];
             let state =
-                unsafe { crate::experiments::safe_read_usize(base + CS_SYSTEM_STEP_GLOBAL_RVA) }
+                unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, CS_SYSTEM_STEP_GLOBAL_RVA, "CS_SYSTEM_STEP_GLOBAL_RVA")) }
                     .filter(|p| *p >= 0x10000)
                     .and_then(|p| unsafe {
                         crate::experiments::safe_read_usize(p + CS_SYSTEM_STEP_CURRENT_STATE_OFFSET)
@@ -180,7 +180,7 @@ fn write_game_module_oracles(body: &mut String) {
         {
             const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
             let flipper =
-                unsafe { crate::experiments::safe_read_usize(base + CS_FLIPPER_SINGLETON_RVA) }
+                unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, CS_FLIPPER_SINGLETON_RVA, "CS_FLIPPER_SINGLETON_RVA")) }
                     .filter(|p| *p >= 0x10000)
                     .unwrap_or(NULL_PTR);
             let read_flip_f32 = |off: usize| -> f32 {
@@ -506,7 +506,7 @@ fn write_game_module_oracles(body: &mut String) {
         const NOW_LOADING_BYTE_MASK: usize = u8::MAX as usize;
         let now_loading = {
             let helper =
-                unsafe { crate::experiments::safe_read_usize(base + NOW_LOADING_SINGLETON_RVA) }
+                unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, NOW_LOADING_SINGLETON_RVA, "NOW_LOADING_SINGLETON_RVA")) }
                     .unwrap_or(NULL_PTR);
             if helper == NULL_PTR {
                 READ_FAIL_SENTINEL
@@ -518,7 +518,7 @@ fn write_game_module_oracles(body: &mut String) {
         const FAKE_LOADING_SCREEN_SINGLETON_RVA: usize =
             RuntimeGlobalRva::FakeLoadingScreenSingleton as usize;
         let fake_loading_screen = unsafe {
-            crate::experiments::safe_read_usize(base + FAKE_LOADING_SCREEN_SINGLETON_RVA)
+            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, FAKE_LOADING_SCREEN_SINGLETON_RVA, "FAKE_LOADING_SCREEN_SINGLETON_RVA"))
         }
         .unwrap_or(NULL_PTR);
         let fake_loading_visible = if fake_loading_screen == NULL_PTR {
@@ -558,13 +558,13 @@ fn write_game_module_oracles(body: &mut String) {
         const RENDMAN_SINGLETON_RVA: usize = RuntimeGlobalRva::RendManSingleton as usize;
         const CSGRAPHICS_SINGLETON_RVA: usize = RuntimeGlobalRva::CsGraphicsSingleton as usize;
         const CSSCALEFORM_SINGLETON_RVA: usize = RuntimeGlobalRva::CsScaleformSingleton as usize;
-        let rendman = unsafe { crate::experiments::safe_read_usize(base + RENDMAN_SINGLETON_RVA) }
+        let rendman = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, RENDMAN_SINGLETON_RVA, "RENDMAN_SINGLETON_RVA")) }
             .unwrap_or(NULL_PTR);
         let csgraphics =
-            unsafe { crate::experiments::safe_read_usize(base + CSGRAPHICS_SINGLETON_RVA) }
+            unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, CSGRAPHICS_SINGLETON_RVA, "CSGRAPHICS_SINGLETON_RVA")) }
                 .unwrap_or(NULL_PTR);
         let csscaleform =
-            unsafe { crate::experiments::safe_read_usize(base + CSSCALEFORM_SINGLETON_RVA) }
+            unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, CSSCALEFORM_SINGLETON_RVA, "CSSCALEFORM_SINGLETON_RVA")) }
                 .unwrap_or(NULL_PTR);
         let read_rend = |offset: usize| -> usize {
             if rendman == NULL_PTR {
@@ -2861,7 +2861,7 @@ fn write_game_module_oracles(body: &mut String) {
             const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d67a50;
             const RENDER_READ_FAIL: i64 = -1;
             const MIN_VALID_PTR: usize = 0x10000;
-            let gxdc = unsafe { crate::experiments::safe_read_usize(base + G_GX_DRAW_CONTEXT_RVA) }
+            let gxdc = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, G_GX_DRAW_CONTEXT_RVA, "G_GX_DRAW_CONTEXT_RVA")) }
                 .filter(|p| *p >= MIN_VALID_PTR)
                 .unwrap_or(NULL_PTR);
             let (out_span_bytes, out_count, out_capacity) = if gxdc == NULL_PTR {
@@ -2890,11 +2890,11 @@ fn write_game_module_oracles(body: &mut String) {
                 }
             };
             let distview =
-                unsafe { crate::experiments::safe_read_usize(base + GLOBAL_CS_DIST_VIEW_MANAGER_RVA) }
+                unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, GLOBAL_CS_DIST_VIEW_MANAGER_RVA, "GLOBAL_CS_DIST_VIEW_MANAGER_RVA")) }
                     .filter(|p| *p >= MIN_VALID_PTR)
                     .unwrap_or(NULL_PTR);
             let mapitemman =
-                unsafe { crate::experiments::safe_read_usize(base + GLOBAL_MAP_ITEM_MAN_RVA) }
+                unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, GLOBAL_MAP_ITEM_MAN_RVA, "GLOBAL_MAP_ITEM_MAN_RVA")) }
                     .filter(|p| *p >= MIN_VALID_PTR)
                     .unwrap_or(NULL_PTR);
             body.push_str(&format!(

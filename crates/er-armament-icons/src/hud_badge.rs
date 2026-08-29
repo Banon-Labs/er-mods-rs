@@ -354,7 +354,14 @@ fn hand_for_component(component: usize) -> Option<i32> {
 /// `PlayerIns`, or `None` before the world exists. Both hops are null-checked exactly as the
 /// game checks them.
 unsafe fn player_ins(base: usize) -> Option<usize> {
-    let world = unsafe { safe_read_usize(base + WORLD_CHR_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let world = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            WORLD_CHR_MAN_GLOBAL_RVA,
+            "WORLD_CHR_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if world == 0 {
         return None;
     }

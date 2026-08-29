@@ -50,7 +50,7 @@ pub unsafe fn dlc_root_entry_addr(base: usize) -> Option<usize> {
         }
         DLC_ROOT_ENTRY_ADDR.store(0, Ordering::SeqCst);
     }
-    let manager = unsafe { safe_read_usize(base + DL_FILE_DEVICE_MANAGER_SINGLETON_RVA) }
+    let manager = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, DL_FILE_DEVICE_MANAGER_SINGLETON_RVA, "DL_FILE_DEVICE_MANAGER_SINGLETON_RVA")) }
         .filter(|&v| v > 0x10000)?;
     let roots = manager + DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
     let start =
@@ -103,7 +103,7 @@ pub unsafe fn dlc_roots_self_heal_tick() {
         return;
     }
 
-    let csdlc = match unsafe { safe_read_usize(base + CSDLC_SINGLETON_RVA) } {
+    let csdlc = match unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CSDLC_SINGLETON_RVA, "CSDLC_SINGLETON_RVA")) } {
         Some(p) if p > 0x10000 => p,
         _ => return,
     };

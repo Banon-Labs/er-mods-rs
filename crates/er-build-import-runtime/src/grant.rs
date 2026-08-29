@@ -438,7 +438,13 @@ unsafe fn grant_armament(
     levels: &crate::catalog::ReinforceLevels,
 ) -> Option<ArmamentOutcome> {
     // Safety: a fault-checked read of one pointer-sized slot in the loaded image.
-    let gaitem = unsafe { er_game_base::mem::safe_read_usize(module_base + GLOBAL_CSGAITEM_RVA) }?;
+    let gaitem = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            module_base,
+            GLOBAL_CSGAITEM_RVA,
+            "GLOBAL_CSGAITEM_RVA",
+        ))
+    }?;
     if gaitem == 0 {
         return None;
     }

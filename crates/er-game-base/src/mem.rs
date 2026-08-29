@@ -43,13 +43,49 @@ pub fn game_module_base() -> Result<usize, String> {
 /// that ignores the error cannot call into whatever now occupies those bytes. Plain addition on
 /// the supported build, and for anything outside the game image.
 pub fn game_rva(rva: u32) -> Result<usize, String> {
+    game_rva_named(rva, "game_rva")
+}
+
+/// [`game_rva`], but the caller names the address so a refusal is attributable.
+///
+/// The unnamed form logged 57 refusals in one boot, every one of them as `game_rva`, which
+/// identified no feature and no constant. A refusal nobody can attribute is barely better than
+/// a silent one.
+pub fn game_rva_named(rva: u32, what: &'static str) -> Result<usize, String> {
     let raw = game_module_base()? + rva as usize;
-    crate::game_build::resolve_game_address(raw, "game_rva").ok_or_else(|| {
+    crate::game_build::resolve_game_address(raw, what).ok_or_else(|| {
         format!(
             "rva 0x{rva:x} has no verified mapping for the running build: {}",
             crate::game_build::describe_build()
         )
     })
+}
+
+/// `base + rva` for a READ, resolved for the running build -- or `0` when there is no mapping.
+///
+/// # Why zero rather than an error
+///
+/// The call sites this exists for are reads of game globals: `safe_read_usize(crate::mem::game_data_addr(base, FOO_RVA, "FOO_RVA"))`
+/// and friends, which are already fault-tolerant and already have a "this global is not there"
+/// path. Handing them address 0 puts a refusal down that existing path unchanged -- the read
+/// fails, the caller takes the branch it already had for a null global, and nothing new has to
+/// be decided at ~73 separate sites.
+///
+/// # Why reads needed this at all
+///
+/// A stale CALL announces itself: 1.16.2's `0x1405eefb0` is mid-instruction on 1.17 and the
+/// process dies immediately. A stale READ does not. Every `.data` global moved between the
+/// builds -- most by +0x4070, `runtime_heap_allocator` by +0x4080, `multiplay_properties` by
+/// +0x4000 -- so `safe_read_usize` SUCCEEDS and returns whatever now occupies the old slot. Two
+/// measured consequences: a garbage repository pointer reached `CreateTpfResCap`, which divided
+/// by zero 894ms into boot; and the swapchain find read a stale `GX_DRAW_CONTEXT_RVA` root, missed
+/// for 1200 consecutive tries, and left a live process behind a black screen.
+///
+/// NEVER use this for a call target. Zero is a safe address to fail a read at and a fatal one to
+/// jump to; call sites must take the `Option` from [`crate::game_build::resolve_game_address`]
+/// and decide what refusing means for them.
+pub fn game_data_addr(base: usize, rva: usize, what: &'static str) -> usize {
+    crate::game_build::resolve_game_address(base + rva, what).unwrap_or(0)
 }
 
 /// Cheap heap-pointer sanity check: above the low 64 KiB reserve and 8-byte aligned.

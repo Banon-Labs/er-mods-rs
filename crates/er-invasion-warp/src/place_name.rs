@@ -79,8 +79,13 @@ pub fn place_name_for_text_id(text_id: i32) -> Option<String> {
             return None;
         }
     }
-    let repository =
-        unsafe { er_game_base::mem::safe_read_usize(base + MSG_REPOSITORY_GLOBAL_RVA) }?;
+    let repository = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            MSG_REPOSITORY_GLOBAL_RVA,
+            "MSG_REPOSITORY_GLOBAL_RVA",
+        ))
+    }?;
     if repository == 0 {
         // Before the singleton exists the engine DLPanics on this path; we simply decline.
         return None;

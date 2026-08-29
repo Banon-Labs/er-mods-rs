@@ -1299,7 +1299,11 @@ fn boot_view_game_systems_submilestone() -> (&'static str, usize, usize) {
     let state = crate::experiments::game_module_base()
         .ok()
         .and_then(|base| unsafe {
-            crate::experiments::safe_read_usize(base + BOOT_SYS_STEP_GLOBAL_RVA)
+            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                BOOT_SYS_STEP_GLOBAL_RVA,
+                "BOOT_SYS_STEP_GLOBAL_RVA",
+            ))
         })
         .filter(|instance| *instance >= 0x10000)
         .and_then(|instance| unsafe {

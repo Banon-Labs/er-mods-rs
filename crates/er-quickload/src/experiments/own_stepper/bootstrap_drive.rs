@@ -138,9 +138,22 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // CSTaskImp/CSWindowImp/CSEzWork, and GameMan::WriteSaveToSlot derefs it as
         // `GLOBAL_MainHeapAllocator->_vfptr->AllocateAligned`. Renamed 2026-08-01.
         const SLLOADCONTENT_SRC_RVA: usize = 0x3d87358;
-        let src1 = unsafe { safe_read_usize(base + SLLOADCONTENT_SRC_RVA) }.unwrap_or(null);
-        let src2 =
-            unsafe { safe_read_usize(base + GLOBAL_MAIN_HEAP_ALLOCATOR_RVA) }.unwrap_or(null);
+        let src1 = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                SLLOADCONTENT_SRC_RVA,
+                "SLLOADCONTENT_SRC_RVA",
+            ))
+        }
+        .unwrap_or(null);
+        let src2 = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                GLOBAL_MAIN_HEAP_ALLOCATOR_RVA,
+                "GLOBAL_MAIN_HEAP_ALLOCATOR_RVA",
+            ))
+        }
+        .unwrap_or(null);
         let owner_probe = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
         let owner8 = if owner_probe != null {
             unsafe { safe_read_usize(owner_probe + 8) }.unwrap_or(null)
@@ -159,7 +172,14 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // This file had the identity right all along; `constants.rs` called the same address
         // an FD4 IO worker manager until 2026-08-01. Ghidra confirms this reading.
         const SLSYSTEMIMPL_PTR_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
-        let sysimpl = unsafe { safe_read_usize(base + SLSYSTEMIMPL_PTR_RVA) }.unwrap_or(null);
+        let sysimpl = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                SLSYSTEMIMPL_PTR_RVA,
+                "SLSYSTEMIMPL_PTR_RVA",
+            ))
+        }
+        .unwrap_or(null);
         let (sl_mgr, sl_tbl, sl_ready) = if sysimpl != null {
             let m = unsafe { safe_read_usize(sysimpl + 0x8) }.unwrap_or(null);
             let t = unsafe { safe_read_usize(sysimpl + 0x10) }.unwrap_or(null);
@@ -433,8 +453,14 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         }
         // Guard: the builder derefs the Steam interface (*0x143b48ff0) for the account id; skip the
         // call (logging the cause) if it is null cold -- that would be hypothesis-2 (Steam not live).
-        let steam_iface =
-            unsafe { safe_read_usize(base + STEAM_INTERFACE_GUARD_RVA) }.unwrap_or(null);
+        let steam_iface = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                STEAM_INTERFACE_GUARD_RVA,
+                "STEAM_INTERFACE_GUARD_RVA",
+            ))
+        }
+        .unwrap_or(null);
         if steam_iface != null && allocator != null {
             let builder: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(base + SAVE_DIR_BUILDER_RVA) };

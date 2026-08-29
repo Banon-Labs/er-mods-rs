@@ -249,8 +249,14 @@ fn apply_default_menu_sort_preferences_once(config: &RuntimeConfig) {
 }
 
 unsafe fn resolve_menu_system_save_load(base: usize) -> Option<usize> {
-    let gdm =
-        unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }.filter(|&value| value != 0)?;
+    let gdm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }
+    .filter(|&value| value != 0)?;
     unsafe { safe_read_usize(gdm + GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET) }
         .filter(|&value| value != 0)
 }

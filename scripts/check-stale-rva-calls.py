@@ -42,6 +42,20 @@ CALL_SITE = re.compile(
     r"transmute(?:::<[^>]*>)?\(\s*(?:base|module_base|game_base|image_base)\s*\+\s*"
     r"([A-Z0-9_]*RVA[A-Z0-9_]*)\s*\)"
 )
+# A game GLOBAL read through the same stale arithmetic. Added 2026-08-29, because counting only
+# the calls understated the exposure and the miss was expensive.
+#
+# Every `.data` global moved between 2.6.2.0 and 2.7.0.0 -- most by +0x4070, but not all, and
+# `cs_system_step` by a different amount than the neighbour eight bytes away, so no constant
+# delta rescues these. A stale read does not fault the way a stale call does; `safe_read_usize`
+# succeeds and returns whatever now lives there. `GLOBAL_TEX_REPOSITORY_RVA` read that way, and
+# the garbage pointer went into `CreateTpfResCap`, which divided by zero and took the game down
+# 894ms after load with a perfectly correct function address one frame up. Quieter than a stale
+# call, and harder to attribute for exactly that reason.
+READ_SITE = re.compile(
+    r"(?:safe_read_(?:usize|u64|u32|u16|u8|i32)|read_bytes)\(\s*"
+    r"(?:base|module_base|game_base|image_base)\s*\+\s*([A-Z0-9_]*RVA[A-Z0-9_]*)\s*[,)]"
+)
 
 
 def sites():
@@ -56,6 +70,8 @@ def sites():
             relative = os.path.relpath(path, ROOT)
             text = open(path, encoding="utf-8", errors="replace").read()
             for constant in CALL_SITE.findall(text):
+                found.add((relative, constant))
+            for constant in READ_SITE.findall(text):
                 found.add((relative, constant))
     return found
 

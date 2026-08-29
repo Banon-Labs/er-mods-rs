@@ -652,7 +652,14 @@ pub(crate) unsafe fn system_quit_menu_window_set_visible_and_flags(
     unsafe { dtor(scratch_ptr + 0x28) };
 
     let menu_id = unsafe { safe_read_u16(window + 0x180) }.unwrap_or(u16::MAX);
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     let mut flags_before = NULL;
     let mut flags_after = NULL;
     if menu_id < 0x47 && cs_menu_man >= HEAP_LO {
@@ -913,7 +920,14 @@ pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
 pub(crate) unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &str) -> i32 {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     if cs_menu_man < HEAP_LO {
         return -1;
     }
@@ -946,7 +960,14 @@ pub(crate) unsafe fn system_quit_force_return_title_bc4_ready(base: usize, sourc
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
-    let gm = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(NULL);
+    let gm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     if gm < HEAP_LO {
         return -1;
     }
@@ -977,8 +998,22 @@ pub(crate) unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     if !(n <= 8 || n.is_multiple_of(240)) {
         return;
     }
-    let force = unsafe { safe_read_u8(base + FORCE_LATCH_RVA) }.unwrap_or(0xff);
-    let gm = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(NULL);
+    let force = unsafe {
+        safe_read_u8(er_game_base::mem::game_data_addr(
+            base,
+            FORCE_LATCH_RVA,
+            "FORCE_LATCH_RVA",
+        ))
+    }
+    .unwrap_or(0xff);
+    let gm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     let (save_state, bc4) = if gm >= HEAP_LO {
         (
             unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
@@ -988,7 +1023,14 @@ pub(crate) unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     } else {
         (-1, -1)
     };
-    let csm = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let csm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     let sub = if csm >= HEAP_LO {
         unsafe { safe_read_usize(csm + 0x80) }.unwrap_or(NULL)
     } else {
@@ -1619,7 +1661,14 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     // OptionSetting MenuWindowJob::Run also fires during preload/hidden states; without this gate the
     // blank fired at +26s before the user could reproduce.
     let menu_id = unsafe { safe_read_u16(option_window + 0x180) }.unwrap_or(u16::MAX);
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(0);
     let flag = if menu_id < 0x47 && cs_menu_man >= OPTIONSETTING_WINDOW_MIN_PTR {
         unsafe { safe_read_u8(cs_menu_man + 0x90 + menu_id as usize) }.unwrap_or(0)
     } else {

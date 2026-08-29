@@ -1071,8 +1071,14 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // deferring OUR clear was inert). They are LEVEL flags nothing resets; left set on a
                 // resident world they re-request quit-to-title (bounce). Undo them at the clean-title
                 // Continue as before.
-                let menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
-                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+                let menu_man = unsafe {
+                    safe_read_usize(er_game_base::mem::game_data_addr(
+                        base,
+                        CS_MENU_MAN_GLOBAL_RVA,
+                        "CS_MENU_MAN_GLOBAL_RVA",
+                    ))
+                }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
                 if menu_man != TITLE_OWNER_SCAN_START_ADDRESS
                     && unsafe { is_heap_aligned_ptr(menu_man) }
                     && let Some(menu_data) =

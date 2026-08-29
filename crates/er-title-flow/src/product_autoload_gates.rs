@@ -390,7 +390,7 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     // set (subagent-C static RE: product native-open with this byte set reached the menu with 0 msgbox).
     // Null-/readability-guarded; no save write, no input. bd er-effects-rs-0ye + title-accept-to-registrar-narrow-path-143d5dea8.
     let transition_singleton =
-        unsafe { safe_read_usize(base + TITLE_MENU_TRANSITION_SINGLETON_RVA) }.unwrap_or(null);
+        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, TITLE_MENU_TRANSITION_SINGLETON_RVA, "TITLE_MENU_TRANSITION_SINGLETON_RVA")) }.unwrap_or(null);
     if transition_singleton != null && unsafe { safe_read_usize(transition_singleton) }.is_some() {
         unsafe { *(transition_singleton as *mut u8) = TITLE_MENU_TRANSITION_FLAG_SET_VALUE };
         append_autoload_debug(format_args!(
@@ -540,7 +540,7 @@ pub unsafe fn force_offline_connection_bytes(base: usize) {
     const IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
     const SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let game_man = unsafe { safe_read_usize(base + GAME_SAVE_SLOT_SINGLETON_RVA) }.unwrap_or(null);
+    let game_man = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, GAME_SAVE_SLOT_SINGLETON_RVA, "GAME_SAVE_SLOT_SINGLETON_RVA")) }.unwrap_or(null);
     if game_man == null {
         return;
     }
@@ -589,7 +589,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         return;
     }
     // Require "the rest of GameMan is set up": the GetSaveSlot singleton (*(base+0x3d69918)) non-null.
-    let gm_singleton = unsafe { safe_read_usize(base + GAME_SAVE_SLOT_SINGLETON_RVA) }.unwrap_or(0);
+    let gm_singleton = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, GAME_SAVE_SLOT_SINGLETON_RVA, "GAME_SAVE_SLOT_SINGLETON_RVA")) }.unwrap_or(0);
     if gm_singleton == null || gm_singleton == 0 {
         return;
     }
