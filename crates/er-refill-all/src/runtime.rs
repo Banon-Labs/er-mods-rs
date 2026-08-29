@@ -158,7 +158,11 @@ pub(crate) fn install(base: usize) {
         ),
         (
             "DepositoryDialog::dtor",
-            base + DEPOSITORY_DIALOG_DTOR_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                DEPOSITORY_DIALOG_DTOR_RVA,
+                "DEPOSITORY_DIALOG_DTOR_RVA",
+            ),
             depository_dtor_union as er_hook::UnionFn,
             &ORIG_DEPOSITORY_DTOR,
         ),
@@ -188,8 +192,16 @@ pub(crate) fn install(base: usize) {
     refill_log(format_args!(
         "install: gate = DepositoryDialog lifetime (ctor @0x{:x}, dtor @0x{:x}); \
          gamepad_hotkey={} hotkey={} refill_immediately={} config={}",
-        base + DEPOSITORY_DIALOG_CTOR_RVA,
-        base + DEPOSITORY_DIALOG_DTOR_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            DEPOSITORY_DIALOG_CTOR_RVA,
+            "DEPOSITORY_DIALOG_CTOR_RVA"
+        ),
+        er_game_base::mem::game_data_addr(
+            base,
+            DEPOSITORY_DIALOG_DTOR_RVA,
+            "DEPOSITORY_DIALOG_DTOR_RVA"
+        ),
         pad_chord_name(config.pad()),
         config
             .keyboard()

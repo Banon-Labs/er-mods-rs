@@ -689,7 +689,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         "fire-tfc-continue: SET *(tfc+0x{:x})=1 (was {before}) + mss+0x{:x}=slot {want_slot} (tfc=0x{tfc:x} dialog=0x{dialog:x} owner=0x{owner:x} mss={mss:?} gm_singleton=0x{gm_singleton:x}) -- now INVOKING selector 0x{:x} (NO input)",
         TFC_DISPATCH_STATE_14C_OFFSET,
         MSS_SAVE_SLOT_1200_OFFSET,
-        base + TITLE_CONTINUE_SELECTOR_RVA
+        er_game_base::mem::game_data_addr(base, TITLE_CONTINUE_SELECTOR_RVA, "TITLE_CONTINUE_SELECTOR_RVA")
     ));
     // INVOKE the Continue-item selector that consumes tfc+0x14c (it is NOT pumped from the idle menu).
     // Selector 0x1409a8eb0(rcx = &dialog_slot = owner+0xe0, rdx = out MenuJobResult*): reads
@@ -772,7 +772,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     let new_top = unsafe { safe_read_usize(dest) }.unwrap_or(0);
     append_autoload_debug(format_args!(
         "fire-tfc-continue: *** INSTALLED job=0x{job:x} into owner+0x130 (STEP_MenuJobWait active slot) via Assign 0x{:x} (tfc+0x18c was {nrf_before}->0; owner=0x{owner:x} dest=0x{dest:x} old_top=0x{old_top:x} new_top=0x{new_top:x} panicked={}) -- STEP_MenuJobWait should pump it IN CONTEXT. Watch oracle: c30 real, player present, now_loading ***",
-        base + MENU_JOB_ASSIGN3_RVA,
+        er_game_base::mem::game_data_addr(base, MENU_JOB_ASSIGN3_RVA, "MENU_JOB_ASSIGN3_RVA"),
         r.is_err()
     ));
 }

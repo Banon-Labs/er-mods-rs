@@ -1052,7 +1052,11 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
 
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
-        base + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
+            "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA"
+        ),
         base + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
     ));
     native_ret

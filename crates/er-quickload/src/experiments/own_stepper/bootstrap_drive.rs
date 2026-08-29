@@ -210,7 +210,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         unsafe { peek() };
         append_autoload_debug(format_args!(
             "cold-char-mount: slot-mgr peek 0x{:x}() -> set save-file path before mount (GameMan+0xe70 ready)",
-            base + SLOT_MGR_PEEK_RVA
+            er_game_base::mem::game_data_addr(base, SLOT_MGR_PEEK_RVA, "SLOT_MGR_PEEK_RVA")
         ));
         // (0) REFRAME (2026-06-18, REFRAME-io-subsystem-present-cold-blocker-is-just-the-active-byte):
         // the FD4 IO subsystem (pool/task/iodev) is ALREADY present + CLEAN cold (snapshot-proven).
@@ -337,7 +337,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let (dev40_after, dev30_after) = read_dev(iodev);
         append_autoload_debug(format_args!(
             "cold-char-mount: MOUNT 0x{:x}(iodev=0x{iodev:x}) al={mount_al} | registry=0x{registry:x} reg_count={reg_count} | dev40 {dev40_before}->{dev40_after} dev30 0x{dev30_before:x}->0x{dev30_after:x} (al=1 & dev40->nonzero = device bound; submit should now route to the BOUND read)",
-            base + IODEV_MOUNT_OPEN_RVA
+            er_game_base::mem::game_data_addr(base, IODEV_MOUNT_OPEN_RVA, "IODEV_MOUNT_OPEN_RVA")
         ));
         // WORKER-GATE diagnostic (b80-DEVICE-MOUNT-REFUTED-...). The read drops b80 2->0 in
         // ONE frame = the enqueue 0x14240e420 DISCARDS the request (no-op completion). Two

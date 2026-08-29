@@ -154,9 +154,12 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let seq_update_abs = module_base + SEQ_UPDATE_RVA;
-    let leaf_update_abs = module_base + LEAF_UPDATE_RVA;
-    let ifelse_update_abs = module_base + IFELSE_UPDATE_RVA;
-    let wrap_update_abs = module_base + WRAP_UPDATE_RVA;
+    let leaf_update_abs =
+        er_game_base::mem::game_data_addr(module_base, LEAF_UPDATE_RVA, "LEAF_UPDATE_RVA");
+    let ifelse_update_abs =
+        er_game_base::mem::game_data_addr(module_base, IFELSE_UPDATE_RVA, "IFELSE_UPDATE_RVA");
+    let wrap_update_abs =
+        er_game_base::mem::game_data_addr(module_base, WRAP_UPDATE_RVA, "WRAP_UPDATE_RVA");
 
     let e_lfanew = unsafe { safe_read_usize(module_base + PE_E_LFANEW_OFFSET) }
         .map(|v| v & PE_U32_MASK)

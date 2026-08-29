@@ -158,7 +158,8 @@ unsafe fn inspect_row_container(tag: &str, container: usize) {
         return;
     }
     let factory = base + DIALOG_FACTORY_RVA;
-    let confirm = base + CONTINUE_CONFIRM_RVA;
+    let confirm =
+        er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA");
     let begin = unsafe { safe_read_usize(container) }.unwrap_or(NULL);
     if begin == NULL {
         return;
@@ -878,8 +879,13 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     if continue_candidate {
         record_continue_candidate(item, accept_predicate, base);
     }
-    let semantic_continue_item =
-        continue_candidate && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+    let semantic_continue_item = continue_candidate
+        && accept_predicate
+            == er_game_base::mem::game_data_addr(
+                base,
+                MENU_ITEM_ACCEPT_NATIVE_RVA,
+                "MENU_ITEM_ACCEPT_NATIVE_RVA",
+            );
     if semantic_continue_item {
         MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
     }
@@ -969,7 +975,12 @@ pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
             MENU_WINDOW_JOB_VTABLE_RVA,
             "MENU_WINDOW_JOB_VTABLE_RVA",
         ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
-            && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+            && accept_predicate
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    MENU_ITEM_ACCEPT_NATIVE_RVA,
+                    "MENU_ITEM_ACCEPT_NATIVE_RVA",
+                );
     if semantic_continue_item {
         MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
         record_continue_candidate(item, accept_predicate, base);
@@ -1135,8 +1146,13 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
         if continue_candidate {
             record_continue_candidate(item, accept_predicate, base);
         }
-        let semantic_continue_item =
-            continue_candidate && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+        let semantic_continue_item = continue_candidate
+            && accept_predicate
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    MENU_ITEM_ACCEPT_NATIVE_RVA,
+                    "MENU_ITEM_ACCEPT_NATIVE_RVA",
+                );
         if semantic_continue_item {
             MENU_ITEM_UPDATE_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
         }

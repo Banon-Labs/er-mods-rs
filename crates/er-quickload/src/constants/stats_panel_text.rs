@@ -286,7 +286,7 @@ pub(crate) const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
 /// True when an about-to-be-called vtable slot is the pure-virtual trap, i.e. the object behind it
 /// has been destructed. Check this before EVERY indirect call through a resolved component.
 pub(crate) fn dispatch_target_is_purecall(target: usize, base: usize) -> bool {
-    target == base + PURECALL_RVA || target == base + PURECALL_CRASH_HANDLER_RVA
+    target == er_game_base::mem::game_data_addr(base, PURECALL_RVA, "PURECALL_RVA") || target == base + PURECALL_CRASH_HANDLER_RVA
 }
 /// Count of rows the hide was DRIVEN on because the row has no character -- i.e. the native setter
 /// was called for at least one of the three fields; pair it with `_NON_DISPLAY` below to know the

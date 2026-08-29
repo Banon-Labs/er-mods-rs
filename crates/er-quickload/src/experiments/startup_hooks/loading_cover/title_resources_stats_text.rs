@@ -1362,7 +1362,11 @@ unsafe fn row_child_gfx_value_type(base: usize, row_proxy: usize, name: &str) ->
     }
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => er_game_base::mem::game_data_addr(
+            base,
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ),
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
@@ -1434,7 +1438,11 @@ pub(crate) unsafe fn push_stats_text_on_row(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => er_game_base::mem::game_data_addr(
+            base,
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ),
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
@@ -1643,7 +1651,11 @@ pub(crate) unsafe fn set_row_field_visible(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => er_game_base::mem::game_data_addr(
+            base,
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ),
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };

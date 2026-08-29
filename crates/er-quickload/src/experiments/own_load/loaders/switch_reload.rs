@@ -159,7 +159,7 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     }
     append_autoload_debug(format_args!(
         "own-load-feed: parser 0x{:x}(slot={want_slot}) ret={pret} fed_bytes=0x{fed:x} c30 0x{c30_before:x}->0x{c30:x} c30_real={c30_real} ac0={ac0} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) ok={ok} (read-only deserialize; NO SetState5, NO save write)",
-        base + DESERIALIZE_SLOT_RVA
+        er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
     ok
 }
@@ -292,7 +292,11 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
     let b80 = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
     append_autoload_debug(format_args!(
         "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} ret={sret} b80={b80} -> DRAIN (replicating boot native-fullread residency before feed+continue_confirm)",
-        base + B80_FULL_LOAD_INITIATOR_RVA
+        er_game_base::mem::game_data_addr(
+            base,
+            B80_FULL_LOAD_INITIATOR_RVA,
+            "B80_FULL_LOAD_INITIATOR_RVA"
+        )
     ));
 }
 

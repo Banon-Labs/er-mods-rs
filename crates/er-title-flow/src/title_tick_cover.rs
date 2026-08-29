@@ -75,7 +75,7 @@ pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
         TFC_DRAIN_JOB.store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "tfc-drain: ExecuteMenuJob 0x{:x}(rcx=&job=0x{job:x}) PANICKED (caught) at tick {ticks} -> stop pumping",
-            base + EXECUTE_MENU_JOB_RVA
+            er_game_base::mem::game_data_addr(base, EXECUTE_MENU_JOB_RVA, "EXECUTE_MENU_JOB_RVA")
         ));
         return;
     }
@@ -300,7 +300,7 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
     if prev == 0 {
         append_autoload_debug(format_args!(
             "title-cover-part-a: hid 05_000_Title PressStart/StaticSystemText_101000 via SceneObjProxy visibility wrapper 0x{:x} dialog=0x{dialog:x} proxy=0x{proxy:x} context=0x{context:x}",
-            base + TITLE_PRESS_START_SET_VISIBLE_RVA,
+            er_game_base::mem::game_data_addr(base, TITLE_PRESS_START_SET_VISIBLE_RVA, "TITLE_PRESS_START_SET_VISIBLE_RVA"),
         ));
     }
 }

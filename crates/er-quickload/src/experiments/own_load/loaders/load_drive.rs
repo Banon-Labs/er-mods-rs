@@ -98,7 +98,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     }
     append_autoload_debug(format_args!(
         "own-load: VERIFY parser 0x{:x}(slot={want_slot}) ret={pret} fed_bytes=0x{fed:x} c30 0x{c30_before:x}->0x{c30:x} c30_real={c30_real} ac0={ac0} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) presses=0 (NO SetState5/NO save write)",
-        base + DESERIALIZE_SLOT_RVA
+        er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
     unsafe { dump_load_correctness(base, n) };
     // OWNER DIAGNOSTIC (er-effects-rs-mr2, save-safe pure reads): the prior continue crash used the
@@ -254,7 +254,7 @@ pub(crate) unsafe fn own_load_continue_fire(
     };
     append_autoload_debug(format_args!(
         "own-load-continue: *** GUARD PASS -- COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} title_owner=0x{title_owner:x}) c30=0x{c30:x} level={fp_level} title_owner+0x284=0 -- continue_confirm fires SetState5 internally (AUTOSAVES) presses=0 ***",
-        base + CONTINUE_CONFIRM_RVA
+        er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA")
     ));
     timeline_event(
         "T_own_load_continue",
@@ -349,7 +349,7 @@ unsafe fn own_load_install_job_fire(
     append_autoload_debug(format_args!(
         "own-load-install-job: BEFORE slot=owner+0x130=0x{slot_addr:x} job=0x{b_job:x} vt=0x{b_vt:x} (expect IfElseJob dump 0x{:x}) +0x68_built={b_built} +0x70_seq=0x{b_seq:x} +0x10_idx=0x{b_idx:x} -- BUILD 0x{:x}(out,ctx=0,slot={want_slot},owner_ctx=0) presses=0",
         MENUJOB_IFELSE_VTABLE_DUMP_VA,
-        base + LOADGAME_JOB_BUILD_RVA,
+        er_game_base::mem::game_data_addr(base, LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA"),
     ));
     // (a) BUILD the LoadGame MenuJobWithContext into a local DLRefCountPtr (the factory writes the job
     //     ptr into *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot, owner_ctx).
@@ -389,7 +389,7 @@ unsafe fn own_load_install_job_fire(
     append_autoload_debug(format_args!(
         "own-load-install-job: BUILD OK job=0x{built_job:x} vt=0x{built_vt:x} (expect LoadGame dump 0x{:x}) -- INSTALL via assign 0x{:x}(slot=0x{slot_addr:x}, src=&job)",
         MENUJOB_LOADGAME_VTABLE_DUMP_VA,
-        base + MENUJOB_ASSIGN_RVA,
+        er_game_base::mem::game_data_addr(base, MENUJOB_ASSIGN_RVA, "MENUJOB_ASSIGN_RVA"),
     ));
     // (b) APPEND our built job into the owner+0x130 MenuJobQueue via PushBackJob (NOT a slot-overwrite).
     //     owner+0x130 is a CS::MenuJobQueue (active job +0x130, ring +0x138, count +0x178). The prior
@@ -538,7 +538,7 @@ unsafe fn own_load_pump_fire(
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "own-load-pump: BUILD 0x{:x}(out, ctx_parent=dialog+0x{:x}=0x{ctx_parent:x}, slot={want_slot}, owner_ctx=*(dialog+0x{:x})=0x{owner_ctx:x}) dialog=0x{dialog:x} -- CORRECTED dialog-derived ctx (golden Continue args) presses=0",
-        base + LOADGAME_JOB_BUILD_RVA,
+        er_game_base::mem::game_data_addr(base, LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA"),
         DIALOG_CTX_PARENT_50_OFFSET,
         DIALOG_OWNER_CTX_A38_OFFSET,
     ));

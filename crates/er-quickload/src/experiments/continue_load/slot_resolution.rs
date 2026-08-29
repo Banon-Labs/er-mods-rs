@@ -259,7 +259,11 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             "native-fullread: SUBMIT slot={slot} b78={b78} (0x{:x} write) set_save_slot 0x{:x} ac0={ac0} submit 0x{:x} ret={sret} b80={b80} -> DRAIN",
             base,
             base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
-            base + B80_FULL_LOAD_INITIATOR_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                B80_FULL_LOAD_INITIATOR_RVA,
+                "B80_FULL_LOAD_INITIATOR_RVA"
+            )
         ));
         timeline_event(
             "T_fullread_submit",
@@ -490,7 +494,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         };
         append_autoload_debug(format_args!(
             "native-fullread: *** COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={level} owner+0x284={new_game_flag} -- SetState5 (AUTOSAVES) ***",
-            base + CONTINUE_CONFIRM_RVA
+            er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA")
         ));
         timeline_event(
             "T_fullread_confirm",

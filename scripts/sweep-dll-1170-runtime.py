@@ -86,8 +86,29 @@ path = '{dll}'
 """
 
 
+# Crate name is NOT the DLL name for every shell: `er-ags-stub` builds `amd_ags_x64.dll`, because
+# it has to be named what the game looks for. Assuming `crate.replace("-", "_")` reported it as
+# `not-built` and silently skipped it. The `[lib] name` in cargo metadata is the authority.
+_LIB_NAMES: dict[str, str] = {}
+
+
 def dll_path(crate: str) -> str:
-    return os.path.join(DLL_DIR, crate.replace("-", "_") + ".dll")
+    if not _LIB_NAMES:
+        try:
+            meta = json.loads(
+                subprocess.run(
+                    ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                    capture_output=True, text=True, cwd=REPO, check=True, timeout=30,
+                ).stdout
+            )
+            for package in meta["packages"]:
+                for target in package["targets"]:
+                    if "cdylib" in target["kind"]:
+                        _LIB_NAMES[package["name"]] = target["name"]
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    name = _LIB_NAMES.get(crate, crate.replace("-", "_"))
+    return os.path.join(DLL_DIR, name + ".dll")
 
 
 def game_pid() -> int | None:
@@ -241,6 +262,9 @@ def selftest() -> int:
     built = [c for c in cdylibs() if os.path.exists(dll_path(c))]
     if not built:
         failures.append("no built DLLs found -- run scripts/er-build-dlls.sh --all first")
+    # The one shell whose DLL name is not its crate name; if this regresses, so does the mapping.
+    if "er-ags-stub" in cdylibs() and not dll_path("er-ags-stub").endswith("amd_ags_x64.dll"):
+        failures.append("er-ags-stub did not resolve to amd_ags_x64.dll -- lib names are not being read")
     if DEFAULT_WATCH_SECONDS < 40:
         failures.append("watch window is shorter than the latest failure this sweep has seen")
     stamps = fingerprint(cdylibs())

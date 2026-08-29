@@ -5,6 +5,7 @@
 # entry is a direct transfer of control to a 1.16.2 address on a build that moved the
 # code. Convert a site by resolving through er_game_base::mem::game_rva and handling
 # the Err, then re-run --refresh to record the smaller set.
-# Currently 2 sites in 2 files.
+# Currently 3 sites in 3 files.
 crates/er-game-base/src/game_build.rs	RVA
 crates/er-invasion-warp-core/src/lib.rs	SOME_RVA
+crates/er-title-flow/src/dlc_roots_self_heal.rs	CSDLC_SINGLETON_RVA

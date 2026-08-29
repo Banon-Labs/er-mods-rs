@@ -1021,7 +1021,11 @@ mod windows_runtime {
         ));
         install_one(
             "SessionManagerPlayerEntryBase::Copy",
-            base + SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
+                "SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA",
+            ),
             SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
             &SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
             session_manager_player_entry_base_copy_hook as UnionFn,
@@ -1029,7 +1033,11 @@ mod windows_runtime {
         );
         install_one(
             "PlayerGameData::CopyChrName",
-            base + PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
+                "PLAYER_GAME_DATA_COPY_CHR_NAME_RVA",
+            ),
             PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
             &PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE,
             player_game_data_copy_chr_name_hook as UnionFn,
@@ -1037,7 +1045,11 @@ mod windows_runtime {
         );
         install_one(
             "GetPlayerChrName",
-            base + GET_PLAYER_CHR_NAME_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                GET_PLAYER_CHR_NAME_RVA,
+                "GET_PLAYER_CHR_NAME_RVA",
+            ),
             GET_PLAYER_CHR_NAME_RVA,
             &GET_PLAYER_CHR_NAME_PROLOGUE,
             get_player_chr_name_hook as UnionFn,

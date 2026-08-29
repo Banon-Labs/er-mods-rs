@@ -220,8 +220,16 @@ fn install_better_refills_hooks(base: usize) {
             log_message(format_args!(
                 "install: hooks ACTIVE SetItemReplenishState @0x{:x}, MoveMapStep::UpdatePlayerInfo @0x{:x}, OnEvent_BonfireFirstLvUp @0x{:x}; native refill rva=0x{REPLANISH_ITEMS_FROM_CHEST_RVA:x}",
                 base + SET_ITEM_REPLENISH_STATE_RVA,
-                base + MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA,
-                base + BONFIRE_FIRST_LVUP_RVA,
+                er_game_base::mem::game_data_addr(
+                    base,
+                    MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA,
+                    "MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA"
+                ),
+                er_game_base::mem::game_data_addr(
+                    base,
+                    BONFIRE_FIRST_LVUP_RVA,
+                    "BONFIRE_FIRST_LVUP_RVA"
+                ),
             ));
         }
         status => log_message(format_args!("install: MH_ApplyQueued failed: {status:?}")),

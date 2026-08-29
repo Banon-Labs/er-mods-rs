@@ -90,7 +90,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     let set_state: unsafe extern "system" fn(usize, usize) =
         unsafe { std::mem::transmute(match title_fn(TITLE_FD4_SETSTATE_RVA, "TITLE_FD4_SETSTATE_RVA") { Some(address) => address, None => return }) };
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    unsafe { set_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) };
+    unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
     append_autoload_debug(format_args!(
         "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop) via 0x{:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***",
         base + TITLE_FD4_SETSTATE_RVA

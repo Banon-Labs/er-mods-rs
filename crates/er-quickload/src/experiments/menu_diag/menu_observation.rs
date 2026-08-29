@@ -366,7 +366,8 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
         "titletop-entries: dialog=0x{dialog:x} menu=0x{menu:x} count={count} cursor={cursor} bound={bound} vec=[0x{vec_begin:x}..0x{vec_end:x}]"
     ));
     let factory_abs = base + DIALOG_FACTORY_RVA;
-    let confirm_abs = base + CONTINUE_CONFIRM_RVA;
+    let confirm_abs =
+        er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA");
     let continue_wrapper_abs = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
     // Decode a function/thunk address forward through up to JMP_HOPS jmp-thunks, reporting if it
     // reaches the Load-Game factory, Continue confirm, or native Continue wrapper. (Full-function
@@ -530,7 +531,7 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
         MEMBERFUNCJOB_VTABLE_RVA,
         "MEMBERFUNCJOB_VTABLE_RVA",
     );
-    let factory_abs = base + FACTORY_RVA;
+    let factory_abs = er_game_base::mem::game_data_addr(base, FACTORY_RVA, "FACTORY_RVA");
     // Resolve a (member-)fn forward through up to JMP_HOPS jmp-thunks; true if it reaches the
     // Load-Game dialog_factory. (A full member fn that only CALLs the factory internally won't
     // chain-resolve; the raw fn VA is logged regardless for offline disasm.)

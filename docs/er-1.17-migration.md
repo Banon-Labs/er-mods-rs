@@ -526,3 +526,57 @@ against a 1.16.2 value that can never match.
 **When refreshing the data map, diff by (constant -> destination), never by line.** A refresh
 rewrote 37 of 77 rows and changed ZERO destinations -- only the vote counts moved. Read by line,
 that looks like a mass remap.
+
+### Score against all three maps, not one
+
+The resolver's table is fed by three files -- `data.tsv`, `needed-verified.tsv` and `verified.tsv`
+(see `crates/er-game-base/build.rs`) -- so "is this constant mapped?" has to be asked of the union.
+Asking only the data map said 167 sites needed a new row. Against the union it is 110, and the
+57-site difference were free wins: the address was already known and the code was still building it
+by hand. `scripts/gate-stale-rva-data.py` now reads all three.
+
+    151 + 57 = 208 data/compare sites routed through `game_data_addr`
+    110 sites across 61 constants still need a map row earned first
+
+Note that several of those constants are `.text` addresses used as DATA -- `MENU_ITEM_ACCEPT_NATIVE_RVA`
+(`0x7ad810`) is compared against, not called. `map-data-rvas-1162-to-1170.py` skips `.text` by
+design, so those rows come from the FUNCTION map instead; a constant missing from one map is not
+missing from the gate.
+
+## The gate turned the boot crash into 792 refusals (2026-08-29)
+
+`er_quickload` boots on ELDEN RING 1.17. It had been dying at +1.7s with an execute access
+violation on a `CS::CSFadeImp` object; on the fully-gated tree its crash log carries **zero fault
+lines** and its debug log carries **792 `ADDRESS REFUSED` entries**. That is the whole mechanism in
+one number: 792 stale 1.16.2 addresses that used to be called blind are now refused by name, and
+one of them was the fault. A refused address costs a feature; calling it cost the process.
+
+### Per-DLL runtime verdicts, one launch each, on one settled build
+
+    26 boot   1 dies   (27 cdylibs, docs/recon/dll-1170-runtime-results.json)
+
+The single holdout is `er-reload-trace`, which vanishes with no crash record. It installs ~40
+diagnostic hooks and its log shows two `create failed status=8` (`MH_ERROR_UNSUPPORTED_FUNCTION`)
+before the end -- a tracing shell, not a product one, and its own bug rather than a shared defect.
+
+Two shells that DIED before this work now boot: `er_armament_icons` (was `0xc000001d`
+ILLEGAL_INSTRUCTION at `game+0x32ee2b5`) and `er_loading_portrait` (was vanishing ~4s after its
+first Present). Both had ungated `transmute(base + rva)` sites; both are clean now.
+
+### Two ways this measurement can lie, and what stops each
+
+* **A mixed build.** The first attempt at this sweep was thrown away because DLLs were rebuilt ten
+  minutes into it, so the early entries tested one binary and the rest another. The sweep now
+  fingerprints every DLL at the start and ABORTS the instant one changes underneath it.
+* **Scoring liveness instead of signature.** Three shells once died three different ways, and
+  ranking rows live/dead convicted the wrong crate twice. The results file records the crash
+  signature, and `not-built` is never read as a pass -- `er-ags-stub` reported it for a whole run
+  because its DLL is `amd_ags_x64.dll`, not `er_ags_stub.dll`; the sweep now reads the real `[lib]
+  name` from cargo metadata.
+
+### What this does and does not prove
+
+It proves each DLL can be loaded into 1.17 and the game survives boot, and that no stale address
+can execute or corrupt. It does NOT prove any FEATURE works: 792 refusals is 792 things not
+happening. Feature-level 1.17 correctness is per-DLL work behind this, and the refusal log is
+exactly the to-do list for it.

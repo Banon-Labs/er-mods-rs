@@ -103,7 +103,7 @@ pub unsafe fn dlc_roots_self_heal_tick() {
         return;
     }
 
-    let csdlc = match unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CSDLC_SINGLETON_RVA, "CSDLC_SINGLETON_RVA")) } {
+    let csdlc = match unsafe { safe_read_usize(base + CSDLC_SINGLETON_RVA) } {
         Some(p) if p > 0x10000 => p,
         _ => return,
     };

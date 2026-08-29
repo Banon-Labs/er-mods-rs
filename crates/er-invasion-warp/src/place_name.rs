@@ -73,7 +73,8 @@ pub fn place_name_for_text_id(text_id: i32) -> Option<String> {
         return None;
     }
     let base = er_game_base::mem::game_module_base().ok()?;
-    let lookup = base + PLACE_NAME_LOOKUP_RVA;
+    let lookup =
+        er_game_base::mem::game_data_addr(base, PLACE_NAME_LOOKUP_RVA, "PLACE_NAME_LOOKUP_RVA");
     for (index, expected) in PLACE_NAME_LOOKUP_PROLOGUE.iter().enumerate() {
         if unsafe { er_game_base::mem::safe_read_u8(lookup + index) }? != *expected {
             return None;

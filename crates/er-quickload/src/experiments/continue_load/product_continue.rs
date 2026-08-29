@@ -49,7 +49,14 @@ pub(crate) fn record_continue_candidate(item: usize, accept_predicate: usize, ba
             "MENU-CONTINUE-CANDIDATE accept predicate changed item=0x{item:x} prior=0x{prior:x} now=0x{accept_predicate:x}"
         ));
     }
-    if base != null && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA {
+    if base != null
+        && accept_predicate
+            == er_game_base::mem::game_data_addr(
+                base,
+                MENU_ITEM_ACCEPT_NATIVE_RVA,
+                "MENU_ITEM_ACCEPT_NATIVE_RVA",
+            )
+    {
         MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
     } else if base != null && accept_predicate == base + MENU_ITEM_ACCEPT_IDLE_RVA {
         MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
@@ -112,10 +119,20 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
         ));
         return None;
     }
-    if accept_predicate != base + MENU_ITEM_ACCEPT_NATIVE_RVA {
+    if accept_predicate
+        != er_game_base::mem::game_data_addr(
+            base,
+            MENU_ITEM_ACCEPT_NATIVE_RVA,
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} accept_predicate=0x{accept_predicate:x} expected native accept predicate 0x{:x}",
-            base + MENU_ITEM_ACCEPT_NATIVE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                MENU_ITEM_ACCEPT_NATIVE_RVA,
+                "MENU_ITEM_ACCEPT_NATIVE_RVA"
+            )
         ));
         return None;
     }
@@ -173,7 +190,11 @@ pub(crate) unsafe fn submit_native_continue_item_action(
     const CONTINUE_WRAPPER_EVENT_CODE_INDEX: usize = 0;
     #[allow(dead_code)] // Retained: Word index within the decoded Continue event payload; see CONTINUE_WRAPPER_EVENT_WORDS.
     const CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX: usize = 1;
-    let native_submit = base + MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
+    let native_submit = er_game_base::mem::game_data_addr(
+        base,
+        MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+        "MENU_WINDOW_CLOSE_WITH_FAILED_RVA",
+    );
     let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
     let native_submit_fn: unsafe extern "system" fn(usize) =
         unsafe { std::mem::transmute(native_submit) };
@@ -328,7 +349,11 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
         append_autoload_debug(format_args!(
             "product-core-autoload: *** SUBMITTED native Continue MenuWindowJob result mode={result_mode} submit=0x{:x}(result=0x{:x}, result_vt=0x{:x}, item=0x{:x}, functor=0x{:x}, docall=0x{:x}) after set_save_slot({slot}) b78={b78} ac0={ac0} c30=0x{c30:x} b80={b80} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) dialog=0x{:x} menu_latch={} tick={tick} -- no input/direct_load/direct_build/raw deserialize/direct_confirm ***",
-            base + MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+                "MENU_WINDOW_CLOSE_WITH_FAILED_RVA"
+            ),
             action.result,
             action.result_vt,
             action.item,

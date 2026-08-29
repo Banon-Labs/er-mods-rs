@@ -47,7 +47,7 @@ unsafe fn product_profile_select_load_flow(owner: usize, base: usize, slot: i32,
         if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
                 "profile-select-flow: kicked profile refresh 0x{:x} with ProfileLoadDialog=0x{dialog:x} open (slot={slot}) -- saveSlotsStates[slot] now set, portrait can render",
-                base + PROFILE_RENDERER_REFRESH_RVA
+                er_game_base::mem::game_data_addr(base, PROFILE_RENDERER_REFRESH_RVA, "PROFILE_RENDERER_REFRESH_RVA")
             ));
         }
         maybe_capture_portrait_gxtexture(base, slot);
@@ -334,11 +334,11 @@ pub unsafe fn profile_load_dialog_ready(
     }
     let lav =
         unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }.unwrap_or(null);
-    if lav != base + PROFILE_LOAD_ACTIVATE_RVA {
+    if lav != er_game_base::mem::game_data_addr(base, PROFILE_LOAD_ACTIVATE_RVA, "PROFILE_LOAD_ACTIVATE_RVA") {
         if log_pending {
             append_autoload_debug(format_args!(
                 "profile-load-ready: load_activate slot not ready lav=0x{lav:x} want=0x{:x} dvt=0x{dvt:x}",
-                base + PROFILE_LOAD_ACTIVATE_RVA
+                er_game_base::mem::game_data_addr(base, PROFILE_LOAD_ACTIVATE_RVA, "PROFILE_LOAD_ACTIVATE_RVA")
             ));
         }
         return None;
@@ -609,7 +609,7 @@ pub fn apply_online_disable() {
     );
     append_autoload_debug(format_args!(
         "online-disable: Menu_IsEnableOnlineMode@0x{:x} patched ok={menu_online_off} -> xor eax,eax;ret (notReleaseFlag55 becomes 1 -> no 'Starting in offline mode' popup -> title rows build)",
-        base + MENU_ONLINE_MODE_DISABLE_RVA
+        er_game_base::mem::game_data_addr(base, MENU_ONLINE_MODE_DISABLE_RVA, "MENU_ONLINE_MODE_DISABLE_RVA")
     ));
     let _ = ONLINE_PREDICATE_DISABLE_RVA;
 }
@@ -637,8 +637,8 @@ pub fn apply_signin_force(base: usize) {
     );
     append_autoload_debug(format_args!(
         "signin-force: signin@0x{:x} ok={s} -> mov al,1;ret | userindex@0x{:x} ok={u} -> xor eax,eax;ret (select-op gate now passes: signed-in as user 0)",
-        base + SIGNIN_FORCE_RVA,
-        base + USERINDEX_FORCE_RVA
+        er_game_base::mem::game_data_addr(base, SIGNIN_FORCE_RVA, "SIGNIN_FORCE_RVA"),
+        er_game_base::mem::game_data_addr(base, USERINDEX_FORCE_RVA, "USERINDEX_FORCE_RVA")
     ));
 }
 /// Boot-level title-accept (genuine zero input). The press-any-button wall is the

@@ -182,7 +182,7 @@ macro_rules! own_stepper_idx10_fallbacks {
             }
         }
         let set_state: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute($base + TITLE_SET_STATE_RVA) };
+            unsafe { std::mem::transmute(er_game_base::mem::game_data_addr($base, TITLE_SET_STATE_RVA, "TITLE_SET_STATE_RVA")) };
         unsafe { set_state($owner, target_state) };
         own_stepper_enter_menu_build_phase();
         append_autoload_debug(format_args!(
