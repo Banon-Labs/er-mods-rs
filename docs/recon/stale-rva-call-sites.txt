@@ -5,7 +5,7 @@
 # entry is a direct transfer of control to a 1.16.2 address on a build that moved the
 # code. Convert a site by resolving through er_game_base::mem::game_rva and handling
 # the Err, then re-run --refresh to record the smaller set.
-# Currently 160 sites in 35 files.
+# Currently 159 sites in 35 files.
 crates/er-armament-icons/src/hud_badge.rs	GET_GAITEM_INS_BY_HANDLE_RVA
 crates/er-armament-icons/src/hud_badge.rs	GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA
 crates/er-armament-icons/src/hud_badge.rs	GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA
@@ -126,7 +126,6 @@ crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_m
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs	MSGBOX_OK_HANDLER_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs	TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs	TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA
-crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs	TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs	CSSCALEFORMVALUE_DTOR_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs	PROFILE_SETTEXT_RVA
 crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs	TITLE_PRESS_START_SET_VISIBLE_RVA

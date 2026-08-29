@@ -1020,16 +1020,35 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
         return;
     }
     let orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
-            unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(orig) }
-        } else {
-            unsafe {
-                std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(
-                    base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
-                )
+    let target = if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
+        // A MinHook trampoline. Already correct for the running build by construction, and NOT an
+        // address to resolve -- it does not live in the game image at all.
+        orig
+    } else {
+        // THE FALLBACK THAT CRASHED THE 1.17 BOOT AT ~11s, three runs running. This called
+        // `base + 0x9a62c0` raw. On 1.16.2 that is a thunk (`add rcx,0x70; jmp ...`); on 1.17 the
+        // same RVA holds `lea eax,[rsp+0x40]; cmp rcx,rax; setne dl` -- the middle of an unrelated
+        // function, and the address has no verified mapping. The crash record proves the landing:
+        // return address 0x1409a62ce, exactly +0xe into it, with rcx holding `logo`, and RIP ending
+        // up at heap 0x1d107080 -- an EXECUTE fault (access kind 8) in no module.
+        //
+        // Resolving means an unmapped address REFUSES and the logo simply is not hidden. A title
+        // logo left visible is a cosmetic defect; this was a boot-killer.
+        match er_game_base::game_build::resolve_game_address(
+            base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            "title-logo SetVisible",
+        ) {
+            Some(address) => address,
+            None => {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: SKIPPED hiding {TITLE_LOGO_BACK_VIEW_PARTS_NAME} via {source} --                      SetVisible has no verified mapping for the running build (logo stays visible)"
+                ));
+                return;
             }
-        };
+        }
+    };
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(target) };
     unsafe { set_visible(logo, 0) };
     let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
@@ -1090,8 +1109,15 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
     if unsafe { safe_read_usize(logo) }.is_none() {
         return;
     }
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+    // Same raw call, same address, same crash if left ungated. See
+    // `force_hide_title_logo_surface` for the record that proved it.
+    let Some(target) = er_game_base::game_build::resolve_game_address(
+        base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+        "title-logo SetVisible (start-login)",
+    ) else {
+        return;
+    };
+    let set_visible: unsafe extern "system" fn(usize, u8) = unsafe { std::mem::transmute(target) };
     unsafe { set_visible(logo, 0) };
     let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
