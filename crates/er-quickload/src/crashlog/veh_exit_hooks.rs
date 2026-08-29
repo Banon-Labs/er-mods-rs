@@ -68,8 +68,16 @@ pub(crate) fn deliberate_fail_fast_enabled() -> bool {
 /// * `clean-exit` -- an exit path ran with code 0.
 /// * `exit-unclassified` -- an exit path ran with a non-zero code and NO fatal exception was seen.
 ///   Recorded verbatim and left uninterpreted, because on this target that is what a quit looks
-///   like. Across every run of 2026-08-28 the fatal filter fired ZERO times while several runs
-///   exited `0xc0000005`; reading those as crashes produced a bisect whose verdicts were noise.
+///   like.
+///
+/// AND OUR OWN FILTER IS NOT THE ONLY WITNESS, which was this file's second wrong assumption.
+/// `SetUnhandledExceptionFilter` keeps exactly ONE top-level filter: whoever registers last owns
+/// it, and earlier ones are reachable only by being chained to. This DLL and `er-crash-logging`
+/// both register. On 2026-08-28 a run ended with `er-crash-latest.txt` recording `fatal=true` --
+/// an access violation at `eldenring.exe+0x1ebb799` that reached a top-level filter -- while this
+/// instrument wrote `exit-unclassified`, which reads as "somebody quit". It had crashed. So
+/// [`log_process_exit`] now also reads that record, and `fatal-exception` is stamped whichever
+/// filter saw it.
 ///
 /// The file is also written ONCE AT INSTALL as `outcome=running`, which is what makes its later
 /// states readable. Without that, two very different things looked identical -- the process being
@@ -81,6 +89,8 @@ pub(crate) fn deliberate_fail_fast_enabled() -> bool {
 /// * file ABSENT -- this logger never installed, so the file says nothing about the game and the
 ///   reader should go looking for why the DLL did not start.
 const RUN_OUTCOME_FILE_NAME: &str = "er-run-outcome.txt";
+/// The crash logger's newest-record file. Read, never written, by this module.
+const CRASH_LATEST_FILE_NAME: &str = "er-crash-latest.txt";
 /// Value written at install, before anything can go wrong.
 const RUN_OUTCOME_RUNNING: &str = "outcome=running api=- code=-\n";
 
@@ -126,6 +136,27 @@ pub(crate) fn mark_run_started() {
         return;
     };
     let _ = std::fs::write(directory.join(RUN_OUTCOME_FILE_NAME), RUN_OUTCOME_RUNNING);
+}
+
+/// Write one self-describing line to the outcome file.
+fn stamp_outcome(line: &str) {
+    if let Some(directory) = er_game_base::log::game_directory_path() {
+        let _ = std::fs::write(directory.join(RUN_OUTCOME_FILE_NAME), line);
+    }
+}
+
+/// Whether the crash log's newest record says an exception reached a top-level filter.
+///
+/// `er-crash-logging-core` writes `fatal=true` from its own `SetUnhandledExceptionFilter` handler
+/// and nowhere else, so the flag means exactly what this instrument wants to know, independently of
+/// which DLL's filter ended up owning the top-level slot.
+fn crash_record_says_fatal() -> bool {
+    let Some(directory) = er_game_base::log::game_directory_path() else {
+        return false;
+    };
+    std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME))
+        .map(|text| text.lines().any(|line| line.trim() == "fatal=true"))
+        .unwrap_or(false)
 }
 
 fn write_run_outcome(api: &str, code: u32) {
@@ -180,8 +211,20 @@ pub(crate) fn log_process_exit(api: &str, code: u32, handle: usize) {
     }
     // A fatal stamp is a diagnosis; an exit code on this target is not. Never overwrite the former
     // with the latter.
+    //
+    // OUR filter firing is not the only way to learn the run died by an exception, and relying on
+    // it alone was wrong. `SetUnhandledExceptionFilter` keeps ONE top-level filter: whoever
+    // registers last owns it and every earlier one is reachable only by being chained to. This DLL
+    // and `er-crash-logging` both register, and on 2026-08-28 the crash logger recorded
+    // `fatal=true` -- an access violation that reached a top-level filter -- while this instrument
+    // wrote `exit-unclassified`, i.e. "looks like a quit". The run had crashed. Reading the crash
+    // record settles it whatever the registration order turned out to be.
     if FATAL_OUTCOME_STAMPED.load(Ordering::SeqCst) == 0 {
-        write_run_outcome(api, code);
+        if crash_record_says_fatal() {
+            stamp_outcome("outcome=fatal-exception api=crash-record code=-\n");
+        } else {
+            write_run_outcome(api, code);
+        }
     }
     append_crash_log(format_args!(
         "process-exit via {api} code=0x{code:x} handle=0x{handle:x} {}",

@@ -18,7 +18,7 @@ const LOG_FILE_NAME: &str = "er-ersc-sigshim.log";
 /// which case the shim still runs, silently).
 static LOG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-fn log_line(args: std::fmt::Arguments<'_>) {
+pub(crate) fn log_line(args: std::fmt::Arguments<'_>) {
     let path =
         LOG_PATH.get_or_init(|| log::game_directory_path().map(|dir| dir.join(LOG_FILE_NAME)));
     if let Some(path) = path.as_ref() {

@@ -32,8 +32,17 @@ static HOOK_LOGGER: AtomicUsize = AtomicUsize::new(0);
 
 /// Install the sink for union/registry log lines. Call once, early (before any hook registration) to
 /// preserve the exact logging the in-product `mh.rs` union produced.
+///
+/// It also installs the SAME sink for `er-game-base`'s address-resolution lines, rather than
+/// leaving that a second call every caller has to remember. Every cdylib statically links its own
+/// copy of both crates, so an uninstalled sink is silent PER DLL -- and on 2026-08-28 that cost a
+/// diagnosis: `er-armament-icons` logged `MH_ERROR_UNSUPPORTED_FUNCTION`, which is both MinHook's
+/// genuine "cannot hook this" AND the code `MhHook::new` returns when the build gate REFUSES an
+/// address. With no sink installed there was no line saying which, for an address that is in the
+/// verified translation table and so should not have been refused at all. One sink, one call.
 pub fn set_hook_logger(logger: HookLogFn) {
     HOOK_LOGGER.store(logger as usize, Ordering::Release);
+    er_game_base::game_build::set_address_logger(logger);
 }
 
 fn hook_log(args: std::fmt::Arguments<'_>) {

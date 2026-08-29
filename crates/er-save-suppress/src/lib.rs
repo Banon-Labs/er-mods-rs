@@ -1626,6 +1626,10 @@ fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
 /// partial install is worse than none, so a failure of either backs the whole thing out.
 #[cfg(windows)]
 pub fn install(disarm_for_census: bool) -> usize {
+    // One sink for this DLL's hook + address lines, installed here rather than in a DllMain
+    // because a host calls this. Without it a refused address is silent HERE: every cdylib links
+    // its own copy of er-hook/er-game-base, so the logger is a per-DLL static.
+    er_hook::set_hook_logger(log_message);
     if disarm_for_census {
         log_message(format_args!(
             "suppress: DISARMED by caller -- census-only positive-control run; saves will \

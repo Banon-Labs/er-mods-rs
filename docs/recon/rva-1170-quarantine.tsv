@@ -20,6 +20,16 @@
 #     NtTerminateProcess carrying 0xc0000005, the same code an access violation carries. A whole
 #     bisect was run on that oracle and its verdicts were noise; the row for 0x9a6180 (title-logo
 #     ctor hook) came from it and has been RETRACTED rather than kept on bad evidence.
-# Across every run of 2026-08-28 the unhandled filter fired ZERO times: no crash was ever observed.
+# A CRASH HAS NOW BEEN OBSERVED, and it still does not put a row here. The 17:38 run of
+# 2026-08-28 died after ~5.5 minutes with er-crash-latest.txt recording fatal=true: a null
+# dereference at eldenring.exe+0x1ebb799 (access address 0x0), on a game worker thread whose
+# 17-frame backtrace contains NO frame from any of our modules. Nothing in it names a handler of
+# ours, and the nearest familiar number -- frame #8 at 0x140d3edb9 -- only looks familiar because
+# 0x140d3ed90 is a 1.16.2 address we translate; on 1.17 that address is different code, and the
+# hook it belongs to was installed at 0x140d404e0, not there.
+#
+# A row needs a fatal record ATTRIBUTABLE to an address's handler. "A crash happened while our
+# DLLs were loaded" is not attribution, and quarantining on it would repeat the 26-address mistake
+# above in a more sophisticated costume.
 #
 # Empty until a fatal record names a handler.

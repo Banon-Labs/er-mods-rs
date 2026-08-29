@@ -47,6 +47,9 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        er_hook::set_hook_logger(crate::log::refill_log);
         let module_base = module as usize;
         START.call_once(|| runtime::spawn(module_base));
     }

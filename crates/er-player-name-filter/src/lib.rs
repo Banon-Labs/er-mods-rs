@@ -802,7 +802,6 @@ mod windows_runtime {
 
     fn install_player_name_filter(module: *mut c_void) {
         er_hook::set_hook_logger(log_message);
-        er_game_base::game_build::set_address_logger(log_message);
         let module_path = match module_path(module) {
             Ok(path) => path,
             Err(err) => {

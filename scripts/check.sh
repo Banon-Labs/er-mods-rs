@@ -184,6 +184,14 @@ python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
 # exist; this refuses a 161st while they are converted to er_game_base::mem::game_rva.
 python3 "$repo_root/scripts/check-stale-rva-calls.py" --selftest
 python3 "$repo_root/scripts/check-stale-rva-calls.py"
+# THE SILENT-REFUSAL GATE (2026-08-28). Every cdylib statically links its own er-hook/er-game-base,
+# so the log sink is a PER-DLL static and a DLL that never installs one says nothing when the build
+# gate refuses an address. Measured cost: er-armament-icons reported four
+# MH_ERROR_UNSUPPORTED_FUNCTION failures -- a code that means BOTH "MinHook cannot hook this" and
+# "the gate refused the address" -- for addresses including one that IS in the verified translation
+# table, and a whole game run could not tell the two apart.
+python3 "$repo_root/scripts/check-hook-log-sink.py" --selftest
+python3 "$repo_root/scripts/check-hook-log-sink.py"
 # THE TRANSLATED-TARGET AUDIT. `verify-rva-map-1170.py` proves the mapped 1.17 code is the same
 # function; this proves the destination is a real function ENTRY, by the calls and pointers the
 # 1.17 image itself makes to it, and that MinHook's five-byte patch is safe there. Its selftest

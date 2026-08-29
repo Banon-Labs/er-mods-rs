@@ -47,6 +47,10 @@ EXIT_ERROR = 1
 
 PRODUCT_ARTIFACT = "er_quickload.dll"
 
+# The shim that repairs Seamless Co-op's 1.17 AOB landmarks. Named here so the ordering rule in
+# `render_profile` and the selftest that guards it cannot drift apart.
+ERSC_SIGSHIM_DLL = "er_ersc_sigshim.dll"
+
 # The evidence class every random-save run carries. AGENTS.md's 2026-07-08 standing order
 # deprecates the explicit-save-source path for release/autoload validation, and picking a
 # save at all REQUIRES that path -- so a run from this tool is a feature exercise, never
@@ -147,6 +151,22 @@ def render_profile(
         "",
     ]
 
+    # ORDER IS LOAD ORDER, AND THE SHIM MUST WIN. er-ersc-sigshim rebuilds the two AOB landmarks
+    # Seamless Co-op lost on 1.17, and it does that from its own DllMain -- which is only useful if
+    # it runs BEFORE ersc scans for them. Listed after ersc it is inert, ersc's scan fails, and the
+    # game wedges at boot with no native ever logging a line. Measured 2026-08-28: this function
+    # emitted ersc first and the shim ninth, and the run died exactly that way.
+    shim = [dll for dll in dlls if Path(dll).name == ERSC_SIGSHIM_DLL]
+    rest = [dll for dll in dlls if Path(dll).name != ERSC_SIGSHIM_DLL]
+    for dll in shim:
+        lines += [
+            "# er-ersc-sigshim: MUST precede ersc.dll -- it repairs the landmarks ersc scans for.",
+            f"# sha256 {sha256_of(dll)}",
+            "[[natives]]",
+            f"path = '{dll}'",
+            "",
+        ]
+
     if ersc is not None:
         lines += [
             "# Seamless Co-op, REFERENCED from the game install (never bundled or staged).",
@@ -156,7 +176,7 @@ def render_profile(
             "",
         ]
 
-    for dll in dlls:
+    for dll in rest:
         lines += [
             f"# sha256 {sha256_of(dll)}",
             "[[natives]]",
@@ -314,6 +334,35 @@ def selftest() -> int:
         check("NOT release/autoload product proof" in text, "the evidence class is on the artifact")
         check(sha256_of(dll) in text, "each native carries its sha256")
         check(text.count("[[natives]]") == 2, "ersc plus the product are both listed")
+
+        # LOAD ORDER, not merely presence. The shim repairs the AOB landmarks Seamless Co-op scans
+        # for, and it does that from its own DllMain -- so listed after the co-op DLL it is inert,
+        # the scan fails, and the boot wedges with no native ever logging a line. Measured
+        # 2026-08-28: this renderer emitted the co-op DLL first and the shim ninth, and a run died
+        # exactly that way. The fixture below is a 12-byte stand-in for OUR OWN shim; nothing here
+        # reads, copies or stages the real co-op DLL.
+        shim = tmp / ERSC_SIGSHIM_DLL
+        shim.write_bytes(b"MZ fake shim")
+        ordered = render_profile(
+            closure,
+            save,
+            [dll, shim],
+            "r-test",
+            tmp / "ersc.dll",
+            EVIDENCE_EXPLICIT,
+            sidecar_for(dll),
+        )
+        # Indexed on the full PATHS, not the bare filenames: the shim's own comment names the
+        # co-op DLL to explain why it goes first, and a bare-substring search finds that comment
+        # rather than the entry it describes.
+        check(
+            ordered.index(str(shim)) < ordered.index(str(tmp / "ersc.dll")),
+            "the sigshim is listed BEFORE the co-op DLL, whatever order the closure gave",
+        )
+        check(
+            ordered.count("[[natives]]") == 3,
+            "hoisting the shim lists it once, not twice and not never",
+        )
 
         vanilla = render_profile(
             closure, save, [dll], "r-test", None, EVIDENCE_EXPLICIT, sidecar_for(dll)

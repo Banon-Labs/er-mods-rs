@@ -109,6 +109,10 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // This DLL installs no detours (it registers a FrameBegin tick), so it has no er-hook
+        // dependency -- but it still resolves game addresses, and a refusal is silent HERE unless
+        // the sink is installed, because every cdylib links its own copy of er-game-base.
+        er_game_base::game_build::set_address_logger(log_message);
         START.call_once(spawn_inventory_sort_task);
     }
     DLL_MAIN_SUCCESS

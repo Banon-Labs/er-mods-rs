@@ -1014,6 +1014,9 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        er_hook::set_hook_logger(log_line);
         let _ = std::thread::Builder::new()
             .name("er-reload-trace-install".to_owned())
             .spawn(install_hooks);

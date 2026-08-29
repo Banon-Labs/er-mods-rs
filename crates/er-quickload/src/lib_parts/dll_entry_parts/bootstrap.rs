@@ -111,10 +111,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // the exact sink the union used before it moved into the er-hook crate. Installed here, before any
     // hook is registered, so no union-chain or collision line is ever missed.
     er_hook::set_hook_logger(crate::telemetry::append_autoload_debug);
-    // Same sink for address refusals. These are NOT the same events as the hook lines: a detour
-    // refusal means one feature went inert, while an address refusal can come from a direct CALL
-    // or a data read, which is the failure with no crash record naming anything of ours.
-    er_game_base::game_build::set_address_logger(crate::telemetry::append_autoload_debug);
     // Portrait crate split: wire the er-loading-portrait-core seam to the real product fns
     // BEFORE any hook install or task spawn can execute moved code (the crate's neutral
     // defaults would otherwise gate the whole pipeline off). Pure fn-pointer writes.
