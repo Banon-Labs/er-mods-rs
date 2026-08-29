@@ -87,7 +87,22 @@ HAND_BUILT = re.compile(r"\b(?:base|image_base|module_base|game_base)\s*\+\s*([A
 # The gate, in each of its spellings.
 GATED = re.compile(r"\b(?:game_rva|resolve_game_address|resolve_detour_address|MhHook::new|game_ptr)\s*\(")
 # A raw store through a pointer, or the byte-patch primitive.
-RAW_WRITE = re.compile(r"write_code_byte|write_code_bytes|\*\s*target\s*=|\*\s*(?:addr|address|slot)\s*=")
+#
+# The third alternative is the one this audit was missing until 2026-08-29. Naming the pointer
+# first (`let target = ...; *target = 1`) is a style, not a requirement, and the tree writes
+# globals the other way round just as often:
+#
+#     *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = 1;
+#
+# Six such stores existed while this audit reported ZERO ungated writes across all 27 cdylibs --
+# and the ledger's whole claim is that zero. One of the six was the title's zero-input accept byte,
+# writing to a stale 1.16.2 address on every 1.17 boot: the menu never opened, and nothing in the
+# gate said a word, because a store to a moved global neither faults nor logs. The assignment can
+# also sit on the next line, which is why this is matched against the window rather than one line.
+RAW_WRITE = re.compile(
+    r"write_code_byte|write_code_bytes|\*\s*target\s*=|\*\s*(?:addr|address|slot)\s*="
+    r"|as\s*\*mut\s+[\w:]+\s*\)\s*="
+)
 # The address is turned into something callable. Matched against the text IMMEDIATELY BEFORE the
 # `base + rva`, not a window: `is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA)` sits two lines
 # from a `transmute` and is a DATA pointer, and a window-based match filed 13 such arguments as
@@ -195,6 +210,15 @@ def selftest() -> int:
     """
     if not RAW_WRITE.search(sample):
         failures.append("RAW_WRITE missed a `*target = ` store")
+    # The shape that went unseen for the whole 1.17 migration: cast-and-assign, no named pointer.
+    if not RAW_WRITE.search("*((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = 1;"):
+        failures.append("RAW_WRITE missed a cast-and-assign store")
+    # Same store with the value on the following line, which is how rustfmt leaves the long ones.
+    if not RAW_WRITE.search("*((module_base + SOME_RVA) as *mut u8) =\n    VALUE;"):
+        failures.append("RAW_WRITE missed a cast-and-assign store split across lines")
+    # A read through the same cast is NOT a write; misfiling it would inflate the count it guards.
+    if RAW_WRITE.search("let after = unsafe { *((base + SOME_RVA) as *const u8) };"):
+        failures.append("RAW_WRITE wrongly claimed a `*const` read is a store")
     if not SIGNATURE_CHECK.search(sample):
         failures.append("SIGNATURE_CHECK missed an EXPECTED-opcode compare")
     if not HAND_BUILT.search("let x = base + SOME_RVA;"):

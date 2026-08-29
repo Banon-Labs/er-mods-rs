@@ -108,6 +108,43 @@ def find_vtables(image: bytes, wanted: str) -> list[int]:
     return found
 
 
+def vtables_holding(image: bytes, func_rva: int) -> list[tuple[int, int, str | None]]:
+    """`(vtable rva, slot index, class name)` for every vtable whose slot holds `func_rva`.
+
+    THE ONLY WAY TO CARRY A VIRTUAL METHOD THAT CHANGED.
+
+    Two other mappers exist and neither can do this. A body-signature mapper identifies a function
+    by what it looks like, so it goes silent exactly when the body was rewritten. Caller voting
+    fixes that -- but only for a DIRECT call, and a virtual method has no direct caller to vote:
+    the game reaches it through `[vtable + n]`. Measured 2026-08-29: the now-loading helper's
+    `Update` (1.16.2 0x2a2c40) was absent from the 128,603-row function map, unresolvable by
+    masked signature, and reported "no usable caller" -- while the game refused its address 1,513
+    times in a single boot and the loading bar never moved.
+
+    A vtable, though, knows its own name. So: find the slot in 1.16.2, carry the VTABLE by RTTI
+    (a mangled class name is unique per image), and read the same slot in 1.17. The method's own
+    bytes never enter into it.
+    """
+    out = []
+    needle = struct.pack("<Q", BASE + func_rva)
+    at = image.find(needle)
+    while at >= 0:
+        if at % 8 == 0:
+            # Walk back to the start of the pointer run; the vtable begins where the preceding
+            # qword stops being a plausible code pointer.
+            start = at
+            while start >= 8:
+                prev = struct.unpack_from("<Q", image, start - 8)[0]
+                if not (BASE + 0x1000 <= prev < BASE + len(image)):
+                    break
+                start -= 8
+            name = class_name_at_vtable(image, start)
+            if name:
+                out.append((start, (at - start) // 8, name))
+        at = image.find(needle, at + 1)
+    return out
+
+
 def selftest() -> int:
     """Two facts measured on 2026-08-29, one per image, plus the inverse lookup."""
     failures = []
@@ -135,6 +172,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("names", nargs="*", help="class names (substring of the mangled RTTI name)")
     parser.add_argument("--rva", help="inverse lookup: name the class whose vtable is at this rva")
+    parser.add_argument(
+        "--slot-of",
+        help="find every vtable whose slot holds this FUNCTION rva, and read the same slot in 1.17",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
@@ -148,6 +189,30 @@ def main() -> int:
             print(f"missing image for {name}: {path}", file=sys.stderr)
             return 1
         images[name] = image
+
+    if args.slot_of:
+        func = int(args.slot_of, 0) & 0xFFFFFFFF
+        old_image, new_image = images["1.16.2"], images["1.17"]
+        holders = vtables_holding(old_image, func)
+        if not holders:
+            print(f"0x{func:x}: no vtable slot holds this function in 1.16.2")
+            return 1
+        answers: dict[int, list[str]] = {}
+        for vtable, slot, name in holders:
+            print(f"  1.16.2 vtable 0x{vtable:x} slot {slot}  {name}")
+            twin = next((v for v in find_vtables(new_image, name) if class_name_at_vtable(new_image, v) == name), None)
+            if twin is None:
+                print("         1.17: no vtable with that class name")
+                continue
+            moved = struct.unpack_from("<Q", new_image, twin + slot * 8)[0] - BASE
+            print(f"         1.17 vtable 0x{twin:x} slot {slot} -> 0x{moved:x}  delta +0x{moved - func:x}")
+            answers.setdefault(moved, []).append(name)
+        if len(answers) == 1:
+            only = next(iter(answers))
+            print(f"CARRIED 0x{func:x} -> 0x{only:x} (agreed by {len(holders)} vtable slot(s))")
+            return 0
+        print(f"AMBIGUOUS: {len(answers)} different answers across the holding vtables")
+        return 1
 
     if args.rva:
         rva = int(args.rva, 0) & 0xFFFFFFFF

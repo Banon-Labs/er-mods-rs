@@ -40,3 +40,13 @@
 0x1409749f0	0x140975b90	IDENTICAL	1.000	66	unique, 42B signature, 26B fixed	BOTH-ENTRIES
 0x14067a3a0	0x14067b1f0	DIVERGES	0.273	88	unique, 41B signature, 17B fixed	BOTH-ENTRIES
 0x1409a4d90	0x1409a5f30	IDENTICAL	1.000	16	unique, 43B signature, 27B fixed	BOTH-ENTRIES
+#
+# BRACKET-CARRIED, then verified here like every other row. These three are absent from the
+# 128,603-row function map and unresolvable by masked signature -- their neighbours pin them:
+# every mapped function on both sides moves by one delta, and the byte comparison below is
+# what turns that from a guess into a row. 0x1402a2c40 is the now-loading helper Update the
+# loading bar reads; the game refused it 1,513 times in one boot and the bar never moved.
+# 0x1409af3a0 is the title cover profile renderer init -- the character portrait.
+0x1402a2c40	0x1402a2c50	BYTE-IDENTICAL	1.000	43	bracket (mapped neighbours both sides at this delta)	BOTH-ENTRIES
+0x1402a27c0	0x1402a27d0	IDENTICAL	1.000	37	bracket (mapped neighbours both sides at this delta)	BOTH-ENTRIES
+0x1409af3a0	0x1409b05f0	IDENTICAL	1.000	46	bracket (mapped neighbours both sides at this delta)	BOTH-ENTRIES

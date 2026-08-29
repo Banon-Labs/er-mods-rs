@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,041 |
+| all `experiments/**` | 76 | 49,059 |
 | excluding `startup_hooks/**` | 43 | 24,324 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 23,334 |
 | lifecycle S10 split | 5 | 2,241 |
@@ -161,7 +161,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_load/loaders/load_drive.rs` | 723 | load-drive implementation family | D5 |
 | `own_load/loaders/switch_reload.rs` | 579 | switch-reload adapter family | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
-| `own_stepper/bootstrap_drive.rs` | 959 | product bootstrap-drive policy | D5 |
+| `own_stepper/bootstrap_drive.rs` | 968 | product bootstrap-drive policy | D5 |
 | `own_stepper/load_steps.rs` | 792 | product load-step policy | D5 |
 | `present_overlay.rs` | 1,048 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
@@ -195,7 +195,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,418 | System>Quit dialog implementation and picker adapter; the row TEXT layer moved to `er_quit_menu_core::row_text` | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 679 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,437 | ownership, telemetry, quit, and portrait families | R19 |
-| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,160 | product repro guard and quit/title families | R2 and R19 |
+| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,167 | product repro guard and quit/title families | R2 and R19 |
 | `startup_hooks/quit_menu/system_quit_row_identity.rs` | 77 | product facade: capture/telemetry half in `er_quit_menu_core::row_identity`; this side reads the two `er_title_flow` dialog offsets and resets the build-url editor | R18 |
 | `startup_hooks/save_picker/mod.rs` | 22 | save-picker module facade | R17 |
 | `startup_hooks/save_picker/save_picker_boot.rs` | 421 | boot picker surface | R17 |
@@ -203,7 +203,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/save_picker/save_picker_surface.rs` | 122 | picker surface routing adapter | R17-R18 |
 | `title.rs` | 5 | title facade | R22 |
 | `trace.rs` | 10 | trace facade | R6A-R6D and D4 |
-| `trace/menu_constructor_capture.rs` | 1,377 | menu constructor capture family | R6B and D4 |
+| `trace/menu_constructor_capture.rs` | 1,379 | menu constructor capture family | R6B and D4 |
 | `trace/menu_trace_hooks.rs` | 1,983 | title reload and menu trace families | R6C, R21, and D4 |
 | `trace/native_result_map_hooks.rs` | 745 | native result-map hook family | R6A and D4 |
 

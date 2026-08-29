@@ -88,6 +88,50 @@ pub fn game_data_addr(base: usize, rva: usize, what: &'static str) -> usize {
     crate::game_build::resolve_game_address(base + rva, what).unwrap_or(0)
 }
 
+/// Read a pointer-sized game global by RVA: resolve the address for the running build, then read
+/// it fault-tolerantly. `0` for a refusal, an unmapped address, or a genuinely null global.
+///
+/// # Why this exists as one call
+///
+/// The two halves are useless apart and were repeatedly written apart. Resolving without a safe
+/// read turns a REFUSAL into a crash, because [`game_data_addr`] answers 0 and `*(0 as *const _)`
+/// faults. Safe-reading without resolving is worse and quieter: every `.data` global moved between
+/// 1.16.2 and 1.17, so the read SUCCEEDS and returns whatever now occupies the old slot.
+///
+/// This is a SAFE function on purpose. It dereferences nothing the caller can get wrong: the
+/// address is resolved here and the read is kernel-validated, so there is no precondition to
+/// state and no `unsafe` block for a caller to write around it. Marking it `unsafe` would only
+/// add ceremony at every site and make the safe form look like the risky one.
+pub fn read_global_ptr(base: usize, rva: usize, what: &'static str) -> usize {
+    unsafe { safe_read_usize(game_data_addr(base, rva, what)) }.unwrap_or(ZERO)
+}
+
+/// [`read_global_ptr`] for a byte-sized global. `0` for a refusal or an unreadable address.
+pub fn read_global_u8(base: usize, rva: usize, what: &'static str) -> u8 {
+    unsafe { safe_read_u8(game_data_addr(base, rva, what)) }.unwrap_or(ZERO as u8)
+}
+
+/// Store a byte into a game global by RVA. Returns whether the store happened.
+///
+/// A store is the one access that must never go through unresolved. Reading a moved global returns
+/// nonsense the caller can at least notice; writing one corrupts whatever now lives there, and
+/// writing a REFUSAL (address 0) crashes outright. Measured 2026-08-29: the title's zero-input
+/// menu-accept byte moved +0x4080 on 1.17 and its raw store landed on a neighbouring byte, logging
+/// success while the title menu never opened.
+///
+/// # Safety
+///
+/// `rva` must name a byte-sized game global. The store itself is guarded: nothing is written when
+/// the address cannot be resolved for the running build.
+pub unsafe fn write_global_u8(base: usize, rva: usize, what: &'static str, value: u8) -> bool {
+    let at = game_data_addr(base, rva, what);
+    if at == ZERO {
+        return false;
+    }
+    unsafe { *(at as *mut u8) = value };
+    true
+}
+
 /// Cheap heap-pointer sanity check: above the low 64 KiB reserve and 8-byte aligned.
 ///
 /// # Safety

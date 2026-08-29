@@ -94,7 +94,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
     }
     let read_i32 = |off: usize| unsafe { *((gm + off) as *const i32) };
     let iodev_summary = || -> (usize, usize, usize) {
-        let iodev = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let iodev = er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         if iodev == null {
             (null, null, null)
         } else {
@@ -154,7 +154,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             ))
         }
         .unwrap_or(null);
-        let owner_probe = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let owner_probe =
+            er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         let owner8 = if owner_probe != null {
             unsafe { safe_read_usize(owner_probe + 8) }.unwrap_or(null)
         } else {
@@ -281,7 +282,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // submit. The mount is internally guarded by 0x14240acd0([0x143d872e0]) which needs
         // the IO worker registry [0x144843038+0x18]!=0; if it bails (al=0) the log shows it.
         // SAVE-SAFE: the mount only OPENS a handle + registers paths for READ; no save write.
-        let iodev_before = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let iodev_before =
+            er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         let registry = unsafe {
             *((er_game_base::mem::game_data_addr(
                 base,
@@ -344,7 +346,11 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // discard gates: (1) [worker+0x19]!=0 (no-accept/shutdown byte); (2) the registry
         // intrusive list [registry+0x28] does not contain the caller's key (0x141ee1240).
         // Read both (no call) to pin which gate fires cold. reg_list_empty when [[+0x28]]==[+0x28].
-        let worker_mgr = unsafe { *((base + FD4_IO_WORKER_MGR_RVA) as *const usize) };
+        let worker_mgr = er_game_base::mem::read_global_ptr(
+            base,
+            FD4_IO_WORKER_MGR_RVA,
+            "FD4_IO_WORKER_MGR_RVA",
+        );
         let worker_noaccept = if worker_mgr != null {
             unsafe { *((worker_mgr + FD4_IO_WORKER_NOACCEPT_19_OFFSET) as *const u8) }
         } else {
@@ -636,7 +642,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         const OWNER_HANDLE_CONTAINER_OFFSET: usize = 0x0;
         const OWNER_HANDLE_H10_OFFSET: usize = 0x10;
         const OWNER_DF0_OFFSET: usize = 0xdf0;
-        let owner_fsm = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let owner_fsm =
+            er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         let container = if io20 != null {
             unsafe { safe_read_usize(io20 + OWNER_HANDLE_CONTAINER_OFFSET) }.unwrap_or(null)
         } else {
@@ -790,7 +797,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // parked node via the finalizer 0x140e6f200 (zeroes owner+0x10/+0x18/+0x20 -- the same
             // teardown the idx-0x14 success path runs) so the kick rebuilds worker+node cleanly and
             // submits the real FD4 read job. owner = iodev = *0x144589390.
-            let owner = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+            let owner =
+                er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
             let (o10_pre, o20_pre) = if owner != null {
                 unsafe {
                     (
@@ -918,7 +926,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         const C30_WRITE_GATE_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
         let df0 = unsafe { *((gm + DF0_OFFSET) as *const usize) };
         let job18 = unsafe { *((gm + ASYNC_JOB_18_OFFSET) as *const usize) };
-        let c30_gate = unsafe { *((base + C30_WRITE_GATE_RVA) as *const usize) };
+        let c30_gate =
+            er_game_base::mem::read_global_ptr(base, C30_WRITE_GATE_RVA, "C30_WRITE_GATE_RVA");
         let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
             std::mem::transmute(
                 match crate::experiments::gated_game_fn(

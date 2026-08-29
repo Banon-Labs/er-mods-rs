@@ -1759,7 +1759,7 @@ pub(crate) fn b80_mount_trace_summary() -> String {
     let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
     let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
     let b78 = read_gm(GAME_MAN_REQUESTED_SLOT_B78_OFFSET);
-    let iodev = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+    let iodev = er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
     let read_io = |off: usize| {
         if iodev != null {
             unsafe { *((iodev + off) as *const usize) }

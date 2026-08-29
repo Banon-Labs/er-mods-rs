@@ -1306,8 +1306,11 @@ mod windows_runtime {
         if let Some(&address) = cache.get(text) {
             return Some(address as *const RawDlStringWide);
         }
-        let allocator = unsafe { *((base + MENU_HEAP_ALLOCATOR_POINTER_RVA) as *const usize) }
-            as *mut RawDlAllocator;
+        let allocator = er_game_base::mem::read_global_ptr(
+            base,
+            MENU_HEAP_ALLOCATOR_POINTER_RVA,
+            "MENU_HEAP_ALLOCATOR_POINTER_RVA",
+        ) as *mut RawDlAllocator;
         if allocator.is_null() {
             log_message(format_args!(
                 "chr-name: GLOBAL_MenuHeapAllocator is null; cannot build a replacement string"

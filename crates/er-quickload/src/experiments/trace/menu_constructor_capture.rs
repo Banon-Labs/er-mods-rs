@@ -740,7 +740,9 @@ pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
         };
         let io = game_module_base()
             .ok()
-            .map(|base| unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) })
+            .map(|base| {
+                er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA")
+            })
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let io18 = q(io, IODEV_REQHANDLE_18_OFFSET);
         let io20 = q(io, IODEV_REQHANDLE_20_OFFSET);

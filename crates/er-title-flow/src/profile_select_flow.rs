@@ -473,8 +473,8 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
                 }
             }
         }
-    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
-    let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
+    let csfeman = read_global_ptr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA");
+    let session = read_global_ptr(module_base, SESSION_SINGLETON_RVA, "SESSION_SINGLETON_RVA");
     let gm = game_man_ptr_or_null();
     let read_gm = |off: usize| {
         if gm != null {
@@ -491,7 +491,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     // the iodev request handle pair [iodev+0x18]/[iodev+0x20] + [iodev+0x10] inflight.
     // Only 0x14067b4e0's preview read populates these; logging them across a real
     // load pins EXACTLY when the read goes in-flight/resident vs when b80 flips.
-    let iodev = unsafe { *((module_base + IODEV_GLOBAL_RVA) as *const usize) };
+    let iodev = read_global_ptr(module_base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
     let read_iodev = |off: usize| {
         if iodev != null {
             unsafe { *((iodev + off) as *const usize) }
@@ -659,12 +659,12 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     // its full-memory VirtualQuery+deref walk raced the booting game (region freed
     // mid-scan -> AV, the boot-crash). The autoload needs none of it -- the movie
     // singleton and GameMan are fixed globals.
-    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
-    let latch = unsafe { *((er_game_base::mem::game_data_addr(module_base, TITLE_ACCEPT_LATCH_RVA, "TITLE_ACCEPT_LATCH_RVA")) as *const u8) };
-    let movie = unsafe { *((er_game_base::mem::game_data_addr(module_base, MOVIE_SINGLETON_RVA, "MOVIE_SINGLETON_RVA")) as *const usize) };
-    let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
+    let csfeman = read_global_ptr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA");
+    let latch = read_global_u8(module_base, TITLE_ACCEPT_LATCH_RVA, "TITLE_ACCEPT_LATCH_RVA");
+    let movie = read_global_ptr(module_base, MOVIE_SINGLETON_RVA, "MOVIE_SINGLETON_RVA");
+    let skip = read_global_u8(module_base, MOVIE_SKIP_FLAG_RVA, "MOVIE_SKIP_FLAG_RVA");
     let gm = game_man_ptr_or_null();
-    let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
+    let session = read_global_ptr(module_base, SESSION_SINGLETON_RVA, "SESSION_SINGLETON_RVA");
     let log_now = (tick % ARM_PROBE_TICK_INTERVAL == null as u64)
         || (skip == MOVIE_SKIP_FLAG_SET && csfeman == null);
     // Scan-free native movie dismiss: gated on the movie singleton being present
@@ -682,8 +682,15 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
                 }
                 ShowWindow(hwnd_ptr, WND_SW_HIDE);
                 UpdateWindow(hwnd_ptr);
-                *((module_base + MOVIE_SKIP_FLAG_RVA) as *mut u8) = MOVIE_SKIP_FLAG_SET;
             }
+            unsafe {
+                write_global_u8(
+                    module_base,
+                    MOVIE_SKIP_FLAG_RVA,
+                    "MOVIE_SKIP_FLAG_RVA",
+                    MOVIE_SKIP_FLAG_SET,
+                )
+            };
             append_autoload_debug(format_args!(
                 "title_accept: native movie dismiss (movie=0x{movie:x} hwnd=0x{hwnd:x} latch={latch} tick={tick})"
             ));
@@ -739,8 +746,13 @@ pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
             unsafe { std::mem::transmute(match title_fn(FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA, "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA") { Some(address) => address, None => return }) };
         unsafe { set_save_slot(slot) };
         unsafe {
-            *((module_base + SELECTBOT_LOAD_GATE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
-        }
+            write_global_u8(
+                module_base,
+                SELECTBOT_LOAD_GATE_RVA,
+                "SELECTBOT_LOAD_GATE_RVA",
+                TITLE_PROCEED_GATE_SET_VALUE,
+            )
+        };
     }
     if tick % ARM_PROBE_TICK_INTERVAL == null as u64 {
         let ac0 = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
@@ -760,12 +772,15 @@ pub unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
     {
         return;
     }
-    let read_ptr = |rva: usize| unsafe { *((module_base + rva) as *const usize) };
+    // Takes the constant's NAME as well as its value: a closure that hides the constant is how a
+    // stale address escapes an audit, since a grep for `base + SOMETHING_RVA` sees `base + rva`
+    // and moves on. Naming it also makes any refusal attributable in the log.
+    let read_ptr = |rva: usize, what: &'static str| read_global_ptr(module_base, rva, what);
     let game_man = game_man_ptr_or_null();
     let slot_mgr = game_data_man_ptr_or_null();
-    let csfeman = read_ptr(CSFEMAN_SINGLETON_RVA);
-    let input_mgr = read_ptr(TITLE_INPUT_MANAGER_RVA);
-    let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+    let csfeman = read_ptr(CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA");
+    let input_mgr = read_ptr(TITLE_INPUT_MANAGER_RVA, "TITLE_INPUT_MANAGER_RVA");
+    let latch = read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gm_byte = |off: usize| {
         if game_man != null {

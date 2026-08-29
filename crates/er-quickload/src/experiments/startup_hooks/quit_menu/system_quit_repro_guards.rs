@@ -1091,7 +1091,14 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                         *((menu_data + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
                     }
                 }
-                unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };
+                unsafe {
+                    er_game_base::mem::write_global_u8(
+                        base,
+                        RETURN_TITLE_REBUILD_FLAG_DAT_RVA,
+                        "RETURN_TITLE_REBUILD_FLAG_DAT_RVA",
+                        0,
+                    )
+                };
                 // Clear GameMan.save_requested defensively (typed): the return-title REQUEST set it for
                 // the teardown; a residual true would drive an immediate quit-save on the reload. Do NOT
                 // clear GameMan.warp_requested here. Native full deserialize owns that flag; MoveMapStep

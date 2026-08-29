@@ -174,10 +174,15 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     // advances the inner TitleStep to Finish (state 11 -> -1) the inner owner is
     // torn down, but `pump_ran` (does the outer MenuLoop spin up?) and the latch
     // byte live in module globals, so we must still capture them post-cascade.
-    let registry = unsafe { *((er_game_base::mem::game_data_addr(module_base, SELECTBOT_REGISTRY_GLOBAL_RVA, "SELECTBOT_REGISTRY_GLOBAL_RVA")) as *const usize) };
-    let load_gate = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
-    let input_manager =
-        unsafe { *((module_base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) as *const usize) };
+    // Every one of these three is a RESOLVED address read through a FAULT-TOLERANT reader, and
+    // both halves are load-bearing on 1.17. Resolution stops the read landing on whatever now
+    // occupies a moved global; the fault-tolerant reader is what makes a REFUSAL survivable,
+    // because `game_data_addr` answers 0 when it will not translate and a raw `*(0 as *const _)`
+    // turns a refusal into a crash. A probe must not be able to kill the boot it is observing.
+    let registry = read_global_ptr(module_base, SELECTBOT_REGISTRY_GLOBAL_RVA, "SELECTBOT_REGISTRY_GLOBAL_RVA");
+    let load_gate =
+        read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
+    let input_manager = read_global_ptr(module_base, SELECTBOT_INPUT_MANAGER_GLOBAL_RVA, "SELECTBOT_INPUT_MANAGER_GLOBAL_RVA");
     let pump_ran = if input_manager != TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { *((input_manager + SELECTBOT_PUMP_RAN_FLAG_OFFSET) as *const u8) }
     } else {
@@ -205,12 +210,17 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
         && state == TITLE_STEP_MENU_JOB_WAIT_STATE
         && !TITLE_PROCEED_GATE_FIRED.swap(true, Ordering::SeqCst)
     {
-        unsafe {
-            *((module_base + SELECTBOT_LOAD_GATE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
-        }
-        let after = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+        let stored = unsafe {
+            write_global_u8(
+                module_base,
+                SELECTBOT_LOAD_GATE_RVA,
+                "SELECTBOT_LOAD_GATE_RVA",
+                TITLE_PROCEED_GATE_SET_VALUE,
+            )
+        };
+        let after = read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
         append_autoload_debug(format_args!(
-            "title_proceed_gate: set [0x143d856a0]={after} at state {state} tick={tick}"
+            "title_proceed_gate: stored={stored} value={after} at state {state} tick={tick}"
         ));
     }
     // Lever-2 (option c): satisfy the global menu-accept side-effect zero-input. At the parked
@@ -224,13 +234,21 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
         && state == TITLE_STEP_MENU_JOB_WAIT_STATE
         && !TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst)
     {
-        unsafe {
-            *((module_base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) =
-                TITLE_PROCEED_GATE_SET_VALUE;
-        }
-        let after = unsafe { *((module_base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *const u8) };
+        let stored = unsafe {
+            write_global_u8(
+                module_base,
+                TITLE_GLOBAL_ACCEPT_BYTE_RVA,
+                "TITLE_GLOBAL_ACCEPT_BYTE_RVA",
+                TITLE_PROCEED_GATE_SET_VALUE,
+            )
+        };
+        let after = read_global_u8(
+            module_base,
+            TITLE_GLOBAL_ACCEPT_BYTE_RVA,
+            "TITLE_GLOBAL_ACCEPT_BYTE_RVA",
+        );
         append_autoload_debug(format_args!(
-            "title_accept_byte_gate: set [0x144589bdc]={after} at state {state} tick={tick} -- zero-input natural menu-open"
+            "title_accept_byte_gate: stored={stored} value={after} at state {state} tick={tick} -- zero-input natural menu-open"
         ));
     }
 }
@@ -260,7 +278,8 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
                 unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
             let load14 =
                 unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
-            let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+            let latch =
+        read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
             let b72 = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
             let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
             append_autoload_debug(format_args!(
@@ -278,7 +297,8 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
     // CORRECTED recipe (native-continue-and-slotn-recipe-2026): the latch
     // 0x143d856a0 must stay CLEAR; the arm flag is [GameMan+0xb72]=1. (The old
     // code set the latch to 1, which the disasm proves aborts the load.)
-    let latch_before = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+    let latch_before =
+        read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
     let set_save_slot: unsafe extern "system" fn(i32) =
         unsafe { std::mem::transmute(match title_fn(FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA, "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA") { Some(address) => address, None => return }) };
     unsafe { set_save_slot(slot) };
@@ -511,13 +531,35 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
             "title-accept-byte: native-profile-capture set TitleTopDialog cursor [dialog+0xb0c] {before}->1 before native accept byte"
         ));
     }
-    unsafe {
-        *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
+    // THE STORE THAT MOVED. This byte is the whole zero-input menu-open: the game's own
+    // `TitleTopDialog::update` reads it, runs the open-menu registrar in its NATIVE frame, and
+    // that native frame is what BUILDS AND DRAINS the Continue/Load/NewGame rows. On 1.17 the
+    // global moved +0x4080 (0x4589bdc -> 0x458dc5c) and this store was raw, so it wrote a
+    // neighbouring byte, the log said `set [0x144589bdc]=1` as if it had worked, and the title
+    // sat at PRESS BUTTON forever "waiting for native a40/menu-open latch". A store is the one
+    // access that cannot be allowed through unresolved: reading a moved global returns nonsense,
+    // writing one corrupts whatever now lives there.
+    let stored = unsafe {
+        write_global_u8(
+            base,
+            TITLE_GLOBAL_ACCEPT_BYTE_RVA,
+            "TITLE_GLOBAL_ACCEPT_BYTE_RVA",
+            TITLE_PROCEED_GATE_SET_VALUE,
+        )
+    };
+    if !stored {
+        // Refused: say so once rather than arming a lever that cannot fire. The one-shot latch is
+        // already taken, so this reports the arm that will not happen instead of retrying forever.
+        if first_arm {
+            append_autoload_debug(format_args!(
+                "title-accept-byte: REFUSED -- TITLE_GLOBAL_ACCEPT_BYTE_RVA has no verified address for this build; the zero-input menu-open cannot be armed"
+            ));
+        }
+        return;
     }
     if first_arm {
         append_autoload_debug(format_args!(
-            "title-accept-byte: set [0x{:x}]=1 on settled TitleTopDialog (Loop, a40==0) -- zero-input NATURAL menu-open (registrar runs in native update frame -> Continue/Load/NewGame rows build + drain); will retry until native a40/menu-open latch flips",
-            base + TITLE_GLOBAL_ACCEPT_BYTE_RVA
+            "title-accept-byte: set TITLE_GLOBAL_ACCEPT_BYTE_RVA=1 on settled TitleTopDialog (Loop, a40==0) -- zero-input NATURAL menu-open (registrar runs in native update frame -> Continue/Load/NewGame rows build + drain); will retry until native a40/menu-open latch flips"
         ));
     }
 }
