@@ -176,6 +176,21 @@ python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 # Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
+# THE STALE-CALL RATCHET (2026-08-28). The 1.17 build gate resolves DETOUR addresses and refuses
+# the ones it cannot place. Nothing looked at a game address reached as a direct CALL --
+# `transmute(base + SOME_RVA)` -- and that is the worse of the two: a refused detour makes one
+# feature inert and logs why, while a stale call transfers control into whatever now occupies
+# those bytes and faults with no unwind and no record naming anything of ours. 160 such sites
+# exist; this refuses a 161st while they are converted to er_game_base::mem::game_rva.
+python3 "$repo_root/scripts/check-stale-rva-calls.py" --selftest
+python3 "$repo_root/scripts/check-stale-rva-calls.py"
+# THE TRANSLATED-TARGET AUDIT. `verify-rva-map-1170.py` proves the mapped 1.17 code is the same
+# function; this proves the destination is a real function ENTRY, by the calls and pointers the
+# 1.17 image itself makes to it, and that MinHook's five-byte patch is safe there. Its selftest
+# calibrates on the 27 addresses this project hooks successfully on 1.16.2 today -- the previous
+# implementation of the entry check called 20 of those mid-function, and calibration is what
+# caught it.
+python3 "$repo_root/scripts/audit-1170-hook-targets.py" --selftest
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/.githooks/pre-push"

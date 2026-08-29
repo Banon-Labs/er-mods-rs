@@ -36,9 +36,20 @@ pub fn game_module_base() -> Result<usize, String> {
     Ok(module as usize)
 }
 
-/// `game_module_base() + rva`.
+/// `game_module_base() + rva`, resolved for the RUNNING build.
+///
+/// Every RVA in this workspace is a 1.16.2 RVA. On a build that moved the code, this returns the
+/// translated address when one has been verified and an `Err` when it has not -- so a caller
+/// that ignores the error cannot call into whatever now occupies those bytes. Plain addition on
+/// the supported build, and for anything outside the game image.
 pub fn game_rva(rva: u32) -> Result<usize, String> {
-    Ok(game_module_base()? + rva as usize)
+    let raw = game_module_base()? + rva as usize;
+    crate::game_build::resolve_game_address(raw, "game_rva").ok_or_else(|| {
+        format!(
+            "rva 0x{rva:x} has no verified mapping for the running build: {}",
+            crate::game_build::describe_build()
+        )
+    })
 }
 
 /// Cheap heap-pointer sanity check: above the low 64 KiB reserve and 8-byte aligned.

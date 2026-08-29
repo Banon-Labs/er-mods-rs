@@ -388,11 +388,27 @@ unsafe fn save_buffer_allocator_ready(module_base: usize) -> Result<bool, String
     Ok(!save_buffer_allocator.is_null())
 }
 
+/// `module_base + rva`, resolved for the RUNNING build.
+///
+/// Takes the base as an argument rather than resolving it (callers already hold one and the
+/// tests pass a fake), which is the only reason this is not `er_game_base::mem::game_rva`
+/// outright. The build resolution is the same call, so a 1.16.2 RVA on a build that moved the
+/// code is translated when a mapping is verified and an `Err` when it is not -- these results
+/// are transmuted into function pointers and CALLED, and a stale one transfers control into
+/// whatever now occupies those bytes.
 fn game_rva(module_base: usize, rva: u32) -> Result<usize, String> {
     if module_base == NULL_MODULE_BASE {
         return Err("failed to resolve game module: null module base".to_owned());
     }
-    Ok(module_base + rva as usize)
+    let raw = module_base + rva as usize;
+    er_game_base::game_build::resolve_game_address(raw, "er-save-loader game_rva").ok_or_else(
+        || {
+            format!(
+                "rva 0x{rva:x} has no verified mapping for the running build: {}",
+                er_game_base::game_build::describe_build()
+            )
+        },
+    )
 }
 
 #[cfg(test)]

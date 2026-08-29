@@ -413,8 +413,23 @@ unsafe fn insert_ashes_of_war(
     let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
         return;
     };
-    let arts_getter = module_base + rva::GET_ARTS_NAME;
-    let gem_getter = module_base + rva::GET_GEM_NAME;
+    // Resolved for the running build rather than added blind: `name_of` transmutes these into
+    // function pointers and CALLS them, and its safety comment says the caller guarantees the
+    // address is one of the verified getters -- which was not true while this was bare addition.
+    // On a build that moved the code, an unresolvable getter means no ash names, not a call into
+    // whatever now occupies the address.
+    let (Some(arts_getter), Some(gem_getter)) = (
+        er_game_base::game_build::resolve_game_address(
+            module_base + rva::GET_ARTS_NAME,
+            "catalog GetArtsName",
+        ),
+        er_game_base::game_build::resolve_game_address(
+            module_base + rva::GET_GEM_NAME,
+            "catalog GetGemName",
+        ),
+    ) else {
+        return;
+    };
 
     // skill row -> (this gem IS the canonical `arts * 100` row, it draws an icon, it has an
     // item name, gem row).

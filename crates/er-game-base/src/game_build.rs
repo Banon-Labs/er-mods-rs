@@ -21,6 +21,9 @@
 //! exactly the builds this module calls unsupported). Refusing those would break the one thing
 //! that currently works on 1.17.
 
+// Reading the running image's own PE headers is a Windows-only operation, and these externs are
+// undefined at LINK time on the host -- which host-unit-tested crates hit through `describe_build`.
+#[cfg(windows)]
 use crate::mem::{game_module_base, read_bytes};
 
 /// `FileVersion` of the build every RVA in this workspace was reverse-engineered against:
@@ -52,25 +55,47 @@ impl core::fmt::Display for FileVersion {
 }
 
 /// Signature at the head of `VS_FIXEDFILEINFO`.
+#[cfg(windows)]
 const VS_FIXEDFILEINFO_SIGNATURE: u32 = 0xFEEF_04BD;
+
 /// `IMAGE_DIRECTORY_ENTRY_RESOURCE`.
+#[cfg(windows)]
 const RESOURCE_DIRECTORY_INDEX: usize = 2;
+
 /// `RT_VERSION`.
+#[cfg(windows)]
 const RT_VERSION: u32 = 16;
+
 /// Bytes of `.rsrc` searched for the fixed-file-info signature once the resource directory has
 /// been located. The version resource sits at the front of it; this bound keeps a corrupt or
 /// unexpected directory from turning into a long scan.
+#[cfg(windows)]
 const VERSION_SEARCH_LIMIT: usize = 0x4000;
 /// High bit of a resource directory entry's `OffsetToData`: set means the entry points at another
 /// directory rather than at a data leaf.
+#[cfg(windows)]
 const RESOURCE_SUBDIRECTORY_FLAG: u32 = 0x8000_0000;
+
 /// High bit of a resource directory entry's `Name`: set means the entry is keyed by a string,
 /// not by an integer id. A different field from the one above, and conflating the two is why this
 /// is spelled out.
+#[cfg(windows)]
 const RESOURCE_NAME_IS_STRING_FLAG: u32 = 0x8000_0000;
 
 /// The running game image's `FileVersion`, or `None` when the headers or the version resource
 /// cannot be read (which is itself a reason to treat the build as unrecognised).
+///
+/// A host build has no running game image, so it answers `None` -- the same answer, for the same
+/// reason, as a Windows build whose headers are unreadable. It is a separate function body rather
+/// than an early return because the Win32 externs below are undefined at LINK time on the host,
+/// and crates that are host-unit-tested (`er-save-loader`) reach this through `describe_build`.
+#[cfg(not(windows))]
+pub fn game_file_version() -> Option<FileVersion> {
+    None
+}
+
+/// The running game image's `FileVersion`; see the host counterpart above.
+#[cfg(windows)]
 pub fn game_file_version() -> Option<FileVersion> {
     let base = game_module_base().ok()?;
     let (rsrc_rva, rsrc_size) = resource_directory(base)?;
@@ -97,6 +122,7 @@ pub fn game_file_version() -> Option<FileVersion> {
 }
 
 /// `(rva, size)` of the resource data directory.
+#[cfg(windows)]
 fn resource_directory(base: usize) -> Option<(usize, usize)> {
     let mut word = [0u8; 4];
     if !unsafe { read_bytes(base + 0x3C, &mut word) } {
@@ -131,6 +157,7 @@ fn resource_directory(base: usize) -> Option<(usize, usize)> {
 }
 
 /// RVA of the first data block under the `RT_VERSION` type, walking type -> name -> language.
+#[cfg(windows)]
 fn version_resource_data(base: usize, rsrc_rva: usize) -> Option<usize> {
     let type_dir = resource_entry(base, rsrc_rva, rsrc_rva, Some(RT_VERSION))?;
     let name_dir = resource_entry(base, rsrc_rva, type_dir, None)?;
@@ -148,6 +175,7 @@ fn version_resource_data(base: usize, rsrc_rva: usize) -> Option<usize> {
 ///
 /// `want_id` selects an entry by id; `None` takes the first, which is what the name and language
 /// levels want (the version resource has exactly one of each).
+#[cfg(windows)]
 fn resource_entry(
     base: usize,
     rsrc_rva: usize,
@@ -185,6 +213,7 @@ fn resource_entry(
 /// do with the game build". A detour on `user32!CreateWindowExW` or `kernel32!ExitProcess` is
 /// resolved through `GetProcAddress` at runtime and is equally correct on every ELDEN RING
 /// version; only addresses INSIDE this range carry a version assumption.
+#[cfg(windows)]
 pub fn game_image_range() -> Option<(usize, usize)> {
     let base = game_module_base().ok()?;
     let mut word = [0u8; 4];
@@ -213,6 +242,7 @@ pub fn game_image_range() -> Option<(usize, usize)> {
 ///
 /// A `None` image range answers `true`: if the headers cannot be read, treating an address as
 /// version-sensitive is the side that refuses rather than the side that detours blind.
+#[cfg(windows)]
 pub fn is_game_image_address(address: usize) -> bool {
     match game_image_range() {
         Some((start, end)) => (start..end).contains(&address),
@@ -238,4 +268,106 @@ pub fn describe_build() -> String {
             format!("game FileVersion UNREADABLE (this build supports {SUPPORTED_FILE_VERSION})")
         }
     }
+}
+
+// ============================================================================
+// ADDRESS RESOLUTION ACROSS BUILDS.
+//
+// `is_supported_build` above answers "is this the build our RVAs were written against". This
+// section answers the question that follows from a NO: where, if anywhere, did that address go.
+//
+// It lives here rather than in `er-hook` because the danger is not specific to detours. A detour
+// on a stale address is caught by the hook path, but a stale address is equally reachable as a
+// CALL (`transmute(base + RVA)`) and as a data pointer, and neither goes anywhere near MinHook.
+// A call through a stale address is in fact the worse of the two: it transfers control into
+// whatever now occupies those bytes, which on a patched build is routinely the middle of an
+// unrelated function -- an execute-fault with no unwind information and no exception record
+// naming anything of ours.
+// ============================================================================
+
+include!(concat!(env!("OUT_DIR"), "/address_map_1170.rs"));
+
+/// Signature of the sink refusal/translation lines are written to.
+pub type AddressLogFn = fn(core::fmt::Arguments<'_>);
+static ADDRESS_LOGGER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Install the sink for address-resolution lines. Call once, early, before any resolution.
+///
+/// Default is a no-op: this crate is a zero-dependency leaf and has no log of its own, so the
+/// product DLL points this at the same file its hook refusals already go to.
+pub fn set_address_logger(logger: AddressLogFn) {
+    ADDRESS_LOGGER.store(logger as usize, core::sync::atomic::Ordering::Release);
+}
+
+/// Windows-only: the resolver is the sole caller, and on a host build there is no running game
+/// to refuse an address for, so the sink would never be reached.
+#[cfg(windows)]
+fn address_log(args: core::fmt::Arguments<'_>) {
+    let raw = ADDRESS_LOGGER.load(core::sync::atomic::Ordering::Acquire);
+    if raw != 0 {
+        // SAFETY: `raw` is only ever an `AddressLogFn` stored by `set_address_logger`.
+        let logger: AddressLogFn = unsafe { core::mem::transmute::<usize, AddressLogFn>(raw) };
+        logger(args);
+    }
+}
+
+/// Where `address` lives on the RUNNING build, or `None` if that is not known.
+///
+/// * `Some(address)` unchanged -- the address is outside the game image (an import resolved by
+///   `GetProcAddress` means the same thing on every patch), or the running build is the one the
+///   address was written for.
+/// * `Some(translated)` -- the build moved, and this address has a mapping that two independent
+///   passes agreed on: `scripts/map-rvas-1162-to-1170.py` found where the function's masked
+///   signature re-occurs, and `scripts/verify-rva-map-1170.py` then confirmed the normalised
+///   instruction sequences match over the body. `scripts/audit-1170-hook-targets.py` separately
+///   confirms the destination is a real function entry, by the references the image itself makes
+///   to it.
+/// * `None` -- the build moved and nothing here knows where to. The caller must not proceed.
+///
+/// `what` names the caller in the log line, because a refusal is only actionable if a reader can
+/// tell which feature just went inert.
+pub fn resolve_game_address(address: usize, what: &str) -> Option<usize> {
+    #[cfg(windows)]
+    {
+        resolve_on_running_build(address, what)
+    }
+    // Host builds have no running game to resolve against, and reaching the Win32 externs from a
+    // host unit test is a link error rather than a wrong answer. `er-save-loader` runs its tests
+    // on the host against a fake module base, so this passthrough is what keeps the resolver
+    // callable from code that is also host-tested.
+    #[cfg(not(windows))]
+    {
+        let _ = what;
+        Some(address)
+    }
+}
+
+#[cfg(windows)]
+fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
+    if !is_game_image_address(address) || is_supported_build() {
+        return Some(address);
+    }
+    let base = crate::mem::game_module_base().ok()?;
+    let rva = (address - base) as u32;
+    if let Some((_, moved)) = VERIFIED_1162_TO_1170.iter().find(|(from, _)| *from == rva) {
+        let translated = base + *moved as usize;
+        address_log(format_args!(
+            "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
+             (verified same function; see docs/recon/rva-map-1162-to-1170.verified.tsv)",
+            describe_build()
+        ));
+        return Some(translated);
+    }
+    address_log(format_args!(
+        "ADDRESS REFUSED ({what}): 0x{address:x} -- {}, and this address has no verified mapping \
+         for the running build, so using it would reach whatever code now occupies it",
+        describe_build()
+    ));
+    None
+}
+
+/// How many verified translations this build carries. Read by the product's startup line so a log
+/// says how much of the migration is actually present, rather than leaving it to be inferred.
+pub fn verified_translation_count() -> usize {
+    VERIFIED_1162_TO_1170.len()
 }

@@ -80,10 +80,16 @@ fn transform_at(position: [f32; 3]) -> WorldTransform {
 #[repr(C, align(16))]
 struct WorldTransform([f32; 16]);
 
-/// Resolve a game function by RVA, refusing anything that is not inside the game image.
+/// Resolve a game function by RVA for the RUNNING build, refusing what it cannot place.
+///
+/// The doc comment here used to make this claim while the body only added the base -- it checked
+/// nothing. It now delegates to the shared resolver, which returns the translated address on a
+/// build that moved the code and `None` when no mapping is verified. That matters more here than
+/// almost anywhere: these addresses are transmuted into function pointers and CALLED, so a stale
+/// one transfers control into whatever now occupies those bytes.
 fn function(rva: u32) -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
-    Some(module_base + rva as usize)
+    er_game_base::game_build::resolve_game_address(module_base + rva as usize, "invasion-path sfx")
 }
 
 /// Bytes of `UnkSfxCtrlStruct`, the control block `SpawnFfxInstance` writes into.
