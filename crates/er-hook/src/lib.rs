@@ -131,6 +131,30 @@ pub unsafe fn register_union_hook(
         Some(resolved) => resolved,
         None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
     };
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+}
+
+/// [`register_union_hook`] on an address that has ALREADY been resolved for the running build.
+///
+/// RESOLUTION IS NOT IDEMPOTENT, and assuming it was is what made this split necessary. The
+/// translation table is keyed by 1.16.2 RVA and its VALUES are 1.17 RVAs, so feeding a translated
+/// address back in asks "where did 0x11d0b80 move to" -- a question with no entry, whose honest
+/// answer is REFUSED. Measured 2026-08-28: `register_shared_hook` resolved, then handed the result
+/// to `register_shared_hook_with_budget`, which resolved again; `er-armament-icons` lost its
+/// file-open observer at 0x1411ced80 to `MH_ERROR_UNSUPPORTED_FUNCTION` even though that address is
+/// in the verified table and its 1.17 prologue is byte-identical and perfectly hookable.
+///
+/// # Safety
+/// Same contract as [`register_union_hook`], plus: `target` must already be correct for the
+/// running build.
+///
+/// NOT `#[cfg(windows)]`, because its caller `register_union_hook` is not either -- gating only the
+/// callee is a host build error, not a smaller binary.
+unsafe fn register_union_hook_resolved(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         s => return Err(s),
@@ -316,8 +340,10 @@ pub unsafe fn register_shared_hook(
         Some(resolved) => resolved,
         None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
     };
+    // The RESOLVED path, deliberately: resolving twice refuses. See
+    // [`register_union_hook_resolved`] for what that cost.
     unsafe {
-        register_shared_hook_with_budget(
+        register_shared_hook_resolved(
             target,
             handler,
             orig_slot,
@@ -352,6 +378,22 @@ pub unsafe fn register_shared_hook_with_budget(
         Some(resolved) => resolved,
         None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
     };
+    unsafe { register_shared_hook_resolved(target, handler, orig_slot, tries, sleep_ms) }
+}
+
+/// [`register_shared_hook_with_budget`] on an already-resolved address. See
+/// [`register_union_hook_resolved`] for why the split exists.
+///
+/// # Safety
+/// Same contract, plus: `target` must already be correct for the running build.
+#[cfg(windows)]
+unsafe fn register_shared_hook_resolved(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+    tries: u32,
+    sleep_ms: u32,
+) -> Result<HookRoute, MH_STATUS> {
     if let Some(register) = resolve_product_union_register(tries, sleep_ms) {
         // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
         // own static is sound; our image outlives every dispatch.
@@ -364,7 +406,8 @@ pub unsafe fn register_shared_hook_with_budget(
             code => Err(mh_status_from_i32(code)),
         };
     }
-    unsafe { register_union_hook(target, handler, orig_slot) }.map(|()| HookRoute::LocalUnion)
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+        .map(|()| HookRoute::LocalUnion)
 }
 
 /// Reconstruct an [`MH_STATUS`] from the `i32` the cross-DLL export returns.

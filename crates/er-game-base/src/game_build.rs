@@ -349,6 +349,16 @@ fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
     }
     let base = crate::mem::game_module_base().ok()?;
     let rva = (address - base) as u32;
+    // ALREADY TRANSLATED. Resolution is not naturally idempotent: the table is keyed by 1.16.2 RVA
+    // and its values are 1.17 RVAs, so asking it where a 1.17 address moved to finds no entry and
+    // the honest answer is to refuse -- which is how a correctly translated address got REFUSED on
+    // its second pass through, costing `er-armament-icons` its file-open observer at 0x1411ced80.
+    // The call graph no longer resolves twice; this makes a future double-resolve harmless rather
+    // than merely unlikely. Sound because no 1.17 value is also a 1.16.2 key -- the intersection is
+    // empty, and `verified_map_is_idempotent` fails the build's test run if that ever changes.
+    if VERIFIED_1162_TO_1170.iter().any(|(_, moved)| *moved == rva) {
+        return Some(address);
+    }
     if let Some((_, moved)) = VERIFIED_1162_TO_1170.iter().find(|(from, _)| *from == rva) {
         let translated = base + *moved as usize;
         address_log(format_args!(
@@ -370,4 +380,29 @@ fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
 /// says how much of the migration is actually present, rather than leaving it to be inferred.
 pub fn verified_translation_count() -> usize {
     VERIFIED_1162_TO_1170.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VERIFIED_1162_TO_1170;
+
+    /// No 1.17 destination may also be a 1.16.2 source, or the "already translated" shortcut in
+    /// `resolve_game_address` would swallow a real translation. Empty today; asserted so that a
+    /// future row cannot make the shortcut silently wrong.
+    #[test]
+    fn verified_map_is_idempotent() {
+        let sources: Vec<u32> = VERIFIED_1162_TO_1170
+            .iter()
+            .map(|(from, _)| *from)
+            .collect();
+        let clashes: Vec<u32> = VERIFIED_1162_TO_1170
+            .iter()
+            .map(|(_, moved)| *moved)
+            .filter(|moved| sources.contains(moved))
+            .collect();
+        assert!(
+            clashes.is_empty(),
+            "a translated destination is also a source RVA: {clashes:#x?}"
+        );
+    }
 }
