@@ -161,7 +161,13 @@ fn enabled() -> bool {
 fn dialog_class(vt: usize, base: usize) -> Option<&'static str> {
     if vt == base + MSGBOX_DIALOG_VTABLE_RVA {
         Some("MessageBoxDialog")
-    } else if vt == base + SAVE_RETRY_DIALOG_VTABLE_RVA {
+    } else if vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            SAVE_RETRY_DIALOG_VTABLE_RVA,
+            "SAVE_RETRY_DIALOG_VTABLE_RVA",
+        )
+    {
         Some("SaveRetryDialog")
     } else {
         None
@@ -340,8 +346,14 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
     // Supporting singleton diagnostics (NOT authoritative): the CSMenuMan build-time
     // dialog flags, for corroboration + future RE. Their teardown-clear semantics
     // are unverified, so they never gate `msgbox_active`.
-    let cs_menu_man = unsafe { safe_read_usize(base + er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA) }
-        .filter(|p| *p >= HEAP_LO);
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .filter(|p| *p >= HEAP_LO);
     let popup_menu =
         cs_menu_man.and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_POPUP_MENU_80_OFFSET) });
     let flag_104 =

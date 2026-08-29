@@ -41,7 +41,11 @@ pub(crate) unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usiz
     }
     let scene_proxy = system_dialog + SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET;
     let scene_proxy_vt = unsafe { safe_read_usize(scene_proxy) }.unwrap_or(NULL);
-    let want_scene_proxy_vt = base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    let want_scene_proxy_vt = er_game_base::mem::game_data_addr(
+        base,
+        SCENE_OBJ_PROXY_VTABLE_RVA,
+        "SCENE_OBJ_PROXY_VTABLE_RVA",
+    );
     if scene_proxy_vt != want_scene_proxy_vt {
         append_autoload_debug(format_args!(
             "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} scene_proxy=dialog+0x{SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET:x}=0x{scene_proxy:x} vt=0x{scene_proxy_vt:x} want=0x{want_scene_proxy_vt:x}"

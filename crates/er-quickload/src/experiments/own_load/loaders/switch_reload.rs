@@ -548,7 +548,13 @@ pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
         return false;
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         return false;
     }
     let ctx = unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);

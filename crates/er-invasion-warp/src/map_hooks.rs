@@ -857,7 +857,13 @@ pub(crate) fn layer_bit_for_converter(
         return None;
     }
     let table: [u8; LAYERED_CONVERTER_COUNT] = core::array::from_fn(|i| {
-        unsafe { er_game_base::mem::safe_read_u8(base + LAYER_ID_TABLE_RVA + i) }.unwrap_or(0xFF)
+        unsafe {
+            er_game_base::mem::safe_read_u8(
+                er_game_base::mem::game_data_addr(base, LAYER_ID_TABLE_RVA, "LAYER_ID_TABLE_RVA")
+                    + i,
+            )
+        }
+        .unwrap_or(0xFF)
     });
     // Fail closed on an unexpected table: the layer ids are what the whole mapping rests on.
     if table != [0, 1, 10] {

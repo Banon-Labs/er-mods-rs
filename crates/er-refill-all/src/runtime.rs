@@ -245,7 +245,13 @@ fn live_depository_dialog(base: usize) -> Option<*mut core::ffi::c_void> {
         return None;
     }
     let vfptr = unsafe { safe_read_usize(dialog) }?;
-    (vfptr == base + DEPOSITORY_DIALOG_VFTABLE_RVA).then_some(dialog as *mut core::ffi::c_void)
+    (vfptr
+        == er_game_base::mem::game_data_addr(
+            base,
+            DEPOSITORY_DIALOG_VFTABLE_RVA,
+            "DEPOSITORY_DIALOG_VFTABLE_RVA",
+        ))
+    .then_some(dialog as *mut core::ffi::c_void)
 }
 
 /// One `FrameBegin` tick. Returns immediately unless the storage box is open.

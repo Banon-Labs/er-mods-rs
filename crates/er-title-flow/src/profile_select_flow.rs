@@ -83,7 +83,7 @@ pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuA
         return None;
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
         return None;
     }
     let registry =
@@ -95,7 +95,7 @@ pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuA
     let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
     let node = member_node?;
     let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);
-    if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
+    if node_vt != er_game_base::mem::game_data_addr(base, MEMBERFUNCJOB_VTABLE_RVA, "MEMBERFUNCJOB_VTABLE_RVA") {
         return None;
     }
     const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
@@ -148,7 +148,7 @@ pub unsafe fn title_live_dialog_fire_ready(
         return None;
     }
     let title_dialog_vt = unsafe { safe_read_usize(title_dialog) }.unwrap_or(null);
-    if title_dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if title_dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
         return None;
     }
     let menu_opened_latch = unsafe {
@@ -161,7 +161,7 @@ pub unsafe fn title_live_dialog_fire_ready(
     }
     let registry_vt =
         unsafe { safe_read_usize(title_dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
-    if registry_vt != base + SCENE_OBJ_PROXY_VTABLE_RVA {
+    if registry_vt != er_game_base::mem::game_data_addr(base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") {
         return None;
     }
     let capture_slot = title_dialog + DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
@@ -170,7 +170,7 @@ pub unsafe fn title_live_dialog_fire_ready(
         return None;
     }
     let capture_vt = unsafe { safe_read_usize(capture) }.unwrap_or(null);
-    if capture_vt != base + TITLE_FLOW_CONTEXT_VTABLE_RVA {
+    if capture_vt != er_game_base::mem::game_data_addr(base, TITLE_FLOW_CONTEXT_VTABLE_RVA, "TITLE_FLOW_CONTEXT_VTABLE_RVA") {
         return None;
     }
     let menu_window = LATCHED_MENU_WINDOW.load(Ordering::SeqCst);
@@ -195,7 +195,7 @@ pub unsafe fn title_live_dialog_fire_ready(
 /// SaveRetryDialog AFTER the builder, so a base-only check bails once the override lands). bd
 /// offline-title-modal-is-saveretrydialog.
 pub fn is_startup_msgbox_vtable(vt: usize, base: usize) -> bool {
-    vt == base + MSGBOX_DIALOG_VTABLE_RVA || vt == base + SAVE_RETRY_DIALOG_VTABLE_RVA
+    vt == base + MSGBOX_DIALOG_VTABLE_RVA || vt == er_game_base::mem::game_data_addr(base, SAVE_RETRY_DIALOG_VTABLE_RVA, "SAVE_RETRY_DIALOG_VTABLE_RVA")
 }
 pub fn startup_modal_blocking_state() -> StartupModalBlockingState {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -454,12 +454,12 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
             } else {
                 null
             };
-            if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            if dialog_vt == er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
                 let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
                 let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
                     unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return }) };
                 let textfadeout =
-                    unsafe { is_in_state(sm, module_base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) }
+                    unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(module_base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) }
                         != OWN_STEPPER_FALSE;
                 if textfadeout
                     && OBSERVE_MENU_OPEN_EMITTED.swap(OBSERVE_MARKER_EMITTED, Ordering::SeqCst)
@@ -473,7 +473,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
                 }
             }
         }
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
     let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
     let gm = game_man_ptr_or_null();
     let read_gm = |off: usize| {
@@ -536,7 +536,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     } else {
         TITLE_STATE_OWNER_GONE
     };
-    let driver = unsafe { *((module_base + STREAMING_DRIVER_SINGLETON_RVA) as *const usize) };
+    let driver = unsafe { *((er_game_base::mem::game_data_addr(module_base, STREAMING_DRIVER_SINGLETON_RVA, "STREAMING_DRIVER_SINGLETON_RVA")) as *const usize) };
     // Change-detection: only log when the signature changes (full granularity, no
     // per-frame file I/O). Captures every transition incl. the mms_state 3 -> resolve.
     let csf_nz = (csfeman != null) as i64;
@@ -659,9 +659,9 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     // its full-memory VirtualQuery+deref walk raced the booting game (region freed
     // mid-scan -> AV, the boot-crash). The autoload needs none of it -- the movie
     // singleton and GameMan are fixed globals.
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-    let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
-    let movie = unsafe { *((module_base + MOVIE_SINGLETON_RVA) as *const usize) };
+    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
+    let latch = unsafe { *((er_game_base::mem::game_data_addr(module_base, TITLE_ACCEPT_LATCH_RVA, "TITLE_ACCEPT_LATCH_RVA")) as *const u8) };
+    let movie = unsafe { *((er_game_base::mem::game_data_addr(module_base, MOVIE_SINGLETON_RVA, "MOVIE_SINGLETON_RVA")) as *const usize) };
     let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
     let gm = game_man_ptr_or_null();
     let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
@@ -673,7 +673,7 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     if do_write && tick >= DISMISS_MIN_TICK && skip == MOVIE_SKIP_FLAG_CLEAR && movie != null {
         let movie_vtable = unsafe { *(movie as *const usize) };
         let hwnd = unsafe { *((movie + MOVIE_HWND_OFFSET) as *const usize) };
-        if movie_vtable == module_base + MOVIE_VTABLE_RVA && hwnd != null {
+        if movie_vtable == er_game_base::mem::game_data_addr(module_base, MOVIE_VTABLE_RVA, "MOVIE_VTABLE_RVA") && hwnd != null {
             let hwnd_ptr = hwnd as *mut c_void;
             unsafe {
                 let menu = GetSystemMenu(hwnd_ptr, WND_GET_SYSTEM_MENU_KEEP);
@@ -732,7 +732,7 @@ pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
     let load_in_progress =
         unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
     let armed = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
     if load_in_progress == TITLE_NATIVE_JOB_TASK_DATA_ZERO {
         // Re-arm each frame: persist the slot against the title's reset, set latch.
         let set_save_slot: unsafe extern "system" fn(i32) =
@@ -872,7 +872,7 @@ pub unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> 
                                 Ordering::SeqCst,
                             );
                             let table_ok =
-                                instance_table == Some(module_base + INNER_TITLE_STATE_TABLE_RVA);
+                                instance_table == Some(er_game_base::mem::game_data_addr(module_base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA"));
                             let state_ok = state_value.is_some_and(|s| {
                                 (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&s)
                             });

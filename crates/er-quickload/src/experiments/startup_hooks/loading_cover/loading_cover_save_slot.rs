@@ -99,7 +99,11 @@ pub(crate) unsafe fn count_live_profile_models(base: usize) -> usize {
         let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
         if valid(r)
             && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
             && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
                 .map(&valid)
                 .unwrap_or(false)
@@ -156,7 +160,11 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     let populated = t0 != 0
         && t0 != null
         && unsafe { safe_read_usize(t0) }.unwrap_or(0)
-            == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+            == er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            );
     let force_loading_screen_rebuild = populated
         && loading_screen_started
         && PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) == 0

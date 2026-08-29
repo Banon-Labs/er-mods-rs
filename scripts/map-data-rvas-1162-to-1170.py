@@ -174,6 +174,60 @@ def carry(md, old: Image, new: Image, fmap: dict[int, int], target: int):
 
 
 
+# --- RTTI RESCUE for vtables ----------------------------------------------------------------
+# Reference voting needs two agreeing references, and a vtable referenced from only one place is
+# withheld even when its identity is not in doubt. A vtable carries its own name: MSVC puts a
+# CompleteObjectLocator at `vtable[-1]` whose type descriptor holds the mangled class. If the SAME
+# mangled name sits at the candidate in the new image and at the source in the old one -- and at
+# neither of the crossed positions -- that is a unique-name match, which is STRONGER evidence than
+# any number of agreeing displacements.
+#
+# Measured 2026-08-29: `FUNCTOR_VTABLE_RVA 0x2ac3ea8 -> 0x2ac6f28` was dropped as WEAK (one
+# reference), and RTTI confirms it outright -- both ends carry
+# `.?AV?$_Func_impl@V<lambda_e1e7...>@@...PEAVMenuWindow@CS@@AEAVSceneProxy@5@@std@@`, a name that
+# occurs once per image.
+RTTI_TYPE_DESCRIPTOR_OFFSET = 0x0C
+RTTI_NAME_OFFSET = 0x10
+
+
+def rtti_class_name(image: bytes, vtable_rva: int, image_base: int = 0x140000000) -> str | None:
+    """The mangled RTTI class name for a vtable at `vtable_rva`, or None if that is not a vtable."""
+    if not 8 <= vtable_rva < len(image):
+        return None
+    locator = int.from_bytes(image[vtable_rva - 8 : vtable_rva], "little")
+    if not image_base <= locator < image_base + len(image):
+        return None
+    locator -= image_base
+    if locator + RTTI_TYPE_DESCRIPTOR_OFFSET + 4 > len(image):
+        return None
+    descriptor = int.from_bytes(
+        image[locator + RTTI_TYPE_DESCRIPTOR_OFFSET : locator + RTTI_TYPE_DESCRIPTOR_OFFSET + 4],
+        "little",
+    )
+    start = descriptor + RTTI_NAME_OFFSET
+    if not 0 < start < len(image):
+        return None
+    end = image.find(b"\0", start, start + 256)
+    if end < 0:
+        return None
+    name = image[start:end]
+    return name.decode("ascii", "replace") if name.startswith(b".?A") else None
+
+
+def rtti_confirms(old_image: bytes, new_image: bytes, src_rva: int, dst_rva: int) -> str | None:
+    """The shared mangled name when `src` in the old image and `dst` in the new are the same class.
+
+    Requires the crossed positions NOT to carry that name, so a region that happens not to have
+    moved cannot pass by accident.
+    """
+    src_name = rtti_class_name(old_image, src_rva)
+    if src_name is None or src_name != rtti_class_name(new_image, dst_rva):
+        return None
+    if rtti_class_name(new_image, src_rva) == src_name or rtti_class_name(old_image, dst_rva) == src_name:
+        return None
+    return src_name
+
+
 CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9a-fA-F_]+)")
 BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 DATA_MAP = "docs/recon/rva-map-1162-to-1170.data.tsv"
@@ -244,7 +298,7 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
                 continue
             targets.setdefault(f"(refused at runtime 0x{rva:x})", rva)
 
-    rows, weak = [], []
+    rows, weak, rtti_rescued = [], [], []
     for name, rva in sorted(targets.items(), key=lambda kv: kv[1]):
         moved, note, votes = carry(md, old, new, fmap, rva)
         if moved is None:
@@ -257,6 +311,15 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         # not a missing address -- that only costs a feature -- but a confident
         # wrong one, which is what put 0x3d6e278 in the first 2.7.0.0 bundle.
         if best < 2 or best * 5 < total * 3:
+            # A vtable can rescue itself: it carries its own mangled class name, and a name that
+            # occurs once per image is stronger evidence than any number of agreeing
+            # displacements. Only for vtables, and only when the crossed positions do NOT carry
+            # the name, so a region that happens not to have moved cannot pass by accident.
+            confirmed = rtti_confirms(old.data, new.data, rva, moved)
+            if confirmed:
+                rtti_rescued.append((name, rva, moved, confirmed))
+                rows.append((name, rva, moved, best, total))
+                continue
             weak.append((name, rva, f"{note}, winner {best}/{total}"))
             continue
         rows.append((name, rva, moved, best, total))
@@ -270,12 +333,25 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         "# fewer than two agreeing references, or without a clear majority, is listed at the",
         "# bottom as UNUSED rather than promoted -- a missing address costs a feature, a confident",
         "# wrong one cost a boot (0x3d6e278, the first 2.7.0.0 cs_system_step).",
+        "# A `rtti` suffix means a VTABLE carried itself: the same mangled class name sits at the",
+        "# source in 1.16.2 and the destination in 1.17 and at neither crossed position. A name",
+        "# that occurs once per image beats any number of agreeing displacements.",
     ]
-    body = [f"0x{rva:x}\t0x{moved:x}\t{name}\t{best}/{total}" for name, rva, moved, best, total in rows]
+    rescued_names = {name for name, _rva, _moved, _cls in rtti_rescued}
+    body = [
+        f"0x{rva:x}\t0x{moved:x}\t{name}\t"
+        + (f"{best}/{total} rtti" if name in rescued_names else f"{best}/{total}")
+        for name, rva, moved, best, total in rows
+    ]
     tail = ["#", "# UNUSED -- not enough agreement to be worth trusting:"]
     tail += [f"# {name}\t0x{rva:x}\t{note}" for name, rva, note in weak]
     (repo / DATA_MAP).write_text("\n".join(head + body + tail) + "\n", encoding="utf-8")
-    print(f"wrote {DATA_MAP}: {len(rows)} usable row(s), {len(weak)} withheld")
+    for name, rva, moved, cls in rtti_rescued:
+        print(f"  rtti rescue: {name} 0x{rva:x} -> 0x{moved:x}  {cls[:90]}")
+    print(
+        f"wrote {DATA_MAP}: {len(rows)} usable row(s) "
+        f"({len(rtti_rescued)} carried by RTTI), {len(weak)} withheld"
+    )
     return 0
 
 

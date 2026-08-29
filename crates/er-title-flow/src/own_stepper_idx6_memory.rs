@@ -24,7 +24,7 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
-    let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
     let read_gm = |off: usize| {
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((gm + off) as *const i32) }

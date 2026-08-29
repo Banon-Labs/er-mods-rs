@@ -32,6 +32,13 @@ IGNORED_FILES = {
     # drained" or "the display woke". The no-sleep rule targets runtime probes.
     Path("scripts/vm-sendkeys.py"),
     Path("scripts/vanilla-control-probe.py"),
+    # Per-DLL runtime sweep. Its `time.sleep` is the WATCH WINDOW -- the measurement itself --
+    # not synchronization: the question it answers is "is this DLL's thread-group leader still
+    # alive N seconds after launch", and N is the datum. Its stop conditions are real semaphores
+    # (/proc leader state `Z`, or the process disappearing), never a timer; the window only bounds
+    # how long a surviving game is watched. There is no readiness primitive for "nothing has gone
+    # wrong yet", which is precisely what a boot verdict asserts.
+    Path("scripts/sweep-dll-1170-runtime.py"),
     # Sampling profiler / flight recorder, NOT a runtime probe that waits on a readiness
     # signal. Its `time.sleep` is the sample PERIOD -- the measurement instrument itself --
     # not synchronization: the tool exists to record a thread's state at a fixed rate right

@@ -226,7 +226,13 @@ fn scan_for_owner(base: usize) -> Option<usize> {
 fn find_title_owner(base: usize) -> Option<usize> {
     let cached = CACHED_OWNER.load(Ordering::SeqCst);
     if cached != 0 {
-        if unsafe { safe_read_usize(cached) } == Some(base + TITLE_OWNER_VTABLE_RVA) {
+        if unsafe { safe_read_usize(cached) }
+            == Some(er_game_base::mem::game_data_addr(
+                base,
+                TITLE_OWNER_VTABLE_RVA,
+                "TITLE_OWNER_VTABLE_RVA",
+            ))
+        {
             return Some(cached);
         }
         CACHED_OWNER.store(0, Ordering::SeqCst);
@@ -260,8 +266,7 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_DIALOG_E0_OFFSET) }.filter(|p| *p >= HEAP_LO);
     let dialog_vtable = dialog.and_then(|d| unsafe { safe_read_usize(d) });
-    let dialog_vtable_ok =
-        matches!(dialog_vtable, Some(vt) if vt == base + TITLE_TOP_DIALOG_VTABLE_RVA);
+    let dialog_vtable_ok = matches!(dialog_vtable, Some(vt) if vt == er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA"));
     let valid_dialog = if dialog_vtable_ok { dialog } else { None };
 
     // press-start SceneObjProxy window (dialog+0xb78): the deadlock hinges here.
@@ -271,7 +276,7 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
     let proxy_vtable = proxy.and_then(|p| unsafe { safe_read_usize(p) });
     let proxy_vtable_ok = matches!(
         proxy_vtable,
-        Some(vt) if vt == base + SCENE_OBJ_PROXY_VTABLE_RVA && vtable_in_game_image(vt, base)
+        Some(vt) if vt == er_game_base::mem::game_data_addr(base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") && vtable_in_game_image(vt, base)
     );
     let proxy_component =
         proxy.and_then(|p| unsafe { safe_read_usize(p + SCENE_OBJ_PROXY_COMPONENT_08_OFFSET) });
@@ -287,8 +292,7 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
         .and_then(|d| unsafe { safe_read_usize(d + DIALOG_TFC_A38_OFFSET) })
         .filter(|p| *p >= HEAP_LO);
     let tfc_vtable = tfc.and_then(|t| unsafe { safe_read_usize(t) });
-    let tfc_vtable_ok =
-        matches!(tfc_vtable, Some(vt) if vt == base + TITLE_FLOW_CONTEXT_VTABLE_RVA);
+    let tfc_vtable_ok = matches!(tfc_vtable, Some(vt) if vt == er_game_base::mem::game_data_addr(base, TITLE_FLOW_CONTEXT_VTABLE_RVA, "TITLE_FLOW_CONTEXT_VTABLE_RVA"));
     let valid_tfc = if tfc_vtable_ok { tfc } else { None };
     let tfc_14c =
         valid_tfc.and_then(|t| unsafe { safe_read_i32(t + TFC_DISPATCH_STATE_14C_OFFSET) });

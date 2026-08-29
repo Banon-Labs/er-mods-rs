@@ -122,7 +122,11 @@ pub unsafe fn portrait_equip_read_sample(
         return None;
     }
     if unsafe { safe_read_usize(renderer) }?
-        != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
     {
         return None;
     }

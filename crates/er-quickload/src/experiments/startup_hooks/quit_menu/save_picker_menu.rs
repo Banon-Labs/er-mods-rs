@@ -918,7 +918,12 @@ fn save_picker_rebuild_target_is_live(
     game_base: usize,
 ) -> bool {
     dialog_vtable == game_base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA
-        && list_vtable == game_base + PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA
+        && list_vtable
+            == er_game_base::mem::game_data_addr(
+                game_base,
+                PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA,
+                "PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA",
+            )
 }
 
 unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
@@ -960,7 +965,11 @@ mod rebuild_liveness_tests {
     fn rebuild_requires_the_live_dialog_and_final_derived_list_vtables() {
         let base = 0x140000000;
         let dialog = base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA;
-        let list = base + PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA;
+        let list = er_game_base::mem::game_data_addr(
+            base,
+            PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA,
+            "PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA",
+        );
         assert!(save_picker_rebuild_target_is_live(dialog, list, base));
         assert!(!save_picker_rebuild_target_is_live(
             dialog,
@@ -1632,7 +1641,13 @@ static SAVE_PICKER_GRID_GEOMETRY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// The live `CSMenuManImp` keystate bitmap (`+0x90`), one byte per menu event id.
 unsafe fn save_picker_menu_event_keystate() -> Option<*mut u8> {
     let base = game_module_base().ok()?;
-    let inputmgr = unsafe { *((base + CS_MENU_MAN_GLOBAL_RVA) as *const usize) };
+    let inputmgr = unsafe {
+        *((er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        )) as *const usize)
+    };
     (inputmgr != 0).then(|| (inputmgr + INPUTMGR_BITMAP_90_OFFSET) as *mut u8)
 }
 

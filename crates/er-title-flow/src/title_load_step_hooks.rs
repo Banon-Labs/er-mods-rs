@@ -20,17 +20,17 @@ unsafe fn title_dialog_sm_state(
         return None;
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
         return None;
     }
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
         unsafe { std::mem::transmute(title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA")?) };
     let in_fadein =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) } != OWN_STEPPER_FALSE;
-    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_FADEIN_RVA, "TITLE_STATE_DESC_FADEIN_RVA")) } != OWN_STEPPER_FALSE;
+    let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) } != OWN_STEPPER_FALSE;
     let latch = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
         .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
         .unwrap_or(0);
@@ -90,7 +90,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     let set_state: unsafe extern "system" fn(usize, usize) =
         unsafe { std::mem::transmute(match title_fn(TITLE_FD4_SETSTATE_RVA, "TITLE_FD4_SETSTATE_RVA") { Some(address) => address, None => return }) };
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
+    unsafe { set_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) };
     append_autoload_debug(format_args!(
         "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop) via 0x{:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***",
         base + TITLE_FD4_SETSTATE_RVA
@@ -630,7 +630,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
             && let Ok(base) = game_module_base() {
                 let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
                     .unwrap_or(0);
-                if table == base + INNER_TITLE_STATE_TABLE_RVA {
+                if table == er_game_base::mem::game_data_addr(base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA") {
                     let previous = TITLE_OWNER_PTR.swap(owner, Ordering::SeqCst);
                     TITLE_OWNER_SCAN_COUNTDOWN
                         .store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);

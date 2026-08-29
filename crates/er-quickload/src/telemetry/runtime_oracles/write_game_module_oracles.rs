@@ -1041,7 +1041,7 @@ fn write_game_module_oracles(body: &mut String) {
             TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755.load(Ordering::SeqCst);
         let title_custom_cover_profile_source_ready =
             title_custom_cover_profile_source_renderer_vtable
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(base, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA")
                 && title_custom_cover_profile_source_offscreen_rend
                     != TITLE_OWNER_SCAN_START_ADDRESS
                 && title_custom_cover_profile_source_offscreen_rend != NULL_PTR

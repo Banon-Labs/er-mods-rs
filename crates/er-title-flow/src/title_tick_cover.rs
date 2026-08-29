@@ -142,7 +142,7 @@ pub unsafe fn title_press_button_component_ready(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
     let proxy_vt = unsafe { safe_read_usize(proxy) }.unwrap_or(null);
-    if proxy_vt != base + SCENE_OBJ_PROXY_VTABLE_RVA {
+    if proxy_vt != er_game_base::mem::game_data_addr(base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") {
         return None;
     }
     let context =
@@ -157,9 +157,9 @@ pub unsafe fn title_dialog_state(dialog: usize, base: usize) -> TitleDialogState
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
         unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return TitleDialogState { in_loop: false, in_textfadeout: false, menu_opened_latch: TITLE_OWNER_SCAN_START_ADDRESS } }) };
-    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) } != OWN_STEPPER_FALSE;
     let menu_opened_latch =
         unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
             .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
@@ -189,9 +189,9 @@ pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     };
     if committed != TITLE_STEP_MENU_JOB_WAIT
         || requested != TITLE_STEP_MENU_JOB_WAIT
-        || table != base + INNER_TITLE_STATE_TABLE_RVA
+        || table != er_game_base::mem::game_data_addr(base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA")
         || session == null
-        || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA
+        || dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA")
         || unsafe { title_press_button_component_ready(dialog, base) }.is_none()
     {
         return false;
@@ -199,9 +199,9 @@ pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
         unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return false }) };
-    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) } != OWN_STEPPER_FALSE;
     in_loop || in_textfadeout
 }
 pub unsafe fn title_scheduler_ready(owner: usize, base: usize) -> bool {
@@ -240,19 +240,19 @@ pub unsafe fn product_core_autoload_ready(
     } else {
         null
     };
-    let press_start = if dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    let press_start = if dialog_vt == er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
         unsafe { title_press_button_component_ready(dialog, base) }
     } else {
         None
     };
-    let title_state = if dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    let title_state = if dialog_vt == er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
         Some(unsafe { title_dialog_state(dialog, base) })
     } else {
         None
     };
     if committed != TITLE_STEP_MENU_JOB_WAIT
         || requested != TITLE_STEP_MENU_JOB_WAIT
-        || table != base + INNER_TITLE_STATE_TABLE_RVA
+        || table != er_game_base::mem::game_data_addr(base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA")
         || session == null
         || game_data_man == null
         || profile_summary == null
@@ -350,7 +350,7 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
         return false;
     }
     let renderer_slot =
-        base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA + slot * core::mem::size_of::<usize>();
+        er_game_base::mem::game_data_addr(base, TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA") + slot * core::mem::size_of::<usize>();
     let renderer =
         unsafe { safe_read_usize(renderer_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let renderer_vtable = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
@@ -358,7 +358,7 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
-    let offscreen = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    let offscreen = if renderer_vtable == er_game_base::mem::game_data_addr(base, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA") {
         unsafe {
             safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
         }
@@ -374,7 +374,7 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
-    let tex_index = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    let tex_index = if renderer_vtable == er_game_base::mem::game_data_addr(base, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA") {
         unsafe { safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET) }
             .map(|value| value & 0xffff_ffff)
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
@@ -404,7 +404,7 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
     TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX.store(tex_index, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754.store(ready_754, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755.store(ready_755, Ordering::SeqCst);
-    renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    renderer_vtable == er_game_base::mem::game_data_addr(base, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA")
         && offscreen != TITLE_OWNER_SCAN_START_ADDRESS
         && offscreen != 0
         && tex_rescap != TITLE_OWNER_SCAN_START_ADDRESS
@@ -2213,14 +2213,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         } else {
             null
         };
-        let press_start_context = if press_start_vt == module_base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        let press_start_context = if press_start_vt == er_game_base::mem::game_data_addr(module_base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") {
             unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
                 .unwrap_or(null)
         } else {
             null
         };
         let (title_loop, title_textfadeout, menu_opened_latch) =
-            if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            if dialog_vt == er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
                 let state = unsafe { title_dialog_state(dialog, module_base) };
                 (state.in_loop, state.in_textfadeout, state.menu_opened_latch)
             } else {
@@ -2237,7 +2237,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let blocker =
             if committed != TITLE_STEP_MENU_JOB_WAIT || requested != TITLE_STEP_MENU_JOB_WAIT {
                 PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE
-            } else if table != module_base + INNER_TITLE_STATE_TABLE_RVA {
+            } else if table != er_game_base::mem::game_data_addr(module_base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA") {
                 PRODUCT_CORE_BLOCKER_TITLE_TABLE
             } else if session == null {
                 PRODUCT_CORE_BLOCKER_SESSION
@@ -2249,7 +2249,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 PRODUCT_CORE_BLOCKER_IODEV
             } else if heap_allocator == null {
                 PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR
-            } else if dialog_vt != module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            } else if dialog_vt != er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
                 PRODUCT_CORE_BLOCKER_TITLE_DIALOG
             } else if press_start_vt != module_base + SCENE_OBJ_PROXY_VTABLE_RVA
                 || press_start_context == null

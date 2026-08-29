@@ -561,7 +561,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let probe = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     if !valid(probe)
         || unsafe { safe_read_usize(probe) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
     {
         return;
     }
@@ -658,7 +662,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if !valid(r)
                 || unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    != er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
             {
                 continue;
             }
@@ -729,7 +737,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             let r_valid = valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+                    == er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    );
             let _ = unsafe { mark(summary, s) };
             // PER-SLOT kick replica in place of the engine's GLOBAL refresh: the global form kicked
             // every marked slot (all the save's characters) -- the cross-slot portrait swap source.
@@ -750,7 +762,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    == er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
                 && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0)
                     != 0
             {
@@ -779,7 +795,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    == er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
             {
                 unsafe { apply_profile_camera_override(base, r, s) };
             }
@@ -792,7 +812,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
         if valid(r)
             && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             let target = portrait_target_slot();
             if s == target
@@ -823,7 +847,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if !valid(r)
                 || unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    != er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
             {
                 continue;
             }
@@ -1028,7 +1056,11 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         };
         if valid(renderer)
             && unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
             PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
@@ -1101,7 +1133,7 @@ pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
                 let is_valid = r != 0
                     && r != null
                     && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                        == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+                        == er_game_base::mem::game_data_addr(base, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA");
                 if is_valid {
                     valid_mask |= 1 << s;
                 } else {

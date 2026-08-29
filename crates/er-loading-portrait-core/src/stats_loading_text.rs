@@ -44,7 +44,13 @@ pub unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
         return;
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return;
     }
     let data = unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);

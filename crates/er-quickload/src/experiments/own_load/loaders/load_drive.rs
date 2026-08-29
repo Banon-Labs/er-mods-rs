@@ -500,11 +500,22 @@ unsafe fn own_load_pump_fire(
     } else {
         0
     };
-    if dialog == 0 || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog == 0
+        || dialog_vt
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
+    {
         append_autoload_debug(format_args!(
             "own-load-pump: ABORT -- live TitleTopDialog not up (owner+0x{:x}=0x{dialog:x} vt=0x{dialog_vt:x} want 0x{:x}) -> no build (save-safe)",
             TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
-            base + TITLE_TOP_DIALOG_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA"
+            )
         ));
         return;
     }

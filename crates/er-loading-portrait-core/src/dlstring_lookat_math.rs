@@ -707,7 +707,11 @@ pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
     } else {
         0
     };
-    base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA + idx * core::mem::size_of::<usize>()
+    er_game_base::mem::game_data_addr(
+        base,
+        TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA,
+        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA",
+    ) + idx * core::mem::size_of::<usize>()
 }
 
 /// Walk the CSMenuProfModelRend chain for `slot` to its live portrait `CSGxTexture`, or 0 if the
@@ -727,7 +731,13 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
         return 0;
     }
     let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
-    if vt != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    if vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
+    {
         return 0;
     }
     let offscreen = unsafe {
@@ -800,7 +810,13 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
         return;
     }
     let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
-    if vt != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    if vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
+    {
         return;
     }
     // NOTE: driving the menu offscreen render (FUN_140bb8d90) post-Continue crashes during world-load

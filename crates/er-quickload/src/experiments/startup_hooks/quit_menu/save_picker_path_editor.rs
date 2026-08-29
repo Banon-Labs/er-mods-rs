@@ -732,8 +732,13 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
         && let Ok(base) = game_module_base()
     {
         unsafe {
-            *(time as *mut usize) = base + FD4_TIME_VTABLE_RVA;
-            *(time as *mut usize) = base + FD4_TIME_FLOAT_VTABLE_RVA;
+            *(time as *mut usize) =
+                er_game_base::mem::game_data_addr(base, FD4_TIME_VTABLE_RVA, "FD4_TIME_VTABLE_RVA");
+            *(time as *mut usize) = er_game_base::mem::game_data_addr(
+                base,
+                FD4_TIME_FLOAT_VTABLE_RVA,
+                "FD4_TIME_FLOAT_VTABLE_RVA",
+            );
         }
     }
     append_autoload_debug(format_args!(

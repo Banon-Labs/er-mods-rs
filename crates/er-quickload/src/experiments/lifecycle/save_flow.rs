@@ -943,8 +943,13 @@ fn save_flow_retract_stuck_request(reason: &str) {
         decline("the game module base is unavailable");
         return;
     };
-    let Some(gm) = (unsafe { safe_read_usize(base + er_game_base::rva::GAME_MAN_SINGLETON_RVA) })
-    else {
+    let Some(gm) = (unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            er_game_base::rva::GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }) else {
         decline("GameMan is unreadable");
         return;
     };

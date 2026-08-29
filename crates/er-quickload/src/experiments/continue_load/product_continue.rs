@@ -26,7 +26,12 @@ pub(crate) unsafe fn product_continue_action_ready(
         return false;
     }
     let dialog_vt = unsafe { safe_read_usize(ready.title_dialog) }.unwrap_or(null);
-    dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
+    dialog_vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
 }
 pub(crate) fn record_continue_candidate(item: usize, accept_predicate: usize, base: usize) {
     const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
@@ -66,10 +71,20 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
         return None;
     }
     let item_vt = unsafe { safe_read_usize(item) }?;
-    if item_vt != base + MENU_WINDOW_JOB_VTABLE_RVA {
+    if item_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            MENU_WINDOW_JOB_VTABLE_RVA,
+            "MENU_WINDOW_JOB_VTABLE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} vt=0x{item_vt:x} expected=0x{:x}",
-            base + MENU_WINDOW_JOB_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                MENU_WINDOW_JOB_VTABLE_RVA,
+                "MENU_WINDOW_JOB_VTABLE_RVA"
+            )
         ));
         return None;
     }

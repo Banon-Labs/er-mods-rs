@@ -137,7 +137,12 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
             unsafe { crate::win32::read_usize(p) }
         }
     };
-    let Some(manager) = rd(base + FD4_PAD_MANAGER_RVA).filter(|m| *m >= HEAP_LO) else {
+    let Some(manager) = rd(er_game_base::mem::game_data_addr(
+        base,
+        FD4_PAD_MANAGER_RVA,
+        "FD4_PAD_MANAGER_RVA",
+    ))
+    .filter(|m| *m >= HEAP_LO) else {
         return;
     };
     // SAFE read-only replication of the CSInGamePad lookup (bd STRUCT-padMaps-is-at-0x48). padMaps (+0x48)

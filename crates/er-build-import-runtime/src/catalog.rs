@@ -587,7 +587,11 @@ pub fn msg_repository() -> Option<usize> {
     let base = er_game_base::mem::game_module_base().ok()?;
     // Safety: a fault-checked read of one pointer-sized slot in the loaded image.
     let repository = unsafe {
-        er_game_base::mem::safe_read_usize(base + er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA)
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA,
+            "MSG_REPOSITORY_GLOBAL_RVA",
+        ))
     }?;
     (repository != 0).then_some(repository)
 }

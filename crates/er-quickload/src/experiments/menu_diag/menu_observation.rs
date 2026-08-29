@@ -82,7 +82,8 @@ pub(crate) unsafe fn diagnostic_menu_walk(
     const INTERP_COUNT: usize = 2;
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let item_vtable_abs = module_base + ITEM_VTABLE_RVA;
+    let item_vtable_abs =
+        er_game_base::mem::game_data_addr(module_base, ITEM_VTABLE_RVA, "ITEM_VTABLE_RVA");
     let dialog_factory_abs = module_base + DIALOG_FACTORY_RVA;
     let container = owner + ITEM_CONTAINER_138;
 
@@ -295,10 +296,20 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     } else {
         BAD_I32
     };
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "titletop-entries: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} (expect 0x{:x}) -- not the TitleTopDialog, skip",
-            base + TITLE_TOP_DIALOG_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA"
+            )
         ));
         return (None, None, cursor);
     }
@@ -495,15 +506,30 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
         return (None, None);
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "loadgame-scan: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} != TitleTopDialog 0x{:x} -- skip",
-            base + TITLE_TOP_DIALOG_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA"
+            )
         ));
         return (None, None);
     }
-    let functor_vt = base + FUNCTOR_VTABLE_RVA;
-    let memberjob_vt = base + MEMBERFUNCJOB_VTABLE_RVA;
+    let functor_vt =
+        er_game_base::mem::game_data_addr(base, FUNCTOR_VTABLE_RVA, "FUNCTOR_VTABLE_RVA");
+    let memberjob_vt = er_game_base::mem::game_data_addr(
+        base,
+        MEMBERFUNCJOB_VTABLE_RVA,
+        "MEMBERFUNCJOB_VTABLE_RVA",
+    );
     let factory_abs = base + FACTORY_RVA;
     // Resolve a (member-)fn forward through up to JMP_HOPS jmp-thunks; true if it reaches the
     // Load-Game dialog_factory. (A full member fn that only CALLs the factory internally won't

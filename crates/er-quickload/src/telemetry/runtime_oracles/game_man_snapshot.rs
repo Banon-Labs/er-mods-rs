@@ -122,7 +122,7 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
         0
     };
     let title_flow_context =
-        if base != 0 && dialog != 0 && dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        if base != 0 && dialog != 0 && dialog_vt == er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
             unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0)
         } else {
             0

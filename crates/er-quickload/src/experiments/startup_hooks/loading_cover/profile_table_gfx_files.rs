@@ -372,10 +372,20 @@ pub(crate) unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> 
         false
     };
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!(
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
-            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+                "SCALEFORM_MEMORY_FILE_VTABLE_RVA"
+            )
         ));
     }
     let stripped = match TITLE_05_000_RUNTIME_STRIPPED.get() {
@@ -516,10 +526,20 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
         false
     };
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!(
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
-            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+                "SCALEFORM_MEMORY_FILE_VTABLE_RVA"
+            )
         ));
     }
     match profile_05_010_editor_hot_gfx() {
@@ -642,7 +662,13 @@ unsafe fn text_input_02_990_swap(
         return fail(format_args!("invalid MemoryFile 0x{file:x}"));
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!("unexpected MemoryFile vtable 0x{vtable:x}"));
     }
     let edited = match derivation.cache.get() {
@@ -746,10 +772,20 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
         false
     };
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!(
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
-            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+                "SCALEFORM_MEMORY_FILE_VTABLE_RVA"
+            )
         ));
     }
     let edited = match OPTIONS_02_040_QUIT6_RUNTIME_EDITED.get() {

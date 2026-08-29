@@ -8,12 +8,5 @@
     "transmute(base + rva) sites were routed through er_game_base::mem::game_rva_named, so they",
     "are due a re-run. Absent = never launched; never infer an outcome from the static audit."
   ],
-  "er-quickload": "DIES 0xc0000005 EXEC @0x3cb67a0 CS::CSFadeImp +1.7s (2026-08-29)",
-  "er-telemetry": "boots clean, leader R at 38s (2026-08-29)",
-  "er-quit-menu": "boots clean, leader R at 38s (2026-08-29)",
-  "er-loading-bar": "boots clean, leader R at 42s (2026-08-29)",
-  "er-save-picker": "boots clean, leader R at 38s (2026-08-29)",
-  "er-save-disable": "boots clean, leader R at 38s (2026-08-29)",
-  "er-loading-portrait": "DIES ~4s after first Present, NO crash record (2026-08-29, pre-gating)",
-  "er-armament-icons": "DIES 0xc000001d @game+0x32ee2b5; 3 hooks refused first (2026-08-29, pre-gating)"
+  "_INVALIDATED_2026_08_29": "Per-DLL verdicts cleared: DLLs were rebuilt WHILE that sweep ran, so early entries tested older binaries than late ones. A sweep that cannot say which build it measured is not evidence. Re-run scripts/sweep-dll-1170-runtime.py --all on a settled tree, and do not rebuild while it runs."
 }

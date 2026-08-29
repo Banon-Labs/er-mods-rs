@@ -27,6 +27,14 @@ Results merge into `docs/recon/dll-1170-runtime-results.json`, which
 runtime truth: a DLL with zero ungated addresses is not thereby working, and nothing infers one
 from the other.
 
+DO NOT REBUILD WHILE THIS RUNS
+------------------------------
+Measured 2026-08-29, by doing it: a sweep was started, DLLs were rebuilt 10 minutes into it, and
+the run silently became a mix -- the first eight DLLs tested one build and the rest another. A
+sweep that cannot say which build it measured is not evidence, and 18 verdicts had to be thrown
+away. So the sweep now fingerprints every DLL at the start and ABORTS the moment one changes
+underneath it, rather than producing a result that looks fine and is not.
+
 SAFETY / HOUSE RULES
   * launches only the approved `~/Elden/launch.sh` path -- never Steam, never the EAC launcher;
   * one game at a time, torn down between runs via `scripts/er-teardown.py`;
@@ -109,7 +117,9 @@ def leader_state(pid: int) -> str | None:
 
 
 def teardown() -> None:
-    subprocess.run(["python3", TEARDOWN], capture_output=True, text=True, cwd=REPO)
+    subprocess.run(
+        ["python3", TEARDOWN], capture_output=True, text=True, cwd=REPO, timeout=30, check=False
+    )
 
 
 def crash_signature(crate: str, since: float) -> str:
@@ -181,6 +191,18 @@ def run_one(crate: str, watch_seconds: float) -> str:
     return f"boots, leader alive at {watch_seconds:g}s ({stamp})"
 
 
+def fingerprint(crates: list[str]) -> dict[str, tuple[int, int]]:
+    """`{crate: (size, mtime_ns)}` for the built DLLs, cheap enough to re-check between runs."""
+    stamps = {}
+    for crate in crates:
+        try:
+            stat = os.stat(dll_path(crate))
+        except OSError:
+            continue
+        stamps[crate] = (stat.st_size, stat.st_mtime_ns)
+    return stamps
+
+
 def load_results() -> dict:
     try:
         with open(RESULTS, encoding="utf-8") as handle:
@@ -199,7 +221,7 @@ def cdylibs() -> list[str]:
     meta = json.loads(
         subprocess.run(
             ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-            capture_output=True, text=True, cwd=REPO, check=True,
+            capture_output=True, text=True, cwd=REPO, check=True, timeout=30,
         ).stdout
     )
     return sorted(
@@ -221,6 +243,9 @@ def selftest() -> int:
         failures.append("no built DLLs found -- run scripts/er-build-dlls.sh --all first")
     if DEFAULT_WATCH_SECONDS < 40:
         failures.append("watch window is shorter than the latest failure this sweep has seen")
+    stamps = fingerprint(cdylibs())
+    if stamps and fingerprint(cdylibs()) != stamps:
+        failures.append("fingerprint is not stable across two calls on an unchanged tree")
     for line in failures:
         print(f"selftest FAIL {line}")
     print(f"selftest: {len(failures)} failure(s); {len(built)} built cdylib(s)")
@@ -253,7 +278,22 @@ def main() -> int:
     if args.skip_measured:
         targets = [t for t in targets if t not in results or "pre-gating" in str(results.get(t))]
 
+    baseline = fingerprint(everything)
     for crate in targets:
+        drifted = [
+            name
+            for name, stamp in fingerprint(everything).items()
+            if baseline.get(name) not in (None, stamp)
+        ]
+        if drifted:
+            print(
+                "[sweep] ABORT -- these DLLs changed on disk mid-sweep: "
+                + ", ".join(sorted(drifted))
+                + ". Verdicts already recorded describe the OLD build; the rest would describe a "
+                "different one, and a mix is not evidence. Let the tree settle, then re-run.",
+                flush=True,
+            )
+            return 1
         print(f"[sweep] {crate} ...", flush=True)
         verdict = run_one(crate, args.watch_seconds)
         print(f"[sweep] {crate}: {verdict}", flush=True)

@@ -356,19 +356,19 @@ macro_rules! own_stepper_idx10_fallbacks {
                 TITLE_OWNER_SCAN_START_ADDRESS
             };
             // Only call into the dialog's FD4 state machine once $owner+0xe0 IS the TitleTopDialog.
-            if dialog_vt == $base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            if dialog_vt == er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
                 // is_in_state receiver = the ADDRESS dialog+0xa60 (the embedded SM sub-object), per
                 // the registrar's `add rcx,0xa60; call`. is_in_state(sm, desc) -> bool reads the
                 // live state by name (no hand pointer-chase). Read-only / no side effects.
                 let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
                 let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
                     unsafe { std::mem::transmute($base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
-                let in_fadein = unsafe { is_in_state(sm, $base + TITLE_STATE_DESC_FADEIN_RVA) }
+                let in_fadein = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr($base, TITLE_STATE_DESC_FADEIN_RVA, "TITLE_STATE_DESC_FADEIN_RVA")) }
                     != OWN_STEPPER_FALSE;
-                let in_loop = unsafe { is_in_state(sm, $base + TITLE_STATE_DESC_LOOP_RVA) }
+                let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr($base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) }
                     != OWN_STEPPER_FALSE;
                 let in_textfadeout =
-                    unsafe { is_in_state(sm, $base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) }
+                    unsafe { is_in_state(sm, er_game_base::mem::game_data_addr($base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) }
                         != OWN_STEPPER_FALSE;
                 let latch =
                     unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }

@@ -387,7 +387,13 @@ unsafe fn capture_continue_member_node_candidate(base: usize, candidate: usize, 
         return;
     }
     let node_vt = unsafe { safe_read_usize(candidate) }.unwrap_or(null);
-    if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
+    if node_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            MEMBERFUNCJOB_VTABLE_RVA,
+            "MEMBERFUNCJOB_VTABLE_RVA",
+        )
+    {
         return;
     }
     let member_fn = unsafe { safe_read_usize(candidate + MEMBER_FN_18) }.unwrap_or(null);

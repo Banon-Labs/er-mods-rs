@@ -368,7 +368,13 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        unsafe {
+            *(r8 as *mut usize) = er_game_base::mem::game_data_addr(
+                base,
+                FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+                "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+            )
+        };
     }
     if NETWORK_CHECK_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(
@@ -583,7 +589,13 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                 && r8 > null
                 && unsafe { safe_read_usize(r8) }.is_some()
             {
-                unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+                unsafe {
+                    *(r8 as *mut usize) = er_game_base::mem::game_data_addr(
+                        base,
+                        FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+                        "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+                    )
+                };
             }
             if d < 16 || d.is_power_of_two() {
                 append_autoload_debug(format_args!(
@@ -625,7 +637,13 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        unsafe {
+            *(r8 as *mut usize) = er_game_base::mem::game_data_addr(
+                base,
+                FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+                "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+            )
+        };
     }
     if SHOW_PROGRESS_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(

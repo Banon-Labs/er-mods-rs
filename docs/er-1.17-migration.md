@@ -480,3 +480,49 @@ A blind transform would have deleted vanilla behaviour in both detours.
 prints it as a column. It is populated only by an actual launch: a DLL with zero ungated sites is
 NOT thereby "working on 1.17", and the tool never infers one from the other. Rows tagged
 `(pre-gating)` were measured before their crate was converted and are due a re-run.
+
+## The silent class: data addresses, and how a vtable proves its own identity (2026-08-29)
+
+141 of the unmapped constants are not in `.text` at all -- vtables, globals, tables. The function
+gate cannot see them, and a stale one does not crash: the reads are fault-safe, so it yields a
+wrong answer and the feature behind it quietly stops working. `TITLE_OWNER_VTABLE_RVA` is
+`CS::TitleStep` in 1.16.2 and not a vtable at all in 1.17, and its three scans had been finding no
+owner, forever, without a log line.
+
+`scripts/map-data-rvas-1162-to-1170.py` already carries data addresses by VOTING: every
+rip-relative reference in 1.16.2 `.text` is mapped onto its 1.17 function and the same instruction
+re-read there. It withholds any row under two agreeing references, because a confident wrong
+address once cost a boot.
+
+### RTTI rescues what voting withholds
+
+A vtable carries its own name. MSVC puts a CompleteObjectLocator at `vtable[-1]` whose type
+descriptor holds the mangled class, and **a name that occurs once per image is stronger evidence
+than any number of agreeing displacements**. `rtti_confirms()` accepts a withheld row when the same
+mangled name sits at the source in 1.16.2 and the destination in 1.17 **and at neither crossed
+position** -- that last condition is what stops a region which happens not to have moved from
+passing by accident. Rescued rows carry an `rtti` suffix in the votes column.
+
+    76 -> 81 usable rows, 5 carried by RTTI:
+      FUNCTOR_VTABLE_RVA                          0x2ac3ea8 -> 0x2ac6f28
+      DEPOSITORY_DIALOG_VFTABLE_RVA               0x2aebba0 -> 0x2aeec20   CS::DepositoryDialog
+      SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA  0x2b12b48 -> 0x2b15bc8
+      MEMBERFUNCJOB_VTABLE_RVA                    0x2b265d0 -> 0x2b29650   CS::MenuMemberFuncJob<TitleTopDialog>
+
+### Two methods, no shared assumption, same answer
+
+Worth doing for any address you are going to trust. The title vtables were derived twice over:
+
+| | `TITLE_OWNER_VTABLE_RVA` | `TITLE_TOP_DIALOG_VTABLE_RVA` |
+|---|---|---|
+| RTTI ordinal + slot delta (`find-vtable-rva.py`) | `0x2b63bb0 -> 0x2b66c60` (#16 of 21 TitleStep vtables in both images) | `0x2b26468 -> 0x2b294e8` (all three shift the same `0x3080`) |
+| reference voting (`map-data-rvas`) | `0x2b63bb0 -> 0x2b66c60`, 2/2 | `0x2b26468 -> 0x2b294e8`, 2/2 |
+
+All 32 use sites now go through `er_game_base::mem::game_data_addr(base, RVA, "RVA")`, which
+resolves for the running build and returns `0` on a refusal -- so an unmapped address takes the
+caller's existing "not the object I wanted" branch and says so, instead of silently comparing
+against a 1.16.2 value that can never match.
+
+**When refreshing the data map, diff by (constant -> destination), never by line.** A refresh
+rewrote 37 of 77 rows and changed ZERO destinations -- only the vote counts moved. Read by line,
+that looks like a mass remap.

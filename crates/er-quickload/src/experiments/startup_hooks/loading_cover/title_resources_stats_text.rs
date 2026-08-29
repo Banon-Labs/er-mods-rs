@@ -1703,7 +1703,12 @@ pub(crate) unsafe fn set_row_field_visible(
             }
         }
     }
-    let vtable_ok = proxy_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    let vtable_ok = proxy_vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            SCENE_OBJ_PROXY_VTABLE_RVA,
+            "SCENE_OBJ_PROXY_VTABLE_RVA",
+        );
     if vtable_ok {
         unsafe { set_visible(out, u8::from(visible)) };
     } else {
@@ -1712,7 +1717,11 @@ pub(crate) unsafe fn set_row_field_visible(
             append_autoload_debug(format_args!(
                 "save-picker: row field {} visibility SKIPPED fail-closed -- out proxy 0x{out:x} vtable 0x{proxy_vt:x} is not CS::SceneObjProxy 0x{:x} (n={n})",
                 name.trim_end_matches('\0'),
-                base + SCENE_OBJ_PROXY_VTABLE_RVA
+                er_game_base::mem::game_data_addr(
+                    base,
+                    SCENE_OBJ_PROXY_VTABLE_RVA,
+                    "SCENE_OBJ_PROXY_VTABLE_RVA"
+                )
             ));
         }
     }

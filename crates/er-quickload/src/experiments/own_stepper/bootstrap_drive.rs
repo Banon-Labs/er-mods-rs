@@ -282,7 +282,13 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // the IO worker registry [0x144843038+0x18]!=0; if it bails (al=0) the log shows it.
         // SAVE-SAFE: the mount only OPENS a handle + registers paths for READ; no save write.
         let iodev_before = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
-        let registry = unsafe { *((base + IO_WORKER_REGISTRY_RVA) as *const usize) };
+        let registry = unsafe {
+            *((er_game_base::mem::game_data_addr(
+                base,
+                IO_WORKER_REGISTRY_RVA,
+                "IO_WORKER_REGISTRY_RVA",
+            )) as *const usize)
+        };
         let reg_count = if registry != null {
             unsafe { *((registry + IO_WORKER_REGISTRY_COUNT_18_OFFSET) as *const u32) }
         } else {
@@ -344,7 +350,10 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         } else {
             0xff
         };
-        let io_pool = unsafe { *((base + FD4_IO_POOL_RVA) as *const usize) };
+        let io_pool = unsafe {
+            *((er_game_base::mem::game_data_addr(base, FD4_IO_POOL_RVA, "FD4_IO_POOL_RVA"))
+                as *const usize)
+        };
         let reg_list_node = if registry != null {
             unsafe { *((registry + IO_WORKER_REGISTRY_LIST_28_OFFSET) as *const usize) }
         } else {

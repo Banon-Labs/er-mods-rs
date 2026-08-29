@@ -15,7 +15,8 @@ use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 pub unsafe fn profile_gx_queue_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
-    let global = base + GX_DRAW_CONTEXT_RVA;
+    let global =
+        er_game_base::mem::game_data_addr(base, GX_DRAW_CONTEXT_RVA, "GX_DRAW_CONTEXT_RVA");
     let readable = |c: usize| {
         valid(c)
             && unsafe { safe_read_usize(c + GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET) }.is_some()
@@ -92,7 +93,11 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
     let spared = LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst);
     if valid(spared)
         && unsafe { safe_read_usize(spared) }.unwrap_or(0)
-            == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            == er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
     {
         let model =
             unsafe { safe_read_usize(spared + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
@@ -117,7 +122,11 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
             unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }.unwrap_or(0);
         if !valid(r)
             || unsafe { safe_read_usize(r) }.unwrap_or(0)
-                != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                != er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             continue;
         }
@@ -202,7 +211,11 @@ unsafe fn profile_lookat_stage_probe(base: usize) {
     let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     if !valid(r)
         || unsafe { safe_read_usize(r) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
     {
         return;
     }
@@ -492,7 +505,11 @@ pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize)
         && let Ok(base) = game_module_base()
     {
         let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-            == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+            == er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            );
         if vt_ok {
             // Map renderer -> slot index (the look-at indices/base are cached per slot by the
             // FrameBegin apply_profile_lookat); skip if this renderer isn't in the profile table.

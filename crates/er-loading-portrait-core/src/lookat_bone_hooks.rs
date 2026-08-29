@@ -509,14 +509,22 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
         if r == 0 || r == null {
             PORTRAIT_PUMP_BLOCK_R.fetch_add(1, Ordering::SeqCst);
         } else if unsafe { safe_read_usize(r) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
         {
             PORTRAIT_PUMP_BLOCK_VTABLE.fetch_add(1, Ordering::SeqCst);
         }
         if r != 0
             && r != null
             && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             let off = unsafe {
                 safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)

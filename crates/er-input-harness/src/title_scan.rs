@@ -153,7 +153,13 @@ fn scan_for_owner(base: usize) -> Option<usize> {
 pub fn find_title_owner(base: usize) -> Option<usize> {
     let cached = CACHED_OWNER.load(Ordering::SeqCst);
     if cached != 0 {
-        if unsafe { read_usize(cached) } == Some(base + TITLE_OWNER_VTABLE_RVA) {
+        if unsafe { read_usize(cached) }
+            == Some(er_game_base::mem::game_data_addr(
+                base,
+                TITLE_OWNER_VTABLE_RVA,
+                "TITLE_OWNER_VTABLE_RVA",
+            ))
+        {
             return Some(cached);
         }
         // The owner was freed / vtable no longer matches -> invalidate and rescan (throttled).

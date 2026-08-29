@@ -301,7 +301,13 @@ fn mms_header_window(a: usize) -> String {
 unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d: usize) -> usize {
     let calls = FIN_ADVANCER_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
     let fin_before = unsafe { read_u8(a + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
-    let menu = game_base().and_then(|base| unsafe { read_usize(base + CS_MENU_MAN_GLOBAL_RVA) });
+    let menu = game_base().and_then(|base| unsafe {
+        read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    });
     let menu_data = menu.and_then(|m| unsafe { read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) });
     // NOTE: the rt5d/save-flag DRIVE was REMOVED (bd CORRECTION-rt5d-drive-tears-down-load2). Driving
     // menuData+0x5d=1 (+ clearing saveRequested/0xb73) DID complete load2's finalize 0..9, but that
@@ -395,8 +401,22 @@ fn snapshot() -> String {
     let Some(base) = game_base() else {
         return "base=<unresolved>".to_owned();
     };
-    let gm = unsafe { read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(0);
-    let gdm = unsafe { read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let gm = unsafe {
+        read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(0);
+    let gdm = unsafe {
+        read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(0);
     let mounted = unsafe { read_usize(base + MOUNTED_ARCHIVE_REGISTRY_RVA) }.unwrap_or(0);
 
     let b78 = unsafe { read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) };

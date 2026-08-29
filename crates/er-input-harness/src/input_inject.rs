@@ -232,8 +232,14 @@ pub fn tap_menu_event(input_manager_ptr: usize, event: MenuEvent) {
 /// call every frame from the drive hook (ER clears it each unfocused frame). Returns true once the
 /// flag was written at least once (for logging).
 pub fn keep_input_active(base: usize) -> bool {
-    let Some(dluid) = (unsafe { read_usize(base + DLUID_SINGLETON_RVA) }).filter(|p| *p >= HEAP_LO)
-    else {
+    let Some(dluid) = (unsafe {
+        read_usize(er_game_base::mem::game_data_addr(
+            base,
+            DLUID_SINGLETON_RVA,
+            "DLUID_SINGLETON_RVA",
+        ))
+    })
+    .filter(|p| *p >= HEAP_LO) else {
         return false;
     };
     let flag = dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET;
@@ -274,8 +280,14 @@ pub fn log_resolution(base: usize) {
     harness_log!(
         "input-inject: base=0x{base:x} input_manager=0x{:x} dluid_present={} (direct keystate-bitmap + DLUID stay-active channel; no SendInput/XInput)",
         input_manager(base).unwrap_or(0),
-        (unsafe { read_usize(base + DLUID_SINGLETON_RVA) })
-            .filter(|p| *p >= HEAP_LO)
-            .is_some() as u8
+        (unsafe {
+            read_usize(er_game_base::mem::game_data_addr(
+                base,
+                DLUID_SINGLETON_RVA,
+                "DLUID_SINGLETON_RVA",
+            ))
+        })
+        .filter(|p| *p >= HEAP_LO)
+        .is_some() as u8
     );
 }

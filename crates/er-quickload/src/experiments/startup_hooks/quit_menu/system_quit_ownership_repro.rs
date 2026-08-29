@@ -91,7 +91,11 @@ pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
     };
     // Only a LIVE profile renderer (correct vtable) -- never a freed/garbage pointer.
     if unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-        != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
     {
         return false;
     }

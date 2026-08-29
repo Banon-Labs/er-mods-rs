@@ -98,7 +98,12 @@ pub(crate) unsafe extern "system" fn cap_csmenu_ctor_hook(
     if this != NULL && base != NULL {
         let vt = unsafe { safe_read_usize(this) }.unwrap_or(NULL);
         let vt_rva = vt.wrapping_sub(base);
-        let matched = vt == base + ROUTER_THIS_VTABLE_RVA;
+        let matched = vt
+            == er_game_base::mem::game_data_addr(
+                base,
+                ROUTER_THIS_VTABLE_RVA,
+                "ROUTER_THIS_VTABLE_RVA",
+            );
         if matched {
             MENU_ROUTER_THIS.store(this, Ordering::SeqCst);
         }
@@ -865,7 +870,11 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     MENU_WINDOW_JOB_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
     let continue_candidate =
-        vt == base + MENU_WINDOW_JOB_VTABLE_RVA && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+        vt == er_game_base::mem::game_data_addr(
+            base,
+            MENU_WINDOW_JOB_VTABLE_RVA,
+            "MENU_WINDOW_JOB_VTABLE_RVA",
+        ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
     if continue_candidate {
         record_continue_candidate(item, accept_predicate, base);
     }
@@ -954,9 +963,13 @@ pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
-        && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
-        && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+    let semantic_continue_item =
+        vt == er_game_base::mem::game_data_addr(
+            base,
+            MENU_WINDOW_JOB_VTABLE_RVA,
+            "MENU_WINDOW_JOB_VTABLE_RVA",
+        ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
+            && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
     if semantic_continue_item {
         MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
         record_continue_candidate(item, accept_predicate, base);
@@ -1039,7 +1052,11 @@ pub(crate) unsafe extern "system" fn menu_window_job_idle_ctor_hook(
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
     let continue_candidate =
-        vt == base + MENU_WINDOW_JOB_VTABLE_RVA && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+        vt == er_game_base::mem::game_data_addr(
+            base,
+            MENU_WINDOW_JOB_VTABLE_RVA,
+            "MENU_WINDOW_JOB_VTABLE_RVA",
+        ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
     if continue_candidate {
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
@@ -1109,8 +1126,12 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
         MENU_ITEM_UPDATE_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_DOCALL.store(do_call, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-        let continue_candidate = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
-            && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+        let continue_candidate =
+            vt == er_game_base::mem::game_data_addr(
+                base,
+                MENU_WINDOW_JOB_VTABLE_RVA,
+                "MENU_WINDOW_JOB_VTABLE_RVA",
+            ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
         if continue_candidate {
             record_continue_candidate(item, accept_predicate, base);
         }
@@ -1277,13 +1298,24 @@ pub(crate) unsafe extern "system" fn cap_sequence_iter_hook(
                     // are registered into a Sequence the iterator walks) -- signal the STAGE1d
                     // retry loop to stop. The title views tick via a different pump, so this
                     // fires ONLY on the real main-menu entries.
-                    if child_vt == base + MENU_WINDOW_JOB_VTABLE_RVA {
+                    if child_vt
+                        == er_game_base::mem::game_data_addr(
+                            base,
+                            MENU_WINDOW_JOB_VTABLE_RVA,
+                            "MENU_WINDOW_JOB_VTABLE_RVA",
+                        )
+                    {
                         MENU_ENTRIES_SEEN.store(MENU_ENTRIES_SEEN_YES, Ordering::SeqCst);
                     }
                     // Diagnostic: surface distinct MenuWindowJob children (the registered menu
                     // entries, ticking or not) with their docall chain so one run reveals the
                     // opened-menu structure (which entry is Load-Game). Capped to avoid flooding.
-                    if child_vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+                    if child_vt
+                        == er_game_base::mem::game_data_addr(
+                            base,
+                            MENU_WINDOW_JOB_VTABLE_RVA,
+                            "MENU_WINDOW_JOB_VTABLE_RVA",
+                        )
                         && SEQ_ITER_CHILD_LAST.swap(child, Ordering::SeqCst) != child
                     {
                         let nlog = SEQ_ITER_CHILD_LOG_COUNT

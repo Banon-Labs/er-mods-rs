@@ -234,7 +234,7 @@ def main() -> int:
     meta = json.loads(
         subprocess.run(
             ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-            capture_output=True, text=True, cwd=REPO, check=True,
+            capture_output=True, text=True, cwd=REPO, check=True, timeout=30,
         ).stdout
     )
     pkgs = {p["name"]: p for p in meta["packages"]}
