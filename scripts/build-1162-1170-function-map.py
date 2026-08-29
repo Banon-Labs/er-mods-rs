@@ -94,6 +94,10 @@ class Image:
             # Two sections share the name ".text"; the first is the real one.
             self.sections.setdefault(name, (va, max(vsz, rsz)))
 
+    def function_starts(self) -> list[int]:
+        """Every RUNTIME_FUNCTION start, ascending -- the order both images agree on."""
+        return sorted({start for start, _end in self.functions()})
+
     def functions(self) -> list[tuple[int, int]]:
         """(start_rva, end_rva) for every RUNTIME_FUNCTION in .pdata."""
         va, size = self.sections[".pdata"]
@@ -145,6 +149,8 @@ def build(md, image: Image) -> dict[bytes, list[int]]:
 
 # How many same-signature functions may be paired by position before the group is abandoned.
 MAX_ORDERED_GROUP = 8
+# The widest hole between two confirmed anchors that may be filled by position alone.
+MAX_INTERPOLATED_GAP = 24
 
 
 def pair(old_table, new_table) -> dict[int, int]:
@@ -176,6 +182,46 @@ def pair(old_table, new_table) -> dict[int, int]:
             for a, b in zip(sorted(olds), sorted(news)):
                 mapping[a] = b
     return mapping
+
+
+def interpolate(mapping, old_starts, new_starts):
+    """Fill gaps BETWEEN two confirmed anchors when both sides have the same count.
+
+    Signature pairing leaves holes: a function whose opening bytes are shared with several
+    siblings, or which changed between the builds, has nothing unique to match on. 86 of the
+    136 addresses the running game asked for and was refused fall in those holes, and they are
+    not incidental -- they are the ones the boot oracles hook, which is why boot progress reads
+    as zero with the game alive behind the cover.
+
+    A hole bounded by two confirmed pairs is still constrained. Functions appear in `.pdata` in
+    address order on both sides, so if the gap holds N functions on the 1.16.2 side and exactly
+    N on the 1.17 side, the k-th in one is the k-th in the other. That is the same
+    order-preserving argument the small same-signature groups already use, applied between
+    anchors instead of within a signature.
+
+    A gap whose counts DIFFER is skipped entirely, and so is one wider than
+    MAX_INTERPOLATED_GAP: a differing count means functions were added or removed, which is
+    exactly when position stops carrying information, and a long run of unanchored guesses is
+    how a plausible wrong address gets manufactured.
+    """
+    anchors = sorted(mapping.items())
+    old_index = {rva: i for i, rva in enumerate(old_starts)}
+    new_index = {rva: i for i, rva in enumerate(new_starts)}
+    added = 0
+    for (old_a, new_a), (old_b, new_b) in zip(anchors, anchors[1:]):
+        oi, ni = old_index.get(old_a), new_index.get(new_a)
+        oj, nj = old_index.get(old_b), new_index.get(new_b)
+        if None in (oi, ni, oj, nj):
+            continue
+        span_old, span_new = oj - oi - 1, nj - ni - 1
+        if span_old != span_new or not 0 < span_old <= MAX_INTERPOLATED_GAP:
+            continue
+        for k in range(1, span_old + 1):
+            src = old_starts[oi + k]
+            if src not in mapping:
+                mapping[src] = new_starts[ni + k]
+                added += 1
+    return added
 
 
 def known_pairs(repo: Path, sibling: Path) -> dict[int, int]:
@@ -216,6 +262,11 @@ def main() -> int:
     ap.add_argument("--new", type=Path, default=repo / IMAGE_1170)
     ap.add_argument("--sibling", type=Path, default=repo.parent / "fromsoftware-rs")
     ap.add_argument("--out", type=Path, help="write the map as TSV here")
+    ap.add_argument(
+        "--interpolate",
+        action="store_true",
+        help="also fill gaps between anchors by position (OFF by default; see `interpolate`)",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -229,6 +280,20 @@ def main() -> int:
     old_img, new_img = Image(args.old), Image(args.new)
     old_table, new_table = build(md, old_img), build(md, new_img)
     mapping = pair(old_table, new_table)
+    signature_pairs = len(mapping)
+    # OFF BY DEFAULT, and the default was chosen by a game rather than by taste.
+    #
+    # Interpolation adds 62,863 pairs and keeps the calibration clean -- 45 known pairs, zero
+    # disagreements -- which is exactly as reassuring as it sounds and no more: the calibration
+    # set does not reach into the holes being filled. Enabling it alongside a second widening
+    # took the translation table from 304 rows to 329 and killed the game at +145ms, during DLL
+    # init, where 304 rows had survived past twenty seconds.
+    #
+    # A position-guessed pair is right whenever nothing was added or removed in the gap, and
+    # silently wrong when something was. Signature pairs do not have that failure mode. So this
+    # stays behind a flag until a row promoted this way can be checked individually.
+    filled = interpolate(mapping, sorted(old_img.function_starts()), sorted(new_img.function_starts())) if args.interpolate else 0
+    print(f"signature pairs {signature_pairs}, plus {filled} filled between anchors")
     print(
         f"functions: {sum(len(v) for v in old_table.values())} (1.16.2) "
         f"{sum(len(v) for v in new_table.values())} (1.17); paired {len(mapping)}"

@@ -24,7 +24,11 @@ import sys
 from pathlib import Path
 
 BASE = 0x140000000
-REFUSED = re.compile(r"ADDRESS REFUSED \([^)]*\): (0x14[0-9a-f]+)")
+# Both refusal wordings. `ADDRESS REFUSED FOR DETOUR` was added when calls and detours were
+# split, and the original pattern -- which required the parenthesis straight after REFUSED --
+# silently matched none of them. That hid 72 addresses that no map covers: the ones the boot
+# oracles hook, and therefore the reason boot progress reads as zero.
+REFUSED = re.compile(r"ADDRESS REFUSED(?: FOR DETOUR)? \([^)]*\): (0x14[0-9a-f]+)")
 LOGS = (
     "er-quickload-autoload-debug.log",
     "er-armament-icons.log",
@@ -79,6 +83,9 @@ def main() -> int:
         sample = "[+1ms] ADDRESS REFUSED (game_rva): 0x1409a62c0 -- game FileVersion 2.7.0.0\n"
         if REFUSED.findall(sample) != ["0x1409a62c0"]:
             failures.append("the refusal pattern did not match a real log line")
+        detour = "[+1ms] ADDRESS REFUSED FOR DETOUR (register_union_hook 0x140b0f000): 0x140b0f000 -- game\n"
+        if REFUSED.findall(detour) != ["0x140b0f000"]:
+            failures.append("the detour-refusal wording was not matched; 72 addresses hid behind that once")
         # A line that merely mentions the words must not be harvested as an address.
         if REFUSED.findall("HOOK REFUSED (MhHook::new 0x1411d0fa0): game FileVersion 2.7.0.0\n"):
             failures.append("a HOOK REFUSED line was harvested; only ADDRESS REFUSED carries the address")

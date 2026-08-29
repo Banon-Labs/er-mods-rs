@@ -106,15 +106,34 @@ def compare(old_image, new_image, old_va, new_va):
     }
 
 
-def load_map():
+def load_map(path=None):
+    """Pairs to verify, from `path` or the original byte-search table.
+
+    Two shapes are accepted, because the maps that produce candidates now outnumber the one
+    this started with. The original table carries a How-it-was-mapped note in column 4; the
+    function, data and needed maps carry a constant name or a vote count there, or nothing at
+    all. Either way the first two columns are the pair, which is all the verification needs,
+    and anything after the second column is passed through as the note.
+    """
     pairs = []
-    for line in open(MAP_TSV, encoding="utf-8"):
+    for line in open(path or MAP_TSV, encoding="utf-8"):
         if line.startswith("#") or not line.strip():
             continue
         fields = line.rstrip("\n").split("\t")
-        if len(fields) < 4 or fields[1] == "-":
+        if len(fields) < 2 or fields[1] == "-":
             continue
-        pairs.append((int(fields[0], 16), int(fields[1], 16), fields[3]))
+        try:
+            old_va, new_va = int(fields[0], 16), int(fields[1], 16)
+        except ValueError:
+            continue
+        # The newer maps are keyed by RVA; this one by VA. Both are unambiguous because the
+        # image base is 0x140000000 and no RVA reaches it.
+        if old_va < BASE:
+            old_va += BASE
+        if new_va < BASE:
+            new_va += BASE
+        note = fields[3] if len(fields) >= 4 else (fields[2] if len(fields) >= 3 else "")
+        pairs.append((old_va, new_va, note))
     return pairs
 
 
@@ -124,6 +143,11 @@ def main():
     )
     parser.add_argument("vas", nargs="*", help="1.16.2 VAs to check (default: the whole table)")
     parser.add_argument("--tsv", metavar="PATH", help="write the verdicts here")
+    parser.add_argument(
+        "--map",
+        metavar="PATH",
+        help="read candidate pairs from this table instead of the byte-search one",
+    )
     parser.add_argument(
         "--min-ratio",
         type=float,
@@ -138,7 +162,7 @@ def main():
     old_image = open(OLD_IMAGE, "rb").read()
     new_image = open(NEW_IMAGE, "rb").read()
 
-    pairs = load_map()
+    pairs = load_map(args.map)
     if args.vas:
         wanted = {int(v, 0) for v in args.vas}
         pairs = [p for p in pairs if p[0] in wanted]

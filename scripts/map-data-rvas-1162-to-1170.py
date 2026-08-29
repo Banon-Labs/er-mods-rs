@@ -207,10 +207,42 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             if BOUND.search(name):
                 continue
             rva = int(value.replace("_", ""), 16)
-            # .text addresses are the function map's job; this tool is for the rest.
-            if text_va <= rva < text_va + text_size or rva in done:
+            if rva in done:
+                continue
+            # `.text` IS EXCLUDED, and the exclusion was tested rather than assumed.
+            #
+            # It looked like it should not be. 75 of the 83 addresses the running game asked for
+            # and could not be placed are in `.text` but absent from `.pdata` -- leaf functions
+            # with no unwind data, structurally invisible to a map built from the function table.
+            # And a `call rel32` encodes its target exactly as a rip-relative displacement does,
+            # `dword[i] + i + 4`, so the reference scan finds their call sites for free.
+            #
+            # MEASURED 2026-08-29: allowing them took the table from 304 rows to 329 and killed
+            # the game at +145ms, during DLL init, where 304 rows had survived past twenty
+            # seconds. The contract this tool advertises -- never wrong, sometimes silent -- is
+            # calibrated on eleven `.data` globals. Leaf functions are a class it has never been
+            # calibrated on, and the runtime says the vote does not carry them. Re-enabling this
+            # needs its own calibration set first.
+            if text_va <= rva < text_va + text_size:
                 continue
             targets.setdefault(name, rva)
+
+    # The declared constants are not the whole population; the running game is the authority on
+    # what is actually reached. See scripts/record-1170-refusals.py.
+    observed = repo / "docs/recon/rva-1170-observed-refusals.txt"
+    if observed.is_file():
+        for line in observed.read_text(encoding="utf-8").splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            try:
+                rva = int(line, 16)
+            except ValueError:
+                continue
+            if rva == 0 or rva in done or rva in targets.values():
+                continue
+            if text_va <= rva < text_va + text_size:
+                continue
+            targets.setdefault(f"(refused at runtime 0x{rva:x})", rva)
 
     rows, weak = [], []
     for name, rva in sorted(targets.items(), key=lambda kv: kv[1]):

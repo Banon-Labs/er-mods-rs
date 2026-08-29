@@ -357,7 +357,7 @@ fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
     // than merely unlikely. Sound because the only addresses that are BOTH a 1.17 destination and
     // a 1.16.2 source are the ones that did not move, where both answers are the same address;
     // `verified_map_is_idempotent` fails the build's test run if a row ever makes that untrue.
-    if VERIFIED_1162_TO_1170.iter().any(|(_, moved)| *moved == rva) {
+    if already_translated(rva) {
         return Some(address);
     }
     if let Some((_, moved)) = VERIFIED_1162_TO_1170.iter().find(|(from, _)| *from == rva) {
@@ -375,6 +375,31 @@ fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
         describe_build()
     ));
     None
+}
+
+/// Is `rva` a 1.17 destination that must NOT be translated again?
+///
+/// TRANSLATION WINS OVER THE SHORTCUT, and the order is the whole point. The shortcut exists so a
+/// second pass over an already-translated address hands it back instead of refusing -- the bug
+/// that cost er-armament-icons its file-open observer. But at 329 rows an address can be BOTH a
+/// destination of one row and the source of a different one, and if the shortcut answered first
+/// it would swallow that second row's translation silently.
+///
+/// So an address that is a source is always translated as a source. The shortcut applies only to
+/// destinations that are not sources of some other row, plus the rows that did not move, where
+/// both answers are the same address anyway.
+///
+/// A pure function of the table so it can be tested on the host, where there is no game to
+/// resolve against.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn already_translated(rva: u32) -> bool {
+    let is_destination = VERIFIED_1162_TO_1170
+        .iter()
+        .any(|(from, moved)| *moved == rva && *from != rva);
+    let is_source_of_a_move = VERIFIED_1162_TO_1170
+        .iter()
+        .any(|(from, moved)| *from == rva && *moved != rva);
+    is_destination && !is_source_of_a_move
 }
 
 /// The address to DETOUR for `address` on the running build, or `None`.
@@ -463,35 +488,45 @@ pub fn verified_translation_count() -> usize {
 mod tests {
     use super::VERIFIED_1162_TO_1170;
 
-    /// A 1.17 destination that is also a 1.16.2 source makes the "already translated" shortcut in
-    /// `resolve_game_address` swallow a real translation: the shortcut sees the address as a
-    /// destination and hands it back untouched, so the row that should have moved it never runs.
+    /// Every row that MOVED must still be reachable as a source.
     ///
-    /// An address that did NOT move between versions is the harmless case -- it appears on both
-    /// sides of its own row, and the shortcut returns exactly what translating it would return.
-    /// The whole-image function map contributes a number of those (ten at the time of writing),
-    /// and they are worth keeping rather than dropping: an absent row means REFUSE, so the
-    /// identity row is what records "confirmed still valid on 1.17" as distinct from "unknown".
+    /// The hazard the "already translated" shortcut creates is silent: an address that is a
+    /// destination of one row and the source of a different one gets handed back untouched, and
+    /// the second row never runs. At 27 rows the intersection was empty and this could not
+    /// happen; at 329 it is not, which is how the test earned its keep.
     ///
-    /// So the invariant is not that the intersection is empty; it is that everything in the
-    /// intersection maps to itself.
+    /// `already_translated` therefore lets translation win, and this asserts that property over
+    /// the real table rather than assuming the data stays convenient.
     #[test]
     fn verified_map_is_idempotent() {
-        let clashes: Vec<(u32, u32)> = VERIFIED_1162_TO_1170
+        let shadowed: Vec<(u32, u32)> = VERIFIED_1162_TO_1170
             .iter()
             .filter(|(from, moved)| from != moved)
-            .filter(|(_, moved)| {
-                VERIFIED_1162_TO_1170
-                    .iter()
-                    .any(|(other, _)| other == moved)
-            })
+            .filter(|(from, _)| super::already_translated(*from))
             .copied()
             .collect();
         assert!(
-            clashes.is_empty(),
-            "a translated destination is also the source of a DIFFERENT row, so the \
-             already-translated shortcut would swallow that row: {clashes:#x?}"
+            shadowed.is_empty(),
+            "these rows would be swallowed by the already-translated shortcut: {shadowed:#x?}"
         );
+    }
+
+    /// A destination that nothing else claims as a source is recognised, so a double resolve is
+    /// still harmless -- the reason the shortcut exists at all.
+    #[test]
+    fn a_pure_destination_is_recognised_as_already_translated() {
+        let pure = VERIFIED_1162_TO_1170.iter().find(|(from, moved)| {
+            from != moved
+                && !VERIFIED_1162_TO_1170
+                    .iter()
+                    .any(|(other, other_moved)| other == moved && other != other_moved)
+        });
+        if let Some((_, moved)) = pure {
+            assert!(
+                super::already_translated(*moved),
+                "0x{moved:x} is a destination claimed by nothing else and was not recognised"
+            );
+        }
     }
 
     /// The table has to be usable by the resolver's linear scans without a duplicate source
