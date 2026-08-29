@@ -226,7 +226,47 @@ it was gone. Not blocked, and no fatal record from the vectored handler in the r
 one. A thread that runs hot and then exits cleanly points at a deliberate thread termination, not
 a fault.
 
-Naming the site needs the tool's `--gdb` tier, which breaks on `NtTerminateThread` /
-`RtlExitUserThread` / `abort_thread`. Attaching after the fact cannot work -- gdb refuses a zombie
--- and the thread dies within about six seconds of launch, which is too early to attach by hand.
-The way in is me3's `suspend` option: start the game suspended, attach, then resume.
+### The death site, captured
+
+It is a **SIGSEGV inside `er_quickload.dll`**, and Wine aborts the thread because it cannot even
+build the exception frame -- which is why no vectored handler ever recorded it. `abort_thread`
+bypasses the SEH/VEH path entirely.
+
+```
+#0 abort_thread            (ntdll.so)
+#1 virtual_setup_exception (ntdll.so)   <- could not build the exception frame
+#2 setup_raise_exception   (ntdll.so)
+#3 segv_handler            (ntdll.so)
+#4 <signal handler called>
+#5 0x6ffff9cd2326 in er_quickload.dll
+#6 0x0
+```
+
+The PE stack scan at the abort (module base `0x6ffff9cd0000`) names the shape:
+
+| rva | times on the stack | symbol |
+|---|---|---|
+| `0x2326` | 3 | none -- below where Rust code starts, so a linker import/jump thunk |
+| `0x1cf0c0` | 2 | `core::fmt::num::impl$8::fmt` |
+| `0x392fd8` | 1 | none |
+
+Alternating repeated frames, plus `virtual_setup_exception` failing, is **recursion into stack
+overflow** -- not a wild pointer. An import thunk in the loop with `core::fmt` beside it points at
+a log write re-entering a hooked Win32 file call: the DLL logs every `CreateFileW` through
+save-override, and writing that log opens a file. Confirm by disassembling `er_quickload.dll` at
+rva `0x2326` to see which import it is, then read that hook's re-entrancy guard.
+
+### How to reproduce the capture
+
+This is the part that cost the most, so it is written down rather than rediscovered:
+
+* me3 has `--suspend` ("Suspend the game until a debugger is attached"). Pass it through the user
+  launcher as `ME3_PROFILE=... bash ~/Elden/launch.sh -s -- --suspend`. **The bare `--` matters**;
+  without it `getopts` eats `--suspend` and the script just prints its usage.
+* Then attach `python3 scripts/wine-thread-death-watch.py --gdb --max-seconds 240 --out <file>`.
+  Attaching after the fact cannot work -- gdb refuses a zombie leader -- and without `--suspend`
+  the thread dies within about six seconds, far too early to attach by hand.
+* Run the watcher under `setsid`/`nohup`: an agent tool call is killed at two minutes and the
+  capture needs longer than that.
+* Under gdb the death is DELAYED, because every breakpoint trap slows the process down. An 80
+  second window was not enough and 240 was.
