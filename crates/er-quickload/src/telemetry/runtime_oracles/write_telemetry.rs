@@ -95,6 +95,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     body.push_str(&format!("  \"player_seen\": {player_seen},\n"));
     body.push_str(&format!("  \"runtime_mode\": \"{runtime_mode}\",\n"));
     body.push_str(&format!("  \"seamless_coop_loaded\": {seamless_loaded},\n"));
+    // THE VEH stack-overflow semaphore. Non-zero means describing one fault faulted again on the
+    // same thread and the re-entrancy latch caught it. Before the latch that descent cost 4704
+    // bytes of stack per level and killed the process with NO crash record at all -- Wine cannot
+    // raise an exception it has no stack to build a frame for, so it calls `abort_thread` instead.
+    // A run reporting a fault AND a non-zero refusal count is saying the FIRST `access-violation`
+    // line in the crash log is the real one and the rest were the handler tripping over itself.
+    body.push_str(&format!(
+        "  \"oracle_veh_reentrant_refusals\": {},\n",
+        VEH_REENTRANT_REFUSALS.load(Ordering::SeqCst)
+    ));
     // Loading-screen portrait fail-fast semaphore state (er-effects-rs-j3r): 0 = healthy / never
     // tripped; nonzero packs (loaded_slot<<16)|(render_target_slot<<8)|cond (cond bit0=wrong-slot,
     // bit1=null loaded renderer). On diagnostic runs a violation also crashes the run (crash log).

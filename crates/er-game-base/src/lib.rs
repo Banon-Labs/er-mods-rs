@@ -39,6 +39,7 @@ pub mod panic_report;
 #[cfg(all(windows, feature = "game-types"))]
 pub mod pgd;
 pub mod profile_summary;
+pub mod reentry;
 pub mod rva;
 /// Tier A: bounded, wineserver-friendly polling for a game singleton. The unbounded
 /// `loop { yield_now() }` every shell used instead deadlocked a whole boot -- see the module.

@@ -517,12 +517,58 @@ fn annotate_addr(addr: usize, game_base: usize) -> String {
     String::new()
 }
 
+std::thread_local! {
+    /// Closed while THIS thread is somewhere inside [`crash_vectored_handler`].
+    static VEH_IN_PROGRESS: er_game_base::reentry::ReentryLatch =
+        const { er_game_base::reentry::ReentryLatch::new() };
+}
+
+/// `Some(token)` for the outermost VEH entry on this thread, `None` for a nested one.
+///
+/// # Why a crash logger of all things needs a re-entrancy latch
+///
+/// Everything the access-violation arm below does to describe a fault reads raw memory belonging
+/// to the faulting thread: `av_stack_game_returns` and `av_module_backtrace` walk its stack,
+/// `av_object_probe` and `safe_read_usize` chase pointers out of its registers, `loaded_modules`
+/// walks the loader list. That is exactly the state a fault says is not trustworthy, so any of
+/// them can fault in turn -- and a VEH is re-entered for its OWN faults, on the SAME thread, on
+/// top of the frame it is already in.
+///
+/// `MAX_AV_LOG_LINES` does not bound that. It is checked once per entry and each entry costs a
+/// whole handler frame, so the stack runs out first:
+///
+/// MEASURED 2026-08-28 on ELDEN RING 1.17, `control-quickload-only.me3`. One execute-fault at
+/// `0x3cb67a0` (called from `eldenring.exe+0xb3d2e8`) entered this handler; describing it read
+/// NULL inside `ntdll+0x3969c`; that re-entered the handler, which read NULL again. The crash log
+/// holds 215 copies of that identical second fault with `rsp` marching DOWN by exactly `0x1260` a
+/// line, from `0x2fc50` to `0x13a50`. At 4704 bytes a level the 1 MiB main-thread stack is gone
+/// after ~220 levels, and the budget is 256 -- it could never have been reached.
+///
+/// The thread then took a SIGSEGV that Wine could not even report: `virtual_setup_exception` needs
+/// stack to build the exception frame, had none, and called `abort_thread`. So the game died with
+/// no crash record, no minidump and no unhandled-filter line, and the ROOT fault -- the single
+/// line at the top naming the bad call target -- was buried under 215 copies of the amplifier.
+///
+/// A nested entry therefore returns `EXCEPTION_CONTINUE_SEARCH` having touched NOTHING: not the
+/// record, not the context, no counter but its own. The outer entry is still mid-way through its
+/// line and finishes it, and the process goes on to die the way it should -- through the unhandled
+/// filter, which writes the fatal record and the minidump.
+fn enter_veh() -> Option<er_game_base::reentry::ReentryToken> {
+    er_game_base::reentry::ReentryLatch::enter(&VEH_IN_PROGRESS, &VEH_REENTRANT_REFUSALS)
+}
+
 /// Vectored handler: log access violations (faulting RVA + caller stack) so an
 /// in-process crash points straight at the instruction. Rate-limited; never
 /// changes behavior (returns EXCEPTION_CONTINUE_SEARCH).
 pub(crate) unsafe extern "system" fn crash_vectored_handler(
     info: *mut ExceptionPointersMin,
 ) -> i32 {
+    // FIRST, before `info` is even dereferenced: a fault raised while describing a fault must not
+    // re-enter this handler. See `enter_veh` -- without this the descent exhausts the stack
+    // long before any line budget notices.
+    let Some(_not_nested) = enter_veh() else {
+        return EXCEPTION_CONTINUE_SEARCH;
+    };
     if !info.is_null() {
         let record = unsafe { (*info).exception_record };
         let context = unsafe { (*info).context_record };
@@ -1051,3 +1097,4 @@ fn parse_byte_pattern(spec: &str) -> Vec<Option<u8>> {
         })
         .collect()
 }
+

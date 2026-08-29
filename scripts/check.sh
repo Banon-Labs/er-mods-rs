@@ -355,6 +355,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # confirmed to go red against a deliberately broken implementation.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hook --lib
 
+# er-game-base: the shared re-entrancy latch and the bounded wait helpers. Both are load-bearing
+# for whether the game SURVIVES, not for what it computes -- `wait::poll_until` is what stops an
+# unbounded `yield_now` spin from starving the serializing wineserver, and `reentry::ReentryLatch`
+# is what stops a crash handler that faults while describing a fault from eating 4704 bytes of
+# stack per level until the thread dies unreportably (measured on ELDEN RING 1.17, 2026-08-28).
+# Neither failure mode produces a compile error and neither is selectable by a bare `cargo test`,
+# because `default-members` pins that to er-quickload.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-game-base --lib
+
 # er-refill-all: the pad-chord parser, the config reload decision, and the cycle-direction rule are
 # all host-buildable on purpose, so the parts that decide whether a press does the right thing are
 # testable without the game. The tracker-capacity assertion lives here too -- it is the guard on a

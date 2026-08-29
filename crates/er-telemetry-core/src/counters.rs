@@ -1079,6 +1079,14 @@ pub static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+/// Nested VEH entries the crash logger's re-entrancy latch refused.
+///
+/// THE VEH stack-overflow semaphore. Non-zero means describing one fault faulted again on the same
+/// thread and the latch caught it -- the descent that killed ELDEN RING 1.17 with no crash record
+/// on 2026-08-28, at 4704 bytes of stack a level against a 1 MiB stack. A run that reports a fault
+/// AND a non-zero refusal count is telling you the report you are reading is the outermost of a
+/// pile, and that the first `access-violation` line is the real one.
+pub static VEH_REENTRANT_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 /// Crash-log lines spent on the process-FATAL exception codes (stack overflow, fastfail, heap
 /// corruption, illegal instruction). Separate from the general budget below so a first-chance
 /// C++/Rust throw storm cannot consume the line that names the actual kill.
