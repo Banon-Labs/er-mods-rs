@@ -152,6 +152,14 @@ const FUNCTION_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.needed.tsv";
 /// Each row is carried by the code that references it, and only rows where independent
 /// references agree are used; see the file's own header.
 const DATA_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.data.tsv";
+/// Rows from the weaker maps that have ALSO passed the detour checks, and so may carry a hook.
+///
+/// A signature match says an address is the right one. It says nothing about whether MinHook may
+/// write five bytes there. `scripts/audit-1170-hook-targets.py --promote` supplies the second
+/// claim: the 1.17 destination is a real function entry by the image's own forward references,
+/// and its opening five bytes relocate. 187 of 277 candidates pass; the 90 that do not stay out,
+/// and their reasons are recorded in the file.
+const AUDITED_DETOURS: &str = "../../docs/recon/rva-1170-detour-audited.tsv";
 
 /// 1.16.2 RVAs excluded from translation.
 fn quarantined(root_dir: &str) -> Vec<u32> {
@@ -245,6 +253,23 @@ fn emit_address_map(root_dir: &str) {
     rows.retain(|(old, _)| !held_back.contains(old));
     rows.sort_unstable();
     rows.dedup_by_key(|(old, _)| *old);
+    // NOT WIRED IN, and the measurement is why.
+    //
+    // `--promote` audits the 277 signature/reference-mapped rows and passes 187: each is a real
+    // function entry by the image's own forward references, with a relocatable five-byte
+    // prologue. Feeding those into the detour table put the crash straight back -- the full
+    // profile died again, one rust_panic, where the 27-row table had survived twenty seconds
+    // with none.
+    //
+    // So entry-and-prologue safety is NECESSARY and not SUFFICIENT. Those checks answer "may
+    // MinHook write here"; they cannot answer "is this the same function the hook was written
+    // for". A signature-paired sibling hooks perfectly and then does the wrong thing, and the
+    // detour fires into a handler expecting different arguments.
+    //
+    // The audited file stays as the work list: promoting a row needs evidence of semantic
+    // identity -- a byte comparison through scripts/verify-rva-map-1170.py, or an RTTI/name
+    // anchor -- and not merely somewhere safe to land.
+    let _ = AUDITED_DETOURS;
     let mut detour_rows = detour_safe;
     detour_rows.retain(|(old, _)| !held_back.contains(old));
     detour_rows.sort_unstable();
