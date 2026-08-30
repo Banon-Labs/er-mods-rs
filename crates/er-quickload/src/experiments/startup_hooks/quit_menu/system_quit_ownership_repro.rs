@@ -7,7 +7,12 @@ use super::*;
 /// pump is not draining the torn-down profile renderers, whose still-registered draw tasks then keep
 /// filling the GX command queue.
 pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
-    let base = game_rva(0).ok()?;
+    // `game_module_base()`, NOT `game_rva(0)`. RVA 0 is the PE header, never a code or data
+    // address, so there is nothing for the 1.16.2 -> 1.17 map to translate and asking it is
+    // always a refusal. This site alone logged 339,764 of them in one session (it is on the
+    // 4 Hz telemetry write), each reading `ADDRESS REFUSED (game_rva): 0x140000000` and naming
+    // nothing. The module base is version-independent; take it directly.
+    let base = er_game_base::mem::game_module_base().ok()?;
     let man = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr(
             base,
@@ -1025,130 +1030,145 @@ pub(crate) fn install_system_quit_noop_action_hook() {
             return;
         }
     }
+    // EACH ROW INSTALLS OR FAILS ON ITS OWN. These three used to `return` out of the whole
+    // function when an address would not resolve, so a single refused RVA on the FIRST row took
+    // the other two with it -- including the guard that sits in front of the native
+    // Return-to-Desktop confirmation, which is the irreversible one. On 1.17 that is not
+    // hypothetical: SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA is declared `: u32` where the row
+    // selector's regex requires `: usize`, so it is invisible to the scanner, absent from the map,
+    // and refused at runtime -- silently disabling the entire Quit-tab routing.
+    // A labelled block gives each row its own exit: it skips itself and nothing else.
     if !first_installed {
-        let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: failed to resolve Save Game/Quit action invoke rva 0x{SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA:x}"
-            ));
-            return;
-        };
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                system_quit_noop_desktop_action_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                SYSTEM_QUIT_NOOP_ACTION_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                if let Err(status) = unsafe { hook.queue_enable() } {
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: queue_enable first-row action hook failed: {status:?}"
-                    ));
-                    return;
-                }
-                match unsafe { MH_ApplyQueued() } {
-                    MH_STATUS::MH_OK => {
-                        crate::mh::leak_installed_hook(hook);
-                        SYSTEM_QUIT_NOOP_ACTION_INSTALLED
-                            .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
+        'first: {
+            let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve Save Game/Quit action invoke rva 0x{SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA:x}"
+                ));
+                break 'first;
+            };
+            match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    system_quit_noop_desktop_action_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    SYSTEM_QUIT_NOOP_ACTION_ORIG
+                        .store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
                         append_autoload_debug(format_args!(
-                            "system-quit-dup: hooked first Quit-tab action invoke 0x{addr:x}; native first row routes to Save Game"
+                            "system-quit-dup: queue_enable first-row action hook failed: {status:?}"
                         ));
+                        break 'first;
                     }
-                    status => append_autoload_debug(format_args!(
-                        "system-quit-dup: MH_ApplyQueued first-row action hook failed: {status:?}"
-                    )),
+                    match unsafe { MH_ApplyQueued() } {
+                        MH_STATUS::MH_OK => {
+                            crate::mh::leak_installed_hook(hook);
+                            SYSTEM_QUIT_NOOP_ACTION_INSTALLED
+                                .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
+                            append_autoload_debug(format_args!(
+                                "system-quit-dup: hooked first Quit-tab action invoke 0x{addr:x}; native first row routes to Save Game"
+                            ));
+                        }
+                        status => append_autoload_debug(format_args!(
+                            "system-quit-dup: MH_ApplyQueued first-row action hook failed: {status:?}"
+                        )),
+                    }
                 }
+                Err(status) => append_autoload_debug(format_args!(
+                    "system-quit-dup: MhHook::new first-row action hook failed: {status:?}"
+                )),
             }
-            Err(status) => append_autoload_debug(format_args!(
-                "system-quit-dup: MhHook::new first-row action hook failed: {status:?}"
-            )),
         }
     }
     if !second_installed {
-        let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA) else {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: failed to resolve Return-to-Desktop action invoke rva 0x{SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA:x}"
-            ));
-            return;
-        };
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                system_quit_return_desktop_action_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG
-                    .store(hook.trampoline() as usize, Ordering::SeqCst);
-                if let Err(status) = unsafe { hook.queue_enable() } {
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: queue_enable second-row action hook failed: {status:?}"
-                    ));
-                    return;
-                }
-                match unsafe { MH_ApplyQueued() } {
-                    MH_STATUS::MH_OK => {
-                        crate::mh::leak_installed_hook(hook);
-                        SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.store(
-                            SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES,
-                            Ordering::SeqCst,
-                        );
+        'second: {
+            let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve Return-to-Desktop action invoke rva 0x{SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA:x}"
+                ));
+                break 'second;
+            };
+            match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    system_quit_return_desktop_action_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG
+                        .store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
                         append_autoload_debug(format_args!(
-                            "system-quit-dup: hooked second Quit-tab action invoke 0x{addr:x}; cloned Load Profile/Load Save Profiles rows route before native Return-to-Desktop confirmation"
+                            "system-quit-dup: queue_enable second-row action hook failed: {status:?}"
                         ));
+                        break 'second;
                     }
-                    status => append_autoload_debug(format_args!(
-                        "system-quit-dup: MH_ApplyQueued second-row action hook failed: {status:?}"
-                    )),
+                    match unsafe { MH_ApplyQueued() } {
+                        MH_STATUS::MH_OK => {
+                            crate::mh::leak_installed_hook(hook);
+                            SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.store(
+                                SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES,
+                                Ordering::SeqCst,
+                            );
+                            append_autoload_debug(format_args!(
+                                "system-quit-dup: hooked second Quit-tab action invoke 0x{addr:x}; cloned Load Profile/Load Save Profiles rows route before native Return-to-Desktop confirmation"
+                            ));
+                        }
+                        status => append_autoload_debug(format_args!(
+                            "system-quit-dup: MH_ApplyQueued second-row action hook failed: {status:?}"
+                        )),
+                    }
                 }
+                Err(status) => append_autoload_debug(format_args!(
+                    "system-quit-dup: MhHook::new second-row action hook failed: {status:?}"
+                )),
             }
-            Err(status) => append_autoload_debug(format_args!(
-                "system-quit-dup: MhHook::new second-row action hook failed: {status:?}"
-            )),
         }
     }
     if !controller_installed {
-        let Ok(addr) = game_rva(PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA) else {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: failed to resolve PropertyNewButtonController activation rva 0x{PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA:x}"
-            ));
-            return;
-        };
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                property_new_button_controller_activate_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_ORIG
-                    .store(hook.trampoline() as usize, Ordering::SeqCst);
-                if let Err(status) = unsafe { hook.queue_enable() } {
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: queue_enable PropertyNewButtonController activation hook failed: {status:?}"
-                    ));
-                    return;
-                }
-                match unsafe { MH_ApplyQueued() } {
-                    MH_STATUS::MH_OK => {
-                        crate::mh::leak_installed_hook(hook);
-                        PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED.store(
-                            PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES,
-                            Ordering::SeqCst,
-                        );
+        'controller: {
+            let Ok(addr) = game_rva(PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve PropertyNewButtonController activation rva 0x{PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA:x}"
+                ));
+                break 'controller;
+            };
+            match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    property_new_button_controller_activate_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_ORIG
+                        .store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
                         append_autoload_debug(format_args!(
-                            "system-quit-dup: hooked PropertyNewButtonController activation 0x{addr:x}; custom Quit rows route by controller before native confirmation"
+                            "system-quit-dup: queue_enable PropertyNewButtonController activation hook failed: {status:?}"
                         ));
+                        break 'controller;
                     }
-                    status => append_autoload_debug(format_args!(
-                        "system-quit-dup: MH_ApplyQueued PropertyNewButtonController activation hook failed: {status:?}"
-                    )),
+                    match unsafe { MH_ApplyQueued() } {
+                        MH_STATUS::MH_OK => {
+                            crate::mh::leak_installed_hook(hook);
+                            PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED.store(
+                                PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES,
+                                Ordering::SeqCst,
+                            );
+                            append_autoload_debug(format_args!(
+                                "system-quit-dup: hooked PropertyNewButtonController activation 0x{addr:x}; custom Quit rows route by controller before native confirmation"
+                            ));
+                        }
+                        status => append_autoload_debug(format_args!(
+                            "system-quit-dup: MH_ApplyQueued PropertyNewButtonController activation hook failed: {status:?}"
+                        )),
+                    }
                 }
+                Err(status) => append_autoload_debug(format_args!(
+                    "system-quit-dup: MhHook::new PropertyNewButtonController activation hook failed: {status:?}"
+                )),
             }
-            Err(status) => append_autoload_debug(format_args!(
-                "system-quit-dup: MhHook::new PropertyNewButtonController activation hook failed: {status:?}"
-            )),
         }
     }
 }

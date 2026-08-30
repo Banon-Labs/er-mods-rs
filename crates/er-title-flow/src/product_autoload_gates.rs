@@ -349,7 +349,7 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
     let mut remaining_slots = TITLE_OWNER_SCAN_START_ADDRESS;
     let mut idx = ACTIVE_SCREEN_SLOT_START;
     while idx < ACTIVE_SCREEN_ARRAY_SLOTS {
-        let slot = module_base + ACTIVE_SCREEN_ARRAY_RVA + idx * ACTIVE_SCREEN_ARRAY_STRIDE;
+        let slot = er_game_base::mem::game_data_addr(module_base, ACTIVE_SCREEN_ARRAY_RVA, "ACTIVE_SCREEN_ARRAY_RVA") + idx * ACTIVE_SCREEN_ARRAY_STRIDE;
         let ptr = unsafe { safe_read_usize(slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         if ptr != TITLE_OWNER_SCAN_START_ADDRESS {
             remaining_slots += ACTIVE_SCREEN_SLOT_STEP;
@@ -358,7 +358,7 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
     }
     append_autoload_debug(format_args!(
         "title-dialog-cleanup: called 0x{:x} frame={frame} owner=0x{owner_addr:x} dialog=0x{dialog:x} ret=0x{ret:x} remaining_active_slots={remaining_slots}",
-        module_base + TITLE_TOP_DIALOG_CLEANUP_RVA
+        er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_CLEANUP_RVA, "TITLE_TOP_DIALOG_CLEANUP_RVA")
     ));
 }
 /// AUTONOMOUS press-any-button -> open-menu (zero-input): drive the title to the open main menu
@@ -427,7 +427,7 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     let _ = null;
     append_autoload_debug(format_args!(
         "tfc-auto-open: fired open-menu registrar 0x{:x}(dialog=0x{dialog:x}) on Loop+a40==0 (panicked={}) -- autonomous press-any-button equivalent, NO input",
-        base + TITLE_TOP_DIALOG_OPEN_MENU_RVA,
+        er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA"),
         r.is_err()
     ));
 }

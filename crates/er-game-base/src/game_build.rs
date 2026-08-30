@@ -327,6 +327,16 @@ fn address_log(args: core::fmt::Arguments<'_>) {
 /// `what` names the caller in the log line, because a refusal is only actionable if a reader can
 /// tell which feature just went inert.
 pub fn resolve_game_address(address: usize, what: &str) -> Option<usize> {
+    resolve_game_address_fmt(address, format_args!("{what}"))
+}
+
+/// [`resolve_game_address`], with the label built by the caller's own `format_args!`.
+///
+/// The label is the only thing a reader of a refusal line has to go on, and the useful ones are
+/// composite -- `er_game_base::mem::game_rva` wants to print the constant's name AND the source
+/// line that asked for it. Taking `Arguments` rather than `&str` lets it do that without a
+/// `format!` allocation on every resolution, including the overwhelming majority that succeed.
+pub fn resolve_game_address_fmt(address: usize, what: core::fmt::Arguments<'_>) -> Option<usize> {
     #[cfg(windows)]
     {
         resolve_on_running_build(address, what)
@@ -343,7 +353,7 @@ pub fn resolve_game_address(address: usize, what: &str) -> Option<usize> {
 }
 
 #[cfg(windows)]
-fn resolve_on_running_build(address: usize, what: &str) -> Option<usize> {
+fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> Option<usize> {
     if !is_game_image_address(address) || is_supported_build() {
         return Some(address);
     }

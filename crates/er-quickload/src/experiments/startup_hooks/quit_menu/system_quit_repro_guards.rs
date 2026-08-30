@@ -303,7 +303,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 if sq_repro_pause_at_menu() {
                     // Diagnostic mode: 0 switches, no load. Nothing to drive without the menu-nav.
                     sq_repro_transition(SQ_REPRO_STATE_DONE);
-                } else if let Ok(base) = game_rva(0) {
+                } else if let Ok(base) = er_game_base::mem::game_module_base() {
                     sq_repro_begin_switch();
                     let slot = sq_repro_target_slot();
                     unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
@@ -368,7 +368,8 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // TRUE (load done), the fresh-deser count reached this switch, the player is up, and the cover
             // is gone. The lingering-true-from-the-previous-load risk is covered by fresh_deser (must
             // reach THIS switch's count) plus the settle wait below.
-            let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let base =
+                er_game_base::mem::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let base_ok = base != TITLE_OWNER_SCAN_START_ADDRESS;
             let load_done = base_ok && unsafe { now_loading_active(base) };
             let fake_cover = base_ok && unsafe { fake_loading_screen_visible(base) };
@@ -421,7 +422,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 // More loads to drive: arm the NEXT switch the SAME menu-free programmatic way (no menu-nav,
                 // no focus-steal) instead of OPEN_MENU. bd CORRECT-disable-custom-onclick.
                 sq_repro_begin_switch();
-                if let Ok(base) = game_rva(0) {
+                if let Ok(base) = er_game_base::mem::game_module_base() {
                     let slot = sq_repro_target_slot();
                     unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
                     append_autoload_debug(format_args!(
@@ -573,7 +574,7 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
     // renderer constructed for this switch snapshots the full-size RT; waiting for the loaded-slot flip
     // left the row native 128 until after both builds (run 20260730-202840).
     {
-        let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let base = er_game_base::mem::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         if base != 0 && base != TITLE_OWNER_SCAN_START_ADDRESS {
             let patched = unsafe { patch_profile_offscreen_size_for_slot(base, selected_slot) };
             if !patched {
@@ -720,7 +721,7 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     // clear in system_quit_restore_real_system_windows). No-op / inert on switch 1 (its byte is already 0);
     // reuses the shared startup_hooks helper. SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT is the runtime
     // semaphore: >0 on a switch == that switch's quit-save was gated OFF and we unblocked it.
-    let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let base = er_game_base::mem::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     if base != TITLE_OWNER_SCAN_START_ADDRESS {
         let dsm_prev =
             unsafe { system_quit_clear_disable_save_menu(base, "arm-quickload-return-title") };
@@ -1013,7 +1014,8 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             return 0;
         } else {
             let slot = selected as i32;
-            let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let base =
+                er_game_base::mem::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let _gm = game_man_ptr_or_null();
             let native_slot_proven =
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;

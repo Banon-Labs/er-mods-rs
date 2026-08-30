@@ -321,7 +321,13 @@ pub(crate) fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usiz
         safe_read_usize(vtable + MSGBOX_DIALOG_VTABLE_UPDATE_SLOT * core::mem::size_of::<usize>())
     }
     .unwrap_or(0);
-    let ok = vtable != 0 && update_slot == base + MSGBOX_DIALOG_UPDATE_RVA;
+    let ok = vtable != 0
+        && update_slot
+            == er_game_base::mem::game_data_addr(
+                base,
+                MSGBOX_DIALOG_UPDATE_RVA,
+                "MSGBOX_DIALOG_UPDATE_RVA",
+            );
     (vtable, update_slot, ok)
 }
 
@@ -386,7 +392,11 @@ pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDec
         SAVE_FLOW_BOX_IDENTITY_LOST_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "save-flow-box: {label} IDENTITY LOST dialog=0x{dialog:x} vtable=0x{vtable:x} vtable[2]=0x{update_slot:x} (want 0x{:x}) -- the box was freed or reused before it reported; UNDECIDABLE, ending the flow WITHOUT writing (this is NOT the user pressing No)",
-            base + MSGBOX_DIALOG_UPDATE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                MSGBOX_DIALOG_UPDATE_RVA,
+                "MSGBOX_DIALOG_UPDATE_RVA"
+            )
         ));
         return Some(save_flow_box_finish(box_id, SaveFlowDecision::Undecidable));
     }

@@ -518,12 +518,20 @@ pub(crate) unsafe fn fire_product_title_load_action(
     reset_phase_timer(&OWN_STEPPER_S2_PHASE_STARTED_MS);
     let run: unsafe extern "system" fn(usize) = unsafe {
         std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(
-            base + MENU_MEMBER_FUNC_JOB_RUN_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                MENU_MEMBER_FUNC_JOB_RUN_RVA,
+                "MENU_MEMBER_FUNC_JOB_RUN_RVA",
+            ),
         )
     };
     append_autoload_debug(format_args!(
         "product-core-autoload: *** FIRING native TitleTopDialog Load-Game run 0x{:x}(rcx=node=0x{node:x}) vt=0x{node_vt:x} member_dialog=0x{member_dialog:x} member_fn=0x{member_fn:x} member_adjust=0x{member_adjust:x} window_item=0x{window_item:x} slot={slot} tick={tick} -- no direct_build/forged ctx ***",
-        base + MENU_MEMBER_FUNC_JOB_RUN_RVA
+        er_game_base::mem::game_data_addr(
+            base,
+            MENU_MEMBER_FUNC_JOB_RUN_RVA,
+            "MENU_MEMBER_FUNC_JOB_RUN_RVA"
+        )
     ));
     timeline_event(
         "T_native_load_action",

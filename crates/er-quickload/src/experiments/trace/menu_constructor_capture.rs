@@ -527,10 +527,14 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
             TITLE_OWNER_SCAN_START_ADDRESS
         };
         let ctx = ret + SELECTOR_CTX_OFFSET_F8;
-        if game_module_base()
-            .ok()
-            .is_some_and(|base| step_vt == base + SELECTOR_STEP_VTABLE_RVA)
-        {
+        if game_module_base().ok().is_some_and(|base| {
+            step_vt
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    SELECTOR_STEP_VTABLE_RVA,
+                    "SELECTOR_STEP_VTABLE_RVA",
+                )
+        }) {
             OWN_STEPPER_SELECTOR_STEP.store(step, Ordering::SeqCst);
             OWN_STEPPER_SELECTOR_CTX.store(ctx, Ordering::SeqCst);
         }
@@ -685,7 +689,12 @@ pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
         && base != NULL
         && OWN_STEPPER_TITLE_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
         && OWN_STEPPER_PHASE.load(Ordering::SeqCst) == OWN_STEPPER_PHASE_MENU
-        && ret_vt == base + PROFILE_LOAD_DIALOG_VTABLE_RVA
+        && ret_vt
+            == er_game_base::mem::game_data_addr(
+                base,
+                PROFILE_LOAD_DIALOG_VTABLE_RVA,
+                "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+            )
     {
         OWN_STEPPER_DIALOG.store(ret, Ordering::SeqCst);
         // DEFAULT (gate OFF): latch the live ProfileLoadDialog and immediately enter STAGE2 ACTIVATE

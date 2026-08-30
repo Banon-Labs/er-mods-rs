@@ -258,8 +258,17 @@ def enclosing(starts: list[int], rva: int) -> int | None:
     return starts[i] if i >= 0 else None
 
 
-def instruction_index(md, image: Image, func: int, disp_at: int, target: int) -> int | None:
-    """Which instruction of `func` carries its displacement at `disp_at` AND addresses `target`.
+def instruction_index(md, image: Image, func: int, disp_at: int, target: int) -> tuple[int, int] | None:
+    """`(instruction index, byte offset from function start)` for the reference at `disp_at`.
+
+    BOTH anchors are returned because neither survives on its own, and trusting only the index
+    silently loses references. `displacement_of` re-reads the paired 1.17 function by walking to
+    the SAME instruction index -- so if any earlier instruction changed length, the walk arrives at
+    a different instruction and the reference is dropped or, worse, votes for whatever that
+    instruction points at. Measured 2026-08-30 on `RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA`
+    (0x3d6c5e8) and `SAVE_SERIALIZE_BYTES_RVA` (0x3d69920): both enclosing functions ARE in the
+    map, and both were reported "no usable reference" purely because index #271 and #84 land
+    elsewhere in 1.17 while the BYTE OFFSET of the reference is unchanged.
 
     The target check is what makes a multi-tail candidate scan safe. A candidate offset only means
     "these four bytes would be the right displacement IF the instruction ended a certain number of
@@ -271,21 +280,31 @@ def instruction_index(md, image: Image, func: int, disp_at: int, target: int) ->
         pos = insn.address - BASE - func
         if insn.disp_size == 4 and func + pos + insn.disp_offset == disp_at:
             reaches = insn.address - BASE + insn.size + insn.disp
-            return n if reaches == target else None
+            return (n, pos) if reaches == target else None
         if func + pos > disp_at:
             return None
     return None
 
 
-def displacement_of(md, image: Image, func: int, index: int) -> int | None:
-    """Where instruction `index` of `func` points, rip-relatively."""
+def displacement_of(md, image: Image, func: int, index: int, at_offset: int | None = None) -> int | None:
+    """Where the paired instruction in `func` points, rip-relatively.
+
+    Anchored on the BYTE OFFSET from the function start when one is supplied, falling back to the
+    instruction INDEX. Byte offset is the better anchor: an instruction that changes length shifts
+    every later index by one but leaves the offsets of everything before it alone, and a patch
+    usually edits one instruction rather than inserting one. Neither anchor is sound alone, so a
+    disagreement between them is not resolved here -- the offset simply wins, and the vote across
+    independent references is what catches a bad answer.
+    """
     window = image.data[func : func + 0x400]
+    by_index = None
     for n, insn in enumerate(md.disasm(window, BASE + func)):
-        if n == index:
-            if insn.disp_size != 4:
-                return None
+        pos = insn.address - BASE - func
+        if at_offset is not None and pos == at_offset and insn.disp_size == 4:
             return insn.address - BASE + insn.size + insn.disp
-    return None
+        if n == index and insn.disp_size == 4:
+            by_index = insn.address - BASE + insn.size + insn.disp
+    return by_index
 
 
 def carry(md, old: Image, new: Image, fmap: dict[int, int], target: int):
@@ -296,11 +315,12 @@ def carry(md, old: Image, new: Image, fmap: dict[int, int], target: int):
         func = enclosing(old_starts, disp_at)
         if func is None or func not in fmap:
             continue
-        index = instruction_index(md, old, func, disp_at, target)
-        if index is None:
+        found = instruction_index(md, old, func, disp_at, target)
+        if found is None:
             continue
+        index, at_offset = found
         seen_functions += 1
-        moved = displacement_of(md, new, fmap[func], index)
+        moved = displacement_of(md, new, fmap[func], index, at_offset)
         if moved is not None:
             votes[moved] = votes.get(moved, 0) + 1
     if not votes:
@@ -401,6 +421,17 @@ SHAPE_RESCUED = {
     # (1.16.2 0xe85f50, 1.17 0xe87d50).
     #   python3 scripts/map-data-rvas-1162-to-1170.py 0x4589bdc --confirm 0x458dc5c
     0x4589BDC: (0x458DC5C, "TITLE_GLOBAL_ACCEPT_BYTE_RVA", "bracket+shape"),
+    # The return-title rebuild flag. The single highest-volume refusal in the entire suite:
+    # 339,684 in one session, because `write_telemetry.rs` reads it every tick. Its one reference
+    # is `mov byte ptr [rip+d], 1` @0x78a990 -- a trailing-immediate encoding, and the setter is a
+    # tail-jump target reached by exactly one control transfer in each image.
+    #   python3 scripts/map-data-rvas-1162-to-1170.py 0x3d6c5e8 --confirm 0x3d70658
+    0x3D6C5E8: (0x3D70658, "RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA", "shape"),
+    # SAVE_SERIALIZE_BYTES_RVA, refused by er-save-disable. It is GAME_MAN_SINGLETON + 8 in both
+    # images -- eight bytes from a 115-vote anchor -- and its one reference is the same
+    # instruction at the same byte offset inside a .pdata-paired function.
+    #   python3 scripts/map-data-rvas-1162-to-1170.py 0x3d69920 --confirm 0x3d6d990
+    0x3D69920: (0x3D6D990, "SAVE_SERIALIZE_BYTES_RVA", "anchor+8+shape"),
 }
 
 
@@ -608,15 +639,16 @@ def explain(md, old: Image, new: Image, fmap: dict[int, int], target: int) -> No
         # coincidence and says nothing about map coverage; reporting it as "function not in map"
         # would send the next reader off to improve the function map over bytes that were never a
         # reference at all.
-        index = instruction_index(md, old, func, disp_at, target)
-        if index is None:
+        found = instruction_index(md, old, func, disp_at, target)
+        if found is None:
             tally["decodes elsewhere"] += 1
             continue
+        index, at_offset = found
         if func not in fmap:
             tally["function not in map"] += 1
             print(f"  0x{disp_at:x}  in fn 0x{func:x}  REAL reference, fn NOT IN FUNCTION MAP")
             continue
-        moved = displacement_of(md, new, fmap[func], index)
+        moved = displacement_of(md, new, fmap[func], index, at_offset)
         tally["usable"] += 1
         print(
             f"  0x{disp_at:x}  in fn 0x{func:x} -> 0x{fmap[func]:x}  insn #{index}  "
@@ -750,8 +782,14 @@ def confirm(md, old: Image, new: Image, target: int, candidate: int) -> int:
     before = shape_sites(old, shapes).get(target, [])
     everywhere = shape_sites(new, shapes)
     after = everywhere.get(candidate, [])
-    print(f"1.16.2 0x{target:x}: {len(before)} site(s) of this shape  {', '.join(before[:4])}")
-    print(f"1.17   0x{candidate:x}: {len(after)} site(s) of this shape  {', '.join(after[:4])}")
+    # The shape's operand text comes from the 1.16.2 instruction in BOTH lines -- that is inherent
+    # to matching on a masked shape, since the displacement is exactly what was blanked. Labelling
+    # it plainly, because printed unqualified it reads as though the two images decoded to the
+    # same displacement, which would be a much stronger claim than this test actually makes. The
+    # site ADDRESSES are per-image and are the real content of these lines.
+    print(f"1.16.2 0x{target:x}: {len(before)} site(s) at  {', '.join(before[:4])}")
+    print(f"1.17   0x{candidate:x}: {len(after)} site(s) at  {', '.join(after[:4])}")
+    print("       (operand text above is the 1.16.2 shape; its displacement is masked by design)")
     print(f"1.17   the same shape reaches {len(everywhere)} distinct address(es) image-wide")
     if before and len(before) == len(after):
         print("CONFIRMED: the shape references the candidate exactly as often as it referenced the source")

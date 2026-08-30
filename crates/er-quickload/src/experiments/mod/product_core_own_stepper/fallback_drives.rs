@@ -160,7 +160,7 @@ macro_rules! own_stepper_idx10_fallbacks {
         // hard-asserts session singleton 0x144588e98 at entry -- read it live; SetState(2) only
         // when non-null, else fall back to SetState(3). Save-safe either way: BeginLogo/BeginTitle
         // are menu-UI builds with NO save write (only SetState(5)/PlayGame writes).
-        let session = unsafe { safe_read_usize($base + SESSION_SINGLETON_144588E98_RVA) }
+        let session = unsafe { safe_read_usize(er_game_base::mem::game_data_addr($base, SESSION_SINGLETON_144588E98_RVA, "SESSION_SINGLETON_144588E98_RVA")) }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let target_state = if session != TITLE_OWNER_SCAN_START_ADDRESS {
             TITLE_STEP_BEGIN_LOGO
@@ -394,7 +394,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                     && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
                 {
                     let open_menu: unsafe extern "system" fn(usize) =
-                        unsafe { std::mem::transmute($base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
+                        unsafe { std::mem::transmute(er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA")) };
                     unsafe { open_menu(dialog) };
                     OWN_STEPPER_MENU_OPENED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     // Deterministic timing endpoint: the DLL has driven boot -> modal-skip ->
@@ -408,7 +408,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                     );
                     append_autoload_debug(format_args!(
                         "own_stepper: STAGE1d self-fire open-menu 0x{:x}(dialog=0x{dialog:x}) -- in Loop + latch clear (correct gate, zero-input) waits={waits}",
-                        $base + TITLE_TOP_DIALOG_OPEN_MENU_RVA
+                        er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA")
                     ));
                 }
             }

@@ -195,23 +195,57 @@ fn install_better_refills_hooks(base: usize) {
         ),
     ];
 
+    // ONE REFUSED HOOK MUST NOT TAKE THE OTHERS DOWN WITH IT.
+    //
+    // This loop used to `return` on the first failure. That is much worse than it looks: the
+    // failure happens at `MhHook::new`, BEFORE `MH_ApplyQueued`, so bailing there leaves the
+    // hooks that DID queue successfully queued and never applied. The mod does not degrade, it
+    // goes completely inert -- and it says nothing, because the only log line is about the one
+    // that failed. Measured on 1.17: `OnEvent_BonfireFirstLvUp` is third in this list and its
+    // address was refused, so `SetItemReplenishState` and `MoveMapStep::UpdatePlayerInfo` were
+    // both mapped, both queued, and both dead, with no `hooks ACTIVE` line to say so.
+    //
+    // A refused address is now survivable per-hook: the features behind the hooks that resolved
+    // still work, and the ones that did not are named. Partial is the honest outcome of a partial
+    // migration; silence is not.
+    let mut installed: Vec<&str> = Vec::new();
+    let mut refused: Vec<&str> = Vec::new();
     for (name, target, detour, orig_slot) in targets {
         let hook = match unsafe { MhHook::new(target as *mut c_void, detour) } {
             Ok(hook) => hook,
             Err(status) => {
                 log_message(format_args!(
-                    "install: MhHook::new({name} @0x{target:x}) failed: {status:?}"
+                    "install: MhHook::new({name} @0x{target:x}) failed: {status:?} -- skipping this hook, keeping the rest"
                 ));
-                return;
+                refused.push(name);
+                continue;
             }
         };
         orig_slot.store(hook.trampoline() as usize, Ordering::SeqCst);
         if let Err(status) = unsafe { hook.queue_enable() } {
             log_message(format_args!(
-                "install: queue_enable({name} @0x{target:x}) failed: {status:?}"
+                "install: queue_enable({name} @0x{target:x}) failed: {status:?} -- skipping this hook, keeping the rest"
             ));
-            return;
+            refused.push(name);
+            continue;
         }
+        installed.push(name);
+    }
+
+    if installed.is_empty() {
+        log_message(format_args!(
+            "install: NO hook queued ({} refused: {}); nothing to apply",
+            refused.len(),
+            refused.join(", ")
+        ));
+        return;
+    }
+    if !refused.is_empty() {
+        log_message(format_args!(
+            "install: PARTIAL -- queued [{}], refused [{}]; applying the queued ones",
+            installed.join(", "),
+            refused.join(", ")
+        ));
     }
 
     match unsafe { MH_ApplyQueued() } {

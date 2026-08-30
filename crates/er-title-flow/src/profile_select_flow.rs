@@ -110,7 +110,7 @@ pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuA
     if member_fn == null {
         return None;
     }
-    let factory_abs = base + LIVE_DIALOG_FACTORY_RVA;
+    let factory_abs = er_game_base::mem::game_data_addr(base, LIVE_DIALOG_FACTORY_RVA, "LIVE_DIALOG_FACTORY_RVA");
     let mut target = member_fn;
     let mut hop = HOP_START;
     while hop < JMP_HOPS && target != null {
@@ -297,7 +297,7 @@ pub unsafe fn profile_dialog_select_save_slot(base: usize, dialog: usize, slot: 
     // Fail closed on anything that is not the dialog this call expects: it dereferences
     // `[dialog+0xb08]` and two vtables before touching anything.
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    if dialog_vt != base + PROFILE_LOAD_DIALOG_VTABLE_RVA {
+    if dialog_vt != er_game_base::mem::game_data_addr(base, PROFILE_LOAD_DIALOG_VTABLE_RVA, "PROFILE_LOAD_DIALOG_VTABLE_RVA") {
         return false;
     }
     let bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(0);
@@ -318,7 +318,7 @@ pub unsafe fn profile_load_dialog_ready(
 ) -> Option<ProfileLoadDialogReady> {
     const PROFILE_LOAD_ACTIVATE_RVA: usize = 0x009a4670;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
+    let pld_vt = er_game_base::mem::game_data_addr(base, PROFILE_LOAD_DIALOG_VTABLE_RVA, "PROFILE_LOAD_DIALOG_VTABLE_RVA");
     let dvt = if dialog != null {
         unsafe { safe_read_usize(dialog) }.unwrap_or(null)
     } else {

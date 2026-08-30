@@ -29,6 +29,7 @@ faulting cleanly, and none of which needs the game to run:
 
 import argparse
 import os
+import struct
 import sys
 
 try:
@@ -91,12 +92,55 @@ def xref_targets(blob, wanted):
     return hits
 
 
-def entry_verdict(hit):
-    """Positive evidence only: something names this address as a callable destination."""
+def pdata_entry_starts(blob):
+    """Every RVA the image's own `.pdata` declares as a function start."""
+    pe = struct.unpack_from("<I", blob, 0x3C)[0]
+    nsec = struct.unpack_from("<H", blob, pe + 6)[0]
+    optsz = struct.unpack_from("<H", blob, pe + 20)[0]
+    off = pe + 24 + optsz
+    # Section header layout: name[8], VirtualSize, VirtualAddress, SizeOfRawData, PointerToRawData.
+    entry = next(
+        (
+            blob[off + i * 40 : off + (i + 1) * 40]
+            for i in range(nsec)
+            if blob[off + i * 40 : off + i * 40 + 8].rstrip(b"\0") == b".pdata"
+        ),
+        None,
+    )
+    if entry is None:
+        return frozenset()
+    vsz, vaddr, rsz, _ = struct.unpack_from("<IIII", entry, 8)
+    size = max(vsz, rsz)
+    starts = set()
+    for at in range(vaddr, vaddr + size, 12):
+        begin, end, _unwind = struct.unpack_from("<III", blob, at)
+        if begin and end > begin:
+            starts.add(begin)
+    return frozenset(starts)
+
+
+def entry_verdict(hit, pdata_starts=None, va=None):
+    """Is this address a function ENTRY, by any positive evidence?
+
+    Two kinds of evidence, and the second was missing until 2026-08-30:
+
+      1. Something NAMES it -- a `call`, a `jmp`, or a stored pointer. Direct and obvious.
+      2. The image's own `.pdata` DECLARES a function to start there. This is the authority, not a
+         hint: it is the binary telling you where its functions begin, and the unwinder depends on
+         it being right.
+
+    Judging on (1) alone reads "reached only indirectly" as "mid-function", which is a false
+    positive with real cost -- a correct hook target gets flagged and the gate goes red.
+    `MMS_CHILD_CLEANUP_RVA` (1.16.2 0xaf5750) was flagged exactly this way while `.pdata` declares
+    an EXACT FUNCTION ENTRY of size 0x68 there in both builds. Plenty of functions are reached
+    only through a vtable or a runtime-resolved pointer and have no literal reference anywhere.
+    """
     total = hit["call"] + hit["jmp"] + hit["ptr"]
-    if total == 0:
-        return False, "nothing references it"
-    return True, f"{hit['call']} call, {hit['jmp']} jmp, {hit['ptr']} ptr"
+    if total:
+        return True, f"{hit['call']} call, {hit['jmp']} jmp, {hit['ptr']} ptr"
+    if pdata_starts is not None and va is not None and (va - BASE) in pdata_starts:
+        return True, "no literal reference, but .pdata declares a function entry here"
+    return False, "nothing references it and .pdata declares no entry"
 
 
 def patch_safe(blob, va):
@@ -161,7 +205,7 @@ def promote(pairs):
     passed, failed = [], []
     previous = None
     for a, b in sorted(pairs, key=lambda p: p[1]):
-        entry_ok, entry_why = entry_verdict(hits[b])
+        entry_ok, entry_why = entry_verdict(hits[b], pdata_entry_starts(blob), b)
         patch_ok, patch_why = patch_safe(blob, b)
         overlap = previous is not None and b - previous < OVERLAP_BYTES
         previous = b
@@ -204,6 +248,7 @@ def audit(image_path, pairs, column, label):
     blob = open(image_path, "rb").read()
     targets = sorted({pair[column] for pair in pairs})
     hits = xref_targets(blob, set(targets))
+    starts = pdata_entry_starts(blob)
     bad = 0
     previous = None
     print(f"{len(pairs)} pairs, judging the {label} address against "
@@ -211,7 +256,7 @@ def audit(image_path, pairs, column, label):
     for pair in sorted(pairs, key=lambda p: p[column]):
         va = pair[column]
         flags = []
-        ok, why = entry_verdict(hits[va])
+        ok, why = entry_verdict(hits[va], starts, va)
         detail = why
         if not ok:
             flags.append(f"MID-FUNCTION ({why})")
@@ -244,7 +289,8 @@ def selftest():
     blob = open(IMAGE_1170, "rb").read()
     inside = 0x1407AE8C0 + 2
     hits = xref_targets(blob, {inside})
-    ok, why = entry_verdict(hits[inside])
+    # Negative control: two bytes into a known entry. .pdata must not rescue it.
+    ok, why = entry_verdict(hits[inside], pdata_entry_starts(blob), inside)
     assert not ok, f"an address inside a function must not read as an entry, got {why}"
     print("\nselftest OK")
     return 0

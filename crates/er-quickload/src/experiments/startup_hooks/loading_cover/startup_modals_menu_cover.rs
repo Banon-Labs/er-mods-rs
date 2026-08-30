@@ -93,7 +93,7 @@ pub(crate) fn force_dismiss_startup_dialog() {
     if n % AUTO_ACCEPT_LOG_INTERVAL == null {
         append_autoload_debug(format_args!(
             "auto-accept: OK-handler 0x{:x}(MessageBoxDialog 0x{dialog:x}) -- real OK-press to close + proceed #{n}",
-            base + MSGBOX_OK_HANDLER_RVA
+            er_game_base::mem::game_data_addr(base, MSGBOX_OK_HANDLER_RVA, "MSGBOX_OK_HANDLER_RVA")
         ));
     }
     let _ = (

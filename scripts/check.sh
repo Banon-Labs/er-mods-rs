@@ -46,6 +46,11 @@ python3 "$repo_root/scripts/check-yk0j-runtime-proof.py" --selftest
 python3 "$repo_root/scripts/check-user-release-package.py"
 python3 "$repo_root/scripts/check-native-continue-static.py"
 python3 "$repo_root/scripts/check-menu-constructor-static.py"
+# RVA 0 is the PE header: the 1.16.2 -> 1.17 resolver refuses it every time, forever, at the call
+# site's own rate. One `game_rva(0)` used only to fetch the module base sat on the 4 Hz telemetry
+# write and logged 339,764 anonymous refusals in a single session. Selftest first.
+python3 "$repo_root/scripts/check-no-rva-zero.py" --selftest
+python3 "$repo_root/scripts/check-no-rva-zero.py"
 python3 "$repo_root/scripts/check-env-gate-comments.py"
 python3 "$repo_root/scripts/test-env-gate-comments.py"
 python3 "$repo_root/scripts/check-marker-file-gates.py"

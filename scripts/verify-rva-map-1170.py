@@ -132,7 +132,33 @@ def normalise(insn):
     return " ".join(parts)
 
 
-def decode(image, va, limit=DECODE_LIMIT):
+def decode(image, va, limit=DECODE_LIMIT, end_rva=None):
+    """Normalised instructions of the function at `va`, stopped at the function's real end.
+
+    KNOWING WHERE TO STOP IS THE WHOLE ACCURACY OF THIS TOOL. Stopping only at `ret` -- which is
+    what this did until 2026-08-30 -- silently walks off the end of any function that ends in a
+    TAIL CALL, and a great many do. Past the end sits inter-function padding whose length differs
+    between builds (measured: 3 bytes in 1.16.2 against 4 in 1.17 after
+    `CS::MenuWindowJob::~MenuWindowJob`), so the two decodes fall out of phase and every
+    instruction after that point compares unequal. The result is a confident `DIVERGES` on a
+    function that is byte-identical in its own body.
+
+    That false negative is not merely noise: `build.rs::refuted_sources()` treats `DIVERGES` as
+    positive evidence that an address is WRONG and subtracts the row from `VERIFIED_1162_TO_1170`
+    -- the CALL map, not just the detour map. So a decoding artifact removes a working address and
+    the feature dies with a `failed to resolve` line. Three independent reviews on 2026-08-30
+    found the same artifact behind 12 of 12 non-clean rows, with zero changed immediates and zero
+    changed struct offsets among them.
+
+    Stops, in order of authority:
+      1. `end_rva` -- the `.pdata` extent. The image's own declaration of where the function ends;
+         nothing beats it, so it is used whenever both images declare one.
+      2. `ret`.
+      3. An unconditional `jmp` immediately followed by an `int3` pad byte. MSVC pads between
+         functions with 0xCC, so `jmp` + `0xCC` is a tail call at a function boundary -- while a
+         `jmp` in the middle of a body (a loop, a branch to a shared epilogue) is followed by real
+         code and must NOT stop the decode.
+    """
     from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 
     md = Cs(CS_ARCH_X86, CS_MODE_64)
@@ -142,14 +168,23 @@ def decode(image, va, limit=DECODE_LIMIT):
         return []
     out = []
     for insn in md.disasm(bytes(image[offset : offset + DECODE_BYTES]), va):
+        if end_rva is not None and insn.address - BASE >= end_rva:
+            break
         out.append(normalise(insn))
         if len(out) >= limit:
             break
-        # Stop at a plain return: past it is the next function, whose drift is not this
-        # function's business.
         if insn.mnemonic == "ret":
             break
+        if end_rva is None and insn.mnemonic == "jmp":
+            after = insn.address - BASE + insn.size
+            if after < len(image) and image[after] == INT3_PAD:
+                break
     return out
+
+
+# MSVC pads between functions with `int3`. A `jmp` followed by one is a tail call at a function
+# boundary; a `jmp` followed by anything else is inside a body.
+INT3_PAD = 0xCC
 
 
 def whole_function_bytes(image, extents, va):
@@ -180,8 +215,13 @@ def compare(old_image, new_image, old_va, new_va, old_extents=None, new_extents=
                 "right_len": len(right_body),
                 "whole_body": True,
             }
-    left = decode(old_image, old_va)
-    right = decode(new_image, new_va)
+    # Bound each decode by that image's own `.pdata` extent when it declares one. This is what
+    # keeps the two instruction streams in phase: without it a tail-call function runs into
+    # padding of a different length in each build and everything after diverges.
+    old_end = old_extents.get(old_va - BASE) if old_extents is not None else None
+    new_end = new_extents.get(new_va - BASE) if new_extents is not None else None
+    left = decode(old_image, old_va, end_rva=old_end)
+    right = decode(new_image, new_va, end_rva=new_end)
     if not left or not right:
         return {"verdict": "UNDECODABLE", "ratio": 0.0, "compared": 0, "first_diff": None}
     compared = min(len(left), len(right))
@@ -342,13 +382,26 @@ def main():
 
 
 def selftest():
-    """Re-derive the verdicts the crash bisect of 2026-08-29 established.
+    """Pin the decode boundary, and record that one 2026-08-29 verdict was retracted.
 
-    er-armament-icons installed five detours and the game died at the first overlay draw. Four of
-    the five targets are the same function in 1.17; the fifth, `HUD_WEAPON_SLOT_UPDATE`, is not --
-    the signature map paired it with a function whose body shares 18% of its instruction shape.
-    A promotion rule that cannot separate those two cases would put that crash straight back, so
-    the separation is asserted here rather than described in a comment.
+    THE RETRACTION, because a test that asserts a wrong answer is worse than no test. This
+    selftest used to require `HUD_WEAPON_SLOT_UPDATE` (0x1408d2110 -> 0x1408d32b0) to come back
+    `DIVERGES` at "18% of its instruction shape", and treated that as the lesson of the
+    2026-08-29 crash bisect. The 18% was an artifact of THIS FILE: the function is 86 bytes and
+    ends in a tail-call `jmp`, `decode()` stopped only at `ret`, and roughly 98 of the 120
+    instructions it compared belonged to the NEXT function. Bounded by the `.pdata` extent the two
+    bodies differ in four bytes, both of them halves of `call rel32` displacements, and the
+    verdict is IDENTICAL. Three independent reviews found the same artifact behind 12 of 12
+    non-clean rows, with zero changed immediates and zero changed struct offsets among them.
+
+    WHAT IS NOT RETRACTED: the crash was real. Its cause is now UNKNOWN and must be re-derived --
+    an independent look at the same run found the game dying in FromSoftware's own `DL_PANIC`
+    ("未初期化のシングルトンにアクセスしました", FD4Singleton.h) for an uninitialised singleton,
+    which points at a stale `.data` global rather than at a detour. Do not read the IDENTICAL
+    verdict below as "that address was fine all along"; read it as "the reason we gave was wrong".
+
+    So what is asserted here is the BOUNDARY, which is the thing that was actually broken: a
+    function ending in a tail call must compare over its own body and no further.
     """
     old_image = open(OLD_IMAGE, "rb").read()
     new_image = open(NEW_IMAGE, "rb").read()
@@ -387,8 +440,19 @@ def selftest():
     killer = compare(
         old_image, new_image, 0x1408D2110, 0x1408D32B0, old_extents, new_extents
     )
-    check("HUD_WEAPON_SLOT_UPDATE verdict", killer["verdict"], "DIVERGES")
-    check("HUD_WEAPON_SLOT_UPDATE is rejected", killer["ratio"] < 1.0, True)
+    # Retracted 2026-08-29 verdict -- see this function's docstring. Bounded by .pdata, the two
+    # bodies agree; the old DIVERGES was this file decoding the following function.
+    check("HUD_WEAPON_SLOT_UPDATE verdict", killer["verdict"], "IDENTICAL")
+    check("HUD_WEAPON_SLOT_UPDATE compares its own body only", killer["compared"] <= 40, True)
+    # THE REGRESSION GUARD THAT MATTERS. A tail-call function must not decode past its own end.
+    # Without the .pdata bound this returned ~120 instructions for an 86-byte body.
+    tail_call_body = decode(
+        old_image,
+        0x1408D2110,
+        end_rva=old_extents.get(0x1408D2110 - BASE),
+    )
+    check("tail-call body stays inside its .pdata extent", len(tail_call_body) <= 40, True)
+    check("tail-call body is not empty", len(tail_call_body) > 0, True)
 
     # Short functions the extent rule rescues: 21 and 38 bytes, byte-for-byte unchanged in 1.17.
     # Before extents were read these were IDENTICAL-SHORT over 7 instructions and excluded, which

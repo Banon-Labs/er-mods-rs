@@ -30,7 +30,24 @@ import sys
 from pathlib import Path
 
 BASE = 0x140000000
-CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9a-fA-F_]+)")
+# The TYPE is not part of what makes something a game address. Requiring `usize` here made every
+# `: u32` constant invisible to this scanner -- and invisibility is total: the row is never
+# selected, never mapped, never verified, and the game refuses it at runtime with no clue why.
+# Measured 2026-08-30: SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA is declared `: u32`, so the
+# whole System>Quit tab routing was refused on 1.17 -- including the guard in front of the native
+# Return-to-Desktop confirmation. Accept any integer width; the NAME is the signal.
+# A game address does not need a NAME to be a game address. Three crates keep theirs as bare
+# `rva: 0x...` fields inside `HookSpec`/`MapSeam` table literals -- 39 in er-reload-trace, 13 in
+# er-invasion-warp, 1 in er-seamless-bugfixes -- and because every tool here keyed on the constant
+# NAME, all 53 were invisible: never selected, never mapped, never verified, and refused at
+# runtime under no name anyone could search for. Underscore separators are used in those tables
+# (`0x088_55b0`), so they have to be accepted and stripped.
+BARE_RVA_FIELD = re.compile(r"\brva\s*:\s*(0x[0-9a-fA-F_]+)")
+
+RVA_TYPE = r"(?:usize|u32|u64)"
+CONST = re.compile(
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*(0x[0-9a-fA-F_]+)"
+)
 # `pub const FOO_RVA: usize = SomeEnum::Variant as usize;` -- the value lives on the enum, not at
 # the declaration, so a `= 0x...` scan cannot see it. 37 constants are written this way and the
 # selector was blind to every one. It cost a black screen: TITLE_TOP_DIALOG_IS_IN_STATE_RVA
@@ -38,7 +55,9 @@ CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9
 # `title_dialog_state` could not tell whether the title had reached Loop, and the boot cover --
 # which releases on that observation -- never released. 37 `boot-view DECISION` lines, every one
 # `own_menu=false render_ready=false`, in front of a title screen that was rendering fine underneath.
-ALIAS = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(\w+)::(\w+)\s+as\s+usize")
+ALIAS = re.compile(
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*(\w+)::(\w+)\s+as\s+" + RVA_TYPE
+)
 VARIANT = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9a-fA-F_]+)\s*,", re.M)
 # Names that describe a RANGE rather than an address. `AV_GAME_TEXT_RVA_MIN` is
 # 0x1000, which is where .text begins and therefore also where a function
@@ -54,10 +73,15 @@ OBSERVED = "docs/recon/rva-1170-observed-refusals.txt"
 
 
 def declared_rvas(repo: Path) -> dict[str, int]:
-    """Every `*_RVA` constant declared under crates/, by name.
+    """Every game address declared under crates/, by name.
 
-    Two declaration forms, and missing the second one is what let a refused address black-screen
-    the game: a literal `= 0x...`, and an alias onto an enum variant whose value lives elsewhere.
+    Three declaration forms, and each one that was missing cost a feature:
+      * a literal `const FOO_RVA: usize = 0x...`;
+      * an alias onto an enum variant whose value lives in another file -- missing this one let a
+        refused address black-screen the game;
+      * a bare `rva: 0x...` field in a `HookSpec`/`MapSeam` table, which has NO constant name at
+        all. Those get a synthetic `<file>:<line>` key, because the map still needs the address
+        and a refusal still needs something a human can search for.
     """
     out: dict[str, int] = {}
     aliases: dict[str, tuple[str, str]] = {}
@@ -72,6 +96,10 @@ def declared_rvas(repo: Path) -> dict[str, int]:
         for name, enum_name, variant in ALIAS.findall(text):
             if not BOUND.search(name):
                 aliases.setdefault(name, (enum_name, variant))
+        for match in BARE_RVA_FIELD.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            rel = path.relative_to(repo).as_posix()
+            out.setdefault(f"{rel}:{line}", int(match.group(1).replace("_", ""), 16))
         for variant, value in VARIANT.findall(text):
             # Variant names are matched without their enum -- the declaration and the enum body are
             # routinely in different files, and a variant name is unique enough in practice. A

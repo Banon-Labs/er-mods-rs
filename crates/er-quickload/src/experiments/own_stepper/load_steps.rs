@@ -341,7 +341,11 @@ pub(crate) unsafe fn own_stepper_stage2(
     let s2_elapsed_ms = own_stepper_s2_elapsed_ms();
     let s2_timed_out = own_stepper_s2_timed_out();
     let item = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
-    let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
+    let pld_vt = er_game_base::mem::game_data_addr(
+        base,
+        PROFILE_LOAD_DIALOG_VTABLE_RVA,
+        "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+    );
     // 32-bit GameMan field read (low dword of the 8-byte safe read; little-endian).
     let ri32 = |addr: usize, dflt: i32| -> i32 {
         unsafe { safe_read_usize(addr) }

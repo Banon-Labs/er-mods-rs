@@ -801,7 +801,12 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             }
         };
         let vt = unsafe { safe_read_usize(ret) }.unwrap_or(null);
-        let is_msgbox = vt == base + MSGBOX_DIALOG_VTABLE_RVA;
+        let is_msgbox = vt
+            == er_game_base::mem::game_data_addr(
+                base,
+                MSGBOX_DIALOG_VTABLE_RVA,
+                "MSGBOX_DIALOG_VTABLE_RVA",
+            );
         let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
         // CAPTURE the startup MessageBoxDialog (connection-error / EULA / warning) pre-world so
         // the game task can dismiss it via the real OK handler. Post-load/in-world dialogs are

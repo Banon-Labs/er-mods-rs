@@ -263,7 +263,11 @@ const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
 /// Set the title global accept byte = 1 to advance the parked PRESS ANY BUTTON title into its menu.
 /// Fault-safe; game-thread only. Returns true once written. A no-op effect once past the title.
 pub fn advance_press_any_button(base: usize) -> bool {
-    let addr = base + TITLE_GLOBAL_ACCEPT_BYTE_RVA;
+    let addr = er_game_base::mem::game_data_addr(
+        base,
+        TITLE_GLOBAL_ACCEPT_BYTE_RVA,
+        "TITLE_GLOBAL_ACCEPT_BYTE_RVA",
+    );
     if unsafe { read_u8(addr) }.is_none() {
         return false;
     }

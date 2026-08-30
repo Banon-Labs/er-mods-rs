@@ -294,7 +294,11 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         } else {
             "empty-streak"
         },
-        base + PROFILE_TABLE_BUILDER_RVA
+        er_game_base::mem::game_data_addr(
+            base,
+            PROFILE_TABLE_BUILDER_RVA,
+            "PROFILE_TABLE_BUILDER_RVA"
+        )
     ));
 }
 

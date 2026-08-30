@@ -648,7 +648,7 @@ fn write_game_module_oracles(body: &mut String) {
         } else {
             unsafe { crate::experiments::safe_read_usize(msgbox_dialog) }.unwrap_or(NULL_PTR)
         };
-        let msgbox_closing_latch = if msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA {
+        let msgbox_closing_latch = if msgbox_vtable == er_game_base::mem::game_data_addr(base, MSGBOX_DIALOG_VTABLE_RVA, "MSGBOX_DIALOG_VTABLE_RVA") {
             unsafe {
                 crate::experiments::safe_read_usize(msgbox_dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET)
             }
@@ -657,7 +657,7 @@ fn write_game_module_oracles(body: &mut String) {
         } else {
             MSGBOX_CLOSING_YES
         };
-        let blocking_modal_present = msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA
+        let blocking_modal_present = msgbox_vtable == er_game_base::mem::game_data_addr(base, MSGBOX_DIALOG_VTABLE_RVA, "MSGBOX_DIALOG_VTABLE_RVA")
             && msgbox_closing_latch != MSGBOX_CLOSING_YES;
         const NO_POLICY_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
         let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);

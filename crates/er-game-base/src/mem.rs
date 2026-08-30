@@ -42,18 +42,48 @@ pub fn game_module_base() -> Result<usize, String> {
 /// translated address when one has been verified and an `Err` when it has not -- so a caller
 /// that ignores the error cannot call into whatever now occupies those bytes. Plain addition on
 /// the supported build, and for anything outside the game image.
+///
+/// # Why `#[track_caller]`
+///
+/// This is the UNNAMED spelling, so its refusals used to be labelled `game_rva` and nothing else
+/// -- which names ~150 call sites at once and therefore names none of them. It has now cost two
+/// hunts. The first was 57 refusals in one boot. The second was a session that logged **339,764**
+/// refusals of `0x140000000` (image base + RVA 0, which is never a meaningful address) with no
+/// way to tell from the log which site was asking; it turned out to be `delay_delete_pending`
+/// resolving RVA 0 just to obtain the module base, four times a second for 25 hours.
+///
+/// The caller's `file:line` goes into the refusal line so that class of hunt cannot recur. It is
+/// a property of the function rather than a discipline expected of ~150 call sites, which is the
+/// only reason it holds.
+#[track_caller]
 pub fn game_rva(rva: u32) -> Result<usize, String> {
-    game_rva_named(rva, "game_rva")
+    resolve_rva(rva, "game_rva", core::panic::Location::caller())
 }
 
-/// [`game_rva`], but the caller names the address so a refusal is attributable.
+/// [`game_rva`], but the caller names the address so a refusal is attributable by NAME as well
+/// as by source line.
 ///
-/// The unnamed form logged 57 refusals in one boot, every one of them as `game_rva`, which
-/// identified no feature and no constant. A refusal nobody can attribute is barely better than
-/// a silent one.
+/// Both halves earn their place: the name says WHICH constant went inert (the thing a reader
+/// wants), and the location says which of the several sites that resolve it was asking (the
+/// thing that makes it fixable). Prefer this form when a name exists.
+#[track_caller]
 pub fn game_rva_named(rva: u32, what: &'static str) -> Result<usize, String> {
+    resolve_rva(rva, what, core::panic::Location::caller())
+}
+
+/// Shared body of [`game_rva`] and [`game_rva_named`]: resolve `rva` for the running build,
+/// labelling any refusal with both the name and the source line that asked for it.
+///
+/// `at` is passed in rather than read here because `#[track_caller]` reports the caller of the
+/// nearest tracked frame; reading it in this untracked helper would report `game_rva` itself and
+/// re-create the exact anonymity this exists to remove.
+fn resolve_rva(rva: u32, what: &str, at: &core::panic::Location<'_>) -> Result<usize, String> {
     let raw = game_module_base()? + rva as usize;
-    crate::game_build::resolve_game_address(raw, what).ok_or_else(|| {
+    crate::game_build::resolve_game_address_fmt(
+        raw,
+        format_args!("{what} @ {}:{}", at.file(), at.line()),
+    )
+    .ok_or_else(|| {
         format!(
             "rva 0x{rva:x} has no verified mapping for the running build: {}",
             crate::game_build::describe_build()

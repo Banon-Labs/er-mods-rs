@@ -159,7 +159,13 @@ fn enabled() -> bool {
 /// The class name for a matched dialog vtable, or `None` if `vt` is not a dialog
 /// vtable. Also the authoritative "this pointer is a live dialog vtable" test.
 fn dialog_class(vt: usize, base: usize) -> Option<&'static str> {
-    if vt == base + MSGBOX_DIALOG_VTABLE_RVA {
+    if vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            MSGBOX_DIALOG_VTABLE_RVA,
+            "MSGBOX_DIALOG_VTABLE_RVA",
+        )
+    {
         Some("MessageBoxDialog")
     } else if vt
         == er_game_base::mem::game_data_addr(

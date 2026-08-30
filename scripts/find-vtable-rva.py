@@ -43,6 +43,9 @@ IMAGES = {
 TYPE_DESCRIPTOR_NAME_OFFSET = 0x10
 # RTTICompleteObjectLocator: signature, offset, cdOffset, pTypeDescriptor, pClassDescriptor(, pSelf).
 COL_TYPE_DESCRIPTOR_OFFSET = 0x0C
+# How far back from a slot to look for the vtable it belongs to. Generous: ER's menu/functor
+# vtables are short, but a deep interface can carry dozens of entries.
+MAX_VTABLE_SLOTS_BACK = 64
 
 
 def load(path: str) -> bytes | None:
@@ -130,17 +133,39 @@ def vtables_holding(image: bytes, func_rva: int) -> list[tuple[int, int, str | N
     at = image.find(needle)
     while at >= 0:
         if at % 8 == 0:
-            # Walk back to the start of the pointer run; the vtable begins where the preceding
-            # qword stops being a plausible code pointer.
-            start = at
-            while start >= 8:
-                prev = struct.unpack_from("<Q", image, start - 8)[0]
-                if not (BASE + 0x1000 <= prev < BASE + len(image)):
+            # Walk back and TEST each candidate start, rather than walking until the preceding
+            # qword stops looking like a code pointer. That heuristic overshoots every time: the
+            # qword before a vtable is its CompleteObjectLocator, which is also an in-image
+            # pointer, so the walk sails past the start it was looking for and lands somewhere
+            # with no RTTI -- reporting "no vtable slot holds this function" for a function that
+            # is sitting in slot 2 of a named vtable.
+            for slot in range(MAX_VTABLE_SLOTS_BACK):
+                start = at - slot * 8
+                if start < 8:
                     break
-                start -= 8
-            name = class_name_at_vtable(image, start)
-            if name:
-                out.append((start, (at - start) // 8, name))
+                name = class_name_at_vtable(image, start)
+                if name:
+                    out.append((start, slot, name))
+                    break
+        at = image.find(needle, at + 1)
+    return out
+
+
+def pointers_to(image: bytes, func_rva: int) -> list[int]:
+    """Every 8-byte-aligned qword in the WHOLE image that holds `BASE + func_rva`.
+
+    Wider than `vtables_holding`, which requires the run to carry an RTTI name. A function can be
+    reached from a plain function-pointer table, a task registration array, or a jump table with
+    no class attached, and none of those is a vtable. When a function has zero direct callers AND
+    zero rip-relative references, this says whether it is reachable from data at all -- which is
+    the difference between "look in a table" and "this needs a live process".
+    """
+    out = []
+    needle = struct.pack("<Q", BASE + func_rva)
+    at = image.find(needle)
+    while at >= 0:
+        if at % 8 == 0:
+            out.append(at)
         at = image.find(needle, at + 1)
     return out
 
@@ -176,6 +201,11 @@ def main() -> int:
         "--slot-of",
         help="find every vtable whose slot holds this FUNCTION rva, and read the same slot in 1.17",
     )
+    parser.add_argument(
+        "--pointer-to",
+        help="every aligned qword in the whole image holding this FUNCTION rva (data tables, not "
+        "just vtables)",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
@@ -189,6 +219,14 @@ def main() -> int:
             print(f"missing image for {name}: {path}", file=sys.stderr)
             return 1
         images[name] = image
+
+    if args.pointer_to:
+        func = int(args.pointer_to, 0) & 0xFFFFFFFF
+        for name, image in images.items():
+            hits = pointers_to(image, func)
+            shown = ", ".join(f"0x{h:x}" for h in hits[:10]) or "(none)"
+            print(f"  {name:>6}  {len(hits)} pointer(s) to 0x{func:x}: {shown}")
+        return 0
 
     if args.slot_of:
         func = int(args.slot_of, 0) & 0xFFFFFFFF
