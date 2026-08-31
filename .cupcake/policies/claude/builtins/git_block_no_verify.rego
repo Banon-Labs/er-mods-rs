@@ -170,22 +170,104 @@ contains_hook_disable(cmd) if {
 	key_match[1] == value_match[1]
 }
 
-contains_hook_disable(cmd) if {
-	# Detect attempts to chmod hooks to non-executable
-	commands.has_verb(cmd, "chmod")
-	regex.match(`\.git/hooks`, cmd)
-	regex.match(`-x|-[0-9]*0[0-9]*`, cmd) # Removing execute permission
+# ---------------------------------------------------------------------------
+# HOOK REMOVAL: THE VERB AND THE HOOK DIRECTORY MUST BE THE SAME COMMAND
+# (2026-08-31, bd er-effects-rs-c0t9)
+#
+# Three arms used to live in contains_hook_disable, each ANDing a verb test with
+# `contains(cmd, ".git/hooks")` over the WHOLE command string. Co-presence, not
+# relation -- the identical defect the core.hooksPath block above was narrowed to
+# fix, in the identical file, one screen further down. So this
+#
+#     rm -rf <an unrelated dir> && mkdir -p <hooks dir> && cp shim <hooks dir>/pre-push
+#
+# was denied with "Disabling git hooks is not permitted" while INSTALLING a hook,
+# because a removal verb aimed at one path in one statement met a hooks-directory
+# operand in a different statement. Measured live on 2026-08-31 -- and then again
+# on the bug report about it, which was denied for quoting both tokens. A guard
+# that blocks its own bug report has stopped being evidence about commands.
+#
+# THE SHAPE, taken from guard_layer_destructive_guard.rego rather than reinvented
+# (its segmenter now lives in commands.rego so there is exactly one):
+#
+#   * PER STATEMENT, so tokens in different statements cannot combine. Statement
+#     and not segment: a PIPE carries data, so `echo <hooks dir>/pre-commit |
+#     xargs rm -f` really does delete a hook with the path in one stage and the
+#     verb in the next. The old whole-string test caught that by accident and
+#     segment granularity would have dropped it -- a false-positive fix that
+#     opens a hole is a worse bug than the one it fixes. The cost is a narrow
+#     over-denial (`rm -rf /tmp/x | tee <hooks dir>/log`), which is affordable
+#     only because these verb sets are tiny; see the note in commands.rego for
+#     why the destructive guard takes the opposite trade;
+#   * over commands.executed_texts, so a `fish -c '<payload>'` wrapper is still
+#     decomposed and its payload split into statements on its own;
+#   * VERB from commands.quotes_removed(statement) in COMMAND POSITION, so a `rm`
+#     inside a quoted argument -- a commit message, a bd description, a python
+#     one-liner -- is the data it is, not a program. This is what un-denies the
+#     bug report;
+#   * PATH from the RAW statement, quotes and all, because quoting a path is
+#     ordinary: `rm -rf "$repo/.git/hooks"` must still be caught.
+#
+# WHAT WAS DELIBERATELY NOT WIDENED. The verb set stays exactly {rm, unlink,
+# trash} + mv + chmod: `rmdir`/`shred` were never caught here and adding them is
+# a different change with a different risk. The one addition is the find arm
+# below, and it exists to PREVENT a regression rather than to extend reach.
+hooks_dir := ".git/hooks"
+
+hook_scan_statements := {statement |
+	some text in commands.executed_texts(input.tool_input.command)
+	some statement in commands.shell_statements(lower(text))
 }
 
-contains_hook_disable(cmd) if {
-	# Detect attempts to remove hook files
-	contains(cmd, ".git/hooks")
-	removal_cmds := {"rm", "unlink", "trash"}
-	commands.has_dangerous_verb(cmd, removal_cmds)
+deny contains decision if {
+	input.hook_event_name == "PreToolUse"
+	input.tool_name == "Bash"
+
+	some statement in hook_scan_statements
+	hook_removal_statement(statement)
+
+	decision := {
+		"rule_id": "BUILTIN-GIT-BLOCK-NO-VERIFY",
+		"reason": "Disabling git hooks is not permitted. Hooks are required for code quality and security.",
+		"severity": "HIGH",
+	}
 }
 
-contains_hook_disable(cmd) if {
-	# Detect moving/renaming hooks to disable them
-	commands.has_verb(cmd, "mv")
-	contains(cmd, ".git/hooks")
+# Removing hook files.
+hook_removal_statement(statement) if {
+	contains(statement, hooks_dir)
+	some verb in {"rm", "unlink", "trash"}
+	commands.has_command_verb(commands.quotes_removed(statement), verb)
+}
+
+# Moving/renaming the directory to disable it.
+hook_removal_statement(statement) if {
+	contains(statement, hooks_dir)
+	commands.has_command_verb(commands.quotes_removed(statement), "mv")
+}
+
+# chmod to non-executable.
+hook_removal_statement(statement) if {
+	contains(statement, hooks_dir)
+	commands.has_command_verb(commands.quotes_removed(statement), "chmod")
+	regex.match(`-x|-[0-9]*0[0-9]*`, statement) # Removing execute permission
+}
+
+# `find <hooks dir> -exec rm {}` puts the removal verb after an option, where
+# COMMAND POSITION cannot see it -- the old whole-string has_verb caught that
+# shape by accident, and tightening to command position would have dropped it.
+# So it is caught deliberately here, together with `-delete`, which nothing
+# caught before.
+#
+# Scoped to an actual removal rather than to `-exec` in general: the destructive
+# guard's broader `-(delete|exec|execdir)` arm would also deny
+# `find .git/hooks -type f -exec ls -l {} +`, and denying an audit of the hook
+# directory is the same class of false positive this block exists to remove.
+find_removal_pattern := `(^|[ \t])(-delete([ \t]|$)|-(exec|execdir|ok)[ \t]+(rm|unlink|trash|shred)([ \t]|$))`
+
+hook_removal_statement(statement) if {
+	contains(statement, hooks_dir)
+	unquoted := commands.quotes_removed(statement)
+	commands.has_command_verb(unquoted, "find")
+	regex.match(find_removal_pattern, unquoted)
 }

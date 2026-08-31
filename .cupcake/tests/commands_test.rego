@@ -337,3 +337,59 @@ test_word_as_an_operand_is_not_a_command_verb if {
 test_has_verb_still_matches_prose_so_the_two_are_not_interchangeable if {
 	commands.has_verb("echo the installer will install things", "install")
 }
+
+# --- shell segmentation (2026-08-31, bd er-effects-rs-c0t9) -------------------
+#
+# shell_segments moved here from guard_layer_destructive_guard.rego so the
+# vendored git_block_no_verify builtin could close the same co-presence defect
+# without a second copy. shell_statements is the coarser cut it is now built on:
+# statements only, pipelines kept whole, because a pipe carries data between the
+# commands it joins and a co-presence guard has to see that.
+
+test_statements_split_on_semicolon if {
+	commands.shell_statements("a x; b y") == {"a x", "b y"}
+}
+
+test_statements_split_on_and_and if {
+	commands.shell_statements("a x && b y") == {"a x", "b y"}
+}
+
+test_statements_split_on_or_or if {
+	commands.shell_statements("a x || b y") == {"a x", "b y"}
+}
+
+test_statements_split_on_background_and_newline if {
+	commands.shell_statements("a x &\nb y") == {"a x", "b y"}
+}
+
+# THE DISTINCTION THIS TYPE EXISTS FOR. `||` is consumed whole before the single
+# characters, so it cannot leave a stray `|` behind that would read as a pipe --
+# and a real pipe keeps its two stages together.
+test_statements_keep_a_pipeline_whole if {
+	commands.shell_statements("echo p | xargs rm -f") == {"echo p | xargs rm -f"}
+}
+
+test_segments_cut_a_pipeline if {
+	commands.shell_segments("echo p | xargs rm -f") == {"echo p", "xargs rm -f"}
+}
+
+# shell_segments was a single-pass `|`/`&`/`;` replacement before it was factored
+# through shell_statements. Set-equality on a command carrying every separator at
+# once is what pins the refactor as behaviour-preserving.
+test_segments_match_the_single_pass_form if {
+	cmd := "a 1 | b 2 && c 3 || d 4; e 5 & f 6"
+	commands.shell_segments(cmd) == {"a 1", "b 2", "c 3", "d 4", "e 5", "f 6"}
+}
+
+test_segments_drop_empty_pieces if {
+	commands.shell_segments(";; a x ;;") == {"a x"}
+}
+
+# The input contract: callers pass executed_texts output, where a separator
+# inside a quoted operand has already been blanked. Under that contract a quoted
+# `;` does not split -- which matters, because splitting in the wrong place
+# separates a verb from its operand and that is the fail-OPEN direction.
+test_quoted_separator_does_not_split_under_the_contract if {
+	some text in commands.executed_texts(`rm -rf "a;b"`)
+	commands.shell_statements(text) == {`rm -rf "a b"`}
+}

@@ -63,6 +63,80 @@ has_command_verb(command, verb) if {
 	regex.match(pattern, command)
 }
 
+# ---------------------------------------------------------------------------
+# SHELL SEGMENTS (2026-08-31, bd er-effects-rs-c0t9)
+#
+# Moved here from guard_layer_destructive_guard.rego, which had the only copy.
+# The move is the point: a SECOND segmenter written for the next policy that
+# needs one is a divergence bug waiting to happen, and the next policy that
+# needed one arrived the same day.
+#
+# WHAT PROBLEM IT SOLVES. A guard that ANDs a verb test with an operand test over
+# the WHOLE command string is asking whether the two tokens are CO-PRESENT, not
+# whether they belong to the same command. That is not the question any of these
+# rules means to ask, and it fires on commands where the two never meet:
+#
+#     rm -rf <some unrelated dir> && mkdir -p <hooks dir> && cp shim <hooks dir>/
+#
+# -- a removal aimed at one path, and a hooks directory named in a DIFFERENT
+# statement, read as removing a hook. Measured live twice on 2026-08-31, the
+# second time on the bug report about the first, because the report quoted both
+# tokens. Evaluating the predicate PER SEGMENT is what closes it.
+#
+# THE INPUT CONTRACT, and it is load-bearing: callers must pass text that has
+# been through scan_text / executed_texts, never the raw command. This splits on
+# separator CHARACTERS, so a `;` inside a quoted operand would split a segment a
+# shell would keep whole -- and splitting the wrong place separates a verb from
+# its operand, which is the fail-OPEN direction. executed_texts blanks the
+# anchors inside quoted spans before this ever sees them, so under that contract
+# a quoted separator is already a space. Both callers satisfy it.
+#
+# TWO GRANULARITIES, because `|` is not the same kind of boundary as the others.
+# `;`, `&&`, `||`, `&` and a newline separate commands that share nothing. A PIPE
+# separates commands that share a data stream -- which is exactly how a removal
+# gets its operand from somewhere else in the line:
+#
+#     echo <hooks dir>/pre-commit | xargs rm -f
+#
+# The path is in one stage and the verb in the next, and the file is deleted all
+# the same. So a co-presence guard whose verb set is small and specific should
+# read shell_statements (pipelines kept whole) and accept the narrow over-denial
+# that comes with it; a guard whose predicate is broad should read shell_segments
+# and accept the narrow gap instead. The destructive guard is the broad case --
+# at statement granularity `git diff .cupcake | grep -c restore` would be denied
+# by its `git (checkout|restore|clean)` arm, which is a worse trade than the
+# xargs gap. That choice is per policy; the SPLITTING is not, and lives here once.
+#
+# NOT SPLIT ON, deliberately: command substitution. `$(...)` really does open a
+# new command context, but leaving it joined to its host errs toward treating
+# `echo $(rm -rf <path>)` as one command that both removes and names the path --
+# a DENY, the safe direction. Splitting it would be the direction that loses a
+# real removal, so the honest gap here costs precision, never coverage.
+
+# Statement boundaries only. `||` and `&&` are consumed WHOLE before the single
+# characters, so that neither leaves a stray `|` behind to be read as a pipe.
+shell_statements(cmd) := out if {
+	no_or := replace(cmd, "||", "\n")
+	no_and := replace(no_or, "&&", "\n")
+	replaced := replace(replace(no_and, ";", "\n"), "&", "\n")
+	out := {statement |
+		some raw in split(replaced, "\n")
+		statement := trim_space(raw)
+		statement != ""
+	}
+}
+
+# Statements further cut at each data pipe. Set-equal to the original single-pass
+# `|`/`&`/`;` replacement this was factored out of.
+shell_segments(cmd) := out if {
+	out := {segment |
+		some statement in shell_statements(cmd)
+		some raw in split(statement, "|")
+		segment := trim_space(raw)
+		segment != ""
+	}
+}
+
 # Detect symlink creation commands
 # Matches: ln -s, ln -sf, ln -s -f, etc.
 creates_symlink(command) if {

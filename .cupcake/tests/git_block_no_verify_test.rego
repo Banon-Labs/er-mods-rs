@@ -215,3 +215,222 @@ test_allow_git_config_env_mismatched_indices if {
 	]))
 	count(denials) == 0
 }
+
+# --- hook removal: the verb and the hook directory must be ONE statement -------
+#   (2026-08-31, bd er-effects-rs-c0t9)
+#
+# Three arms of contains_hook_disable used to AND a verb test with
+# `contains(cmd, "<hooks dir>")` over the WHOLE command string -- the same
+# co-presence defect the core.hooksPath block above was narrowed to fix, one
+# screen further down the same file. It denied an install:
+#
+#     rm -rf <unrelated dir> && mkdir -p <hooks dir> && cp shim <hooks dir>/pre-push
+#
+# and then denied the bug report about that denial, because the report quoted
+# both tokens. Measured live, twice, on 2026-08-31.
+#
+# THE SENSITIVITY CASES COME FIRST ON PURPOSE. A false-positive fix that makes
+# real hook removal allowable is a strictly worse bug than the one it fixes, so
+# the deny direction is pinned in more detail than the allow direction, and two
+# of these cases are here because they went RED against an earlier draft of the
+# patch: `echo <hook> | xargs rm -f` and `find <hooks dir> | xargs rm` are real
+# deletions whose path and verb sit in DIFFERENT pipeline stages, which is why
+# the rule reads shell_statements (pipelines whole) rather than shell_segments.
+#
+# Assembled rather than written whole, for the reason given above `no_verify`.
+hooks_dir := concat("", [".git/", "hooks"])
+
+# ---- MUST STAY DENIED --------------------------------------------------------
+
+test_deny_rm_the_hooks_directory if {
+	denials := guard.deny with input as bash_event(concat("", ["rm -rf ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_a_single_hook_file if {
+	denials := guard.deny with input as bash_event(concat("", ["rm -f ", hooks_dir, "/pre-commit"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+# has_command_verb steps over wrapper words, so tightening to command position
+# cannot lose a real invocation hiding behind one.
+test_deny_rm_behind_sudo if {
+	denials := guard.deny with input as bash_event(concat("", ["sudo rm -rf ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_behind_an_env_assignment if {
+	denials := guard.deny with input as bash_event(concat("", ["TMPDIR=/x rm -rf ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+# The removal is in the SECOND statement. Per-statement matching must find it
+# there, not only at the start of the command.
+test_deny_rm_in_a_later_statement if {
+	denials := guard.deny with input as bash_event(concat("", ["cd /tmp/lab && rm -rf ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+# The PATH is read from the raw statement, quotes and all, precisely so that
+# quoting an operand -- which is ordinary -- does not hide it.
+test_deny_rm_with_a_double_quoted_path if {
+	denials := guard.deny with input as bash_event(concat("", [`rm -rf "$repo/`, hooks_dir, `"`]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_with_a_single_quoted_path if {
+	denials := guard.deny with input as bash_event(concat("", ["rm -rf '", hooks_dir, "'"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_unlink_a_hook if {
+	denials := guard.deny with input as bash_event(concat("", ["unlink ", hooks_dir, "/pre-push"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_mv_the_hooks_directory_away if {
+	denials := guard.deny with input as bash_event(concat("", ["mv ", hooks_dir, " ", hooks_dir, ".off"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_chmod_a_hook_non_executable if {
+	denials := guard.deny with input as bash_event(concat("", ["chmod -x ", hooks_dir, "/pre-commit"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_inside_a_subshell if {
+	denials := guard.deny with input as bash_event(concat("", ["( rm -rf ", hooks_dir, " )"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_mv_inside_a_loop_body if {
+	denials := guard.deny with input as bash_event(concat("", ["for f in a; do mv ", hooks_dir, " /tmp/x; done"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+# `fish -c` bypassed every executed-text guard until 2026-08-31; the statement
+# set is built over commands.executed_texts so a wrapper payload is decomposed
+# and then segmented on its own.
+test_deny_rm_inside_a_fish_wrapper if {
+	denials := guard.deny with input as bash_event(concat("", ["fish -c 'rm -rf ", hooks_dir, "'"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_inside_a_bash_wrapper if {
+	denials := guard.deny with input as bash_event(concat("", [`bash -c "rm -rf `, hooks_dir, `"`]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_inside_a_nested_wrapper if {
+	denials := guard.deny with input as bash_event(concat("", [`bash -c 'bash -c "rm -rf `, hooks_dir, `"'`]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+# THE PIPELINE PAIR. Path in stage one, verb in stage two, hook deleted all the
+# same. Both of these were ALLOWED by a segment-granularity draft of this patch,
+# which is the whole reason shell_statements exists.
+test_deny_echo_path_piped_to_xargs_rm if {
+	denials := guard.deny with input as bash_event(concat("", ["echo ", hooks_dir, "/pre-commit | xargs rm -f"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_find_piped_to_xargs_rm if {
+	denials := guard.deny with input as bash_event(concat("", ["find ", hooks_dir, " -type f | xargs rm"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+# `-exec rm` puts the verb after an option, where command position cannot see it.
+# The old whole-string has_verb caught this shape by accident; the find arm
+# catches it deliberately, and adds `-delete`, which nothing caught before.
+test_deny_find_exec_rm if {
+	denials := guard.deny with input as bash_event(concat("", ["find ", hooks_dir, ` -type f -exec rm {} \;`]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_find_delete if {
+	denials := guard.deny with input as bash_event(concat("", ["find ", hooks_dir, " -type f -delete"]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+# ---- MUST NOW BE ALLOWED -----------------------------------------------------
+
+# THE REPORTED FALSE POSITIVE, verbatim in shape: a removal aimed at one path in
+# one statement, a hooks directory named in two others, and the command as a
+# whole INSTALLS a hook.
+test_allow_unrelated_removal_then_installing_a_hook if {
+	denials := guard.deny with input as bash_event(concat("", [
+		"rm -rf /tmp/lab && mkdir -p /tmp/lab/", hooks_dir,
+		" && cp shim /tmp/lab/", hooks_dir, "/pre-push",
+	]))
+	count(denials) == 0
+}
+
+# THE SECOND HIT: the bug report about the first. Both tokens appear, inside a
+# quoted argument, and nothing executes -- the verb is read from
+# commands.quotes_removed, so quoted prose is the data it is.
+test_allow_the_bug_report_naming_both_tokens if {
+	denials := guard.deny with input as bash_event(concat("", [
+		"bd create --description 'denied: rm -rf /tmp/lab in one statement and ",
+		hooks_dir, " in another'",
+	]))
+	count(denials) == 0
+}
+
+# STATEMENT BOUNDARIES, one case per separator: the same two tokens that deny in
+# one statement must allow across two.
+test_allow_removal_and_hooks_path_across_and_and if {
+	denials := guard.deny with input as bash_event(concat("", ["rm -rf /tmp/x && ls ", hooks_dir]))
+	count(denials) == 0
+}
+
+test_allow_removal_and_hooks_path_across_semicolon if {
+	denials := guard.deny with input as bash_event(concat("", ["rm -rf /tmp/x; ls -l ", hooks_dir]))
+	count(denials) == 0
+}
+
+test_allow_removal_and_hooks_path_across_or_or if {
+	denials := guard.deny with input as bash_event(concat("", ["rm -rf /tmp/x || ls -l ", hooks_dir]))
+	count(denials) == 0
+}
+
+# ...and the control that keeps the three above honest: put them in ONE
+# statement and it denies. Without this pair the allow-cases could pass because
+# the rule stopped working altogether.
+test_deny_removal_naming_hooks_path_in_one_statement if {
+	denials := guard.deny with input as bash_event(concat("", ["rm -rf /tmp/x ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_allow_installing_a_hook_with_cp if {
+	denials := guard.deny with input as bash_event(concat("", ["cp scripts/hooks/pre-push ", hooks_dir, "/pre-push"]))
+	count(denials) == 0
+}
+
+# The find arm is scoped to an actual removal. Auditing the hook directory is
+# not one, and denying it would be the same class of false positive again.
+test_allow_find_exec_ls_over_the_hooks_directory if {
+	denials := guard.deny with input as bash_event(concat("", ["find ", hooks_dir, " -type f -exec ls -l {} +"]))
+	count(denials) == 0
+}
+
+# The word `rm` as an argument, not a program.
+test_allow_reading_a_hook_and_grepping_for_the_word if {
+	denials := guard.deny with input as bash_event(concat("", ["cat ", hooks_dir, "/pre-commit | grep -c rm"]))
+	count(denials) == 0
+}
+
+# The shape that denied an inspection one-liner in the sibling guard: a python
+# brace puts a quoted token in command position unless quoted spans are deleted.
+test_allow_python_one_liner_inspecting_a_hook if {
+	denials := guard.deny with input as bash_event(concat("", [
+		`python3 -c "s={'rm'}; print(open('`, hooks_dir, `/pre-commit').read())"`,
+	]))
+	count(denials) == 0
+}
+
+test_allow_commit_message_naming_both_tokens if {
+	denials := guard.deny with input as bash_event(concat("", [
+		`git commit -m "stop rm -rf /tmp/lab from reading as a `, hooks_dir, ` removal"`,
+	]))
+	count(denials) == 0
+}

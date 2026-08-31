@@ -91,7 +91,7 @@ halt contains decision if {
 	# Per SEGMENT, so a destructive verb in one statement cannot borrow a guard
 	# path operand from an unrelated one: `rm -f /tmp/x && opa test .cupcake/`
 	# must stay allowed.
-	some segment in shell_segments(lower(text))
+	some segment in commands.shell_segments(lower(text))
 
 	# THE VERB IS READ FROM THE EXECUTABLE PART OF THE SEGMENT ONLY, with quoted
 	# spans DELETED -- while the PATH is read from the whole segment, quotes and
@@ -170,16 +170,11 @@ destructive_segment(segment) if {
 	commands.creates_symlink(segment)
 }
 
-# Split on the shell separators that start a new statement. `&&`/`||` reduce to
-# `&`/`|`, which is why single-character replacement is enough.
-shell_segments(cmd) := out if {
-	replaced := replace(replace(replace(cmd, "|", "\n"), "&", "\n"), ";", "\n")
-	out := {segment |
-		some raw in split(replaced, "\n")
-		segment := trim_space(raw)
-		segment != ""
-	}
-}
+# The segmenter this rule used to define lives in commands.rego as of 2026-08-31
+# (bd er-effects-rs-c0t9), because the vendored git_block_no_verify builtin needed
+# the same machinery to close the same defect and two copies of a security
+# predicate diverge. Its input contract -- feed it executed_texts output, never
+# the raw command -- is documented there and is satisfied above.
 
 # The segment names the guard path AS A PATH: at a token boundary, or after a
 # `/` so an absolute or repo-relative spelling counts. A file merely ENDING in

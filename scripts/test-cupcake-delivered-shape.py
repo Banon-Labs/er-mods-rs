@@ -362,9 +362,33 @@ def load_delivered_cases() -> list[dict]:
     )
 
 
+# THE ONE PLACE THE TABLE CANNOT SPEAK FOR ITSELF. `affected_parent_directories` is
+# synthesised by the engine from the CWD it is invoked in, so the fixture literals in
+# `.cupcake/tests/protected_paths_test.rego` have to spell out an absolute path -- and a
+# `.rego` file cannot ask where it is checked out. They were written against
+# `/home/banon/projects/er-mods-rs`, which makes every wrapper case fail in a linked git
+# worktree, in a second clone, and on anyone else's machine, with a diff that looks like a
+# policy regression rather than a path assumption. Rebase the fixture's root onto the live
+# one before comparing: the assertion still checks the SHAPE the engine produced, which is
+# the thing the case is about, and it now checks it wherever the repo lives.
+FIXTURE_REPO_ROOT = "/home/banon/projects/er-mods-rs"
+
+
+def rebase_fixture_paths(affected: object) -> object:
+    if not isinstance(affected, list) or str(REPO_ROOT) == FIXTURE_REPO_ROOT:
+        return affected
+    return [
+        f"{REPO_ROOT}{entry[len(FIXTURE_REPO_ROOT):]}"
+        if isinstance(entry, str) and entry.startswith(FIXTURE_REPO_ROOT)
+        else entry
+        for entry in affected
+    ]
+
+
 def check_case_table() -> list[str]:
     rows = []
     for case in load_delivered_cases():
+        case = dict(case, affected=rebase_fixture_paths(case.get("affected")))
         outcome = eval_bash(case["command"])
         if outcome["delivered"] != case["command"]:
             raise Failure(
@@ -1022,6 +1046,134 @@ def check_guard_layer_forms() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 8. Hook removal: the verb and the hook directory must be ONE statement
+# ---------------------------------------------------------------------------
+#
+# The same co-presence defect as section 5, in the same vendored builtin, one
+# screen further down: three arms ANDed a removal verb with
+# `contains(cmd, "<hooks dir>")` over the WHOLE command string. So a command that
+# removed an unrelated directory and then INSTALLED a hook was denied with
+# "Disabling git hooks is not permitted" -- and so was the bug report about it,
+# for quoting both tokens. bd er-effects-rs-c0t9, measured live 2026-08-31.
+#
+# WHY THESE CASES ARE HERE AND NOT ONLY IN `opa test`. Two reasons, and the
+# second is the one that would otherwise go unnoticed:
+#
+#   * the interpreter never sees the engine's normalisation, and one of these
+#     commands is multi-line;
+#   * for `.git/hooks` specifically, CLAUDE-GUARD-LAYER-DESTRUCTIVE covers almost
+#     the same ground and answers FIRST. Measured: `rm -rf <hooks dir>`,
+#     `mv <hooks dir> <hooks dir>.off` and the fish-wrapped delete all come back
+#     with the guard-layer reason, not this builtin's. A deny-case that does not
+#     name which rule answered would therefore stay green with this builtin's
+#     hook arms entirely dead. So every deny-case pins its expected reason, and
+#     the pipeline case exists precisely because it is the one shape the sibling
+#     guard MISSES (it segments at pipes; this rule does not), which makes it the
+#     only production proof that these arms are alive at all.
+HOOK_REMOVAL_CASES = [
+    # ---- must be DENIED, by THIS rule ---------------------------------------
+    (
+        "PIPELINE: the path is in one stage and the verb in the next",
+        f"echo {GIT_HOOKS_TOKEN}/pre-commit | xargs rm -f",
+        False,
+        HOOK_DISABLE_REASON,
+    ),
+    (
+        "MULTI-LINE: a removal on the SECOND line, visible only through the shim's `; `",
+        f"echo tidying up\nfind {GIT_HOOKS_TOKEN} -type f | xargs rm",
+        False,
+        HOOK_DISABLE_REASON,
+    ),
+    # ---- must be DENIED, whichever guard answers -----------------------------
+    (
+        "a plain recursive delete of the hook directory",
+        f"{DELETE_RECURSIVE} {GIT_HOOKS_TOKEN}",
+        False,
+        GUARD_LAYER_REASON,
+    ),
+    (
+        "both tokens in ONE statement -- the control for the allow-cases below",
+        f"{DELETE_RECURSIVE} /tmp/x {GIT_HOOKS_TOKEN}",
+        False,
+        GUARD_LAYER_REASON,
+    ),
+    # ---- must be ALLOWED -----------------------------------------------------
+    (
+        "THE REPORTED FALSE POSITIVE: remove an unrelated dir, then INSTALL a hook",
+        f"{DELETE_RECURSIVE} /tmp/lab && mkdir -p /tmp/lab/{GIT_HOOKS_TOKEN}"
+        f" && cp shim /tmp/lab/{GIT_HOOKS_TOKEN}/pre-push",
+        True,
+        None,
+    ),
+    (
+        "THE SECOND HIT: the bug report, which quotes both tokens and runs nothing",
+        "bd create --description 'denied: "
+        f"{DELETE_RECURSIVE} /tmp/lab in one statement and {GIT_HOOKS_TOKEN} in another'",
+        True,
+        None,
+    ),
+    (
+        "an unrelated removal beside a hook listing, joined by &&",
+        f"{DELETE_RECURSIVE} /tmp/x && ls -l {GIT_HOOKS_TOKEN}",
+        True,
+        None,
+    ),
+]
+
+# The tokens whose CO-PRESENCE used to trigger the denial. An allow-case that no
+# longer delivers both is testing nothing.
+HOOK_REMOVAL_VACUITY_TOKENS = (GIT_HOOKS_TOKEN, "rm")
+
+
+def check_hook_removal_forms() -> list[str]:
+    """Both directions through the shim, with the reason pinned per case.
+
+    Six workers rather than section 5's four: this gate already sits near the
+    repo's 30s per-command cap, and deny-cases skip the second process that only
+    an allow-case's vacuity check needs.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure(case):
+        name, command, expect_allow, fragment = case
+        direct = eval_bash(command) if expect_allow else None
+        return name, command, expect_allow, fragment, eval_through_shim(command), direct
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        measured = list(pool.map(measure, HOOK_REMOVAL_CASES))
+
+    rows = []
+    for name, command, expect_allow, fragment, outcome, direct in measured:
+        if outcome["allowed"] != expect_allow:
+            raise Failure(
+                f"hook-removal case {name!r}: expected "
+                f"{'allow' if expect_allow else 'deny'} from the production path, got "
+                f"{'allow' if outcome['allowed'] else 'deny'}\n"
+                f"  typed  {command!r}\n"
+                f"  reason {outcome['reason'][:300]}"
+            )
+        if not expect_allow and fragment not in outcome["reason"]:
+            raise Failure(
+                f"hook-removal case {name!r}: denied, but not by the expected rule "
+                f"(no {fragment!r} in the reason). A denial from another rule is not evidence "
+                f"that this one works -- for .git/hooks the guard-layer rule shadows most of "
+                f"these shapes.\n  reason {outcome['reason'][:300]}"
+            )
+        if expect_allow:
+            delivered = (direct["delivered"] or "").lower()
+            missing = [t for t in HOOK_REMOVAL_VACUITY_TOKENS if t not in delivered]
+            if missing:
+                raise Failure(
+                    f"hook-removal case {name!r} is VACUOUS: the delivered text no longer "
+                    f"contains {missing!r}, so this allow says nothing about whether the rule "
+                    "requires the verb and the hook directory to be the same statement.\n"
+                    f"  typed     {command!r}\n  delivered {direct['delivered']!r}"
+                )
+        rows.append(f"{'allow' if expect_allow else 'deny ':<5} {name}")
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # selftest
 # ---------------------------------------------------------------------------
 
@@ -1070,7 +1222,12 @@ def selftest() -> int:
         globals()["load_delivered_cases"] = original
     print("test-cupcake-delivered-shape: selftest OK (a fictional fixture is rejected)")
 
-    for stage in (selftest_hooks_path, selftest_guard_layer, selftest_lockdown_flip):
+    for stage in (
+        selftest_hooks_path,
+        selftest_guard_layer,
+        selftest_hook_removal,
+        selftest_lockdown_flip,
+    ):
         rc = stage()
         if rc:
             return rc
@@ -1167,6 +1324,72 @@ def selftest_guard_layer() -> int:
     return 0
 
 
+def selftest_hook_removal() -> int:
+    """Sabotage the hook-removal table and prove the check goes red both ways.
+
+    THREE sabotages, not two. The usual pair is here -- a real removal claimed
+    allowed, the repair command claimed denied -- plus one this section needs and
+    the others do not: a deny-case whose expected reason is swapped for the
+    sibling guard's. For `.git/hooks` the guard-layer rule answers first on most
+    shapes, so a table that did not pin the reason would stay green with these
+    builtin arms completely dead, which is the exact failure mode the reason
+    assertion exists to prevent.
+    """
+    original = HOOK_REMOVAL_CASES[:]
+    sabotage = [
+        (
+            "claims a real pipeline removal is allowed",
+            [(
+                "sabotage-pipeline",
+                f"echo {GIT_HOOKS_TOKEN}/pre-commit | xargs rm -f",
+                True,
+                None,
+            )],
+            "expected allow",
+        ),
+        (
+            "claims the install-a-hook command is denied",
+            [(
+                "sabotage-install",
+                f"{DELETE_RECURSIVE} /tmp/lab && mkdir -p /tmp/lab/{GIT_HOOKS_TOKEN}"
+                f" && cp shim /tmp/lab/{GIT_HOOKS_TOKEN}/pre-push",
+                False,
+                HOOK_DISABLE_REASON,
+            )],
+            "expected deny",
+        ),
+        (
+            "credits this builtin with a denial the guard-layer rule made",
+            [(
+                "sabotage-attribution",
+                f"{DELETE_RECURSIVE} {GIT_HOOKS_TOKEN}",
+                False,
+                HOOK_DISABLE_REASON,
+            )],
+            "not evidence that this one works",
+        ),
+    ]
+    try:
+        for label, cases, fragment in sabotage:
+            HOOK_REMOVAL_CASES[:] = cases
+            try:
+                check_hook_removal_forms()
+            except Failure as exc:
+                if fragment not in str(exc):
+                    print(f"selftest FAILED ({label}): caught the wrong failure:\n{exc}")
+                    return 1
+            else:
+                print(
+                    f"selftest FAILED ({label}): the check accepted a sabotaged expectation, "
+                    "so it is not asserting anything."
+                )
+                return 1
+    finally:
+        HOOK_REMOVAL_CASES[:] = original
+    print("test-cupcake-delivered-shape: selftest OK (all three hook-removal sabotages go red)")
+    return 0
+
+
 def selftest_lockdown_flip() -> int:
     """Prove the `enabled:` measurement is a measurement.
 
@@ -1213,6 +1436,7 @@ def main(argv: list[str]) -> int:
         hooks_path = check_hooks_path_forms()
         lockdown = check_lockdown_builtin_is_off()
         guard_layer = check_guard_layer_forms()
+        hook_removal = check_hook_removal_forms()
     except Failure as exc:
         print(f"test-cupcake-delivered-shape: FAILED\n{exc}", file=sys.stderr)
         return 1
@@ -1242,12 +1466,15 @@ def main(argv: list[str]) -> int:
         print("GUARD LAYER: DESTRUCTIVE SHELL OPERATIONS ONLY")
         for line in guard_layer:
             print(f"  {line}")
+        print("HOOK REMOVAL: THE VERB AND THE HOOK DIRECTORY MUST BE ONE STATEMENT")
+        for line in hook_removal:
+            print(f"  {line}")
     print(
         f"test-cupcake-delivered-shape: ok ({len(contract)} enrichment pins, "
         f"{len(table)} delivered cases, {len(inventory)} dead-logic assertions, "
         f"{len(load_bearing)} shim-divergence cases, {len(production)} production-path cases, "
         f"{len(hooks_path)} core.hooksPath cases, {len(lockdown)} lockdown measurements, "
-        f"{len(guard_layer)} guard-layer cases)"
+        f"{len(guard_layer)} guard-layer cases, {len(hook_removal)} hook-removal cases)"
     )
     return 0
 
