@@ -70,6 +70,10 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_WINDOW_ARM_MS;
 pub(crate) const BOOT_VIEW_STOP_REASON_RELEASE_FADE: usize = 1;
 pub(crate) const BOOT_VIEW_STOP_REASON_FPS_BAIL: usize = 2;
 pub(crate) const BOOT_VIEW_STOP_REASON_WORLD_HANDOFF: usize = 3;
+/// The absolute backstop ended the window. Reasons 1-3 are the cover working; this one is the
+/// cover having FAILED and being torn down by force. Kept distinct so no reader can file a
+/// backstop release as a healthy one -- see [`boot_view_absolute_backstop`].
+pub(crate) const BOOT_VIEW_STOP_REASON_ABSOLUTE_BACKSTOP: usize = 4;
 const BOOT_VIEW_MONO_ORD_SCALE: usize = 1000;
 /// Load-epoch identity + the per-epoch baselines for process-sticky counters (bd er-effects-rs-ok8d).
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_CONTINUE_ALLOW_BASELINE;
@@ -86,11 +90,9 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_REACHED_MASK;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_TFC_CONTINUE_BASELINE;
 /// `BOOT_VIEW_EPOCH_KIND` values.
 const BOOT_VIEW_EPOCH_KIND_RELOAD: usize = 1;
+use crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS as COMPOSITE_CAP;
+use er_loading_portrait_core::native_loading_progress as np;
 
-// Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
-// windows-rs COM types are !Send). Deliberately SEPARATE from the OVERLAY_* objects so the boot view
-// cannot interfere with the proven portrait composite path or thrash its cached buffers at handoff.
-pub(crate) use er_telemetry_core::counters::BOOT_VIEW_ALLOCATOR;
 /// LOADING_SCREEN_UPDATE_HITS baseline latched at handoff detection: the counter is cumulative
 /// across loads, so an own-menu second load must measure only ITS loading screen's ticks.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_DARK_GAP_FAILURES;
@@ -122,12 +124,10 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_LAST_ALPHA;
 /// own loading screen still running.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_START_LS_UPDATE_HITS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FADE_START_MS;
-pub(crate) use er_telemetry_core::counters::BOOT_VIEW_FENCE;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE;
 /// Epoch-ms (never 0 once set) when the real loading/world handoff was first detected; the hold
 /// clock for the seamless cut. Early profile/keyed-frame semaphores must not start this clock.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_HANDOFF_SEEN_MS;
-pub(crate) use er_telemetry_core::counters::BOOT_VIEW_LIST;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_COMPLETE_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_NATIVE_GFX_FADE_HOLD_HITS;
 /// THE defect counter for the 2026-08-22 "portrait comes back if I press escape too quickly"
@@ -141,10 +141,6 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PRESENT_FULL_CLEAR_HITS;
 /// (the goal), 2 = timeout budget, 3 = Present returned a failure HRESULT.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PUMP_STOP_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_PUMP_STOP_REASON;
-pub(crate) use er_telemetry_core::counters::BOOT_VIEW_QUEUE;
-/// 1-descriptor RTV heap for the self-present full-clear (the engine has never rendered the
-/// backbuffer before its first own present, so un-cleared regions would show garbage).
-pub(crate) use er_telemetry_core::counters::BOOT_VIEW_RTV_HEAP;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SELF_FULL_CLEAR_HITS;
 /// Frames WE presented on the game's swapchain before its render loop produced its first frame.
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SELF_PRESENTS;
@@ -165,21 +161,14 @@ static BOOT_VIEW_FIRST_LOAD_REQUEST_REARMED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_IDX_CHANGED_MS;
 
-/// Optional, pre-decoded local screenshot background. This is intentionally disk-only: the DLL never
-/// touches the network on the launch path. A helper script may populate this cache before launch.
-struct BootBgImage {
-    width: usize,
-    height: usize,
-    rgba: Vec<u8>,
-}
-
-static BOOT_BG_IMAGE: std::sync::OnceLock<Option<BootBgImage>> = std::sync::OnceLock::new();
-
-const BOOT_BG_CACHE_FILE: &str = "er-quickload-boot-background.rgba";
-const BOOT_BG_MAGIC: &[u8; 8] = b"ERBGRA01";
-const BOOT_BG_STEAM_APPID: &str = "1245620";
-const BOOT_BG_MAX_DIM: usize = 4096;
-const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
+/// Optional, pre-decoded local screenshot background, resolved once per process.
+///
+/// Where to look, how to decode it, and the two pixel passes that put it behind the bar all live in
+/// `er-boot-background`. That code reads no game memory, writes no counter and installs no hook, so
+/// it had no claim on the DLL crate; what stays here is the cache and the host's answer to "where do
+/// I look" -- the configured path and the game directory.
+static BOOT_BG_IMAGE: std::sync::OnceLock<Option<er_boot_background::BootBgImage>> =
+    std::sync::OnceLock::new();
 
 /// The phase sequence THIS load epoch publishes. Boot walks engine bring-up through the first world;
 /// a character reload cannot replay any of that, so it publishes a strictly smaller sequence and its
@@ -228,23 +217,91 @@ const BOOT_VIEW_FADE_HOLD_MAX_STEP_MS: u64 = 250;
 ///
 /// A honored hold clears once `CS::LoadingScreen::Update` has been quiet for
 /// `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS`, so a genuine one is always well inside this. The cap
-/// exists because the fade is the ONLY exit from a world-handoff cover window -- the FPS bail below
-/// is reachable only through the `own_menu_active` branch this code never falls to once
-/// `world_handoff` is true -- so an unbounded pause would be an unbounded cover, and the per-frame
-/// GPU readback behind it would sit on the frame rate forever.
+/// exists because the fade is the ONLY exit from a world-handoff cover window, so an unbounded
+/// pause would be an unbounded cover and the per-frame GPU readback behind it would sit on the
+/// frame rate forever.
+///
+/// CORRECTION (2026-08-30). The reasoning above is sound but it only ever asked the question one
+/// way round: what bounds the window once `world_handoff` is TRUE. It never asked the converse --
+/// what bounds the window when `world_handoff` is NEVER true -- and the answer was NOTHING. This
+/// cap is not, and cannot become, a lifetime bound: a fade that is never ENTERED is never paused,
+/// so there is nothing here to cap. That hole is what [`boot_view_absolute_backstop`] closes; the
+/// two are complementary, this one bounding a running fade and that one bounding the window.
+///
+/// CORRECTION (2026-08-31). The paragraph above this one used to add "the FPS bail below is
+/// reachable only through the `own_menu_active` branch this code never falls to once
+/// `world_handoff` is true". That is FALSE, and run br-20260831-160354-2513 measured it false:
+/// `world_handoff` went true at 224208 ms, the native-loading hold kept the fade from STARTING, and
+/// every frame fell straight past the `native_gfx_hold_pending && !fade_started` arm into the FPS
+/// bail, which stopped the window at 239858 ms with `reason=2`. A true `world_handoff` does not
+/// keep this code out of the bail; only a fade that has actually STARTED does. That is why the
+/// composite cap has to be able to tell a finished gauge from a frozen one
+/// ([`er_loading_portrait_core::native_loading_progress`]) rather than relying on never being
+/// reached.
 const BOOT_VIEW_FADE_MAX_HELD_MS: u64 = 2_000;
 
-static BOOT_VIEW_FADE_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_PSO: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_PSO_FORMAT: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_SRV_HEAP: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_TEXTURE: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_UPLOAD: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
-static BOOT_VIEW_FADE_TEX_W: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_TEX_H: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_TEX_STATE: AtomicUsize = AtomicUsize::new(0);
-static BOOT_VIEW_FADE_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
+// ---- ABSOLUTE COVER BACKSTOP (user report 2026-08-30) ----
+//
+// THRESHOLDS, CHOSEN FROM MEASURED NUMBERS RATHER THAN TASTE. A backstop that fires during a
+// legitimately slow load is a REGRESSION, not a safety net: it would tear the cover off mid-load
+// and show the user the black gap the cover exists to hide. Every value below is therefore set
+// well past the slowest legitimate load this repo has evidence for.
+//
+//   * the reported failure's own load: `handoff_seen_ms = 19117`, last real phase label `+20449ms`;
+//   * `BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS` = 20_000, the own-menu epoch's existing composite cap;
+//   * `RELOAD_STALL_BACKSTOP_SECONDS = 120.0` in `scripts/capture-samechar-3x.py`, the repo's
+//     existing DEFENSIVE reload backstop, whose comment reads "Generous so a slow-but-progressing
+//     load is never cut" -- the same job, the same reasoning, so the same number;
+//   * `BOOT_TIMEOUT_SECONDS = 300.0` in the same file, raised from 110 precisely because ER's
+//     asset load is slow-but-progressing under load and must not be torn down early.
+/// Wall-clock lifetime of a single cover window, measured from `BOOT_VIEW_WINDOW_ARM_MS` (the
+/// user's load REQUEST, not process start). The pure last resort: it is the only arm that still
+/// works when the world clock itself cannot be read.
+///
+/// 120 s is ~6x the reported failure's 19.1 s handoff and 6x the own-menu composite cap, matches
+/// the repo's existing 120 s reload-stall backstop, and sits well inside the 300 s boot budget --
+/// so a slow-but-progressing load cannot reach it, while a window with no exit at all cannot
+/// outlive it. The user in the reported session waited 7+ minutes; this bounds that at two.
+const BOOT_VIEW_BACKSTOP_LIFETIME_MS: u64 = 120_000;
+/// How long `GameDataMan::play_time` must rise CONTINUOUSLY, while the cover is still opaque,
+/// before the world counts as demonstrably live. This is the PRIMARY arm: it does not wait for a
+/// clock to run out, it observes that the game is already being played underneath us.
+///
+/// 5 s against the repo's own `PLAY_TIME_LIVE_THRESHOLD_MS` of 1_000 (`input_trace.rs`,
+/// `write_game_module_oracles.rs`), i.e. 5x the margin the rest of the codebase calls "the world
+/// is genuinely live". A healthy release lands within ~1 s of the world coming up (both of its
+/// latches are set by then and the fade is 640 ms), so five seconds of live world under an opaque
+/// full-screen cover cannot be a healthy window. The reported failure ran 186 s past this.
+const BOOT_VIEW_BACKSTOP_WORLD_LIVE_MS: u64 = 5_000;
+/// Largest single-sample rise in `play_time` this treats as one frame of world simulation.
+///
+/// A presented frame cannot advance the world clock by two seconds -- Elden Ring presents as
+/// slowly as ~5 fps under the cover's readback, which is 200 ms, so this is 10x headroom. Its real
+/// job is the discontinuity: a character switch replaces the clock wholesale with a DIFFERENT
+/// character's playtime, which can jump by hours in either direction, and crediting that jump as
+/// world simulation would fire the backstop in the middle of the switch's load.
+const BOOT_VIEW_BACKSTOP_PT_MAX_STEP_MS: usize = 2_000;
+/// A world clock that has not risen for this long ends the current live run.
+///
+/// This is the repo's own definition of a load boundary read back the other way round: a sustained
+/// flat `play_time` window IS a load (`er_telemetry_core::read::epoch`), so a run of rises
+/// interrupted by one was not continuous gameplay and must not be summed across the gap.
+const BOOT_VIEW_BACKSTOP_FLAT_RESET_MS: u64 = 1_000;
+/// `BOOT_VIEW_BACKSTOP_TRIGGER` values (0 = never tripped).
+const BOOT_VIEW_BACKSTOP_TRIGGER_WORLD_LIVE: usize = 1;
+const BOOT_VIEW_BACKSTOP_TRIGGER_LIFETIME: usize = 2;
+
+// Per-window backstop state. Internal sampling state only, cleared by
+// `boot_view_reset_cover_window`; the counters a reader is meant to look at
+// (`BOOT_VIEW_BACKSTOP_RELEASES` / `_FIRST_MS` / `_TRIGGER`) deliberately survive a rearm.
+/// Epoch-ms at which the backstop tripped for the CURRENT window (0 = not tripped). A latch: once
+/// set, the window is committed to the backstop release and a later flat sample cannot undo it.
+static BOOT_VIEW_BACKSTOP_TRIPPED_MS: AtomicUsize = AtomicUsize::new(0);
+/// Previous `play_time` sample (game ms; 0 = none yet).
+static BOOT_VIEW_BACKSTOP_PT_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view epoch ms of the first and most recent rise in the current continuous-rise run.
+static BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+static BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 
 // Strip geometry (pixels; text is the 5x7 font at 2x = 10x14). ER-idiomatic minimal presentation
 // (user 2026-07-05: the panel/border/percent styling clashed with the game): a hairline bar on a
@@ -407,8 +464,9 @@ fn boot_world_phase_reached(phase: er_loading_bar_core::LoadPhase) -> bool {
         P::EnteringWorld => {
             let max_frame = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
             let cur_frame = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
-            let gauge_done = max_frame == 0 || cur_frame >= max_frame;
-            progress >= 900 || (close_hits != 0 && gauge_done)
+            // Through the shared definition, not a local copy. The copy at the release predicate
+            // below was never made in the first place, and that omission is er-effects-rs-t7q2.
+            progress >= 900 || (close_hits != 0 && np::gauge_done(cur_frame, max_frame))
         }
         _ => false,
     }
@@ -424,6 +482,20 @@ fn boot_view_player_render_ready() -> bool {
         && chr_ctrl != TITLE_OWNER_SCAN_START_ADDRESS
         && player.chr_ins.chr_flags1c4.is_render_group_enabled()
         && player.chr_ins.chr_flags1c5.enable_render()
+}
+
+/// The local player exists and carries a real loaded character (model + controller both built).
+///
+/// Weaker than [`boot_view_player_render_ready`] on purpose: it says a character is RESIDENT, not
+/// that it is currently render-enabled, and unlike the render flags it is PERSISTENT once true
+/// rather than a ~2 s spike at the tail of a load. Same pointer walk, no hook anywhere in it.
+fn boot_view_player_loaded() -> bool {
+    unsafe { PlayerIns::local_player_mut() }
+        .map(|player| {
+            player.chr_ins.chr_model_ins.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+                && player.chr_ins.chr_ctrl.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
+        })
+        .unwrap_or(false)
 }
 
 /// Has the cover's job finished -- is the game ready to be revealed?
@@ -510,12 +582,7 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     // It cannot reveal the game early despite being broad: the character-load gate above still
     // blocks everything before this switch's confirm, and the release also requires the native-done
     // latch, which only sets when the load screen is actually finishing.
-    let player_loaded = unsafe { PlayerIns::local_player_mut() }
-        .map(|player| {
-            player.chr_ins.chr_model_ins.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
-                && player.chr_ins.chr_ctrl.as_ptr() as usize != TITLE_OWNER_SCAN_START_ADDRESS
-        })
-        .unwrap_or(false);
+    let player_loaded = boot_view_player_loaded();
     if epoch_world_live || player_loaded || boot_view_player_render_ready() {
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(1, Ordering::SeqCst);
     }
@@ -531,9 +598,21 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     // earlier to close the re-arm gap (er-effects-rs-q6vk), that burst would latch native-done at
     // window OPEN, and with the player still resident from the previous world render-ready latches
     // too -- releasing the cover instantly and defeating that fix.
-    if LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst) != 0
-        || LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst) >= 998
-    {
+    //
+    // AND IT MUST ASK THE GAUGE (er-effects-rs-t7q2). This read `close_hits != 0 || permille >= 998`
+    // until 2026-08-31 -- the exact bare-close form `boot_world_phase_reached(EnteringWorld)` above
+    // already refuses, and refuses for the same measured reason: a reload's transient loading screen
+    // sends its finish while its gauge is still at frame 1 of 500. In run br-20260831-160354-2513
+    // that close (boot-view 217892 ms, `frame=1/500`) latched this release at 224208 ms, 17 s before
+    // the gauge reached 500/500 -- and because `boot_view_absolute_backstop` stands down while the
+    // release is reachable, it also DISARMED the window's 120 s lifetime bound. Both sites now go
+    // through `np::release_native_done` / `np::gauge_done`, so they cannot drift apart again.
+    if np::release_native_done(
+        LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
+        LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
+        LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst),
+        LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
+    ) {
         BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(1, Ordering::SeqCst);
     }
     let ready = BOOT_VIEW_RELEASE_RENDER_READY_SEEN.load(Ordering::SeqCst) != 0
@@ -560,6 +639,188 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
         ));
     }
     ready
+}
+
+/// Wall-clock ms over which `GameDataMan::play_time` has been rising CONTINUOUSLY, sampled once per
+/// composited frame. 0 whenever there is no such run.
+///
+/// A total delta would have been simpler and wrong. The baseline for a delta has to come from
+/// somewhere, and on an own-menu switch the clock at arm time belongs to the OUTGOING character:
+/// when the incoming one has more playtime the delta jumps by hours the instant it deserializes --
+/// mid-load, with the loading screen still up. Measuring the SPAN OF A RUN OF PLAUSIBLE RISES
+/// instead makes that jump self-cancelling: it is one implausible step, the run resets, and the
+/// clock has to earn its five seconds again from the world that is actually running.
+fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
+    let gdm = crate::game_data_man_ptr_or_null();
+    // Pointer walk off the game's own singleton -- the same class of read as
+    // `boot_view_player_render_ready`, and deliberately NOT any counter a detour writes.
+    let play_time = if gdm == 0 {
+        0
+    } else {
+        unsafe {
+            crate::experiments::safe_read_usize(gdm + crate::GAME_DATA_MAN_PLAY_TIME_A0_OFFSET)
+        }
+        .map_or(0, |value| value & 0xffff_ffff)
+    };
+    let prev = BOOT_VIEW_BACKSTOP_PT_LAST.swap(play_time, Ordering::SeqCst);
+    let now = now_ms.max(1) as usize;
+    let step = play_time.saturating_sub(prev);
+    let rose = play_time != 0 && prev != 0 && step != 0;
+    // Unreadable, gone backwards, or moved further in one frame than a frame can move it: this is
+    // not a clock we can reason about (no character yet, or a different one). Drop the run.
+    if play_time == 0 || play_time < prev || step > BOOT_VIEW_BACKSTOP_PT_MAX_STEP_MS {
+        BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS.store(0, Ordering::SeqCst);
+        BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS.store(0, Ordering::SeqCst);
+        return 0;
+    }
+    if rose {
+        BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS.store(now, Ordering::SeqCst);
+        let _ = BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS.compare_exchange(
+            0,
+            now,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    let first = BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS.load(Ordering::SeqCst) as u64;
+    let last = BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS.load(Ordering::SeqCst) as u64;
+    if first == 0 || last == 0 {
+        return 0;
+    }
+    // A step of 0 is ordinary (two presents inside one game tick) and must not end the run on its
+    // own; a SUSTAINED flat window is the load boundary, and it does.
+    if now_ms.saturating_sub(last) >= BOOT_VIEW_BACKSTOP_FLAT_RESET_MS {
+        BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS.store(0, Ordering::SeqCst);
+        BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS.store(0, Ordering::SeqCst);
+        return 0;
+    }
+    last.saturating_sub(first)
+}
+
+/// ABSOLUTE BACKSTOP: has this cover window failed so completely that it must be torn down by
+/// force? Returns the per-window latch, so once true it stays true until the window re-arms.
+///
+/// THE HOLE THIS FILLS (user report 2026-08-30). A session played 7+ minutes with this cover
+/// black-clearing the whole backbuffer over live gameplay and no way out but killing the process.
+/// The proximate cause was a game-image detour that failed to install -- but the reason a single
+/// failed detour was CATASTROPHIC rather than cosmetic is structural: on the boot epoch this
+/// window had no backstop of any kind, because both of its exits are downstream of that same
+/// detour.
+///
+///   * The release fade needs `world_handoff`, i.e. [`boot_view_cover_release_ready`], whose
+///     `NATIVE_DONE_SEEN` half is written ONLY from `LOADING_SCREEN_CLOSE_SENT_HITS` or
+///     `LOADING_SCREEN_BAR_PROGRESS_PERMILLE`, both fed by the CS::LoadingScreen detour. Measured
+///     in the reported run: `release_native_done_seen = 0`, `fade_hits = 0`, `fade_start_ms = 0`.
+///   * The FPS bail lives inside `if own_menu_active`, and the boot epoch is not an own-menu one
+///     (`oracle_boot_view_epoch_kind = 0`), so that whole block is skipped.
+///   * `can_move_handoff` is not a third exit: it needs `CAN_MOVE_CONFIRMED`, which only the
+///     proof-only can-move probe writes, and its own comment says it never fires in a normal
+///     session.
+///
+/// So: `stop_ms = 0`, `stop_reason = 0`, `semantic_releases = 0`, and
+/// `present_full_clear_hits = 5001` against `present_hook_hits = 4794` -- full-clearing essentially
+/// every Present, indefinitely.
+///
+/// WHY THESE SIGNALS AND NOT THE OBVIOUS ONES. A backstop keyed on anything a detour writes would
+/// share the failure mode it exists to survive, which is the whole defect repeated one layer up.
+/// Everything below is a pointer walk into game memory:
+///
+///   * `GameDataMan::play_time` rising is the game itself saying the world is simulating. It is
+///     flat during loads -- this repo detects load boundaries BY that flatness
+///     (`er_telemetry_core::read::epoch`) -- so it cannot be true during the load the cover is for.
+///   * the local player carrying a loaded character. The same class of read as the render-ready
+///     path that DEMONSTRABLY kept working throughout the failure
+///     (`release_render_ready_seen = 1` is exactly such a read succeeding).
+///
+/// The wall clock is the second arm and the pure last resort: it is the only one left when the
+/// world clock itself cannot be read at all.
+///
+/// IT CANNOT PREEMPT A HEALTHY RELEASE. `release_reachable` is `world_handoff`; while that is true
+/// the normal path owns the window and this only samples, never trips. And the thresholds are set
+/// so far past any measured legitimate load (see `BOOT_VIEW_BACKSTOP_LIFETIME_MS`) that a
+/// slow-but-progressing load reaches neither arm.
+fn boot_view_absolute_backstop(now_ms: u64, release_reachable: bool) -> bool {
+    // Sample every frame, including the frames the healthy path owns: the dwell is the span of a
+    // CONTINUOUS run of rises, so skipping frames would put holes in the run it measures.
+    let world_live_ms = boot_view_backstop_world_live_dwell_ms(now_ms);
+    if BOOT_VIEW_BACKSTOP_TRIPPED_MS.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    if release_reachable {
+        return false;
+    }
+    // SWITCH GATE, reusing the q6vk character-load gate rather than inventing a second one. An
+    // own-menu switch arms this window from the IN-WORLD System menu, so the OUTGOING world is
+    // still simulating when the cover goes up and its play_time keeps rising through the
+    // return-to-title teardown. Crediting that as "the world is live underneath our cover" would
+    // fire the world-live arm on the teardown and reveal the exact screen the cover exists to
+    // hide. So on a window that is waiting for a character load, the world-live arm stays shut
+    // until that load has actually begun -- the same fresh-deser advance
+    // `boot_view_cover_release_ready` holds its release on. The boot epoch clears
+    // `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM`, so it is unaffected. The wall clock below is NOT gated
+    // this way: it is the last resort and must survive a switch that never deserializes at all.
+    let confirm_pending = er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM
+        .load(Ordering::SeqCst)
+        != 0
+        && crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst)
+            <= er_telemetry_core::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE
+                .load(Ordering::SeqCst);
+    let world_live = !confirm_pending
+        && world_live_ms >= BOOT_VIEW_BACKSTOP_WORLD_LIVE_MS
+        && boot_view_player_loaded();
+    // From the load REQUEST, not process start: `BOOT_VIEW_WINDOW_ARM_MS` is 0 until
+    // `boot_view_reset_cover_window` stamps it, and on the boot epoch that is the frame the user's
+    // load flow was requested. A 0 here means the cover is still over the pre-Continue title,
+    // where dwelling as long as the user likes is correct behaviour and not a defect to cut short.
+    let arm_ms = BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst) as u64;
+    let armed_ms = if arm_ms == 0 {
+        0
+    } else {
+        now_ms.saturating_sub(arm_ms)
+    };
+    let lifetime = armed_ms >= BOOT_VIEW_BACKSTOP_LIFETIME_MS;
+    if !(world_live || lifetime) {
+        return false;
+    }
+    let now = now_ms.max(1) as usize;
+    if BOOT_VIEW_BACKSTOP_TRIPPED_MS
+        .compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // Another Present thread tripped it on the same frame; it owns the log line.
+        return true;
+    }
+    let trigger = if world_live {
+        BOOT_VIEW_BACKSTOP_TRIGGER_WORLD_LIVE
+    } else {
+        BOOT_VIEW_BACKSTOP_TRIGGER_LIFETIME
+    };
+    er_telemetry_core::counters::BOOT_VIEW_BACKSTOP_TRIGGER.store(trigger, Ordering::SeqCst);
+    let _ = er_telemetry_core::counters::BOOT_VIEW_BACKSTOP_FIRST_MS.compare_exchange(
+        0,
+        now,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    let n =
+        er_telemetry_core::counters::BOOT_VIEW_BACKSTOP_RELEASES.fetch_add(1, Ordering::SeqCst) + 1;
+    // Once per window by construction (the latch above), and a window that reaches here is already
+    // a defect -- so this is the one place in the cover's per-frame path where a full log line is
+    // unconditionally worth the IO.
+    append_autoload_debug(format_args!(
+        "boot-view: ABSOLUTE BACKSTOP #{n} at {now}ms -- THIS IS A DEFECT, NOT A HEALTHY RELEASE. The cover window had no reachable exit and is being force-released through the fade (trigger={trigger} world_live_ms={world_live_ms} armed_ms={armed_ms} arm_ms={arm_ms} epoch_kind={} epoch_seq={} own_menu={} render_ready_seen={} native_done_seen={} handoff_seen_ms={} fade_start_ms={} draws={} full_clears={} permille={}). native_done_seen=0 here means the CS::LoadingScreen detour never wrote; investigate the hook install, not the cover.",
+        BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst),
+        BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
+        BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst),
+        er_telemetry_core::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.load(Ordering::SeqCst),
+        er_telemetry_core::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.load(Ordering::SeqCst),
+        BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst),
+        BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst),
+        BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+        BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.load(Ordering::SeqCst),
+        BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+    ));
+    true
 }
 
 fn boot_view_load_flow_requested() -> bool {
@@ -803,6 +1064,12 @@ fn boot_view_stamp_stop_baselines(now_ms: usize) {
         LOADING_SCREEN_GFX_FADEOUT_HITS.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
+    // The total-load witness, so a world load STARTED after this stop is a delta. Read only by
+    // `er_telemetry_core::counters::cover_owns_current_loading_screen`, which carries the argument.
+    er_telemetry_core::counters::BOOT_VIEW_STOP_LOAD_WITNESS.store(
+        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
 }
 
 /// Re-arm the cover DRAWING WINDOW: stop latch, window clock, handoff/fade/dark-gap state, draw cache.
@@ -841,6 +1108,14 @@ fn boot_view_reset_cover_window() {
     BOOT_VIEW_DARK_GAP_FAILURES.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_HELD_MS.store(0, Ordering::SeqCst);
     BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.store(0, Ordering::SeqCst);
+    // Absolute-backstop SAMPLING state. The trip latch belongs to one window, and the world-clock
+    // run must not span a rearm: the load the new window covers is exactly the gap in that run.
+    // The `BOOT_VIEW_BACKSTOP_RELEASES` / `_FIRST_MS` / `_TRIGGER` counters are deliberately NOT
+    // cleared here, for the reason given at `BOOT_VIEW_DRAW_AFTER_STOP_TOTAL`.
+    BOOT_VIEW_BACKSTOP_TRIPPED_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_BACKSTOP_PT_LAST.store(0, Ordering::SeqCst);
+    BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS.store(0, Ordering::SeqCst);
     // Release latches belong to the window that observed them.
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
@@ -1492,320 +1767,18 @@ pub(super) fn boot_fill_rect(
     er_loading_bar_core::fill_rect_rgb(buf, w, h, x0, y0, rw, rh, rgb);
 }
 
-fn boot_bg_image() -> Option<&'static BootBgImage> {
+fn boot_bg_image() -> Option<&'static er_boot_background::BootBgImage> {
     BOOT_BG_IMAGE
         .get_or_init(|| {
-            if let Some((path, img)) = boot_bg_toml_image_override() {
-                append_autoload_debug(format_args!(
-                    "boot-view: TOML background image loaded '{}' {}x{}",
-                    path.display(),
-                    img.width,
-                    img.height
-                ));
-                return Some(img);
-            }
-            if let Some(img) = boot_bg_cache_override() {
-                return Some(img);
-            }
-            if let Some((path, img)) = boot_bg_latest_local_steam_screenshot() {
-                append_autoload_debug(format_args!(
-                    "boot-view: local Steam screenshot background loaded '{}' {}x{}",
-                    path.display(),
-                    img.width,
-                    img.height
-                ));
-                return Some(img);
-            }
-            None
+            er_boot_background::load(
+                &er_boot_background::Sources {
+                    configured_image: crate::config::configured_boot_background_image(),
+                    game_directory: game_directory_path(),
+                },
+                append_autoload_debug,
+            )
         })
         .as_ref()
-}
-
-fn boot_bg_toml_image_override() -> Option<(std::path::PathBuf, BootBgImage)> {
-    let path = crate::config::configured_boot_background_image()?;
-    if !boot_bg_is_supported_image_path(&path) {
-        append_autoload_debug(format_args!(
-            "boot-view: TOML background image ignored '{}' (expected .jpg/.jpeg/.png file)",
-            path.display()
-        ));
-        return None;
-    }
-    let img = unsafe { boot_bg_decode_wic_rgba(&path) }?;
-    Some((path, img))
-}
-
-fn boot_bg_cache_override() -> Option<BootBgImage> {
-    let path = game_directory_path()?.join(BOOT_BG_CACHE_FILE);
-    let bytes = std::fs::read(&path).ok()?;
-    match parse_boot_bg_cache(&bytes) {
-        Some(img) => {
-            append_autoload_debug(format_args!(
-                "boot-view: cached screenshot background loaded '{}' {}x{}",
-                path.display(),
-                img.width,
-                img.height
-            ));
-            Some(img)
-        }
-        None => {
-            append_autoload_debug(format_args!(
-                "boot-view: cached screenshot background ignored '{}' (bad ERBGRA01 cache)",
-                path.display()
-            ));
-            None
-        }
-    }
-}
-
-fn parse_boot_bg_cache(bytes: &[u8]) -> Option<BootBgImage> {
-    if bytes.len() < 16 || &bytes[..8] != BOOT_BG_MAGIC {
-        return None;
-    }
-    let width = u32::from_le_bytes(bytes[8..12].try_into().ok()?) as usize;
-    let height = u32::from_le_bytes(bytes[12..16].try_into().ok()?) as usize;
-    boot_bg_image_from_rgba(width, height, bytes[16..].to_vec())
-}
-
-fn boot_bg_image_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Option<BootBgImage> {
-    if width == 0 || height == 0 || width > BOOT_BG_MAX_DIM || height > BOOT_BG_MAX_DIM {
-        return None;
-    }
-    let pixels = width.checked_mul(height)?;
-    if pixels > BOOT_BG_MAX_PIXELS {
-        return None;
-    }
-    let len = pixels.checked_mul(RGBA8_BPP)?;
-    if rgba.len() != len {
-        return None;
-    }
-    Some(BootBgImage {
-        width,
-        height,
-        rgba,
-    })
-}
-
-fn boot_bg_latest_local_steam_screenshot() -> Option<(std::path::PathBuf, BootBgImage)> {
-    let path = boot_bg_find_latest_local_steam_screenshot()?;
-    let img = unsafe { boot_bg_decode_wic_rgba(&path) }?;
-    Some((path, img))
-}
-
-fn boot_bg_find_latest_local_steam_screenshot() -> Option<std::path::PathBuf> {
-    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-    for root in boot_bg_steam_userdata_roots() {
-        let Ok(accounts) = std::fs::read_dir(&root) else {
-            continue;
-        };
-        for account in accounts.flatten() {
-            let account_path = account.path();
-            if !account_path.is_dir() {
-                continue;
-            }
-            let shots = account_path
-                .join("760")
-                .join("remote")
-                .join(BOOT_BG_STEAM_APPID)
-                .join("screenshots");
-            let Ok(entries) = std::fs::read_dir(&shots) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !boot_bg_is_supported_image_path(&path) {
-                    continue;
-                }
-                let Ok(meta) = entry.metadata() else {
-                    continue;
-                };
-                let modified = meta
-                    .modified()
-                    .or_else(|_| meta.created())
-                    .unwrap_or(std::time::UNIX_EPOCH);
-                if best.as_ref().is_none_or(|(t, _)| modified > *t) {
-                    best = Some((modified, path));
-                }
-            }
-        }
-    }
-    best.map(|(_, path)| path)
-}
-
-fn boot_bg_steam_userdata_roots() -> Vec<std::path::PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(game_dir) = game_directory_path() {
-        for ancestor in game_dir.ancestors() {
-            boot_bg_push_unique_root(&mut roots, ancestor.join("userdata"));
-        }
-    }
-    for var in [
-        "STEAM_COMPAT_CLIENT_INSTALL_PATH",
-        "STEAM_HOME",
-        "STEAM_ROOT",
-    ] {
-        if let Ok(value) = std::env::var(var)
-            && !value.is_empty()
-        {
-            boot_bg_push_unique_root(&mut roots, std::path::PathBuf::from(value).join("userdata"));
-        }
-    }
-    if let Ok(home) = std::env::var("HOME")
-        && !home.is_empty()
-    {
-        let home = std::path::PathBuf::from(home);
-        boot_bg_push_unique_root(
-            &mut roots,
-            home.join(".steam").join("steam").join("userdata"),
-        );
-        boot_bg_push_unique_root(
-            &mut roots,
-            home.join(".local")
-                .join("share")
-                .join("Steam")
-                .join("userdata"),
-        );
-    }
-    roots
-}
-
-fn boot_bg_push_unique_root(roots: &mut Vec<std::path::PathBuf>, path: std::path::PathBuf) {
-    if roots.iter().any(|existing| existing == &path) {
-        return;
-    }
-    roots.push(path);
-}
-
-fn boot_bg_is_supported_image_path(path: &std::path::Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| {
-                matches!(
-                    ext.to_ascii_lowercase().as_str(),
-                    "jpg" | "jpeg" | "png" | "gif"
-                )
-            })
-            .unwrap_or(false)
-}
-
-unsafe fn boot_bg_decode_wic_rgba(path: &std::path::Path) -> Option<BootBgImage> {
-    // COM may already be initialized on this thread; ignore the HRESULT and let CoCreateInstance be
-    // the real gate. WIC is local file decode only -- no network and no helper process.
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-    let factory: IWICImagingFactory = unsafe {
-        CoCreateInstance(
-            &CLSID_WICImagingFactory,
-            None::<&IUnknown>,
-            CLSCTX_INPROC_SERVER,
-        )
-        .ok()?
-    };
-    let wide = boot_bg_wide_null(path);
-    let decoder = unsafe {
-        factory
-            .CreateDecoderFromFilename(
-                PCWSTR(wide.as_ptr()),
-                None,
-                GENERIC_READ,
-                WICDecodeMetadataCacheOnDemand,
-            )
-            .ok()?
-    };
-    let frame = unsafe { decoder.GetFrame(0).ok()? };
-    let source: IWICBitmapSource = frame.cast().ok()?;
-    let converted = unsafe { WICConvertBitmapSource(&GUID_WICPixelFormat32bppRGBA, &source).ok()? };
-    let mut width = 0u32;
-    let mut height = 0u32;
-    unsafe { converted.GetSize(&mut width, &mut height).ok()? };
-    let width_usize = width as usize;
-    let height_usize = height as usize;
-    let len = width_usize
-        .checked_mul(height_usize)?
-        .checked_mul(RGBA8_BPP)?;
-    let mut rgba = vec![0u8; len];
-    unsafe {
-        converted
-            .CopyPixels(std::ptr::null(), width * RGBA8_BPP as u32, &mut rgba)
-            .ok()?
-    };
-    boot_bg_image_from_rgba(width_usize, height_usize, rgba)
-}
-
-fn boot_bg_wide_null(path: &std::path::Path) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-
-fn boot_fill_aspect_cover_background(buf: &mut [u8], w: usize, h: usize, bg: &BootBgImage) {
-    // Integer aspect-cover mapping. The screenshot is deliberately dimmed so the loading bar remains
-    // legible without adding a game-clashing panel. Keep this cheap: no launch-path blur/filter pass.
-    let scale_by_width = w * bg.height >= h * bg.width;
-    let (num, den) = if scale_by_width {
-        (w, bg.width)
-    } else {
-        (h, bg.height)
-    };
-    let scaled_w = bg.width * num / den;
-    let scaled_h = bg.height * num / den;
-    let crop_x = scaled_w.saturating_sub(w) / 2;
-    let crop_y = scaled_h.saturating_sub(h) / 2;
-    for y in 0..h {
-        let sy = ((y + crop_y) * den / num).min(bg.height - 1);
-        for x in 0..w {
-            let sx = ((x + crop_x) * den / num).min(bg.width - 1);
-            let so = (sy * bg.width + sx) * RGBA8_BPP;
-            let dofs = (y * w + x) * RGBA8_BPP;
-            buf[dofs] = ((bg.rgba[so] as u16 * 6) / 16) as u8;
-            buf[dofs + 1] = ((bg.rgba[so + 1] as u16 * 6) / 16) as u8;
-            buf[dofs + 2] = ((bg.rgba[so + 2] as u16 * 6) / 16) as u8;
-            buf[dofs + 3] = 255;
-        }
-    }
-}
-
-fn boot_darken_bar_shadow(
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    content_x: usize,
-    content_y: usize,
-    content_w: usize,
-    strip_h: usize,
-) {
-    // Soft vignette behind the progress UI: strongest at the bar center, fading to no darkening at
-    // the edges. This keeps the hairline readable over bright screenshots without a hard rectangular
-    // panel or a full-screen blur pass on the launch path.
-    let x0 = content_x.saturating_sub(32);
-    let y0 = content_y.saturating_sub(10);
-    let rw = (content_w + 64).min(w.saturating_sub(x0));
-    let rh = (strip_h + 20).min(h.saturating_sub(y0));
-    if rw == 0 || rh == 0 {
-        return;
-    }
-    let cx2 = (content_x * 2).saturating_add(content_w);
-    let cy2 = (content_y * 2).saturating_add(strip_h);
-    let rx = (rw.max(1) as u32).max(1);
-    let ry = (rh.max(1) as u32).max(1);
-    for y in y0..(y0 + rh).min(h) {
-        let dy = ((y * 2).abs_diff(cy2) as u32).saturating_mul(255) / ry;
-        for x in x0..(x0 + rw).min(w) {
-            let dx = ((x * 2).abs_diff(cx2) as u32).saturating_mul(255) / rx;
-            // Diamond-ish falloff: center -> strong shadow; edges -> original screenshot.
-            let dist = ((dx + dy) / 2).min(255);
-            let strength = 255u32.saturating_sub(dist);
-            // Factor ranges roughly 3/8 at the center to 1.0 at the edge.
-            let factor = 255u32.saturating_sub((strength * 5) / 8);
-            let o = (y * w + x) * RGBA8_BPP;
-            buf[o] = ((buf[o] as u32 * factor) / 255) as u8;
-            buf[o + 1] = ((buf[o + 1] as u32 * factor) / 255) as u8;
-            buf[o + 2] = ((buf[o + 2] as u32 * factor) / 255) as u8;
-            buf[o + 3] = 255;
-        }
-    }
 }
 
 // BootViewFrame moved to er_loading_portrait_core::host (portrait crate split); the struct
@@ -1924,7 +1897,10 @@ struct BootViewRaster {
 
 /// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
 /// background with the same understated bar/label geometry overlaid near the bottom.
-fn boot_view_rasterize(spec: BootViewRaster, bg: Option<&BootBgImage>) -> Vec<u8> {
+fn boot_view_rasterize(
+    spec: BootViewRaster,
+    bg: Option<&er_boot_background::BootBgImage>,
+) -> Vec<u8> {
     let BootViewRaster {
         w,
         h,
@@ -1939,7 +1915,7 @@ fn boot_view_rasterize(spec: BootViewRaster, bg: Option<&BootBgImage>) -> Vec<u8
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
     let has_bg = bg.is_some();
     if let Some(bg) = bg {
-        boot_fill_aspect_cover_background(&mut buf, w, h, bg);
+        er_boot_background::boot_fill_aspect_cover_background(&mut buf, w, h, bg);
     } else {
         boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     }
@@ -2046,7 +2022,9 @@ fn boot_view_rasterize(spec: BootViewRaster, bg: Option<&BootBgImage>) -> Vec<u8
     if has_bg {
         // Local shadow band only around the UI, plus globally dimmed screenshot: keeps the hairline bar
         // readable on bright screenshots without turning the boot screen back into a heavy panel.
-        boot_darken_bar_shadow(&mut buf, w, h, content_x, content_y, content_w, strip_h);
+        er_boot_background::boot_darken_bar_shadow(
+            &mut buf, w, h, content_x, content_y, content_w, strip_h,
+        );
     }
     if has_bg {
         boot_draw_text_shadowed(&mut buf, w, h, content_x, content_y, label, text_scale);
@@ -2078,362 +2056,43 @@ fn boot_view_rasterize(spec: BootViewRaster, bg: Option<&BootBgImage>) -> Vec<u8
     buf
 }
 
-/// One-time command-object init (device derived from the backbuffer; own DIRECT queue -- never the
-/// game's). Mirrors the proven portrait-overlay init; separate objects on purpose.
-unsafe fn boot_view_init(backbuffer: &ID3D12Resource) -> bool {
-    let mut device_opt: Option<ID3D12Device> = None;
-    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
-        return false;
-    }
-    let Some(device) = device_opt else {
-        return false;
-    };
-    let Ok(allocator) = (unsafe {
-        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
-    }) else {
-        return false;
-    };
-    let Ok(list) = (unsafe {
-        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
-            0,
-            D3D12_COMMAND_LIST_TYPE_DIRECT,
-            &allocator,
-            None,
-        )
-    }) else {
-        return false;
-    };
-    if unsafe { list.Close() }.is_err() {
-        return false;
-    }
-    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
-        return false;
-    };
-    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
-        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-        Priority: 0,
-        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
-        NodeMask: 0,
-    };
-    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
-    else {
-        return false;
-    };
-    let rtv_heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
-        Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-        NumDescriptors: 1,
-        Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-        NodeMask: 0,
-    };
-    let Ok(rtv_heap) =
-        (unsafe { device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&rtv_heap_desc) })
-    else {
-        return false;
-    };
-    BOOT_VIEW_RTV_HEAP.store(rtv_heap.into_raw() as usize, Ordering::SeqCst);
-    BOOT_VIEW_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
-    BOOT_VIEW_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
-    BOOT_VIEW_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
-    BOOT_VIEW_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
-    true
-}
-
-unsafe fn boot_view_fade_init(device: &ID3D12Device, format: DXGI_FORMAT, w: u32, h: u32) -> bool {
-    let fmt = format.0 as usize;
-    if BOOT_VIEW_FADE_ROOT_SIGNATURE.load(Ordering::SeqCst) != 0
-        && BOOT_VIEW_FADE_PSO.load(Ordering::SeqCst) != 0
-        && BOOT_VIEW_FADE_SRV_HEAP.load(Ordering::SeqCst) != 0
-        && BOOT_VIEW_FADE_PSO_FORMAT.load(Ordering::SeqCst) == fmt
-        && BOOT_VIEW_FADE_TEX_W.load(Ordering::SeqCst) == w as usize
-        && BOOT_VIEW_FADE_TEX_H.load(Ordering::SeqCst) == h as usize
-    {
-        return true;
-    }
-    let Some(root_sig) = (unsafe { create_overlay_root_signature(device) }) else {
-        return false;
-    };
-    let Some(pso) = (unsafe { create_overlay_pso(device, &root_sig, format) }) else {
-        return false;
-    };
-    let srv_desc = D3D12_DESCRIPTOR_HEAP_DESC {
-        Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-        NumDescriptors: 1,
-        Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-        NodeMask: 0,
-    };
-    let Ok(srv_heap) = (unsafe { device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&srv_desc) })
-    else {
-        return false;
-    };
-    if !unsafe {
-        ensure_overlay_gpu_texture_slot(
-            device,
-            &srv_heap,
-            w,
-            h,
-            0,
-            &BOOT_VIEW_FADE_TEXTURE,
-            &BOOT_VIEW_FADE_UPLOAD,
-            &BOOT_VIEW_FADE_UPLOAD_SIZE,
-            &BOOT_VIEW_FADE_TEX_W,
-            &BOOT_VIEW_FADE_TEX_H,
-            &BOOT_VIEW_FADE_TEX_STATE,
-            &BOOT_VIEW_FADE_TEX_VERSION,
-        )
-    } {
-        return false;
-    }
-    BOOT_VIEW_FADE_ROOT_SIGNATURE.store(root_sig.into_raw() as usize, Ordering::SeqCst);
-    BOOT_VIEW_FADE_PSO.store(pso.into_raw() as usize, Ordering::SeqCst);
-    BOOT_VIEW_FADE_SRV_HEAP.store(srv_heap.into_raw() as usize, Ordering::SeqCst);
-    BOOT_VIEW_FADE_PSO_FORMAT.store(fmt, Ordering::SeqCst);
-    true
-}
-
-unsafe fn fill_boot_view_fade_upload(
-    upload: &ID3D12Resource,
-    alpha: u8,
-    row_pitch: usize,
-    w: usize,
-    h: usize,
-) -> bool {
-    let total = BOOT_VIEW_FADE_UPLOAD_SIZE.load(Ordering::SeqCst) as usize;
-    if total < row_pitch.saturating_mul(h) || row_pitch < w.saturating_mul(RGBA8_BPP) {
-        return false;
-    }
-    let text_scale = boot_view_text_scale(h as u32);
-    let strip_w = ((w as u32 * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
-        .max(BOOT_VIEW_STRIP_MIN_W)
-        .min(w as u32)) as usize;
-    let strip_h = boot_view_strip_height(text_scale).min(h);
-    let strip_x = (w - strip_w) / 2;
-    let strip_y = ((h as u32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN) as usize)
-        .min(h.saturating_sub(strip_h));
-    let (ms_idx, permille) = boot_view_progress();
-    let mut tight = boot_view_rasterize(
-        BootViewRaster {
-            w,
-            h,
-            idx: ms_idx,
-            permille,
-            content_x: strip_x,
-            content_y: strip_y,
-            content_w: strip_w,
-            text_scale,
-            draw_portrait: false,
-        },
-        None,
-    );
-    for px in tight.as_chunks_mut::<RGBA8_BPP>().0 {
-        px[3] = alpha;
-    }
-    let mut map: *mut c_void = std::ptr::null_mut();
-    if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
-        return false;
-    }
-    let dst = unsafe { std::slice::from_raw_parts_mut(map as *mut u8, total) };
-    dst.fill(0);
-    let src_row = w * RGBA8_BPP;
-    for y in 0..h {
-        let so = y * src_row;
-        let dofs = y * row_pitch;
-        if so + src_row > tight.len() || dofs + src_row > dst.len() {
-            break;
-        }
-        dst[dofs..dofs + src_row].copy_from_slice(&tight[so..so + src_row]);
-    }
-    unsafe { upload.Unmap(0, None) };
-    true
-}
-
+/// Draw one release-fade frame. The GPU half -- the command objects, the root signature/PSO/texture
+/// slot and the alpha-blended full-screen draw -- moved to `er-cover-fade`, which has no product
+/// decision in it. What stays here is everything that IS a product decision: taking the draw-busy
+/// latch this file shares with the opaque composite path, rasterizing the frame from the current
+/// strip geometry and progress reading, and this cover window's own bookkeeping on success.
 unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> bool {
     if BOOT_VIEW_DRAW_BUSY.swap(1, Ordering::SeqCst) != 0 {
         return false;
     }
     let _busy = BootViewBusyGuard;
-    let sc_raw = swapchain_raw as *mut c_void;
-    let Some(sc) = (unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) }) else {
-        return false;
-    };
-    let idx = unsafe { sc.GetCurrentBackBufferIndex() };
-    let Ok(backbuffer) = (unsafe { sc.GetBuffer::<ID3D12Resource>(idx) }) else {
-        return false;
-    };
-    if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 0 {
-        if unsafe { boot_view_init(&backbuffer) } {
-            BOOT_VIEW_DRAW_STATE.store(1, Ordering::SeqCst);
-        } else {
-            BOOT_VIEW_DRAW_STATE.store(2, Ordering::SeqCst);
-            return false;
-        }
-    }
-    if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
-        return false;
-    }
-    let bb_desc = unsafe { backbuffer.GetDesc() };
-    let cw = bb_desc.Width as u32;
-    let ch = bb_desc.Height;
-    if cw == 0 || ch == 0 || cw > MAX_RT_DIM || ch > MAX_RT_DIM {
-        return false;
-    }
-    let mut device_opt: Option<ID3D12Device> = None;
-    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
-        return false;
-    }
-    let Some(device) = device_opt else {
-        return false;
-    };
-    if !unsafe { boot_view_fade_init(&device, bb_desc.Format, cw, ch) } {
-        return false;
-    }
-
-    let tex_raw = BOOT_VIEW_FADE_TEXTURE.load(Ordering::SeqCst) as *mut c_void;
-    let upload_raw = BOOT_VIEW_FADE_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
-    let root_raw = BOOT_VIEW_FADE_ROOT_SIGNATURE.load(Ordering::SeqCst) as *mut c_void;
-    let pso_raw = BOOT_VIEW_FADE_PSO.load(Ordering::SeqCst) as *mut c_void;
-    let srv_heap_raw = BOOT_VIEW_FADE_SRV_HEAP.load(Ordering::SeqCst) as *mut c_void;
-    let alloc_raw = BOOT_VIEW_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
-    let list_raw = BOOT_VIEW_LIST.load(Ordering::SeqCst) as *mut c_void;
-    let fence_raw = BOOT_VIEW_FENCE.load(Ordering::SeqCst) as *mut c_void;
-    let queue_raw = BOOT_VIEW_QUEUE.load(Ordering::SeqCst) as *mut c_void;
-    let rtv_heap_raw = BOOT_VIEW_RTV_HEAP.load(Ordering::SeqCst) as *mut c_void;
-    let (
-        Some(texture),
-        Some(upload),
-        Some(root_sig),
-        Some(pso),
-        Some(srv_heap),
-        Some(allocator),
-        Some(list),
-        Some(fence),
-        Some(queue),
-        Some(rtv_heap),
-    ) = (unsafe {
-        (
-            ID3D12Resource::from_raw_borrowed(&tex_raw),
-            ID3D12Resource::from_raw_borrowed(&upload_raw),
-            ID3D12RootSignature::from_raw_borrowed(&root_raw),
-            ID3D12PipelineState::from_raw_borrowed(&pso_raw),
-            ID3D12DescriptorHeap::from_raw_borrowed(&srv_heap_raw),
-            ID3D12CommandAllocator::from_raw_borrowed(&alloc_raw),
-            ID3D12GraphicsCommandList::from_raw_borrowed(&list_raw),
-            ID3D12Fence::from_raw_borrowed(&fence_raw),
-            ID3D12CommandQueue::from_raw_borrowed(&queue_raw),
-            ID3D12DescriptorHeap::from_raw_borrowed(&rtv_heap_raw),
-        )
-    })
-    else {
-        return false;
-    };
-
-    let desc = unsafe { texture.GetDesc() };
-    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-    unsafe { device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut footprint), None, None, None) };
-    if !unsafe {
-        fill_boot_view_fade_upload(
-            upload,
-            alpha,
-            footprint.Footprint.RowPitch as usize,
-            cw as usize,
-            ch as usize,
-        )
-    } {
-        return false;
-    }
-    let rtv_cpu = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
-    unsafe { device.CreateRenderTargetView(&backbuffer, None, rtv_cpu) };
-    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
-        return false;
-    }
-    if BOOT_VIEW_FADE_TEX_STATE.load(Ordering::SeqCst) == 1 {
-        unsafe {
-            record_transition(
-                list,
-                texture,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-            )
-        };
-        BOOT_VIEW_FADE_TEX_STATE.store(0, Ordering::SeqCst);
-    }
-    let mut src = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(upload.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            PlacedFootprint: footprint,
-        },
-    };
-    let mut dst = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(texture.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            SubresourceIndex: 0,
-        },
-    };
-    unsafe { list.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
-    unsafe { ManuallyDrop::drop(&mut src.pResource) };
-    unsafe { ManuallyDrop::drop(&mut dst.pResource) };
-    unsafe {
-        record_transition(
-            list,
-            texture,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    let mut rasterize = |w: usize, h: usize| -> Vec<u8> {
+        let text_scale = boot_view_text_scale(h as u32);
+        let strip_w = ((w as u32 * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
+            .max(BOOT_VIEW_STRIP_MIN_W)
+            .min(w as u32)) as usize;
+        let strip_h = boot_view_strip_height(text_scale).min(h);
+        let strip_x = (w - strip_w) / 2;
+        let strip_y = ((h as u32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN) as usize)
+            .min(h.saturating_sub(strip_h));
+        let (ms_idx, permille) = boot_view_progress();
+        boot_view_rasterize(
+            BootViewRaster {
+                w,
+                h,
+                idx: ms_idx,
+                permille,
+                content_x: strip_x,
+                content_y: strip_y,
+                content_w: strip_w,
+                text_scale,
+                draw_portrait: false,
+            },
+            None,
         )
     };
-    BOOT_VIEW_FADE_TEX_STATE.store(1, Ordering::SeqCst);
-    unsafe {
-        record_transition(
-            list,
-            &backbuffer,
-            D3D12_RESOURCE_STATE_PRESENT,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        )
-    };
-    let viewport = D3D12_VIEWPORT {
-        TopLeftX: 0.0,
-        TopLeftY: 0.0,
-        Width: cw as f32,
-        Height: ch as f32,
-        MinDepth: 0.0,
-        MaxDepth: 1.0,
-    };
-    let scissor = RECT {
-        left: 0,
-        top: 0,
-        right: cw as i32,
-        bottom: ch as i32,
-    };
-    let constants = [
-        1.0f32.to_bits(),
-        1.0f32.to_bits(),
-        0.0f32.to_bits(),
-        0.0f32.to_bits(),
-    ];
-    unsafe {
-        list.SetGraphicsRootSignature(root_sig);
-        list.SetPipelineState(pso);
-        list.SetDescriptorHeaps(&[Some(srv_heap.clone())]);
-        list.SetGraphicsRootDescriptorTable(0, srv_gpu_handle_at(&device, srv_heap, 0));
-        list.SetGraphicsRoot32BitConstants(
-            1,
-            constants.len() as u32,
-            constants.as_ptr() as *const c_void,
-            0,
-        );
-        list.RSSetViewports(std::slice::from_ref(&viewport));
-        list.RSSetScissorRects(std::slice::from_ref(&scissor));
-        list.OMSetRenderTargets(1, Some(&rtv_cpu), true, None);
-        list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        list.DrawInstanced(3, 1, 0, 0);
-        record_transition(
-            list,
-            &backbuffer,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PRESENT,
-        );
-    }
-    if !unsafe { execute_and_wait(queue, list, fence) } {
+    if !unsafe { er_cover_fade::composite_release_fade_frame(swapchain_raw, alpha, &mut rasterize) }
+    {
         return false;
     }
     boot_view_note_draw_after_stop("release-fade");
@@ -2565,6 +2224,15 @@ unsafe fn composite_boot_progress_inner(
     let render_release_handoff = boot_view_cover_release_ready(can_move_handoff);
     let _epoch_world_handoff = render_release_handoff;
     let world_handoff = render_release_handoff;
+    // ABSOLUTE BACKSTOP -- see [`boot_view_absolute_backstop`] for the whole argument. False in
+    // every healthy window: while `world_handoff` is true the normal path owns the window and this
+    // only samples, and its thresholds sit far past any measured legitimate load.
+    //
+    // It does NOT stop the cover itself. It routes the window down the SAME release fade a healthy
+    // release uses, so the user gets the 640 ms fade rather than a hard pop, and the only thing it
+    // overrides on the way is the native-loading hold below -- which cannot be evidence here,
+    // because it is a recency read of counters a dead loading-screen detour never writes.
+    let backstop = boot_view_absolute_backstop(boot_view_epoch_ms(), world_handoff);
     // DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-not-stopping): log the actual
     // stop gates. The product cover must not stop at player-present/native-loading; only the same
     // can_move epoch-gated proof used by the watcher is allowed to uncover the game.
@@ -2580,10 +2248,14 @@ unsafe fn composite_boot_progress_inner(
                 .load(Ordering::SeqCst);
             let move_epoch = crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "boot-view DECISION: own_menu={} loading_handoff={} world_handoff={} can_move_handoff={} render_ready={} permille={} draw_state={} in_world={} fresh_deser={} move_epoch={} loadscreen_builds={} table_baseline={} now_ms={}",
+                "boot-view DECISION: own_menu={} loading_handoff={} world_handoff={} backstop={} backstop_world_live_ms={} can_move_handoff={} render_ready={} permille={} draw_state={} in_world={} fresh_deser={} move_epoch={} loadscreen_builds={} table_baseline={} now_ms={}",
                 own_menu_active,
                 loading_handoff,
                 world_handoff,
+                backstop,
+                BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS
+                    .load(Ordering::SeqCst)
+                    .saturating_sub(BOOT_VIEW_BACKSTOP_PT_RISE_FIRST_MS.load(Ordering::SeqCst)),
                 can_move_handoff,
                 boot_view_player_render_ready(),
                 BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
@@ -2613,7 +2285,7 @@ unsafe fn composite_boot_progress_inner(
         // appeared, producing the user-visible black/loading gap.
         // Fall through and keep compositing.
     }
-    if real_loading_handoff || world_handoff {
+    if real_loading_handoff || world_handoff || backstop {
         // PRODUCT COVER (user 2026-07-25): native CS::LoadingScreen becoming lit is NOT a stop
         // condition. The product loading bar owns the full backbuffer until the game is actually
         // world/playable-ready. Native loading updates only prove the handoff happened and drive the
@@ -2651,7 +2323,7 @@ unsafe fn composite_boot_progress_inner(
             .saturating_sub(BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.load(Ordering::SeqCst));
         let held_ms = (now_ms as u64).saturating_sub(seen_ms as u64);
         let native_lit = native_hits >= BOOT_VIEW_NATIVE_LIT_UPDATE_HITS;
-        if world_handoff {
+        if world_handoff || backstop {
             let native_gfx_fadeout_start =
                 LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst);
             let native_gfx_fadeout_last = LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst);
@@ -2672,7 +2344,16 @@ unsafe fn composite_boot_progress_inner(
             // [`boot_view_note_fade_hold_reassert`] for the whole argument.
             let start_gate_hold = fadeout_pending || update_quiet_pending;
             let fade_started = BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) != 0;
-            let native_gfx_hold_pending = if fade_started {
+            let native_gfx_hold_pending = if backstop {
+                // NO HOLD SURVIVES THE BACKSTOP. Both halves of the hold are recency reads of
+                // counters the CS::LoadingScreen detour writes, and a dead detour is the failure
+                // this arrived to survive -- so an honest hold cannot exist here, while a
+                // DISHONEST one can: `stamp_loading_gfx_fadeout` fires on any movie carrying a
+                // "fadeout" label, including `02_000_ingametop.gfx`, the pause menu a stuck user
+                // presses Escape on. Letting that keep the fade from starting is exactly how the
+                // window stayed up for seven minutes.
+                false
+            } else if fade_started {
                 let ls_ticked_since_fade_start = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst)
                     > BOOT_VIEW_FADE_START_LS_UPDATE_HITS.load(Ordering::SeqCst);
                 let honored = ls_ticked_since_fade_start && update_quiet_pending;
@@ -2773,8 +2454,16 @@ unsafe fn composite_boot_progress_inner(
                         boot_view_stamp_stop_baselines(now_ms);
                         // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): stop reason
                         // (can-move world proof vs render-release) + arm->stop duration.
+                        //
+                        // The backstop is checked FIRST and unconditionally. A window that needed
+                        // it was pathological long enough to trip it, and that stays the truth
+                        // even if the healthy release became reachable during the fade it forced;
+                        // filing such a window as reason 1 would hide the defect behind its own
+                        // late recovery.
                         BOOT_VIEW_STOP_REASON.store(
-                            if can_move_handoff {
+                            if backstop {
+                                BOOT_VIEW_STOP_REASON_ABSOLUTE_BACKSTOP
+                            } else if can_move_handoff {
                                 BOOT_VIEW_STOP_REASON_WORLD_HANDOFF
                             } else {
                                 BOOT_VIEW_STOP_REASON_RELEASE_FADE
@@ -2828,6 +2517,11 @@ unsafe fn composite_boot_progress_inner(
     // per-frame GPU readback-with-wait above would run forever (~20fps). The loading bar itself still
     // fills (world resident/present at mms18), so stop the composite once the bar is essentially full OR
     // the composite has run past the per-epoch cap -- the readback must never permanently tank FPS.
+    //
+    // SCOPE, STATED SO IT IS NOT MISREAD AS GENERAL (2026-08-30): this is the OWN-MENU epoch's cap
+    // and nothing else. The `if own_menu_active` below is the whole reason the boot epoch had no
+    // bound at all, which is what [`boot_view_absolute_backstop`] now supplies for every epoch. The
+    // 20 s cap here still fires first on a switch, so this path is unchanged in practice.
     if own_menu_active {
         let cur_epoch =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
@@ -2852,7 +2546,7 @@ unsafe fn composite_boot_progress_inner(
         // Both still feed the stop log below -- they describe the state the cap fired in, they no
         // longer decide it.
         let resumed = BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0;
-        if composite_ms >= crate::constants::BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS {
+        if let Some(cap) = np::cap_fired(cur_epoch, now_ms, composite_ms, COMPOSITE_CAP) {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and
                 // slot-key snapshots the publish-triggered resume compares/restores against.
@@ -2872,8 +2566,9 @@ unsafe fn composite_boot_progress_inner(
                     Ordering::SeqCst,
                 );
                 append_autoload_debug(format_args!(
-                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} resumed={resumed} cover_window_ms={}) -- handoff signals never fired (frozen load2); stopping per-frame GPU readback (resumable once on a fresh portrait publish while native loading is active)",
+                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} resumed={resumed} cover_window_ms={}) {}; stopping per-frame GPU readback (resumable once on a fresh portrait publish while native loading is active)",
                     BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
+                    np::bail_detail(&cap),
                 ));
             }
             BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
@@ -2900,7 +2595,7 @@ unsafe fn composite_boot_progress_inner(
     };
 
     if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 0 {
-        if unsafe { boot_view_init(&backbuffer) } {
+        if unsafe { er_cover_fade::ensure_cover_command_objects(&backbuffer) } {
             BOOT_VIEW_DRAW_STATE.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!("boot-view: draw state READY"));
         } else {
