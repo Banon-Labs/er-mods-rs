@@ -284,9 +284,21 @@ ENRICHMENT_CASES = [
 
 
 def check_enrichment_contract() -> list[str]:
+    """The ENRICHMENT_CASES loop runs concurrently for the same reason as
+    check_case_table below: independent measurements, one process each, and no
+    reason to pay for them one at a time (bd er-effects-rs-5z75).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure(case):
+        label, typed, expected = case
+        return label, typed, expected, eval_bash(typed)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        measured = list(pool.map(measure, ENRICHMENT_CASES))
+
     findings = []
-    for label, typed, expected in ENRICHMENT_CASES:
-        outcome = eval_bash(typed)
+    for label, typed, expected, outcome in measured:
         if outcome["delivered"] != expected:
             raise Failure(
                 f"enrichment contract changed ({label}):\n"
@@ -386,10 +398,26 @@ def rebase_fixture_paths(affected: object) -> object:
 
 
 def check_case_table() -> list[str]:
+    """Run concurrently: one `cupcake eval` process per case, and this table has
+    grown to 12 entries since the sequential-loop version was measured (bd
+    er-effects-rs-5z75) -- combined with the other sections below, that pushed
+    the whole gate from ~13s to ~47s, over the caller's 30s subprocess cap.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    cases = [
+        dict(case, affected=rebase_fixture_paths(case.get("affected")))
+        for case in load_delivered_cases()
+    ]
+
+    def measure(case):
+        return case, eval_bash(case["command"])
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        measured = list(pool.map(measure, cases))
+
     rows = []
-    for case in load_delivered_cases():
-        case = dict(case, affected=rebase_fixture_paths(case.get("affected")))
-        outcome = eval_bash(case["command"])
+    for case, outcome in measured:
         if outcome["delivered"] != case["command"]:
             raise Failure(
                 f"case {case['name']}: the table's command is not in delivered shape.\n"
@@ -591,10 +619,20 @@ SHIM_LOAD_BEARING_CASES = [
 
 
 def check_shim_is_load_bearing() -> list[str]:
+    """Two `cupcake eval` processes per case, run concurrently (bd
+    er-effects-rs-5z75) -- same reasoning as check_case_table below.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure(case):
+        name, command = case
+        return name, eval_bash(command), eval_through_shim(command)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        measured = list(pool.map(measure, SHIM_LOAD_BEARING_CASES))
+
     rows = []
-    for name, command in SHIM_LOAD_BEARING_CASES:
-        direct = eval_bash(command)
-        through = eval_through_shim(command)
+    for name, direct, through in measured:
         if not direct["allowed"]:
             raise Failure(
                 f"{name!r}: the DIRECT path now denies this. Either the engine stopped "
@@ -612,10 +650,21 @@ def check_shim_is_load_bearing() -> list[str]:
 
 
 def check_production_path() -> list[str]:
-    rows = []
-    for name, command, expect_allow, fragment in SHIM_CASES:
+    """One `cupcake-hook.sh` process per case, run concurrently (bd
+    er-effects-rs-5z75) -- same reasoning as check_case_table below.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure(case):
+        name, command, expect_allow, fragment = case
         mode = "some-future-mode" if "permission mode" in name else "default"
-        outcome = eval_through_shim(command, permission_mode=mode)
+        return name, expect_allow, fragment, eval_through_shim(command, permission_mode=mode)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        measured = list(pool.map(measure, SHIM_CASES))
+
+    rows = []
+    for name, expect_allow, fragment, outcome in measured:
         if outcome["allowed"] != expect_allow:
             raise Failure(
                 f"production path {name!r}: expected "
@@ -760,7 +809,7 @@ def check_hooks_path_forms() -> list[str]:
         name, command, expect_allow = case
         return name, command, expect_allow, eval_through_shim(command), eval_bash(command)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=20) as pool:
         measured = list(pool.map(measure, HOOKS_PATH_CASES))
 
     rows = []
@@ -1014,7 +1063,7 @@ def check_guard_layer_forms() -> list[str]:
         direct = eval_bash(command) if expect_allow else None
         return name, command, expect_allow, eval_through_shim(command), direct
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=12) as pool:
         measured = list(pool.map(measure, GUARD_LAYER_CASES))
 
     rows = []
@@ -1139,7 +1188,7 @@ def check_hook_removal_forms() -> list[str]:
         direct = eval_bash(command) if expect_allow else None
         return name, command, expect_allow, fragment, eval_through_shim(command), direct
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         measured = list(pool.map(measure, HOOK_REMOVAL_CASES))
 
     rows = []
