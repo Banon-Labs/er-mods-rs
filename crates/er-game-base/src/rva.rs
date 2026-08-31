@@ -51,6 +51,30 @@ pub const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
 pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = 0x2ba4c80;
 /// `CSSystemStep` singleton global.
 pub const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d85680;
+/// `FD4::FD4StepTemplateBase::currentState` -- the state the stepper is EXECUTING this frame,
+/// at `CSSystemStep + 0x48`. `requestedState` is the adjacent `+0x4c` and the "step done,
+/// advance" bool is `+0x50`; the constructor zeroes the first two together with a single
+/// `mov qword [this+0x48], 0`.
+///
+/// PROVENANCE, because this constant was WRONG (0x40) from its introduction until 2026-08-31 and
+/// the wrong value looked exactly like the right one. `oracle_system_step_label` reported `"?"`
+/// with `oracle_system_step_state = -95247096` = `0xfa52a508`, which is the low half of the
+/// `FD4ComponentAttachSystem_Step::allocator` POINTER that actually lives at `+0x40` -- a legal
+/// i32 out of a legal read, so nothing ever faulted.
+///
+/// The 0x40 came from back-solving the layout off a field NAME: the sibling `fromsoftware-rs`
+/// `FD4StepTemplateBase` has a member spelled `unk48` directly after `requested_state`, and
+/// "unk48 is at 0x48" puts `current_state` at 0x40. That member is misnamed -- it sits at 0x50 --
+/// and the Rust struct's computed layout was right all along.
+///
+/// Measured instead of named: `scripts/pair-object-field-drift.py --pair 0x140dec6d0:226
+/// 0x140dee4d0:226 --base rsi --base rcx` aligns the CSSystemStep step-template constructor's two
+/// bodies 57/57 instructions with 13 field offsets -- 0x0, 0x10, 0x18, 0x48, 0x50, 0x58, 0x60,
+/// 0x68, 0x69, 0x70, 0xa0, 0xa8, 0xac -- every one HELD across 1.16.2 -> 1.17 and 0x40 absent from
+/// the set. The bytes are identical in both images: `48 89 5e 48 88 5e 50` at 0x140dec744 (1.16.2)
+/// and 0x140dee544 (1.17). Frozen as a witness row in
+/// `scripts/check-object-field-offsets-1170.py`, which is what now keeps this honest.
+pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x48;
 /// Native `MenuWindowJob::Run` close-with-Failed helper. It calls `SetResult(..., Failed=3, 0)`
 /// and then invokes the receiver's own vtable slot +0x60.
 pub const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize = 0x7ac890;
