@@ -13,7 +13,12 @@ cd "$repo_root"
 # Before this, `git-pre-push-block-main.sh` drained stdin and anything after it got nothing.
 pushed=$(cat)
 
-printf '%s' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
+# `%s\n`, NOT `%s`. `$(cat)` strips the trailing newline, and a `while read` loop drops a final
+# unterminated line -- so replaying with `printf '%s'` handed the main-push guard an empty read
+# on every single-ref push and it blocked nothing. Measured 2026-08-31; the guard now also
+# tolerates the unterminated shape, and both halves are covered by
+# scripts/test-git-pre-push-block-main.sh.
+printf '%s\n' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
 
 # DOES THE STATE BEING PUSHED COMPILE? Not "does my working tree compile" -- see the header of
 # scripts/check-committed-compiles.sh for why those are different questions, and how two commits
