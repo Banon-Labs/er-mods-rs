@@ -294,6 +294,384 @@ include!(concat!(env!("OUT_DIR"), "/address_map_1170.rs"));
 pub type AddressLogFn = fn(core::fmt::Arguments<'_>);
 static ADDRESS_LOGGER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
+// Imported rather than spelled out at each use because the announcement bitsets below are array
+// types whose element type and length both appear twice, and the fully-qualified form pushes them
+// past what rustfmt can lay out readably.
+use core::sync::atomic::{AtomicU64, Ordering};
+
+// ============================================================================
+// ONE TRANSLATION LINE PER ADDRESS, NOT PER RESOLUTION.
+//
+// `ADDRESS TRANSLATED` states a fact about an ADDRESS -- this 1.16.2 constant was carried to 1.17
+// and the pair was verified as the same function. That fact does not change between two calls, so
+// emitting it per call says nothing new and costs a formatted file append every time.
+//
+// MEASURED on the 2026-08-30 session's `er-quickload-autoload-debug.log`: 1.955 GB from a single
+// run, of which a 40 MB sample taken at five points across the file was **99.03%** this one
+// message (145,006 of 146,434 lines). The largest single contributor is
+// `GX_RESERVE_CMD_QUEUE_SLOT_RVA (cmd-queue producer attribution band)` at ~18,500 lines per 8 MB
+// in the tail -- `resolve_call_site_band` re-resolving the same anchor from the per-frame
+// command-queue producer path. Extrapolated over the file that is ~6.8 million lines, ~4.5 million
+// of them that one address.
+//
+// The second cost is the one that actually blocked work: the log became unreadable. A scan of the
+// last 8 MB for `ADDRESS REFUSED`, `HOOK REFUSED`, `catalog: N named`, `GRANTED:`, `EQUIP LEDGER`,
+// `loading-bar:`, `backstop` and `icon_id=` returned ZERO hits on all eight, because the tail is
+// effectively 100% this message. The acceptance evidence for several landed fixes was in there
+// somewhere and could not be found.
+//
+// So the line is emitted the FIRST time each row translates, and suppressed after. REFUSALS are
+// bounded separately and much more loosely -- see the refusal ledger below. They are a different
+// kind of fact and must never be reduced to one line per address, because a refusal is attributed
+// to its CALLER (`mem::game_rva` puts the asking `file:line` in the label) and two callers
+// refusing the same address are two different dead features.
+// ============================================================================
+
+/// Rows of an address table covered by one word of its announcement bitset.
+const ANNOUNCEMENT_ROWS_PER_WORD: usize = 64;
+
+/// Words needed to give every row of a `rows`-row table its own announcement bit.
+const fn announcement_words(rows: usize) -> usize {
+    rows.div_ceil(ANNOUNCEMENT_ROWS_PER_WORD)
+}
+
+/// One bit per row of [`VERIFIED_1162_TO_1170`]: set once that row's translation has been logged.
+static CALL_TRANSLATION_ANNOUNCED: [AtomicU64; announcement_words(VERIFIED_1162_TO_1170.len())] =
+    [const { AtomicU64::new(0) }; announcement_words(VERIFIED_1162_TO_1170.len())];
+
+/// One bit per row of [`DETOUR_SAFE_1162_TO_1170`]; see [`CALL_TRANSLATION_ANNOUNCED`].
+static DETOUR_TRANSLATION_ANNOUNCED: [AtomicU64;
+    announcement_words(DETOUR_SAFE_1162_TO_1170.len())] =
+    [const { AtomicU64::new(0) }; announcement_words(DETOUR_SAFE_1162_TO_1170.len())];
+
+/// CALL/READ translations performed, whether or not they were logged.
+static CALL_TRANSLATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// DETOUR translations performed, whether or not they were logged.
+static DETOUR_TRANSLATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Claim the right to announce `row`'s translation: `true` for exactly one caller, ever.
+///
+/// # Why a bitset and not a set
+///
+/// The check now runs where the log line used to, which for
+/// `GX_RESERVE_CMD_QUEUE_SLOT_RVA` is a per-frame command-queue producer path -- so the check
+/// itself must not become the new cost. A `Mutex<HashSet>` would take a lock and hash a key on
+/// every resolution from every thread that resolves anything, and would allocate on first insert.
+/// The row index is already in hand from the table lookup, and the tables are fixed-size `const`
+/// arrays, so each whole set is one `u64` per 64 rows of static storage -- under ten words apiece
+/// at the tables' current sizes -- with no allocation, no hashing and no lock.
+///
+/// The steady state -- every call after the first for a given row -- is a single RELAXED load and
+/// a bit test, with no bus-locked read-modify-write at all. The `fetch_or` runs at most once per
+/// row per process. `Relaxed` is the right ordering because no data is published through this
+/// flag: it orders nothing, it only has to be atomic, and `fetch_or` returning the previous value
+/// is what makes exactly one racing thread see the bit as clear.
+///
+/// Host builds have no running game to resolve an address for, so only the tests below reach it
+/// there -- and it is testable on the host precisely because it is a pure function of a bitset.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn announce_translation_once(announced: &[AtomicU64], row: usize) -> bool {
+    let mask = 1u64 << (row % ANNOUNCEMENT_ROWS_PER_WORD);
+    // A row index out of range cannot occur -- it came from a lookup in the very table this bitset
+    // is sized from -- so the fallback only decides what an impossible state does, and logging is
+    // the side that reports rather than the side that hides.
+    let Some(word) = announced.get(row / ANNOUNCEMENT_ROWS_PER_WORD) else {
+        return true;
+    };
+    if word.load(Ordering::Relaxed) & mask != 0 {
+        return false;
+    }
+    word.fetch_or(mask, Ordering::Relaxed) & mask == 0
+}
+
+// ============================================================================
+// A REFUSAL IS A FAILURE SIGNAL. BOUND ITS REPETITION; NEVER SILENCE IT.
+//
+// The governing asymmetry of this whole migration is that a MISSING address must cost a feature
+// loudly while a WRONG one corrupts silently. So the translation gate above -- one line per
+// address, ever -- is exactly the wrong shape for a refusal, and the ledger here is deliberately
+// far looser than it.
+//
+// WHY ANY BOUND AT ALL. The refusal path emits a formatted file append per call at whatever rate
+// its caller runs. Measured twice:
+//
+//   * 339,764 lines of `ADDRESS REFUSED (game_rva): 0x140000000` in one 25-hour session, from
+//     `delay_delete_pending` resolving RVA 0 on the 4 Hz telemetry write purely to obtain the
+//     module base. Root-caused and gated by `scripts/check-no-rva-zero.py`.
+//   * 628 lines of `ADDRESS REFUSED (CS_MSB_POINT_CTOR_RVA): 0x140cf9300` in the 2026-08-30 21:16
+//     session's `er-invasion-warp.log`. That one is NOT a bug: `docs/recon/rva-map-1162-to-1170
+//     .verified.tsv` records the row as deliberately absent (its 1.17 pair is correct by 16 caller
+//     votes but verifies DIVERGES 0.09 on an Arxan entry-jmp, and writing the row would drop the
+//     constructor from the CALL map too). The address is genuinely unmapped on 1.17, the feature
+//     is genuinely unavailable, and the map-point reader asked again on every map open.
+//
+// The second one is the point: fixing individual callers does not close this, because the NEXT
+// unmapped address does it again. The bound belongs here, once.
+//
+// WHAT IS BOUNDED, AND WHAT IS NOT.
+//
+//   * The first [`REFUSALS_LOGGED_PER_ADDRESS`] refusals of an address are logged in full,
+//     unconditionally. The cap is 12 rather than 1 precisely because of the caller attribution
+//     above: several distinct callers refusing the same address all get their own line.
+//   * Refusal `REFUSALS_LOGGED_PER_ADDRESS + 1` logs a WENT-QUIET marker, so a reader can tell
+//     "it stopped happening" from "it stopped being written down".
+//   * After that the address logs again at each power of ten -- 100, 1,000, 10,000, ... -- each
+//     line stating the running count. Growth is therefore logarithmic in the number of refusals
+//     while the true magnitude still reaches the log. This is the part that matters: a bound that
+//     merely truncated would leave a reader of 13 lines unable to tell 13 refusals from 4.5
+//     million, and the magnitude is what says how hot the dead path is.
+//
+// Every one of those lines keeps the `ADDRESS REFUSED (<label>): 0x<addr>` prefix, so
+// `scripts/record-1170-refusals.py` -- which harvests the DISTINCT addresses a real run asked for
+// and was refused -- sees exactly what it saw before. It de-duplicates into a set, so fewer
+// repeats of an address it already has cannot change its output.
+// ============================================================================
+
+/// Refusals of one address logged in full before it goes quiet.
+///
+/// 12 matches `er_hook::detour_site::MAX_REFUSAL_LINES`, the existing in-repo precedent for this
+/// shape. It is deliberately not 1: a refusal names its CALLER, and one address is refused by
+/// several callers whose labels differ, so a cap of 1 would report one dead feature and hide the
+/// rest. `what` is `core::fmt::Arguments` and cannot be keyed on without formatting it into a
+/// `String` on the failure path, so a loose per-address cap is how caller diversity survives.
+const REFUSALS_LOGGED_PER_ADDRESS: u64 = 12;
+
+/// Slots in each refusal ledger.
+///
+/// SIZED BY MEASUREMENT, not by taste. The worst case actually observed is the 2026-08-29 boot:
+/// 54 distinct addresses refused on the CALL path and 72 more behind the `FOR DETOUR` wording,
+/// 126 together -- and each path has its own ledger, so 126 in ONE is already double the real
+/// load. Replaying the verified map's own source addresses (real RVAs, 896 of 950 of them 16-byte
+/// aligned, so their clustering is the clustering that matters) through this exact placement:
+///
+/// | addresses | 256 slots / 8 probes | 256 / 16 | 512 / 8 | 512 / 16 |
+/// |-----------|----------------------|----------|---------|----------|
+/// | 126       | 1 spilled            | 0        | 0       | 0        |
+/// | 200       | 6                    | 2        | 0       | 0        |
+/// | 256       | 26                   | 20       | 1       | 0        |
+///
+/// The first draft was 256/8 and spilled on the very load it was sized for. 512 slots and 16
+/// probes hold twice the measured worst case with nothing spilled, for 4 KiB of statics per
+/// ledger. An address that still finds no slot is not silenced; see [`note_refusal`].
+const REFUSAL_SLOTS: usize = 512;
+
+/// Probe length for the open-addressed refusal ledger. See [`REFUSAL_SLOTS`] for the measurement.
+#[cfg_attr(not(windows), allow(dead_code))]
+const REFUSAL_PROBES: usize = 16;
+
+/// Occupied-slot encoding: the low 32 bits hold `rva + 1`, so a zero word means free.
+#[cfg_attr(not(windows), allow(dead_code))]
+const REFUSAL_KEY_MASK: u64 = 0xffff_ffff;
+
+/// One increment of the count packed into the high 32 bits of a slot.
+#[cfg_attr(not(windows), allow(dead_code))]
+const REFUSAL_COUNT_STEP: u64 = 1u64 << 32;
+
+/// Stop incrementing here, leaving slack for threads already inside `fetch_add`, so a count can
+/// never carry into the key bits and rename an address. 4.29 billion refusals of one address is
+/// 34 years at 4 Hz; the guard is one compare on the failure path and it costs nothing to be
+/// exact rather than nearly exact.
+#[cfg_attr(not(windows), allow(dead_code))]
+const REFUSAL_COUNT_CEILING: u64 = (u32::MAX as u64) - 64;
+
+/// The powers of ten a bounded address logs at after going quiet.
+///
+/// It stops at 1e9 because a per-address count saturates at [`REFUSAL_COUNT_CEILING`] (~4.29e9),
+/// so 1e10 is unreachable for a slotted address. The shared overflow counter is a full `u64` and
+/// can pass 1e9 without another line; that is the same resolution loss overflow already carries,
+/// and it needs more than [`REFUSAL_SLOTS`] distinct refused addresses to be reached at all.
+const REFUSAL_MILESTONES: [u64; 8] = [
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+];
+
+/// Refusals that found no ledger slot, counted together. See [`note_refusal`].
+static CALL_REFUSAL_OVERFLOW: AtomicU64 = AtomicU64::new(0);
+
+/// See [`CALL_REFUSAL_OVERFLOW`].
+static DETOUR_REFUSAL_OVERFLOW: AtomicU64 = AtomicU64::new(0);
+
+/// Per-address refusal counts for the CALL/READ path.
+static CALL_REFUSALS: [AtomicU64; REFUSAL_SLOTS] = [const { AtomicU64::new(0) }; REFUSAL_SLOTS];
+
+/// Per-address refusal counts for the DETOUR path. A SEPARATE ledger from the CALL one, for the
+/// same reason the announcement bitsets are separate: the two refusals make different claims
+/// about the same address and answer to different tables, so neither may quieten the other.
+static DETOUR_REFUSALS: [AtomicU64; REFUSAL_SLOTS] = [const { AtomicU64::new(0) }; REFUSAL_SLOTS];
+
+/// Which line, if any, refusal number `occurrence` of one address should emit.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RefusalLine {
+    /// The full refusal, with the caller label and the reason.
+    Full,
+    /// The last line before this address goes quiet.
+    WentQuiet,
+    /// A power-of-ten restatement carrying the running count.
+    Milestone,
+    /// Counted, not written.
+    Suppressed,
+}
+
+/// The bound, as a pure function of the occurrence number so it can be tested for its VALUES
+/// rather than for the shape of the code that calls it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn refusal_line_for(occurrence: u64) -> RefusalLine {
+    if occurrence <= REFUSALS_LOGGED_PER_ADDRESS {
+        return RefusalLine::Full;
+    }
+    if occurrence == REFUSALS_LOGGED_PER_ADDRESS + 1 {
+        return RefusalLine::WentQuiet;
+    }
+    if REFUSAL_MILESTONES.contains(&occurrence) {
+        return RefusalLine::Milestone;
+    }
+    RefusalLine::Suppressed
+}
+
+/// Slot an RVA hashes to. Multiply-shift on the golden ratio, because RVAs are dense, aligned and
+/// clustered -- the low bits are nearly constant across a table of them, so `rva % SLOTS` would
+/// pile the whole set onto a handful of slots and overflow a ledger with room to spare.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn refusal_slot(rva: u32, slots: usize) -> usize {
+    const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
+    ((rva as u64).wrapping_mul(GOLDEN) >> 32) as usize % slots
+}
+
+/// Record one refusal of `rva` and return its 1-based occurrence number for that address.
+///
+/// # Cost
+///
+/// Steady state, for an address already in the ledger: a multiply-shift, one RELAXED load, a
+/// compare, one RELAXED `fetch_add`, and the compare in [`refusal_line_for`]. No lock, no
+/// allocation, no string hashing, and nothing at all on the success path -- this is only reached
+/// where the code was already about to format a message and append it to a file.
+///
+/// `Relaxed` throughout is right for the same reason it is right in `announce_translation_once`:
+/// no data is published through these words. They order nothing; they only have to be atomic, and
+/// the compare-exchange is what makes exactly one racing thread claim a free slot.
+///
+/// # When the ledger is full
+///
+/// An address that finds no free slot within [`REFUSAL_PROBES`] falls to a shared overflow
+/// counter, which is itself bounded by the same rule. That loses per-address resolution for those
+/// addresses -- but reaching it means more than [`REFUSAL_SLOTS`] distinct addresses were refused,
+/// at which point the log has already said the map is wrong wholesale, and the alternative
+/// (logging every overflow refusal in full) is the unbounded behaviour this exists to remove.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn note_refusal(slots: &[AtomicU64], overflow: &AtomicU64, rva: u32) -> u64 {
+    let key = rva as u64 + 1;
+    let start = refusal_slot(rva, slots.len());
+    for probe in 0..REFUSAL_PROBES {
+        let slot = &slots[(start + probe) % slots.len()];
+        let mut current = slot.load(Ordering::Relaxed);
+        loop {
+            if current == 0 {
+                match slot.compare_exchange_weak(
+                    0,
+                    REFUSAL_COUNT_STEP | key,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return 1,
+                    // Lost the claim -- to this same address or to another one. Re-examine the
+                    // word rather than probing on, or two threads racing on a fresh slot would
+                    // give the same address two slots and two independent counts.
+                    Err(actual) => current = actual,
+                }
+                continue;
+            }
+            if current & REFUSAL_KEY_MASK != key {
+                break;
+            }
+            let count = current >> 32;
+            if count >= REFUSAL_COUNT_CEILING {
+                return count;
+            }
+            return (slot.fetch_add(REFUSAL_COUNT_STEP, Ordering::Relaxed) >> 32) + 1;
+        }
+    }
+    overflow.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Total refusals recorded in one ledger, and how many distinct addresses hold a slot.
+fn refusal_totals(slots: &[AtomicU64], overflow: &AtomicU64) -> (u64, u32) {
+    let mut total = overflow.load(Ordering::Relaxed);
+    let mut addresses = 0u32;
+    for slot in slots {
+        let word = slot.load(Ordering::Relaxed);
+        if word != 0 {
+            addresses += 1;
+            total += word >> 32;
+        }
+    }
+    (total, addresses)
+}
+
+/// How much address translation has happened, and how much of it the log shows.
+///
+/// The `*_addresses` counts are what a reader of the log SEES -- one `ADDRESS TRANSLATED` line
+/// each. The `*_resolutions` counts are what actually happened, and they are the reason this
+/// struct exists: suppressing the repeats would otherwise destroy the only evidence that one
+/// address was resolved four and a half million times, which is the fact that made the log
+/// unreadable in the first place and the fact a reader most needs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AddressTranslationStats {
+    /// Distinct CALL/READ addresses announced.
+    pub call_addresses: u32,
+    /// CALL/READ translations performed.
+    pub call_resolutions: u64,
+    /// Distinct DETOUR addresses announced.
+    pub detour_addresses: u32,
+    /// DETOUR translations performed.
+    pub detour_resolutions: u64,
+    /// Distinct CALL/READ addresses refused that hold a ledger slot.
+    pub call_refused_addresses: u32,
+    /// CALL/READ refusals, including the ones the bound did not write down.
+    pub call_refusals: u64,
+    /// Distinct DETOUR addresses refused that hold a ledger slot.
+    pub detour_refused_addresses: u32,
+    /// DETOUR refusals, including the ones the bound did not write down.
+    pub detour_refusals: u64,
+}
+
+/// Read [`AddressTranslationStats`] for this process.
+///
+/// This crate deliberately does not emit the summary itself. It is a zero-dependency leaf with no
+/// thread, no clock and no shutdown hook; a periodic emitter would need a time read back on the
+/// hot path, and `DLL_PROCESS_DETACH` is not reached when the game is killed, which is how these
+/// sessions actually end. So the numbers are exposed here and printed by whichever crate already
+/// owns a periodic or teardown telemetry line.
+pub fn address_translation_stats() -> AddressTranslationStats {
+    fn announced(words: &[AtomicU64]) -> u32 {
+        words
+            .iter()
+            .map(|word| word.load(Ordering::Relaxed).count_ones())
+            .sum()
+    }
+    let (call_refusals, call_refused_addresses) =
+        refusal_totals(&CALL_REFUSALS, &CALL_REFUSAL_OVERFLOW);
+    let (detour_refusals, detour_refused_addresses) =
+        refusal_totals(&DETOUR_REFUSALS, &DETOUR_REFUSAL_OVERFLOW);
+    AddressTranslationStats {
+        call_addresses: announced(&CALL_TRANSLATION_ANNOUNCED),
+        call_resolutions: CALL_TRANSLATIONS.load(Ordering::Relaxed),
+        detour_addresses: announced(&DETOUR_TRANSLATION_ANNOUNCED),
+        detour_resolutions: DETOUR_TRANSLATIONS.load(Ordering::Relaxed),
+        call_refused_addresses,
+        call_refusals,
+        detour_refused_addresses,
+        detour_refusals,
+    }
+}
+
 /// Install the sink for address-resolution lines. Call once, early, before any resolution.
 ///
 /// Default is a no-op: this crate is a zero-dependency leaf and has no log of its own, so the
@@ -385,22 +763,54 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
     // that the shortcut never swallows a source the table should have translated.
     match table_answer(&VERIFIED_1162_TO_1170, rva) {
         TableAnswer::AlreadyTranslated => return Some(address),
-        TableAnswer::MovedTo(moved) => {
-            let translated = base + moved as usize;
-            address_log(format_args!(
-                "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
-                 (verified same function; see docs/recon/rva-map-1162-to-1170.verified.tsv)",
-                describe_build()
-            ));
+        TableAnswer::MovedTo { row, to } => {
+            let translated = base + to as usize;
+            CALL_TRANSLATIONS.fetch_add(1, Ordering::Relaxed);
+            // Once per ROW -- per ADDRESS -- not once per call and not once per `what`. The fact
+            // stated is about the address and is identical for every caller, so `what` is neither
+            // needed nor usable as the key. MEASURED over the same 40 MB sample: 145,006
+            // translated lines carried 195 distinct source addresses and 215 distinct labels; 29
+            // addresses carried more than one label, and -- decisively -- 2 labels covered more
+            // than one ADDRESS (`game_rva @ crates/er-save-suppress/src/lib.rs:1595` resolves 9
+            // different addresses from one loop). A `what` key would therefore suppress 8 of
+            // those 9, which is a wrong answer rather than a quieter one. It would also cost a
+            // `String` per resolution on this path, because `what` is `Arguments` and cannot be
+            // hashed without being formatted first.
+            if announce_translation_once(&CALL_TRANSLATION_ANNOUNCED, row) {
+                address_log(format_args!(
+                    "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
+                     (verified same function; see docs/recon/rva-map-1162-to-1170.verified.tsv; \
+                     logged once per address, repeats are counted by \
+                     `address_translation_stats`)",
+                    describe_build()
+                ));
+            }
             return Some(translated);
         }
         TableAnswer::Unmapped => {}
     }
-    address_log(format_args!(
-        "ADDRESS REFUSED ({what}): 0x{address:x} -- {}, and this address has no verified mapping \
-         for the running build, so using it would reach whatever code now occupies it",
-        describe_build()
-    ));
+    // BOUNDED, NOT SILENCED -- see the refusal ledger. The first 12 are written in full, then a
+    // went-quiet marker, then a restatement at each power of ten carrying the running count. Every
+    // line keeps the harvestable `ADDRESS REFUSED (<label>): 0x<addr>` prefix.
+    let occurrence = note_refusal(&CALL_REFUSALS, &CALL_REFUSAL_OVERFLOW, rva);
+    match refusal_line_for(occurrence) {
+        RefusalLine::Full => address_log(format_args!(
+            "ADDRESS REFUSED ({what}): 0x{address:x} -- {}, and this address has no verified \
+             mapping for the running build, so using it would reach whatever code now occupies it",
+            describe_build()
+        )),
+        RefusalLine::WentQuiet => address_log(format_args!(
+            "ADDRESS REFUSED ({what}): 0x{address:x} -- refusal {occurrence} of this address; \
+             further refusals of it are counted, not written, and restated at each power of ten. \
+             The feature asking for it is dead for the whole session, so the repeats say nothing \
+             new -- but they are still happening, and `address_translation_stats` has the total"
+        )),
+        RefusalLine::Milestone => address_log(format_args!(
+            "ADDRESS REFUSED ({what}): 0x{address:x} -- refusal {occurrence} of this address. \
+             Restated so the log carries the MAGNITUDE of a dead path, not just its existence"
+        )),
+        RefusalLine::Suppressed => {}
+    }
     None
 }
 
@@ -448,8 +858,13 @@ fn already_translated_in(table: &[(u32, u32)], rva: u32) -> bool {
 enum TableAnswer {
     /// A 1.17 destination that no row claims as a source: hand it back unchanged.
     AlreadyTranslated,
-    /// A 1.16.2 source; the running build has that function at this RVA.
-    MovedTo(u32),
+    /// A 1.16.2 source; the running build has that function at `to`.
+    ///
+    /// `row` is where in the table the answer was found. It rides along because the lookup already
+    /// knows it and the translation log needs a per-address key that costs nothing to derive --
+    /// see `announce_translation_once`. Deriving it with a second scan would double the table walk
+    /// on the per-frame path this whole gate exists to quieten.
+    MovedTo { row: usize, to: u32 },
     /// No row names this RVA as a source. The caller must not proceed.
     Unmapped,
 }
@@ -464,8 +879,11 @@ fn table_answer(table: &[(u32, u32)], rva: u32) -> TableAnswer {
     if already_translated_in(table, rva) {
         return TableAnswer::AlreadyTranslated;
     }
-    match table.iter().find(|(from, _)| *from == rva) {
-        Some((_, moved)) => TableAnswer::MovedTo(*moved),
+    match table.iter().position(|(from, _)| *from == rva) {
+        Some(row) => TableAnswer::MovedTo {
+            row,
+            to: table[row].1,
+        },
         None => TableAnswer::Unmapped,
     }
 }
@@ -499,13 +917,22 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     // establish. See the comment there.
     match table_answer(&DETOUR_SAFE_1162_TO_1170, rva) {
         TableAnswer::AlreadyTranslated => return Some(address),
-        TableAnswer::MovedTo(moved) => {
-            let translated = base + moved as usize;
-            address_log(format_args!(
-                "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
-                 (byte-verified same function AND audited as a detour target)",
-                describe_build()
-            ));
+        TableAnswer::MovedTo { row, to } => {
+            let translated = base + to as usize;
+            DETOUR_TRANSLATIONS.fetch_add(1, Ordering::Relaxed);
+            // A SEPARATE bitset from the CALL path's, indexed into a DIFFERENT table. The two
+            // lines make different claims about the same address -- "verified same function"
+            // versus "and audited as somewhere MinHook may write five bytes" -- so one must not
+            // suppress the other. Sharing a key would mean whichever resolver ran first silences
+            // the stronger claim, which is the one a reader of a crash log wants.
+            if announce_translation_once(&DETOUR_TRANSLATION_ANNOUNCED, row) {
+                address_log(format_args!(
+                    "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
+                     (byte-verified same function AND audited as a detour target; logged once per \
+                     address, repeats are counted by `address_translation_stats`)",
+                    describe_build()
+                ));
+            }
             return Some(translated);
         }
         TableAnswer::Unmapped => {}
@@ -514,31 +941,53 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     // different places, so reporting them as one wasted a day: 65 addresses were investigated as
     // missing map coverage when they were already-translated addresses arriving for a second
     // opinion, and the map that produced them was sitting right there.
-    let call_only = resolve_on_running_build_quiet(rva).is_some();
-    let arrived_translated = VERIFIED_1162_TO_1170
-        .iter()
-        .find(|(from, moved)| *moved == rva && *from != rva)
-        .map(|(from, _)| *from);
-    address_log(format_args!(
-        "ADDRESS REFUSED FOR DETOUR ({what}): 0x{address:x} -- {}, and {}",
-        describe_build(),
-        match (arrived_translated, call_only) {
-            // A caller resolved this through `game_rva` before asking to hook it, so the address
-            // is right and the question is only whether its ROW may carry a detour.
-            (Some(source), _) => format!(
-                "this is already the translation of 1.16.2 0x{:x}, whose row is not detour-safe: \
-                 the pair is not verified identical over the body, or the two images disagree \
-                 about where a function starts there",
-                source as usize + base
-            ),
-            (None, true) =>
-                "while this address HAS a mapping good enough to call, it has not been audited as \
-                 a detour target: a signature match does not say MinHook may write five bytes \
-                 there"
-                    .to_string(),
-            (None, false) => "this address has no mapping at all for the running build".to_string(),
+    //
+    // Bounded by its OWN ledger, separate from the CALL path's -- the two refusals answer to
+    // different tables and neither may quieten the other. The diagnosis below costs a whole-table
+    // scan and up to one `String`, so it is computed only when a line is actually emitted;
+    // previously it ran on every refusal, including the 616 of the 628 that a bound now drops.
+    let occurrence = note_refusal(&DETOUR_REFUSALS, &DETOUR_REFUSAL_OVERFLOW, rva);
+    match refusal_line_for(occurrence) {
+        RefusalLine::Full => {
+            let call_only = resolve_on_running_build_quiet(rva).is_some();
+            let arrived_translated = VERIFIED_1162_TO_1170
+                .iter()
+                .find(|(from, moved)| *moved == rva && *from != rva)
+                .map(|(from, _)| *from);
+            address_log(format_args!(
+                "ADDRESS REFUSED FOR DETOUR ({what}): 0x{address:x} -- {}, and {}",
+                describe_build(),
+                match (arrived_translated, call_only) {
+                    // A caller resolved this through `game_rva` before asking to hook it, so the
+                    // address is right and the question is only whether its ROW may carry a detour.
+                    (Some(source), _) => format!(
+                        "this is already the translation of 1.16.2 0x{:x}, whose row is not \
+                         detour-safe: the pair is not verified identical over the body, or the two \
+                         images disagree about where a function starts there",
+                        source as usize + base
+                    ),
+                    (None, true) =>
+                        "while this address HAS a mapping good enough to call, it has not been \
+                         audited as a detour target: a signature match does not say MinHook may \
+                         write five bytes there"
+                            .to_string(),
+                    (None, false) =>
+                        "this address has no mapping at all for the running build".to_string(),
+                }
+            ));
         }
-    ));
+        RefusalLine::WentQuiet => address_log(format_args!(
+            "ADDRESS REFUSED FOR DETOUR ({what}): 0x{address:x} -- refusal {occurrence} of this \
+             address; further refusals of it are counted, not written, and restated at each power \
+             of ten. `address_translation_stats` has the total"
+        )),
+        RefusalLine::Milestone => address_log(format_args!(
+            "ADDRESS REFUSED FOR DETOUR ({what}): 0x{address:x} -- refusal {occurrence} of this \
+             address. Restated so the log carries the MAGNITUDE of a dead path, not just its \
+             existence"
+        )),
+        RefusalLine::Suppressed => {}
+    }
     None
 }
 
@@ -651,7 +1100,13 @@ pub fn verified_translation_count() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{DETOUR_SAFE_1162_TO_1170, TableAnswer, VERIFIED_1162_TO_1170, table_answer};
+    use super::{
+        ANNOUNCEMENT_ROWS_PER_WORD, AtomicU64, DETOUR_SAFE_1162_TO_1170, Ordering,
+        REFUSAL_COUNT_CEILING, REFUSAL_KEY_MASK, REFUSAL_PROBES, REFUSAL_SLOTS,
+        REFUSALS_LOGGED_PER_ADDRESS, RefusalLine, TableAnswer, VERIFIED_1162_TO_1170,
+        announce_translation_once, announcement_words, note_refusal, refusal_line_for,
+        refusal_slot, refusal_totals, table_answer,
+    };
 
     /// VACUOUS QUANTIFICATION, and why every test below counts what it walked.
     ///
@@ -736,12 +1191,12 @@ mod tests {
 
         assert_eq!(
             table_answer(&TABLE, 0xa),
-            TableAnswer::MovedTo(0xb),
-            "a plain source must translate"
+            TableAnswer::MovedTo { row: 0, to: 0xb },
+            "a plain source must translate, and from its OWN row"
         );
         assert_eq!(
             table_answer(&TABLE, 0xb),
-            TableAnswer::MovedTo(0xc),
+            TableAnswer::MovedTo { row: 1, to: 0xc },
             "an address that is BOTH a destination and a source must be answered as a source; \
              AlreadyTranslated here drops the second row silently, which is the whole hazard"
         );
@@ -753,7 +1208,7 @@ mod tests {
         );
         assert_eq!(
             table_answer(&TABLE, 0x20),
-            TableAnswer::MovedTo(0x20),
+            TableAnswer::MovedTo { row: 2, to: 0x20 },
             "a row that did not move still answers from the table"
         );
         assert_eq!(
@@ -763,8 +1218,9 @@ mod tests {
         );
         assert_eq!(
             table_answer(&TABLE, 0x31),
-            TableAnswer::MovedTo(0x30),
-            "a source whose destination did not move is still a source"
+            TableAnswer::MovedTo { row: 4, to: 0x30 },
+            "a source whose destination did not move is still a source, answered by row 4 rather \
+             than by row 3, which merely shares its destination"
         );
         assert_eq!(
             table_answer(&TABLE, 0x99),
@@ -864,6 +1320,393 @@ mod tests {
         }
     }
 
+    /// ONE LINE PER ADDRESS, and the arithmetic that decides which bit.
+    ///
+    /// The gate this covers stands between the log and the message that was 99% of a 1.955 GB
+    /// file, so the failure that matters is the OPPOSITE one: an off-by-one in the word/bit split
+    /// that silences a row which was never announced. Every row of a three-word bitset is claimed
+    /// exactly once and then refused forever, and no row's claim disturbs another's -- which is
+    /// what a shared word would do if the mask were built from the row rather than from the row
+    /// MODULO the word width. 130 rows is deliberately not a multiple of 64: it exercises a
+    /// partly-filled last word, where an off-by-one lands.
+    #[test]
+    fn a_row_is_announced_once_and_never_again() {
+        const ROWS: usize = 130;
+        let announced: Vec<AtomicU64> = (0..announcement_words(ROWS))
+            .map(|_| AtomicU64::new(0))
+            .collect();
+        assert_eq!(
+            announced.len(),
+            3,
+            "130 rows at {ANNOUNCEMENT_ROWS_PER_WORD} rows per word needs 3 words; a bitset short \
+             by a word would push the last rows onto `get`'s None arm, which logs every time"
+        );
+
+        let first: Vec<usize> = (0..ROWS)
+            .filter(|row| announce_translation_once(&announced, *row))
+            .collect();
+        assert_eq!(
+            first.len(),
+            ROWS,
+            "every row must get its one line; rows that did not: {:?}",
+            (0..ROWS).filter(|r| !first.contains(r)).collect::<Vec<_>>()
+        );
+
+        let repeats: Vec<usize> = (0..ROWS)
+            .flat_map(|row| core::iter::repeat_n(row, 4))
+            .filter(|row| announce_translation_once(&announced, *row))
+            .collect();
+        assert!(
+            repeats.is_empty(),
+            "these rows announced themselves a second time, which is the 4.5-million-line \
+             defect: {repeats:?}"
+        );
+    }
+
+    /// A row index past the end of its bitset LOGS rather than goes quiet.
+    ///
+    /// It cannot happen -- the index comes from a lookup in the table the bitset is sized from --
+    /// but the arm has to be pinned to the side that reports, because the alternative is a state
+    /// in which translations happen and nothing anywhere says so.
+    #[test]
+    fn an_impossible_row_still_announces() {
+        let announced = [AtomicU64::new(0)];
+        assert!(
+            announce_translation_once(&announced, 64),
+            "an out-of-range row must fall to the logging side, not the silent one"
+        );
+    }
+
+    /// The once-per-address TRANSLATION gate must never reach a refusal. The refusals are bounded
+    /// by their own, far looser rule; being folded into the translation gate would cut them to one
+    /// line per address forever, which is the one bound this file must not have.
+    ///
+    /// A source-level assertion, because the refusals are emitted from `#[cfg(windows)]` bodies
+    /// that cannot run on the host. It reads only the code ABOVE this test module, so the pattern
+    /// strings in the test itself are not counted as occurrences of the thing they look for.
+    #[test]
+    fn refusals_never_use_the_once_per_address_translation_gate() {
+        const GATE: &str = "announce_translation_once";
+        for (index, statement) in refusal_literals().iter().enumerate() {
+            assert!(
+                !statement.contains(GATE),
+                "refusal #{index} became conditional on the once-per-ADDRESS translation gate. A \
+                 refusal is attributed to its CALLER, and two callers refusing the same address \
+                 are two separate dead features:\n{statement}"
+            );
+        }
+
+        // ...and the translations, which ARE gated by it, prove the search can see the gate at
+        // all. Without this the test passes just as well on a file where the gate does not exist,
+        // or where it was renamed and `GATE` now matches nothing anywhere.
+        assert_eq!(
+            source_above_tests()
+                .matches(&format!("if {GATE}(&"))
+                .count(),
+            2,
+            "expected exactly two gated emit sites -- the CALL resolver and the DETOUR one. \
+             Finding a different number means the search above is not looking at the shape it \
+             thinks it is, and its silence proves nothing"
+        );
+    }
+
+    /// Every refusal line keeps the prefix `scripts/record-1170-refusals.py` harvests.
+    ///
+    /// That script reads the DISTINCT addresses a real run asked for and was refused, and feeds
+    /// them to `select-needed-1170-rows.py` -- which is how an address whose CONSTANT the name
+    /// scan cannot see (42 of 54 in one boot) gets carried at all. Its pattern is
+    /// `ADDRESS REFUSED(?: FOR DETOUR)? \([^)]*\): (0x14[0-9a-f]+)`, so bounding the repeats is
+    /// harmless to it (it de-duplicates into a set) but re-wording a line is not.
+    #[test]
+    fn every_refusal_line_stays_harvestable_by_the_refusal_recorder() {
+        for statement in refusal_literals() {
+            let message = statement
+                .split_once("\"")
+                .expect("a refusal is emitted from a string literal")
+                .1;
+            assert!(
+                message.starts_with("ADDRESS REFUSED ({what}): 0x{address:x}")
+                    || message.starts_with("ADDRESS REFUSED FOR DETOUR ({what}): 0x{address:x}"),
+                "this refusal line no longer opens with the prefix record-1170-refusals.py \
+                 matches, so the address it names would stop reaching the work list:\n{message}"
+            );
+        }
+    }
+
+    /// The source above the test module, so the test's own pattern strings are not searched.
+    fn source_above_tests() -> &'static str {
+        include_str!("game_build.rs")
+            .split_once("#[cfg(test)]")
+            .expect("this module has a test cfg")
+            .0
+    }
+
+    /// Each `address_log(format_args!(...))` statement that emits a refusal.
+    ///
+    /// The count is asserted HERE rather than in one caller, and that placement is the fix for a
+    /// blinded-and-passed test: a reworded line stops matching `ADDRESS REFUSED`, so it silently
+    /// drops out of this list, and every caller that only inspects what the list CONTAINS then
+    /// agrees the survivors are fine. Asserting the population where the population is built
+    /// means a line cannot leave the search by being renamed out of it.
+    fn refusal_literals() -> Vec<&'static str> {
+        const EXPECTED: usize = 6;
+        let code = source_above_tests();
+        let mut found = Vec::new();
+        let mut cursor = 0usize;
+        while let Some(hit) = code[cursor..].find("ADDRESS REFUSED") {
+            let at = cursor + hit;
+            cursor = at + 1;
+            // Only the emitted LITERALS, not the prose above them: every emitted line carries the
+            // caller label right after the message name, which no doc comment does.
+            if !code[at..at + 40.min(code.len() - at)].contains("({what}):") {
+                continue;
+            }
+            let start = code[..at]
+                .rfind("address_log(format_args!(")
+                .expect("a refusal is emitted through address_log");
+            let end = at
+                + code[at..]
+                    .find("))")
+                    .expect("a closed address_log statement");
+            found.push(&code[start..end]);
+        }
+        assert_eq!(
+            found.len(),
+            EXPECTED,
+            "expected {EXPECTED} refusal literals -- full/went-quiet/milestone on each of the CALL \
+             and DETOUR paths. Found {}: a line was deleted, added, or reworded out of the \
+             `ADDRESS REFUSED (<label>): 0x<addr>` shape that record-1170-refusals.py harvests",
+            found.len()
+        );
+        found
+    }
+
+    /// THE FIRST REFUSAL OF AN ADDRESS IS ALWAYS WRITTEN, whichever address it is.
+    ///
+    /// This is the load-bearing half of the bound. The refusal recorder harvests DISTINCT
+    /// addresses, and a feature that goes inert has to cost a line the first time; a bound that
+    /// could swallow a first occurrence would convert a loud failure into a silent one, which is
+    /// the exact inversion this whole migration is built to prevent.
+    #[test]
+    fn the_first_refusal_of_every_address_is_written_in_full() {
+        let ledger: Vec<AtomicU64> = (0..REFUSAL_SLOTS).map(|_| AtomicU64::new(0)).collect();
+        let overflow = AtomicU64::new(0);
+        // Real RVA shapes: dense, 16-byte aligned, spread over the image, plus 0 and the last
+        // representable one so neither end is special-cased by accident.
+        let addresses: Vec<u32> = core::iter::once(0)
+            .chain((0..REFUSAL_SLOTS as u32 - 2).map(|n| 0x40_0000 + n * 0x10))
+            .chain(core::iter::once(u32::MAX))
+            .collect();
+        let unwritten: Vec<u32> = addresses
+            .iter()
+            .copied()
+            .filter(|rva| {
+                refusal_line_for(note_refusal(&ledger, &overflow, *rva)) != RefusalLine::Full
+            })
+            .collect();
+        assert!(
+            unwritten.is_empty(),
+            "{} of {} addresses had their FIRST refusal suppressed. A first refusal is the only \
+             notice that a feature is dead: {unwritten:#x?}",
+            unwritten.len(),
+            addresses.len()
+        );
+    }
+
+    /// The ledger holds the WORST CASE ACTUALLY MEASURED without spilling to the shared counter.
+    ///
+    /// That case is the 2026-08-29 boot: 54 distinct addresses refused on the CALL path and 72
+    /// more behind the `FOR DETOUR` wording, 126 together -- and the two paths have a ledger each,
+    /// so 126 in ONE is already double the real load. A spilled address keeps its first line but
+    /// loses its own count, and the count is what carries the magnitude.
+    ///
+    /// THE ADDRESSES ARE REAL ONES, taken from the verified map's own sources, and that is the
+    /// whole load-bearing choice here. Synthetic RVAs at a fixed stride do not exercise the hash:
+    /// a first draft of this test walked `0x400000 + n * 0x10` and stayed GREEN with the slot
+    /// index built from the LOW bits, because uniformly spaced keys land one per probe run
+    /// whatever mixing is applied. Real game addresses are not uniform -- 896 of the map's 950
+    /// sources are 16-byte aligned -- so the low-bit index collapses 126 of them onto 16 home
+    /// slots (measured) and the ledger spills. Hence both assertions below: the spread is what
+    /// makes the fit mean something.
+    #[test]
+    fn the_measured_worst_case_of_real_addresses_fits_without_spilling() {
+        /// 2026-08-29: 54 CALL refusals plus 72 behind the `FOR DETOUR` wording.
+        const MEASURED_WORST_CASE: usize = 126;
+        /// Twice that, because a ledger sized exactly to the last bad day has no headroom for the
+        /// next one -- and the first draft of this ledger (256 slots, 8 probes) spilled on
+        /// MEASURED_WORST_CASE itself.
+        const REQUIRED_HEADROOM: usize = 252;
+        /// Distinct home slots the real addresses must reach. The mixed index reaches 98 of a
+        /// possible 126; the low-bit one reaches 16. Anything near the latter is a hash that has
+        /// stopped hashing, whatever the fit happens to work out as.
+        const MIN_DISTINCT_HOME_SLOTS: usize = 64;
+
+        assert_table_is_populated(&VERIFIED_1162_TO_1170, "VERIFIED_1162_TO_1170");
+        let sources: Vec<u32> = VERIFIED_1162_TO_1170
+            .iter()
+            .map(|(from, _)| *from)
+            .collect();
+        assert!(
+            sources.len() >= REQUIRED_HEADROOM,
+            "the map holds only {} sources, too few to load the ledger to {REQUIRED_HEADROOM}",
+            sources.len()
+        );
+
+        let home_slots: std::collections::BTreeSet<usize> = sources
+            .iter()
+            .take(MEASURED_WORST_CASE)
+            .map(|rva| refusal_slot(*rva, REFUSAL_SLOTS))
+            .collect();
+        assert!(
+            home_slots.len() >= MIN_DISTINCT_HOME_SLOTS,
+            "{MEASURED_WORST_CASE} real game addresses reached only {} of {REFUSAL_SLOTS} home \
+             slots. They are near-uniformly 16-byte aligned, so an index built from their low \
+             bits piles them up; the fits below would then be luck, not headroom",
+            home_slots.len()
+        );
+
+        for load in [MEASURED_WORST_CASE, REQUIRED_HEADROOM] {
+            let ledger: Vec<AtomicU64> = (0..REFUSAL_SLOTS).map(|_| AtomicU64::new(0)).collect();
+            let overflow = AtomicU64::new(0);
+            for rva in sources.iter().take(load) {
+                note_refusal(&ledger, &overflow, *rva);
+            }
+            let (_, held) = refusal_totals(&ledger, &overflow);
+            assert_eq!(
+                (overflow.load(Ordering::Relaxed), held as usize),
+                (0, load),
+                "{load} real addresses did not all get their own slot in a {REFUSAL_SLOTS}-slot \
+                 ledger at {REFUSAL_PROBES} probes, so some would lose their per-address count"
+            );
+        }
+    }
+
+    /// One address logs a bounded number of lines and an UNBOUNDED count.
+    ///
+    /// The count is the point. A bound that merely truncated would leave a reader of thirteen
+    /// lines unable to tell thirteen refusals from four and a half million, and the magnitude is
+    /// what says how hot the dead path is -- 628 refusals of `CS_MSB_POINT_CTOR_RVA` in one
+    /// session is a per-map-open retry; twelve would have been a startup probe.
+    #[test]
+    fn one_address_goes_quiet_but_its_count_keeps_running() {
+        const REFUSALS: u64 = 5_000;
+        let ledger: Vec<AtomicU64> = (0..REFUSAL_SLOTS).map(|_| AtomicU64::new(0)).collect();
+        let overflow = AtomicU64::new(0);
+
+        let lines: Vec<(u64, RefusalLine)> = (1..=REFUSALS)
+            .map(|expected| {
+                let occurrence = note_refusal(&ledger, &overflow, 0xcf_9300);
+                assert_eq!(
+                    occurrence, expected,
+                    "the occurrence number skipped: a count that does not advance one per refusal \
+                     cannot carry the magnitude"
+                );
+                (occurrence, refusal_line_for(occurrence))
+            })
+            .filter(|(_, line)| *line != RefusalLine::Suppressed)
+            .collect();
+
+        let written: Vec<u64> = lines.iter().map(|(occurrence, _)| *occurrence).collect();
+        assert_eq!(
+            written,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 100, 1_000],
+            "expected the first {REFUSALS_LOGGED_PER_ADDRESS} in full, then one went-quiet \
+             marker, then a restatement at each power of ten -- and nothing else"
+        );
+        assert_eq!(
+            lines.last().map(|(occurrence, _)| *occurrence),
+            Some(1_000),
+            "the last line a reader sees must state a count, or 5,000 refusals read as 13"
+        );
+
+        let (total, addresses) = refusal_totals(&ledger, &overflow);
+        assert_eq!(
+            total,
+            REFUSALS,
+            "the ledger must count every refusal, including the {} it did not write",
+            REFUSALS - written.len() as u64
+        );
+        assert_eq!(addresses, 1, "one address must occupy exactly one slot");
+    }
+
+    /// Two addresses that hash to the same slot keep separate counts.
+    ///
+    /// Collisions are not hypothetical at 256 slots, and a ledger that folded two addresses
+    /// together would silence the second one's FIRST refusal -- reporting one dead feature and
+    /// hiding another, which is worse than the spam it replaced.
+    #[test]
+    fn colliding_addresses_keep_separate_counts() {
+        let ledger: Vec<AtomicU64> = (0..REFUSAL_SLOTS).map(|_| AtomicU64::new(0)).collect();
+        let overflow = AtomicU64::new(0);
+        let first = 0xcf_9300u32;
+        let slot = refusal_slot(first, REFUSAL_SLOTS);
+        let second = (first + 1..u32::MAX)
+            .find(|rva| refusal_slot(*rva, REFUSAL_SLOTS) == slot)
+            .expect("some other RVA hashes to the same slot");
+
+        assert_eq!(note_refusal(&ledger, &overflow, first), 1);
+        assert_eq!(note_refusal(&ledger, &overflow, first), 2);
+        assert_eq!(
+            note_refusal(&ledger, &overflow, second),
+            1,
+            "0x{second:x} collides with 0x{first:x} and inherited its count, so its own first \
+             refusal would have been reported as a repeat and suppressed"
+        );
+        assert_eq!(note_refusal(&ledger, &overflow, first), 3);
+        assert_eq!(note_refusal(&ledger, &overflow, second), 2);
+        let (total, addresses) = refusal_totals(&ledger, &overflow);
+        assert_eq!((total, addresses), (5, 2));
+    }
+
+    /// An address that finds no slot is still REPORTED, and still bounded.
+    ///
+    /// Both halves matter and they pull opposite ways: falling to silence would hide a refusal,
+    /// and falling to unconditional logging would restore the unbounded write this exists to
+    /// remove. The shared overflow counter is the compromise, and it obeys the same rule.
+    #[test]
+    fn an_address_with_no_room_in_the_ledger_is_still_reported() {
+        // One slot, so the second distinct address cannot be placed however far it probes.
+        let ledger = [AtomicU64::new(0)];
+        let overflow = AtomicU64::new(0);
+        assert_eq!(note_refusal(&ledger, &overflow, 0x11_1111), 1);
+
+        let homeless: Vec<RefusalLine> = (0..40)
+            .map(|_| refusal_line_for(note_refusal(&ledger, &overflow, 0x22_2222)))
+            .collect();
+        assert_eq!(
+            homeless.first(),
+            Some(&RefusalLine::Full),
+            "an address the ledger has no room for must still cost its first line"
+        );
+        assert!(
+            homeless.iter().any(|line| *line == RefusalLine::WentQuiet),
+            "the overflow path must go quiet too, or a full ledger restores the unbounded write"
+        );
+        assert_eq!(overflow.load(Ordering::Relaxed), 40);
+    }
+
+    /// The count cannot carry into the key bits and rename an address.
+    ///
+    /// Pathological, and cheap to make impossible: the alternative is a slot that silently starts
+    /// counting a DIFFERENT address's refusals, which is a wrong answer rather than a loud one.
+    #[test]
+    fn a_saturated_count_never_corrupts_the_address_it_belongs_to() {
+        let rva = 0xcf_9300u32;
+        let ledger = [AtomicU64::new(
+            (REFUSAL_COUNT_CEILING << 32) | (rva as u64 + 1),
+        )];
+        let overflow = AtomicU64::new(0);
+        for _ in 0..8 {
+            assert_eq!(note_refusal(&ledger, &overflow, rva), REFUSAL_COUNT_CEILING);
+        }
+        assert_eq!(
+            ledger[0].load(Ordering::Relaxed) & REFUSAL_KEY_MASK,
+            rva as u64 + 1,
+            "the count carried into the key: this slot now counts refusals of a different address"
+        );
+        assert_eq!(overflow.load(Ordering::Relaxed), 0);
+    }
+
     /// A conclusion drawn from walking a table is worth exactly as much as the walk was long.
     fn assert_table_is_populated(table: &[(u32, u32)], name: &str) {
         assert!(
@@ -885,7 +1728,7 @@ mod tests {
                 // The shortcut may claim a source only when the address it hands back IS what the
                 // row would have returned. That is the rows that did not move, and only them.
                 TableAnswer::AlreadyTranslated => from != moved,
-                TableAnswer::MovedTo(to) => to != moved,
+                TableAnswer::MovedTo { row, to } => to != moved || table[row].0 != from,
                 TableAnswer::Unmapped => true,
             })
             .collect();
