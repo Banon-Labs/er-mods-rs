@@ -360,7 +360,13 @@ HEADER = """\
 #                                        named, so these are the ones that need an owner most)
 #     OFFSET-ZERO-UNMEASURABLE     12   (a displacement of 0 carries no byte to compare; a new
 #                                        LEADING member or a new base class would move it and this
-#                                        method could not see it)
+#                                        method could not see it. ONE ROUTE EXISTS for a polymorphic
+#                                        owner: `[this+0]` is the vtable slot, so pairing the class's
+#                                        vtable slot-for-slot and confirming the constructor's
+#                                        `mov [this+0],<vtable>` is aligned in both bodies proves
+#                                        nothing was inserted in front of it. FD4PadDevice was
+#                                        settled that way on 2026-08-31 -- 0x143295998 -> 0x143298c58,
+#                                        5 slots, 3 identical and 2 at the region's own +0x2810.)
 #     value not resolvable         37   (the constant is an expression this inventory cannot fold,
 #                                        so it is not even in the census)
 #
@@ -369,16 +375,33 @@ HEADER = """\
 # the one PlayerGameData move this migration found actually lives. It is evidence, ranked; the
 # owner is what makes it measurable.
 #
-# THE TOP OF THAT RANKING, and where it stops. The only row that is BOTH written through AND
-# MOVED-SOMEWHERE is `VK_ARRAY_88_OFFSET` = 0x88 (er-input-harness/src/pad_inject.rs), the key
-# array the pad builders rebuild at `CSInGamePad + 0x88`. Its owner is named in the prose, but
-# `CS::CSInGamePad` yields only 2 usable paired method bodies (38 of 40 do not store its vtable
-# into `this`), so the class route cannot witness it -- and the one function that writes the
-# field, WRITER_RVA 0x26634a0, has NO `.pdata` entry in 1.16.2 and lands MID-FUNCTION inside a
-# different 1.17 function, so that region genuinely changed. Settling 0x88 needs that writer
-# re-paired first, which is RVA work, not offset work. Recorded here rather than guessed.
-# The two padMaps offsets beside it ARE settled: builder 0x140240e70 is byte-identical between
-# the builds (195/195 aligned at the same address) and holds 0x18 and 0x48 on the manager.
+# THE TOP OF THAT RANKING WAS SETTLED ON 2026-08-31, AND THE OWNER WAS THE WRONG CLASS.
+# The only row that was BOTH written through AND MOVED-SOMEWHERE was `VK_ARRAY_88_OFFSET` = 0x88
+# (er-input-harness/src/pad_inject.rs). It was attributed to `CS::CSInGamePad`, which yields 2
+# usable paired method bodies out of 40 -- and that starvation is why it would not settle. It is
+# not that class. Its writer, 1.16.2 0x1426634a0 (`mov byte [rcx+rdx*2+0x88],1`, bound
+# `cmp eax,0x50` on id-1000), has exactly four call sites (0x140240e70, 0x140241130, 0x140e321b0,
+# 0x140e32470) and EVERY one loads `rcx` from `*(manager + 0x18 + dev*8)` =
+# `FD4PadManager::padDevices[dev]`; `FD4PadManager::Init` fills that array with `HeapAlloc(0x3c0)`
+# + `FD4PadDevice::FD4PadDevice` + `FD4PadDevice::vftable`. So the owner is `FD4::FD4PadDevice`,
+# and the CSInGamePad merely HOLDS the device at its own +0x10.
+#
+# 0x88 HELD on 1.17. The writer pairs to 0x142665cb0 -- a masked signature that wildcards BOTH the
+# displacement and the bound is unique in each image, and the call graph agrees independently (0
+# callees, the same four callers, two of them at identical addresses) -- and the two bodies are
+# byte-identical, so 0x88 is MEASURED on 1.17 rather than carried. Second witness: the
+# `FD4PadDevice` constructor 0x142663880 -> 0x142666090 aligns 168/168 with zero moved offsets,
+# holding 0x80 immediately below the array, and the allocation size is still 0x3c0.
+#
+# The prose that stood here before said WRITER_RVA "lands MID-FUNCTION inside a different 1.17
+# function, so that region genuinely changed". The region did move -- uniformly, by +0x2810, which
+# is why the naive same-address carry lands mid-function -- but nothing in it changed: all ten
+# `disp == 0x88` sites in 0x142660000..0x14266a000 reappear at exactly +0x2810 with identical
+# operands, and the class vtable pairs slot for slot (0x143295998 -> 0x143298c58).
+#
+# `.pdata` blindness was the real obstacle and call-graph topology is what got past it. The two
+# padMaps offsets beside it were already settled: builder 0x140240e70 is byte-identical between
+# the builds (195/195 aligned at the same address) and holds 0x18, 0x40 and 0x48 on the manager.
 #
 # NOT WIRED INTO scripts/check.sh. Two other agents held that file when this landed, so the gate
 # runs only when invoked. Adding it is one line there, in column 1, like every other step:

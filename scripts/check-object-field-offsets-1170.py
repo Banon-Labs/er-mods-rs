@@ -45,6 +45,19 @@ which re-applies the mount after a map move and reads `PlayerGameData+0x960` to 
 idempotent. Two derivations that share no evidence -- a constructor alignment here, a new callee
 read there -- land on the same byte.
 
+`FD4::FD4PadDevice` did not move a byte, and settling it took correcting its OWNER first. The
+census left exactly one offset that was both WRITTEN THROUGH and unsettled -- `VK_ARRAY_88_OFFSET`
+in the input harness -- attributed to `CS::CSInGamePad`, a class that yields 2 usable paired bodies
+out of 40. It is not that class. All four call sites of the array's only writer (1.16.2
+0x1426634a0, `mov byte [rcx+rdx*2+0x88],1`) compute `rcx` as `*(FD4PadManager + 0x18 + dev*8)` =
+`padDevices[dev]`, and `FD4PadManager::Init` fills that array with `HeapAlloc(0x3c0)` +
+`FD4PadDevice::FD4PadDevice` + `FD4PadDevice::vftable`. With the owner right, the measurement is
+easy and 0x88 holds. The CSInGamePad is one indirection away: it HOLDS the device at its own +0x10.
+
+That correction was not cosmetic. The harness had been writing `0x88 + (id-1000)*2` onto the
+CSInGamePad, which is `HeapAlloc(0x98)` = 152 bytes, so every id from 1008 up wrote past the end of
+a live game allocation.
+
 `CS::PlayerIns` did NOT grow at all: 8 bytes were inserted in (0x398, 0x3a8] and 8 bytes REMOVED
 in (0x560, 0x580], so the band between them shifts +8 while the object size is unchanged and both
 ends hold. A "+8 above the insertion" rule applied here would have corrupted
@@ -106,6 +119,17 @@ PGD_CTOR = dict(va16=0x14025D580, len16=1199, va17=0x14025D550, len17=1199, base
 PLAYER_INS_CTOR = dict(va16=0x14064FE40, len16=2143, va17=0x140650C90, len17=2143, bases=("rbx",))
 PGD_COPY_CHR_NAME = dict(
     va16=0x1402610C0, len16=120, va17=0x1402610D0, len17=120, bases=("rcx", "rbx", "rdi", "rsi")
+)
+# FD4::FD4PadDevice. `this` is rbx after `mov rbx,rcx` in both bodies; the base filter matters here
+# because the constructor also dispatches through vtables on r8/r9/rax, and counting those would
+# manufacture "held" readings for foreign objects (the mistake that produced spurious PlayerIns
+# witnesses at 0x480/0x508/0x530).
+FD4_PAD_DEVICE_CTOR = dict(
+    va16=0x142663880, len16=661, va17=0x142666090, len17=661, bases=("rbx", "rcx")
+)
+# FD4::FD4PadManager. `this` is rsi after `mov rsi,rcx`.
+FD4_PAD_BUILDER_A = dict(
+    va16=0x140240E70, len16=690, va17=0x140240E70, len17=690, bases=("rsi", "rcx")
 )
 
 WITNESSES = (
@@ -192,6 +216,71 @@ WITNESSES = (
         dict(va16=0x1403F09F0, len16=200, va17=0x1403F0C20, len17=200, bases=("rcx", "rdi")),
         "vtable slot 154 of CS::PlayerIns",
     ),
+    # ---- FD4::FD4PadDevice ------------------------------------------------------------------
+    # The virtual-key array the input harness WRITES. A write through a moved offset does not
+    # return a wrong value, it corrupts whatever now lives there -- and this is the path every
+    # agent-driven menu navigation runs on, so a wrong write poisons runtime evidence rather than
+    # producing one bad log line.
+    #
+    # The census could not settle this row (`CS::CSInGamePad` yields 2 usable paired bodies out of
+    # 40) because the owner was misattributed. It is `FD4::FD4PadDevice`: all four call sites of
+    # the writer below load `rcx` from `FD4PadManager::padDevices[dev]`, and `FD4PadManager::Init`
+    # fills that array with `HeapAlloc(0x3c0)` + `FD4PadDevice::FD4PadDevice` + its vftable.
+    (
+        "FD4PadDevice",
+        "virtual_key_array (VK_ARRAY_88_OFFSET)",
+        0x88,
+        0x88,
+        dict(va16=0x1426634A0, len16=29, va17=0x142665CB0, len17=29, bases=("rcx",)),
+        "the ONLY writer of the array, `mov byte [rcx+rdx*2+0x88],1`; paired by a masked signature "
+        "that is unique in BOTH images with the displacement AND the bound wildcarded, and "
+        "independently by call-graph topology (0 callees, the same 4 callers)",
+    ),
+    (
+        "FD4PadDevice",
+        "held immediately below the key array (0x80)",
+        0x80,
+        0x80,
+        FD4_PAD_DEVICE_CTOR,
+        "FD4PadDevice constructor, 168/168 aligned with zero moved offsets; brackets 0x88 from below",
+    ),
+    (
+        "FD4PadDevice",
+        "held (0x68)",
+        0x68,
+        0x68,
+        FD4_PAD_DEVICE_CTOR,
+        "FD4PadDevice constructor",
+    ),
+    # ---- FD4::FD4PadManager -----------------------------------------------------------------
+    # The BASE the write goes through. Pinning the field without pinning the pointer that reaches
+    # it would leave half the address unmeasured.
+    (
+        "FD4PadManager",
+        "pad_devices (PAD_MGR_DEVICES_18_OFFSET)",
+        0x18,
+        0x18,
+        FD4_PAD_BUILDER_A,
+        "virtual-key builder A, 195/195 aligned; it computes the writer's `this` as "
+        "`*(manager + 0x18 + dev*8)`",
+    ),
+    (
+        "FD4PadManager",
+        "pad_devices.count (PAD_DEVICES_COUNT_40_OFFSET)",
+        0x40,
+        0x40,
+        FD4_PAD_BUILDER_A,
+        "virtual-key builder A; the bound the game itself checks `dev` against",
+    ),
+    (
+        "FD4PadManager",
+        "pad_maps (0x48)",
+        0x48,
+        0x48,
+        FD4_PAD_BUILDER_A,
+        "virtual-key builder A; the frozen negative for the padDevices rows -- 0x18 and 0x48 are "
+        "adjacent members of the same object and a matcher that confused them would fail here",
+    ),
 )
 
 # The drift model the witnesses above establish, expressed as the SAFE region per object: an
@@ -204,6 +293,14 @@ SAFE_REGIONS = {
     # 8 bytes inserted in (0x398,0x3a8] and 8 removed in (0x560,0x580]; the object size is
     # unchanged and both ends hold, so the hazard is the band between them, not the whole struct.
     "PlayerIns": ((0x0, 0x3A0), (0x568, 0x760)),
+    # Nothing in either pad object moved: the FD4PadDevice constructor aligns 168/168 and its
+    # destructor 99/99 with zero moved offsets, the builder aligns 195/195, the writer 7/7, the
+    # object is still `HeapAlloc(0x3c0)` and the vtable pairs slot for slot. The regions stop at
+    # the highest offset actually WITNESSED, because "no witness moved" is not "no field moved" --
+    # `CS::PlayerIns` is the standing counterexample, where a compensating insert/remove pair moved
+    # the interior of a bracket while both ends held.
+    "FD4PadDevice": ((0x0, 0x89),),
+    "FD4PadManager": ((0x0, 0xA9),),
 }
 
 # --------------------------------------------------------------------------------------------
@@ -216,6 +313,17 @@ PINNED_CONSTANTS = (
     ("PLAYER_GAME_DATA_EQUIP_OFFSET", "crates/er-build-import-runtime/src/grant.rs", 0x2B0, "PlayerGameData"),
     ("PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET", "crates/er-player-name-filter/src/lib.rs", 0x8F0, "PlayerGameData"),
     ("PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET", "crates/er-player-name-filter/src/lib.rs", 0x6B8, "PlayerIns"),
+    ("VK_ARRAY_88_OFFSET", "crates/er-input-harness/src/pad_inject.rs", 0x88, "FD4PadDevice"),
+    ("PAD_MGR_DEVICES_18_OFFSET", "crates/er-input-harness/src/pad_inject.rs", 0x18, "FD4PadManager"),
+    ("PAD_DEVICES_COUNT_40_OFFSET", "crates/er-input-harness/src/pad_inject.rs", 0x40, "FD4PadManager"),
+    # THE FROZEN NEGATIVE THAT IS NOT ABOUT THIS OBJECT AT ALL. These sit numerically inside the
+    # band where PlayerGameData moved +4 (0x960..0xa78) and belong to `CS::CSMenuProfModelRend`,
+    # whose constructor aligns 64/64 with every one of them HELD. A "+4 everything in that range"
+    # sweep would have corrupted the loading-screen portrait camera; pinning them here makes that
+    # sweep red instead of silent.
+    ("PROFILE_CAM_YAW_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0x9C8, "CSMenuProfModelRend"),
+    ("PROFILE_CAM_PITCH_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0x9CC, "CSMenuProfModelRend"),
+    ("PROFILE_CAM_ASPECT_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0xA24, "CSMenuProfModelRend"),
 )
 
 # Every `PlayerGameData` field this workspace reaches through `offset_of!`, with the offset the

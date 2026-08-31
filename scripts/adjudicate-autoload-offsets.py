@@ -212,6 +212,22 @@ OWNERS: dict[str, object] = {
     "PROFILE_RENDERER_MODEL_INS_OFFSET": "CS::CSMenuProfModelRend",  # 0x778 STILL-UNKNOWN
     "PROFILE_ANIM_HANDLE_OFFSET": "CS::CSMenuProfModelRend",  # 0x96c STILL-UNKNOWN
     "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET": "CS::CSMenuProfModelRend",  # 0x9a8
+    # FD4::FD4PadDevice / FD4::FD4PadManager (2026-08-31). The census left VK_ARRAY_88_OFFSET as
+    # the ONLY offset that was both WRITTEN THROUGH and unsettled, attributed to CS::CSInGamePad --
+    # a class that yields 2 usable paired bodies out of 40, which is why it would not settle. It is
+    # the wrong class. The array's only writer (1.16.2 0x1426634a0, `mov byte [rcx+rdx*2+0x88],1`,
+    # bound `cmp eax,0x50` on id-1000) is called from exactly four sites (0x140240e70, 0x140241130,
+    # 0x140e321b0, 0x140e32470) and EVERY one of them computes `rcx` as `*(manager + 0x18 + dev*8)`
+    # = `FD4PadManager::padDevices[dev]`. `FD4PadManager::Init` fills that array with
+    # `HeapAlloc(0x3c0)` + `FD4PadDevice::FD4PadDevice` + `FD4PadDevice::vftable`. The CSInGamePad
+    # is one indirection away: it HOLDS the device at its own +0x10 (Ghidra's type name
+    # `CSInGamePad0x10` records exactly that).
+    #
+    # Both 1.17 values re-measured, HELD, and frozen in
+    # scripts/check-object-field-offsets-1170.py.
+    "VK_ARRAY_88_OFFSET": "FD4::FD4PadDevice",  # 0x88 CLEARED (writer 7/7 aligned; ctor 168/168)
+    "PAD_MGR_DEVICES_18_OFFSET": "FD4::FD4PadManager",  # 0x18 CLEARED (builder A 195/195 aligned)
+    "PAD_DEVICES_COUNT_40_OFFSET": "FD4::FD4PadManager",  # 0x40 CLEARED (same alignment)
     # CS::PropertyNewButtonController -- named in full in the constant's own doc comment,
     # including the allocation size and the constructor that writes the field.
     "PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET": "CS::PropertyNewButtonController",
