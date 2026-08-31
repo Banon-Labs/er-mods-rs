@@ -27,7 +27,7 @@ FOURTEEN distinct deltas (seven in `.data` from +0x4010 to +0x4110, seven in `.r
 to +0x3160). A single constant is wrong on 46 of the 103 addresses even if you pick the modal one
 per section, so nothing carries a data address forward by arithmetic.
 
-THE FOUR ANCHORS, AND WHAT EACH ONE IS WORTH
+THE FIVE ANCHORS, AND WHAT EACH ONE IS WORTH
 ---------------------------------------------
 Every anchor below is content or evidence about the DESTINATION. None of them is "the bytes at the
 two addresses are equal", and none of them reads the data map for its answer -- the map is only
@@ -56,6 +56,17 @@ what the answer is compared against.
   FNPTR    For a table of code pointers, the pointers. Each slot's 1.16.2 target is looked up in
            the FUNCTION ledger and the paired 1.17 function must be the qword at the same slot of
            the destination. Two agreeing slots required, for the same reason as accessors.
+
+  STRING-  LITERAL, one dereference out. For a datum whose qwords are `wchar_t*`, the strings
+  PTR      those pointers REACH -- required to be the same literal, occurring exactly once in each
+           image, at the source's pointee and the candidate's, with no slot disagreeing and the
+           identical test failing at every +-0x8/+-0x10 neighbour. Added 2026-08-31, and it moved
+           two of the four thinnest rows in the ledger out of UNANCHORED: `STEAM_INTERFACE_GUARD`
+           (9 slots, "Resolution-WindowScreenWidth" and eight more) and
+           `PROFILE_OFFSCREEN_SIZE_TABLE` (3, "SYSTEX_Menu_Profile01"). Both had been carried by a
+           bracket plus a single agreeing reference; neither is a vtable, neither has
+           unique-enough accessors, and their pointers are data rather than code, so all four
+           earlier anchors passed over them in silence.
 
 WHAT IS DELIBERATELY *NOT* AN ANCHOR
 -------------------------------------
@@ -91,7 +102,7 @@ That is most of the map, and it is why this tool does not replace the voting one
 
 USAGE
   python3 scripts/verify-data-rvas-by-rtti.py                 # check the tracked data map
-  python3 scripts/verify-data-rvas-by-rtti.py --anchors       # ALL rows, all four anchors (gate)
+  python3 scripts/verify-data-rvas-by-rtti.py --anchors       # ALL rows, all five anchors (gate)
   python3 scripts/verify-data-rvas-by-rtti.py --occupancy     # what sits at each 1.17 address
   python3 scripts/verify-data-rvas-by-rtti.py --population    # declared data addresses with no row
   python3 scripts/verify-data-rvas-by-rtti.py --deltas        # + whole-.rdata delta census
@@ -547,6 +558,111 @@ def _ordinal_of(image, needle, rva):
 
 
 # =============================================================================================
+# ANCHOR: the strings a table POINTS AT
+# =============================================================================================
+
+# Slots read out of a candidate table. Same window as the code-pointer anchor below, and for the
+# same reason: past a dozen qwords you are no longer reading the table, you are reading whatever
+# follows it.
+STRING_PTR_SLOTS = 12
+
+
+def string_ptr_identity(old, new, src, dst):
+    """Verdict from the strings the table's POINTERS reach, or `None` when it holds none.
+
+    WHY A HOP. `literal_identity` above asks what is AT the address, which answers for the four
+    rows that are strings and for nothing else. A table of `wchar_t*` is one dereference away from
+    the same evidence and was invisible to every anchor here: it is not a vtable (no RTTI), its
+    accessors are not unique enough to vote, and its pointers are data rather than code so the
+    function map cannot pair them.
+
+    That was not a small gap. `STEAM_INTERFACE_GUARD_RVA` and `PROFILE_OFFSCREEN_SIZE_TABLE_RVA`
+    are two of the four thinnest addresses in the ledger -- carried by a bracket alone, with a
+    single agreeing reference each -- and both hold `wchar_t*` slots reaching strings that occur
+    EXACTLY ONCE per image: "Resolution-WindowScreenWidth" and "Resolution-WindowScreenHeight" for
+    the first, "SYSTEX_Menu_Profile01" for the second, each at the source's pointee in 1.16.2 and
+    at the candidate's pointee in 1.17. A name that occurs once per image is the same class of
+    evidence the RTTI anchor rests on, and it owes nothing to a delta, to a neighbour, or to the
+    reference that carried the row into the map.
+
+    The bar is deliberately strict, because ONE slot is enough to promote a row here and a wrong
+    table would be promoted just as confidently as a right one:
+      * the slot's pointee must be a literal in BOTH images and the SAME literal;
+      * that literal must occur exactly once in each image -- an ordinal fallback is not offered,
+        because a repeated string reached through a pointer says nothing about which table holds
+        the pointer;
+      * no slot may disagree -- one mismatched slot returns DISAGREE, which is what catches a
+        destination nudged by eight bytes: the slots shift by one and the strings stop lining up;
+      * and the identical test must FAIL at every +-0x8/+-0x10 neighbour, so the verdict identifies
+        an address rather than a neighbourhood.
+
+    THE WINDOW IS TWELVE QWORDS AND THE OBJECT MAY BE SHORTER, which is worth saying plainly:
+    `STEAM_INTERFACE_GUARD_RVA` is a single pointer slot the mod dereferences, and the eight
+    further slots this reads belong to whatever follows it. That does not weaken the claim,
+    because the claim being made is about the POSITION -- the 96 bytes at the candidate hold
+    pointers to the same nine unique strings, in the same order, as the 96 bytes at the source --
+    and the neighbour test above is what stops that from degenerating into "somewhere around here".
+    """
+    agreed, mismatch, shown = _string_ptr_scan(old, new, src, dst)
+    if mismatch:
+        return "DISAGREE", mismatch
+    if not agreed:
+        return None
+    # DOES IT SELECT, OR DOES IT MERELY ACCEPT? The same question `fnptr_table_confirms` asks in
+    # the map generator, and the same answer: a test that also passes one slot either way has not
+    # identified an address, it has identified a neighbourhood. Measured on all four rows this
+    # anchor has an opinion about, every offset from -0x40 to +0x40 comes back DISAGREE or
+    # withheld and only the candidate itself passes.
+    for step in (-0x10, -0x8, 0x8, 0x10):
+        near = dst + step
+        if near < 0 or near + STRING_PTR_SLOTS * 8 > len(new):
+            continue
+        near_agreed, near_mismatch, _ = _string_ptr_scan(old, new, src, near)
+        if near_agreed and not near_mismatch:
+            return (
+                "DISAGREE",
+                f"the identical test also passes at 0x{near:x}, so it does not select an address",
+            )
+    return (
+        "STRING-PTR",
+        f"{agreed} pointer slot(s) reach a literal occurring exactly once in each image, "
+        f"at the source's pointee and the candidate's ({shown!r}); the same test fails at every "
+        "+-0x8/+-0x10 neighbour",
+    )
+
+
+def _string_ptr_scan(old, new, src, dst):
+    """`(agreeing slots, first mismatch text or None, one agreeing literal)` over the window.
+
+    Split out so the selectivity check above can re-run the identical scan at a neighbour without
+    recursing through the rules that consume its result.
+    """
+    agreed, shown = 0, None
+    for slot in range(STRING_PTR_SLOTS):
+        offset = slot * 8
+        if src + offset + 8 > len(old) or dst + offset + 8 > len(new):
+            break
+        here = struct.unpack_from("<Q", old, src + offset)[0]
+        there = struct.unpack_from("<Q", new, dst + offset)[0]
+        if not (BASE <= here < BASE + len(old) and BASE <= there < BASE + len(new)):
+            continue
+        kind, text = literal_at(old, here - BASE)
+        if text is None:
+            continue
+        _other_kind, other = literal_at(new, there - BASE)
+        if other != text:
+            return 0, (
+                f"slot +0x{offset:x} reaches {text[:40]!r} in 1.16.2 and {other!r} in 1.17"
+            ), None
+        if old.count(text) != 1 or new.count(text) != 1:
+            continue
+        agreed += 1
+        if shown is None:
+            shown = text[:-1].decode("ascii") if kind == "ascii" else text[:-2].decode("utf-16le")
+    return agreed, None, shown
+
+
+# =============================================================================================
 # ANCHOR: the code pointers a table holds
 # =============================================================================================
 
@@ -612,7 +728,9 @@ def fnptr_identity(old, new, src, dst, pairs, text_span):
 # The audit
 # =============================================================================================
 
-VERIFIED_CODES = ("PROVEN", "ORDINAL", "ACCESSORS", "LITERAL", "LITERAL-ORDINAL", "FNPTR")
+VERIFIED_CODES = (
+    "PROVEN", "ORDINAL", "ACCESSORS", "LITERAL", "LITERAL-ORDINAL", "FNPTR", "STRING-PTR",
+)
 
 
 def audit(rows, old, new, old_cm, new_cm):
@@ -649,8 +767,10 @@ def audit(rows, old, new, old_cm, new_cm):
                 f"{agreeing} of {total} independent accessors agree",
             ))
             continue
-        verdict = literal_identity(old, new, src, dst) or fnptr_identity(
-            old, new, src, dst, pairs, span
+        verdict = (
+            literal_identity(old, new, src, dst)
+            or fnptr_identity(old, new, src, dst, pairs, span)
+            or string_ptr_identity(old, new, src, dst)
         )
         if verdict is not None:
             results.append((verdict[0], src, dst, const, note, verdict[1]))
@@ -708,11 +828,9 @@ UNANCHORED = {
     "MOVIE_SKIP_FLAG_RVA",
     "NAV_COST_TABLE_RVA",
     "PROFILE_MODEL_REND_TABLE_RVA",
-    "PROFILE_OFFSCREEN_SIZE_TABLE_RVA",
     "RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA",
     "SAVE_SERIALIZE_BYTES_RVA",
     "SL_IODEV_GLOBAL_RVA",
-    "STEAM_INTERFACE_GUARD_RVA",
     "STREAMING_DRIVER_SINGLETON_RVA",
     "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA",
     "TITLE_GLOBAL_ACCEPT_BYTE_RVA",
@@ -1083,7 +1201,7 @@ def main():
     ap.add_argument(
         "--anchors",
         action="store_true",
-        help="every row, every anchor: RTTI, accessors, string literals, code-pointer tables",
+        help="every row, every anchor: RTTI, accessors, literals, code pointers, string tables",
     )
     ap.add_argument(
         "--occupancy",
