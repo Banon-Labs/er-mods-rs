@@ -37,6 +37,7 @@ Exit status is 1 on any failure, so this can gate.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -67,12 +68,26 @@ EXEMPT: dict[str, str] = {
 
 
 def rust_files(root: Path) -> list[Path]:
-    """Every Rust source under `root`, minus build output and repo copies."""
+    """Every Rust source under `root`, minus build output and repo copies.
+
+    The walk PRUNES `SKIP_DIRS` as it descends instead of enumerating their contents and
+    discarding them afterwards, which is what `rglob` forced. Identical by construction: a path
+    under a skipped directory carries that directory in its relative `.parts`, so the filter
+    below already rejected it. Measured 2026-08-31: `rglob` traversed all 1,118,634 entries under
+    the repo root -- `.worktrees`, `.claude` and `target` are 99.4% of them -- for 571 files, and
+    this gate ran the walk TWICE (once to check, once to count for the success line).
+    """
     files: list[Path] = []
-    for path in root.rglob("*.rs"):
-        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
-        files.append(path)
+    for directory, subdirectories, filenames in os.walk(root):
+        subdirectories[:] = [name for name in subdirectories if name not in SKIP_DIRS]
+        base = Path(directory)
+        for name in filenames:
+            if not name.endswith(".rs"):
+                continue
+            path = base / name
+            if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
+                continue
+            files.append(path)
     return sorted(files)
 
 
@@ -90,7 +105,7 @@ def defines_helper(text: str) -> bool:
     return all(re.search(rf"fn\s+{name}\b", text) for name in HELPER_FUNCTIONS)
 
 
-def check(root: Path) -> list[str]:
+def check(root: Path, sources: list[Path] | None = None) -> list[str]:
     """Return a list of failures; empty means every log in the tree is fresh per run."""
     failures: list[str] = []
     exempt_hits: dict[str, int] = {name: 0 for name in EXEMPT}
@@ -102,7 +117,7 @@ def check(root: Path) -> list[str]:
                 "cannot be told apart from an oversight"
             )
 
-    for path in rust_files(root):
+    for path in (rust_files(root) if sources is None else sources):
         relative = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
         openers = append_openers(text)
@@ -282,14 +297,19 @@ def main() -> int:
         return selftest()
 
     root = args.root.resolve()
-    failures = check(root)
+    # Walked ONCE. `check()` enumerated the tree and then the success line called
+    # `rust_files(root)` a second time purely to print a count, so a passing run paid for the
+    # whole walk twice. The six selftest call sites still pass only `root` and enumerate
+    # themselves -- their trees are a handful of files.
+    sources = rust_files(root)
+    failures = check(root, sources)
     if failures:
         print("[check-fresh-run-logs] FAIL:", file=sys.stderr)
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         return 1
     print(
-        f"[check-fresh-run-logs] ok -- {len(rust_files(root))} Rust files scanned, every log "
+        f"[check-fresh-run-logs] ok -- {len(sources)} Rust files scanned, every log "
         f"opener routes through the one-shot truncation, {len(EXEMPT)} file(s) exempt with reasons"
     )
     return 0

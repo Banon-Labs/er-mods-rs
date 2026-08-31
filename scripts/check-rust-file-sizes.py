@@ -8,6 +8,7 @@ backsliding while semantic module extraction continues.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 DEFAULT_WARN_LINES = 900
@@ -27,12 +28,25 @@ SKIP_DIRS = {
 
 
 def rust_files(root: Path) -> list[Path]:
+    """Every `.rs` under `root` except `SKIP_DIRS`.
+
+    The walk PRUNES `SKIP_DIRS` as it descends instead of enumerating their contents and
+    discarding them afterwards, which is what `rglob` forced. Identical by construction: a path
+    under a skipped directory carries that directory in `rel_parts`, so the filter below already
+    rejected it. Measured 2026-08-31: `rglob` traversed all 1,118,634 entries under the repo root
+    -- `.worktrees`, `.claude` and `target` are 99.4% of them -- to produce 571 files.
+    """
     files: list[Path] = []
-    for path in root.rglob("*.rs"):
-        rel_parts = path.relative_to(root).parts
-        if any(part in SKIP_DIRS for part in rel_parts):
-            continue
-        files.append(path)
+    for directory, subdirectories, filenames in os.walk(root):
+        subdirectories[:] = [name for name in subdirectories if name not in SKIP_DIRS]
+        base = Path(directory)
+        for name in filenames:
+            if not name.endswith(".rs"):
+                continue
+            path = base / name
+            if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
+                continue
+            files.append(path)
     return sorted(files)
 
 

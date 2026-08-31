@@ -26,6 +26,7 @@ any FFI callback argument is not a waiver; it is the same bug with a note attach
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -47,11 +48,28 @@ REPLACEMENT = "er_game_base::mem::safe_read_cstr"
 
 
 def rust_source_files() -> list[Path]:
+    """Every `.rs` under the repo except the ignored directories.
+
+    The walk PRUNES `IGNORED_DIRECTORIES` as it descends instead of enumerating their contents
+    and discarding them afterwards, which is what `rglob` forced. Identical by construction: a
+    path under an ignored directory carries that directory in its relative `.parts`, so the
+    post-filter below already rejected it. Measured 2026-08-31: `rglob` traversed all 1,118,634
+    entries in the tree -- `.worktrees`, `.claude` and `target` are 99.4% of them -- to produce
+    the 571 files this gate reads.
+    """
     paths: list[Path] = []
-    for path in REPO_ROOT.rglob("*.rs"):
-        if any(part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
-            continue
-        paths.append(path)
+    for directory, subdirectories, filenames in os.walk(REPO_ROOT):
+        subdirectories[:] = [
+            name for name in subdirectories if name not in IGNORED_DIRECTORIES
+        ]
+        base = Path(directory)
+        for name in filenames:
+            if not name.endswith(".rs"):
+                continue
+            path = base / name
+            if any(part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
+                continue
+            paths.append(path)
     return sorted(paths)
 
 

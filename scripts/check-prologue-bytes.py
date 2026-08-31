@@ -49,6 +49,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import tempfile
@@ -146,9 +147,31 @@ def scan_text(relative: Path, text: str) -> list[Finding]:
     return findings
 
 
+def rust_files(root: Path) -> list[Path]:
+    """Every `.rs` under `root` outside `IGNORED_DIRECTORIES`.
+
+    The walk PRUNES `IGNORED_DIRECTORIES` as it descends instead of enumerating their contents
+    and discarding them afterwards, which is what `rglob` forced. Identical by construction: a
+    path under an ignored directory carries that directory in its relative `.parts`, so
+    `is_scanned` already rejected it. Measured 2026-08-31: `rglob` traversed all 1,118,634
+    entries under the repo root -- `.worktrees`, `.claude` and `target` are 99.4% of them -- to
+    reach the 513 files this gate scans.
+    """
+    files: list[Path] = []
+    for directory, subdirectories, filenames in os.walk(root):
+        subdirectories[:] = [
+            name for name in subdirectories if name not in IGNORED_DIRECTORIES
+        ]
+        base = Path(directory)
+        for name in filenames:
+            if name.endswith(".rs"):
+                files.append(base / name)
+    return sorted(files)
+
+
 def scan(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for path in sorted(root.rglob("*.rs")):
+    for path in rust_files(root):
         relative = path.relative_to(root)
         if not is_scanned(relative):
             continue
