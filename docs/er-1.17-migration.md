@@ -23,7 +23,7 @@ blocked on. Update it as items close rather than starting a second list somewher
 | --- | --- | --- | --- |
 | 1 | Ghidra dump / MCP (`ermaporch1162`, :8765) | 1.16.2 only -- every name, signature and struct it returns is the previous build | a 1.17 runtime dump, imported as `ermaporch1170` |
 | 2 | 19 unresolved addresses in the RVA map | shape-matched but ambiguous, and deliberately left blank | #1, or hand RE per address |
-| 3 | 1 mapping refused on evidence: `MOVEMAPSTEP_STEP_MOVEMAP_RVA` (`NEAR`, body grew by two instructions) | callable, detour refused; the 2026-08-30 verdict rework cleared the other four -- see "Function lengths" below | an explicit human promotion, if that detour is wanted |
+| 3 | ~~1 mapping refused on evidence: `MOVEMAPSTEP_STEP_MOVEMAP_RVA`~~ **RESOLVED 2026-08-31** | `PATCH-SITE-IDENTICAL`, in both `VERIFIED_1162_TO_1170` and `DETOUR_SAFE_1162_TO_1170`. The two inserted instructions are `mov rcx,rbx; call CS::MoveMapStep::_UpdateHorseType` at index 873 of 975, 0x1055 bytes past a prologue that is `48 8b c4 55 56 57 41 54` in both builds -- see "Function lengths" below | nothing; pinned in `PATCH_SITE_ACKNOWLEDGED` (`er-game-base/build.rs`) so the next insertion fails the build |
 | 4 | Struct layouts | two confirmed drifts: `PlayerGameData` +8 (`+0xab5` -> `+0xabd`), the Wwise settings object +0x38. The rest is unaudited | #1 |
 | 5 | `fromsoftware-rs` bindings (path dependency) | field offsets are 1.16.2-shaped | #4 |
 | 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | mostly fine: a swept comparison of all 36 specs against the 1.17 image found exactly ONE that breaks, `er-save-suppress::QUIT_PHASE_SETTLE_SIG`, now respelled. `Image::EldenRing1170` exists for a spec that must be 1.17 (3 use it); the rest are register-only prologues whose encoding is version-invariant | 5 specs whose 1.16.2 RVA is in no map, so they could not be checked at all |
@@ -374,8 +374,19 @@ explained away, and the explanation was never checked against the thing it expla
 Since 2026-08-30 the extent length is a first-class signal rather than an audit someone remembers
 to run: a differing length blocks an `IDENTICAL` verdict outright, the verifier decodes the WHOLE
 declared extent instead of the first 120 instructions, and every row carries an `extent` column
-(`PDATA:0x120b/0x1213+8`). This pair now verdicts `NEAR` -- callable, detour refused -- which is
-what it should have said all along.
+(`PDATA:0x120b/0x1213+8`).
+
+The pair verdicts `PATCH-SITE-IDENTICAL`, not `NEAR`: the difference is a single pure-insertion
+hunk 0x1055 bytes past a prologue that is `48 8b c4 55 56 57 41 54` in both builds, so MinHook's
+five bytes and the three instructions it relocates are identical code in both images. The callee,
+`CS::MoveMapStep::_UpdateHorseType`, is NEW in 1.17 -- its prologue signature has 0 hits in
+`eldenring-deobf.bin` and 1 in `eldenring-deobf-1.17.bin`, and the whole-image pairing's local
+delta steps `0x1490 -> 0x16a0` across it, which is exactly its 514 bytes plus alignment. It never
+dereferences the `MoveMapStep`: the caller's `mov rcx,rbx` is a DEAD STORE (`rcx` is written
+before any read in the callee and in the first thing the callee calls), and the callee reloads
+`rbx` from `GameDataMan`. So the fields er-title-flow's after-original detour holds -- `+0x100`,
+`+0x270`, `+0x4b8`, `+0x4c`, `+0x50` -- are untouched by the insertion, and the gate read it sits
+two instructions in front of is unchanged.
 
 ## How much of the migration is actually left (2026-08-29)
 

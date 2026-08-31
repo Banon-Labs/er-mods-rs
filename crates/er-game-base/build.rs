@@ -199,6 +199,50 @@ const EXHAUSTIVE_VERDICTS: [&str; 3] = ["BYTE-IDENTICAL", "IDENTICAL-WHOLE", "ID
 /// gate-hold has no `STEP_MoveMap` detour and the feature is inert on 1.17.
 const PATCH_SITE_VERDICTS: [&str; 1] = ["PATCH-SITE-IDENTICAL"];
 
+/// Every `PATCH-SITE-IDENTICAL` row in either ledger, pinned to the difference a human read.
+///
+/// # The hole this closes
+///
+/// [`PATCH_SITE_VERDICTS`] is the one verdict that admits a pair whose BODIES DIFFER to
+/// `DETOUR_SAFE_1162_TO_1170`, and it decides that on machine caps alone: no `replace` hunk, at
+/// most `MAX_DRIFT_HUNKS` places, at most `MAX_DRIFT_INSNS` instructions, all of it after the
+/// window MinHook relocates. Those caps are about the PATCH SITE. They say nothing about what the
+/// inserted code DOES, and our detours are not only five bytes at an entry -- they read and write
+/// the object the function is stepping. `STEP_MoveMap`'s after-original detour clears the advance
+/// gate at `MoveMapStep+0x4b8`; the insertion 1.17 made lands two instructions before the native
+/// read of that same field. It was benign, and nothing in the pipeline had to look to find that
+/// out, which is the actual defect: a second insertion would be admitted just as quietly.
+///
+/// So a row may carry this verdict only if it is named here. A new one fails the build until
+/// somebody reads the two bodies and writes down what changed.
+///
+/// # What is machine-checked and what is not
+///
+/// CHECKED: the pair still exists, still carries this verdict, still names this constant, and its
+/// `.pdata` extents are still the two lengths recorded. That is enough to catch the next
+/// insertion, because clause 4 of `patch_site_drift` refuses any `replace` hunk -- a body that
+/// reaches this verdict differs by pure insertion and deletion, which moves the extent.
+///
+/// NOT CHECKED HERE: the `note`. It is prose, and build.rs has no image to compare it against
+/// (`eldenring-deobf*.bin` are untracked, 94 MB, and no build may depend on them). Reproduce it
+/// with `python3 scripts/diff-function-bodies-1162-1170.py <old> <new>`.
+const PATCH_SITE_ACKNOWLEDGED: [(&str, &str, &str, &str, &str); 1] = [(
+    "0x140af7cf0",
+    "0x140af9000",
+    "MOVEMAPSTEP_STEP_MOVEMAP_RVA",
+    "PDATA:0x120b/0x1213+8",
+    "1.17 inserts `mov rcx,rbx; call 0x140b02ef0` at instruction 873 of 975, 0x1055 bytes past \
+     the prologue and 2 instructions before the native read of `MoveMapStep+0x4b8`. The callee is \
+     `CS::MoveMapStep::_UpdateHorseType`, new in 1.17 -- its prologue signature has 0 hits in \
+     eldenring-deobf.bin and 1 in eldenring-deobf-1.17.bin, and the whole-image pairing's local \
+     delta steps 0x1490 -> 0x16a0 across it, which is its 514 bytes plus alignment. It re-applies \
+     the mount type after a map move (event flags 0x1a2c..0x1a2f -> RemoveChrIns + \
+     CreatePlayersHorse + SetHP), is idempotent behind PlayerGameData+0x960, and never \
+     dereferences the MoveMapStep: `rcx` is a dead store, clobbered before any read in both the \
+     callee and the first thing the callee calls, and `rbx` is reloaded from GameDataMan. So the \
+     fields our detour holds (+0x100, +0x270, +0x4b8, +0x4c, +0x50) are untouched by it.",
+)];
+
 /// Verdicts admitted to [`VERIFIED_1162_TO_1170`] -- CALL and READ -- and to NOTHING else.
 ///
 /// A THIRD LIST RATHER THAN A LONGER SECOND ONE, and the separation is the whole feature.
@@ -459,8 +503,90 @@ fn quarantined(root_dir: &str) -> Vec<u32> {
     out
 }
 
+/// Refuse to build while a `PATCH-SITE-IDENTICAL` row is not pinned in [`PATCH_SITE_ACKNOWLEDGED`].
+///
+/// Both directions, and the second is the one that rots quietly: an unpinned row means a body
+/// changed under a detour and nobody read it, and a pin with no row means the evidence the pin
+/// describes is gone while the pin still reads as current.
+///
+/// Skipped entirely when neither ledger can be read -- a source archive without `docs/recon` is
+/// the same situation `detourable_pairs` already returns empty for, and turning that into a build
+/// failure would be a different rule than this one.
+fn assert_patch_sites_acknowledged(root_dir: &str) {
+    let mut readable = false;
+    let mut found: Vec<(String, String, String, String)> = Vec::new();
+    for ledger in [VERIFIED_MAP, NEEDED_VERIFIED_MAP] {
+        let path = Path::new(root_dir).join(ledger);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        readable = true;
+        for line in text.lines() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() < 3 || !PATCH_SITE_VERDICTS.contains(&fields[2].trim()) {
+                continue;
+            }
+            // The extent column is the machine-checked half of the pin, so a row that carries
+            // this verdict without one cannot be checked at all -- say that instead of skipping.
+            assert!(
+                fields.len() >= 8,
+                "{ledger} row `{line}` carries {} with only {} column(s); the extent column is \
+                 what pins the difference, so this row cannot be acknowledged",
+                fields[2].trim(),
+                fields.len()
+            );
+            found.push((
+                fields[0].trim().to_ascii_lowercase(),
+                fields[1].trim().to_ascii_lowercase(),
+                fields[5].trim().to_string(),
+                fields[7].trim().to_string(),
+            ));
+        }
+    }
+    if !readable {
+        return;
+    }
+    for (old, new, name, extent) in &found {
+        let pin = PATCH_SITE_ACKNOWLEDGED
+            .iter()
+            .find(|(o, n, ..)| o.to_ascii_lowercase() == *old && n.to_ascii_lowercase() == *new);
+        let Some((_, _, pinned_name, pinned_extent, _)) = pin else {
+            panic!(
+                "{old} -> {new} ({name}) carries PATCH-SITE-IDENTICAL, which admits a pair whose \
+                 BODIES DIFFER to the detour table, and it is not in PATCH_SITE_ACKNOWLEDGED. \
+                 Read both bodies -- `python3 scripts/diff-function-bodies-1162-1170.py {old} \
+                 {new}` -- work out what the difference does to whatever our detour reads and \
+                 writes on that object, then pin it. Do not add the pin first"
+            )
+        };
+        assert!(
+            pinned_name == name && pinned_extent == extent,
+            "{old} -> {new} is pinned in PATCH_SITE_ACKNOWLEDGED as ({pinned_name}, \
+             {pinned_extent}) and the ledger now says ({name}, {extent}). A changed extent is a \
+             changed body: this verdict refuses every `replace` hunk, so a pair that still holds \
+             it differs by pure insertion and deletion and cannot move its extent without new \
+             code. Re-read both bodies before touching this pin"
+        );
+    }
+    for (old, new, name, ..) in PATCH_SITE_ACKNOWLEDGED {
+        assert!(
+            found
+                .iter()
+                .any(|(o, n, ..)| o == &old.to_ascii_lowercase() && n == &new.to_ascii_lowercase()),
+            "PATCH_SITE_ACKNOWLEDGED pins {old} -> {new} ({name}), and no ledger row carries \
+             PATCH-SITE-IDENTICAL for it any more. The pin now describes evidence that is gone; \
+             delete it, or find out why the row lost the verdict"
+        );
+    }
+}
+
 /// Emit the translation table `er-hook` consults when the running build is not 1.16.2.
 fn emit_address_map(root_dir: &str) {
+    assert_patch_sites_acknowledged(root_dir);
     let verified_path = Path::new(root_dir).join(VERIFIED_MAP);
     let verified_detourable: Vec<(u32, u32)> = detourable_pairs(&verified_path);
     // The CALL map is seeded from the detourable rows PLUS the callable-only ones. Those were the
