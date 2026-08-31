@@ -78,6 +78,13 @@ HOOK_SHIM = REPO_ROOT / "scripts" / "cupcake-hook.sh"
 # guard it tests when an agent edits it through a Bash command.
 ROOT_DELETE = " ".join(["rm", "-rf", "/"])
 PUSH_MAIN = " ".join(["git", "push", "origin", "main"])
+# Same reason, and it is not hypothetical here: writing these two tokens whole into
+# one Bash command line is exactly what BUILTIN-GIT-BLOCK-NO-VERIFY denies, so an
+# agent editing this file through a heredoc would be blocked by the rule it is
+# testing. Splitting them is the difference between a file that can be maintained
+# and one that can only be read.
+HOOKS_PATH = "core.hooks" + "Path"
+DEV_NULL = "/dev/" + "null"
 
 BASE_ENV = {
     "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/delivered-shape",
@@ -600,6 +607,171 @@ def check_production_path() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 5. core.hooksPath: the two tokens must be ONE assignment
+# ---------------------------------------------------------------------------
+#
+# BUILTIN-GIT-BLOCK-NO-VERIFY's hook-disable rule used to AND
+# `contains(cmd, "core.hookspath")` with `contains(cmd, "/dev/null")` across the
+# WHOLE command string. Co-presence, not relation. So this -- which INSTALLS
+# hooks and merely silences an unrelated read --
+#
+#     git config core.hooksPath scripts/hooks && git config --get core.hooksPath >/dev/null
+#
+# was denied with "Disabling git hooks is not permitted", and it was denied while
+# an agent was REPAIRING core.hooksPath after the er-effects-rs -> er-mods-rs
+# rename left it pointing at an absolute path that no longer existed. Git had
+# silently run NO hooks since 39a919e0: not the main-push guard, not
+# ci-local-check.sh. The guard was blocking the fix for a total, silent failure of
+# the guard layer, which is the worst direction a false positive can point.
+#
+# These cases live HERE rather than only in `opa test` because the interpreter
+# feeds a policy whatever text the author typed, and two of these commands are
+# multi-line -- the shapes where typed text and delivered text differ most. The
+# separator that makes line 2 visible is inserted by scripts/cupcake-hook.sh, so a
+# rule about "the same assignment" is only actually tested end to end from here.
+#
+# (name, command, expect_allow).
+HOOKS_PATH_CASES = [
+    # ---- must be ALLOWED: the tokens are co-present but unrelated -------------
+    (
+        "THE REPORTED FALSE POSITIVE: install hooks, then silence an unrelated read",
+        f"git config {HOOKS_PATH} scripts/hooks && git config --get {HOOKS_PATH} >{DEV_NULL}",
+        True,
+    ),
+    (
+        "install hooks with stderr silenced",
+        f"git config {HOOKS_PATH} scripts/hooks 2>{DEV_NULL}",
+        True,
+    ),
+    (
+        "read the setting, discard the output",
+        f"git config --get {HOOKS_PATH} >{DEV_NULL}",
+        True,
+    ),
+    (
+        "read the setting through a pipe",
+        f"git config --get {HOOKS_PATH} | tee {DEV_NULL}",
+        True,
+    ),
+    (
+        "install hooks, no /dev/null anywhere",
+        f"git config {HOOKS_PATH} scripts/hooks",
+        True,
+    ),
+    (
+        "MULTI-LINE repair: the shim joins the lines with `; `, which is not an assignment",
+        f"git config {HOOKS_PATH} scripts/hooks\ngit config --get {HOOKS_PATH} >{DEV_NULL}",
+        True,
+    ),
+    (
+        "GIT_CONFIG_* env form INSTALLING hooks",
+        f"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0={HOOKS_PATH} GIT_CONFIG_VALUE_0=scripts/hooks git status",
+        True,
+    ),
+    (
+        "GIT_CONFIG_* env form: hooks at index 0, an unrelated key discarded at index 1",
+        "GIT_CONFIG_COUNT=2 "
+        f"GIT_CONFIG_KEY_0={HOOKS_PATH} GIT_CONFIG_VALUE_0=scripts/hooks "
+        f"GIT_CONFIG_KEY_1=core.pager GIT_CONFIG_VALUE_1={DEV_NULL} git status",
+        True,
+    ),
+    # ---- must stay DENIED: the tokens ARE one assignment ----------------------
+    ("git config, positional", f"git config {HOOKS_PATH} {DEV_NULL}", False),
+    ("git config --global", f"git config --global {HOOKS_PATH} {DEV_NULL}", False),
+    ("git config --worktree", f"git config --worktree {HOOKS_PATH} {DEV_NULL}", False),
+    ("git config with a quoted value", f'git config {HOOKS_PATH} "{DEV_NULL}"', False),
+    (
+        "MULTI-LINE: a disabling SECOND line, visible only through the shim's `; `",
+        f"echo repairing hooks\ngit config {HOOKS_PATH} {DEV_NULL}",
+        False,
+    ),
+    (
+        "a trailing backslash JOINS the key to the value; it is still one assignment",
+        f"git config {HOOKS_PATH} \\\n    {DEV_NULL}",
+        False,
+    ),
+    (
+        "git -c inline config -- carries no `config` verb, so the old rule ALLOWED it",
+        f"git -c {HOOKS_PATH}={DEV_NULL} commit -m x",
+        False,
+    ),
+    (
+        "git -c inline config reached by absolute path",
+        f"/usr/bin/git -c {HOOKS_PATH}={DEV_NULL} push origin topic",
+        False,
+    ),
+    (
+        "inside a fish -c wrapper payload",
+        f"fish -c 'git config {HOOKS_PATH} {DEV_NULL}'",
+        False,
+    ),
+    (
+        "GIT_CONFIG_* env form, key and value at the SAME index",
+        f"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0={HOOKS_PATH} GIT_CONFIG_VALUE_0={DEV_NULL} git status",
+        False,
+    ),
+]
+
+HOOK_DISABLE_REASON = "Disabling git hooks is not permitted"
+
+
+def check_hooks_path_forms() -> list[str]:
+    """Both directions, through the production shim, with a vacuity guard.
+
+    THE VACUITY GUARD IS THE POINT OF DOING THIS HERE. An allow-case passes just
+    as happily when the engine has eaten one of the two tokens before any policy
+    ran -- and then it is testing nothing, while reading as proof. So every
+    allow-case additionally asserts that BOTH tokens are still present in the
+    DELIVERED text: the co-presence that used to trigger the denial must still be
+    there for the allow to mean the predicate got tighter.
+
+    Run concurrently because each case is one `cupcake eval` process and this
+    section would otherwise add ~6s to a gate that already sits at ~13s, close
+    enough to the repo's 30s per-command cap that a loaded box would start
+    reporting it as a hang.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure(case):
+        name, command, expect_allow = case
+        return name, command, expect_allow, eval_through_shim(command), eval_bash(command)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        measured = list(pool.map(measure, HOOKS_PATH_CASES))
+
+    rows = []
+    for name, command, expect_allow, outcome, direct in measured:
+        if outcome["allowed"] != expect_allow:
+            raise Failure(
+                f"core.hooksPath case {name!r}: expected "
+                f"{'allow' if expect_allow else 'deny'} from the production path, got "
+                f"{'allow' if outcome['allowed'] else 'deny'}\n"
+                f"  typed     {command!r}\n"
+                f"  delivered {direct['delivered']!r}\n"
+                f"  reason    {outcome['reason'][:300]}"
+            )
+        if not expect_allow and HOOK_DISABLE_REASON not in outcome["reason"]:
+            raise Failure(
+                f"core.hooksPath case {name!r}: denied, but not by the hook-disable rule "
+                f"(no {HOOK_DISABLE_REASON!r} in the reason). A denial from another rule is "
+                f"not evidence that this one works.\n  reason {outcome['reason'][:300]}"
+            )
+        if expect_allow:
+            delivered = (direct["delivered"] or "").lower()
+            both_present = HOOKS_PATH.lower() in delivered and DEV_NULL in delivered
+            if DEV_NULL in command and not both_present:
+                raise Failure(
+                    f"core.hooksPath case {name!r} is VACUOUS: the delivered text no longer "
+                    "contains both tokens, so this allow says nothing about whether the rule "
+                    "requires them to be the same assignment.\n"
+                    f"  typed     {command!r}\n"
+                    f"  delivered {direct['delivered']!r}"
+                )
+        rows.append(f"{'allow' if expect_allow else 'deny ':<5} {name}")
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # selftest
 # ---------------------------------------------------------------------------
 
@@ -641,12 +813,62 @@ def selftest() -> int:
         if "not what the engine synthesises" not in str(exc):
             print(f"selftest FAILED: caught the wrong failure:\n{exc}")
             return 1
-        print("test-cupcake-delivered-shape: selftest OK (a fictional fixture is rejected)")
-        return 0
+    else:
+        print("selftest FAILED: a fictional affected_parent_directories fixture was accepted")
+        return 1
     finally:
         globals()["load_delivered_cases"] = original
-    print("selftest FAILED: a fictional affected_parent_directories fixture was accepted")
-    return 1
+    print("test-cupcake-delivered-shape: selftest OK (a fictional fixture is rejected)")
+
+    return selftest_hooks_path()
+
+
+def selftest_hooks_path() -> int:
+    """Sabotage the core.hooksPath table and prove the check goes red.
+
+    A table of expectations that can only ever agree with the engine is not a
+    test. One case in this repo passed today for the wrong reason -- a capitalised
+    verb against a case-sensitive matcher -- and looked identical to a real pass
+    from the outside. So the check is made to FAIL here, twice, on the two ways it
+    is supposed to fail: an allow-expectation over a genuinely disabling command,
+    and a deny-expectation over a repair command.
+    """
+    original = HOOKS_PATH_CASES[:]
+    sabotage = [
+        (
+            "claims a genuinely disabling assignment is allowed",
+            [("sabotage-disable", f"git config {HOOKS_PATH} {DEV_NULL}", True)],
+            "expected allow",
+        ),
+        (
+            "claims the repair command is denied",
+            [(
+                "sabotage-repair",
+                f"git config {HOOKS_PATH} scripts/hooks && git config --get {HOOKS_PATH} >{DEV_NULL}",
+                False,
+            )],
+            "expected deny",
+        ),
+    ]
+    try:
+        for label, cases, fragment in sabotage:
+            HOOKS_PATH_CASES[:] = cases
+            try:
+                check_hooks_path_forms()
+            except Failure as exc:
+                if fragment not in str(exc):
+                    print(f"selftest FAILED ({label}): caught the wrong failure:\n{exc}")
+                    return 1
+            else:
+                print(
+                    f"selftest FAILED ({label}): the check accepted a sabotaged expectation, "
+                    "so it is not asserting anything."
+                )
+                return 1
+    finally:
+        HOOKS_PATH_CASES[:] = original
+    print("test-cupcake-delivered-shape: selftest OK (both core.hooksPath sabotages go red)")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -659,6 +881,7 @@ def main(argv: list[str]) -> int:
         inventory = check_dead_logic_inventory()
         load_bearing = check_shim_is_load_bearing()
         production = check_production_path()
+        hooks_path = check_hooks_path_forms()
     except Failure as exc:
         print(f"test-cupcake-delivered-shape: FAILED\n{exc}", file=sys.stderr)
         return 1
@@ -679,10 +902,14 @@ def main(argv: list[str]) -> int:
         print("PRODUCTION PATH (through scripts/cupcake-hook.sh)")
         for line in production:
             print(f"  {line}")
+        print("core.hooksPath: THE TWO TOKENS MUST BE ONE ASSIGNMENT")
+        for line in hooks_path:
+            print(f"  {line}")
     print(
         f"test-cupcake-delivered-shape: ok ({len(contract)} enrichment pins, "
         f"{len(table)} delivered cases, {len(inventory)} dead-logic assertions, "
-        f"{len(load_bearing)} shim-divergence cases, {len(production)} production-path cases)"
+        f"{len(load_bearing)} shim-divergence cases, {len(production)} production-path cases, "
+        f"{len(hooks_path)} core.hooksPath cases)"
     )
     return 0
 

@@ -99,14 +99,75 @@ deny contains decision if {
 	}
 }
 
+# ---------------------------------------------------------------------------
+# core.hooksPath (2026-08-31, bd committed-state-compile-gate-2026-08-31)
+#
+# This rule used to AND `contains(cmd, "core.hookspath")` with
+# `contains(cmd, "/dev/null")` over the WHOLE command string, so the two only had
+# to be CO-PRESENT, not related. That denied
+#
+#     git config core.hooksPath scripts/hooks && git config --get core.hooksPath >/dev/null
+#
+# -- a command that INSTALLS hooks and merely silences an unrelated read -- with
+# "Disabling git hooks is not permitted". Measured live, and it fired on an agent
+# REPAIRING core.hooksPath after the er-effects-rs -> er-mods-rs rename left it
+# pointing at an absolute path that no longer existed, so git had silently run NO
+# hooks since 39a919e0. A guard that blocks the repair of its own total failure is
+# worse than a guard that is merely noisy.
+#
+# The fix is not to drop the `/dev/null` half -- `git config core.hooksPath
+# /dev/null` is a real way to disable hooks and must stay denied. It is to require
+# the two to be THE SAME ASSIGNMENT: only whitespace, an `=`, quotes, or a
+# line-continuation backslash may stand between the key and the value. A `>`, a
+# `2>`, a `|` or a `;` in that gap means they belong to different commands, which
+# is exactly what the false positive was.
+#
+# WHY THOSE GAP CHARACTERS AND NO OTHERS, against the shape the engine actually
+# delivers (bd cupcake-tests-vs-delivered-input-shape-and-wrapper-payload-hole):
+#   * space/tab -- `git config core.hooksPath /dev/null`, and the engine's
+#     whitespace_normalization has already collapsed any run of them to one;
+#   * `=` -- the `git -c core.hooksPath=/dev/null <cmd>` form, which the old rule
+#     ALLOWED outright because it carries no `config` verb (measured);
+#   * quotes -- `core.hooksPath "/dev/null"`; commands.scan_text blanks a quoted
+#     span's ANCHORS but leaves the quote characters themselves in place;
+#   * backslash + newline -- a continued command line, `git config core.hooksPath \`
+#     newline `/dev/null`, which the shim leaves as a newline (it is a join, not a
+#     boundary) and the engine then collapses to `\ `.
+#
+# The `git` requirement is kept, loosened to admit `/usr/bin/git`: it is what stops
+# prose that merely NAMES the setting from being read as an attempt to apply it.
+# The trailing-slash form is written the same way as commands.shell_name_pattern so
+# a word merely ENDING in git (`legit`) cannot satisfy it.
+hooks_path_dev_null_pattern := `core\.hookspath[ \t\r\n\\'"]*=?[ \t\r\n\\'"]*/dev/null`
+
+git_invocation_pattern := `(^|[ \t;&|(){}])([^ \t;&|(){}'"]*/)?git([ \t]|$)`
+
 contains_hook_disable(cmd) if {
-	commands.has_verb(cmd, "git")
-	commands.has_verb(cmd, "config")
+	regex.match(git_invocation_pattern, cmd)
 
 	# Lowercased: every caller passes `lower(text)`, so the shipped
 	# `core.hooksPath` spelling could never match and this rule was dead.
-	contains(cmd, "core.hookspath")
-	contains(cmd, "/dev/null")
+	regex.match(hooks_path_dev_null_pattern, cmd)
+}
+
+# The GIT_CONFIG_* environment form is the documented way to set a config value
+# without `git config` and without `-c`, and nothing here reasoned about it before:
+#
+#     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit
+#
+# Its key and value live in SEPARATE assignments, so no same-assignment pattern can
+# reach it; it needs its own clause. The captured index must MATCH on both sides, so
+# a command that legitimately sets core.hooksPath at index 0 and some unrelated key
+# to /dev/null at index 1 is not swept up. No `git` requirement here: the variable
+# names already say git, and requiring the verb would miss `/usr/bin/git`.
+git_config_env_key_pattern := `git_config_key_([0-9]+)[ \t]*=[ \t]*['"]*core\.hookspath`
+
+git_config_env_value_pattern := `git_config_value_([0-9]+)[ \t]*=[ \t]*['"]*/dev/null`
+
+contains_hook_disable(cmd) if {
+	some key_match in regex.find_all_string_submatch_n(git_config_env_key_pattern, cmd, -1)
+	some value_match in regex.find_all_string_submatch_n(git_config_env_value_pattern, cmd, -1)
+	key_match[1] == value_match[1]
 }
 
 contains_hook_disable(cmd) if {
