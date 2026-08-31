@@ -39,6 +39,12 @@ alignment, so it lands at 0xa80 rather than 0xa7c. Hence:
     [0x960, 0xa78)   +4          e.g. resistance_gauges 0x9c8 -> 0x9cc
     [0xa78, 0xae8)   +8          e.g. scadutree override 0xab4 -> 0xabc
 
+What the new field at 0x960 IS was established independently, from the other end: 1.17 also adds
+`CS::MoveMapStep::_UpdateHorseType` (commit "The insertion was benign", bd er-effects-rs-xci9),
+which re-applies the mount after a map move and reads `PlayerGameData+0x960` to make that
+idempotent. Two derivations that share no evidence -- a constructor alignment here, a new callee
+read there -- land on the same byte.
+
 `CS::PlayerIns` did NOT grow at all: 8 bytes were inserted in (0x398, 0x3a8] and 8 bytes REMOVED
 in (0x560, 0x580], so the band between them shifts +8 while the object size is unchanged and both
 ends hold. A "+8 above the insertion" rule applied here would have corrupted
