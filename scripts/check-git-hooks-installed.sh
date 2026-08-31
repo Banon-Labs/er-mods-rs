@@ -96,42 +96,56 @@ check_fallback() {
 # holding a weaker stub than the real hook -- and require a refusal for each.
 if [[ "${1:-}" == "--selftest" ]]; then
 	# A HOOK'S ENVIRONMENT REDIRECTS EVERY FIXTURE COMMAND BELOW AT THE REAL REPOSITORY, AND THAT
-	# IS THE UNATTRIBUTED WRITER: IT IS THIS SCRIPT.
+	# IS THE WRITER THAT KEPT BLANKING core.hooksPath: IT IS THIS SCRIPT.
 	#
-	# git exports GIT_DIR -- and the rest of `git rev-parse --local-env-vars` -- to every hook it
-	# runs, and `git -C <dir>` does NOT override GIT_DIR. So under `pre-push` the fixtures below
-	# operated on THIS checkout: `git init` re-initialised its git dir, rewriting [core] to exactly
-	# the four keys a fresh init writes with `bare` flipped to true and `hooksPath` gone, in a
-	# single write, everything below [core] untouched -- the signature described above, down to the
-	# key list. The later `config core.hooksPath <abs>` and `config --unset core.hooksPath` lines
-	# then rewrote the live hook configuration, which is how the checkout acquired an absolute
-	# hooksPath pointing into a deleted /tmp fixture. Every negative control "passed" because the
-	# fixture was reading the real repo's correct value, so the gate failed itself, on damage it had
-	# just done, once per push.
+	# ...BUT ONLY WHEN THE PUSH CAME FROM A LINKED WORKTREE, which is the detail two agents
+	# contradicted each other over on 2026-08-31 and which decides whether this is a real route or
+	# only a theoretical one. Both were measuring correctly; they were measuring different repos.
+	# scripts/measure-git-hook-env.sh settles it on git 2.55, and refuses to report at all unless it
+	# saw hooks actually fire (a hook that never ran reports the same empty environment as one that
+	# inherited nothing):
+	#   MAIN checkout   pre-push -> GIT_EDITOR, GIT_EXEC_PATH, GIT_PREFIX. No GIT_DIR.
+	#   LINKED WORKTREE pre-push -> the same PLUS GIT_DIR=<main>/.git/worktrees/<name>.
+	#                               (also pre-commit, prepare-commit-msg, post-checkout)
 	#
-	# Reproduced deterministically on 2026-08-31:
-	#   GIT_DIR=<repo>/.git bash scripts/check-git-hooks-installed.sh --selftest
-	#   -> SELFTEST FAIL: a renamed absolute hooksPath was accepted
-	#   -> <repo> core.bare=true, core.hooksPath=/tmp/er-hooks-installed-selftest.XXXXXX/before/...
+	# That GIT_DIR's basename is not `.git`, so `git init` under it concludes the repository is BARE
+	# and writes core.bare = true into the SHARED <main>/.git/config -- which is where the "fatal:
+	# this operation must be run in a work tree" came from. `git -C <dir>` does not override
+	# GIT_DIR, so `config core.hooksPath <abs>` and `config --unset core.hooksPath` landed there
+	# too. Every negative control "passed" because the fixture was reading the real repo's value, so
+	# the gate failed itself, on damage it had just done, once per push.
+	#
+	# NOT what an earlier version of this comment claimed, and worth stating so nobody re-derives
+	# it: `git init` re-run on an existing repo drops NO keys -- a sentinel [core] key survives it
+	# in every form (cwd inside or outside, with or without a path argument, GIT_DIR set or not).
+	# [core] here only ever held five keys, so unsetting hooksPath leaves four that merely LOOK like
+	# a fresh init.
+	#
+	# Reproduced 2026-08-31 against the historical file, GIT_DIR aimed at a linked worktree:
+	#   849cc89b -> shared config: core.bare=true AND core.hooksPath UNSET  (the observed damage)
+	#   db109e1d -> shared config: core.bare=true                          (it restores hooksPath)
+	#   bb9fe569 -> config unchanged                                       (the unset below)
 	#
 	# shellcheck disable=SC2046  # word splitting is the point: one variable name per word.
 	unset $(git rev-parse --local-env-vars)
-	# ...AND THEN PROVE IT, because the unset above is only as good as the list it unsets and the
-	# mechanism it assumes. MEASURED on git 2.55, twice, with an env-dumping hook at BOTH hook
-	# paths (scripts/hooks reached through core.hooksPath, and the fallback directory reached with
-	# core.hooksPath unset): a pre-push hook receives GIT_EDITOR, GIT_EXEC_PATH and GIT_PREFIX --
-	# and NO GIT_DIR. pre-commit adds GIT_AUTHOR_* and GIT_INDEX_FILE, still no GIT_DIR. So an
-	# inherited GIT_DIR is a REAL hazard -- with it exported, the 849cc89b version of this script
-	# left this repo's core.hooksPath UNSET and still printed "selftest passed", against a clean
-	# control where the config stayed byte-identical -- but it is NOT demonstrated to be how a hook
-	# reaches this script, and the comment above overstates that. The snapshot below does not care
-	# which mechanism it was: if this selftest changes the ambient config by ANY route, it goes red
-	# instead of silently disarming the push gate it exists to protect.
+	# ...AND THEN PROVE IT, because the unset above is only as good as the list it unsets. The
+	# snapshot below does not care which variable or which route: if this selftest changes the
+	# ambient config AT ALL, it goes red instead of silently disarming the push gate it exists to
+	# protect. Belt and braces on purpose -- the measurement above is of one git version, and the
+	# failure it guards is invisible from inside (with GIT_DIR exported the 849cc89b version left
+	# this repo's core.hooksPath UNSET and still printed "selftest passed").
 	ambient_config=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/.git/config
 	ambient_before=""
 	[[ -f "$ambient_config" ]] && ambient_before=$(cat "$ambient_config")
 
 	tmp=$(mktemp -d "${TMPDIR:-/tmp}/er-hooks-installed-selftest.XXXXXX")
+	# INVOKED INDIRECTLY, by the `trap ... EXIT` below. ShellCheck 0.11 does not follow trap
+	# handlers, so it reported SC2329 and `shellcheck scripts/check-git-hooks-installed.sh` in
+	# scripts/check.sh exited 1 -- a gate red since this function landed, in the one file whose
+	# whole subject is gates that fail without saying so. (The prose goes ABOVE the directive:
+	# a following comment line beginning with the word `shellcheck` is parsed as another
+	# directive and becomes a hard SC1073 parse error.)
+	# shellcheck disable=SC2329
 	selftest_cleanup() {
 		local rc=$?
 		rm -rf -- "$tmp"
