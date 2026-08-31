@@ -31,6 +31,7 @@ faulting cleanly, and none of which needs the game to run:
 """
 
 import argparse
+import importlib.util
 import os
 import re
 import struct
@@ -482,6 +483,98 @@ def trampoline_walk(blob, va):
     return True, relocated, patched_above, ""
 
 
+_VERIFY = None
+
+
+def verify_rules():
+    """`scripts/verify-rva-map-1170.py`, imported for its FUNCTION EXTENT rules.
+
+    IMPORTED, NOT RE-DERIVED, and the direction is worth stating because that file already
+    imports THIS one for `trampoline_walk` (its `minhook_port`). Both imports are LAZY -- inside
+    a function, on first use -- so neither module executes the other at import time and the cycle
+    never closes. A local copy of `function_regions`/`leaf_extent` would be the third
+    implementation of a rule whose own docstrings record two earlier wrong ones (first-`ret`
+    truncation, and a padding-only tail-`jmp` test that walked straight through the de-Arxan'd
+    images' leftover gap bytes).
+
+    The sibling's name has hyphens in it, so it is loaded by path rather than by `import`.
+    """
+    global _VERIFY
+    if _VERIFY is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify-rva-map-1170.py")
+        spec = importlib.util.spec_from_file_location("_verify_rva_map_1170", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load {path}, which holds the function-extent rules")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _VERIFY = module
+    return _VERIFY
+
+
+_REGIONS = {}
+
+
+def declared_functions(blob):
+    """`({begin: end}, {begin}, [(begin, end)])` for `blob`: chunk runs merged, once per image.
+
+    Cached because `patch_safe` asks per ADDRESS while the parse walks the whole `.pdata` table
+    and the sorted span list is 175k entries. `promote()` re-parsing `.pdata` per candidate row is
+    what turned a 409-row run into minutes. The blob itself is kept in the cache value so its `id`
+    cannot be recycled under the key while the entry is alive.
+    """
+    cached = _REGIONS.get(id(blob))
+    if cached is None or cached[0] is not blob:
+        extents, starts = verify_rules().function_regions(blob)
+        cached = (blob, extents, starts, sorted(extents.items()))
+        _REGIONS[id(blob)] = cached
+    return cached[1], cached[2], cached[3]
+
+
+def body_end(blob, va):
+    """The RVA one past the last byte of the function at `va`, or None if it cannot be told.
+
+    WITHOUT THIS THE BRANCH SCAN READS THE NEXT FUNCTION, AND NOT EVEN IN PHASE. `patch_safe`
+    used to decode a flat `BRANCH_SCAN_BYTES` from the entry, which for a 14-byte leaf is 0x3f2
+    bytes of somebody else's code entered at an arbitrary offset. The de-Arxan'd images make that
+    worse than a plain over-read: the gaps between functions hold the deobfuscator's LEFTOVER
+    BYTES rather than a uniform `cc`/`90` run, so the decode desynchronises on the way out and
+    manufactures instructions that were never assembled -- including branches.
+
+    Measured, and the whole reason this exists (2026-08-31). 1.16.2 `0x14067ac90`
+    (`GameMan::SetSaveState`: `mov rax,[rip+0x36eec81] / mov [rax+0xb80],ecx / ret`, 14 bytes) is
+    followed by `90 83` before the next leaf at `0x14067aca0`. Decoding through that pair yielded
+    `or dword ptr [rax - 0x75], 5` at 0x14067ac9f and then a PHANTOM `jno 0x14067ac91` at
+    0x14067aca3 -- a branch into the patch operand, conjured out of two bytes of padding -- and
+    the gate went red on a row four independent derivations had just confirmed. Its 1.17
+    counterpart `0x14067bae0` is the same fourteen bytes; its junk pad byte happens to be `28`
+    instead of `83`, so it desynchronised into a harmless `sub` and that side stayed green. Which
+    image a correct row failed on was decided by one leftover byte.
+
+    Three sources, most authoritative first:
+
+      1. `.pdata` declares a function STARTING here -- the linker's own answer, chunk runs merged
+         by `function_regions` so a split function's extent is the whole run and not its first
+         couple of dozen bytes.
+      2. `.pdata` declares one CONTAINING it. Then the row is mid-function and `entry_verdict`
+         already says so; the enclosing extent is still the right bound for reading its bytes.
+      3. Neither: an unwindless leaf, whose end is DECODED by `verify-rva-map-1170.py::leaf_extent`
+         -- the watermark rule that refuses to stop at a `ret` some earlier branch reaches past.
+
+    Measured over the 425 rows both detour ledgers admit: 359 declared, 0 enclosed, 66 decoded
+    leaves, 0 unknown -- in BOTH images. The None arm is a fallback nothing in the current tables
+    takes.
+    """
+    extents, starts, spans = declared_functions(blob)
+    rva = va - BASE
+    if rva in extents:
+        return extents[rva]
+    enclosing = _inside_declared_function(rva, spans)
+    if enclosing is not None:
+        return enclosing[1]
+    return verify_rules().leaf_extent(blob, va, starts, limit=BRANCH_SCAN_BYTES)
+
+
 def patch_safe(blob, va):
     """Will MinHook build a trampoline here, and does anything jump INTO the patched bytes?
 
@@ -491,6 +584,11 @@ def patch_safe(blob, va):
     a branch from later in the function landing on bytes 1..4 of the prologue -- which after the
     patch are the operand of a JMP. That control transfer faults into an address in no module,
     with no unwind. It is checked here because nothing else checks it.
+
+    THE SCAN STOPS AT THE END OF THE FUNCTION. Only this function's own branches can be read as
+    evidence about this function's prologue; bytes past its end belong to someone else, and in
+    these images the decode does not even arrive at them in phase. See `body_end` for the row that
+    proved it and `_unbounded_branch_scan` for the shape this replaced.
     """
     off = va - BASE
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
@@ -506,7 +604,12 @@ def patch_safe(blob, va):
     # and flagged those; on the current tables that difference is one address, 1.17 0x14067b010,
     # where a `jrcxz` at +0x4e targets +6.
     hot = range(va + 1, va + JMP_REL_SIZE)
-    body = blob[off : off + BRANCH_SCAN_BYTES]
+    end = body_end(blob, va)
+    # BRANCH_SCAN_BYTES survives as a CAP, not as the window: a body longer than it is read only
+    # that far (a branch to a prologue from 1KB away has never been seen), and an extent that
+    # cannot be determined at all falls back to it rather than to nothing.
+    limit = off + BRANCH_SCAN_BYTES if end is None else min(end, off + BRANCH_SCAN_BYTES)
+    body = blob[off : max(limit, off)]
     for insn in md.disasm(body, va):
         if capstone.CS_GRP_JUMP not in insn.groups:
             continue
@@ -701,6 +804,45 @@ PATCH_SAFE_CASES = (
 )
 
 
+def _unbounded_branch_scan(blob, va):
+    """The BUGGY branch scan `patch_safe` shipped until 2026-08-31, kept as a fixture.
+
+    A flat `BRANCH_SCAN_BYTES` from the entry with no notion of where the function ends. It is
+    preserved for exactly the reason `_unbounded_walk` is: a case only earns a place in
+    `BRANCH_SCAN_CASES` as a DISCRIMINATOR if this thing gets it wrong, so "the bound matters" is
+    measured on every run instead of asserted once in a comment. Reverting `patch_safe` to this
+    shape makes the selftest fail.
+    """
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
+    off = va - BASE
+    hot = range(va + 1, va + JMP_REL_SIZE)
+    for insn in md.disasm(blob[off : off + BRANCH_SCAN_BYTES], va):
+        if capstone.CS_GRP_JUMP not in insn.groups:
+            continue
+        for op in insn.operands:
+            if op.type == capstone.x86.X86_OP_IMM and op.imm in hot:
+                return False, f"{insn.mnemonic} at 0x{insn.address:x} targets 0x{op.imm:x}"
+    return True, "no branch into the patched bytes"
+
+
+# The branch-scan half of `patch_safe`, on addresses whose answer the bytes already settle.
+# `discriminating` marks the ones the unbounded scan got WRONG, and the pair of leaves below is
+# the point: it is the SAME function in the two builds, and the unbounded scan refused one of them
+# and passed the other on the strength of a byte that is padding in both.
+BRANCH_SCAN_CASES = (
+    ("1.16.2", 0x14067AC90, True, True,
+     "GameMan::SetSaveState, a 14-byte leaf: the junk byte `83` after its `ret` desynchronises an"
+     " unbounded decode into a phantom `jno 0x14067ac91` -- a branch into the patch operand that"
+     " was never assembled"),
+    ("1.17", 0x14067BAE0, True, False,
+     "the SAME function in 1.17, whose junk byte is `28` and desynchronises into a harmless `sub`."
+     " One leftover byte decided which build the row failed on"),
+    ("1.17", 0x1407AE8C0, True, False,
+     "a real 802-byte prologue: the bound must not turn the scan into a rubber stamp"),
+)
+
+
 def selftest():
     """Calibrate on input whose answer is already known, then assert the deliberate negatives.
 
@@ -776,6 +918,48 @@ def selftest():
     assert discriminators >= 3, "too few cases actually exercise the new bound"
     print(f"patch_safe: {len(PATCH_SAFE_CASES)} byte-dictated cases agree, {discriminators} of "
           "them wrong under the walk this replaced")
+
+    # The BRANCH SCAN's own bound, held to the same standard, against the same kept fixture.
+    for build, va, want, discriminating, why in BRANCH_SCAN_CASES:
+        got, detail = patch_safe(images[build], va)
+        assert got == want, (
+            f"{build} 0x{va:x} ({why}): patch_safe returned {got} [{detail}], expected {want}"
+        )
+        old, old_detail = _unbounded_branch_scan(images[build], va)
+        assert (old != want) == discriminating, (
+            f"{build} 0x{va:x} ({why}): the pre-2026-08-31 scan said {old} [{old_detail}], so this "
+            f"case is {'not ' if discriminating else ''}discriminating -- fix the flag or the case"
+        )
+    assert any(case[3] for case in BRANCH_SCAN_CASES), (
+        "no BRANCH_SCAN_CASES row is wrong under the unbounded scan, so none of them exercises "
+        "the bound"
+    )
+
+    # ...AND THE BOUND MUST NOT HAVE MADE THE ARM TOOTHLESS. Narrowing a scan can only ever make
+    # it accept more, so accepting the two leaves above proves nothing on its own. There is no
+    # natural specimen to point at -- no row in either ledger has a genuine branch into its own
+    # patch window, which is why the only ones the old scan ever "found" were desync artefacts --
+    # so one is MADE: take an address the audit accepts and write a short jump into the middle of
+    # its body, aimed at entry+2. In phase, same length, inside the declared extent.
+    donor = 0x1407AE8C0
+    site = donor + 0x2A  # `33 f6` (xor esi, esi), two bytes, and within rel8 range of the entry
+    planted_body = bytearray(images["1.17"])
+    displacement = (donor + 2) - (site + 2)
+    planted_body[site - BASE : site - BASE + 2] = bytes([0xEB, displacement & 0xFF])
+    planted = bytes(planted_body)
+    ok, why = patch_safe(planted, donor)
+    assert not ok and f"0x{site:x}" in why and f"0x{donor + 2:x}" in why, (
+        f"POSITIVE CONTROL FAILED: a `jmp 0x{donor + 2:x}` planted at 0x{site:x} lands on the "
+        f"second byte of the JMP MinHook writes over 0x{donor:x}, and patch_safe returned "
+        f"{ok} [{why}]. The bound has turned the branch scan into a rubber stamp."
+    )
+    assert patch_safe(images["1.17"], donor)[0], (
+        "the control is inert: the UNPLANTED donor must be accepted, or the refusal above is "
+        "about something other than the planted branch"
+    )
+    print(f"branch scan: {len(BRANCH_SCAN_CASES)} byte-dictated cases agree, and a planted "
+          f"`jmp` into 0x{donor:x}'s patch window is still refused")
+
     bad = audit(IMAGE_1162, pairs, 0, "1.16.2")
     assert not bad, (
         f"{len(bad)} row(s) the verified table admits as DETOURABLE cannot carry a detour:\n"
