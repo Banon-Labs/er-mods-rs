@@ -383,147 +383,120 @@ pub(crate) fn install_policy_tos_title_hook() {
             return;
         }
     }
-    let Ok(wrapper_addr) = game_rva(POLICY_TOS_TITLE_CTOR_WRAPPER_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS ctor wrapper rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            wrapper_addr as *mut c_void,
+    // ONE ROW PER HOOK, AND A REFUSAL SKIPS ONLY ITS OWN ROW (2026-08-30).
+    //
+    // This was six sequential `let Ok(addr) = game_rva(..) else { log; return; }` blocks, so a
+    // single unmapped address on 1.17 took the other five down with it -- the whole Privacy/ToS
+    // surface oracle, which exists to say a run's proof is INVALID, going dark because one of its
+    // six functions moved. Same shape and same fix as `er-better-refills` and the System->Quit
+    // installer; see bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    //
+    // ARMED / REFUSED / FAILED are three different outcomes and are logged as three different
+    // words: REFUSED means the 1.17 map has no row for that RVA (a migration gap, fix the map),
+    // FAILED means MinHook would not take the address it was given (a different problem entirely).
+    let plan: [(&str, u32, *mut c_void, &AtomicUsize); 6] = [
+        (
+            "ToS ctor wrapper",
+            POLICY_TOS_TITLE_CTOR_WRAPPER_RVA,
             policy_tos_title_ctor_wrapper_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS ctor wrapper failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(selector_wrapper_addr) = game_rva(POLICY_TOS_SELECTOR_WRAPPER_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS selector wrapper rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            selector_wrapper_addr as *mut c_void,
+            &POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG,
+        ),
+        (
+            "ToS selector wrapper",
+            POLICY_TOS_SELECTOR_WRAPPER_RVA,
             policy_tos_selector_wrapper_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_SELECTOR_WRAPPER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS selector wrapper failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(selector_ctor_addr) = game_rva(POLICY_TOS_SELECTOR_CTOR_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS selector ctor rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            selector_ctor_addr as *mut c_void,
+            &POLICY_TOS_SELECTOR_WRAPPER_ORIG,
+        ),
+        (
+            "ToS selector ctor",
+            POLICY_TOS_SELECTOR_CTOR_RVA,
             policy_tos_selector_ctor_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_SELECTOR_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS selector ctor failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(predicate_addr) = game_rva(POLICY_TOS_STATUS_PREDICATE_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS status predicate rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            predicate_addr as *mut c_void,
+            &POLICY_TOS_SELECTOR_CTOR_ORIG,
+        ),
+        (
+            "ToS status predicate",
+            POLICY_TOS_STATUS_PREDICATE_RVA,
             policy_tos_status_predicate_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_STATUS_PREDICATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS status predicate failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(flag_setter_addr) = game_rva(POLICY_TOS_FLAG_SETTER_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS flag setter rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            flag_setter_addr as *mut c_void,
+            &POLICY_TOS_STATUS_PREDICATE_ORIG,
+        ),
+        (
+            "ToS flag setter",
+            POLICY_TOS_FLAG_SETTER_RVA,
             policy_tos_flag_setter_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_FLAG_SETTER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS flag setter failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(ctor_addr) = game_rva(POLICY_TOS_TITLE_CTOR_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve TosTitle ctor rva"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            ctor_addr as *mut c_void,
+            &POLICY_TOS_FLAG_SETTER_ORIG,
+        ),
+        (
+            "TosTitle ctor",
+            POLICY_TOS_TITLE_CTOR_RVA,
             policy_tos_title_ctor_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            POLICY_TOS_TITLE_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
+            &POLICY_TOS_TITLE_CTOR_ORIG,
+        ),
+    ];
+    let mut armed: Vec<String> = Vec::new();
+    let mut refused: Vec<&str> = Vec::new();
+    let mut failed: Vec<&str> = Vec::new();
+    for (label, rva, detour, orig) in plan {
+        let Ok(addr) = game_rva(rva) else {
+            append_autoload_debug(format_args!(
+                "policy-oracle: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the running build; the other rows are unaffected"
+            ));
+            refused.push(label);
+            continue;
+        };
+        let hook = match unsafe { MhHook::new(addr as *mut c_void, detour) } {
+            Ok(hook) => hook,
+            Err(status) => {
                 append_autoload_debug(format_args!(
-                    "policy-oracle: queue_enable TosTitle ctor failed: {status:?}"
+                    "policy-oracle: FAILED {label} @0x{addr:x} -- MhHook::new: {status:?}"
                 ));
-                return;
+                failed.push(label);
+                continue;
             }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    POLICY_TOS_TITLE_HOOK_INSTALLED
-                        .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "policy-oracle: hooked TosTitle ctor 0x{ctor_addr:x}, ctor wrapper 0x{wrapper_addr:x}, selector wrapper 0x{selector_wrapper_addr:x}, selector ctor 0x{selector_ctor_addr:x}, status predicate 0x{predicate_addr:x}, and flag setter 0x{flag_setter_addr:x} (native Privacy/ToS surface oracle)"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "policy-oracle: MH_ApplyQueued TosTitle ctor failed: {status:?}"
-                )),
-            }
+        };
+        orig.store(hook.trampoline() as usize, Ordering::SeqCst);
+        if let Err(status) = unsafe { hook.queue_enable() } {
+            orig.store(HOOK_ORIGINAL_UNSET, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "policy-oracle: FAILED {label} @0x{addr:x} -- queue_enable: {status:?}"
+            ));
+            failed.push(label);
+            continue;
         }
-        Err(status) => append_autoload_debug(format_args!(
-            "policy-oracle: MhHook::new TosTitle ctor failed: {status:?}"
+        crate::mh::leak_installed_hook(hook);
+        armed.push(format!("{label} 0x{addr:x}"));
+    }
+    if armed.is_empty() {
+        append_autoload_debug(format_args!(
+            "policy-oracle: NOTHING ARMED -- refused={refused:?} failed={failed:?}; the Privacy/ToS surface is UNWATCHED this run"
+        ));
+        POLICY_TOS_TITLE_HOOK_INSTALLED
+            .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            POLICY_TOS_TITLE_HOOK_INSTALLED
+                .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "policy-oracle: ARMED {} of {} (native Privacy/ToS surface oracle): {}{}{}",
+                armed.len(),
+                armed.len() + refused.len() + failed.len(),
+                armed.join(", "),
+                if refused.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | REFUSED {refused:?}")
+                },
+                if failed.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | FAILED {failed:?}")
+                },
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "policy-oracle: MH_ApplyQueued failed: {status:?} -- {} queued rows are NOT live",
+            armed.len()
         )),
     }
 }

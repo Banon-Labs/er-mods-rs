@@ -259,10 +259,37 @@ fn getter_rva_for(kind: Kind) -> Option<usize> {
 ///
 /// `msg` must be a live `MsgRepositoryImp*` and `module_base` the loaded image base.
 pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) -> Option<String> {
-    let getter = module_base + getter_rva_for(kind)?;
-    // Safety: `getter` is a verified RVA within the loaded module and `msg` is the caller's live
-    // repository pointer.
+    // RESOLVED, not added. `name_of` transmutes this into a function pointer and CALLS it, and its
+    // safety comment says the caller guarantees the address is one of the verified getters --
+    // which was not true while this was bare addition against a 1.16.2 RVA. A refusal means the
+    // row goes unnamed, which is an answer this function already has.
+    let getter = getter_rva_for(kind)?;
+    let getter = crate::native::resolve(module_base, getter, name_getter_of(getter))?;
+    // Safety: `getter` was resolved for the running build immediately above and `msg` is the
+    // caller's live repository pointer.
     unsafe { name_of(getter, msg, row_id) }
+}
+
+/// The engine's own name for one name getter, for the refusal log.
+///
+/// Keyed on the RVA rather than on [`Kind`] because that is what the getter IS -- several kinds
+/// share one getter (talismans and great runes both come out of the goods bundle), and a label
+/// derived from the kind would report the same missing function under three different names.
+/// A name per getter rather than one shared label, because a reader who sees a refusal wants to
+/// know WHICH table stopped naming rows.
+fn name_getter_of(getter_rva: usize) -> &'static str {
+    match getter_rva {
+        rva::GET_WEAPON_NAME => "MsgRepositoryImp::GetWeaponName",
+        rva::GET_PROTECTOR_NAME => "MsgRepositoryImp::GetProtectorName",
+        rva::GET_ACCESSORY_NAME => "MsgRepositoryImp::GetAccessoryName",
+        rva::GET_GOODS_NAME => "MsgRepositoryImp::GetGoodsName",
+        rva::GET_GEM_NAME => "MsgRepositoryImp::GetGemName",
+        rva::GET_ARTS_NAME => "MsgRepositoryImp::GetArtsName",
+        // Unreachable through `SOURCES` and `getter_rva_for`, which between them cover every
+        // constant above. A catch-all rather than a panic: this is a LOG LABEL, and taking a
+        // game-loaded DLL down to complain about one is not a trade worth making.
+        _ => "an unrecognised MsgRepositoryImp name getter",
+    }
 }
 
 /// Insert one resolved row.
@@ -356,10 +383,22 @@ pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, Bu
     };
 
     for source in SOURCES {
-        let getter = module_base + source.getter_rva;
+        // Resolved for the RUNNING build, once per table rather than once per row: the loop below
+        // is thousands of calls and a refusal is a property of the build, not of a row. A table
+        // whose getter has no mapping contributes no names, and every row in it lands in
+        // `stats.unnamed` -- which the caller already prints beside `stats.named`, so a catalog
+        // that came up empty cannot be read as a catalog that found nothing to name.
+        let Some(getter) = crate::native::resolve(
+            module_base,
+            source.getter_rva,
+            name_getter_of(source.getter_rva),
+        ) else {
+            stats.unnamed += row_ids(source.kind, &spells).len();
+            continue;
+        };
         for row_id in row_ids(source.kind, &spells) {
-            // Safety: `getter` is a verified RVA within the loaded module and `msg` is the
-            // caller's live repository pointer.
+            // Safety: `getter` was resolved for the running build immediately above and `msg` is
+            // the caller's live repository pointer.
             match unsafe { name_of(getter, msg, row_id) } {
                 Some(name) => {
                     insert(&mut catalog, source, row_id, &name);
@@ -418,15 +457,15 @@ unsafe fn insert_ashes_of_war(
     // address is one of the verified getters -- which was not true while this was bare addition.
     // On a build that moved the code, an unresolvable getter means no ash names, not a call into
     // whatever now occupies the address.
-    let (Some(arts_getter), Some(gem_getter)) = (
-        er_game_base::game_build::resolve_game_address(
-            module_base + rva::GET_ARTS_NAME,
-            "catalog GetArtsName",
-        ),
-        er_game_base::game_build::resolve_game_address(
-            module_base + rva::GET_GEM_NAME,
-            "catalog GetGemName",
-        ),
+    // Through `crate::native` rather than the resolver directly, so a refusal here is named in
+    // this crate's own log exactly once for the life of the process, like every other native it
+    // asks for -- and under the same name the two loops above would report.
+    let Ok([arts_getter, gem_getter]) = crate::native::resolve_all(
+        module_base,
+        [
+            (rva::GET_ARTS_NAME, name_getter_of(rva::GET_ARTS_NAME)),
+            (rva::GET_GEM_NAME, name_getter_of(rva::GET_GEM_NAME)),
+        ],
     ) else {
         return;
     };

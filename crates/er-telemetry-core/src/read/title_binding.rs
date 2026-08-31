@@ -15,7 +15,7 @@
 //! fault-safe `safe_read_*`; NO vtable function is ever called.
 
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::{safe_read_i32, safe_read_u8, safe_read_usize, vtable_in_game_image};
 
@@ -92,6 +92,9 @@ const PAGE_NOACCESS: u32 = 0x01;
 const PAGE_GUARD: u32 = 0x100;
 
 static CACHED_OWNER: AtomicUsize = AtomicUsize::new(0);
+/// One line per process for a refused needle. The refusal is a permanent property of the build,
+/// so a line per throttle boundary would be the same sentence forever in an append-only file.
+static NEEDLE_REFUSAL_LOGGED: AtomicBool = AtomicBool::new(false);
 static SCAN_COUNTDOWN: AtomicU64 = AtomicU64::new(0);
 
 /// Windows `MEMORY_BASIC_INFORMATION` (x64). Only `base_address`, `region_size`,
@@ -187,6 +190,26 @@ fn scan_for_owner(base: usize) -> Option<usize> {
         INNER_TITLE_STATE_TABLE_RVA,
         "INNER_TITLE_STATE_TABLE_RVA",
     );
+    // A refused RVA resolves to 0. As a dereference target that is safe -- the guarded read just
+    // fails -- but as a SEARCH NEEDLE it inverts: `vtable == 0` matches every zeroed qword in the
+    // address space, and the cross-check does not save us because it is built from the same
+    // refusal (`want_table` is 0 too, so `[cand+0x10] == want_table` also passes). The first
+    // zeroed block would be captured, cached, and re-validated forever, and this oracle would
+    // emit fields read out of blank memory. Refuse instead. `dialog_active.rs::dialog_class`
+    // carries the same guard for the same reason.
+    if want_vtable == 0 || want_table == 0 {
+        if !NEEDLE_REFUSAL_LOGGED.swap(true, Ordering::SeqCst) {
+            // Deliberately shaped as a non-sample: `epoch` is null, so the analyzer buckets it
+            // on its own (`analyze-title-binding-stream.py` already sorts a null epoch last) and
+            // none of the `proxy_*` fractions can absorb it. One line, once, per process.
+            super::append_line(
+                OUT_FILE,
+                "{\"epoch\":null,\"owner_ptr\":null,\"scan_refused\":\"needle-rva-unmapped\",\
+\"why\":\"a refused RVA resolves to 0 and 0 as a scan needle matches every zeroed qword\"}\n",
+            );
+        }
+        return None;
+    }
     let mut buf = vec![0u8; SCAN_CHUNK];
     let mut address: usize = 0;
     while address < SCAN_MAX {

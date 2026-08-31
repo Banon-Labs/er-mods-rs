@@ -145,6 +145,11 @@ type GetQuickIdFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
 /// `*out = egd->physicTears[slot]`. Calling it as `(egd, slot)` puts the slot index in RDX and
 /// the function writes through it -- a store to address 0, which took the game down once.
 type GetTearFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
+/// `CS::EquipItemData::GetEquippedGreatrune(EquipItemData*, int *out, int slot)`.
+///
+/// THREE arguments, and the third is not optional -- see [`equipped_great_rune`] for the run of
+/// wrong answers that produced.
+type GreatRuneFn = unsafe extern "system" fn(usize, *mut i32, i32) -> *mut i32;
 
 /// Which minted armament instance belongs in which `ChrAsmSlot`.
 ///
@@ -330,6 +335,166 @@ pub struct EquipOutcome {
     pub final_mismatches: Vec<(i32, i32, i32)>,
     /// The equip game data pointer was unusable, so nothing at all was attempted.
     pub no_inventory: bool,
+    /// Game functions with no verified mapping for the RUNNING build, so the positions that
+    /// needed them were not attempted.
+    ///
+    /// Kept as names rather than a bool because the useful next action is a `docs/recon` row for
+    /// each one, and a bool names none of them. Empty is the normal state.
+    pub unresolved_natives: Vec<&'static str>,
+}
+
+/// The game functions [`equip_all`] calls, resolved for the build that is actually running.
+///
+/// # Why this is a struct and not thirteen `let`s
+///
+/// It used to be thirteen `transmute(module_base + <the RVA>)` lines under one shared comment
+/// claiming "verified 1.16.2 RVAs within the loaded image". Every one was a direct call into game
+/// code at an address from a previous patch, and the shared comment made them look like one
+/// decision that had been checked once. Grouping them makes the resolution a single decision that
+/// really is checked once -- and makes the two OPTIONAL families below visible as families rather
+/// than as thirteen equally-load-bearing addresses.
+struct EquipNatives {
+    equip: EquipFn,
+    get_inventory: GetInventoryFn,
+    get_item_idx: GetItemIdxFn,
+    get_item_idx_by_handle: GetItemIdxByHandleFn,
+    get_slot: GetSlotFn,
+    param_in_slot: GetParamIdInSlotFn,
+    get_handle: GetHandleFn,
+    set_entries: SetEntriesFn,
+    refresh: RefreshFn,
+    broadcast: BroadcastFn,
+    /// The menu path's permission gate. PROBE ONLY -- its answer is recorded and then used to
+    /// choose between two write paths that are both available. `None` means it could not be
+    /// resolved, which is treated as "not permitted": that is the branch that writes through the
+    /// engine's own setters, i.e. the one that does not need the gate's opinion at all.
+    gate: Option<GateFn>,
+    /// The quick/pouch/rune family: the single dispatcher that writes those positions, and the
+    /// getter that reads the quickbar back.
+    ///
+    /// One `Option` for the pair because a write with no read-back would put an unproven position
+    /// in the ledger, and this module's whole discipline is that no number is derived from a call
+    /// having been made. `None` means those positions are not attempted at all.
+    quick: Option<QuickNatives>,
+}
+
+/// The quick/pouch/rune writer and its read-back, resolved together. See [`EquipNatives::quick`].
+#[derive(Clone, Copy)]
+struct QuickNatives {
+    set_quick: SetQuickFn,
+    get_quick_id: GetQuickIdFn,
+    /// The great rune is not in the quickbar array at all -- index 16 writes `equipItemData+0x88`
+    /// -- so its read-back is a third function rather than the same getter with another index.
+    get_great_rune: GreatRuneFn,
+}
+
+impl EquipNatives {
+    /// Resolve every function the equip pass calls, or say which ones have no mapping.
+    ///
+    /// The REQUIRED ten are the ones both write paths need; missing any of them means the pass
+    /// cannot run and `Err` names all of them, because fixing them one rebuild at a time is how a
+    /// morning disappears.
+    fn resolve(module_base: usize) -> Result<Self, Vec<&'static str>> {
+        let [
+            equip,
+            get_inventory,
+            get_item_idx,
+            get_item_idx_by_handle,
+            get_slot,
+            param_in_slot,
+            get_handle,
+            set_entries,
+            refresh,
+            broadcast,
+        ] = crate::native::resolve_all(
+            module_base,
+            [
+                (EQUIP_ITEM_TO_CHR_ASM_SLOT, "EquipItemToChrAsmSlot"),
+                (
+                    GET_EQUIP_INVENTORY_DATA,
+                    "CS::EquipGameData::GetEquipInventoryData",
+                ),
+                (
+                    GET_ITEM_INVENTORY_IDX,
+                    "CS::EquipInventoryData::GetItemInventoryIdx",
+                ),
+                (
+                    GET_ITEM_INDEX_BY_GAITEM_HANDLE,
+                    "CS::EquipInventoryData::GetItemIndexByGaitemHandle",
+                ),
+                (
+                    GET_SLOT_INDEX_BY_ITEM_INDEX,
+                    "CS::EquipGameData::GetSlotIndexByItemIndex",
+                ),
+                (GET_PARAM_ID_IN_SLOT, "CS::EquipGameData::GetParamIdInSlot"),
+                (
+                    GET_GAITEM_HANDLE_BY_INDEX,
+                    "CS::EquipInventoryData::GetGaItemHandleByIndex",
+                ),
+                (
+                    SET_EQUIPMENT_ENTRIES,
+                    "CS::EquipGameData::SetEquipmentEntries",
+                ),
+                (EQUIP_REFRESH, "EquipGameData equip refresh (FUN_140249a90)"),
+                (BROADCAST_EQUIPMENT_CHANGE, "BroadCastEquipmentChange"),
+            ],
+        )?;
+        let quick = match crate::native::resolve_all(
+            module_base,
+            [
+                (
+                    SET_QUICK_OR_POUCH_OR_RUNE,
+                    "quick/pouch/rune dispatcher (FUN_140249a50)",
+                ),
+                (
+                    GET_ITEM_ID_BY_QUICK_SLOT_INDEX,
+                    "CS::EquipGameData::GetItemIdByQuickSlotIndex",
+                ),
+                (
+                    GET_EQUIPPED_GREATRUNE,
+                    "CS::EquipItemData::GetEquippedGreatrune",
+                ),
+            ],
+        ) {
+            // Safety: all three addresses were resolved for the running build immediately above.
+            Ok([set_quick, get_quick_id, get_great_rune]) => Some(unsafe {
+                QuickNatives {
+                    set_quick: core::mem::transmute::<usize, SetQuickFn>(set_quick),
+                    get_quick_id: core::mem::transmute::<usize, GetQuickIdFn>(get_quick_id),
+                    get_great_rune: core::mem::transmute::<usize, GreatRuneFn>(get_great_rune),
+                }
+            }),
+            Err(_) => None,
+        };
+        // The gate is asked for separately because it is the one function whose absence changes
+        // nothing: its `false` answer and its absence lead to the same write path.
+        let gate = crate::native::resolve(
+            module_base,
+            EQUIP_PERMISSION_GATE,
+            "equip permission gate (FUN_140788a90)",
+        )
+        // Safety: resolved for the running build immediately above.
+        .map(|address| unsafe { core::mem::transmute::<usize, GateFn>(address) });
+        // Safety: every address below was resolved for the running build by `resolve_all`.
+        Ok(unsafe {
+            Self {
+                equip: core::mem::transmute::<usize, EquipFn>(equip),
+                get_inventory: core::mem::transmute::<usize, GetInventoryFn>(get_inventory),
+                get_item_idx: core::mem::transmute::<usize, GetItemIdxFn>(get_item_idx),
+                get_item_idx_by_handle: core::mem::transmute::<usize, GetItemIdxByHandleFn>(
+                    get_item_idx_by_handle,
+                ),
+                get_slot: core::mem::transmute::<usize, GetSlotFn>(get_slot),
+                param_in_slot: core::mem::transmute::<usize, GetParamIdInSlotFn>(param_in_slot),
+                get_handle: core::mem::transmute::<usize, GetHandleFn>(get_handle),
+                set_entries: core::mem::transmute::<usize, SetEntriesFn>(set_entries),
+                refresh: core::mem::transmute::<usize, RefreshFn>(refresh),
+                broadcast: core::mem::transmute::<usize, BroadcastFn>(broadcast),
+                gate,
+                quick,
+            }
+        })
+    }
 }
 
 /// Read what a quick/pouch/rune position currently holds. `-1` means empty.
@@ -341,9 +506,10 @@ pub struct EquipOutcome {
 ///
 /// # Safety
 ///
-/// Game thread, `egd` live, `index` in `0..=16`.
+/// Game thread, `egd` live, `index` in `0..=16`. `quick` must be the natives resolved for the
+/// RUNNING build -- which is what having a [`QuickNatives`] at all means.
 unsafe fn read_quick_position(
-    module_base: usize,
+    quick: QuickNatives,
     egd: usize,
     kind: PositionKind,
     index: u32,
@@ -351,12 +517,10 @@ unsafe fn read_quick_position(
     match kind {
         // The native getter, which covers exactly the ten quickbar positions.
         PositionKind::Quickbar => {
-            let get: GetQuickIdFn =
-                // Safety: verified 1.16.2 RVA within the loaded image.
-                unsafe { core::mem::transmute(module_base + GET_ITEM_ID_BY_QUICK_SLOT_INDEX) };
             let mut out = -1i32;
-            // Safety: out-parameter getter; the slot is ours and outlives the call.
-            unsafe { get(egd, &raw mut out, index) };
+            // Safety: out-parameter getter, resolved for the running build; the slot is ours and
+            // outlives the call.
+            unsafe { (quick.get_quick_id)(egd, &raw mut out, index) };
             out
         }
         // No named getter reaches the pouch, so read the array the pouch writer stores into.
@@ -369,7 +533,13 @@ unsafe fn read_quick_position(
         }
         // The rune is not in that array at all: the dispatcher's `index == 16` branch writes
         // `equipItemData + 0x88`, which is what GetEquippedGreatrune reads.
-        PositionKind::GreatRune => unsafe { equipped_great_rune(module_base, egd) },
+        PositionKind::GreatRune => {
+            let mut out = -1i32;
+            // Safety: the three-argument out-parameter form, resolved for the running build; the
+            // out slot is ours and outlives the call.
+            unsafe { (quick.get_great_rune)(egd, &raw mut out, 0) };
+            out
+        }
         // Every other kind is a ChrAsm equipment entry, answered by GetParamIdInSlot instead.
         _ => -1,
     }
@@ -399,28 +569,45 @@ pub unsafe fn equip_all(
     // entries, and holding a borrow of the thing being recorded into is not worth the saving.
     let planned: Vec<PlannedPosition> = ledger.planned().to_vec();
 
-    // Safety: verified 1.16.2 RVAs within the loaded image.
-    let equip: EquipFn = unsafe { core::mem::transmute(module_base + EQUIP_ITEM_TO_CHR_ASM_SLOT) };
-    let get_inventory: GetInventoryFn =
-        unsafe { core::mem::transmute(module_base + GET_EQUIP_INVENTORY_DATA) };
-    let get_item_idx: GetItemIdxFn =
-        unsafe { core::mem::transmute(module_base + GET_ITEM_INVENTORY_IDX) };
-    let get_item_idx_by_handle: GetItemIdxByHandleFn =
-        unsafe { core::mem::transmute(module_base + GET_ITEM_INDEX_BY_GAITEM_HANDLE) };
-    let get_slot: GetSlotFn =
-        unsafe { core::mem::transmute(module_base + GET_SLOT_INDEX_BY_ITEM_INDEX) };
-    let param_in_slot: GetParamIdInSlotFn =
-        unsafe { core::mem::transmute(module_base + GET_PARAM_ID_IN_SLOT) };
-    let gate: GateFn = unsafe { core::mem::transmute(module_base + EQUIP_PERMISSION_GATE) };
-    let get_handle: GetHandleFn =
-        unsafe { core::mem::transmute(module_base + GET_GAITEM_HANDLE_BY_INDEX) };
-    let set_entries: SetEntriesFn =
-        unsafe { core::mem::transmute(module_base + SET_EQUIPMENT_ENTRIES) };
-    let refresh: RefreshFn = unsafe { core::mem::transmute(module_base + EQUIP_REFRESH) };
-    let broadcast: BroadcastFn =
-        unsafe { core::mem::transmute(module_base + BROADCAST_EQUIPMENT_CHANGE) };
-    let set_quick: SetQuickFn =
-        unsafe { core::mem::transmute(module_base + SET_QUICK_OR_POUCH_OR_RUNE) };
+    // RESOLVED FOR THE RUNNING BUILD, not added blind. Every address below is a 1.16.2 RVA and
+    // the installed game is 1.17: a call through an unresolved one lands wherever that code moved
+    // to, which is a control transfer into the middle of an unrelated function.
+    //
+    // A refusal here costs the equip pass and NOTHING ELSE -- the grants, the stats and the
+    // spells are separate steps and still run. Every planned position is recorded as not
+    // attempted, so the ledger's denominator keeps them rather than quietly shrinking.
+    let natives = match EquipNatives::resolve(module_base) {
+        Ok(natives) => natives,
+        Err(missing) => {
+            outcome.unresolved_natives = missing;
+            for (at, position) in planned.iter().enumerate() {
+                if position.kind == PositionKind::Physick {
+                    continue;
+                }
+                ledger.record(
+                    at,
+                    PositionResult::NotAttempted(
+                        "the equip natives have no verified mapping for the running build",
+                    ),
+                );
+            }
+            return outcome;
+        }
+    };
+    let EquipNatives {
+        equip,
+        get_inventory,
+        get_item_idx,
+        get_item_idx_by_handle,
+        get_slot,
+        param_in_slot,
+        get_handle,
+        set_entries,
+        refresh,
+        broadcast,
+        gate,
+        quick,
+    } = natives;
 
     // Resolved once: BroadCastEquipmentChange wants the live PlayerIns.
     let main_player = {
@@ -534,13 +721,26 @@ pub unsafe fn equip_all(
                     continue;
                 }
             };
+            // The write and its read-back resolved together or not at all: writing a position
+            // this pass cannot then read back would put an unproven entry in the ledger, and the
+            // module header says no number here is derived from a call having been made.
+            let Some(quick) = quick else {
+                ledger.record(
+                    at,
+                    PositionResult::NotAttempted(
+                        "the quick/pouch/rune natives have no verified mapping for the running \
+                         build",
+                    ),
+                );
+                continue;
+            };
             let mut handle = [0u32; 2];
             // Safety: engine-owned inventory, validated index, our own handle buffer.
             unsafe { get_handle(inventory, handle.as_mut_ptr(), item_idx as u32) };
-            // Safety: the native dispatcher for quick/pouch/rune.
-            unsafe { set_quick(egd, index, handle.as_ptr(), item_idx as u32) };
+            // Safety: the native dispatcher for quick/pouch/rune, resolved for this build.
+            unsafe { (quick.set_quick)(egd, index, handle.as_ptr(), item_idx as u32) };
             // Safety: same context; a read of the position that was just written.
-            let actual = unsafe { read_quick_position(module_base, egd, position.kind, index) };
+            let actual = unsafe { read_quick_position(quick, egd, position.kind, index) };
             outcome
                 .dispatch
                 .push((slot, position.item.item_id, item_idx, actual));
@@ -581,9 +781,14 @@ pub unsafe fn equip_all(
             continue;
         }
 
-        // Ask the menu path's gate what it thinks, purely to record it.
+        // Ask the menu path's gate what it thinks, purely to record it. An UNRESOLVED gate reads
+        // as "not permitted", which is not a guess: that answer selects the branch that writes
+        // through the engine's own setters, i.e. the one that never needed the gate's opinion.
         // Safety: a pure predicate over engine singletons, already known non-null here.
-        let permitted = unsafe { gate(slot) };
+        let permitted = match gate {
+            Some(gate) => unsafe { gate(slot) },
+            None => 0,
+        };
         if outcome.gate.len() < GATE_ANSWERS_KEPT {
             outcome.gate.push((slot, permitted));
         }
@@ -687,9 +892,23 @@ fn verdict(outcome: &mut EquipOutcome, slot: i32, expected: i32, actual: i32) ->
 /// # Safety
 ///
 /// Game thread, `egd` live.
-pub unsafe fn fill_physick(module_base: usize, egd: usize, tears: &[Option<EquipRef>]) -> usize {
-    let get_tear: GetTearFn =
-        unsafe { core::mem::transmute(module_base + GET_PHYSIC_TEAR_BY_SLOT) };
+pub unsafe fn fill_physick(
+    module_base: usize,
+    egd: usize,
+    tears: &[Option<EquipRef>],
+) -> Option<usize> {
+    // THE WRITE IS A STRUCT FIELD; ONLY THE READ-BACK IS A GAME FUNCTION. The store below goes to
+    // `egd + 0x3e4`, a field offset -- a different kind of 1.17 risk, owned by
+    // `scripts/detect-struct-field-drift.py`, not by the address gate. The getter is code, and
+    // code moved. So an unresolvable getter means the tears are still written and NOTHING is
+    // verified, which is what `None` says: `0` would be indistinguishable from "the game read the
+    // flask back and it held something else", and that is the exact confusion the first version
+    // of this function shipped (it "verified 2/2" against the wrong value it had itself written).
+    let get_tear = crate::native::resolve(
+        module_base,
+        GET_PHYSIC_TEAR_BY_SLOT,
+        "CS::EquipGameData::GetPhysicTearBySlot",
+    );
     let mut verified = 0;
     for (index, tear) in tears.iter().enumerate().take(2) {
         let Some(tear) = tear else { continue };
@@ -697,6 +916,9 @@ pub unsafe fn fill_physick(module_base: usize, egd: usize, tears: &[Option<Equip
         let wanted = tear.item_id as i32;
         // Safety: one int of an int[3] at a verified offset in live save data.
         unsafe { *((egd + EQUIP_GAME_DATA_PHYSIC_TEARS + index * 4) as *mut i32) = wanted };
+        let Some(get_tear) = get_tear else { continue };
+        // Safety: resolved for the running build immediately above.
+        let get_tear: GetTearFn = unsafe { core::mem::transmute(get_tear) };
         let mut got = -1i32;
         // Safety: the native out-parameter getter.
         unsafe { get_tear(egd, &raw mut got, index as u32) };
@@ -704,7 +926,7 @@ pub unsafe fn fill_physick(module_base: usize, egd: usize, tears: &[Option<Equip
             verified += 1;
         }
     }
-    verified
+    get_tear.map(|_| verified)
 }
 
 /// Read what the flask currently holds, for the log.
@@ -712,9 +934,17 @@ pub unsafe fn fill_physick(module_base: usize, egd: usize, tears: &[Option<Equip
 /// # Safety
 ///
 /// Game thread, `egd` live.
-pub unsafe fn read_physick(module_base: usize, egd: usize) -> [i32; 2] {
-    let get_tear: GetTearFn =
-        unsafe { core::mem::transmute(module_base + GET_PHYSIC_TEAR_BY_SLOT) };
+pub unsafe fn read_physick(module_base: usize, egd: usize) -> Option<[i32; 2]> {
+    // `None`, not `[-1, -1]`: in this field `-1` MEANS empty, so a refusal returned as `-1`
+    // would be reported to the reader as an empty flask on a character that may be carrying two
+    // tears. A refusal has to be unrepresentable as a value.
+    let get_tear = crate::native::resolve(
+        module_base,
+        GET_PHYSIC_TEAR_BY_SLOT,
+        "CS::EquipGameData::GetPhysicTearBySlot",
+    )?;
+    // Safety: resolved for the running build immediately above.
+    let get_tear: GetTearFn = unsafe { core::mem::transmute(get_tear) };
     let mut out = [-1i32; 2];
     for (index, slot) in out.iter_mut().enumerate() {
         let mut got = -1i32;
@@ -722,7 +952,7 @@ pub unsafe fn read_physick(module_base: usize, egd: usize) -> [i32; 2] {
         unsafe { get_tear(egd, &raw mut got, index as u32) };
         *slot = got;
     }
-    out
+    Some(out)
 }
 
 /// Read back the equipped great rune. `-1` means none.
@@ -735,7 +965,7 @@ pub unsafe fn read_physick(module_base: usize, egd: usize) -> [i32; 2] {
 /// # Safety
 ///
 /// Game thread, `egd` live.
-pub unsafe fn equipped_great_rune(module_base: usize, egd: usize) -> i32 {
+pub unsafe fn equipped_great_rune(module_base: usize, egd: usize) -> Option<i32> {
     // THREE arguments. The outer wrapper at 0x140247900 is only
     //     ADD RCX,0x288 / MOV RBX,RDX / CALL 0x14024f390 / MOV RAX,RBX
     // -- it never writes R8, so the slot argument passes straight through from the caller into
@@ -744,10 +974,19 @@ pub unsafe fn equipped_great_rune(module_base: usize, egd: usize) -> i32 {
     // whatever the call site happened to have, the `slot == 0` test fails, and it reports -1 no
     // matter what is equipped. That produced three runs of "the rune will not equip" when the
     // rune was fine and the QUESTION was malformed.
-    type Fn_ = unsafe extern "system" fn(usize, *mut i32, i32) -> *mut i32;
-    // Safety: verified RVA; the out slot is ours and outlives the call.
-    let get: Fn_ = unsafe { core::mem::transmute(module_base + GET_EQUIPPED_GREATRUNE) };
+    //
+    // `None` for a refusal for the same reason the malformed call was worth fixing: `-1` is this
+    // getter's own answer for "no rune equipped", so returning it for "could not ask" reports a
+    // fact the code never established.
+    let get = crate::native::resolve(
+        module_base,
+        GET_EQUIPPED_GREATRUNE,
+        "CS::EquipItemData::GetEquippedGreatrune",
+    )?;
+    // Safety: resolved for the running build; the out slot is ours and outlives the call.
+    let get: GreatRuneFn = unsafe { core::mem::transmute(get) };
     let mut out = -1i32;
+    // Safety: as above.
     unsafe { get(egd, &raw mut out, 0) };
-    out
+    Some(out)
 }

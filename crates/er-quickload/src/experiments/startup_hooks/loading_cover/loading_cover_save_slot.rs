@@ -7,8 +7,14 @@ use super::*;
 /// telemetry/parity. Fault-guarded.
 pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let helper = unsafe { safe_read_usize(base + RuntimeGlobalRva::NowLoadingSingleton as usize) }
-        .unwrap_or(0);
+    // `read_global_ptr` resolves the global for the running build and then reads it
+    // fault-tolerantly. The raw `base + RVA` form read the 1.16.2 slot, and this singleton moved
+    // (0x3d60ec8 -> 0x3d64f28) -- so the read SUCCEEDED and returned a neighbouring global.
+    let helper = er_game_base::mem::read_global_ptr(
+        base,
+        RuntimeGlobalRva::NowLoadingSingleton as usize,
+        "RuntimeGlobalRva::NowLoadingSingleton",
+    );
     if helper == 0 || helper == null {
         return false;
     }
@@ -22,9 +28,13 @@ pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
 /// `*(base + FakeLoadingScreenSingleton)`. Fault-guarded.
 pub(crate) unsafe fn fake_loading_screen_ptr(base: usize) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let helper =
-        unsafe { safe_read_usize(base + RuntimeGlobalRva::FakeLoadingScreenSingleton as usize) }
-            .unwrap_or(0);
+    // Resolved, for the reason given on `now_loading_active`: this singleton moved too
+    // (0x3d74868 -> 0x3d788d8), and a stale read of it succeeds with the wrong pointer.
+    let helper = er_game_base::mem::read_global_ptr(
+        base,
+        RuntimeGlobalRva::FakeLoadingScreenSingleton as usize,
+        "RuntimeGlobalRva::FakeLoadingScreenSingleton",
+    );
     if helper == 0 || helper == null {
         0
     } else {

@@ -271,12 +271,32 @@ pub enum SeamError {
     ModuleBase(String),
     /// The prologue could not be read -- unmapped or protected.
     Unreadable { name: &'static str, address: usize },
+    /// The running build moved this function and no verified mapping says where to.
+    ///
+    /// SEPARATE FROM [`Self::PrologueMismatch`] ON PURPOSE, because the two need opposite fixes
+    /// and this file reported the wrong one for the whole of the 1.17 migration. Every RVA here
+    /// is 1.16.2; the installed game has been 1.17 since 2026-08-27. Byte-comparing at
+    /// `base + rva` on that build reads unrelated code and answers "prologue mismatch", which
+    /// blames the SIGNATURE -- sending a reader to re-derive bytes that were never wrong -- when
+    /// the ADDRESS is what moved and the fix is to map the function.
+    NoMappingForBuild {
+        name: &'static str,
+        /// The 1.16.2 address that was asked for.
+        address: usize,
+        /// `er_game_base::game_build::describe_build()` at the moment of the refusal.
+        build: String,
+    },
     /// The live bytes differ from the image these addresses were verified against.
     PrologueMismatch {
         name: &'static str,
         address: usize,
         expected: Vec<u8>,
         actual: Vec<u8>,
+        /// `Some(stale)` when `address` is a TRANSLATION of the 1.16.2 address `stale`, i.e. the
+        /// build gate did find this function on the running build and its prologue still differs.
+        /// That is a recompiled function, not a wrong address, and saying so keeps this message
+        /// from being read as the refusal above.
+        translated_from: Option<usize>,
     },
 }
 
@@ -287,25 +307,134 @@ impl core::fmt::Display for SeamError {
             Self::Unreadable { name, address } => {
                 write!(f, "{name} @0x{address:x}: prologue unreadable")
             }
+            Self::NoMappingForBuild {
+                name,
+                address,
+                build,
+            } => write!(
+                f,
+                "{name}: the 1.16.2 address 0x{address:x} has no verified detour mapping for the \
+                 running build ({build}) -- refusing to hook. THE ADDRESS MOVED; the prologue \
+                 signature is not in question and must not be \"fixed\""
+            ),
             Self::PrologueMismatch {
                 name,
                 address,
                 expected,
                 actual,
-            } => write!(
-                f,
-                "{name} @0x{address:x}: prologue mismatch (got {actual:02x?}, want {expected:02x?}) \
-                 -- refusing to hook; this is not the 1.16.2 image these addresses were verified \
-                 against"
-            ),
+                translated_from,
+            } => match translated_from {
+                Some(stale) => write!(
+                    f,
+                    "{name} @0x{address:x} (the verified translation of 1.16.2 0x{stale:x}): \
+                     prologue mismatch (got {actual:02x?}, want {expected:02x?}) -- refusing to \
+                     hook. The address resolved, so this is a RECOMPILED function, not a wrong \
+                     address"
+                ),
+                None => write!(
+                    f,
+                    "{name} @0x{address:x}: prologue mismatch (got {actual:02x?}, want \
+                     {expected:02x?}) -- refusing to hook; this is not the 1.16.2 image these \
+                     addresses were verified against"
+                ),
+            },
         }
     }
 }
 
 impl std::error::Error for SeamError {}
 
+/// How many times [`call_target`] may write its refusal line, per process.
+///
+/// # The refusal line is COUNTED, and that is not fussiness
+///
+/// The only caller is `inject_pins`, which runs once per `CS::WorldMapViewModel` construction --
+/// and that object's lifetime is `MoveMapStep`'s, so it is rebuilt on EVERY WORLD ENTRY. An
+/// unlatched refusal is therefore five identical lines every time the player loads in, for as
+/// long as the session lasts, with no upper bound but playtime. That is precisely the shape
+/// `scripts/check-no-rva-zero.py` exists to stop: one session wrote **339,764** copies of a
+/// single refusal, and the volume is what made the real cause unfindable rather than the refusal
+/// itself. The cap costs a reader nothing -- the first pass says everything the ten-thousandth
+/// would -- and turns the log into a bounded artifact. [`ALL_SEAMS`] sizes it so that every seam
+/// gets to speak once even if all of them move at the same time.
+///
+/// NOT `#[cfg(windows)]`, unlike the counter and [`call_target`] themselves, so that the host
+/// test run can assert the bound exists and is small. A cap that only compiles on the target it
+/// protects is a cap nothing can regression-test.
+pub const CALL_REFUSAL_LOG_LIMIT: usize = ALL_SEAMS.len();
 #[cfg(windows)]
-/// Resolve a seam to a live address, refusing when the bytes there are not what we reversed.
+static CALL_REFUSAL_LOGS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The address to CALL for `seam` on the RUNNING build, or `None` after saying why not.
+///
+/// # The CALL resolver, deliberately beside the detour one
+///
+/// [`verify_seam`] is for a seam about to carry a MinHook detour and uses `resolve_detour_address`.
+/// This is for a seam about to be `transmute`d into a function pointer and CALLED, and uses
+/// `resolve_game_address`, which additionally accepts the whole-image `.pdata` pairing -- good
+/// enough to say where a function is, not good enough to say MinHook may write five bytes there.
+/// The two live together so the choice is a visible fork rather than a habit.
+///
+/// # Why it logs here
+///
+/// `er-game-base`'s own refusal goes to the sink `er_hook::set_hook_logger` installs, which is a
+/// PER-DLL static. This line is what makes a dead map surface readable in THIS DLL's log, beside
+/// the injection tallies that will now read zero. It is capped by
+/// [`CALL_REFUSAL_LOG_LIMIT`]; see that constant for why.
+///
+/// On 1.16.2 `resolve_game_address` returns its argument unchanged (`is_supported_build()`
+/// short-circuits before the table is consulted), so this is a pass-through and nothing about the
+/// shipped behaviour on that build changes.
+#[cfg(windows)]
+#[must_use]
+pub fn call_target(base: usize, seam: &MapSeam) -> Option<usize> {
+    let resolved = er_game_base::game_build::resolve_game_address(base + seam.rva, seam.name);
+    if resolved.is_none()
+        && CALL_REFUSAL_LOGS.fetch_add(1, core::sync::atomic::Ordering::SeqCst)
+            < CALL_REFUSAL_LOG_LIMIT
+    {
+        crate::standalone_log(format_args!(
+            "map-inject: REFUSED -- {} (1.16.2 0x{:x}) has NO verified address for the running \
+             build ({}); it will NOT be called, so the map-pin surface is inert this session. The \
+             ADDRESS moved -- map the function rather than removing the guard. This line is \
+             logged at most {CALL_REFUSAL_LOG_LIMIT} times per process",
+            seam.name,
+            seam.verified_va(),
+            er_game_base::game_build::describe_build(),
+        ));
+    }
+    resolved
+}
+
+#[cfg(windows)]
+/// Resolve a seam to a live address, refusing when the running build moved the function or when
+/// the bytes there are not what we reversed.
+///
+/// # RESOLVE FIRST, BYTE-CHECK SECOND
+///
+/// The order is the fix. This used to byte-compare at `base + seam.rva` with no translation at
+/// all, which on 1.17 reads whatever the patch put at a 1.16.2 address -- so every seam reported
+/// [`SeamError::PrologueMismatch`], a message that blames the signature when the address is what
+/// moved. The build gate is asked first now, and its refusal has its own variant.
+///
+/// # Why the DETOUR resolver and not the CALL one
+///
+/// All four callers hand the result straight to `er_hook::register_union_hook`; every one of them
+/// is installing a detour. `resolve_game_address` answers "where is this function now", which is
+/// what a CALL needs, and it will happily return a pair carried by the whole-image `.pdata` map.
+/// A detour needs the further claim that the destination is a real function ENTRY with a
+/// relocatable five-byte prologue, and only `resolve_detour_address` speaks to it -- letting the
+/// weaker rows carry detours is what killed a boot on 2026-08-29. If a future caller wants one of
+/// these seams as a plain CALL target, it must resolve with `resolve_game_address` itself rather
+/// than loosening this.
+///
+/// # No double translation
+///
+/// `register_union_hook` resolves again through the same function. That is idempotent for an
+/// address which is already a 1.17 destination (`already_translated_in`), so handing it a
+/// translated address is safe. On 1.16.2 `resolve_detour_address` returns its argument unchanged
+/// (`is_supported_build()` short-circuits), so this whole step is a no-op there and the byte check
+/// runs at exactly the address it always did.
 ///
 /// # Safety
 ///
@@ -313,7 +442,16 @@ impl std::error::Error for SeamError {}
 /// address yields [`SeamError::Unreadable`] rather than a fault.
 pub unsafe fn verify_seam(seam: &MapSeam) -> Result<usize, SeamError> {
     let base = er_game_base::mem::game_module_base().map_err(SeamError::ModuleBase)?;
-    let address = base + seam.rva;
+    let stale = base + seam.rva;
+    let Some(address) =
+        er_game_base::game_build::resolve_detour_address(base + seam.rva, seam.name)
+    else {
+        return Err(SeamError::NoMappingForBuild {
+            name: seam.name,
+            address: stale,
+            build: er_game_base::game_build::describe_build(),
+        });
+    };
     let mut actual = vec![0_u8; seam.prologue.len()];
     if !unsafe { er_game_base::mem::read_bytes(address, &mut actual) } {
         return Err(SeamError::Unreadable {
@@ -327,6 +465,7 @@ pub unsafe fn verify_seam(seam: &MapSeam) -> Result<usize, SeamError> {
             address,
             expected: seam.prologue.to_vec(),
             actual,
+            translated_from: (address != stale).then_some(stale),
         });
     }
     Ok(address)
@@ -408,6 +547,29 @@ mod tests {
     }
 
     #[test]
+    fn the_call_refusal_line_is_bounded_and_every_seam_still_gets_to_speak() {
+        // The bound is the whole point: `call_target`'s only caller runs once per world entry,
+        // so an unlatched refusal grows with playtime. 339,764 copies of one line is what that
+        // looks like in practice. Asserting an upper bound here is what stops a later edit from
+        // deleting the latch and re-creating it.
+        // `const {}` rather than a runtime assert: both operands are compile-time constants, so
+        // this becomes a BUILD error rather than a test failure -- strictly stronger, and it is
+        // what `clippy::assertions_on_constants` asks for. The lint only fires on the Windows
+        // target (`cargo xwin clippy -p er-invasion-warp --all-targets`), because the module it
+        // guards is `#[cfg(windows)]` and a host clippy run never compiles it.
+        const {
+            assert!(
+                CALL_REFUSAL_LOG_LIMIT > 0,
+                "a zero cap silences the refusal entirely, which is the opposite failure"
+            );
+            assert!(
+                CALL_REFUSAL_LOG_LIMIT <= ALL_SEAMS.len(),
+                "the cap must not exceed one refusal line per seam"
+            );
+        }
+    }
+
+    #[test]
     fn seam_names_are_unique_so_a_refusal_line_is_unambiguous() {
         for (index, seam) in ALL_SEAMS.iter().enumerate() {
             for other in &ALL_SEAMS[index + 1..] {
@@ -423,10 +585,73 @@ mod tests {
             address: 0x1_4088_55b0,
             expected: vec![0x48, 0x8b],
             actual: vec![0xcc, 0xcc],
+            translated_from: None,
         };
         let rendered = error.to_string();
         assert!(rendered.contains("refusing to hook"), "{rendered}");
         assert!(rendered.contains("cc"), "{rendered}");
         assert!(rendered.contains("48"), "{rendered}");
+    }
+
+    #[test]
+    fn a_moved_address_is_not_reported_as_a_byte_mismatch() {
+        // THE DEFECT THIS PAIR EXISTS TO STOP COMING BACK. `verify_seam` used to byte-compare at
+        // the untranslated `base + rva`, so on 1.17 every seam came back "prologue mismatch" --
+        // which reads as "our recorded bytes are wrong" and sends the next agent to re-derive a
+        // signature that was never the problem. The two failures must not share wording.
+        let moved = SeamError::NoMappingForBuild {
+            name: "example",
+            address: 0x1_4088_55b0,
+            build: "game FileVersion 2.7.0.0 (this build supports 2.6.2.0)".to_owned(),
+        }
+        .to_string();
+        assert!(moved.contains("no verified detour mapping"), "{moved}");
+        assert!(moved.contains("THE ADDRESS MOVED"), "{moved}");
+        assert!(moved.contains("2.7.0.0"), "{moved}");
+        // The word a reader greps for when they think the signature is stale must NOT appear.
+        assert!(!moved.contains("prologue mismatch"), "{moved}");
+
+        // And the converse: a mismatch at an address that DID resolve says so, so it is not read
+        // as the refusal above.
+        let recompiled = SeamError::PrologueMismatch {
+            name: "example",
+            address: 0x1_4088_65a0,
+            expected: vec![0x48, 0x8b],
+            actual: vec![0x40, 0x53],
+            translated_from: Some(0x1_4088_55b0),
+        }
+        .to_string();
+        assert!(recompiled.contains("prologue mismatch"), "{recompiled}");
+        assert!(recompiled.contains("RECOMPILED"), "{recompiled}");
+        assert!(recompiled.contains("1408855b0"), "{recompiled}");
+    }
+
+    #[test]
+    fn every_seam_error_refuses_rather_than_reporting_a_partial_success() {
+        // The enum's contract, asserted rather than left to the doc comment: no variant may render
+        // as anything a reader could take for "patched anyway".
+        for error in [
+            SeamError::ModuleBase("no module".to_owned()),
+            SeamError::Unreadable {
+                name: "example",
+                address: 0x1_4088_55b0,
+            },
+            SeamError::NoMappingForBuild {
+                name: "example",
+                address: 0x1_4088_55b0,
+                build: "unreadable".to_owned(),
+            },
+            SeamError::PrologueMismatch {
+                name: "example",
+                address: 0x1_4088_55b0,
+                expected: vec![0x48],
+                actual: vec![0xcc],
+                translated_from: None,
+            },
+        ] {
+            let rendered = error.to_string();
+            assert!(!rendered.is_empty(), "{error:?}");
+            assert!(!rendered.contains("hooked"), "{rendered}");
+        }
     }
 }

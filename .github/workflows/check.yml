@@ -19,7 +19,31 @@ env:
   # Commit of vswarte/fromsoftware-rs the workspace is developed against.
   # The root crate uses `../fromsoftware-rs` path dependencies, so the
   # workspace cannot even be loaded by cargo without this sibling checkout.
-  FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+  #
+  # THIS PIN DECIDES WHICH GAME BUILDS THE DLLs SURVIVE, and it is not a
+  # taste question. Every `T::instance_ptr()` in this workspace -- 63 sites
+  # across 17 crates, and the ONLY way `er-death-persist` and
+  # `mushroom-man-runtime` reach the game at all -- resolves through
+  # upstream's own `crates/eldenring/src/rva/` bundle, selected by the
+  # running image's PE version. `er-game-base`'s 1.17 gate is not on that
+  # path and cannot cover it. Upstream's `rva::get()` ends in
+  # `unwrap_or_else(|e| panic!("{e}"))`, so an unrecognised build is a PANIC
+  # inside a game-loaded cdylib on the first singleton access, not a refusal.
+  #
+  # The previous pin, `9028518` ("Bump to 0.14.0"), predates the 1.17
+  # bundle by two commits: at that revision `ERGameVersion::from_lang_version`
+  # knows only `2.6.2.0` and `2.6.2.1`, and the installed game has been
+  # `2.7.0.0` since 2026-08-27. The local sibling checkouts were already
+  # past it, so local builds worked and only a CI-built artifact carried the
+  # panic -- the split where the released DLL differs from the tested one.
+  #
+  # `1027d24` is the local sibling checkout's own revision. It adds
+  # `rva/rva_ww_270.rs` (`4284a05`) and fixes an ambiguous `cs_system_step`
+  # pattern that picked a different global on 2.7.0.0 (`1027d24`), while
+  # KEEPING `2.6.2.0`/`2.6.2.1`. Do not advance this to upstream `main`
+  # without re-verifying: `acb2a19` DELETES `rva_ww_270.rs` and rewrites
+  # `rva_ww.rs`/`rva_jp.rs` as 1.17-only, dropping 1.16.2 support entirely.
+  FROMSOFTWARE_RS_REV: 1027d24920c0d71fcc17666194d331af0666fc3a
   # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
   # cache of the built binary -- bumping the rev invalidates the cache.
   CUPCAKE_REV: 27b94b8

@@ -285,8 +285,24 @@ pub(crate) const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
 
 /// True when an about-to-be-called vtable slot is the pure-virtual trap, i.e. the object behind it
 /// has been destructed. Check this before EVERY indirect call through a resolved component.
+///
+/// BOTH targets are resolved for the running build, and a target of 0 matches NEITHER. The second
+/// comparison used to be a raw `base + PURECALL_CRASH_HANDLER_RVA` while the first already asked
+/// the resolver -- an inconsistency with teeth, because the handler MOVED on 1.17
+/// (0xc90080 -> 0xc91750), so that half of a guard whose whole job is to notice a destructed object
+/// could never match and the indirect call went ahead. And `game_data_addr` answers 0 on a refusal,
+/// so without the zero screen a refused RVA would make every unreadable slot look like the trap.
 pub(crate) fn dispatch_target_is_purecall(target: usize, base: usize) -> bool {
-    target == er_game_base::mem::game_data_addr(base, PURECALL_RVA, "PURECALL_RVA") || target == base + PURECALL_CRASH_HANDLER_RVA
+    if target == 0 {
+        return false;
+    }
+    let purecall = er_game_base::mem::game_data_addr(base, PURECALL_RVA, "PURECALL_RVA");
+    let crash_handler = er_game_base::mem::game_data_addr(
+        base,
+        PURECALL_CRASH_HANDLER_RVA,
+        "PURECALL_CRASH_HANDLER_RVA",
+    );
+    target == purecall || target == crash_handler
 }
 /// Count of rows the hide was DRIVEN on because the row has no character -- i.e. the native setter
 /// was called for at least one of the three fields; pair it with `_NON_DISPLAY` below to know the

@@ -430,11 +430,29 @@ pub fn install_now_loading_helper_observer_hooks() {
             return;
         }
     }
-    let Ok(ctor) = game_rva(NOW_LOADING_HELPER_CTOR_RVA as u32) else {
-        return;
+    // FIVE INDEPENDENT OBSERVERS (2026-08-30). The first two were bare `let Ok(..) else { return; }`
+    // with NO log line at all, so one unmapped RVA on 1.17 silently took the other four down --
+    // including the loading-bar's own LoadingScreen::Update and the Scaleform label goto, which are
+    // what the user-visible loading bar is made of. The remaining three already resolved into
+    // `Option`; these two now do the same, and say so.
+    // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    let ctor = match game_rva(NOW_LOADING_HELPER_CTOR_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: REFUSED now-loading ctor -- rva 0x{NOW_LOADING_HELPER_CTOR_RVA:x} has no verified mapping for the running build; the other four observers are unaffected"
+            ));
+            None
+        }
     };
-    let Ok(update) = game_rva(NOW_LOADING_HELPER_UPDATE_RVA as u32) else {
-        return;
+    let update = match game_rva(NOW_LOADING_HELPER_UPDATE_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: REFUSED now-loading update -- rva 0x{NOW_LOADING_HELPER_UPDATE_RVA:x} has no verified mapping for the running build; the other four observers are unaffected"
+            ));
+            None
+        }
     };
     let loading_update = match game_rva(LOADING_SCREEN_UPDATE_RVA as u32) {
         Ok(addr) => Some(addr),
@@ -464,44 +482,48 @@ pub fn install_now_loading_helper_observer_hooks() {
         }
     };
     let mut ok = true;
-    match unsafe {
-        MhHook::new(
-            ctor as *mut c_void,
-            now_loading_helper_ctor_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            NOW_LOADING_HELPER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            ok &= unsafe { hook.queue_enable() }.is_ok();
-            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-            // address -- so letting the handle go does NOT uninstall the hook.
-        }
-        Err(status) => {
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: now-loading ctor hook failed: {status:?}"
-            ));
-            ok = false;
+    if let Some(ctor) = ctor {
+        match unsafe {
+            MhHook::new(
+                ctor as *mut c_void,
+                now_loading_helper_ctor_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                NOW_LOADING_HELPER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address -- so letting the handle go does NOT uninstall the hook.
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-b: now-loading ctor hook failed: {status:?}"
+                ));
+                ok = false;
+            }
         }
     }
-    match unsafe {
-        MhHook::new(
-            update as *mut c_void,
-            now_loading_helper_update_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            NOW_LOADING_HELPER_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            ok &= unsafe { hook.queue_enable() }.is_ok();
-            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-            // address -- so letting the handle go does NOT uninstall the hook.
-        }
-        Err(status) => {
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: now-loading update hook failed: {status:?}"
-            ));
-            ok = false;
+    if let Some(update) = update {
+        match unsafe {
+            MhHook::new(
+                update as *mut c_void,
+                now_loading_helper_update_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                NOW_LOADING_HELPER_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address -- so letting the handle go does NOT uninstall the hook.
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-b: now-loading update hook failed: {status:?}"
+                ));
+                ok = false;
+            }
         }
     }
     if let Some(addr) = loading_update {
@@ -582,11 +604,10 @@ pub fn install_now_loading_helper_observer_hooks() {
             if scaleform_label_goto.is_some() || loading_gfx_fadeout.is_some() {
                 LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED.store(1, Ordering::SeqCst);
             }
+            // Every row renders as an address or `None`, so a refused one is VISIBLE rather than
+            // absent from a line that reads as if all five armed.
             append_autoload_debug(format_args!(
-                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; loading-bar-update={} scaleform-label-goto={} loading-gfx-fadeout={}; observe-only",
-                loading_update.unwrap_or(0),
-                scaleform_label_goto.unwrap_or(0),
-                loading_gfx_fadeout.unwrap_or(0)
+                "title-cover-part-b: CSNowLoadingHelperImp observer ctor={ctor:x?} update={update:x?}; loading-bar-update={loading_update:x?} scaleform-label-goto={scaleform_label_goto:x?} loading-gfx-fadeout={loading_gfx_fadeout:x?} (None = refused for this build); observe-only"
             ));
         }
         status => append_autoload_debug(format_args!(
@@ -707,11 +728,16 @@ pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
     } else {
         0
     };
-    er_game_base::mem::game_data_addr(
+    // `_offset`, not `+`: on a refusal `game_data_addr` answers 0, and `0 + idx * 8` is a
+    // NON-zero address (24 for slot 3) that every caller's `!= 0` guard waves through -- including
+    // the teardown that WRITES a null into `table[slot]`. Adding the index inside the resolver
+    // keeps a refusal answering 0 for every slot.
+    er_game_base::mem::game_data_addr_offset(
         base,
         TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA,
         "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA",
-    ) + idx * core::mem::size_of::<usize>()
+        idx * core::mem::size_of::<usize>(),
+    )
 }
 
 /// Walk the CSMenuProfModelRend chain for `slot` to its live portrait `CSGxTexture`, or 0 if the

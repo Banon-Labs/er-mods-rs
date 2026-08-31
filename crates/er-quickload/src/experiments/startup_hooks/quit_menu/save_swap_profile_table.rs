@@ -453,8 +453,24 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
     if PROFILE_SIZE_PATCHED.load(Ordering::SeqCst) & bit != 0 {
         return true;
     }
-    let table = base + PROFILE_OFFSCREEN_SIZE_TABLE_RVA;
-    let row = table + target as usize * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE;
+    // RESOLVED, NOT ADDED (2026-08-30): this is a `.data` table and it is WRITTEN below. A stale
+    // RVA on 1.17 does not fault -- the `cur == PROFILE_OFFSCREEN_SIZE_INIT` check would have to
+    // false-positive first -- but the value check is a filter, not a build gate, and the cost of
+    // it passing on the wrong table is a 16-byte store into an unknown global. `_offset` keeps the
+    // refusal answering 0 for every row rather than turning it into the address `row_index * 16`.
+    let row = er_game_base::mem::game_data_addr_offset(
+        base,
+        PROFILE_OFFSCREEN_SIZE_TABLE_RVA,
+        "PROFILE_OFFSCREEN_SIZE_TABLE_RVA",
+        target as usize * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE,
+    );
+    if row == 0 {
+        append_autoload_debug(format_args!(
+            "portrait-res: REFUSED -- PROFILE_OFFSCREEN_SIZE_TABLE_RVA 0x{PROFILE_OFFSCREEN_SIZE_TABLE_RVA:x} \
+             has no verified mapping for this build; the offscreen size stays native for slot {target}"
+        ));
+        return false;
+    }
     let cur = unsafe { safe_read_usize(row) }.unwrap_or(0);
     let patched = if cur == PROFILE_OFFSCREEN_SIZE_TARGET {
         true

@@ -1537,12 +1537,18 @@ fn decide_status(raw: u32, armed: bool, swallowed: u64) -> u32 {
     }
 }
 
-/// True when `actual` starts with `expected`.
+/// True when `actual` starts with `expected` at every byte `mask` marks compared.
 ///
-/// Kept separate from the hooking code for the same reason: an address guard that is
-/// itself unverified would be decoration.
-fn prologue_matches(actual: &[u8], expected: &[u8]) -> bool {
-    actual.len() >= expected.len() && &actual[..expected.len()] == expected
+/// Delegates to [`er_game_base::prologue::matches_masked`] -- the rule about which operand bytes
+/// a game patch is allowed to re-encode has one implementation, shared with the other crate that
+/// byte-checks generated prologues. `QUIT_PHASE_SETTLE_SIG` is why: it opens with
+/// `mov rax,[rip+disp32]`, that displacement re-encoded on 1.17 at a correctly translated
+/// address, and the gate disarmed a hook whose function had not changed at all.
+///
+/// Kept as a named function for the same reason it always was: an address guard that is itself
+/// unverified would be decoration, and this one has unit tests.
+fn prologue_matches(actual: &[u8], expected: &[u8], mask: &[u8]) -> bool {
+    er_game_base::prologue::matches_masked(actual, expected, mask)
 }
 
 /// Whether occurrence `count` of a repeating event earns a log line.
@@ -1582,8 +1588,10 @@ fn note_opcode(opcode: u32) -> bool {
     SEEN_OPCODES.fetch_or(bit, Ordering::SeqCst) & bit == 0
 }
 
+/// `mask` is the generated companion of `expected` (`<NAME>_MASK`): 0xff = compare, 0x00 = a
+/// RIP-relative displacement, which re-encodes on every build and therefore proves nothing.
 #[cfg(windows)]
-fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
+fn verify(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize> {
     let address = match game_rva(rva as u32) {
         Ok(address) => address,
         Err(err) => {
@@ -1600,9 +1608,12 @@ fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
         PROLOGUE_MISMATCHES.fetch_add(1, Ordering::SeqCst);
         return None;
     }
-    if !prologue_matches(window, expected) {
+    if !prologue_matches(window, expected, mask) {
+        let ignored = er_game_base::prologue::ignored_count(mask);
+        let differing = er_game_base::prologue::compared_mismatches(window, expected, mask);
         log_message(format_args!(
-            "suppress: {name} @0x{address:x}: prologue mismatch (got {:02x?}, want {:02x?}) \
+            "suppress: {name} @0x{address:x}: prologue mismatch in {differing} compared byte(s) \
+             ({ignored} relocation byte(s) ignored) (got {:02x?}, want {:02x?}) \
              -- refusing to hook; this build is not the 1.16.2 image these addresses were \
              verified against",
             window, expected
@@ -1649,6 +1660,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     let Some(enqueue) = verify(
         SL_ENQUEUE_SAVE_JOB_RVA,
         SL_ENQUEUE_SAVE_JOB_SIG,
+        SL_ENQUEUE_SAVE_JOB_SIG_MASK,
         "SL_EnqueueSaveJob",
     ) else {
         return 0;
@@ -1656,6 +1668,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     let Some(poll) = verify(
         SL_POLL_SAVE_STATUS_RVA,
         SL_POLL_SAVE_STATUS_SIG,
+        SL_POLL_SAVE_STATUS_SIG_MASK,
         "SL_PollSaveStatus",
     ) else {
         return 0;
@@ -1663,6 +1676,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     let Some(release) = verify(
         SL_RELEASE_REQUEST_RVA,
         SL_RELEASE_REQUEST_SIG,
+        SL_RELEASE_REQUEST_SIG_MASK,
         "SL_ReleaseRequest",
     ) else {
         return 0;
@@ -1675,6 +1689,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     let settle = verify(
         QUIT_PHASE_SETTLE_RVA,
         QUIT_PHASE_SETTLE_SIG,
+        QUIT_PHASE_SETTLE_SIG_MASK,
         "QuitPhaseSettle",
     );
 
@@ -1783,6 +1798,7 @@ pub fn install_observers_only() -> usize {
     if let Some(release) = verify(
         SL_RELEASE_REQUEST_RVA,
         SL_RELEASE_REQUEST_SIG,
+        SL_RELEASE_REQUEST_SIG_MASK,
         "SL_ReleaseRequest",
     ) {
         SL_RELEASE_REQUEST.store(release, Ordering::SeqCst);
@@ -1790,6 +1806,7 @@ pub fn install_observers_only() -> usize {
     let settle = verify(
         QUIT_PHASE_SETTLE_RVA,
         QUIT_PHASE_SETTLE_SIG,
+        QUIT_PHASE_SETTLE_SIG_MASK,
         "QuitPhaseSettle",
     );
     install_observers(settle);
@@ -1863,11 +1880,12 @@ fn install_observers(settle: Option<usize>) {
     // contract that exists for this. `FUN_14067dc00` currently has no other registrant;
     // going through the union anyway costs nothing and makes a future one safe.
     let mut dispatch_bound = 0_usize;
-    for (name, rva, sig, handler, orig_slot) in [
+    for (name, rva, sig, mask, handler, orig_slot) in [
         (
             "SaveDispatchCombined",
             SAVE_DISPATCH_COMBINED_RVA,
             SAVE_DISPATCH_COMBINED_SIG,
+            SAVE_DISPATCH_COMBINED_SIG_MASK,
             save_dispatch_combined_hook as UnionFn,
             &ORIG_SAVE_DISPATCH_COMBINED,
         ),
@@ -1875,6 +1893,7 @@ fn install_observers(settle: Option<usize>) {
             "SaveDispatchChar",
             SAVE_DISPATCH_CHAR_RVA,
             SAVE_DISPATCH_CHAR_SIG,
+            SAVE_DISPATCH_CHAR_SIG_MASK,
             save_dispatch_char_hook as UnionFn,
             &ORIG_SAVE_DISPATCH_CHAR,
         ),
@@ -1882,6 +1901,7 @@ fn install_observers(settle: Option<usize>) {
             "SaveDispatchSystem",
             SAVE_DISPATCH_SYSTEM_RVA,
             SAVE_DISPATCH_SYSTEM_SIG,
+            SAVE_DISPATCH_SYSTEM_SIG_MASK,
             save_dispatch_system_hook as UnionFn,
             &ORIG_SAVE_DISPATCH_SYSTEM,
         ),
@@ -1889,11 +1909,12 @@ fn install_observers(settle: Option<usize>) {
             "SaveSerializeChar",
             SAVE_SERIALIZE_CHAR_RVA,
             SAVE_SERIALIZE_CHAR_SIG,
+            SAVE_SERIALIZE_CHAR_SIG_MASK,
             save_serialize_char_hook as UnionFn,
             &ORIG_SAVE_SERIALIZE_CHAR,
         ),
     ] {
-        let Some(address) = verify(rva, sig, name) else {
+        let Some(address) = verify(rva, sig, mask, name) else {
             continue;
         };
         match unsafe { register_union_hook(address, handler, orig_slot) } {
@@ -2575,19 +2596,51 @@ mod tests {
         assert_eq!(adopt_completed_save_job_as_final_status(), None);
     }
 
+    /// Every byte compared -- the mask every prologue with no RIP-relative operand gets.
+    // Not a prologue: a comparison MASK, not machine code. 0xff means "this byte must match";
+    // it is never assembled, written, or byte-checked against the game.
+    const EXACT_3: &[u8] = &[0xff, 0xff, 0xff];
+
     #[test]
     fn prologue_guard_accepts_exact_and_longer_reads() {
-        assert!(prologue_matches(&[0x40, 0x53, 0x56], &[0x40, 0x53, 0x56]));
+        assert!(prologue_matches(
+            &[0x40, 0x53, 0x56],
+            &[0x40, 0x53, 0x56],
+            EXACT_3
+        ));
         assert!(prologue_matches(
             &[0x40, 0x53, 0x56, 0x57],
-            &[0x40, 0x53, 0x56]
+            &[0x40, 0x53, 0x56],
+            EXACT_3
         ));
     }
 
     #[test]
     fn prologue_guard_rejects_drift_and_short_reads() {
-        assert!(!prologue_matches(&[0x40, 0x53, 0x99], &[0x40, 0x53, 0x56]));
-        assert!(!prologue_matches(&[0x40, 0x53], &[0x40, 0x53, 0x56]));
+        assert!(!prologue_matches(
+            &[0x40, 0x53, 0x99],
+            &[0x40, 0x53, 0x56],
+            EXACT_3
+        ));
+        assert!(!prologue_matches(
+            &[0x40, 0x53],
+            &[0x40, 0x53, 0x56],
+            EXACT_3
+        ));
+    }
+
+    /// `QUIT_PHASE_SETTLE_SIG` is the reason the mask exists: its opening
+    /// `mov rax,[rip+disp32]` re-encoded on 1.17 at a correctly translated address, and the
+    /// unmasked gate refused a function that had not changed. Masking the displacement accepts
+    /// it; mutating the opcode still refuses.
+    #[test]
+    fn prologue_guard_accepts_a_relocated_rip_displacement_but_not_a_new_opcode() {
+        let want = &[0x48, 0x8b, 0x05, 0x91, 0xef, 0x6e, 0x03, 0xc3];
+        let mask = &[0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff];
+        let relocated = &[0x48, 0x8b, 0x05, 0xb1, 0x21, 0x6f, 0x03, 0xc3];
+        assert!(prologue_matches(relocated, want, mask));
+        let other_instruction = &[0x48, 0x8d, 0x05, 0xb1, 0x21, 0x6f, 0x03, 0xc3];
+        assert!(!prologue_matches(other_instruction, want, mask));
     }
 
     #[test]

@@ -294,13 +294,31 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         return outcome;
     };
 
-    // Safety: the RVAs are verified 1.16.2 addresses inside the loaded image.
-    let add: AddInventoryFn =
-        unsafe { core::mem::transmute(module_base + ADD_INVENTORY_EQUIP_BY_ITEM_ID) };
-    let get_inventory: GetInventoryFn =
-        unsafe { core::mem::transmute(module_base + GET_EQUIP_INVENTORY_DATA) };
-    let get_quantity: GetQuantityFn =
-        unsafe { core::mem::transmute(module_base + GET_QUANTITY_BY_ITEM_ID) };
+    // RESOLVED FOR THE RUNNING BUILD. All three are direct calls into game code at 1.16.2
+    // addresses; on 1.17 an unresolved one transfers control into whatever moved there. Refusing
+    // takes the same path a null EquipGameData already takes -- every item reported missing,
+    // which is exactly what happens when nothing is granted.
+    let natives = crate::native::resolve_all(
+        module_base,
+        [
+            (ADD_INVENTORY_EQUIP_BY_ITEM_ID, "AddInventoryEquipByItemId"),
+            (
+                GET_EQUIP_INVENTORY_DATA,
+                "CS::EquipGameData::GetEquipInventoryData",
+            ),
+            (GET_QUANTITY_BY_ITEM_ID, "GetQuantityByItemId"),
+        ],
+    );
+    let Ok([add, get_inventory, get_quantity]) = natives else {
+        outcome.missing = grants.iter().map(|grant| grant.item_id).collect();
+        return outcome;
+    };
+    // Safety: all three addresses were resolved for the running build immediately above.
+    let add: AddInventoryFn = unsafe { core::mem::transmute(add) };
+    // Safety: as above.
+    let get_inventory: GetInventoryFn = unsafe { core::mem::transmute(get_inventory) };
+    // Safety: as above.
+    let get_quantity: GetQuantityFn = unsafe { core::mem::transmute(get_quantity) };
 
     // Read once: the clamp needs the whole `ReinforceParamWeapon` id set, and every armament in
     // the plan asks it the same question.
@@ -449,12 +467,28 @@ unsafe fn grant_armament(
         return None;
     }
 
-    // Safety: verified 1.16.2 RVAs inside the loaded image.
-    let mint: MintWeaponFn =
-        unsafe { core::mem::transmute(module_base + GET_GAITEM_HANDLE_WEAPON_WITH_GEM) };
-    let add_by_handle: AddInventoryByHandleFn =
-        unsafe { core::mem::transmute(module_base + ADD_INVENTORY_EQUIP) };
-    let release: HandleDtorFn = unsafe { core::mem::transmute(module_base + GAITEM_HANDLE_DTOR) };
+    // Resolved for the running build. The three move together and MUST: the mint takes a
+    // reference on the `CSGaitemImp` table and the release gives it back, so minting without
+    // being able to release would leak a table entry on every armament in the build. `None`
+    // means this armament is not minted at all, which the caller already handles.
+    let [mint, add_by_handle, release] = crate::native::resolve_all(
+        module_base,
+        [
+            (
+                GET_GAITEM_HANDLE_WEAPON_WITH_GEM,
+                "GetGaitemHandleWeaponWithGem",
+            ),
+            (ADD_INVENTORY_EQUIP, "AddInventoryEquip"),
+            (GAITEM_HANDLE_DTOR, "GaItemHandle destructor"),
+        ],
+    )
+    .ok()?;
+    // Safety: all three addresses were resolved for the running build immediately above.
+    let mint: MintWeaponFn = unsafe { core::mem::transmute(mint) };
+    // Safety: as above.
+    let add_by_handle: AddInventoryByHandleFn = unsafe { core::mem::transmute(add_by_handle) };
+    // Safety: as above.
+    let release: HandleDtorFn = unsafe { core::mem::transmute(release) };
 
     let wanted_gem = gem_row(grant);
     // `-1` is the engine's own "no gem": the mint tests `-1 < gemId` before touching the slot.
@@ -528,9 +562,22 @@ unsafe fn apply_reinforcement(module_base: usize, handle: &[u32; 4], level: u16)
     else {
         return -1;
     };
-    // Safety: verified RVAs; both are one-line forwarders to the instance's own virtual.
-    let set: SetReinforcementFn = unsafe { core::mem::transmute(module_base + SET_REINFORCEMENT) };
-    let get: GetReinforcementFn = unsafe { core::mem::transmute(module_base + GET_REINFORCEMENT) };
+    // Resolved for the running build; both are one-line forwarders to the instance's own virtual.
+    // `-1` on refusal is this function's own "the level could not be read", which the caller
+    // already reports rather than presenting as a level.
+    let Ok([set, get]) = crate::native::resolve_all(
+        module_base,
+        [
+            (SET_REINFORCEMENT, "SetReinforcement"),
+            (GET_REINFORCEMENT, "GetReinforcement"),
+        ],
+    ) else {
+        return -1;
+    };
+    // Safety: both addresses were resolved for the running build immediately above.
+    let set: SetReinforcementFn = unsafe { core::mem::transmute(set) };
+    // Safety: as above.
+    let get: GetReinforcementFn = unsafe { core::mem::transmute(get) };
     // Safety: the lookup resolved a live instance, which is what both forwarders dereference.
     unsafe { set(&raw mut lookup, i32::from(level)) };
     // Safety: as above.

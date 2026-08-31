@@ -363,8 +363,18 @@ pub(crate) unsafe fn despawn(mut marker: Marker) {
 unsafe fn sfx_singleton() -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
     // SAFETY: fault-tolerant read; None rather than a fault if the page is not mapped.
-    let singleton =
-        unsafe { er_game_base::mem::safe_read_usize(module_base + GLOBAL_CSSFX_RVA as usize) }?;
+    //
+    // RESOLVED, not `module_base + RVA`. Every `.data` global moved between 1.16.2 and 1.17 --
+    // this one 0x3d839b8 -> 0x3d87a28 -- and a stale READ does not announce itself the way a
+    // stale CALL does: `safe_read_usize` SUCCEEDS and hands back whatever now occupies the old
+    // slot, which the heap-alignment screen below cannot tell from a real CSSfx pointer.
+    let singleton = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            module_base,
+            GLOBAL_CSSFX_RVA as usize,
+            "GLOBAL_CSSFX_RVA",
+        ))
+    }?;
     // SAFETY: a plausibility screen on the raw value; reads nothing through the pointer.
     (singleton != 0 && unsafe { er_game_base::mem::is_heap_aligned_ptr(singleton) })
         .then_some(singleton)

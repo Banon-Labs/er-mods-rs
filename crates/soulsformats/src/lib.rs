@@ -12,14 +12,30 @@ use serde::Deserialize;
 use thiserror::Error;
 
 const SMITHBOX_SOURCE_DIR_ENV: &str = "SMITHBOX_SOURCE_DIR";
-const DEFAULT_SMITHBOX_REPO_CANDIDATES: &[&str] = &[
-    ".deps/Smithbox",
-    "../Smithbox",
-    "../smithbox",
-    // Binary release install on this machine's Windows side (D:\Smithbox).
-    "/mnt/d/Smithbox",
-    "/tmp/pi-github-repos/vawser/Smithbox",
-];
+/// Repo-relative places a Smithbox checkout may sit. Absolute entries are honoured as-is
+/// because `Path::join` lets an absolute component replace the base.
+///
+/// `/mnt/d/Smithbox` used to head this list. That partition is not mounted on this machine,
+/// so the candidate resolved to nothing and reported as "checked, missing" -- indistinguishable
+/// from a genuine absence, which is the worst way for a path to be wrong. Home-relative
+/// candidates are added at runtime by [`smithbox_candidates`] instead of being written here,
+/// so nobody's home directory is baked into a constant.
+const DEFAULT_SMITHBOX_REPO_CANDIDATES: &[&str] = &[".deps/Smithbox", "../Smithbox", "../smithbox"];
+
+/// Home-relative Smithbox locations, resolved for whoever is running.
+const HOME_SMITHBOX_CANDIDATES: &[&str] = &["Smithbox", "tools/Smithbox", "projects/Smithbox"];
+
+/// Every place a Smithbox checkout is looked for, repo-relative first.
+fn smithbox_candidates(repo_root: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = DEFAULT_SMITHBOX_REPO_CANDIDATES
+        .iter()
+        .map(|candidate| repo_root.join(candidate))
+        .collect();
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        out.extend(HOME_SMITHBOX_CANDIDATES.iter().map(|c| home.join(c)));
+    }
+    out
+}
 const ANDRE_FORMATS_PROJECT_PATH: &str = "src/Andre/Andre.Formats/Andre.Formats.csproj";
 const ANDRE_FORMATS_DLL_FILE: &str = "Andre.Formats.dll";
 const ANDRE_SOULSFORMATS_DLL_FILE: &str = "Andre.SoulsFormats.dll";
@@ -151,8 +167,7 @@ impl SoulsFormats {
             );
         }
 
-        for candidate in DEFAULT_SMITHBOX_REPO_CANDIDATES {
-            let path = repo_root.join(candidate);
+        for path in smithbox_candidates(&repo_root) {
             checked_paths.push(path.clone());
             if let Some(layout) = detect_smithbox_layout(&path) {
                 return Ok(Self {
@@ -346,13 +361,22 @@ impl SoulsFormats {
     }
 }
 
+/// The workspace root this crate belongs to.
+///
+/// `CARGO_MANIFEST_DIR` is set in the ENVIRONMENT only under `cargo run`/`cargo test`. Reading
+/// it solely from the environment meant the built binary failed with `path is not valid UTF-8:
+/// "CARGO_MANIFEST_DIR"` -- a message about UTF-8 for a variable that was simply not set, which
+/// sent a reader looking for an encoding problem instead of the real one. The compile-time
+/// `env!` is always available, so the runtime variable is now only an override.
 fn current_repo_root() -> Result<PathBuf, SoulsFormatsError> {
-    env::var_os("CARGO_MANIFEST_DIR")
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .and_then(|path| path.parent().and_then(Path::parent).map(Path::to_path_buf))
-        .ok_or_else(|| SoulsFormatsError::NonUtf8Path {
-            path: PathBuf::from("CARGO_MANIFEST_DIR"),
-        })
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or(SoulsFormatsError::NonUtf8Path { path: manifest_dir })
 }
 
 fn andre_formats_project_path(smithbox_root: &Path) -> PathBuf {

@@ -559,13 +559,17 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         && fd4_time > TITLE_OWNER_SCAN_START_ADDRESS
         && unsafe { safe_read_usize(fd4_time) }.is_some()
     {
-        unsafe {
-            *(fd4_time as *mut usize) = er_game_base::mem::game_data_addr(
-                base,
-                FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
-                "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
-            )
-        };
+        // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build moved this
+        // vftable and nothing verified where to; storing that gives the FD4Time a NULL vptr the
+        // engine will later call through. Leaving the native's own value is strictly safer.
+        let vftable = er_game_base::mem::game_data_addr(
+            base,
+            FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+            "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+        );
+        if vftable != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *(fd4_time as *mut usize) = vftable };
+        }
     }
     append_autoload_debug(format_args!(
         "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success after direct native-close (in-world saveState=2 arm is blocked at RequestLoadSlot); no captured LoadJob is retained or replayed"

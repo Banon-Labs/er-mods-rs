@@ -87,13 +87,27 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     {
         return; // lost the one-shot race
     }
+    let Some(set_state_addr) = title_fn(TITLE_FD4_SETSTATE_RVA, "TITLE_FD4_SETSTATE_RVA") else {
+        return;
+    };
     let set_state: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(match title_fn(TITLE_FD4_SETSTATE_RVA, "TITLE_FD4_SETSTATE_RVA") { Some(address) => address, None => return }) };
+        unsafe { std::mem::transmute(set_state_addr) };
+    // THE ARGUMENT NEEDED RESOLVING TOO. The call target was already gated by `title_fn`, but the
+    // Loop state DESCRIPTOR was passed as a raw `base + RVA` -- and `set_state` dereferences it.
+    // `.rdata` moved on 1.17 like everything else (0x2a8f9e8 -> 0x2a92a68), so the FD4 state
+    // machine was being handed a pointer to whatever now occupies the 1.16.2 slot and told to
+    // transition to whatever it found there. A refusal returns instead: the fade is not skipped,
+    // which is cosmetic, where the wrong descriptor is not.
+    let Some(loop_desc) = er_game_base::game_build::resolve_game_address(
+        base + TITLE_STATE_DESC_LOOP_RVA,
+        "TITLE_STATE_DESC_LOOP_RVA",
+    ) else {
+        return;
+    };
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
+    unsafe { set_state(sm, loop_desc) };
     append_autoload_debug(format_args!(
-        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop) via 0x{:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***",
-        base + TITLE_FD4_SETSTATE_RVA
+        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop desc=0x{loop_desc:x}) via 0x{set_state_addr:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***"
     ));
 }
 

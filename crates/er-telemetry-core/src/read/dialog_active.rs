@@ -159,6 +159,11 @@ fn enabled() -> bool {
 /// The class name for a matched dialog vtable, or `None` if `vt` is not a dialog
 /// vtable. Also the authoritative "this pointer is a live dialog vtable" test.
 fn dialog_class(vt: usize, base: usize) -> Option<&'static str> {
+    // A refused RVA resolves to 0, so without this a null vtable pointer would be reported as a
+    // MessageBoxDialog on any build where the constant has no 1.17 mapping.
+    if vt == 0 {
+        return None;
+    }
     if vt
         == er_game_base::mem::game_data_addr(
             base,
@@ -262,7 +267,11 @@ fn scan_chunk(
     let mut i = 0usize;
     while i + word <= usable {
         let val = usize::from_ne_bytes(buf[i..i + word].try_into().ok()?);
-        if (val == want_a || val == want_b)
+        // `val != 0` is not paranoia about null vtables: `game_data_addr` answers 0 for an address
+        // with no mapping on the running build, and without this guard a refused `want` would turn
+        // every zeroed qword in the address space into a candidate.
+        if val != 0
+            && (val == want_a || val == want_b)
             && let Some(d) = validate_active(addr + i, base)
         {
             return Some(d);
@@ -275,7 +284,17 @@ fn scan_chunk(
 /// Bounded, fault-safe full address-space walk for a currently-displayed dialog.
 /// Only called on the throttle boundary while no active dialog is cached.
 fn scan_for_dialog(base: usize) -> Option<ActiveDialog> {
-    let want_a = base.checked_add(MSGBOX_DIALOG_VTABLE_RVA)?;
+    // BOTH vtable addresses go through the resolver. `want_a` used to be a raw
+    // `base + <1.16.2 RVA>`, which never reaches `er-game-base` and therefore never logs a
+    // refusal: on 1.17 `MSGBOX_DIALOG_VTABLE_RVA` moved 0x2b03550 -> 0x2b065d0, so the scan was
+    // comparing every qword against an address that is not the object any more and this oracle
+    // could not see a `CS::MessageBoxDialog` at all. Silently, with `want_b` resolved correctly
+    // four lines below it.
+    let want_a = er_game_base::mem::game_data_addr(
+        base,
+        MSGBOX_DIALOG_VTABLE_RVA,
+        "MSGBOX_DIALOG_VTABLE_RVA",
+    );
     let want_b = er_game_base::mem::game_data_addr(
         base,
         SAVE_RETRY_DIALOG_VTABLE_RVA,

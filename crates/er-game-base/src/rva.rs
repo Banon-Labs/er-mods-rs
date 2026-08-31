@@ -279,5 +279,25 @@ pub const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
 pub const STEP_LOADLIST_WAIT_RVA: usize = 0x00af_1800;
 /// The DLC virtual-root BLANK path.
 pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
-/// `DLIO::DLFileDeviceManager` singleton global.
+/// `DLIO::DLFileDeviceManager` singleton global -- deobf VA `0x1448464a8`.
+///
+/// SOLE DECLARATION of this address. `er-title-flow`'s `EBL_REGISTRY_GLOBAL_RVA` and
+/// `er-reload-trace`'s `MOUNTED_ARCHIVE_REGISTRY_RVA` are aliases derived from this constant;
+/// on 2026-08-30 both of them held an independently CORRUPTED copy of it (`0x84864a8`, a doubled
+/// digit; `0x448464a8`, the deobf VA with only `0x14` stripped rather than the whole image base).
+/// The image is `0x5e01800` bytes, so neither corruption is inside it and every read through them
+/// silently returned nothing. That is the failure mode this centralisation exists to prevent.
+///
+/// The value is byte-proven, not inferred: `GetFileDeviceManager` @`0x141f48b40` is
+/// `48 8b 05 61 d9 8f 02` = `mov rax, [rip+0x28fd961]`, and `0x141f48b47 + 0x28fd961` is
+/// `0x1448464a8` and nothing else. Ghidra names that global `GLOBAL_DLFileDeviceManager` and its
+/// lazy creator `FUN_141f49f60`. `0x48464a8` has reference sites in `.text` (6/6 agreeing on the
+/// 1.17 carry to `0x484a528`); `0x84864a8` and `0x448464a8` have zero between them.
+///
+/// This global IS the manager pointer, NOT "the mounted-archive registry" -- the mount census
+/// walks the registry hanging off it (`R+0x90`/`R+0x98`, stride `0x40`; archive name is an MSVC
+/// wstring at `entry+0x08`, `Archive*` at `entry+0x30`, lock at `R+0xB8`). This corrects bd
+/// `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`: a genuinely null manager
+/// would break every file read in the process, so that census reading `null` was a
+/// deref-depth/timing artifact and the conclusion drawn from it does not follow.
 pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;

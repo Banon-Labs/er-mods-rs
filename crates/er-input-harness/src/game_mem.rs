@@ -45,8 +45,20 @@ pub fn product_dll_present() -> bool {
     (unsafe { GetModuleHandleA(name.as_ptr().cast()) } as usize) != 0
 }
 
-fn deref_singleton(base: usize, rva: usize) -> Option<usize> {
-    let p = unsafe { read_usize(base + rva) }?;
+/// Dereference a game singleton pointer by RVA -- RESOLVED for the running build, never added raw.
+///
+/// This is the one chokepoint every singleton read in this DLL goes through, and its results feed
+/// raw byte STORES (`inject_vk` stamps `source+0x88`, the popup request byte at `+0x121`). Every
+/// `.data` global moved on 1.17, so a raw `base + rva` reads whatever now occupies the old slot;
+/// `HEAP_LO` only rejects the low 64 KiB, so a plausible-looking garbage qword passes it and the
+/// store lands somewhere arbitrary. Resolving here makes an unmapped global answer `None` instead,
+/// which is a path every caller already has.
+fn deref_singleton(base: usize, rva: usize, what: &'static str) -> Option<usize> {
+    let address = er_game_base::mem::game_data_addr(base, rva, what);
+    if address == 0 {
+        return None;
+    }
+    let p = unsafe { read_usize(address) }?;
     (p >= HEAP_LO).then_some(p)
 }
 
@@ -57,7 +69,8 @@ pub fn player_present() -> bool {
     let Some(base) = game_base() else {
         return false;
     };
-    let Some(gdm) = deref_singleton(base, GAME_DATA_MAN_GLOBAL_RVA) else {
+    let Some(gdm) = deref_singleton(base, GAME_DATA_MAN_GLOBAL_RVA, "GAME_DATA_MAN_GLOBAL_RVA")
+    else {
         return false;
     };
     unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }
@@ -71,7 +84,8 @@ pub fn menu_data_ptr() -> usize {
     let Some(base) = game_base() else {
         return 0;
     };
-    let Some(menu_man) = deref_singleton(base, CS_MENU_MAN_GLOBAL_RVA) else {
+    let Some(menu_man) = deref_singleton(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")
+    else {
         return 0;
     };
     unsafe { read_usize(menu_man + CS_MENU_MAN_MENU_DATA_OFFSET) }
@@ -89,7 +103,8 @@ pub fn play_time_ms() -> i64 {
     let Some(base) = game_base() else {
         return -1;
     };
-    let Some(gdm) = deref_singleton(base, GAME_DATA_MAN_GLOBAL_RVA) else {
+    let Some(gdm) = deref_singleton(base, GAME_DATA_MAN_GLOBAL_RVA, "GAME_DATA_MAN_GLOBAL_RVA")
+    else {
         return -1;
     };
     unsafe { read_usize(gdm + GAME_DATA_MAN_PLAY_TIME_A0_OFFSET) }
@@ -131,7 +146,7 @@ pub fn load_fsm() -> i32 {
     let Some(base) = game_base() else {
         return -1;
     };
-    let Some(gm) = deref_singleton(base, GAME_MAN_SINGLETON_RVA) else {
+    let Some(gm) = deref_singleton(base, GAME_MAN_SINGLETON_RVA, "GAME_MAN_SINGLETON_RVA") else {
         return -1;
     };
     unsafe { read_usize(gm + GAME_MAN_LOAD_FSM_B80_OFFSET) }.map_or(-1, |v| (v & 0xff) as i32)
@@ -143,7 +158,9 @@ pub fn now_loading() -> bool {
     let Some(base) = game_base() else {
         return false;
     };
-    let Some(helper) = deref_singleton(base, NOW_LOADING_SINGLETON_RVA) else {
+    let Some(helper) =
+        deref_singleton(base, NOW_LOADING_SINGLETON_RVA, "NOW_LOADING_SINGLETON_RVA")
+    else {
         return false;
     };
     unsafe { read_usize(helper + NOW_LOADING_FLAG_ED_OFFSET) }.is_some_and(|v| (v & 0xff) != 0)
@@ -167,7 +184,8 @@ pub fn flip_fixed_spf() -> f32 {
     let Some(base) = game_base() else {
         return -1.0;
     };
-    let Some(flipper) = deref_singleton(base, CS_FLIPPER_SINGLETON_RVA) else {
+    let Some(flipper) = deref_singleton(base, CS_FLIPPER_SINGLETON_RVA, "CS_FLIPPER_SINGLETON_RVA")
+    else {
         return -1.0;
     };
     unsafe { read_usize(flipper + CS_FLIPPER_FIXED_SPF_1C_OFFSET) }
@@ -180,7 +198,8 @@ pub fn flip_mode_current() -> i32 {
     let Some(base) = game_base() else {
         return -1;
     };
-    let Some(flipper) = deref_singleton(base, CS_FLIPPER_SINGLETON_RVA) else {
+    let Some(flipper) = deref_singleton(base, CS_FLIPPER_SINGLETON_RVA, "CS_FLIPPER_SINGLETON_RVA")
+    else {
         return -1;
     };
     unsafe { read_usize(flipper + CS_FLIPPER_MODE_CURRENT_C_OFFSET) }
@@ -215,7 +234,7 @@ pub const OPTIONSETTING_QUIT_TAB_INDEX: i32 = 8;
 
 fn input_mgr() -> usize {
     game_base()
-        .and_then(|b| deref_singleton(b, CS_MENU_MAN_GLOBAL_RVA))
+        .and_then(|b| deref_singleton(b, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA"))
         .unwrap_or(0)
 }
 
@@ -387,7 +406,7 @@ pub fn companion_autoload_requested() -> bool {
 pub fn snapshot() -> String {
     let base = game_base().unwrap_or(0);
     let gdm = game_base()
-        .and_then(|b| deref_singleton(b, GAME_DATA_MAN_GLOBAL_RVA))
+        .and_then(|b| deref_singleton(b, GAME_DATA_MAN_GLOBAL_RVA, "GAME_DATA_MAN_GLOBAL_RVA"))
         .unwrap_or(0);
     format!(
         "base=0x{base:x} gdm=0x{gdm:x} player_present={} menu_data=0x{:x}",

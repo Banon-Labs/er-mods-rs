@@ -74,6 +74,38 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// `CS::FeSystemAnnounceView::Update`. Hooked to learn the live view, which is otherwise reachable
 /// only by walking `CSMenuMan`'s window list.
+///
+/// # 1.17: `0x8c5960`, and the PROLOGUE does not need regenerating
+///
+/// It is easy to assume this needs a fresh `UPDATE_PROLOGUE` generated from the 1.17 image, since
+/// the existing one is assembled and pin-checked against `eldenring-deobf.bin` (1.16.2). It does
+/// not. The function's opening is byte-identical in both builds --
+/// `40 53 48 83 ec 30 0f 29 74 24 20` (`push rbx; sub rsp,0x30; movaps [rsp+0x20],xmm6`) -- and
+/// the pin the generator asserts is the first eight of those. What is missing is the ADDRESS, and
+/// only the address.
+///
+/// The 1.17 counterpart is `0x8c5960` (`+0x11a0`), derived four ways and each one independent:
+///
+/// * the masked signature `40 53 48 83 ec 30 0f 29 74 24 20 48 8b d9 0f 28 f1 e8 ?? ?? ?? ?? 48
+///   8b 05 ?? ?? ?? ?? 48 85 c0` occurs EXACTLY ONCE in each image -- at `0x8c47c0` in 1.16.2 and
+///   at `0x8c5960` in 1.17;
+/// * the `.pdata` run around it has the same five consecutive record sizes in both images
+///   (`0x6a, 0x34, 0x6, 0x5b, 0x3e`), and the whole-image map already pairs the four neighbours:
+///   `0x8c4710 -> 0x8c58b0`, `0x8c4780 -> 0x8c5920`, `0x8c47c6 -> 0x8c5966`,
+///   `0x8c4821 -> 0x8c59c1`. This one record sits BETWEEN two mapped ones and ends exactly where
+///   the next begins, in both images, so its own pair is fixed arithmetically;
+/// * the call at `+0x11` targets `0x7459d0` in 1.16.2 and `0x746820` in 1.17, which the map
+///   already carries as a pair;
+/// * the `CSMenuMan` global it reads moves `0x3d6b7b0 -> 0x3d6f820`, the documented `+0x4070`
+///   `.data` shift.
+///
+/// The mapper missed it because the record is SIX BYTES -- an MSVC chained-unwind prologue record,
+/// which has no body to build a masked signature from. That is a property of this function's
+/// unwind encoding, not a gap in the evidence.
+///
+/// So the one thing still needed is a row `0x8c47c0 -> 0x8c5960` in the 1.16.2 -> 1.17 map, which
+/// `docs/recon/` owns. Until it lands, `verified_fn` refuses AUDIBLY (it used to refuse in
+/// silence) and the announcement banner is simply absent on 1.17.
 pub const UPDATE_RVA: usize = 0x8c_47c0;
 
 // `UPDATE_PROLOGUE`: the opening bytes, so a game update that moves this fails closed instead of
@@ -247,13 +279,58 @@ pub fn tally() -> (usize, usize) {
     (0, 0)
 }
 
-/// Resolve a game function and confirm its opening bytes before handing back a pointer.
+/// Resolve a game function FOR THE RUNNING BUILD and confirm its opening bytes before handing
+/// back a pointer.
+///
+/// # The order matters, and it used to be wrong
+///
+/// This computed `base + rva` and byte-checked THERE. On 1.17 that address is not the function --
+/// `0x1408c47c0` holds `and $0x38,%al`, the tail of an unrelated instruction -- so the check
+/// failed and `install` returned `false` having logged nothing at all. The refusal was correct
+/// and completely invisible: the byte check is what kept it from being a corruption, but nothing
+/// downstream ever ran, so `er-hook`'s own `HOOK REFUSED` line never got the chance to appear.
+/// Worse, checking before resolving meant that even a CORRECT map row could not rescue it -- the
+/// stale bytes decide first.
+///
+/// Resolving first and checking at the resolved address makes the two claims independent: the
+/// resolver says WHERE the function is on this build, and the prologue says the code there really
+/// is that function. The byte check is not redundant with the resolver -- it is the belt to its
+/// braces, and the pattern `apply_splash_skip` established (a signature check turns a stale
+/// address into a refusal rather than a corruption).
+///
+/// `resolve_detour_address`, not the call resolver: the address is about to carry a MinHook
+/// detour. `er_hook::register_union_hook` resolves again internally, which is harmless -- the
+/// resolver's `already_translated` shortcut hands a 1.17 destination straight back.
+/// How many times a refusal here may be logged. `install` runs EVERY tick and clears its own
+/// latch on failure, so an unbounded line would be one per frame forever -- the 339,764-refusal
+/// failure `scripts/check-no-rva-zero.py` exists to stop. Twice is enough to be found.
 #[cfg(windows)]
-fn verified_fn(rva: usize, prologue: &[u8]) -> Option<usize> {
+const REFUSAL_LOG_LIMIT: usize = 2;
+#[cfg(windows)]
+static REFUSAL_LOGS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(windows)]
+fn verified_fn(rva: usize, prologue: &[u8], what: &str) -> Option<usize> {
+    let say = || REFUSAL_LOGS.fetch_add(1, Ordering::SeqCst) < REFUSAL_LOG_LIMIT;
     let base = er_game_base::mem::game_module_base().ok()?;
-    let address = base + rva;
+    let Some(address) = er_game_base::game_build::resolve_detour_address(base + rva, what) else {
+        if say() {
+            crate::standalone_log(format_args!(
+                "announce: {what} (1.16.2 rva {rva:#x}) has no detour-safe address for {} -- the \
+                 view-capture hook is NOT installed on this build",
+                er_game_base::game_build::describe_build()
+            ));
+        }
+        return None;
+    };
     for (index, expected) in prologue.iter().enumerate() {
         if unsafe { er_game_base::mem::safe_read_u8(address + index) }? != *expected {
+            if say() {
+                crate::standalone_log(format_args!(
+                    "announce: {what} resolved to {address:#x} but byte +{index:#x} is not \
+                     {expected:#04x} -- refusing to hook code that is not the function we measured"
+                ));
+            }
             return None;
         }
     }
@@ -284,7 +361,11 @@ pub fn install() -> bool {
     if HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return true;
     }
-    let Some(address) = verified_fn(UPDATE_RVA, UPDATE_PROLOGUE) else {
+    let Some(address) = verified_fn(
+        UPDATE_RVA,
+        UPDATE_PROLOGUE,
+        "CS::FeSystemAnnounceView::Update (UPDATE_RVA)",
+    ) else {
         HOOK_INSTALLED.store(0, Ordering::SeqCst);
         return false;
     };

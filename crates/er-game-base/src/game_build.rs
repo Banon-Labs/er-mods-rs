@@ -15,11 +15,14 @@
 //!
 //! # What it does NOT do
 //!
-//! It does not gate raw byte writes. [`crate::mem`]'s readers and `er-hook`'s
-//! `write_code_byte` / `patch_3byte_stub` are used by version-AGNOSTIC code that discovers its
-//! own addresses by scanning (`er-ersc-sigshim` rebuilds Seamless Co-op's lost AOB landmarks on
-//! exactly the builds this module calls unsupported). Refusing those would break the one thing
-//! that currently works on 1.17.
+//! It does not gate `er-hook`'s `write_code_byte`, which is used by version-AGNOSTIC code that
+//! discovers its own addresses by scanning (`er-ersc-sigshim` rebuilds Seamless Co-op's lost AOB
+//! landmarks, in a FOREIGN module, on exactly the builds this module calls unsupported). Refusing
+//! that would break the one thing that currently works on 1.17.
+//!
+//! `patch_3byte_stub` / `apply_xor_ret_stub` were named here too until 2026-08-30 and should not
+//! have been: they take a 1.16.2 `rva`, not a scanned address, so they have something to translate
+//! and now go through [`resolve_game_address`] like everything else.
 
 // Reading the running image's own PE headers is a Windows-only operation, and these externs are
 // undefined at LINK time on the host -- which host-unit-tested crates hit through `describe_build`.
@@ -363,21 +366,35 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
     // and its values are 1.17 RVAs, so asking it where a 1.17 address moved to finds no entry and
     // the honest answer is to refuse -- which is how a correctly translated address got REFUSED on
     // its second pass through, costing `er-armament-icons` its file-open observer at 0x1411ced80.
-    // The call graph no longer resolves twice; this makes a future double-resolve harmless rather
-    // than merely unlikely. Sound because the only addresses that are BOTH a 1.17 destination and
-    // a 1.16.2 source are the ones that did not move, where both answers are the same address;
-    // `verified_map_is_idempotent` fails the build's test run if a row ever makes that untrue.
-    if already_translated(rva) {
-        return Some(address);
-    }
-    if let Some((_, moved)) = VERIFIED_1162_TO_1170.iter().find(|(from, _)| *from == rva) {
-        let translated = base + *moved as usize;
-        address_log(format_args!(
-            "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
-             (verified same function; see docs/recon/rva-map-1162-to-1170.verified.tsv)",
-            describe_build()
-        ));
-        return Some(translated);
+    // The shortcut makes that second pass hand the address back instead of refusing it.
+    //
+    // IT DOES NOT MAKE A DOUBLE RESOLVE SAFE, and nothing in this function can. The shortcut
+    // declines on exactly the addresses where a double resolve goes WRONG: an address that is both
+    // a 1.17 destination and the 1.16.2 source of a DIFFERENT row is a source, so translation wins
+    // (it must -- see `already_translated_in`), and resolving it a second time returns a third,
+    // unrelated function with no error, no refusal and no log line. That is not hypothetical: it
+    // is what happened to 0x7ac890 -> 0x7ad710 -> 0x7ae590 on 2026-08-30.
+    //
+    // So the invariant this depends on is "resolve exactly once", which spans six crates and a
+    // `GetProcAddress` boundary. It is a CONVENTION -- there is no type here that distinguishes a
+    // 1.16.2 RVA from a 1.17 one, and no test in this file establishes it. The machine check is
+    // `scripts/check-1170-translation-collisions.py`, run from `scripts/check.sh`, which fails on
+    // any collision not recorded in `scripts/1170-translation-collisions.baseline.tsv` (three at
+    // the time of writing; an empty baseline means the tables carry none). The test below,
+    // `every_verified_row_resolves_to_its_own_destination`, checks something weaker and different:
+    // that the shortcut never swallows a source the table should have translated.
+    match table_answer(&VERIFIED_1162_TO_1170, rva) {
+        TableAnswer::AlreadyTranslated => return Some(address),
+        TableAnswer::MovedTo(moved) => {
+            let translated = base + moved as usize;
+            address_log(format_args!(
+                "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
+                 (verified same function; see docs/recon/rva-map-1162-to-1170.verified.tsv)",
+                describe_build()
+            ));
+            return Some(translated);
+        }
+        TableAnswer::Unmapped => {}
     }
     address_log(format_args!(
         "ADDRESS REFUSED ({what}): 0x{address:x} -- {}, and this address has no verified mapping \
@@ -387,7 +404,7 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
     None
 }
 
-/// Is `rva` a 1.17 destination that must NOT be translated again?
+/// Is `rva` a 1.17 destination of this table that must NOT be translated again?
 ///
 /// TRANSLATION WINS OVER THE SHORTCUT, and the order is the whole point. The shortcut exists so a
 /// second pass over an already-translated address hands it back instead of refusing -- the bug
@@ -399,20 +416,17 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
 /// destinations that are not sources of some other row, plus the rows that did not move, where
 /// both answers are the same address anyway.
 ///
-/// A pure function of the table so it can be tested on the host, where there is no game to
-/// resolve against.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn already_translated(rva: u32) -> bool {
-    already_translated_in(&VERIFIED_1162_TO_1170, rva)
-}
-
-/// [`already_translated`], asked of a particular table.
-///
 /// Both tables need this rule and they need the SAME rule. The detour table used to ask a looser
 /// question -- is this address any row's destination -- which at 27 rows was safe by accident:
 /// nothing was both. At 216 rows two addresses are (`0x6156c0` and `0x7ad710`), and the loose
 /// form would hand back a stale 1.16.2 source untranslated on the grounds that some other row
-/// moved a different function onto it.
+/// moved a different function onto it. That loose form is what
+/// `translation_wins_over_the_shortcut_on_a_collision` exists to keep out, on a table it builds
+/// itself rather than on whichever rows the ledgers happen to hold this week.
+///
+/// A pure function of the table so it can be tested on the host, where there is no game to
+/// resolve against. It was called through a `VERIFIED_1162_TO_1170`-shaped wrapper named
+/// `already_translated` until 2026-08-30; [`table_answer`] took that over.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn already_translated_in(table: &[(u32, u32)], rva: u32) -> bool {
     let is_destination = table
@@ -422,6 +436,38 @@ fn already_translated_in(table: &[(u32, u32)], rva: u32) -> bool {
         .iter()
         .any(|(from, moved)| *from == rva && *moved != rva);
     is_destination && !is_source_of_a_move
+}
+
+/// What a table says about one RVA, in the order the resolvers ask it.
+///
+/// Both resolvers used to inline this decision, and the tests then re-implemented it a third
+/// time -- which is how a test could go on passing while claiming to cover the order of the two
+/// checks it never actually ran. One function, asked by the resolvers and by the tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TableAnswer {
+    /// A 1.17 destination that no row claims as a source: hand it back unchanged.
+    AlreadyTranslated,
+    /// A 1.16.2 source; the running build has that function at this RVA.
+    MovedTo(u32),
+    /// No row names this RVA as a source. The caller must not proceed.
+    Unmapped,
+}
+
+/// [`already_translated_in`] and the table lookup, in the order that makes translation win.
+///
+/// The order is the whole point and is asserted by
+/// `translation_wins_over_the_shortcut_on_a_collision`: an address that is both a destination and
+/// a source is answered as a SOURCE, because the shortcut declines on it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn table_answer(table: &[(u32, u32)], rva: u32) -> TableAnswer {
+    if already_translated_in(table, rva) {
+        return TableAnswer::AlreadyTranslated;
+    }
+    match table.iter().find(|(from, _)| *from == rva) {
+        Some((_, moved)) => TableAnswer::MovedTo(*moved),
+        None => TableAnswer::Unmapped,
+    }
 }
 
 /// The address to DETOUR for `address` on the running build, or `None`.
@@ -449,20 +495,20 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     }
     let base = crate::mem::game_module_base().ok()?;
     let rva = (address - base) as u32;
-    if already_translated_in(&DETOUR_SAFE_1162_TO_1170, rva) {
-        return Some(address);
-    }
-    if let Some((_, moved)) = DETOUR_SAFE_1162_TO_1170
-        .iter()
-        .find(|(from, _)| *from == rva)
-    {
-        let translated = base + *moved as usize;
-        address_log(format_args!(
-            "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
-             (byte-verified same function AND audited as a detour target)",
-            describe_build()
-        ));
-        return Some(translated);
+    // Same rule, same order, same function as the CALL path above -- including the part it cannot
+    // establish. See the comment there.
+    match table_answer(&DETOUR_SAFE_1162_TO_1170, rva) {
+        TableAnswer::AlreadyTranslated => return Some(address),
+        TableAnswer::MovedTo(moved) => {
+            let translated = base + moved as usize;
+            address_log(format_args!(
+                "ADDRESS TRANSLATED ({what}): 0x{address:x} -> 0x{translated:x} for {} \
+                 (byte-verified same function AND audited as a detour target)",
+                describe_build()
+            ));
+            return Some(translated);
+        }
+        TableAnswer::Unmapped => {}
     }
     // Say WHICH refusal this is. There are three of them and they send a reader to three
     // different places, so reporting them as one wasted a day: 65 addresses were investigated as
@@ -503,6 +549,91 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     Some(address)
 }
 
+/// The RVA of a CALL SITE on the running build, or `None` when it cannot be placed.
+///
+/// # The class of bug this closes
+///
+/// A call site is a RETURN ADDRESS: a byte in the middle of a function, captured off the live
+/// stack by `RtlCaptureStackBackTrace` and compared -- as `frame - module_base` -- against a
+/// 1.16.2 constant. Nine such comparisons existed in this workspace on 2026-08-30, and every one
+/// of them failed in PERFECT SILENCE on 1.17: no hook is installed, no address is resolved, so
+/// there is no `HOOK REFUSED` and no `ADDRESS REFUSED`. The comparison simply never matches and
+/// the feature behind it never runs. Two user-visible features were dead this way -- the three
+/// cloned rows on the System>Quit tab, and the title FadeIn suppression -- with nothing in any
+/// log to say so.
+///
+/// # Why it takes a function and an offset rather than one address
+///
+/// The address map is keyed on `.pdata` function STARTS, because that is what a masked signature
+/// can identify and what the linker records. A mid-function address is not a function start, so
+/// it can never appear in the map -- `scripts/select-needed-1170-rows.py` cannot even see it.
+///
+/// What a call site DOES have is a stable identity: it is the return of the Nth `call` in a named
+/// function, and the offset of that call within its function survives the move whenever the body
+/// is unchanged. So the mappable half is the containing function, and the offset rides along.
+/// `scripts/derive-callsite-1170.py` prints the evidence for a given site: the `.pdata` record
+/// that contains it, the map's pair for that function, and the callee each image's `E8` reaches
+/// at the same offset -- which must be the same function under the map.
+///
+/// # Why this is not a detour licence
+///
+/// It resolves through [`resolve_game_address`], which reads the CALL/READ table. A detour needs
+/// `resolve_detour_address` and its separate, stricter table. That separation is the whole point:
+/// putting a mid-function address in a verdict table would license it as a DETOUR target --
+/// `DETOURABLE_ENTRY_EVIDENCE` accepts `NEITHER-ENTRY` -- and MinHook would then write five bytes
+/// into the middle of a live function. The offset here is added in Rust, AFTER resolution, and
+/// never enters a table at all.
+///
+/// `what` names the caller in the refusal line, so a reader can tell which comparison went inert.
+#[cfg(windows)]
+pub fn resolve_call_site_rva(
+    function_rva: usize,
+    offset_in_function: usize,
+    what: &str,
+) -> Option<usize> {
+    let base = crate::mem::game_module_base().ok().filter(|&b| b != 0)?;
+    let entry = resolve_game_address(base + function_rva, what)?;
+    Some(entry.checked_sub(base)? + offset_in_function)
+}
+
+/// Host builds have no running game, so no stack frame can carry a game RVA to compare against.
+#[cfg(not(windows))]
+pub fn resolve_call_site_rva(
+    function_rva: usize,
+    offset_in_function: usize,
+    what: &str,
+) -> Option<usize> {
+    let _ = (function_rva, offset_in_function, what);
+    None
+}
+
+/// [`resolve_call_site_rva`] for a call-site BAND anchored on one function.
+///
+/// A band whose endpoints sit at fixed offsets from a single named function translates exactly
+/// when that function does. A band spanning MANY functions does NOT: between 2.6.2.0 and 2.7.0.0
+/// neighbouring functions moved by different deltas (+0xdf0, +0xe20, +0xe30, +0xe40, +0xe80,
+/// +0xe90 and +0x1560 all occur inside `0x7a3000..0x7a4000` alone), so its width is not preserved
+/// and no anchor can carry it. Such a band has to be refused, not translated -- see the caller in
+/// `system_quit_dialog_handlers.rs` that does exactly that.
+pub fn resolve_call_site_band(
+    function_rva: usize,
+    start_offset: isize,
+    end_offset: isize,
+    what: &str,
+) -> Option<core::ops::Range<usize>> {
+    let entry = resolve_call_site_rva(function_rva, 0, what)?;
+    let shift = |offset: isize| {
+        if offset >= 0 {
+            entry.checked_add(offset as usize)
+        } else {
+            entry.checked_sub(offset.unsigned_abs())
+        }
+    };
+    let start = shift(start_offset)?;
+    let end = shift(end_offset)?;
+    (start < end).then_some(start..end)
+}
+
 /// Does `rva` have ANY mapping? Used only to word a refusal accurately; logs nothing.
 #[cfg(windows)]
 fn resolve_on_running_build_quiet(rva: u32) -> Option<u32> {
@@ -520,7 +651,23 @@ pub fn verified_translation_count() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{DETOUR_SAFE_1162_TO_1170, VERIFIED_1162_TO_1170};
+    use super::{DETOUR_SAFE_1162_TO_1170, TableAnswer, VERIFIED_1162_TO_1170, table_answer};
+
+    /// VACUOUS QUANTIFICATION, and why every test below counts what it walked.
+    ///
+    /// Two tests here used to filter the table to rows where `from != moved` and then assert a
+    /// predicate whose second conjunct is `!is_source_of_a_move(rva)` -- false, by that very
+    /// filter. The filtered set and the asserted property could not co-occur, so the assertion ran
+    /// over an empty set and passed unconditionally. Nothing in the output distinguished "walked
+    /// 476 rows, all fine" from "walked none", and the doc on `resolve_on_running_build` cited one
+    /// of them as proof that a hazard the data exhibits three times could not happen.
+    ///
+    /// So: no test here concludes anything from a filtered set without first asserting the set it
+    /// filtered is the size it should be. This is the floor for both tables -- an order of
+    /// magnitude below the ~470 and ~370 rows they carry, which is enough to catch a generator
+    /// that emitted a handful of rows or none, and loose enough that deleting bad rows (which is
+    /// wanted) never trips it.
+    const MIN_EXPECTED_ROWS: usize = 100;
 
     /// A hook and a call on the SAME function must reach the same address.
     ///
@@ -530,6 +677,7 @@ mod tests {
     /// fires, and the symptom is a silently inert feature rather than a crash, which is worse.
     #[test]
     fn every_detour_row_agrees_with_the_call_map() {
+        assert_table_is_populated(&DETOUR_SAFE_1162_TO_1170, "DETOUR_SAFE_1162_TO_1170");
         let disagreements: Vec<(u32, u32, Option<u32>)> = DETOUR_SAFE_1162_TO_1170
             .iter()
             .map(|(from, moved)| {
@@ -547,24 +695,10 @@ mod tests {
         );
     }
 
-    /// The shortcut rule has to hold on the DETOUR table too, and it is a different table.
-    #[test]
-    fn detour_table_translation_wins_over_the_shortcut() {
-        let shadowed: Vec<(u32, u32)> = DETOUR_SAFE_1162_TO_1170
-            .iter()
-            .filter(|(from, moved)| from != moved)
-            .filter(|(from, _)| super::already_translated_in(&DETOUR_SAFE_1162_TO_1170, *from))
-            .copied()
-            .collect();
-        assert!(
-            shadowed.is_empty(),
-            "these detour rows would be swallowed by the already-translated shortcut: {shadowed:#x?}"
-        );
-    }
-
     /// One source, one answer -- on the detour table as on the call one.
     #[test]
     fn detour_map_has_one_answer_per_source() {
+        assert_table_is_populated(&DETOUR_SAFE_1162_TO_1170, "DETOUR_SAFE_1162_TO_1170");
         let mut seen: Vec<u32> = DETOUR_SAFE_1162_TO_1170
             .iter()
             .map(|(from, _)| *from)
@@ -575,45 +709,140 @@ mod tests {
         assert_eq!(before, seen.len(), "the detour table names a source twice");
     }
 
-    /// Every row that MOVED must still be reachable as a source.
+    /// THE RULE, on a table this test builds itself. The one test here that no ledger edit can
+    /// make vacuous.
     ///
-    /// The hazard the "already translated" shortcut creates is silent: an address that is a
-    /// destination of one row and the source of a different one gets handed back untouched, and
-    /// the second row never runs. At 27 rows the intersection was empty and this could not
-    /// happen; at 329 it is not, which is how the test earned its keep.
+    /// `0xb` below is both the destination of the first row and the source of the second -- the
+    /// exact shape of `0x7ac890 -> 0x7ad710 -> 0x7ae590`, which on 2026-08-30 returned a third,
+    /// unrelated function with no error and no log line. If the shortcut answered first, `0xb`
+    /// would be handed back as already-translated and the second row would never run.
     ///
-    /// `already_translated` therefore lets translation win, and this asserts that property over
-    /// the real table rather than assuming the data stays convenient.
+    /// The real-table tests below are worth having, but their power to catch a loosened
+    /// `already_translated_in` depends on a collision existing in the ledgers, and the three that
+    /// exist today are slated for deletion. This one does not depend on the data at all.
     #[test]
-    fn verified_map_is_idempotent() {
-        let shadowed: Vec<(u32, u32)> = VERIFIED_1162_TO_1170
-            .iter()
-            .filter(|(from, moved)| from != moved)
-            .filter(|(from, _)| super::already_translated(*from))
-            .copied()
-            .collect();
-        assert!(
-            shadowed.is_empty(),
-            "these rows would be swallowed by the already-translated shortcut: {shadowed:#x?}"
+    fn translation_wins_over_the_shortcut_on_a_collision() {
+        const TABLE: [(u32, u32); 5] = [
+            (0xa, 0xb),
+            // The collision: `0xb` is a destination above and a source here.
+            (0xb, 0xc),
+            // A row that did not move, and that nothing else points at.
+            (0x20, 0x20),
+            // A row that did not move but IS another row's destination. Both answers are `0x30`,
+            // so the shortcut claiming it is harmless -- the one case where it may.
+            (0x30, 0x30),
+            (0x31, 0x30),
+        ];
+
+        assert_eq!(
+            table_answer(&TABLE, 0xa),
+            TableAnswer::MovedTo(0xb),
+            "a plain source must translate"
+        );
+        assert_eq!(
+            table_answer(&TABLE, 0xb),
+            TableAnswer::MovedTo(0xc),
+            "an address that is BOTH a destination and a source must be answered as a source; \
+             AlreadyTranslated here drops the second row silently, which is the whole hazard"
+        );
+        assert_eq!(
+            table_answer(&TABLE, 0xc),
+            TableAnswer::AlreadyTranslated,
+            "a destination that nothing else sources is what the shortcut is FOR: a second \
+             resolve of it must hand it back, not refuse it"
+        );
+        assert_eq!(
+            table_answer(&TABLE, 0x20),
+            TableAnswer::MovedTo(0x20),
+            "a row that did not move still answers from the table"
+        );
+        assert_eq!(
+            table_answer(&TABLE, 0x30),
+            TableAnswer::AlreadyTranslated,
+            "the shortcut may claim a source only when its answer is the row's own destination"
+        );
+        assert_eq!(
+            table_answer(&TABLE, 0x31),
+            TableAnswer::MovedTo(0x30),
+            "a source whose destination did not move is still a source"
+        );
+        assert_eq!(
+            table_answer(&TABLE, 0x99),
+            TableAnswer::Unmapped,
+            "an address no row names must be refused, not guessed at"
         );
     }
 
-    /// A destination that nothing else claims as a source is recognised, so a double resolve is
-    /// still harmless -- the reason the shortcut exists at all.
+    /// Every row must resolve to its OWN destination -- on the call table.
+    ///
+    /// WHAT THIS REPLACED. `verified_map_is_idempotent` filtered to rows where `from != moved` and
+    /// then asked `already_translated(from)`, whose second conjunct is
+    /// `!is_source_of_a_move(rva)` -- false for every row the filter kept. The set it asserted
+    /// over was empty by construction and the test could not fail. Its name promised more than it
+    /// checked as well: resolution is NOT idempotent on this data, because
+    /// `resolve(resolve(0x614870))` is `0x616510`, a different function.
+    ///
+    /// What is left is the property the old doc actually described: no row is swallowed by the
+    /// shortcut. Every row is resolved through the same [`table_answer`] the resolvers call, and
+    /// the answer is compared to that row's own destination -- no filter in front of it, so the
+    /// number of rows checked is the number of rows there are.
     #[test]
-    fn a_pure_destination_is_recognised_as_already_translated() {
-        let pure = VERIFIED_1162_TO_1170.iter().find(|(from, moved)| {
-            from != moved
-                && !VERIFIED_1162_TO_1170
+    fn every_verified_row_resolves_to_its_own_destination() {
+        assert_every_row_resolves_to_itself(&VERIFIED_1162_TO_1170, "VERIFIED_1162_TO_1170");
+    }
+
+    /// The same rule on the DETOUR table, which is generated from a different file and used by a
+    /// different resolver. Replaces `detour_table_translation_wins_over_the_shortcut`, which
+    /// carried the same contradiction between its filter and its predicate.
+    #[test]
+    fn every_detour_row_resolves_to_its_own_destination() {
+        assert_every_row_resolves_to_itself(&DETOUR_SAFE_1162_TO_1170, "DETOUR_SAFE_1162_TO_1170");
+    }
+
+    /// EVERY destination that nothing else claims as a source is recognised, so a double resolve
+    /// of one is handed back rather than refused -- the reason the shortcut exists at all.
+    ///
+    /// The predecessor took the FIRST such row with `find` and then wrapped its assertion in
+    /// `if let Some(..)`, so a table with no pure destination -- or an empty one -- passed in
+    /// silence. This walks all of them and says how many it expected.
+    #[test]
+    fn every_pure_destination_is_recognised_as_already_translated() {
+        let pure: Vec<u32> = VERIFIED_1162_TO_1170
+            .iter()
+            .filter(|(from, moved)| from != moved)
+            .map(|(_, moved)| *moved)
+            .filter(|moved| {
+                !VERIFIED_1162_TO_1170
                     .iter()
                     .any(|(other, other_moved)| other == moved && other != other_moved)
-        });
-        if let Some((_, moved)) = pure {
-            assert!(
-                super::already_translated(*moved),
-                "0x{moved:x} is a destination claimed by nothing else and was not recognised"
-            );
-        }
+            })
+            .collect();
+        assert!(
+            pure.len() >= MIN_EXPECTED_ROWS,
+            "only {} of {} rows in VERIFIED_1162_TO_1170 have a destination nothing else sources; \
+             under {MIN_EXPECTED_ROWS} means the table is not what this test thinks it is, and \
+             the assertion below would be concluding from almost nothing",
+            pure.len(),
+            VERIFIED_1162_TO_1170.len()
+        );
+        let unrecognised: Vec<u32> = pure
+            .iter()
+            .copied()
+            .filter(|moved| super::already_translated_in(&VERIFIED_1162_TO_1170, *moved))
+            .count()
+            .eq(&pure.len())
+            .then(Vec::new)
+            .unwrap_or_else(|| {
+                pure.iter()
+                    .copied()
+                    .filter(|moved| !super::already_translated_in(&VERIFIED_1162_TO_1170, *moved))
+                    .collect()
+            });
+        assert!(
+            unrecognised.is_empty(),
+            "these destinations are claimed by no other row's source and were still not \
+             recognised as already-translated, so a second resolve of them REFUSES: {unrecognised:#x?}"
+        );
     }
 
     /// The table has to be usable by the resolver's linear scans without a duplicate source
@@ -621,6 +850,7 @@ mod tests {
     /// disagree would make the answer depend on row order.
     #[test]
     fn verified_map_has_one_answer_per_source() {
+        assert_table_is_populated(&VERIFIED_1162_TO_1170, "VERIFIED_1162_TO_1170");
         let mut seen: Vec<(u32, u32)> = Vec::new();
         for (from, moved) in VERIFIED_1162_TO_1170 {
             if let Some((_, first)) = seen.iter().find(|(other, _)| *other == from) {
@@ -632,5 +862,40 @@ mod tests {
                 seen.push((from, moved));
             }
         }
+    }
+
+    /// A conclusion drawn from walking a table is worth exactly as much as the walk was long.
+    fn assert_table_is_populated(table: &[(u32, u32)], name: &str) {
+        assert!(
+            table.len() >= MIN_EXPECTED_ROWS,
+            "{name} holds {} rows. Everything asserted about it is a claim over that set, and \
+             under {MIN_EXPECTED_ROWS} rows the generator produced almost nothing -- a green tick \
+             here would mean the check ran over an empty table, not that the table is good",
+            table.len()
+        );
+    }
+
+    /// `resolve(from) == moved`, for every row, through the resolvers' own decision function.
+    fn assert_every_row_resolves_to_itself(table: &[(u32, u32)], name: &str) {
+        assert_table_is_populated(table, name);
+        let wrong: Vec<(u32, u32, TableAnswer)> = table
+            .iter()
+            .map(|&(from, moved)| (from, moved, table_answer(table, from)))
+            .filter(|&(from, moved, answer)| match answer {
+                // The shortcut may claim a source only when the address it hands back IS what the
+                // row would have returned. That is the rows that did not move, and only them.
+                TableAnswer::AlreadyTranslated => from != moved,
+                TableAnswer::MovedTo(to) => to != moved,
+                TableAnswer::Unmapped => true,
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{name}: {} of {} rows do not resolve to their own destination. A row answered \
+             AlreadyTranslated is one the shortcut swallowed -- its translation never runs and \
+             nothing logs that it did not. (from, destination, answer): {wrong:#x?}",
+            wrong.len(),
+            table.len()
+        );
     }
 }

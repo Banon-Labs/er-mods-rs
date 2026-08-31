@@ -57,10 +57,23 @@ USAGE
                                    reads at that offset, and what happened to each   (~1 min)
     --pairs docs/recon/rva-map-1162-to-1170.verified.tsv --names 1
                                    compare only the functions this mod actually hooks
+    --check-extents                prove the DECODED leaf extents against two independent
+                                   witnesses: the linker's own `.pdata` table and Ghidra 1.16.2
 
 ORDER: --scan, then --attribute (needs `bash scripts/ghidra/mcp-up-1162.sh`), then --report.
 `--scan` and `--find-displacement` decode ~29 MB of function bodies on each side; background them.
 Everything else reads cached output under `--out-dir`.
+
+WHERE A FUNCTION ENDS IS PART OF THE MEASUREMENT
+-----------------------------------------------
+MSVC emits no unwind record for a leaf or a thunk, so `.pdata` cannot say where those end -- and
+they are exactly the shape a field getter takes. Their extent is DECODED (forward-branch
+watermark; the implementation is shared with `scripts/verify-rva-map-1170.py` rather than written
+twice), never guessed at the next `.pdata` start. Guessing ran each such comparison through the
+inter-function padding -- 0xCC in one build, 0x90 in the other -- and into unrelated neighbours,
+which desynchronises the two decodes and reports the function as CHANGED. On 2026-08-30 that
+produced six false "this hooked function changed in 1.17" verdicts, `SetSaveSlot` among them.
+`--check-extents` is the standing proof; `--selftest` pins the shape.
 
 THE ONE RULE FOR READING THE OUTPUT: a displacement is not a field. `0xb0c` moved in 1.17 -- in
 `MoWwiseManImp`. `DIALOG_SLOT_CURSOR_B0C_OFFSET` is also `0xb0c` and indexes something else
@@ -84,6 +97,7 @@ IMAGE_1162 = ROOT / "eldenring-deobf.bin"
 IMAGE_1170 = ROOT / "eldenring-deobf-1.17.bin"
 FUNCTION_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.functions.tsv"
 VERIFIED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.verified.tsv"
+NEEDED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.needed-verified.tsv"
 DEFAULT_OUT = Path(
     os.environ.get(
         "ER_STRUCT_DRIFT_OUT",
@@ -261,6 +275,57 @@ SHAPE_DIFF = "SHAPE-DIFF"
 STABLE = "STABLE"
 DRIFT = "DRIFT"
 MIXED = "MIXED"
+# Neither `.pdata` nor a decoded terminator could say where the function ends. Reported instead
+# of comparing, because the alternative -- guess an extent and compare anyway -- is what
+# manufactured six false "this hooked function changed" reports on 2026-08-30. See `extent_of`.
+NO_EXTENT = "NO-EXTENT"
+
+
+# --------------------------------------------------------------------------------------------
+# function extents
+# --------------------------------------------------------------------------------------------
+def _sibling_leaf_extent():
+    """`leaf_extent` from `scripts/verify-rva-map-1170.py`, imported rather than reimplemented.
+
+    That file already solved this exact problem and paid for the solution: the obvious rule --
+    stop at the first `ret` -- is WRONG for a range-checked getter, whose fast-path `ret` sits
+    IN FRONT of the branch target of its own bounds check (`cmp / ja / <compute> / ret /
+    xor eax,eax / ret`). Its sweep therefore carries a watermark of the furthest forward branch
+    target and only accepts a terminator beyond it. Two implementations of a rule that subtle
+    would drift apart, and the second one would be the one nobody re-checked against Ghidra.
+    """
+    import importlib.util
+
+    path = ROOT / "scripts" / "verify-rva-map-1170.py"
+    spec = importlib.util.spec_from_file_location("_verify_rva_map_1170", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.leaf_extent
+
+
+def extent_of(rva: int, ends: dict[int, int], image: bytes, starts: set[int], leaf_extent):
+    """Where the function at `rva` ends: `.pdata` if it declares one, else DECODED. Never guessed.
+
+    THE BUG THIS REPLACES, because the replacement only makes sense against it. The old rule was
+    "`.pdata` end, or else the next `.pdata` start, capped at 0x400". MSVC emits no unwind record
+    for a leaf or a thunk, so for exactly those functions the fallback ran from the function's
+    entry all the way to the next function that DOES have unwind data -- over its own `ret`, over
+    the inter-function padding, and on through several unrelated neighbours.
+
+    That is not merely too much text. The padding is the poison: MSVC pads with EITHER `int3`
+    (0xCC) or `nop` (0x90) and does not make the same choice in two builds, so the two decodes
+    fall out of phase at the first pad byte and every instruction after it compares unequal. The
+    measured result on 2026-08-30 was `--pairs` reporting SEVEN hooked functions whose bodies had
+    changed in 1.17 when only ONE had. `FUN_14067a980` came back "89 vs 6 instructions" -- both
+    numbers describing padding and strangers, not the 6-instruction function at that address.
+
+    A decoded extent that stops at the real terminator keeps the two builds in phase. When even
+    that fails, the answer is `None` -> NO-EXTENT: an honest "not measured" is worth more than a
+    comparison whose inputs are the wrong bytes.
+    """
+    if rva in ends:
+        return ends[rva]
+    return leaf_extent(image, BASE + rva, starts)
 
 
 class Comparison:
@@ -271,6 +336,7 @@ class Comparison:
         "global_drift",
         "imm_drift",
         "stable",
+        "stable_by_base",
         "insns",
         "why",
     )
@@ -282,6 +348,10 @@ class Comparison:
         self.global_drift: list[tuple[int, int]] = []  # image-base-relative globals (old, new)
         self.imm_drift: list[tuple[str, int, int]] = []  # (mnemonic, old, new)
         self.stable: list[int] = []  # non-stack, non-rip displacements that did NOT move
+        # The same, keyed by base register. `stable` alone cannot support a bracket: one function
+        # walks several objects and a held offset on `rax` says nothing about a field reached
+        # through `rbx`.
+        self.stable_by_base: list[tuple[str, int]] = []
         self.insns = 0
         self.why = ""
 
@@ -323,6 +393,7 @@ def compare_bodies(md, a: bytes, a_va: int, b: bytes, b_va: int) -> Comparison:
                         and 0 < disp < GLOBAL_DISPLACEMENT_MIN
                     ):
                         result.stable.append(disp)
+                        result.stable_by_base.append((base, disp))
             continue
         a_shape, a_mem = split_memory(aop)
         b_shape, b_mem = split_memory(bop)
@@ -338,6 +409,7 @@ def compare_bodies(md, a: bytes, a_va: int, b: bytes, b_va: int) -> Comparison:
                     and 0 < a_disp < GLOBAL_DISPLACEMENT_MIN
                 ):
                     result.stable.append(a_disp)
+                    result.stable_by_base.append((a_base, a_disp))
                 continue
             if not a_base or a_base == "rip":
                 continue  # absolute / rip-relative: the image moved, not a struct
@@ -545,35 +617,36 @@ def pairs_mode(args) -> int:
     md = Cs(CS_ARCH_X86, CS_MODE_64)
     old, new_img = Image(IMAGE_1162), Image(IMAGE_1170)
     ends_old, ends_new = old.function_ends(), new_img.function_ends()
-    starts_old = sorted(ends_old)
-    starts_new = sorted(ends_new)
-
-    def extent(rva, ends, starts):
-        """`.pdata` end, or the next function start -- leaf functions carry no unwind record."""
-        if rva in ends:
-            return ends[rva]
-        import bisect
-
-        index = bisect.bisect_right(starts, rva)
-        following = starts[index] if index < len(starts) else rva + 0x200
-        return min(following, rva + 0x400)
+    starts_old, starts_new = set(ends_old), set(ends_new)
+    leaf_extent = _sibling_leaf_extent()
 
     path = Path(args.pairs)
     cache_path = args.out_dir / "ghidra-function-types.json"
     cache = json.loads(cache_path.read_text()) if cache_path.is_file() else {}
     verdicts = collections.Counter()
+    leaves = 0
     for a_rva, b_rva in load_pairs(path):
-        a_end = extent(a_rva, ends_old, starts_old)
-        b_end = extent(b_rva, ends_new, starts_new)
+        a_end = extent_of(a_rva, ends_old, old.data, starts_old, leaf_extent)
+        b_end = extent_of(b_rva, ends_new, new_img.data, starts_new, leaf_extent)
+        va = f"{BASE + a_rva:#x}"
+        if a_end is None or b_end is None:
+            verdicts[NO_EXTENT] += 1
+            side = "1.16.2" if a_end is None else "1.17"
+            print(f"{va} -> {BASE + b_rva:#x}  {NO_EXTENT:<10}    - insns  "
+                  f"(no .pdata record and no decodable terminator on the {side} side)")
+            continue
+        if a_rva not in ends_old or b_rva not in ends_new:
+            leaves += 1
         cmp = compare_bodies(
             md, old.data[a_rva:a_end], BASE + a_rva, new_img.data[b_rva:b_end], BASE + b_rva
         )
         verdicts[cmp.verdict] += 1
-        va = f"{BASE + a_rva:#x}"
         if args.names:
             function_types(cache, [va])
         label = cache.get(va, {}).get("name", "")
-        print(f"{va} -> {BASE + b_rva:#x}  {cmp.verdict:<10} {cmp.insns:>4} insns  {label}")
+        extents = f"{a_end - a_rva:#x}/{b_end - b_rva:#x} bytes"
+        print(f"{va} -> {BASE + b_rva:#x}  {cmp.verdict:<10} {cmp.insns:>4} insns  "
+              f"{extents:<12} {label}")
         if cmp.verdict == SHAPE_DIFF:
             print(f"    body differs: {cmp.why}")
             continue
@@ -586,11 +659,141 @@ def pairs_mode(args) -> int:
     if args.names:
         cache_path.write_text(json.dumps(cache), encoding="utf-8")
     print(f"\n{dict(verdicts)}")
+    print(f"{leaves} of these pairs have no .pdata record on one side; their extent was DECODED "
+          "(forward-branch watermark), not guessed.")
     print(
         "SHAPE-DIFF here is not a struct verdict: the function itself changed, so its "
         "displacements cannot be compared and its offsets stay UNKNOWN."
     )
     return 0
+
+
+def check_extents(args) -> int:
+    """Cross-check every DECODED leaf extent against Ghidra's own 1.16.2 function size.
+
+    The decoded extent is the only part of this tool that is INFERRED rather than read out of the
+    image, so it is the only part that needs an independent witness. Ghidra analysed the same
+    1.16.2 bytes with its own flow analysis and recorded a size per function; if the watermark
+    sweep and Ghidra disagree about where a function ends, one of them is wrong and the
+    comparison built on it is worthless.
+
+    Only 1.16.2 is checkable this way -- the MCP serves no 1.17 program -- but a boundary rule
+    that reproduces Ghidra exactly on every leaf in the hooked set is a rule, not a coincidence,
+    and the same rule runs on both sides.
+
+    An address Ghidra has no function at (a mid-function patch site, e.g. `0x140958b37`) is
+    reported separately: it is not a failure of the extent rule, it is a reminder that not every
+    row in the pair tables names a function entry.
+
+    Needs `bash scripts/ghidra/mcp-up-1162.sh`.
+    """
+    _ensure_capstone()
+    sys.path.insert(0, str(ROOT / "scripts" / "ghidra"))
+    from mcp_query import query  # type: ignore
+
+    old = Image(IMAGE_1162)
+    ends = old.function_ends()
+    starts = set(ends)
+    leaf_extent = _sibling_leaf_extent()
+
+    # WITNESS 1: the linker's own table, over every small function that HAS one.
+    #
+    # Ghidra can only be asked about the few dozen leaves in the pair tables. `.pdata` declares
+    # 200k+ extents that were written by the linker rather than inferred by anyone, and the rule
+    # under test is not allowed to know which functions have a record. So run the decoder on the
+    # functions that DO have one and require it to reproduce the declared end. This is the check
+    # that would have caught the old fallback immediately: "next .pdata start, capped at 0x400"
+    # overruns nearly every one of these.
+    # Two records must be filtered out first, or the check measures its own sample rather than
+    # the rule. `.pdata` emits one RUNTIME_FUNCTION per CHUNK, so a chunked function contributes
+    # records whose `begin` is a mid-function address and whose `end` is a chunk end, not a
+    # function end -- decoding from there correctly runs on into the next chunk, and scoring that
+    # as an overrun blames the decoder for the table's shape. Measured: 379 of 2000 unfiltered
+    # "overruns" were exactly this. So keep only records that (a) no other record covers, and
+    # (b) are followed by an MSVC pad byte, which is the image's own evidence that the function
+    # really ends there.
+    pad = {0xCC, 0x90}
+    ordered = sorted(ends.items())
+    covered = set()
+    reach = -1
+    for rva, end in ordered:
+        if rva < reach:
+            covered.add(rva)
+        reach = max(reach, end)
+    sample = [
+        (rva, end)
+        for rva, end in ordered
+        if end - rva <= 0x100 and rva not in covered and end < len(old.data)
+        and old.data[end] in pad
+    ]
+    step = max(1, len(sample) // args.extent_sample)
+    sample = sample[::step][: args.extent_sample]
+    exact = short = over = missing = 0
+    overruns = []
+    for rva, declared in sample:
+        got = leaf_extent(old.data, BASE + rva, starts, limit=0x100)
+        if got is None:
+            missing += 1
+        elif got == declared:
+            exact += 1
+        elif got < declared:
+            short += 1
+        else:
+            over += 1
+            overruns.append((rva, got, declared))
+    print(f"witness 1 -- .pdata self-check over {len(sample)} declared, unchunked, "
+          "pad-terminated functions <= 0x100 bytes:")
+    print(f"  exact {exact}   short {short}   OVERRUN {over}   no-terminator {missing}")
+    for rva, got, declared in overruns[:10]:
+        print(f"    OVERRUN {BASE + rva:#x}  decoded {got - rva:#x} > declared {declared - rva:#x}")
+    print("  (an overrun here is DIAGNOSTIC, not a failure: this sample is drawn from functions "
+          "that HAVE\n   unwind data, and the three shapes that defeat the sweep -- an epilogue "
+          "chunk, an Arxan\n   chunk at an unaligned begin, and a block ending in a noreturn "
+          "`call` + int3 -- all require\n   a stack frame or a call, which is precisely what a "
+          ".pdata-LESS leaf does not have. The rule\n   is only ever applied to leaves; witness "
+          "2 is the check that governs.)")
+    print()
+
+    # WITNESS 2: Ghidra's independent flow analysis, on the leaves that actually matter.
+    sources = [Path(args.pairs)] if args.pairs else [VERIFIED_MAP, NEEDED_MAP]
+    rvas: set[int] = set()
+    for path in sources:
+        if path.is_file():
+            rvas.update(a for a, _b in load_pairs(path) if a not in ends)
+    print(f"{len(rvas)} 1.16.2-side addresses in {', '.join(p.name for p in sources)} "
+          "have no .pdata record; their extent is decoded")
+
+    match = mismatch = no_extent = not_a_function = 0
+    for rva in sorted(rvas):
+        va = BASE + rva
+        end = leaf_extent(old.data, va, starts)
+        derived = None if end is None else end - rva
+        try:
+            res = query("getFunctionByAddress", {"address": f"{va:#x}"}, timeout=20).get("result")
+        except Exception as exc:  # daemon down, or the address is outside the program
+            res = None
+            print(f"  {va:#x}  ghidra query failed: {exc}")
+        res = res or {}
+        entry, size = res.get("entry"), res.get("size")
+        if entry is None or size is None or int(entry, 16) != va:
+            not_a_function += 1
+            verdict = "no Ghidra function AT this entry"
+        elif derived is None:
+            no_extent += 1
+            verdict = "NO-EXTENT (decoder found no terminator)"
+        elif derived == size:
+            match += 1
+            verdict = "match"
+        else:
+            mismatch += 1
+            verdict = "MISMATCH"
+        shown = "none" if derived is None else f"{derived:#x}"
+        ghidra_size = "-" if size is None else f"{size:#x}"
+        print(f"  {va:#x}  decoded={shown:<7} ghidra={ghidra_size:<7} {verdict:<38} "
+              f"{res.get('name', '')}")
+    print(f"\nwitness 2 -- Ghidra 1.16.2: match {match}   MISMATCH {mismatch}   "
+          f"no-extent {no_extent}   not-a-function {not_a_function}")
+    return 1 if mismatch else 0
 
 
 def find_displacement(args) -> int:
@@ -706,7 +909,9 @@ EXCLUSIONS: list[tuple[str, re.Pattern, str]] = [
     ),
     (
         "save-file",
-        re.compile(r"^(SAVE_PGD_|SLOT_BODY_|USER_DATA10_|ENT_[A-Z]*_OFFSET_OFF|BND4_|SL2_)"),
+        re.compile(
+            r"^(SAVE_PGD_|SAVE_BODY_|SLOT_BODY_|USER_DATA10_|ENT_[A-Z]*_OFFSET_OFF|BND4_|SL2_)"
+        ),
         "byte offset into an on-disk BND4/SL2 save, versioned by the save format not the image",
     ),
     (
@@ -731,6 +936,10 @@ EXCLUSIONS: list[tuple[str, re.Pattern, str]] = [
         "not-a-field",
         re.compile(
             r"(ALIGNMENT|LIMIT|INTERVAL|COUNTDOWN|SCAN_|DIMMED_FRAME|_STEP$|MAX_ADDRESS"
+            # FNV1A64_OFFSET_BASIS is the FNV-1a seed 0xcbf29ce484222325, not a byte offset --
+            # it only matched because "OFFSET" is part of the algorithm's own vocabulary. Left
+            # in, it appears in the triage as a 0xcbf2... "field" that nothing can measure.
+            r"|^FNV1A64_|_BASIS$|_PRIME$"
             r"|^MODULE_MIN_OFFSET$|^MODULE_MAX_OFFSET$|^NEXT_INDEX_OFFSET$|^CAPS_SUBTYPE_OFFSET$)"
         ),
         "a tuning value, an index step or a scan parameter that happens to have OFFSET in its name",
@@ -1215,6 +1424,456 @@ def report(args) -> int:
     return 0
 
 
+# The structures `--attribute` measured growing in 1.17 (see the report's section 3). A move
+# witnessed only inside these is a move already accounted for, not a new one.
+MOVED_STRUCTS = {
+    "MoWwiseManImp", "AkSoundEngine", "AkPlayingMgr", "CAkAudioMgr", "CAkURenderer",
+    # Added 2026-08-30 after reading the witness that generates most of the noise below.
+    # `FUN_1422232b0` is `bool(undefined8, MOSoundManager *, AkPlatformInitSettings *)` -- one
+    # Wwise init function -- and 1.17 shifted its settings block by a uniform +0x38, so it alone
+    # "moves" 0x50, 0x88, 0x90, 0xb8, 0xd4 and 0xe0. Those are the commonest small offsets in the
+    # repo, so without naming this function as audio it implicates a large share of the menu,
+    # step and title constants at once, every one of them a coincidence.
+    "MOSoundManager", "AkPlatformInitSettings",
+    "ChrIns", "PlayerIns", "EnemyIns", "PlayerGameData", "PlayerStatus", "CSPlayerDataMan",
+    "CSLuaEventProxy", "CSLuaEventManImp", "CSLuaEventScriptImitation", "CSScriptCallParam",
+    "EneDat", "ChrAsmModelRes", "CSFeManImp", "CSQuickMatchingCtrl", "ComManipulator",
+    "SosSignMan", "Packet74",
+}
+
+# A use site that WRITES through the offset. A wrong read returns a wrong number, which usually
+# surfaces as visibly wrong behaviour; a wrong write puts a value into a member the mod does not
+# own, in an object the game is still using. So writes are triaged first.
+WRITE_MARKERS = re.compile(r"as\s*\*mut|write_volatile|write_unaligned|\bptr::write|\.write\(")
+
+
+def offset_use_sites() -> dict[str, dict]:
+    """For every `*_OFFSET` constant, where it is used and whether any use WRITES through it.
+
+    The inventory says where a constant is DECLARED. That says nothing about blast radius: a
+    constant read once in a diagnostic and a constant written on the autoload path are the same
+    row. This walks the crates for use sites and grades them, so the 553 unresolved constants can
+    be worked in the order that a wrong answer costs the most.
+
+    The window is the statement, not the line: this repo writes
+    `*((base + FOO_OFFSET) as *mut i32) = value` across two or three lines as often as one.
+    """
+    sites: dict[str, dict] = collections.defaultdict(
+        lambda: {"uses": 0, "written": False, "files": set()}
+    )
+    names = {r["name"] for r in inventory()}
+    if not names:
+        return {}
+    pattern = re.compile(r"\b(" + "|".join(sorted(map(re.escape, names))) + r")\b")
+    for path in (ROOT / "crates").rglob("*.rs"):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        rel = str(path.relative_to(ROOT))
+        for i, line in enumerate(lines):
+            for match in pattern.finditer(line):
+                name = match.group(1)
+                # Skip the declaration itself.
+                if re.search(r"(const|static)\s+" + re.escape(name) + r"\s*:", line):
+                    continue
+                row = sites[name]
+                row["uses"] += 1
+                row["files"].add(rel)
+                window = " ".join(lines[max(0, i - 2) : i + 3])
+                if WRITE_MARKERS.search(window):
+                    row["written"] = True
+    return sites
+
+
+def diff_pair(args) -> int:
+    """Read the displacements of a pair whose BODY changed, by aligning the two decodes.
+
+    `compare_bodies` refuses a function whose instruction sequence differs, and it is right to:
+    once the two streams are out of step, position N on one side is not position N on the other,
+    and every displacement "difference" after that point is an artifact. But refusing leaves the
+    most dangerous functions in the migration -- the ones that actually changed -- with UNKNOWN
+    offsets and nothing more to say. `STEP_MoveMap` is squarely on the autoload path and gained
+    two instructions in 1.17; "unknown" is the honest verdict and a useless one.
+
+    So align them properly instead of pretending they are aligned. `difflib.SequenceMatcher` over
+    the NORMALISED instruction shapes (mnemonic + register operand form, displacements dropped --
+    the same normalisation the matcher masks with) finds the equal runs; inside an equal run the
+    two instructions ARE the same instruction, so their displacements can be compared exactly as
+    in an identical function. The inserted/deleted regions are reported as such and no offset is
+    claimed from them.
+
+    What this cannot do is tell you a field moved when the code around it was rewritten; it tells
+    you what the surviving code says. That is strictly more than nothing, and it is honest about
+    which is which.
+
+        --diff-pair 0x140af7cf0:0x140af9000
+    """
+    _ensure_capstone()
+    import difflib
+
+    from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+
+    a_va, b_va = (int(v, 0) for v in args.diff_pair.split(":"))
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
+    old, new_img = Image(IMAGE_1162), Image(IMAGE_1170)
+    ends_old, ends_new = old.function_ends(), new_img.function_ends()
+    starts_old, starts_new = set(ends_old), set(ends_new)
+    leaf_extent = _sibling_leaf_extent()
+    a_rva, b_rva = a_va - BASE, b_va - BASE
+    a_end = extent_of(a_rva, ends_old, old.data, starts_old, leaf_extent)
+    b_end = extent_of(b_rva, ends_new, new_img.data, starts_new, leaf_extent)
+    if a_end is None or b_end is None:
+        raise SystemExit("no extent for one side; cannot bound the bodies")
+
+    da = list(md.disasm_lite(old.data[a_rva:a_end], a_va))
+    db = list(md.disasm_lite(new_img.data[b_rva:b_end], b_va))
+    shape_a = [f"{mn} {split_memory(op)[0]}" for _a, _s, mn, op in da]
+    shape_b = [f"{mn} {split_memory(op)[0]}" for _a, _s, mn, op in db]
+    print(f"{a_va:#x} ({a_end - a_rva:#x} bytes, {len(da)} insns) -> "
+          f"{b_va:#x} ({b_end - b_rva:#x} bytes, {len(db)} insns)")
+
+    matcher = difflib.SequenceMatcher(None, shape_a, shape_b, autojunk=False)
+    aligned = moved = 0
+    moves: list[str] = []
+    held: collections.Counter = collections.Counter()
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            print(f"  {tag.upper():<7} 1.16.2[{i1}:{i2}] vs 1.17[{j1}:{j2}]")
+            for _a, _s, mn, op in da[i1:i2][:6]:
+                print(f"      -  {mn} {op}")
+            for _a, _s, mn, op in db[j1:j2][:6]:
+                print(f"      +  {mn} {op}")
+            continue
+        for (aa, _as, amn, aop), (_ba, _bs, _bmn, bop) in zip(da[i1:i2], db[j1:j2]):
+            aligned += 1
+            for (a_base, a_disp), (b_base, b_disp) in zip(
+                split_memory(aop)[1], split_memory(bop)[1]
+            ):
+                if not a_base or a_base == "rip" or a_base in STACK_BASES:
+                    continue
+                # A NEGATIVE displacement on a general register is a frame-pointer alias
+                # (MSVC parks one in r11/rbx around a big frame), not a field: no object is
+                # indexed backwards from its own base.
+                if a_disp <= 0 or a_disp >= GLOBAL_DISPLACEMENT_MIN:
+                    continue
+                if a_disp == b_disp:
+                    # Keyed by BASE REGISTER, not by number. One function routinely walks two
+                    # different objects (`FUN_1404ca5f0` moves `[rbx+0x88]` while holding
+                    # `[rax+0x88]` still), and a bracket -- "a field below it and a field above
+                    # it both held, so there is no insertion between them" -- is only an argument
+                    # about ONE object. Merging the bases would let a held offset in object A
+                    # vouch for a field in object B.
+                    held[(a_base, a_disp)] += 1
+                else:
+                    moved += 1
+                    moves.append(
+                        f"  MOVED  {aa:#x}  [{a_base}+{a_disp:#x}] -> [{b_base}+{b_disp:#x}] "
+                        f"({b_disp - a_disp:+#x})   {amn} {aop}"
+                    )
+    print(f"\naligned {aligned} of {len(da)}/{len(db)} instructions "
+          f"({aligned / max(len(da), 1):.1%} of the 1.16.2 body)")
+    for line in moves:
+        print(line)
+    if not moves:
+        print("  no field displacement moved in any aligned instruction")
+    print("\nheld unchanged inside aligned instructions, per base register "
+          "(a bracket is only valid within one base):")
+    by_base: dict[str, list[int]] = collections.defaultdict(list)
+    for (base, disp), _n in held.items():
+        by_base[base].append(disp)
+    moved_by_base: dict[str, list[int]] = collections.defaultdict(list)
+    for line in moves:
+        match = re.search(r"\[(\w+)\+(0x[0-9a-f]+)\]", line)
+        if match:
+            moved_by_base[match.group(1)].append(int(match.group(2), 16))
+    for base in sorted(by_base):
+        disps = sorted(by_base[base])
+        gone = sorted(moved_by_base.get(base, []))
+        print(f"  {base:<5} held {' '.join(f'{d:#x}' for d in disps)}")
+        if gone:
+            print(f"  {'':<5} MOVED {' '.join(f'{d:#x}' for d in gone)}")
+        elif len(disps) > 1:
+            print(f"  {'':<5} -> nothing moved on this base between {disps[0]:#x} and "
+                  f"{disps[-1]:#x}, so no field in that span shifted")
+    return 0
+
+
+def hooked_holds(out_dir: Path) -> dict[int, list[str]]:
+    """Displacement -> the functions THIS MOD HOOKS that still read it at that offset in 1.17.
+
+    THE ONLY POSITIVE CLEARANCE THAT DOES NOT NEED A STRUCTURE NAME. Every other line of evidence
+    here is about a number: how often it moved, how often it held, in objects nobody named. This
+    is about the code the product actually detours. If `SetSaveSlot` -- a hand-verified pair, the
+    same function in both builds -- still writes `[rcx+0xac0]` in 1.17, then whatever object
+    `SetSaveSlot` is handed did not move that field, and a repo constant used on the pointer that
+    same function is given is clear. That is an argument about OUR object, reached without ever
+    naming its type.
+
+    It is deliberately narrow: 430-odd pairs against the scan's 128,602, so most numbers get no
+    answer here. A hit is worth far more than the scan's ratios; a miss means nothing.
+    """
+    _ensure_capstone()
+    from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
+    old, new_img = Image(IMAGE_1162), Image(IMAGE_1170)
+    ends_old, ends_new = old.function_ends(), new_img.function_ends()
+    starts_old, starts_new = set(ends_old), set(ends_new)
+    leaf_extent = _sibling_leaf_extent()
+    cache_path = out_dir / "ghidra-function-types.json"
+    cache = json.loads(cache_path.read_text()) if cache_path.is_file() else {}
+
+    holds: dict[int, list[str]] = collections.defaultdict(list)
+    # (label, base) -> {held displacements}, and the same key -> {moved displacements}. Keyed by
+    # BASE so a span is an argument about one object; see `diff_pair`.
+    spans: dict[tuple[str, str], set[int]] = collections.defaultdict(set)
+    span_moves: dict[tuple[str, str], set[int]] = collections.defaultdict(set)
+    for path in (VERIFIED_MAP, NEEDED_MAP):
+        if not path.is_file():
+            continue
+        for a_rva, b_rva in load_pairs(path):
+            a_end = extent_of(a_rva, ends_old, old.data, starts_old, leaf_extent)
+            b_end = extent_of(b_rva, ends_new, new_img.data, starts_new, leaf_extent)
+            if a_end is None or b_end is None:
+                continue
+            cmp = compare_bodies(
+                md, old.data[a_rva:a_end], BASE + a_rva, new_img.data[b_rva:b_end], BASE + b_rva
+            )
+            if cmp.verdict == SHAPE_DIFF:
+                continue  # its body changed; it clears nothing
+            va = f"{BASE + a_rva:#x}"
+            label = cache.get(va, {}).get("name") or va
+            for disp in set(cmp.stable):
+                holds[disp].append(label)
+            for base, disp in cmp.stable_by_base:
+                spans[(label, base)].add(disp)
+            for base, o, _n in cmp.field_drift:
+                span_moves[(label, base)].add(o)
+    return holds, spans, span_moves
+
+
+def bracket(offset: int, spans, span_moves, only: str = "") -> list[str]:
+    """Functions that prove `offset` did not move WITHOUT ever reading it.
+
+    THE ARGUMENT. A structure grows by INSERTION: every field at or above the insertion point
+    shifts, everything below it stays. So if one function, through one base register, still reads
+    some field BELOW `offset` at the same displacement in 1.17, and some field ABOVE it at the
+    same displacement too, then no insertion happened anywhere between those two -- and `offset`
+    lies between them. The field is proven not to have moved by fields that are not it.
+
+    This is what settles the offsets that have no witness of their own, which is most of the
+    interesting ones: `GameMan+0xbc9` is read by nothing in the mapped half, but the `GameMan`
+    constructor holds 139 displacements from `0x20` to `0xe70` on `rsi` with nothing moving, and
+    `0xbc8` and `0xbcc` sit either side of it.
+
+    The base register is what keeps this honest. One function walks several objects, and a held
+    offset on `rax` says nothing about a field reached through `rbx`.
+
+    NOT A VERDICT ON ITS OWN, and this is the third time this file has had to learn it. Run over
+    all 430 hooked pairs the bracket fires for every one of the 48 unresolved constants, because
+    some function somewhere holds a field either side of any small number -- the same coincidence
+    that made the offset-only join worthless, wearing a span instead of a point. A bracket only
+    argues about the object the function was handed, so the caller must say WHICH function is the
+    right object. It is an instrument for a human with a hypothesis, not a classifier.
+    """
+    out = []
+    for (label, base), disps in spans.items():
+        if only and only not in label:
+            continue
+        below = [d for d in disps if d < offset]
+        above = [d for d in disps if d > offset]
+        if not below or not above:
+            continue
+        lo, hi = max(below), min(above)
+        if any(lo <= m <= hi for m in span_moves.get((label, base), ())):
+            continue
+        out.append(f"{label}[{base}] {lo:#x}..{hi:#x}")
+    return out
+
+
+def resolve_unknown(args) -> int:
+    """Adjudicate the constants `--report` leaves as UNKNOWN-STRUCT, worst blast radius first.
+
+    WHY THESE ARE NOT SIMPLY UNRESOLVABLE. `--report` refuses to judge a constant whose STRUCTURE
+    it cannot name, because joining on the offset alone is worthless -- `0xb0c` moved in
+    `MoWwiseManImp` while `DIALOG_SLOT_CURSOR_B0C_OFFSET` is a different object at the same
+    number. That refusal is right when a number was seen MOVING somewhere: then the structure is
+    the only thing that separates a hit from a coincidence.
+
+    It is not right when a number was never seen moving ANYWHERE. The scan is exhaustive over the
+    mapped half of the image, so "this displacement changed in 0 of the N otherwise-identical
+    function pairs that use it, and held still in M instructions" is a statement about every
+    structure the scan can see, ours included. Naming the structure adds nothing to it. That
+    asymmetry is what lets most of the 553 be settled without a Ghidra type, and it is the whole
+    idea of this mode.
+
+    So each constant lands in one of:
+      NOT-MOVED-ANYWHERE  held M times, moved 0 times      -> cleared, structure-independently
+      MOVED-SOMEWHERE     moved somewhere                  -> needs the witness read (--names)
+      NO-EVIDENCE         held 0, moved 0                  -> stays UNKNOWN, honestly
+
+    NO-EVIDENCE is the honest answer, not a failure. `0xab5` -- the one offset this migration
+    already knows moved -- lands there, because its only witness is a `.pdata`-less leaf that the
+    function map does not contain.
+    """
+    data = load_scan(args.out_dir)
+    stable = {int(k): v for k, v in data["stable_displacements"].items()}
+    moves: dict[int, list[dict]] = collections.defaultdict(list)
+    for row in data["field_drift"]:
+        moves[row["old"]].append(row)
+
+    sites = offset_use_sites()
+    hooked, spans, span_moves = hooked_holds(args.out_dir)
+    rows = [
+        r
+        for r in inventory()
+        if r["included"] and r["resolved"] is not None and not r["struct"]
+    ]
+    if args.autoload_only:
+        rows = [r for r in rows if r["autoload"]]
+
+    def blast(r):
+        use = sites.get(r["name"], {})
+        # written before read, autoload before diagnostic, more uses before fewer.
+        return (not use.get("written"), not r["autoload"], -use.get("uses", 0), r["name"])
+
+    rows.sort(key=blast)
+    brackets = {
+        r["resolved"]: bracket(r["resolved"], spans, span_moves)
+        for r in rows
+        if r["resolved"]
+    }
+    verdicts = collections.Counter()
+    graded = []
+    for r in rows:
+        offset = r["resolved"]
+        held = stable.get(offset, 0)
+        moved = moves.get(offset, [])
+        # NOT a verdict, deliberately. Promoting "some hooked function holds this number" to a
+        # clearance re-commits the exact error this tool exists to avoid, only inverted: `0x8`,
+        # `0x10` and `0x18` are read by nearly every hooked function, so the join lit up 484 of
+        # the 553 -- confidence manufactured out of a coincidence, which is worse than a
+        # coincidental accusation because nobody goes back to check a clearance. It is carried as
+        # an annotation and is decisive only where the hooked function plausibly operates on the
+        # object the constant names, which is a judgement a human makes per constant.
+        if offset == 0:
+            # The first member sits at 0 in both builds by construction, and this measurement
+            # skips zero displacements (`[rcx]` carries no byte to compare), so these would
+            # otherwise pile into NO-EVIDENCE and make the honest-unknown count look worse than
+            # it is. Not a clearance: an insertion at the FRONT of a structure -- a new leading
+            # member, or a new base class -- would move the field now at 0 without this method
+            # ever seeing it. It is unmeasurable by this method, and says so.
+            verdict = "OFFSET-ZERO-UNMEASURABLE"
+        elif moved:
+            verdict = "MOVED-SOMEWHERE"
+        elif held:
+            verdict = "NOT-MOVED-ANYWHERE"
+        else:
+            verdict = "NO-EVIDENCE"
+        verdicts[verdict] += 1
+        use = sites.get(r["name"], {})
+        graded.append((verdict, r, held, moved, use))
+
+    print("adjudicating the UNKNOWN-STRUCT constants, highest blast radius first\n")
+    written = sum(1 for _v, _r, _h, _m, u in graded if u.get("written"))
+    print(f"  {len(graded)} constants; {written} of them are WRITTEN through somewhere "
+          "in the crates\n")
+
+    # THE SECOND DISCRIMINATOR, for the constants a move was measured at.
+    #
+    # A number that moved somewhere is not a verdict on OUR object, and `held 7090 / moved 1` is
+    # a ratio, not proof. What settles it is WHICH object moved: `--attribute` already named the
+    # structures that grew in 1.17, so if every function that moved this displacement operates on
+    # one of those and our constant plainly names something else, the move is accounted for
+    # elsewhere and this constant is not implicated. Where a witness cannot be typed the
+    # constant stays MOVED-SOMEWHERE and must be read by hand -- an untyped witness is not a
+    # clean one.
+    cache_path = args.out_dir / "ghidra-function-types.json"
+    cache = json.loads(cache_path.read_text()) if cache_path.is_file() else {}
+    if args.names:
+        witnesses = sorted({va for _v, _r, _h, moved, _u in graded for m in moved
+                            for va in m["examples"]})
+        function_types(cache, witnesses)
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+
+    def witness_types(moved):
+        out: set[str] = set()
+        untyped = 0
+        for m in moved:
+            for va in m["examples"]:
+                types = cache.get(va, {}).get("types") or []
+                if types:
+                    out.update(types)
+                else:
+                    untyped += 1
+        return out, untyped
+
+    tsv = ["\t".join(("verdict", "constant", "offset", "written", "autoload", "uses",
+                       "held", "moves", "witness_types", "untyped_witnesses", "site",
+                       "hooked_functions_still_reading_it"))]
+    show = args.show or ("MOVED-SOMEWHERE" if not args.all else "")
+    for verdict, r, held, moved, use in graded:
+        types, untyped = witness_types(moved)
+        if verdict == "MOVED-SOMEWHERE" and types and not untyped and types <= MOVED_STRUCTS:
+            verdict = "MOVED-ELSEWHERE"
+            verdicts["MOVED-SOMEWHERE"] -= 1
+            verdicts["MOVED-ELSEWHERE"] += 1
+        witnesses_hooked = hooked.get(r["resolved"], [])
+        tsv.append("\t".join((
+            verdict, r["name"], f"{r['resolved']:#x}",
+            "W" if use.get("written") else "", "A" if r["autoload"] else "",
+            str(use.get("uses", 0)), str(held), str(len(moved)),
+            ",".join(sorted(types)), str(untyped), f"{r['file']}:{r['line']}",
+            ";".join(sorted(set(witnesses_hooked))[:6]),
+        )))
+        if show and verdict != show:
+            continue
+        flags = "".join(("W" if use.get("written") else "-", "A" if r["autoload"] else "-"))
+        print(f"{verdict:<20} [{flags}] {r['name']} = {r['resolved']:#x}")
+        print(f"    {r['file']}:{r['line']}  {use.get('uses', 0)} use site(s)")
+        spanning = brackets.get(r["resolved"]) or []
+        if spanning:
+            print(f"    {len(spanning)} hooked function/base span(s) bracket it "
+                  "(decisive ONLY for the one that handles this object):")
+            for line in spanning[:3]:
+                print(f"        {line}")
+        if witnesses_hooked:
+            print(f"    also: hand-verified hooked function(s) still read {r['resolved']:#x} "
+                  f"in 1.17 -- {', '.join(sorted(set(witnesses_hooked))[:6])} "
+                  "(decisive ONLY if one of them handles this object)")
+        if verdict == "NOT-MOVED-ANYWHERE":
+            print(f"    held still in {held} instructions of otherwise-identical pairs; "
+                  "moved in none")
+        elif verdict in ("MOVED-SOMEWHERE", "MOVED-ELSEWHERE"):
+            for m in moved:
+                print(f"    {m['old']:#x} -> {m['new']:#x} ({m['delta']:+#x}) in "
+                      f"{m['functions']} function(s); held still {held} times elsewhere")
+                for va in m["examples"][: args.names or 3]:
+                    entry = cache.get(va, {})
+                    print(f"        witness {va}  {entry.get('name', '')}  "
+                          f"{entry.get('types', [])}")
+            if verdict == "MOVED-ELSEWHERE":
+                print(f"    every witness operates on a structure already known to have grown: "
+                      f"{', '.join(sorted(types))}")
+        elif verdict == "OFFSET-ZERO-UNMEASURABLE":
+            print("    offset 0: the first member, which this method cannot measure "
+                  "(a new LEADING member would move it unseen)")
+        else:
+            print("    never seen holding still and never seen moving in the mapped half")
+        print()
+    out_tsv = args.out_dir / "unknown-struct-triage.tsv"
+    out_tsv.write_text("\n".join(tsv) + "\n", encoding="utf-8")
+    print(f"wrote {out_tsv}\n")
+    for label, count in verdicts.most_common():
+        print(f"  {label:<20} {count}")
+    print()
+    print("A cleared constant means: no otherwise-identical 1.16.2/1.17 function pair in the\n"
+          "mapped half of the image changed this displacement. That covers every structure the\n"
+          "scan can see. It does NOT cover a field whose only user is a .pdata-less leaf.")
+    return 0
+
+
 # Type names that appear in almost every signature and identify nothing.
 GENERIC_TYPES = {
     "void", "undefined", "undefined1", "undefined2", "undefined4", "undefined8", "bool",
@@ -1546,6 +2205,43 @@ KNOWN = {
 }
 
 
+# LEAF EXTENTS, pinned against Ghidra's own 1.16.2 function sizes.
+#
+# These are the addresses in the hooked-pair tables that `.pdata` does not describe, so their
+# extent is DECODED and the decoder is the only thing standing between this tool and a fabricated
+# verdict. Every size here was read from the 1.16.2 Ghidra dump (`getFunctionByAddress` -> `size`)
+# and agrees with the decode; `--check-extents` re-runs that comparison live over the whole set.
+# They are recorded as literals so the selftest needs no daemon.
+#
+# The first two are the shape that broke the previous rule: two `mov/mov/jmp` thunks packed flush
+# against each other with no padding between them, so "stop at a jmp followed by padding" ran
+# 0x1403efc20 to 0x20 bytes -- through the whole of its neighbour -- against Ghidra's 0x10.
+LEAF_EXTENTS_1162 = {
+    0x1403EFC20: 0x10,  # GetPhysicsHitHeight   -- flush against the next thunk, no padding
+    0x1403EFC30: 0x10,  # GetPhysicsHitRadius   -- the neighbour it used to swallow
+    0x14067A810: 0x0E,  # SetSaveSlot
+    0x14067A980: 0x1B,  # FUN_14067a980
+    0x14067ABB0: 0x0D,  # SetInitialAreaEntityId
+    0x140D4CC50: 0x2F,  # GetParamResCap
+    0x1426634A0: 0x1D,  # FUN_1426634a0
+    0x140261B80: 0x1A,  # the range-checked getter whose branch target sits BEHIND its first ret
+    0x140262250: 0x13,  # MarkProfileIndexAsUsed -- likewise
+}
+
+# The six pairs the guessed extent reported as "this hooked function changed in 1.17" on
+# 2026-08-30. Every one is byte-identical over its true extent. `SetSaveSlot` is the GameMan
+# save-slot writer and `GetParamResCap` is on the param path, so these were not idle rows: acting
+# on them meant re-reversing functions that had not changed.
+FALSE_POSITIVES = {
+    0x14062F470: 0x1406302C0,
+    0x14067A810: 0x14067B660,
+    0x14067A980: 0x14067B7D0,
+    0x14082D5B0: 0x14082E5A0,
+    0x140D4CC50: 0x140D4E990,
+    0x1426634A0: 0x142665CB0,
+}
+
+
 def selftest(args) -> int:
     _ensure_capstone()
     from capstone import CS_ARCH_X86, CS_MODE_64, Cs
@@ -1610,6 +2306,68 @@ def selftest(args) -> int:
               "read is reported as unchanged")
         if not held:
             failures.append("GetScadutreeBlessing stable field")
+
+        print("\nleaf extents: decoded, not guessed")
+        starts_old = set(ends_old := old.function_ends())
+        starts_new = set(ends_new := new.function_ends())
+        leaf_extent = _sibling_leaf_extent()
+        for va, want in sorted(LEAF_EXTENTS_1162.items()):
+            got = extent_of(va - BASE, ends_old, old.data, starts_old, leaf_extent)
+            size = None if got is None else got - (va - BASE)
+            ok = size == want
+            print(f"  {'ok  ' if ok else 'FAIL'} {va:#x} extent "
+                  f"{'none' if size is None else f'{size:#x}'} (Ghidra 1.16.2 says {want:#x})")
+            if not ok:
+                failures.append(f"leaf extent {va:#x}")
+
+        # THE REGRESSION THIS FILE EXISTS TO PREVENT. The old fallback -- "decode to the next
+        # .pdata start, capped at 0x400" -- is reconstructed here and required to disagree, so
+        # that reintroducing it cannot pass silently. It runs past the real `ret`, through the
+        # inter-function padding (0xCC in one build, 0x90 in the other) and into unrelated
+        # neighbours, which is what desynchronises the two decodes.
+        ordered = sorted(ends_old)
+        import bisect as _bisect
+
+        guessed_worse = []
+        for va, want in sorted(LEAF_EXTENTS_1162.items()):
+            rva = va - BASE
+            index = _bisect.bisect_right(ordered, rva)
+            following = ordered[index] if index < len(ordered) else rva + 0x200
+            guessed = min(following, rva + 0x400) - rva
+            if guessed > want:
+                guessed_worse.append(va)
+        # 0x1403efc30 is the one leaf the guess gets right, and only by luck: the next function
+        # WITH unwind data happens to begin at its true end. Its neighbour 0x1403efc20 -- the
+        # same 0x10-byte shape, one slot earlier -- is overrun to 0x20 by the same rule. So the
+        # guess is required to be wrong everywhere EXCEPT that coincidence, which is a sharper
+        # assertion than "wrong somewhere" and fails if anyone softens the extent rule back.
+        lucky = {0x1403EFC30}
+        want_wrong = sorted(set(LEAF_EXTENTS_1162) - lucky)
+        ok = guessed_worse == want_wrong
+        print(f"  {'ok  ' if ok else 'FAIL'} the retired next-.pdata-start guess overruns "
+              f"{len(guessed_worse)}/{len(LEAF_EXTENTS_1162)} of them "
+              f"(all but {', '.join(f'{v:#x}' for v in sorted(lucky))})")
+        if not ok:
+            failures.append("retired extent guess no longer distinguishable")
+
+        print("\nthe six false positives the guessed extent manufactured")
+        for a_va, b_va in sorted(FALSE_POSITIVES.items()):
+            a_rva, b_rva = a_va - BASE, b_va - BASE
+            a_end = extent_of(a_rva, ends_old, old.data, starts_old, leaf_extent)
+            b_end = extent_of(b_rva, ends_new, new.data, starts_new, leaf_extent)
+            if a_end is None or b_end is None:
+                print(f"  FAIL {a_va:#x} -> {b_va:#x} NO-EXTENT")
+                failures.append(f"false positive {a_va:#x} extent")
+                continue
+            cmp = compare_bodies(
+                md, old.data[a_rva:a_end], a_va, new.data[b_rva:b_end], b_va
+            )
+            same_size = (a_end - a_rva) == (b_end - b_rva)
+            ok = cmp.verdict == STABLE and same_size
+            print(f"  {'ok  ' if ok else 'FAIL'} {a_va:#x} -> {b_va:#x} {cmp.verdict} over "
+                  f"{a_end - a_rva:#x}/{b_end - b_rva:#x} bytes, {cmp.insns} insns")
+            if not ok:
+                failures.append(f"false positive {a_va:#x}")
 
         print("\nfunction table")
         pairs = load_pairs(FUNCTION_MAP) if FUNCTION_MAP.is_file() else []
@@ -1704,7 +2462,31 @@ def main() -> int:
     ap.add_argument("--min-fields", type=int, default=1, help="--regions: hide clusters below this")
     ap.add_argument("--min-functions", type=int, default=0, help="--regions: drop thin rows")
     ap.add_argument("--autoload-only", action="store_true", help="--report: autoload crates only")
+    ap.add_argument(
+        "--resolve-unknown",
+        action="store_true",
+        help="adjudicate the UNKNOWN-STRUCT constants, written/autoload first",
+    )
+    ap.add_argument(
+        "--diff-pair",
+        metavar="OLD:NEW",
+        help="align and compare a pair whose body CHANGED (e.g. 0x140af7cf0:0x140af9000)",
+    )
+    ap.add_argument("--show", metavar="VERDICT", help="--resolve-unknown: print only this verdict")
+    ap.add_argument("--all", action="store_true", help="--resolve-unknown: print every verdict")
     ap.add_argument("--names", type=int, default=0, metavar="N", help="annotate N examples via Ghidra")
+    ap.add_argument(
+        "--check-extents",
+        action="store_true",
+        help="validate every DECODED leaf extent against Ghidra's 1.16.2 function size",
+    )
+    ap.add_argument(
+        "--extent-sample",
+        type=int,
+        default=4000,
+        metavar="N",
+        help="--check-extents: how many .pdata-declared functions to self-check (default 4000)",
+    )
     ap.add_argument("--limit", type=int, default=0, help="--scan: stop after N pairs (smoke)")
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     args = ap.parse_args()
@@ -1715,6 +2497,12 @@ def main() -> int:
         return print_inventory(args)
     if args.explain:
         return explain(args)
+    if args.diff_pair:
+        return diff_pair(args)
+    if args.resolve_unknown:
+        return resolve_unknown(args)
+    if args.check_extents:
+        return check_extents(args)
     if args.find_displacement:
         return find_displacement(args)
     if args.pairs:

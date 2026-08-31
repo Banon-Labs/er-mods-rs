@@ -917,13 +917,27 @@ fn save_picker_rebuild_target_is_live(
     list_vtable: usize,
     game_base: usize,
 ) -> bool {
-    dialog_vtable == game_base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA
-        && list_vtable
-            == er_game_base::mem::game_data_addr(
-                game_base,
-                PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA,
-                "PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA",
-            )
+    // Both expected vtables are RESOLVED for the running build, and neither comparison may be
+    // satisfied by zero. The dialog half used to be a raw `game_base + RVA` sitting next to a
+    // resolved sibling: `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78), so
+    // that half could never match and the in-place list rebuild was silently declined on every
+    // records-changed event. The zero screens close the other direction -- `game_data_addr` answers
+    // 0 for a refusal and both observed vtables arrive here as `unwrap_or(0)`, so `0 == 0` would
+    // have called the native rebuild on a dialog nothing had identified.
+    let expected_dialog_vtable = er_game_base::mem::game_data_addr(
+        game_base,
+        er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA,
+        "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+    );
+    let expected_list_vtable = er_game_base::mem::game_data_addr(
+        game_base,
+        PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA,
+        "PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA",
+    );
+    expected_dialog_vtable != 0
+        && expected_list_vtable != 0
+        && dialog_vtable == expected_dialog_vtable
+        && list_vtable == expected_list_vtable
 }
 
 unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
@@ -964,7 +978,11 @@ mod rebuild_liveness_tests {
     #[test]
     fn rebuild_requires_the_live_dialog_and_final_derived_list_vtables() {
         let base = 0x140000000;
-        let dialog = base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA;
+        let dialog = er_game_base::mem::game_data_addr(
+            base,
+            er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA,
+            "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+        );
         let list = er_game_base::mem::game_data_addr(
             base,
             PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA,

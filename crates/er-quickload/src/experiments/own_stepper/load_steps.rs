@@ -153,7 +153,11 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     const MODULE_MIN_OFFSET: usize = 0x1000;
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let seq_update_abs = module_base + SEQ_UPDATE_RVA;
+    // RESOLVED like its three siblings. `SEQUENCE_ITER_RVA` moved on 1.17 (0x7aa1f0 -> 0x7ab070),
+    // so the raw form matched no node, container nodes went unclassified, the walk never
+    // descended, and the Load-Game leaf could not be found down this path.
+    let seq_update_abs =
+        er_game_base::mem::game_data_addr(module_base, SEQ_UPDATE_RVA, "SEQUENCE_ITER_RVA");
     let leaf_update_abs =
         er_game_base::mem::game_data_addr(module_base, LEAF_UPDATE_RVA, "LEAF_UPDATE_RVA");
     let ifelse_update_abs =
@@ -212,10 +216,13 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
         };
         let count = unsafe { safe_read_usize(node + NODE_COUNT_60) }.unwrap_or(null);
         let base = unsafe { safe_read_usize(node + NODE_CHILDREN_BASE_18) }.unwrap_or(null);
-        let is_leaf = update == leaf_update_abs;
-        let is_container = update == seq_update_abs;
-        let is_ifelse = update == ifelse_update_abs;
-        let is_wrap = update == wrap_update_abs;
+        // `update` is 0 for a vtable-less node and a REFUSED RVA is 0 too, so one unmapped
+        // constant would make every such node answer to the classification it refused.
+        let classified = |want: usize| update != null && want != null && update == want;
+        let is_leaf = classified(leaf_update_abs);
+        let is_container = classified(seq_update_abs);
+        let is_ifelse = classified(ifelse_update_abs);
+        let is_wrap = classified(wrap_update_abs);
         let wrap_child = unsafe { safe_read_usize(node + WRAP_CHILD_48) }.unwrap_or(null);
         let ife_count = unsafe { safe_read_usize(node + IFELSE_COUNT_A0) }.unwrap_or(null);
         let ife_default = unsafe { safe_read_usize(node + IFELSE_DEFAULT_A8) }.unwrap_or(null);
@@ -777,12 +784,40 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
             }
         }
     }
-    let slot = module_base + TITLE_STEP_IDX10_SLOT_RVA;
+    // RESOLVED, NOT ADDED (2026-08-30). These two are `.data` function-pointer slots in the inner
+    // title state table, and this is the only write in the product that stores OUR code address
+    // into the GAME's dispatch table. A stale one is the worst case the 1.17 gate exists for: no
+    // refusal, no fault at write time, no log -- the qword that now lives at the 1.16.2 offset is
+    // silently replaced with a pointer to our handler, and the detonation happens later, in
+    // whatever native code owned that slot. `native_continue_enabled()` is true in the default
+    // product path, so this runs on every boot.
+    //
+    // The table's own base IS mapped (`INNER_TITLE_STATE_TABLE_RVA` 0x3d71580 -> 0x3d755f0, +0x4070)
+    // but these two slots at +0x60 and +0xa0 are not rows of their own, so they REFUSE on 1.17
+    // until the data map carries them. Refusing costs own-stepper; guessing corrupts the table.
+    let slot = er_game_base::mem::game_data_addr(
+        module_base,
+        TITLE_STEP_IDX10_SLOT_RVA,
+        "TITLE_STEP_IDX10_SLOT_RVA",
+    );
+    let slot6 = er_game_base::mem::game_data_addr(
+        module_base,
+        TITLE_STEP_IDX6_SLOT_RVA,
+        "TITLE_STEP_IDX6_SLOT_RVA",
+    );
+    if slot == TITLE_OWNER_SCAN_START_ADDRESS || slot6 == TITLE_OWNER_SCAN_START_ADDRESS {
+        append_autoload_debug(format_args!(
+            "own_stepper: REFUSED to patch the step-fn slots -- idx10 rva 0x{TITLE_STEP_IDX10_SLOT_RVA:x} \
+             resolved to 0x{slot:x} and idx6 rva 0x{TITLE_STEP_IDX6_SLOT_RVA:x} to 0x{slot6:x}; a zero \
+             means no verified mapping for this build, and storing a handler pointer into an unmapped \
+             .data qword corrupts silently. own-stepper stays OFF for this boot."
+        ));
+        return;
+    }
     let orig = unsafe { *(slot as *const usize) };
     OWN_STEPPER_ORIG_IDX10.store(orig, Ordering::SeqCst);
     OWN_STEPPER_BASE.store(module_base, Ordering::SeqCst);
     // Own idx6 (STEP_GameStepWait) too, for the post-SetState(5) deserialize + re-target.
-    let slot6 = module_base + TITLE_STEP_IDX6_SLOT_RVA;
     let orig6 = unsafe { *(slot6 as *const usize) };
     OWN_STEPPER_ORIG_IDX6.store(orig6, Ordering::SeqCst);
     unsafe { *(slot6 as *mut usize) = own_stepper_idx6 as *const () as usize };

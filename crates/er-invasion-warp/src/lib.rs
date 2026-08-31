@@ -292,6 +292,14 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         let module_base = module as usize;
         START.call_once(|| {
+            // ONE sink for both refusal channels, installed before anything resolves an address.
+            //
+            // Every cdylib statically links its own copy of `er-hook` and `er-game-base`, so an
+            // uninstalled sink is silent PER DLL -- and this DLL had none. `HOOK REFUSED` and
+            // `ADDRESS REFUSED` lines, the two things that say a 1.16.2 address did not survive
+            // 1.17, were being written to nowhere while the map surface simply failed to appear.
+            // `set_hook_logger` installs the address-resolution sink too.
+            er_hook::set_hook_logger(standalone_log);
             let installed = install_standalone_host();
             append_log(
                 &log_dir(),

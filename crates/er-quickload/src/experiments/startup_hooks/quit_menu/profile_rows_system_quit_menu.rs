@@ -22,12 +22,20 @@ pub(crate) fn install_profile_row_populate_hook() {
             return;
         }
     }
-    if PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) == 0 {
+    // FOUR INDEPENDENT ROWS, EACH SKIPPING ONLY ITSELF (2026-08-30). Every block below used a
+    // bare `return` for its own refusal, so one unmapped RVA on 1.17 took the remaining rows with
+    // it -- e.g. a refused player-name getter also cost the ProfileSelect row-populate and the
+    // row-model builder, which are unrelated functions serving unrelated rows. A labelled block
+    // per row keeps a refusal local. bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    'name_getter: {
+        if PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) != 0 {
+            break 'name_getter;
+        }
         let Ok(addr) = game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve player-name getter rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x}"
+                "stats-text: REFUSED player-name getter -- rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'name_getter;
         };
         match unsafe {
             MhHook::new(
@@ -42,7 +50,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable player-name getter failed: {status:?}"
                     ));
-                    return;
+                    break 'name_getter;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -62,12 +70,15 @@ pub(crate) fn install_profile_row_populate_hook() {
             )),
         }
     }
-    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) == 0 {
+    'row_populate: {
+        if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
+            break 'row_populate;
+        }
         let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve row-populate rva 0x{PROFILE_ROW_POPULATE_RVA:x}"
+                "stats-text: REFUSED row-populate -- rva 0x{PROFILE_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'row_populate;
         };
         match unsafe {
             MhHook::new(
@@ -81,7 +92,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable row-populate failed: {status:?}"
                     ));
-                    return;
+                    break 'row_populate;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -105,12 +116,15 @@ pub(crate) fn install_profile_row_populate_hook() {
     // a slot's ProfileSummary record is still a record: it reads `record[0x34]` and the filler turns
     // that into the row's `Location` string. A save whose summary table was copied in from another
     // file needs its place name corrected HERE or not at all.
-    if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) == 0 {
+    'row_model_build: {
+        if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) != 0 {
+            break 'row_model_build;
+        }
         let Ok(addr) = game_rva(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve row-model-build rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x}"
+                "stats-text: REFUSED row-model-build -- rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'row_model_build;
         };
         match unsafe {
             MhHook::new(
@@ -124,7 +138,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable row-model-build failed: {status:?}"
                     ));
-                    return;
+                    break 'row_model_build;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -144,12 +158,15 @@ pub(crate) fn install_profile_row_populate_hook() {
             )),
         }
     }
-    if !current_row_installed {
+    'current_row: {
+        if current_row_installed {
+            break 'current_row;
+        }
         let Ok(addr) = game_rva(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve title-load row-populate rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x}"
+                "stats-text: REFUSED title-load row-populate -- rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'current_row;
         };
         match unsafe {
             MhHook::new(
@@ -164,7 +181,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable title-load row-populate failed: {status:?}"
                     ));
-                    return;
+                    break 'current_row;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -200,12 +217,17 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
         target != null && target != 0 && value == target
     });
     let caller_rva = trace_first_game_caller_rva();
-    let title_fadein_visible_ordinal =
-        if caller_rva == TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA && visible != 0 {
-            TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN.fetch_add(1, Ordering::SeqCst) + 1
-        } else {
-            0
-        };
+    // The call site is resolved for the RUNNING build, not compared against the raw 1.16.2
+    // `0x744e02`. Reached raw, this comparison never matched on 1.17 and the title FadeIn
+    // suppression was inert with nothing in any log to say so -- no hook to refuse, no address to
+    // resolve, so no refusal line either.
+    let title_fadein_call_site = title_gfx_visible_title_fadein_caller_rva();
+    let title_fadein_visible_ordinal = if title_fadein_call_site == Some(caller_rva) && visible != 0
+    {
+        TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        0
+    };
     let force_title_fadein_visible =
         title_fadein_visible_ordinal == TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL;
     let forced = (single_target != null && single_target != 0 && value == single_target)
@@ -266,7 +288,16 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
                     crate::mh::leak_installed_hook(hook);
                     TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing 05_000_Title FadeIn flash ordinal {TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL} at rva 0x{TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA:x} false"
+                        // Report the call site this build will actually compare against. Printing
+                        // the 1.16.2 constant made the line read as armed on builds where the
+                        // comparison could never match.
+                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing 05_000_Title FadeIn flash ordinal {TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL} at rva {} false",
+                        match title_gfx_visible_title_fadein_caller_rva() {
+                            Some(rva) => format!("0x{rva:x}"),
+                            None =>
+                                "UNRESOLVED on this build -- the FadeIn flash will not be suppressed"
+                                    .to_owned(),
+                        }
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -565,7 +596,11 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
                         Ordering::SeqCst,
                     );
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear visible flags mask 0x{TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK:x} from CSMenuMan+0x90 when Run returns at rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA:x}"
+                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear visible flags mask 0x{TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK:x} from CSMenuMan+0x90 when Run returns at rva {}",
+                        match title_native_menu_visual_window_fadein_run_caller_rva() {
+                            Some(rva) => format!("0x{rva:x}"),
+                            None => "UNRESOLVED on this build".to_owned(),
+                        }
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -1597,10 +1632,25 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // Prefer the hooked ORIG trampoline so the resolve is not double-instrumented (as in
-    // push_stats_text_on_row); else the raw game RVA.
+    // push_stats_text_on_row); else the game function, RESOLVED for the running build.
+    //
+    // The fallback arm used to be a bare `base + RVA`. It is reached exactly when the detour is
+    // NOT installed -- which on a moved build is the likeliest state, because an unmapped hook
+    // target is refused -- so the one path that runs without the hook was the one path that never
+    // asked where the function went. `CS::SceneObjProxy` named-child bind MOVED on 1.17
+    // (0x74a2f0 -> 0x74b140, byte-checked: 1.16.2 @0x74a2f0 and 1.17 @0x74b140 are the same
+    // prologue `4c 89 44 24 18 4c 89 4c 24 20 55 53 56 57 41 56`, while 1.17 @0x74a2f0 is
+    // mid-instruction), so the fallback pointed into unrelated code. `gated_game_fn` refuses
+    // instead, and the pane-visibility oracle simply does not sample.
     let assign_addr = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => match crate::experiments::gated_game_fn(
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ) {
+            Some(address) => address,
+            None => return,
+        },
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign_addr) };

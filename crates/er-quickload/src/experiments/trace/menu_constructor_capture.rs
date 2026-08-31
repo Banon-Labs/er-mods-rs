@@ -130,6 +130,46 @@ pub(crate) unsafe extern "system" fn cap_csmenu_ctor_hook(
 /// 0x14081ead0 (Load-Game) or continue_confirm 0x140b0e180 (Continue). Captures the Load-Game /
 /// Continue ROW ENTRIES (and router_this = container-0x1290) when found. Pure reads + classify
 /// (the original already ran) -> save-safe. Called AFTER the original builds the rows.
+/// Is this `MenuWindowJob` the title's Continue row -- the game's own vtable at `[item+0]` AND the
+/// `MenuTitleContinue::_Do_call` in its functor's `+0x10` slot?
+///
+/// BOTH TARGETS RESOLVED, AND NEITHER MAY BE ZERO. The `_Do_call` half used to be a raw
+/// `base + MENU_TITLE_CONTINUE_DOCALL_RVA` sitting next to a resolved vtable sibling, at four
+/// separate constructor/update hooks. That function moved on 1.17 (0x764b80 -> 0x7659d0), so the
+/// conjunction could never be true and all four Continue classifiers reported nothing -- no
+/// counter, no trace line, no `MENU_CONTINUE_ITEM` latch, and therefore no Continue item for the
+/// autoload to act on. The zero screens matter because both observed values arrive as
+/// `unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)`, which is `usize::MIN` = 0, exactly what
+/// `game_data_addr` answers for a refusal.
+fn continue_job_identity_matches(base: usize, vt: usize, do_call: usize) -> bool {
+    let want_vt = er_game_base::mem::game_data_addr(
+        base,
+        MENU_WINDOW_JOB_VTABLE_RVA,
+        "MENU_WINDOW_JOB_VTABLE_RVA",
+    );
+    let want_do_call = er_game_base::mem::game_data_addr(
+        base,
+        MENU_TITLE_CONTINUE_DOCALL_RVA,
+        "MENU_TITLE_CONTINUE_DOCALL_RVA",
+    );
+    want_vt != TITLE_OWNER_SCAN_START_ADDRESS
+        && want_do_call != TITLE_OWNER_SCAN_START_ADDRESS
+        && vt == want_vt
+        && do_call == want_do_call
+}
+
+/// Is `accept_predicate` the real (selectable) accept predicate rather than the constant-false
+/// idle one? Resolved, and never satisfied by zero -- an uninitialised row reads 0 at `+0xf8`.
+fn accept_predicate_is_native(base: usize, accept_predicate: usize) -> bool {
+    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+    let want = er_game_base::mem::game_data_addr(
+        base,
+        MENU_ITEM_ACCEPT_NATIVE_RVA,
+        "MENU_ITEM_ACCEPT_NATIVE_RVA",
+    );
+    want != TITLE_OWNER_SCAN_START_ADDRESS && accept_predicate == want
+}
+
 unsafe fn inspect_row_container(tag: &str, container: usize) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const ENTRY_STRIDE_210: usize = 0x210;
@@ -157,9 +197,17 @@ unsafe fn inspect_row_container(tag: &str, container: usize) {
     if base == NULL {
         return;
     }
-    let factory = base + DIALOG_FACTORY_RVA;
+    // RESOLVED, next to the sibling that already was. `LIVE_DIALOG_FACTORY_RVA` moved on 1.17
+    // (0x81ead0 -> 0x81f950), so the raw form matched no `_Do_call` and the Load-Game row was
+    // never latched from a row container. Both targets are then screened at every comparison
+    // below: a refusal resolves to 0 and the jmp walk reaches 0 on any unreadable hop.
+    let factory =
+        er_game_base::mem::game_data_addr(base, DIALOG_FACTORY_RVA, "LIVE_DIALOG_FACTORY_RVA");
     let confirm =
         er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA");
+    if factory == NULL && confirm == NULL {
+        return;
+    }
     let begin = unsafe { safe_read_usize(container) }.unwrap_or(NULL);
     if begin == NULL {
         return;
@@ -176,11 +224,11 @@ unsafe fn inspect_row_container(tag: &str, container: usize) {
                 let mut tgt = unsafe { safe_read_usize(avt + ACTION_DOCALL_10) }.unwrap_or(NULL);
                 let mut hop = HOP_START;
                 while hop < JMP_HOPS && tgt != NULL {
-                    if tgt == factory {
+                    if factory != NULL && tgt == factory {
                         load_entry = entry;
                         break;
                     }
-                    if tgt == confirm {
+                    if confirm != NULL && tgt == confirm {
                         cont_entry = entry;
                         break;
                     }
@@ -854,7 +902,6 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     }
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
     const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
-    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
     let item = unsafe { safe_read_usize(out_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     if item == TITLE_OWNER_SCAN_START_ADDRESS {
         return ret;
@@ -881,22 +928,12 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let continue_candidate =
-        vt == er_game_base::mem::game_data_addr(
-            base,
-            MENU_WINDOW_JOB_VTABLE_RVA,
-            "MENU_WINDOW_JOB_VTABLE_RVA",
-        ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+    let continue_candidate = continue_job_identity_matches(base, vt, do_call);
     if continue_candidate {
         record_continue_candidate(item, accept_predicate, base);
     }
-    let semantic_continue_item = continue_candidate
-        && accept_predicate
-            == er_game_base::mem::game_data_addr(
-                base,
-                MENU_ITEM_ACCEPT_NATIVE_RVA,
-                "MENU_ITEM_ACCEPT_NATIVE_RVA",
-            );
+    let semantic_continue_item =
+        continue_candidate && accept_predicate_is_native(base, accept_predicate);
     if semantic_continue_item {
         MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
     }
@@ -951,7 +988,6 @@ pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
     }
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
     const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
-    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
     let item = unsafe { safe_read_usize(out_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     if item == TITLE_OWNER_SCAN_START_ADDRESS {
         return ret;
@@ -980,18 +1016,8 @@ pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let semantic_continue_item =
-        vt == er_game_base::mem::game_data_addr(
-            base,
-            MENU_WINDOW_JOB_VTABLE_RVA,
-            "MENU_WINDOW_JOB_VTABLE_RVA",
-        ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
-            && accept_predicate
-                == er_game_base::mem::game_data_addr(
-                    base,
-                    MENU_ITEM_ACCEPT_NATIVE_RVA,
-                    "MENU_ITEM_ACCEPT_NATIVE_RVA",
-                );
+    let semantic_continue_item = continue_job_identity_matches(base, vt, do_call)
+        && accept_predicate_is_native(base, accept_predicate);
     if semantic_continue_item {
         MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
         record_continue_candidate(item, accept_predicate, base);
@@ -1073,12 +1099,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_idle_ctor_hook(
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_IDLE_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let continue_candidate =
-        vt == er_game_base::mem::game_data_addr(
-            base,
-            MENU_WINDOW_JOB_VTABLE_RVA,
-            "MENU_WINDOW_JOB_VTABLE_RVA",
-        ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+    let continue_candidate = continue_job_identity_matches(base, vt, do_call);
     if continue_candidate {
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
@@ -1124,7 +1145,6 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
     {
         const DOCALL_VTABLE_SLOT_10: usize = 0x10;
         const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
-        const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
         let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let functor = unsafe { safe_read_usize(item + MENU_ITEM_FUNCTOR_A8_OFFSET) }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -1148,22 +1168,12 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
         MENU_ITEM_UPDATE_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_DOCALL.store(do_call, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-        let continue_candidate =
-            vt == er_game_base::mem::game_data_addr(
-                base,
-                MENU_WINDOW_JOB_VTABLE_RVA,
-                "MENU_WINDOW_JOB_VTABLE_RVA",
-            ) && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+        let continue_candidate = continue_job_identity_matches(base, vt, do_call);
         if continue_candidate {
             record_continue_candidate(item, accept_predicate, base);
         }
-        let semantic_continue_item = continue_candidate
-            && accept_predicate
-                == er_game_base::mem::game_data_addr(
-                    base,
-                    MENU_ITEM_ACCEPT_NATIVE_RVA,
-                    "MENU_ITEM_ACCEPT_NATIVE_RVA",
-                );
+        let semantic_continue_item =
+            continue_candidate && accept_predicate_is_native(base, accept_predicate);
         if semantic_continue_item {
             MENU_ITEM_UPDATE_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
         }

@@ -195,7 +195,22 @@ pub unsafe fn title_live_dialog_fire_ready(
 /// SaveRetryDialog AFTER the builder, so a base-only check bails once the override lands). bd
 /// offline-title-modal-is-saveretrydialog.
 pub fn is_startup_msgbox_vtable(vt: usize, base: usize) -> bool {
-    vt == base + MSGBOX_DIALOG_VTABLE_RVA || vt == er_game_base::mem::game_data_addr(base, SAVE_RETRY_DIALOG_VTABLE_RVA, "SAVE_RETRY_DIALOG_VTABLE_RVA")
+    // Both halves of the `||` resolve through `er-game-base`. The first used to be a raw
+    // `base + <1.16.2 RVA>` written next to a gated one: on 1.17 `MSGBOX_DIALOG_VTABLE_RVA` moved
+    // 0x2b03550 -> 0x2b065d0, so the base-MessageBoxDialog half of this test silently stopped
+    // matching while the SaveRetryDialog half kept working. `vt != 0` is required because a refused
+    // RVA resolves to 0, which would otherwise make a null vtable read as a startup message box.
+    vt != 0
+        && (vt == er_game_base::mem::game_data_addr(
+            base,
+            MSGBOX_DIALOG_VTABLE_RVA,
+            "MSGBOX_DIALOG_VTABLE_RVA",
+        ) || vt
+            == er_game_base::mem::game_data_addr(
+                base,
+                SAVE_RETRY_DIALOG_VTABLE_RVA,
+                "SAVE_RETRY_DIALOG_VTABLE_RVA",
+            ))
 }
 pub fn startup_modal_blocking_state() -> StartupModalBlockingState {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -296,17 +311,39 @@ pub unsafe fn profile_dialog_select_save_slot(base: usize, dialog: usize, slot: 
     }
     // Fail closed on anything that is not the dialog this call expects: it dereferences
     // `[dialog+0xb08]` and two vtables before touching anything.
+    //
+    // ZERO IS NOT A MATCH, so the expected vtable is required to be non-zero before the comparison
+    // decides anything. `safe_read_usize(dialog)` falls back to `null` (= `usize::MIN`) and
+    // `game_data_addr` answers 0 for a refusal, so `0 != 0` was FALSE and an unreadable dialog
+    // paired with a refused RVA fell straight through this "fail closed" guard into the native call
+    // below.
+    let expected_vt = er_game_base::mem::game_data_addr(base, PROFILE_LOAD_DIALOG_VTABLE_RVA, "PROFILE_LOAD_DIALOG_VTABLE_RVA");
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    if dialog_vt != er_game_base::mem::game_data_addr(base, PROFILE_LOAD_DIALOG_VTABLE_RVA, "PROFILE_LOAD_DIALOG_VTABLE_RVA") {
+    if expected_vt == null || dialog_vt != expected_vt {
         return false;
     }
     let bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(0);
     if bound <= 0 {
         return false;
     }
-    let select: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
-        core::mem::transmute(base + ProfileLoadMenuRva::ProfileLoadSelectSaveSlot as usize)
+    // BROKEN ON 1.17 UNTIL 2026-08-30: this was `transmute(base + ProfileLoadSelectSaveSlot)`, a
+    // raw `base + RVA` that never asked the resolver where the function lives on the running build.
+    // `CS::ProfileLoadDialog::SelectSaveSlot` MOVED: docs/recon/rva-map-1162-to-1170.verified.tsv
+    // maps 0x1409a5f20 -> 0x1409a70c0 (IDENTICAL-WHOLE, 38 insns, both `.pdata` entries agree), and
+    // byte-checking both images confirms it -- 1.16.2 @0x9a5f20 and 1.17 @0x9a70c0 are the same
+    // prologue `48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 33`, while 1.17 @0x9a5f20 reads
+    // `78 b5 01 48 83 c4 38 c3 ...`, which is mid-instruction and not a function entry. The vtable
+    // guard above does not save it: PROFILE_LOAD_DIALOG_VTABLE_RVA is mapped, so that guard
+    // resolves, passes, and this fires into unrelated code. `title_fn` is the crate's refusal-
+    // checked spelling and is what every other native title call already uses.
+    let Some(select_addr) = title_fn(
+        ProfileLoadMenuRva::ProfileLoadSelectSaveSlot as usize,
+        "ProfileLoadMenuRva::ProfileLoadSelectSaveSlot",
+    ) else {
+        return false;
     };
+    let select: unsafe extern "system" fn(usize, i32) -> u8 =
+        unsafe { core::mem::transmute(select_addr) };
     unsafe { select(dialog, slot) != 0 }
 }
 
@@ -815,9 +852,29 @@ pub unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
         gm_byte(GAME_MAN_FLAG_BC4_OFFSET),
     ));
 }
+/// One line per process for a refused scan needle. The refusal is a property of the build, so
+/// repeating it on every scan attempt would say nothing new into an append-only file.
+static TITLE_OWNER_NEEDLE_REFUSAL_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     TITLE_OWNER_SCAN_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
     let target_vtable = er_game_base::mem::game_data_addr(module_base, TITLE_OWNER_VTABLE_RVA, "TITLE_OWNER_VTABLE_RVA");
+    let target_table = er_game_base::mem::game_data_addr(module_base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA");
+    // A refused RVA resolves to 0. Safe to dereference, INVERTED as a search needle: `vtable == 0`
+    // matches every zeroed qword in the address space, and neither cross-check rejects it -- the
+    // `+0x10` table needle is built from the same refusal (also 0), and `TITLE_OWNER_MIN_STATE`
+    // is `TitleStepState::Min = 0`, so a zeroed block passes the state range too. The result
+    // would be a confident owner pointer into blank memory, driving the product's own title/load
+    // stepper. Refuse instead; `is_startup_msgbox_vtable` above carries the same guard.
+    if target_vtable == 0 || target_table == 0 {
+        if !TITLE_OWNER_NEEDLE_REFUSAL_LOGGED.swap(true, Ordering::SeqCst) {
+            append_autoload_debug(format_args!(
+                "title-owner-scan: REFUSED -- a needle RVA has no mapping on this build (vtable base+0x{TITLE_OWNER_VTABLE_RVA:x} -> 0x{target_vtable:x}, state-table base+0x{INNER_TITLE_STATE_TABLE_RVA:x} -> 0x{target_table:x}); 0 as a scan needle matches every zeroed qword, so the owner is reported not-found rather than captured from blank memory"
+            ));
+        }
+        return None;
+    }
     let mut scan_buf = vec![MOVIE_SKIP_FLAG_CLEAR; SCAN_CHUNK_SIZE];
     let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
     while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
@@ -886,8 +943,9 @@ pub unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> 
                                 state_value.map_or(usize::MAX, |s| s as u32 as usize),
                                 Ordering::SeqCst,
                             );
-                            let table_ok =
-                                instance_table == Some(er_game_base::mem::game_data_addr(module_base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA"));
+                            // `target_table` is the same resolution, hoisted out of the loop by
+                            // the refusal guard above -- it is known non-zero here.
+                            let table_ok = instance_table == Some(target_table);
                             let state_ok = state_value.is_some_and(|s| {
                                 (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&s)
                             });

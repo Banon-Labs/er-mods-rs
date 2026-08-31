@@ -57,6 +57,9 @@ const SCAN_THROTTLE: u64 = 120;
 static CACHED_OWNER: AtomicUsize = AtomicUsize::new(0);
 static SCAN_COUNTDOWN: AtomicU64 = AtomicU64::new(0);
 static OWNER_LOGGED: AtomicBool = AtomicBool::new(false);
+/// One line per process for a refused needle. The refusal is a property of the build, not of the
+/// moment, so re-stating it on every throttle boundary would say nothing new.
+static NEEDLE_REFUSAL_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// The current-process pseudo handle (`-1`) for `ReadProcessMemory`.
 fn cur_proc() -> HANDLE {
@@ -112,6 +115,25 @@ fn scan_for_owner(base: usize) -> Option<usize> {
         INNER_TITLE_STATE_TABLE_RVA,
         "INNER_TITLE_STATE_TABLE_RVA",
     );
+    // A refused RVA resolves to 0. That is safe to dereference and catastrophic as a NEEDLE: a
+    // scan for the value 0 matches every zeroed qword in the address space, and the `+0x10`
+    // cross-check is built from the same refusal (`want_table` is 0 too), so the first zeroed
+    // block satisfies every test. It would then be cached, and `find_title_owner`'s cheap
+    // re-validation (`*cached == want_vtable`) passes on it forever -- the harness would drive
+    // the title menu off a pointer into blank memory. Refuse instead; `dialog_active.rs` in
+    // er-telemetry-core carries the same guard for the same reason.
+    if want_vtable == 0 || want_table == 0 {
+        if !NEEDLE_REFUSAL_LOGGED.swap(true, Ordering::SeqCst) {
+            harness_log!(
+                "title_scan: REFUSED to scan -- a needle RVA has no mapping on this build \
+                 (vtable base+0x{TITLE_OWNER_VTABLE_RVA:x} -> 0x{want_vtable:x}, state-table \
+                 base+0x{INNER_TITLE_STATE_TABLE_RVA:x} -> 0x{want_table:x}); 0 as a scan needle \
+                 matches every zeroed qword, so the title owner is reported not-found rather \
+                 than captured from blank memory"
+            );
+        }
+        return None;
+    }
     let mut buf = vec![0u8; SCAN_CHUNK];
     let mut address: usize = 0;
     while address < SCAN_MAX {
@@ -158,13 +180,16 @@ fn scan_for_owner(base: usize) -> Option<usize> {
 pub fn find_title_owner(base: usize) -> Option<usize> {
     let cached = CACHED_OWNER.load(Ordering::SeqCst);
     if cached != 0 {
-        if unsafe { read_usize(cached) }
-            == Some(er_game_base::mem::game_data_addr(
-                base,
-                TITLE_OWNER_VTABLE_RVA,
-                "TITLE_OWNER_VTABLE_RVA",
-            ))
-        {
+        // Same zero hole as the needle screen in `scan_for_owner`, one step further along: a
+        // refused RVA resolves to 0, and a freed object whose first qword has been zeroed reads
+        // back 0 too, so `0 == 0` would re-validate a dead pointer forever. Require the resolved
+        // vtable to be a real address before it is allowed to confirm anything.
+        let want_vtable = er_game_base::mem::game_data_addr(
+            base,
+            TITLE_OWNER_VTABLE_RVA,
+            "TITLE_OWNER_VTABLE_RVA",
+        );
+        if want_vtable != 0 && unsafe { read_usize(cached) } == Some(want_vtable) {
             return Some(cached);
         }
         // The owner was freed / vtable no longer matches -> invalidate and rescan (throttled).
@@ -205,7 +230,18 @@ pub fn title_dialog(base: usize) -> Option<usize> {
     let dialog =
         (unsafe { read_usize(owner + TITLE_OWNER_DIALOG_E0_OFFSET) }).filter(|p| *p >= HEAP_LO)?;
     let vtable = unsafe { read_usize(dialog) }?;
-    (vtable == base + TITLETOP_DIALOG_VTABLE_RVA).then_some(dialog)
+    // RESOLVED, and never satisfied by zero. `CS::TitleTopDialog`'s vtable moved on 1.17
+    // (0x2b26468 -> 0x2b294e8), so the raw `base + RVA` matched nothing: `title_dialog` returned
+    // `None` for the whole session and everything downstream of it -- `title_dialog_a40`, the
+    // PAB/menu discriminator the harness gates its title navigation on -- reported `-1` with no
+    // refusal line to say why. A resolved 0 must not stand in either: an object whose first qword
+    // reads back 0 would then be accepted as the dialog.
+    let want_vtable = er_game_base::mem::game_data_addr(
+        base,
+        TITLETOP_DIALOG_VTABLE_RVA,
+        "TITLE_TOP_DIALOG_VTABLE_RVA",
+    );
+    (want_vtable != 0 && vtable == want_vtable).then_some(dialog)
 }
 
 /// TitleTopDialog discriminator byte (`dialog+0xa40`): 0 = PAB parked, 1 = menu up; `-1` if no dialog.

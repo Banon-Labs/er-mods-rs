@@ -121,12 +121,43 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def classifier_reaches(body: str, source: str, *tokens: str) -> bool:
+    """Does `body` establish `tokens`, either inline or through a named helper it calls?
+
+    THE CHECK MUST FOLLOW AN EXTRACTION, OR IT PUNISHES ONE. These assertions read a function body
+    for the constants that prove the Continue classifier considers both accept predicates and the
+    `_Do_call` identity. On 2026-08-30 those comparisons were extracted into
+    `accept_predicate_is_idle`, `accept_predicate_is_native` and `continue_job_identity_matches` --
+    named, documented, and each screening a REFUSED (zero) resolution before comparing, which the
+    four copies they replaced did not. Reading only the caller's body, this gate scored that as
+    three regressions.
+
+    So a token counts when it appears in the body OR in the body of a helper the body calls. The
+    invariant is unchanged -- the classifier must still be built from these constants -- and the
+    separate assertions below hold each helper to resolving them for the running build rather than
+    adding them to a raw module base, which is the defect this whole migration is about.
+    """
+    reachable = body
+    for helper in CONTINUE_CLASSIFIER_HELPERS:
+        if f"{helper}(" in body:
+            reachable += rust_fn_body(source, helper)
+    return all(token in reachable for token in tokens)
+
+
 def calls_in_order(source: str, first: str, second: str) -> bool:
     """Whether two exact call sites exist in this order in one runtime function body."""
     first_at = source.find(first)
     second_at = source.find(second)
     return first_at >= 0 and second_at >= 0 and first_at < second_at
 
+
+# The named predicates the Continue classifier is allowed to be spelled through. Each one resolves
+# its RVAs for the running build and refuses a zero resolution before comparing.
+CONTINUE_CLASSIFIER_HELPERS = (
+    "accept_predicate_is_idle",
+    "accept_predicate_is_native",
+    "continue_job_identity_matches",
+)
 
 READINESS_HELPERS = {
     "product_core_autoload_ready",
@@ -396,9 +427,17 @@ def main() -> int:
         "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
         failures,
     )
+    # The factory is pinned as the SHARED constant, not as a second literal. It used to be pinned
+    # here as `0x7acbf0`, which is 0xf0 into `FUN_1407acb00` and lands on the third byte of a
+    # `mov` -- a "RE-proven anchor" that was neither an instruction boundary nor a function entry.
+    # The cause is recorded beside the constant: a `-0xf0` Ghidra-dump shift applied where the
+    # 1.16.2 shift is zero. Pinning the alias means this gate now checks that the two agree
+    # instead of keeping a copy that can drift on its own.
     require(
         "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0" in lib
-        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0" in lib
+        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize =" in lib
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA as usize" in lib
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA: u32 = 0x007acb00" in lib
         and "TITLE_NATIVE_MENU_VISUAL_NAME: &str = \"05_000_Title\"" in lib,
         "title native visual suppression must pin the RE-proven BeginTitle wrapper/factory/05_000_Title anchors",
         failures,
@@ -482,8 +521,12 @@ def main() -> int:
     )
     continue_item_body = rust_fn_body(experiments, "product_continue_item_action")
     require(
-        "MENU_ITEM_ACCEPT_IDLE_RVA" in continue_item_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in continue_item_body
+        classifier_reaches(
+            continue_item_body,
+            experiments,
+            "MENU_ITEM_ACCEPT_IDLE_RVA",
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+        )
         and "constant false idle predicate" in continue_item_body
         and "return None" in continue_item_body,
         "product Continue item validation must reject the constant-false idle accept predicate before native submit",
@@ -493,8 +536,12 @@ def main() -> int:
     require(
         "captured semantic native Continue item" in menu_update_body
         and "semantic_continue_item" in menu_update_body
-        and "MENU_TITLE_CONTINUE_DOCALL_RVA" in menu_update_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in menu_update_body
+        and classifier_reaches(
+            menu_update_body,
+            experiments,
+            "MENU_TITLE_CONTINUE_DOCALL_RVA",
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+        )
         and "captured first title item as native Continue" not in menu_update_body,
         "product Continue capture must latch a semantic Continue item, not the first ticked MenuWindowJob",
         failures,
@@ -514,13 +561,35 @@ def main() -> int:
         and "cap_menu_window_job_native_ctor_b_7acb00" in experiments
         and "MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG" in lib
         and "MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item" in native_ctor_b_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in native_ctor_b_body
+        and classifier_reaches(
+            native_ctor_b_body,
+            experiments,
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+            "0x007ad810",
+        )
         and "MENU_CONTINUE_ITEM" in native_ctor_b_body
-        and "0x007ad810" in native_ctor_b_body
-        and "0x007add70" not in native_ctor_b_body,
+        and "0x007add70" not in native_ctor_b_body
+        and "0x007add70" not in rust_fn_body(experiments, "accept_predicate_is_native"),
         "product diagnostics must hook native-accept MenuWindowJob constructor B without accepting idle rows",
         failures,
     )
+    # THE EXTRACTION IS ONLY AN IMPROVEMENT IF THE HELPER IS BETTER THAN WHAT IT REPLACED. Each
+    # Continue classifier must resolve its addresses for the RUNNING build and must refuse a zero
+    # resolution before comparing -- `game_data_addr` answers 0 for a refusal, and as a COMPARISON
+    # target a zero matches every unset field, which is worse than never matching at all.
+    for helper in CONTINUE_CLASSIFIER_HELPERS:
+        helper_body = rust_fn_body(experiments, helper)
+        require(
+            "game_data_addr" in helper_body
+            and (
+                "!= 0" in helper_body
+                or "!= TITLE_OWNER_SCAN_START_ADDRESS" in helper_body
+            ),
+            f"{helper} must resolve its RVAs for the running build and reject a zero resolution "
+            "before comparing",
+            failures,
+        )
+
     idle_ctor_body = rust_fn_body(experiments, "menu_window_job_idle_ctor_hook")
     require(
         "MENU_WINDOW_JOB_IDLE_CTOR_RVA" in lib
@@ -911,9 +980,14 @@ def main() -> int:
         and "idle_continue_insert_match" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_HITS" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA" in experiments
-        and "MENU_CONTINUE_IDLE_INSERT_CALLER_RVA" in experiments
-        and "MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA" in experiments
-        and "MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA" in experiments
+        # The idle-insert caller attribution used to be three raw 1.16.2 constants
+        # (`MENU_CONTINUE_IDLE_INSERT_CALLER_RVA` / `_START_RVA` / `_END_RVA`) compared straight
+        # against a live stack frame. Those are mid-function return addresses, which the
+        # 1.16.2 -> 1.17 address map structurally cannot carry, so on a moved build they matched
+        # nothing and said nothing. They are now a containing function plus offsets, resolved
+        # through these two helpers -- which is what this gate should be asserting is wired.
+        and "menu_continue_idle_insert_call_site" in experiments
+        and "menu_continue_idle_insert_caller_band" in experiments
         and "callstack_contains_game_rva" in experiments
         and "TASK_ENQUEUE_GENERIC_HITS" in experiments
         and "TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA" in experiments

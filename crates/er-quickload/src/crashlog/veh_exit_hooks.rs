@@ -537,17 +537,35 @@ std::thread_local! {
 /// `MAX_AV_LOG_LINES` does not bound that. It is checked once per entry and each entry costs a
 /// whole handler frame, so the stack runs out first:
 ///
-/// MEASURED 2026-08-28 on ELDEN RING 1.17, `control-quickload-only.me3`. One execute-fault at
-/// `0x3cb67a0` (called from `eldenring.exe+0xb3d2e8`) entered this handler; describing it read
+/// MEASURED 2026-08-28 on ELDEN RING 1.17, `control-quickload-only.me3`. One execute-fault
+/// (`exception_access_kind=8`) at `0x3cb67a0` entered this handler; describing it read
 /// NULL inside `ntdll+0x3969c`; that re-entered the handler, which read NULL again. The crash log
 /// holds 215 copies of that identical second fault with `rsp` marching DOWN by exactly `0x1260` a
 /// line, from `0x2fc50` to `0x13a50`. At 4704 bytes a level the 1 MiB main-thread stack is gone
-/// after ~220 levels, and the budget is 256 -- it could never have been reached.
+/// after ~220 levels, and the budget is 256 -- it could never have been reached. The whole record
+/// is preserved in the game directory as `er-net-effects-crash-telemetry.log.prev` (record 1 is
+/// the execute fault, records 2..216 the descent).
 ///
 /// The thread then took a SIGSEGV that Wine could not even report: `virtual_setup_exception` needs
 /// stack to build the exception frame, had none, and called `abort_thread`. So the game died with
 /// no crash record, no minidump and no unhandled-filter line, and the ROOT fault -- the single
 /// line at the top naming the bad call target -- was buried under 215 copies of the amplifier.
+///
+/// TWO CORRECTIONS TO THE ABOVE, both measured after it was first written (2026-08-30):
+///
+/// 1. "called from `eldenring.exe+0xb3d2e8`" was WRONG and is deleted. That address came from the
+///    `modbt=` field, which is a stack SCAN and mixes dead frames with live. In 1.17 it is the
+///    return address of `call 0x141ebbfc0` at `0x140b3d2e3` -- an atomic AddRef leaf inside
+///    `0x140b3d215..0x140b3d2f8`. A leaf that returns cannot have called `0x3cb67a0`. The real
+///    caller is `CS::CSFadeImp::CSFadeImp` (1.16.2 `0x140b3cc40` -> 1.17 `0x140b3e2e0`), whose
+///    `call *0x18(%rax)` at `0x140b3e43a` is vtable slot 3 of the helper it HeapAlloc'd itself;
+///    `[rsp]=0x3cb67a0` with `[rsp+8]=0x3cb67f8` is `this` and `this+0x58` == `param_1 + 0xb`,
+///    the loop sentinel, which fits that constructor and nothing else.
+/// 2. This latch is correct defensive code but it is NOT what stops that descent. Re-run with the
+///    latch in place, the 215-line descent reproduced byte for byte with
+///    `oracle_veh_reentrant_refusals = 0` -- every dispatch is a fresh top-level VEH entry and the
+///    recursion lives in Wine's own exception dispatch. See bd
+///    `veh-descent-is-wine-dispatch-not-handler-reentrancy-2026-08-29`.
 ///
 /// A nested entry therefore returns `EXCEPTION_CONTINUE_SEARCH` having touched NOTHING: not the
 /// record, not the context, no counter but its own. The outer entry is still mid-way through its

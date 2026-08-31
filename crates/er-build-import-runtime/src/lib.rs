@@ -41,6 +41,7 @@ pub mod export_doc;
 pub mod gaitem;
 pub mod gem_mount;
 pub mod grant;
+pub mod native;
 pub mod read_character;
 pub mod upload;
 
@@ -671,6 +672,17 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 "[build-import] EQUIP: the inventory pointer was null, so NOTHING was attempted",
             );
         }
+        if !worn.unresolved_natives.is_empty() {
+            // Named one by one on purpose: each one is a `docs/recon/rva-map-1162-to-1170` row
+            // that does not exist yet, and a count names none of them.
+            log_line(&format!(
+                "[build-import] EQUIP: NOTHING WAS ATTEMPTED -- {} game function(s) have no \
+                 verified mapping for the running build: {}. Every planned position is recorded \
+                 as not attempted rather than dropped from the denominator.",
+                worn.unresolved_natives.len(),
+                worn.unresolved_natives.join(", ")
+            ));
+        }
         for (slot, permitted) in &worn.gate {
             log_line(&format!("[build-import]   gate(slot {slot}) = {permitted}"));
         }
@@ -792,14 +804,29 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             .collect();
         let filled = unsafe { equip_native::fill_physick(module_base, egd, &equips.physick) };
         let after = unsafe { equip_native::read_physick(module_base, egd) };
-        report.physick = (filled, wanted_tears.len());
+        report.physick = (filled.unwrap_or(0), wanted_tears.len());
+        // UNREADABLE is not EMPTY. `-1` is the flask's own "this slot holds nothing", so a
+        // refusal rendered as `-1` would tell the reader the tears were not written when in fact
+        // they were written and could not be read back.
+        let render = |flask: Option<[i32; 2]>| match flask {
+            Some(values) => format!("{:?}", values.map(|value| format!("0x{value:08X}"))),
+            None => {
+                "UNREADABLE (GetPhysicTearBySlot has no verified mapping for this build)".to_owned()
+            }
+        };
         log_line(&format!(
-            "[build-import] PHYSICK: {filled}/{} verified. wants {:?}; flask was {:?} -> now {:?} \
+            "[build-import] PHYSICK: {} verified out of {}. wants {:?}; flask was {} -> now {} \
              (-1 = empty)",
+            match filled {
+                Some(filled) => filled.to_string(),
+                None => "UNVERIFIABLE -- the tears were written, the read-back native is \
+                         unavailable, so 0"
+                    .to_owned(),
+            },
             wanted_tears.len(),
             wanted_tears,
-            before.map(|v| format!("0x{v:08X}")),
-            after.map(|v| format!("0x{v:08X}"))
+            render(before),
+            render(after)
         ));
         // The physick is the one planned position `equip_all` does not own, so it is recorded
         // here from the same read-back the line above prints. If this loop ever stops running,
@@ -807,11 +834,15 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         for (index, tear) in equips.physick.iter().enumerate() {
             let Some(tear) = tear else { continue };
             let expected = tear.item_id as i32;
-            let actual = after.get(index).copied().unwrap_or(-1);
-            let result = if actual == expected {
-                PositionResult::Verified
-            } else {
-                PositionResult::Mismatch { expected, actual }
+            let result = match after.and_then(|flask| flask.get(index).copied()) {
+                Some(actual) if actual == expected => PositionResult::Verified,
+                Some(actual) => PositionResult::Mismatch { expected, actual },
+                // Written, unprovable. Not `Mismatch { actual: -1 }`, which would claim the
+                // engine reported an empty slot.
+                None => PositionResult::NotAttempted(
+                    "the tear was written but GetPhysicTearBySlot has no verified mapping for \
+                     the running build, so nothing read it back",
+                ),
             };
             if !ledger.record_kind(PositionKind::Physick, index, result) {
                 log_line(&format!(
@@ -827,9 +858,14 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             let equipped = unsafe { equip_native::equipped_great_rune(module_base, egd) };
             let active = unsafe { character::activate_rune_arc() };
             log_line(&format!(
-                "[build-import] GREAT RUNE: {:?} -> GetEquippedGreatrune reports {equipped}, \
+                "[build-import] GREAT RUNE: {:?} -> GetEquippedGreatrune reports {}, \
                  runeArcActive={active}",
-                rune.name
+                rune.name,
+                match equipped {
+                    Some(equipped) => equipped.to_string(),
+                    None => "NOTHING -- the getter has no verified mapping for the running build"
+                        .to_owned(),
+                }
             ));
         }
 
@@ -863,22 +899,31 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         }
 
         // Safety: game thread, character in the world (gated by the caller).
-        let stats = unsafe { character::apply_stats(module_base, pgd, doc) };
-        report.level = stats.level.1;
-        report.attributes_wrong = stats.wrong.len();
-        log_line(&format!(
-            "[build-import] STATS: level {} -> {} ({} attributes wrong after read-back)",
-            stats.level.0,
-            stats.level.1,
-            stats.wrong.len()
-        ));
-        for (name, want, got) in &stats.wrong {
-            log_line(&format!(
-                "[build-import]   {name}: wanted {want}, holds {got}"
-            ));
-        }
-        if stats.is_correct() {
-            log_line("[build-import] STATS: every attribute matches the build");
+        match unsafe { character::apply_stats(module_base, pgd, doc) } {
+            Some(stats) => {
+                report.level = stats.level.1;
+                report.attributes_wrong = stats.wrong.len();
+                log_line(&format!(
+                    "[build-import] STATS: level {} -> {} ({} attributes wrong after read-back)",
+                    stats.level.0,
+                    stats.level.1,
+                    stats.wrong.len()
+                ));
+                for (name, want, got) in &stats.wrong {
+                    log_line(&format!(
+                        "[build-import]   {name}: wanted {want}, holds {got}"
+                    ));
+                }
+                if stats.is_correct() {
+                    log_line("[build-import] STATS: every attribute matches the build");
+                }
+            }
+            // Said, not skipped. The stat pass going inert on a build that moved the code is
+            // exactly the case a silent default outcome would have reported as a clean import.
+            None => log_line(
+                "[build-import] STATS: NOT APPLIED -- the level/attribute natives have no \
+                 verified mapping for the running build. The character keeps the stats it had.",
+            ),
         }
     }
 
@@ -886,16 +931,25 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     // game for capacity before the stats are applied would use the OLD number.
     if let Some(egd) = unsafe { grant::equip_game_data() } {
         // Safety: game thread, character loaded.
-        let spells = unsafe { character::memorise_spells(module_base, egd, &equips.spells) };
-        report.spells = (spells.verified, spells.wanted);
-        log_line(&format!(
-            "[build-import] SPELLS (read back): {}/{} memorised, capacity {}, {} over capacity",
-            spells.verified, spells.wanted, spells.capacity, spells.over_capacity
-        ));
-        for (slot, expected, actual) in &spells.mismatches {
-            log_line(&format!(
-                "[build-import]   SPELL slot {slot} expected {expected} but holds {actual}"
-            ));
+        match unsafe { character::memorise_spells(module_base, egd, &equips.spells) } {
+            Some(spells) => {
+                report.spells = (spells.verified, spells.wanted);
+                log_line(&format!(
+                    "[build-import] SPELLS (read back): {}/{} memorised, capacity {}, {} over \
+                     capacity",
+                    spells.verified, spells.wanted, spells.capacity, spells.over_capacity
+                ));
+                for (slot, expected, actual) in &spells.mismatches {
+                    log_line(&format!(
+                        "[build-import]   SPELL slot {slot} expected {expected} but holds {actual}"
+                    ));
+                }
+            }
+            None => log_line(&format!(
+                "[build-import] SPELLS: NOT MEMORISED -- the spell natives have no verified \
+                 mapping for the running build. {} spell(s) in the build were left unmemorised.",
+                equips.spells.len()
+            )),
         }
     }
 

@@ -20,6 +20,46 @@ both cover an address, and a row selected here is good enough to CALL but
 should still pass `audit-1170-hook-targets.py` before anything DETOURS it --
 the audit checks that the destination is a real function entry with room for
 MinHook's five-byte patch, which signature identity does not.
+
+WHICH LEDGER IS WRITABLE BY HAND, AND WHICH IS NOT
+--------------------------------------------------
+`rva-map-1162-to-1170.needed.tsv` is GENERATED. `--refresh` rewrites it
+WHOLESALE from `functions.tsv`, so every line of it is disposable by
+construction -- including a line a human typed. Its sibling
+`rva-map-1162-to-1170.verified.tsv` is the hand-curated one: rows are added to
+it with their own derivation recorded in the `how` column, and nothing
+regenerates it from a machine source.
+
+That asymmetry set a trap, and the trap is the reason for `unreproduced()`
+below. Before 2026-08-30 a hand-added row in `needed.tsv` whose pair was absent
+from `functions.tsv` was DELETED by the next `--refresh`, with exit 0 and no
+line of output naming it. Measured, on a scratch copy, with the two rows a
+merge agent had been about to add: `0x764290 -> 0x7650e0` and
+`0x8c47c0 -> 0x8c5960` both vanished and the file's sha256 returned to its
+pre-edit value. The loss does not read as a loss afterwards -- the address
+reads as one that was never mapped, and the feature it unblocked simply stops
+working again. Short `.pdata` records and body-changed functions are exactly
+the addresses that need hand derivation, and exactly the ones `functions.tsv`
+cannot carry, so the rows most worth typing were the rows most certain to
+evaporate.
+
+So a row this script cannot reproduce is now PRESERVED rather than dropped,
+written back under the `HAND-CARRIED` banner at the foot of the file, listed on
+stderr at every run, and never silently removed. Preserving carries its own
+hazard -- a wrong row that survives forever reads as a live value, and
+`er-game-base/build.rs::refuted_sources()` subtracts a `DIVERGES` row from BOTH
+maps precisely because a wrong pair is worse than a missing one -- so a
+preserved row is not immortal. It leaves in one of four ways:
+
+  * `functions.tsv` gains a pair that AGREES: the row is reproduced normally
+    and the banner drops it, no hand edit;
+  * `functions.tsv` gains a pair that DISAGREES: that is a contradiction, not
+    weak evidence, and this script REFUSES to write until a human settles it;
+  * the last `crates/` declaration of the address goes away: the row is still
+    preserved, but it is reported as `undeclared`, which is the standing
+    invitation to delete it;
+  * a human deletes the line. `--refresh` does not put it back -- preservation
+    only ever carries forward what it finds.
 """
 
 from __future__ import annotations
@@ -70,6 +110,10 @@ OUTPUT = "docs/recon/rva-map-1162-to-1170.needed.tsv"
 FUNCTIONS = "docs/recon/rva-map-1162-to-1170.functions.tsv"
 VERIFIED = "docs/recon/rva-map-1162-to-1170.verified.tsv"
 OBSERVED = "docs/recon/rva-1170-observed-refusals.txt"
+BUILD_RS = "crates/er-game-base/build.rs"
+# The line the preserved rows sit under. Matched as a prefix when the file is re-read, so the rest
+# of the banner can be reworded without orphaning the rows it introduces.
+HAND_BANNER = "# HAND-CARRIED"
 
 
 def declared_rvas(repo: Path) -> dict[str, int]:
@@ -149,6 +193,116 @@ def verified_rvas(path: Path) -> set[int]:
     return out
 
 
+def exhaustive_verdicts(repo: Path) -> list[str]:
+    """The verdict strings `er-game-base/build.rs` treats as a WHOLE-body comparison.
+
+    Parsed out of `build.rs`, not copied. The vocabulary has already moved once -- the plain
+    `IDENTICAL` of 2026-08-28 became `BYTE-IDENTICAL` / `IDENTICAL-WHOLE` / `IDENTICAL-LEAF` -- and
+    the two tools that had transcribed the old word went on reporting confident numbers about a
+    string that no longer occurs in the file (one counted DETOUR at 42 rather than 374). A
+    transcription cannot notice that; a parse fails loudly and empty.
+    """
+    text = (repo / BUILD_RS).read_text(encoding="utf-8", errors="replace")
+    # BOTH floor-exempt lists, because build.rs has had two since 2026-08-30 and reading only the
+    # first is the same transcription error one word later: PATCH_SITE_VERDICTS carries rows whose
+    # bodies DIFFER while their patch sites do not, and they are admitted without a floor exactly
+    # as the exhaustive ones are.
+    out: list[str] = []
+    for name in ("EXHAUSTIVE_VERDICTS", "PATCH_SITE_VERDICTS"):
+        match = re.search(rf"const\s+{name}\s*:[^=]*=\s*\[([^\]]*)\]", text)
+        if match:
+            out += re.findall(r'"([^"]+)"', match.group(1))
+    return out
+
+
+def verified_covered(path: Path, verdicts: list[str]) -> dict[int, int]:
+    """Every RVA `verified.tsv` covers with one of `verdicts`, mapped to its 1.17 pair.
+
+    Reported, NOT subtracted. `verified_rvas` above -- which decides what this selection skips --
+    still matches the literal string `IDENTICAL`, and as of 2026-08-30 that matches none of the 99
+    rows in the file, so the docstring's "the verified map wins wherever both cover an address" is
+    not what this script actually does. `build.rs` re-establishes that precedence itself by
+    address, which is why the drift is currently duplication rather than a wrong address, and why
+    narrowing the selection here is a deliberate change to the ledger's contents rather than a
+    drive-by. Surfacing the count is the part that costs nothing.
+    """
+    out: dict[int, int] = {}
+    if not path.is_file() or not verdicts:
+        return out
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.split("\t")
+        if len(cols) < 3 or cols[2] not in verdicts:
+            continue
+        try:
+            out[int(cols[0], 16) - BASE] = int(cols[1], 16) - BASE
+        except ValueError:
+            continue
+    return out
+
+
+def body_rows(path: Path) -> list[tuple[int, int, str]]:
+    """The (old, new, label) rows the tracked file currently holds, comments dropped."""
+    if not path.is_file():
+        return []
+    return body_rows_from_text(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def body_rows_from_text(text: str) -> list[tuple[int, int, str]]:
+    """Same, from text. Split out so the guard's selftest never needs a file on disk."""
+    out: list[tuple[int, int, str]] = []
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.split("\t")
+        if len(cols) < 2:
+            continue
+        try:
+            old, new = int(cols[0], 16), int(cols[1], 16)
+        except ValueError:
+            continue
+        old = old - BASE if old >= BASE else old
+        new = new - BASE if new >= BASE else new
+        out.append((old, new, cols[2] if len(cols) > 2 else ""))
+    return out
+
+
+def unreproduced(
+    current: list[tuple[int, int, str]],
+    rows: list[tuple[str, int, int]],
+    declared: set[int],
+) -> tuple[list[tuple[int, int, str, str]], list[tuple[int, int, int, str]]]:
+    """Split the rows on disk that this run would not produce into KEEP and CONFLICT.
+
+    Returns `(preserved, conflicts)`.
+
+    `preserved` is one entry per (old, new) pair the regeneration does not contain and does not
+    contradict: hand work, carried forward with the reason it is not reproducible attached, so the
+    operator reads WHY on every run rather than discovering the row's absence months later.
+
+    `conflicts` is the dangerous half: the file says `old -> a`, this run says `old -> b`. One of
+    the two is a wrong address at a live-looking value, and this script has no standing to pick.
+    The caller refuses to write.
+    """
+    produced: dict[int, set[int]] = {}
+    for _name, old, new in rows:
+        produced.setdefault(old, set()).add(new)
+    preserved: list[tuple[int, int, str, str]] = []
+    conflicts: list[tuple[int, int, int, str]] = []
+    for old, new, label in current:
+        if new in produced.get(old, ()):
+            continue
+        if old in produced:
+            conflicts.append((old, new, sorted(produced[old])[0], label))
+            continue
+        if any(old == kept_old and new == kept_new for kept_old, kept_new, _l, _r in preserved):
+            continue
+        reason = "unmapped" if old in declared else "undeclared"
+        preserved.append((old, new, label, reason))
+    return preserved, conflicts
+
+
 def observed_rvas(path: Path) -> list[int]:
     """Addresses the running game asked for and was refused; see record-1170-refusals.py."""
     out: list[int] = []
@@ -186,9 +340,18 @@ def select(repo: Path) -> tuple[list[tuple[str, int, int]], list[str]]:
     return rows, missing
 
 
-def render(rows) -> str:
+def render(rows, preserved=()) -> str:
     head = [
         "# 1.16.2 RVA\t1.17 RVA\tconstant",
+        "# GENERATED -- DO NOT HAND-EDIT THE BODY OF THIS FILE.",
+        "# scripts/select-needed-1170-rows.py --refresh rewrites everything below WHOLESALE",
+        "# from rva-map-1162-to-1170.functions.tsv. A row typed in by hand is reproduced only",
+        "# if functions.tsv already carries the same pair; anything else is moved to the",
+        "# HAND-CARRIED block at the foot of the file and reported on every run. Nothing here",
+        "# is deleted silently, but a hand-derived pair belongs in the curated ledger next door:",
+        "# rva-map-1162-to-1170.verified.tsv, which only verify-rva-map-1170.py --tsv writes and",
+        "# which carries forward every row that run did not itself produce.",
+        "#",
         "# Selected by scripts/select-needed-1170-rows.py from",
         "# rva-map-1162-to-1170.functions.tsv -- the subset this workspace names in a",
         "# `const *_RVA` declaration. Pairs come from masked-signature identity across",
@@ -198,7 +361,27 @@ def render(rows) -> str:
         "# run scripts/audit-1170-hook-targets.py: signature identity does not check that",
         "# the destination has room for MinHook's five-byte patch.",
     ]
-    return "\n".join(head + [f"0x{old:x}\t0x{new:x}\t{name}" for name, old, new in rows]) + "\n"
+    body = [f"0x{old:x}\t0x{new:x}\t{name}" for name, old, new in rows]
+    tail: list[str] = []
+    if preserved:
+        tail = [
+            "#",
+            f"{HAND_BANNER} -- {len(preserved)} row(s) this selection cannot reproduce.",
+            "# Kept because a wholesale regeneration that drops a hand-derived pair does it with",
+            "# exit 0 and no diagnostic, and the loss reads afterwards as an address that was",
+            "# never mapped. These are read by er-game-base/build.rs exactly like the rows above.",
+            "# `unmapped`   -- a crates/ constant names this address, functions.tsv has no pair",
+            "#                 for it. Short .pdata records and body-changed functions live here.",
+            "# `undeclared` -- no crates/ declaration names it any more. Nothing consumes it;",
+            "#                 delete the line unless you know which unscanned spelling wants it.",
+            "# To remove one: delete its line. --refresh will not put it back. If functions.tsv",
+            "# later disagrees with a pair here, this script refuses to write until you settle it.",
+        ]
+        tail += [
+            f"0x{old:x}\t0x{new:x}\t{label}\t{reason}"
+            for old, new, label, reason in sorted(preserved)
+        ]
+    return "\n".join(head + body + tail) + "\n"
 
 
 def main() -> int:
@@ -232,17 +415,91 @@ def main() -> int:
             failures.append("no runtime-observed refusal made it into the selection")
         if not any(old == 0x5EEFB0 for _n, old, _new in rows):
             failures.append("0x5eefb0 is not in the selection; the live crasher would stay unmapped")
+
+        # THE WHOLESALE-REGENERATION GUARD. Asserted on a fabricated table rather than on the
+        # tracked file, so it keeps failing after the real file's hand rows are all absorbed. The
+        # two `unmapped` addresses are the pair a merge agent nearly typed into needed.tsv on
+        # 2026-08-30 -- both declared under crates/, neither present in functions.tsv, and both
+        # measured vanishing from a scratch copy at exit 0 before this guard existed.
+        fake_rows = [("REPRODUCED_RVA", 0x111111, 0x222222)]
+        fake_current = [
+            (0x111111, 0x222222, "REPRODUCED_RVA"),  # regeneration produces it: not preserved
+            (0x764290, 0x7650E0, "MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA"),  # declared, unmapped
+            (0x8C47C0, 0x8C5960, "UPDATE_RVA"),  # declared, unmapped
+            (0x333333, 0x444444, "GONE_RVA"),  # nothing declares it any more
+        ]
+        kept, clash = unreproduced(fake_current, fake_rows, {0x764290, 0x8C47C0, 0x111111})
+        if {old for old, _n, _l, _r in kept} != {0x764290, 0x8C47C0, 0x333333}:
+            failures.append(f"a hand-added row would be dropped silently again: kept {kept}")
+        if dict((old, reason) for old, _n, _l, reason in kept).get(0x333333) != "undeclared":
+            failures.append("an undeclared preserved row is not reported as such")
+        if clash:
+            failures.append(f"agreeing rows were reported as conflicts: {clash}")
+        # A pair the file and the function map disagree about must stop the write, not be merged.
+        _kept2, clash2 = unreproduced([(0x111111, 0x999999, "REPRODUCED_RVA")], fake_rows, set())
+        if [c[:3] for c in clash2] != [(0x111111, 0x999999, 0x222222)]:
+            failures.append("a contradicting pair did not raise a conflict")
+        # ... and the preserved rows must survive a write/read round trip, or the guard preserves
+        # them into a file the next run cannot see them in.
+        round_trip = body_rows_from_text(render(fake_rows, kept))
+        if not {(0x764290, 0x7650E0), (0x8C47C0, 0x8C5960)} <= {(o, n) for o, n, _l in round_trip}:
+            failures.append("preserved rows do not survive render() -> body_rows()")
+        verdicts = exhaustive_verdicts(args.repo)
+        if "IDENTICAL-WHOLE" not in verdicts:
+            failures.append(f"EXHAUSTIVE_VERDICTS no longer parses out of build.rs: {verdicts}")
+
         for line in failures:
             print(f"SELFTEST FAIL: {line}")
         print(f"selftest: {len(names)} constants, {len(rows)} selected, {len(failures)} failure(s)")
         return 1 if failures else 0
 
     rows, missing = select(args.repo)
-    text = render(rows)
     target = args.repo / OUTPUT
+    declared = set(declared_rvas(args.repo).values())
+    preserved, conflicts = unreproduced(body_rows(target), rows, declared)
+
+    # Printed on EVERY run, refresh or check, before anything is written. The whole defect this
+    # guards against is a deletion nobody saw, so the set is never summarised away to a count.
+    for old, new, label, reason in sorted(preserved):
+        print(f"  hand-carried: 0x{old:x} -> 0x{new:x}  {label}  [{reason}]")
+    if preserved:
+        print(
+            f"{len(preserved)} row(s) this selection cannot reproduce were kept under "
+            f"'{HAND_BANNER}'. Delete a line there to drop it; --refresh will not restore it."
+        )
+    for old, new, other, label in sorted(conflicts):
+        print(
+            f"CONFLICT: 0x{old:x} -> 0x{new:x} in {target.name} ({label}), "
+            f"but functions.tsv now pairs it with 0x{other:x}"
+        )
+    if conflicts:
+        print(
+            f"REFUSING to write {target.name}: {len(conflicts)} row(s) disagree with the "
+            "function map. One of the two addresses is wrong and reads as live either way -- "
+            "er-game-base/build.rs subtracts a refuted pair from BOTH maps for the same reason. "
+            "Settle it by hand: delete the row to accept the function map, or correct "
+            "functions.tsv."
+        )
+        return 1
+
+    overlap = verified_covered(args.repo / VERIFIED, exhaustive_verdicts(args.repo))
+    both = [old for _n, old, _new in rows if old in overlap]
+    if both:
+        print(
+            f"note: {len(both)} selected row(s) are ALSO covered by {Path(VERIFIED).name} with a "
+            "whole-body verdict. verified_rvas() still filters on the literal string 'IDENTICAL', "
+            "which that file no longer writes, so the 'verified map wins' rule is not being "
+            "applied here; build.rs re-applies it by address. Narrowing this selection changes "
+            "the ledger's contents and wants its own commit."
+        )
+
+    text = render(rows, preserved)
     if args.refresh:
         target.write_text(text, encoding="utf-8")
-        print(f"wrote {target} ({len(rows)} rows); {len(missing)} constant(s) still unmapped")
+        print(
+            f"wrote {target} ({len(rows)} rows, {len(preserved)} hand-carried); "
+            f"{len(missing)} constant(s) still unmapped"
+        )
         return 0
     current = target.read_text(encoding="utf-8") if target.is_file() else ""
     if current == text:

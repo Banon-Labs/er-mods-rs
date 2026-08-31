@@ -74,18 +74,67 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NEEDED = os.path.join(REPO, "docs", "recon", "rva-map-1162-to-1170.needed.tsv")
+# The GLOBALS half of the same map. Both files are `1.16.2 RVA <TAB> 1.17 RVA <TAB> label`, both
+# are generated, and a constant mapped in either one is mapped. Reading only the first is why 25
+# of er-invasion-warp's 44 "unmapped" constants were `*_GLOBAL_RVA` / `*_SINGLETON_RVA` /
+# `*_VTABLE_RVA` rows sitting in this file with a full vote count beside them.
+DATA_MAP = os.path.join(REPO, "docs", "recon", "rva-map-1162-to-1170.data.tsv")
 RUNTIME_RESULTS = os.path.join(REPO, "docs", "recon", "dll-1170-runtime-results.json")
 LEDGER = os.path.join(REPO, "docs", "recon", "dll-1170-ungated-ledger.tsv")
 
 # `const NAME_RVA: usize = 0x...` -- the declaration form the map selector also keys on.
 CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9a-fA-F_]+)")
+# A constant-shaped identifier: SCREAMING_SNAKE, which is what a map row's label looks like when
+# the label IS a constant name rather than a source location.
+CONST_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# The two ways this tree gives a mapped address a SECOND name. Neither carries a literal, so
+# neither lands in `declared`, and the alias therefore matched no map row under its own spelling:
+#
+#     const MEMORY_FILE_VTABLE_RVA: usize = er_game_base::rva::SCALEFORM_MEMORY_FILE_VTABLE_RVA;
+#     pub use er_game_base::rva::GAME_MAN_SINGLETON_RVA as GAME_MAN_GLOBAL_RVA;
+#
+# Both targets are mapped. Both aliases read `[UNMAPPED]` at their use sites until these existed.
+CONST_ALIAS = re.compile(
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*"
+    r"((?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*[A-Z0-9_]*RVA[A-Z0-9_]*)\s*;"
+)
+USE_ALIAS = re.compile(
+    r"use\s+((?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*[A-Z0-9_]*RVA[A-Z0-9_]*)"
+    r"\s+as\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*;"
+)
 # `base + SOMETHING_RVA` / `image_base + SOMETHING_RVA` -- an address built by hand.
-HAND_BUILT = re.compile(r"\b(?:base|image_base|module_base|game_base)\s*\+\s*([A-Za-z0-9_:]*RVA[A-Za-z0-9_]*)")
+#
+# THE OPERAND IS NOT ALWAYS A SCREAMING_SNAKE CONSTANT, and assuming it was is how this audit
+# reported `er-reload-trace 0 0` on the very day that crate wrote 34 five-byte JMPs into live 1.17
+# code. Its installer reads
+#
+#     let target = base + spec.rva;
+#
+# -- a lowercase FIELD of a hook-table row, covering all 40 of its detours in one line. The old
+# pattern required an identifier containing an uppercase `RVA`, and `.` was not even in its
+# character class, so zero of those sites matched and the ratchet was blind at precisely the crate
+# that corrupted the image. Three shapes must all match: a bare constant, a `::`-pathed constant,
+# and a dotted field access whose last component is `rva` / `rva_1162` / `hook_rva`.
+HAND_BUILT = re.compile(
+    r"\b(?:base|image_base|module_base|game_base)\s*\+\s*"
+    r"((?:[A-Za-z_][A-Za-z0-9_]*(?:::|\.))*"            # optional `mod::` / `value.` prefix
+    r"(?:[A-Za-z0-9_]*RVA[A-Za-z0-9_]*"                 # SOME_RVA, RVA_TABLE, ...
+    r"|(?:[a-z0-9_]*_)?rva(?:_[a-z0-9_]+)?))"           # rva, rva_1162, hook_rva
+)
 # The gate, in each of its spellings.
-GATED = re.compile(r"\b(?:game_rva|resolve_game_address|resolve_detour_address|MhHook::new|game_ptr)\s*\(")
+#
+# `register_shared_hook` / `register_union_hook` belong here: both call `er-hook`'s `resolve_target`
+# -> `er_game_base::game_build::resolve_detour_address` before MinHook sees the address, exactly as
+# `MhHook::new` does. Omitting them would file a correctly-gated installer as a defect, which is the
+# mirror image of the blindness above and just as useless.
+GATED = re.compile(
+    r"\b(?:game_rva|resolve_game_address|resolve_detour_address|resolve_target"
+    r"|MhHook::new|game_ptr|register_shared_hook|register_union_hook)\s*\("
+)
 # A raw store through a pointer, or the byte-patch primitive.
 #
 # The third alternative is the one this audit was missing until 2026-08-29. Naming the pointer
@@ -99,9 +148,15 @@ GATED = re.compile(r"\b(?:game_rva|resolve_game_address|resolve_detour_address|M
 # writing to a stale 1.16.2 address on every 1.17 boot: the menu never opened, and nothing in the
 # gate said a word, because a store to a moved global neither faults nor logs. The assignment can
 # also sit on the next line, which is why this is matched against the window rather than one line.
+# The fourth alternative is a MinHook install, and it is a WRITE in the only sense that matters:
+# `MH_CreateHook` copies the prologue and `MH_EnableHook` stores a five-byte `E9 rel32` over it.
+# Reaching either with a hand-built address the gate never saw is how 19 live instructions got
+# split on 2026-08-29 -- so it belongs in the bucket whose ledger claim is "no DLL can corrupt the
+# 1.17 image with a stale address", not in the fault-safe read bucket where it used to land.
 RAW_WRITE = re.compile(
     r"write_code_byte|write_code_bytes|\*\s*target\s*=|\*\s*(?:addr|address|slot)\s*="
     r"|as\s*\*mut\s+[\w:]+\s*\)\s*="
+    r"|MH_CreateHook\s*\(|MH_EnableHook\s*\("
 )
 # The address is turned into something callable. Matched against the text IMMEDIATELY BEFORE the
 # `base + rva`, not a window: `is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA)` sits two lines
@@ -135,32 +190,122 @@ def crate_sources(pkgs: dict, crate: str) -> list[str]:
     return out
 
 
-def mapped_constants() -> set:
-    names = set()
-    try:
-        with open(NEEDED, encoding="utf-8") as handle:
-            for line in handle:
-                if line.startswith("0x"):
-                    parts = line.split("\t")
-                    if len(parts) > 2:
-                        names.add(parts[2].strip())
-    except OSError:
-        pass
-    return names
+class MappedRows:
+    """What the 1.16.2 -> 1.17 tables carry, keyed BOTH ways.
+
+    A MAP ROW IS AN ADDRESS PAIR. Its third column is a LABEL, and the label's spelling is decided
+    by whichever generator wrote the row -- not by whether the row is mapped. `select-needed-1170-
+    rows.py` writes the `const *_RVA` name when the workspace declares one and a `file.rs:line`
+    SOURCE LOCATION when the address comes from somewhere with no constant name (a `MapSeam { rva:
+    ... }` field, a hook-table row), and three rows carry a `(refused at runtime 0x...)` note
+    instead.
+
+    Reading the label and asking "is this a constant this crate uses" therefore answers NO for
+    every row of the second and third shapes, however completely mapped they are. That is not a
+    near-miss. On 2026-08-30 the five `er-invasion-warp` map seams -- 0x876140, 0x885ed0, 0x888aa0,
+    0x88b7b0, 0x88bac0, every one of them mapped at +0xff0, verified IDENTICAL 1.000 BOTH-ENTRIES,
+    present in both generated tables -- reported `[UNMAPPED]`, and an agent spent a session
+    re-deriving addresses the ledger already held.
+
+    So `addrs` is the authority and `names` is a convenience for the sites whose operand is a
+    constant the audit could not resolve to a literal. `covers()` accepts either.
+    """
+
+    def __init__(self, names=(), addrs=()):
+        self.names = set(names)
+        self.addrs = set(addrs)
+
+    def __len__(self) -> int:
+        return len(self.names)
+
+    def __contains__(self, name) -> bool:
+        return name in self.names
+
+    def covers(self, name, addr) -> bool:
+        return name in self.names or (addr is not None and addr in self.addrs)
 
 
-def scan(paths: list[str], mapped: set) -> dict:
+def _as_mapped(mapped) -> MappedRows:
+    """Accept a bare name set, so a caller that only has names still works."""
+    return mapped if isinstance(mapped, MappedRows) else MappedRows(mapped)
+
+
+def mapped_constants() -> MappedRows:
+    """Read every map row, keeping its 1.16.2 ADDRESS and, when the label is one, its name."""
+    names, addrs = set(), set()
+    for table in (NEEDED, DATA_MAP):
+        try:
+            with open(table, encoding="utf-8") as handle:
+                for line in handle:
+                    # `#` comments out the UNUSED rows at the foot of the data table; only a row
+                    # that starts with its 1.16.2 address is a promoted mapping.
+                    if not line.startswith("0x"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 3 or not parts[1].strip().startswith("0x"):
+                        continue
+                    try:
+                        addrs.add(int(parts[0].strip(), 16))
+                    except ValueError:
+                        continue
+                    label = parts[2].strip()
+                    if CONST_NAME.match(label):
+                        names.add(label)
+        except OSError:
+            pass
+    return MappedRows(names, addrs)
+
+
+def _canonical(name: str, alias: dict) -> str:
+    """Follow `A -> B -> C` alias hops to the name that actually carries the literal."""
+    seen = set()
+    while name in alias and name not in seen:
+        seen.add(name)
+        name = alias[name]
+    return name
+
+
+def scan(paths: list[str], mapped) -> dict:
     """Count the ways a stale address could reach the game from this source set."""
-    declared = {}
-    buckets = {"exec": [], "write": [], "checked_write": [], "read": []}
+    mapped = _as_mapped(mapped)
+    declared: dict[str, int] = {}
+    alias: dict[str, str] = {}
+    sources: list[tuple[str, list[str]]] = []
+    # Pass one: every declaration in the whole closure, BEFORE any use site is judged. Collecting
+    # these file-by-file inside the scan loop would make a constant's address visible only to the
+    # files walked after the one that declares it, and `os.walk` order is not import order.
     for path in paths:
         try:
             with open(path, encoding="utf-8", errors="replace") as handle:
                 lines = handle.read().splitlines()
         except OSError:
             continue
-        for match in CONST.finditer("\n".join(lines)):
+        sources.append((path, lines))
+        joined = "\n".join(lines)
+        for match in CONST.finditer(joined):
             declared[match.group(1)] = int(match.group(2).replace("_", ""), 16)
+        for match in CONST_ALIAS.finditer(joined):
+            alias[match.group(1)] = re.sub(r"\s+", "", match.group(2)).rsplit("::", 1)[-1]
+        for match in USE_ALIAS.finditer(joined):
+            alias[match.group(2)] = re.sub(r"\s+", "", match.group(1)).rsplit("::", 1)[-1]
+
+    def address_of(name: str):
+        canon = _canonical(name, alias)
+        return canon, declared.get(name, declared.get(canon))
+
+    def label(name: str) -> str:
+        canon, addr = address_of(name)
+        if mapped.covers(name, addr) or mapped.covers(canon, addr):
+            return name
+        if addr is None and not CONST_NAME.match(name):
+            # A local, a parameter or a struct field: there is no literal to look up, so calling
+            # it unmapped would be a claim the audit never checked. `base + spec.rva` is 40 hook
+            # rows, not one address.
+            return name + " [NO-ADDRESS]"
+        return name + " [UNMAPPED]"
+
+    buckets = {"exec": [], "write": [], "checked_write": [], "read": []}
+    for path, lines in sources:
         for index, line in enumerate(lines):
             if line.lstrip().startswith("//"):
                 continue
@@ -175,7 +320,7 @@ def scan(paths: list[str], mapped: set) -> dict:
             # What this OCCURRENCE is used for, judged from the text right before it.
             before = line[: hand.start()].rstrip()
             where = f"{os.path.relpath(path, REPO)}:{index + 1}"
-            entry = (where, name + ("" if name in mapped else " [UNMAPPED]"))
+            entry = (where, label(name))
             # Order matters: a write is a write even if the same window also reads, and an exec is
             # worse than a read. Only a window with NEITHER is the benign read/compare bucket.
             if RAW_WRITE.search(window):
@@ -186,7 +331,12 @@ def scan(paths: list[str], mapped: set) -> dict:
                 buckets["exec"].append(entry)
             else:
                 buckets["read"].append(entry)
-    unmapped = sorted(n for n in declared if n not in mapped)
+    unmapped = sorted(
+        name
+        for name, addr in declared.items()
+        if not mapped.covers(name, addr)
+        and not mapped.covers(_canonical(name, alias), addr)
+    )
     return {"declared": len(declared), "unmapped": unmapped, **buckets}
 
 
@@ -196,6 +346,157 @@ def runtime_results() -> dict:
             return json.load(handle)
     except (OSError, ValueError):
         return {}
+
+
+def _positive_control() -> list[str]:
+    """Run the WHOLE scan over the exact code that corrupted 1.17, and over its fix.
+
+    Asserting the regexes in isolation is not enough, and this audit has now been wrong twice in
+    the same way: `RAW_WRITE` missed six real cast-and-assign stores, and `HAND_BUILT` missed all
+    40 of `er-reload-trace`'s detour sites -- both times the ledger reported ZERO and both times
+    the zero was believed. A pattern test cannot catch that, because the bucket a site lands in
+    also depends on the gate check and the +/-3 line window. So this feeds `scan()` the real
+    before-and-after text and asserts the verdict FLIPS: the ungated install scores 1 ungated
+    WRITE, and the same installer routed through either gate spelling scores 0. Both gated forms
+    are checked because the crate that caused this uses the cross-DLL registrar, not the one the
+    obvious fix reaches for.
+    """
+    broken = """
+fn install_one(base: usize, spec: &HookSpec) {
+    let target = base + spec.rva;
+    let mut trampoline: *mut c_void = null_mut();
+    let create_status = unsafe {
+        MH_CreateHook(target as *mut c_void, spec.detour as *mut c_void, &mut trampoline)
+    } as i32;
+    let enable_status = unsafe { MH_EnableHook(target as *mut c_void) } as i32;
+}
+"""
+    fixed_shared = """
+fn install_one(base: usize, spec: &HookSpec) -> bool {
+    let target = base + spec.rva;
+    match unsafe { er_hook::register_shared_hook(target, spec.detour, spec.original) } {
+        Ok(route) => true,
+        Err(status) => false,
+    }
+}
+"""
+    fixed_union = """
+fn install_one(base: usize, spec: &HookSpec) -> bool {
+    let requested = base + spec.rva;
+    match unsafe { er_hook::register_union_hook(requested, spec.detour, spec.original) } {
+        Ok(()) => true,
+        Err(status) => false,
+    }
+}
+"""
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for label, text, want_write, want_read in (
+            ("ungated", broken, 1, 0),
+            ("register_shared_hook", fixed_shared, 0, 0),
+            ("register_union_hook", fixed_union, 0, 0),
+        ):
+            path = os.path.join(tmp, f"{label}.rs")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            got = scan([path], set())
+            if len(got["write"]) != want_write:
+                out.append(
+                    f"positive control: the {label} installer scored "
+                    f"{len(got['write'])} ungated WRITE, expected {want_write}"
+                )
+            if len(got["read"]) != want_read:
+                out.append(
+                    f"positive control: the {label} installer scored "
+                    f"{len(got['read'])} read/compare, expected {want_read}"
+                )
+    return out
+
+
+def _label_shape_control() -> list[str]:
+    """Prove the reader sees a map row through BOTH spellings of its third column.
+
+    The 2026-08-30 failure was not a regex missing a syntax; it was the reader keying on the SHAPE
+    it expected a column to have. `mapped_constants()` returned column 3 verbatim, so a row labelled
+    with a `file.rs:line` source location contributed a source location to a set that was then
+    searched for constant NAMES -- and every such row read `[UNMAPPED]` while being fully mapped.
+
+    Asserting `mapped_constants()` in isolation would not catch a recurrence, because what broke is
+    the JOIN between the table and the use site. So this runs the whole `scan()` over source text
+    that uses four real addresses under names the tables have never heard of, and asserts the tag:
+
+      * a row whose label is a CONSTANT NAME                    -> recognised, by address
+      * a row whose label is a `file.rs:line` SOURCE LOCATION   -> recognised, by address
+      * a row that lives in the GLOBALS table, not `needed.tsv` -> recognised, by address
+      * an address in NEITHER table                             -> still says [UNMAPPED]
+
+    The last case is the negative control, and it is the reason this cannot pass by tagging
+    nothing. The three addresses are the ones the incident named, so a table that drops them fails
+    here rather than in a session spent re-deriving them.
+    """
+    name_labelled = 0x116C70  # needed.tsv, labelled `DLSTRING_WCHAR_SUBSTR_RVA`
+    srcloc_labelled = 0x876140  # needed.tsv, labelled `crates/er-invasion-warp/src/map_seams.rs:244`
+    globals_table = 0x2BA4C80  # data.tsv, labelled `SCALEFORM_MEMORY_FILE_VTABLE_RVA`
+    absent = 0xDEADBE0  # in neither table, and not a plausible RVA
+    text = f"""
+const NAME_LABELLED_RVA: usize = {name_labelled:#x};
+const SRCLOC_LABELLED_RVA: usize = {srcloc_labelled:#x};
+const GLOBALS_TABLE_RVA: usize = {globals_table:#x};
+const ABSENT_RVA: usize = {absent:#x};
+const ALIASED_RVA: usize = er_game_base::rva::SCALEFORM_MEMORY_FILE_VTABLE_RVA;
+pub use er_game_base::rva::DLSTRING_WCHAR_SUBSTR_RVA as REEXPORTED_RVA;
+fn probe(base: usize) {{
+    let a = unsafe {{ er_game_base::mem::safe_read_usize(base + NAME_LABELLED_RVA) }};
+    let b = unsafe {{ er_game_base::mem::safe_read_usize(base + SRCLOC_LABELLED_RVA) }};
+    let c = unsafe {{ er_game_base::mem::safe_read_usize(base + GLOBALS_TABLE_RVA) }};
+    let d = unsafe {{ er_game_base::mem::safe_read_usize(base + ABSENT_RVA) }};
+    let e = unsafe {{ er_game_base::mem::safe_read_usize(base + ALIASED_RVA) }};
+    let f = unsafe {{ er_game_base::mem::safe_read_usize(base + REEXPORTED_RVA) }};
+    let g = unsafe {{ er_game_base::mem::safe_read_usize(base + row.rva) }};
+}}
+"""
+    # The alias targets have to carry their literals, exactly as the real crates do.
+    text += f"""
+pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = {globals_table:#x};
+pub const DLSTRING_WCHAR_SUBSTR_RVA: usize = {name_labelled:#x};
+"""
+    want = {
+        "NAME_LABELLED_RVA": "NAME_LABELLED_RVA",
+        "SRCLOC_LABELLED_RVA": "SRCLOC_LABELLED_RVA",
+        "GLOBALS_TABLE_RVA": "GLOBALS_TABLE_RVA",
+        "ABSENT_RVA": "ABSENT_RVA [UNMAPPED]",
+        "ALIASED_RVA": "ALIASED_RVA",
+        "REEXPORTED_RVA": "REEXPORTED_RVA",
+        "row.rva": "row.rva [NO-ADDRESS]",
+    }
+    out = []
+    mapped = mapped_constants()
+    for address, why in (
+        (name_labelled, "a row labelled with a constant NAME"),
+        (srcloc_labelled, "a row labelled with a `file.rs:line` SOURCE LOCATION"),
+        (globals_table, "a row from the GLOBALS table"),
+    ):
+        if address not in mapped.addrs:
+            out.append(f"label-shape control: {address:#x} -- {why} -- is not in mapped.addrs")
+    if absent in mapped.addrs:
+        out.append(f"label-shape control: negative control {absent:#x} IS in mapped.addrs")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "label_shapes.rs")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        result = scan([path], mapped)
+    # Every use site above is a fault-safe read, so anything landing elsewhere is itself a defect.
+    for bucket in ("exec", "write", "checked_write"):
+        if result[bucket]:
+            out.append(f"label-shape control: {len(result[bucket])} site(s) misfiled as {bucket}")
+    got = {tag.split(" ", 1)[0]: tag for _where, tag in result["read"]}
+    for operand, expected in want.items():
+        if got.get(operand) != expected:
+            out.append(
+                f"label-shape control: `base + {operand}` tagged {got.get(operand)!r}, "
+                f"expected {expected!r}"
+            )
+    return out
 
 
 def selftest() -> int:
@@ -223,6 +524,36 @@ def selftest() -> int:
         failures.append("SIGNATURE_CHECK missed an EXPECTED-opcode compare")
     if not HAND_BUILT.search("let x = base + SOME_RVA;"):
         failures.append("HAND_BUILT missed `base + SOME_RVA`")
+    # THE SHAPE THE RATCHET WAS BLIND TO. `er-reload-trace` built all 40 of its detour targets from
+    # this one line, and the ledger read `er-reload-trace 0 0` while it was writing five-byte JMPs
+    # at stale 1.16.2 addresses. A lowercase, dotted field access is not an exotic spelling.
+    for sample, why in (
+        ("    let target = base + spec.rva;", "a lowercase dotted field `base + spec.rva`"),
+        ("    let a = base + self.rva_1162;", "a suffixed lowercase field `base + self.rva_1162`"),
+        ("    let b = module_base + hook.hook_rva;", "a prefixed lowercase field"),
+        ("    let c = base + er_game_base::rva::FOO_RVA;", "a `::`-pathed constant"),
+        ("    let d = image_base + rva;", "a bare lowercase `rva` local"),
+    ):
+        if not HAND_BUILT.search(sample):
+            failures.append(f"HAND_BUILT missed {why}")
+    if HAND_BUILT.search("let n = base + spec.offset;"):
+        failures.append("HAND_BUILT wrongly claimed `base + spec.offset` is an address constant")
+    if HAND_BUILT.search("let n = base + arvalue;"):
+        failures.append("HAND_BUILT wrongly matched an identifier that merely contains `rva`")
+    if HAND_BUILT.search("let target = base + spec.rva;").group(1) != "spec.rva":
+        failures.append("HAND_BUILT captured the wrong operand for a dotted field")
+    # ...and the corresponding gate spelling, or a correctly-gated installer reads as a defect.
+    if not GATED.search("unsafe { er_hook::register_shared_hook(target, spec.detour, orig) }"):
+        failures.append("GATED missed register_shared_hook(")
+    if not GATED.search("unsafe { register_union_hook(target, handler, slot) }"):
+        failures.append("GATED missed register_union_hook(")
+    # A MinHook install on a hand-built address is an image WRITE, not a fault-safe read.
+    if not RAW_WRITE.search("MH_CreateHook(target as *mut c_void, detour, &mut tramp)"):
+        failures.append("RAW_WRITE missed a raw MH_CreateHook install")
+    if not RAW_WRITE.search("unsafe { MH_EnableHook(target as *mut c_void) }"):
+        failures.append("RAW_WRITE missed a raw MH_EnableHook arm")
+    failures.extend(_positive_control())
+    failures.extend(_label_shape_control())
     if not EXEC_USE.search("unsafe { std::mem::transmute("):
         failures.append("EXEC_USE missed text ending in `transmute(`")
     if EXEC_USE.search("unsafe { is_in_state(sm, "):

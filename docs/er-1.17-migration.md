@@ -23,10 +23,10 @@ blocked on. Update it as items close rather than starting a second list somewher
 | --- | --- | --- | --- |
 | 1 | Ghidra dump / MCP (`ermaporch1162`, :8765) | 1.16.2 only -- every name, signature and struct it returns is the previous build | a 1.17 runtime dump, imported as `ermaporch1170` |
 | 2 | 19 unresolved addresses in the RVA map | shape-matched but ambiguous, and deliberately left blank | #1, or hand RE per address |
-| 3 | 5 non-IDENTICAL mappings (2 NEAR, 1 DIVERGES, 2 too short to judge) | refused; the other 27 are translated and audited | reading each 1.17 function by hand |
+| 3 | 1 mapping refused on evidence: `MOVEMAPSTEP_STEP_MOVEMAP_RVA` (`NEAR`, body grew by two instructions) | callable, detour refused; the 2026-08-30 verdict rework cleared the other four -- see "Function lengths" below | an explicit human promotion, if that detour is wanted |
 | 4 | Struct layouts | two confirmed drifts: `PlayerGameData` +8 (`+0xab5` -> `+0xabd`), the Wwise settings object +0x38. The rest is unaudited | #1 |
 | 5 | `fromsoftware-rs` bindings (path dependency) | field offsets are 1.16.2-shaped | #4 |
-| 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | ground-truthed against the 1.16.2 image, which is why `eldenring-deobf.bin` still points there | #3 -- flip the canonical image in the same commit that re-points the addresses |
+| 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | mostly fine: a swept comparison of all 36 specs against the 1.17 image found exactly ONE that breaks, `er-save-suppress::QUIT_PHASE_SETTLE_SIG`, now respelled. `Image::EldenRing1170` exists for a spec that must be 1.17 (3 use it); the rest are register-only prologues whose encoding is version-invariant | 5 specs whose 1.16.2 RVA is in no map, so they could not be checked at all |
 | 7 | `dump-exec.bin` + `scripts/dump-deobf-shift.py` | dump side is **1.16.1**: cross-version by two patches, and its matcher cannot see struct-offset drift | regenerate, or retire it in favour of `map-rvas-1162-to-1170.py` |
 | 8 | `regulation.bin`, `data/effects.json`, `effect-master-catalog.json` | 1.17 shipped new params; row ids unverified | re-validate with `tools/er-param-inspect` |
 | 9 | Save containers / `ProfileSummary` reader | RVA-stale; whether the format itself changed is unknown | #1 plus a save-format diff |
@@ -363,10 +363,19 @@ machinery, which points at er-title-flow and er-scaleform-hooks first.
 
 Comparing `.pdata` extents for every pair in `rva-map-1162-to-1170.needed-verified.tsv`: exactly
 one of 218 changed size, `0x140af7cf0 -> 0x140af9000` (`MOVEMAPSTEP_STEP_MOVEMAP_RVA`),
-`0x120b -> 0x1213`. Its first differing byte is a rip-relative displacement at +0x42, which the
-verifier normalises away, so `IDENTICAL` is the right verdict and the 8 bytes are elsewhere in the
-tail. Worth re-running after any map regeneration -- a size change is the cheapest signal that a
-"verified same function" pair deserves a second look.
+`0x120b -> 0x1213`.
+
+**The conclusion originally drawn here was wrong, and the way it was wrong is the point.** It said
+the 8 bytes were "elsewhere in the tail" and `IDENTICAL` was the right verdict. They are two
+INSERTED INSTRUCTIONS at index 873 of 975 -- a Torrent destroy-and-recreate -- and `IDENTICAL` was
+what the verifier said after comparing 120 instructions and stopping. A cheap signal was noticed,
+explained away, and the explanation was never checked against the thing it explained.
+
+Since 2026-08-30 the extent length is a first-class signal rather than an audit someone remembers
+to run: a differing length blocks an `IDENTICAL` verdict outright, the verifier decodes the WHOLE
+declared extent instead of the first 120 instructions, and every row carries an `extent` column
+(`PDATA:0x120b/0x1213+8`). This pair now verdicts `NEAR` -- callable, detour refused -- which is
+what it should have said all along.
 
 ## How much of the migration is actually left (2026-08-29)
 
@@ -580,3 +589,71 @@ It proves each DLL can be loaded into 1.17 and the game survives boot, and that 
 can execute or corrupt. It does NOT prove any FEATURE works: 792 refusals is 792 things not
 happening. Feature-level 1.17 correctness is per-DLL work behind this, and the refusal log is
 exactly the to-do list for it.
+
+## Twenty-eight `functions.tsv` pairs two methods refute, and why none was written (2026-08-30)
+
+Two independent passes each found `docs/recon/rva-map-1162-to-1170.functions.tsv` rows they
+could refute: the call-graph topology pairing adjudicated by whole-body byte equality
+(13 rows), and the leaf pass's caller vote adjudicated by masked extent bytes plus region
+delta (19 rows, 4 shared). The negative controls are strong -- the whole-body test accepted
+0 of 400 random wrong destinations while accepting 399 of 400 correct ones -- and 16 of the
+leaf pass's 19 were independently reproduced by a topology run that did not seed them, with
+0 contradicted.
+
+**None of them was written to any ledger, and that is the finding, not an omission.** All 28
+are absent from `verified.tsv`, `needed.tsv`, `needed-verified.tsv` and `data.tsv`, and no
+literal in `crates/` names any of them. They exist only in `functions.tsv`, which is
+gitignored AND is not what `build.rs` reads -- its `FUNCTION_MAP` is `needed.tsv`. So no
+wrong address reaches either map from these rows, `refuted_sources()` is not in play, and a
+correction written into a tracked ledger would be a dead row.
+
+They are recorded here because `functions.tsv` is regenerated and untracked, so this table is
+the only place the derivation survives. **If one of these addresses is ever named by a new
+`const *_RVA`, put the corrected pair into `needed.tsv` before running
+`select-needed-1170-rows.py --refresh`**: the refresh then REFUSES rather than importing the
+wrong value. That guard is real -- planting `0x116c70 -> 0xdeadbe0` on a scratch copy exits 1
+with `CONFLICT: ... but functions.tsv now pairs it with 0x116c70`, and writes nothing.
+
+| 1.16.2 | `functions.tsv` says | refuted to | evidence | 1.16.2 name |
+|---|---|---|---|---|
+| `0x140536630` | `0x140a7e5c0` | `0x140537480` | topology + whole-body bytes | thunk_FUN_145ac79fd |
+| `0x1406ab480` | `0x140e56250` | `0x1406ac2d0` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x1409f5e70` | `0x140a96e80` | `0x1409f7150` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140b0f3f0` | `0x140bbab60` | `0x140b10a90` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140b2d250` | `0x141d2b520` | `0x140b2e8f0` | topology + whole-body bytes + caller vote + region delta | thunk_FUN_1459837f8 |
+| `0x140d86bc0` | `0x141c99210` | `0x140d88900` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140db28d0` | `0x140e4dd80` | `0x140db4630` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140e44850` | `0x1401b9430` | `0x140e46650` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140e46020` | `0x140e54040` | `0x140e47e20` | caller vote + masked bytes + region delta (topology had no opinion) | — |
+| `0x140e4ac30` | `0x1426d51a0` | `0x140e4ca30` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140e4c550` | `0x1406c8190` | `0x140e4e350` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140e4c6d0` | `0x140ae1a80` | `0x140e4e4d0` | topology + whole-body bytes + caller vote + region delta | Game.Network.GetOpenFieldMaxDistFromHostPlayer |
+| `0x140e4e3e0` | `0x140654b70` | `0x140e501e0` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140e51e50` | `0x140540150` | `0x140e53c50` | caller vote + masked bytes + region delta (topology had no opinion) | — |
+| `0x140e530b0` | `0x140bf7f30` | `0x140e54eb0` | caller vote + masked bytes + region delta (topology had no opinion) | — |
+| `0x140e5dc80` | `0x1406830c0` | `0x140e5fa80` | topology + whole-body bytes + caller vote + region delta | thunk_FUN_1402b9ccd |
+| `0x140e5df10` | `0x140e4a8e0` | `0x140e5fd10` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x141125370` | `0x140dfde10` | `0x141127170` | topology + whole-body bytes | SysAllocStatic |
+| `0x14181e140` | `0x1404d3780` | `0x14181ff40` | topology + whole-body bytes + caller vote + region delta | thunk_FUN_145333383 |
+| `0x141a597c0` | `0x140b125b0` | `0x141a5b5c0` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x141ec5fe0` | `0x141ec7de0` | `0x141ec7e30` | topology + whole-body bytes | FUN_141ec5fe0 |
+| `0x141ecf9a0` | `0x140e45e80` | `0x141ed17a0` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x142028860` | `0x1414c146f` | `0x14202a660` | topology + whole-body bytes | thunk_FUN_144c45a14 |
+| `0x142217ae0` | `0x1422198e0` | `0x142219830` | topology + whole-body bytes | FUN_142217ae0 |
+| `0x14223f8f0` | `0x14296e345` | `0x142242080` | topology + whole-body bytes | SetSwitch |
+| `0x142417b80` | `0x14241a390` | `0x14241a3c0` | topology + whole-body bytes | FUN_142417b80 |
+| `0x14296b5a9` | `0x14296dd69` | `0x14296e7f5` | topology + whole-body bytes | Unwind@14296b5a9 |
+| `0x14299c180` | `0x14299edb0` | `0x14299ed20` | topology + whole-body bytes | FUN_14299c180 |
+
+Three of the leaf pass's nineteen are NOT in the reproduced set: `0x140e46020`,
+`0x140e51e50` and `0x140e530b0`. In the split that withheld each one topology never reached
+it, and in the other split it is a seed that merely echoes `functions.tsv`, so topology has
+no independent opinion. What would decide them is a third complementary seed split that
+both withholds them and anchors their neighbourhood -- NOT a wider ORDER residue, which is
+the setting whose cross-run error is 1.881% rather than 0.181%.
+
+Several are adjacent-sibling SWAPS, where `functions.tsv` crossed two same-shape neighbours
+(`0x14299c0f0`/`0x14299c180` onto `0x14299ed20`/`0x14299edb0`, and `0x141ec5fe0`/`0x141ec6030`
+onto `0x141ec7de0`/`0x141ec7e30`). Masked signature identity cannot separate those; a caller
+set can. Apply such a pair as a pair or not at all -- half a swap leaves one address
+pointing at the other's function.

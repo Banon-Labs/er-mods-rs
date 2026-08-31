@@ -3,7 +3,6 @@ use std::{
     fmt,
     fs::File,
     io::Write,
-    ptr::null_mut,
     sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
     sync::{Mutex, OnceLock},
 };
@@ -13,13 +12,21 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 const LOG_PATH: &str = "er-reload-trace.log";
 
-const MH_OK: i32 = 0;
-const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
-const MH_ERROR_ENABLED: i32 = 5;
-
 const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
 const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
-const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
+/// Mounted-EBL-archive registry -- the `DLIO::DLFileDeviceManager` singleton, whose deobf VA is
+/// `0x1448464a8`.
+///
+/// IT WAS `0x448464a8` HERE UNTIL 2026-08-30, AND THAT WAS A TRANSCRIPTION SLIP, NOT A MIGRATION
+/// CASUALTY. `0x1448464a8 - 0x140000000 = 0x48464a8`; the old constant had dropped a leading `0x14`
+/// instead of the full image base, leaving an RVA of 0x448464a8 -- about 1.1 GB past the end of a
+/// 0x5e08000-byte image, on EVERY build. `read_usize` is `ReadProcessMemory`-backed and the call
+/// site ended in `.unwrap_or(0)`, so the read never faulted and never logged: the mount census in
+/// every trace line this DLL has ever written reported `mounted_registry=0x0` because the address
+/// was unmappable, not because nothing was mounted. `docs/recon/rva-map-1162-to-1170.data.tsv`
+/// records the wrong value as "no usable reference" while the real one carries 6/6 and is already
+/// mapped for 1.17 (0x48464a8 -> 0x484a528).
+const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = er_game_base::rva::DL_FILE_DEVICE_MANAGER_SINGLETON_RVA;
 
 // MoveMapStep finalize advancer FUN_140afa7c0 (dump) -> deobf 0x140afa6d0 -> rva 0xafa6d0 (content-
 // unique, scripts/dump-deobf-shift.py). param_1 (rcx) = MoveMapStep; field25_0x12a = the finalize
@@ -74,28 +81,27 @@ const HOOK_ORIGINAL_UNSET: usize = 0;
 
 type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
-/// C-ABI shape of the product DLL's `er_effects_union_register` export (crates/er-quickload/src/mh.rs).
-/// (target_addr, handler, *mut orig_slot) -> 0 ok / -1 null-slot / positive MH_STATUS on failure.
-/// `TraceHookFn` is exactly the product's `UnionFn`, so our detours plug into its union unchanged.
-type UnionRegisterFn = unsafe extern "system" fn(usize, TraceHookFn, *mut usize) -> i32;
-
-/// The product DLL's module base name as me3 loads it (matched by base name, not full path).
-const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
-const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
-/// Bounded wait for the product DLL to map + export the registrar (both natives load together under
-/// me3; this only covers install-thread ordering). ~3s at 50ms cadence.
-const UNION_RESOLVE_TRIES: u32 = 60;
-const UNION_RESOLVE_SLEEP_MS: u32 = 50;
+/// Bounded wait for the product DLL to map + export `er_effects_union_register`, asked ONCE so the
+/// answer is settled before any hook is registered. ~1s at 25ms, matching `er-hook`'s own budget.
+///
+/// This is a presence question only -- `er_hook::register_shared_hook` does the routing. The old
+/// ~3s hand-rolled poll ALSO decided which code path installed the hooks, and its timeout dropped a
+/// multi-DLL run onto a completely ungated MinHook path. There is no such path left: both answers
+/// now resolve the address through the gate, so a late product load costs a chained handler, never
+/// a stale write.
+const PRODUCT_RESOLVE_TRIES: u32 = 40;
+const PRODUCT_RESOLVE_SLEEP_MS: u32 = 25;
 
 /// Addresses the PRODUCT DLL owns with a BARE `MhHook` (not its union) in the sq-repro reload mode
 /// this trace runs alongside: 0x67b200 = SYSTEM_QUIT_REQUEST_LOAD_SLOT, 0x67b290 =
-/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). Routing OUR observer through
-/// the product union would create the dispatcher on that address first if our install thread wins the
+/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). Registering OUR observer
+/// there would create the union dispatcher on that address first if our install thread wins the
 /// race, making the product's later `MhHook::new` return ALREADY_CREATED and silently dropping the
-/// product's CRITICAL reload hook. So in the unioned run we SKIP these two -- the product's own
-/// menu-trace union hooks + its inworld-load debug line already log the same deserialize events.
-/// (Standalone trace runs, with no product DLL present, still install them via our own MinHook.)
-const UNION_SKIP_RVAS: &[usize] = &[0x67b200, 0x67b290];
+/// product's CRITICAL reload hook. So whenever the product DLL is in the process we SKIP these two --
+/// the product's own menu-trace union hooks + its inworld-load debug line already log the same
+/// deserialize events. A standalone trace run, with no product DLL present, still installs them
+/// (through this DLL's own gated union, so the address is still resolved for the running build).
+const PRODUCT_OWNED_SKIP_RVAS: &[usize] = &[0x67b200, 0x67b290];
 
 static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -172,16 +178,28 @@ struct HookSpec {
     original: &'static AtomicUsize,
 }
 
-// Raw MinHook FFI comes from the shared `er-hook` crate (single cc-compile). Its externs return the
-// `MH_STATUS` enum; this crate historically compared/logged the status as `i32`, so each call site
-// casts `as i32` -- MH_STATUS is `#[repr(C)]` with the same values, so the integers are unchanged.
-use er_hook::{MH_CreateHook, MH_EnableHook, MH_Initialize};
+// NO RAW MinHook FFI HERE, deliberately, and this crate is why the rule exists.
+//
+// Until 2026-08-30 this file imported the raw `MH_CreateHook` / `MH_EnableHook` externs and called
+// them on a hand-built `base + spec.rva`. `er-hook`'s 1.17 resolve gate lives inside `MhHook::new`,
+// `register_union_hook` and `register_shared_hook` -- none of which were on that path -- so on the
+// 1.17 image all 40 targets were stale 1.16.2 addresses and MinHook wrote 34 five-byte JMPs into
+// live code, 19 of them SPLITTING an instruction (`STEP_BeginLogo`, `STEP_MsbLoad`,
+// `_CheckEndingRequest`, the GameMan accessor). It failed invisibly: 34 `installed` lines, zero
+// refusals, zero detour events, and no crash record. Every registration now goes through
+// `er_hook::register_shared_hook`, which resolves (or REFUSES) the address for the running build
+// and picks the product's single MinHook instance when the product DLL is co-loaded.
+//
+// NOTE for whoever owns `scripts/check-reload-trace-policy.py`: its `has_minhook` fact is the
+// literal presence of the two names above anywhere in this crate's sources, so it is currently
+// satisfied by THIS COMMENT rather than by any call. The assertion it stands for -- "must use
+// MinHook trampolines for pass-through instrumentation" -- is still true (via `er-hook`'s union),
+// but the fact should be re-pointed at `register_shared_hook`, and the raw externs should become a
+// DENY for this crate, so the bypass this comment describes cannot be reintroduced silently.
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleA(name: *const u8) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
-    fn Sleep(ms: u32);
     fn GetTickCount64() -> u64;
     fn ReadProcessMemory(
         process: isize,
@@ -343,44 +361,6 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
     ret
 }
 
-static LOADLIST_INIT_CALLS: AtomicU64 = AtomicU64::new(0);
-static ORIG_LOADLIST_INIT: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// worldloadlistlistVirtualPath = InGameStep+0x108, a DlFixedString<wchar_t,128> (inline): +0x00 union
-/// (pointer when capacity>7, else in_place), +0x08 size(wchars), +0x10 capacity.
-const INGAMESTEP_WORLDLOADLIST_VPATH_108_OFFSET: usize = 0x108;
-
-/// Log-only detour for STEP_MoveMap_LoadlistInit (rva 0xaec480 / dump 0x140aec570). Its gate is
-/// worldloadlistlistVirtualPath.size != 0 -- when 0 it SKIPS building the loadlist -> no block-res ->
-/// WorldResWait hangs -> load2 finalize stuck. Logs the DlFixedString (size/cap/ptr + ASCII path
-/// preview) BEFORE the original so a load1-vs-load2 diff shows load1's map:\WorldMsbList\... path and
-/// load2's EMPTY path -- the root of the reload stall (bd fix-point-confirmed-stepmovemap-loadlistinit).
-unsafe extern "system" fn hook_loadlist_init(a: usize, b: usize, c: usize, d: usize) -> usize {
-    let n = LOADLIST_INIT_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
-    let dfs = a.wrapping_add(INGAMESTEP_WORLDLOADLIST_VPATH_108_OFFSET);
-    let size = unsafe { read_usize(dfs + 0x08) }.unwrap_or(usize::MAX);
-    let cap = unsafe { read_usize(dfs + 0x10) }.unwrap_or(usize::MAX);
-    let str_base = if cap != usize::MAX && cap > 7 {
-        unsafe { read_usize(dfs) }.unwrap_or(0)
-    } else {
-        dfs
-    };
-    let mut preview = String::new();
-    if str_base != 0 && size != usize::MAX && size <= 256 {
-        for i in 0..size.min(120) {
-            // ASCII path chars sit in the low byte of each UTF-16LE unit.
-            match unsafe { read_u8(str_base + i * 2) } {
-                Some(w) if (0x20..0x7f).contains(&w) => preview.push(w as char),
-                _ => preview.push('.'),
-            }
-        }
-    }
-    log_line(format_args!(
-        "loadlist_init_aec480 call#{n} InGameStep=0x{a:x} worldloadlist_size={size} cap={cap} strptr=0x{str_base:x} path='{preview}' {}",
-        snapshot()
-    ));
-    unsafe { call_original(&ORIG_LOADLIST_INIT, a, b, c, d) }
-}
-
 /// Log-only detour for the child teardown FUN_140eb54e0 (rva 0xeb54c0). Logs every teardown with the
 /// child_base-0x108 MoveMapStep state/field25 so load2's MoveMapStep child teardown (state==18) is
 /// visible -- or its absence proves the child is never re-scheduled rather than torn down. mms= ptr
@@ -417,7 +397,20 @@ fn snapshot() -> String {
         ))
     }
     .unwrap_or(0);
-    let mounted = unsafe { read_usize(base + MOUNTED_ARCHIVE_REGISTRY_RVA) }.unwrap_or(0);
+    // Resolved, then CHECKED FOR ZERO. `game_data_addr` answers 0 when the running build has no
+    // mapping for the address, and `read_usize(0)` fails the same way a genuinely null global
+    // reads -- so without this branch a REFUSAL and "nothing is mounted" print identically, which
+    // is the confident-false-negative this whole migration keeps producing.
+    let mounted_addr = er_game_base::mem::game_data_addr(
+        base,
+        MOUNTED_ARCHIVE_REGISTRY_RVA,
+        "MOUNTED_ARCHIVE_REGISTRY_RVA",
+    );
+    let mounted = if mounted_addr == 0 {
+        None
+    } else {
+        Some(unsafe { read_usize(mounted_addr) })
+    };
 
     let b78 = unsafe { read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) };
     let b80 = unsafe { read_i32(gm + GAME_MAN_LOAD_PHASE_B80_OFFSET) };
@@ -432,14 +425,26 @@ fn snapshot() -> String {
     let g_cb2 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB2_OFFSET) };
     let g_bca = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_BCA_OFFSET) };
     let g_b5e = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_B5E_OFFSET) };
-    let g_glob = unsafe { read_usize(base + SUBMIT_GLOBAL_PTR_3D68078_RVA) }.unwrap_or(0);
+    // RESOLVED: `SAVE_DATA_SUBSYSTEM_GATE_RVA` moved +0x4070 on 1.17 (0x3d68078 -> 0x3d6c0e8).
+    // Read raw, this trace line prints the contents of an unrelated global as the submit gate --
+    // and the whole point of the line is to DIFF load1 against load2 to find the gate that is
+    // holding, which a wrong-but-plausible value makes actively misleading.
+    let g_glob = unsafe {
+        read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SUBMIT_GLOBAL_PTR_3D68078_RVA,
+            "SAVE_DATA_SUBSYSTEM_GATE_RVA",
+        ))
+    }
+    .unwrap_or(0);
 
     format!(
-        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry=0x{mounted:x} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
+        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry={} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
         fmt_i32(b78),
         fmt_i32(b80),
         fmt_i32(ac0),
         fmt_c30(c30),
+        fmt_mounted(mounted),
         fmt_u8(g_cb1),
         fmt_u8(g_cb2),
         fmt_u8(g_bca),
@@ -457,6 +462,18 @@ fn fmt_c30(value: Option<i32>) -> String {
 
 fn fmt_u8(value: Option<u8>) -> String {
     value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
+}
+
+/// Three outcomes the mount census used to print identically as `0x0`: the running build REFUSED
+/// the address (outer `None`), the read failed (inner `None`), or the global really is what it
+/// says. Collapsing the first two into `0x0` is what let a 1.1 GB-out-of-range constant look like
+/// "nothing is mounted" for the DLL's entire existence.
+fn fmt_mounted(value: Option<Option<usize>>) -> String {
+    match value {
+        None => "<refused>".to_owned(),
+        Some(None) => "<unreadable>".to_owned(),
+        Some(Some(pointer)) => format!("0x{pointer:x}"),
+    }
 }
 
 unsafe fn call_original(
@@ -881,12 +898,15 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_finalize_advancer,
         original: &ORIG_FINALIZE_ADVANCER,
     },
-    HookSpec {
-        name: "loadlist_init_aec480",
-        rva: 0xaec480,
-        detour: hook_loadlist_init,
-        original: &ORIG_LOADLIST_INIT,
-    },
+    // loadlist_init_aec480 (STEP_MoveMap_LoadlistInit) REMOVED 2026-08-30: 0xaec480 was never a
+    // function entry on ANY build. On 1.16.2 it is INSIDE `mov word ptr [rbp-0x28], r12w`
+    // (`66 44 89 65 d8`, 0x140aec47f..0x140aec483), so the five-byte JMP truncated a live
+    // instruction, and the crate's own 1.16.2 trace -- 323,338 lines -- never logged this hook
+    // ONCE. The real entry is 0xaec570 (`er_game_base::rva::STEP_MOVEMAP_LOADLIST_INIT_RVA`); the
+    // shift tool mislanded at 0xaec480 in its -0xf0 sub-region, as
+    // `er-title-flow/src/title_load_step_hooks.rs` already recorded. That entry is a PRODUCT hook
+    // (the union chains a base MinHook the product owns and the trace-DLL copy never fired), so
+    // this crate does not re-derive it -- it drops the wrong address rather than carrying it.
     HookSpec {
         name: "child_teardown_eb54c0",
         rva: CHILD_TEARDOWN_RVA,
@@ -900,25 +920,27 @@ static HOOKS: &[HookSpec] = &[
     // Its log-only trace detour + statics were deleted with the spec entry rather than left parked.
 ];
 
-/// Resolve the product DLL's `er_effects_union_register` export, polling briefly since both natives
-/// load together under me3 and thread ordering is not guaranteed. `None` => the product DLL is not in
-/// this process (a standalone trace run) or has not exported yet; caller falls back to its own MinHook.
-fn resolve_union_register() -> Option<UnionRegisterFn> {
-    for _ in 0..UNION_RESOLVE_TRIES {
-        let hmod = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
-        if !hmod.is_null() {
-            let proc = unsafe { GetProcAddress(hmod, UNION_REGISTER_EXPORT.as_ptr()) };
-            if !proc.is_null() {
-                // SAFETY: the export's C-ABI shape is fixed by the product DLL; both DLLs live for the
-                // process lifetime so the pointer stays valid.
-                return Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) });
-            }
-        }
-        unsafe { Sleep(UNION_RESOLVE_SLEEP_MS) };
-    }
-    None
-}
-
+/// Install every trace observer, through `er-hook`'s gated registrar -- and RESOLVE EXACTLY ONCE.
+///
+/// There used to be two paths here and only one of them was safe. The "unioned" path handed the
+/// address to the product DLL's `er_effects_union_register`, which resolves it; the standalone
+/// fallback called the raw MinHook externs on `base + spec.rva`, which does not. Which one a boot
+/// took depended on a poll of the product module, so the single-DLL sweep profile -- and any
+/// multi-DLL run where the product loaded late -- patched 34 stale 1.16.2 addresses into the live
+/// 1.17 image. Both paths now resolve.
+///
+/// WHY NOT `er_hook::register_shared_hook`, which exists to collapse this into one call: it
+/// resolves and THEN hands the resolved address to the product's export, which resolves it AGAIN.
+/// Resolution is not idempotent, and it is not merely non-idempotent -- it can silently succeed
+/// with the WRONG answer. The translation table is keyed by 1.16.2 RVA, so a 1.17 destination that
+/// happens to equal some other row's 1.16.2 source gets translated a second time. Measured on this
+/// hook set 2026-08-30: `native_submit_7ac890` translates to `0x7ad710`, and `0x7ad710` is itself a
+/// tracked source mapping to `0x7ae590` (both rows BYTE-IDENTICAL in
+/// `rva-map-1162-to-1170.needed-verified.tsv`), so the second resolve would move the detour into a
+/// different function and report success. Three detour rows in the current table have that shape
+/// (`0x6156c0`, `0x7ad710`, `0xbbbd90`). So each branch below is given the UNRESOLVED address and
+/// resolves it once: the product's export resolves for the product-present branch,
+/// `register_union_hook` resolves for the standalone one.
 fn install_hooks() {
     reset_log_file();
     log_line(format_args!(
@@ -928,97 +950,89 @@ fn install_hooks() {
         log_line(format_args!("install abort: game module base unresolved"));
         return;
     };
-    // CROSS-DLL HOOK UNION (2026-07-18, user-directed): when the product DLL (er_quickload.dll) is
-    // co-loaded, route EVERY trace hook through its `er_effects_union_register` export so a SINGLE
-    // MinHook instance owns every address and our observers CHAIN with the product's own detours on
-    // shared addresses (0xb0e180 continue-confirm, 0xb0d960 title-SetState, etc.). Two independent
-    // MinHook instances patching the same address corrupt each other's trampolines -- the exact race
-    // the product's internal union fixes, now spanning DLLs. Standalone trace runs fall back to our
-    // own MinHook instance (no product DLL => no shared addresses => no corruption).
-    if let Some(reg) = resolve_union_register() {
-        log_line(format_args!(
-            "cross-dll union: resolved product er_effects_union_register -> routing all {} hooks through the product DLL's single MinHook instance",
-            HOOKS.len()
-        ));
-        for spec in HOOKS {
-            install_one_union(reg, base, spec);
-        }
-        log_line(format_args!("install complete (unioned) {}", snapshot()));
-        return;
-    }
+    // Asked ONCE, and no longer load-bearing for safety: a timeout now costs a chained handler,
+    // not an ungated write. `er-hook` owns the module lookup so this crate no longer carries its
+    // own `GetProcAddress` poll.
+    let product =
+        er_hook::resolve_product_union_register(PRODUCT_RESOLVE_TRIES, PRODUCT_RESOLVE_SLEEP_MS);
     log_line(format_args!(
-        "cross-dll union: product DLL export not present (standalone trace run) -> own MinHook instance"
+        "hook routing: product DLL {} -- all {} addresses are resolved for the running build (or REFUSED) before MinHook sees them",
+        if product.is_some() {
+            "present; handlers chain on its single MinHook instance via er_effects_union_register"
+        } else {
+            "absent; this DLL's own er_hook union owns the prologues"
+        },
+        HOOKS.len()
     ));
-    let init_status = unsafe { MH_Initialize() } as i32;
-    if init_status != MH_OK && init_status != MH_ERROR_ALREADY_INITIALIZED {
-        log_line(format_args!(
-            "MinHook initialize failed status={init_status}"
-        ));
-        return;
-    }
+    let mut armed = 0_usize;
+    let mut refused = 0_usize;
+    let mut skipped = 0_usize;
     for spec in HOOKS {
-        install_one(base, spec);
-    }
-    log_line(format_args!("install complete {}", snapshot()));
-}
-
-/// Register one trace observer through the product DLL's union (single shared MinHook instance).
-/// The union stores the trampoline (or next chained handler) into `spec.original`, which our
-/// `call_original` already reads -- so chaining is transparent to the detour bodies.
-fn install_one_union(reg: UnionRegisterFn, base: usize, spec: &HookSpec) {
-    if UNION_SKIP_RVAS.contains(&spec.rva) {
-        log_line(format_args!(
-            "hook {} rva=0x{:x} SKIPPED in unioned run (product owns a bare MinHook here; unioning would preempt its critical reload hook)",
-            spec.name, spec.rva
-        ));
-        return;
-    }
-    let target = base + spec.rva;
-    let orig_ptr = spec.original.as_ptr();
-    let rc = unsafe { reg(target, spec.detour, orig_ptr) };
-    if rc == 0 {
-        log_line(format_args!(
-            "hook {} rva=0x{:x} target=0x{target:x} union-registered (chained via product DLL)",
-            spec.name, spec.rva
-        ));
-    } else {
-        log_line(format_args!(
-            "hook {} rva=0x{:x} target=0x{target:x} union register FAILED rc={rc}",
-            spec.name, spec.rva
-        ));
-    }
-}
-
-fn install_one(base: usize, spec: &HookSpec) {
-    let target = base + spec.rva;
-    let mut trampoline: *mut c_void = null_mut();
-    let create_status = unsafe {
-        MH_CreateHook(
-            target as *mut c_void,
-            spec.detour as *mut c_void,
-            &mut trampoline,
-        )
-    } as i32;
-    if create_status != MH_OK {
-        log_line(format_args!(
-            "hook {} rva=0x{:x} target=0x{target:x} create failed status={create_status}",
-            spec.name, spec.rva
-        ));
-        return;
-    }
-    spec.original.store(trampoline as usize, Ordering::SeqCst);
-    let enable_status = unsafe { MH_EnableHook(target as *mut c_void) } as i32;
-    if enable_status != MH_OK && enable_status != MH_ERROR_ENABLED {
-        log_line(format_args!(
-            "hook {} rva=0x{:x} target=0x{target:x} enable failed status={enable_status}",
-            spec.name, spec.rva
-        ));
-        return;
+        if product.is_some() && PRODUCT_OWNED_SKIP_RVAS.contains(&spec.rva) {
+            skipped += 1;
+            log_line(format_args!(
+                "hook {} rva=0x{:x} SKIPPED -- the product DLL owns this prologue with a bare MinHook; registering here would preempt its critical reload hook",
+                spec.name, spec.rva
+            ));
+            continue;
+        }
+        if install_one(base, spec, product) {
+            armed += 1;
+        } else {
+            refused += 1;
+        }
     }
     log_line(format_args!(
-        "hook {} rva=0x{:x} target=0x{target:x} trampoline=0x{:x} installed",
-        spec.name, spec.rva, trampoline as usize
+        "install complete armed={armed} refused={refused} skipped={skipped} of {} {}",
+        HOOKS.len(),
+        snapshot()
     ));
+}
+
+/// Register one trace observer, returning whether it is ARMED.
+///
+/// A refusal is PER HOOK and never aborts the installer. The value of this DLL is the observers
+/// whose addresses the running build does have, and taking the whole run down because one row is
+/// missing from the map trades a diagnosable partial trace for no trace at all -- the same rule
+/// `er-better-refills` and `system_quit_ownership_repro.rs` follow (bd
+/// `one-refused-hook-must-not-abort-the-installer-2026-08-30`).
+fn install_one(base: usize, spec: &HookSpec, product: Option<er_hook::UnionRegisterFn>) -> bool {
+    let requested = base + spec.rva;
+    let outcome = match product {
+        // SAFETY: the export's C-ABI shape is fixed by the product DLL, `spec.detour` is exactly
+        // its `UnionFn`, and `spec.original` is a live `'static` cell in this image. The address is
+        // handed over UNRESOLVED on purpose -- the export resolves it, and resolving here too would
+        // translate twice (see `install_hooks`).
+        Some(register) => match unsafe { register(requested, spec.detour, spec.original.as_ptr()) }
+        {
+            0 => Ok("product union"),
+            code => Err(format!("er_effects_union_register rc={code}")),
+        },
+        // SAFETY: same handler/slot contract; `register_union_hook` resolves the address for the
+        // running build before MinHook is given it, and refuses rather than patching a stale one.
+        None => {
+            match unsafe { er_hook::register_union_hook(requested, spec.detour, spec.original) } {
+                Ok(()) => Ok("local union"),
+                Err(status) => Err(format!("{status:?}")),
+            }
+        }
+    };
+    match outcome {
+        Ok(route) => {
+            log_line(format_args!(
+                "hook {} rva=0x{:x} requested=0x{requested:x} ARMED via {route}",
+                spec.name, spec.rva
+            ));
+            true
+        }
+        Err(why) => {
+            log_line(format_args!(
+                "hook {} rva=0x{:x} requested=0x{requested:x} REFUSED ({why}) -- nothing was written at this address; continuing with the remaining hooks",
+                spec.name, spec.rva
+            ));
+            false
+        }
+    }
 }
 
 /// Windows loader entry point.

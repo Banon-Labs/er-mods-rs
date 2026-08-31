@@ -1,0 +1,31 @@
+# Translation collisions that have been LOOKED AT, for scripts/check-1170-translation-collisions.py.
+#
+# A collision is a pair of rows `A -> B` and `B -> C`, both real moves, in the tables
+# `crates/er-game-base/build.rs` emits. Resolving A once gives B, which is right; resolving the
+# result AGAIN gives C, which is wrong -- and it is wrong SILENTLY, because the table cannot tell
+# a destination from a source when both are just addresses. It bit once already: `native_submit`
+# 0x7ac890 -> 0x7ad710 through `register_shared_hook`, which handed the resolved address to the
+# product's union register, which resolved again.
+#
+# THIS IS NOT AN EXCUSE LIST. Every line here is printed in full on every run, and the gate fails
+# on any collision that is NOT here, or on a recorded one that reaches a table it did not reach
+# before. It exists because the three below are facts about two shipped images that this gate is
+# not permitted to edit away, and a gate that is red on arrival gets deleted rather than fixed.
+#
+# TO CLEAR A LINE: delete the offending row from the ledger and delete the line here. `--strict`
+# ignores this file entirely and is the mode to run once they are gone.
+#
+# THE NOTES BELOW USED TO SAY THE THREE ROWS WERE CLEARABLE AT ZERO FEATURE COST. Corrected
+# 2026-08-30: that came from a test that searched for `const NAME: usize = 0x<addr>;` and read its
+# own silence as proof of absence. The same test called 0xb0d400 unclaimed while it was declared
+# `MenuJobWait = 0x00b0d400` inside `#[repr(u32)] pub enum MenuTraceRva`, with live uses on the
+# autoload path. The question is now asked of `scripts/rva_symbols.py`, which resolves values
+# across every declaration form; re-run `--list` for the current per-row answer rather than
+# trusting a note. For all three the answer today is NOT PROVEN -- no declaration, alias or bare
+# literal was FOUND, and four declarations in crates/ could not be evaluated -- which is a reason
+# to finish the proof, never a licence to delete.
+#
+# first source	collision address	second destination	routes	note
+0x614870	0x6156c0	0x616510	CALL>CALL,CALL>DETOUR,DETOUR>CALL,DETOUR>DETOUR	Row B (0x6156c0 -> 0x616510) is named `(refused at runtime 0x6156c0)` in needed.tsv and needed-verified.tsv -- added to silence a refusal that WAS the double resolve. Claim status 2026-08-30: NOT PROVEN -- no declaration, alias or bare literal for 0x6156c0 was found, but four crates/ declarations could not be evaluated (see --list). Finish that proof before deleting the row.
+0x7ac890	0x7ad710	0x7ae590	CALL>CALL,CALL>DETOUR,DETOUR>CALL,DETOUR>DETOUR	The one that bit, via er-reload-trace's native_submit_7ac890. Row B (0x7ad710 -> 0x7ae590) is named `(refused at runtime 0x7ad710)`. Claim status 2026-08-30: NOT PROVEN -- no declaration, alias or bare literal for 0x7ad710 was found (its only appearances in crates/ are doc comments describing this collision), but four crates/ declarations could not be evaluated. Finish that proof before deleting the row.
+0xbba6e0	0xbbbd90	0xbbd440	CALL>CALL,CALL>DETOUR,DETOUR>CALL,DETOUR>DETOUR	Row B (0xbbbd90 -> 0xbbd440) is named `(refused at runtime 0xbbbd90)`. Claim status 2026-08-30: NOT PROVEN -- no declaration, alias or bare literal for 0xbbbd90 was found (its only appearances in crates/ are doc comments describing this collision), but four crates/ declarations could not be evaluated. Finish that proof before deleting the row.

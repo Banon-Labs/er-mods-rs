@@ -972,9 +972,14 @@ pub(crate) fn blockres_stalecap_fix_enabled() -> bool {
 /// block's primary file cap reports loaded (status 0x04) but its data ptr +0x90 is null (file resident
 /// from load 1, re-load short-circuits without re-attaching data). Detect that EXACT condition after the
 /// original handler runs and, only on a SUBSEQUENT load (IN_WORLD_REACHED==YES, so the first autoload is
-/// never touched), force the block's phase +0x35 to 5 (the game's own teardown/reload retry) so it
-/// releases the stale cap and re-loads fresh. Bounded retries so a genuinely un-evictable file cannot
-/// spin forever. `bres`=rcx (block-res).
+/// never touched), re-enqueue the stale cap onto its own CSFile load queue so the read is re-issued and
+/// `+0x90` re-attaches. Bounded retries so a genuinely un-evictable file cannot spin forever.
+/// `bres`=rcx (block-res).
+///
+/// This sentence used to say the fix "forces the block's phase +0x35 to 5". It does NOT, and has not
+/// since the re-issue replaced the phase-force -- see the body's own comment and bd
+/// `blockres-hook-reissues-cap-not-phase-force-and-reissue-works-2026-07-30`, which caught the stale
+/// description being carried forward into a memory. The phase is deliberately left alone.
 pub(crate) unsafe extern "system" fn blockres_phase2_hook(
     bres: usize,
     b: usize,
@@ -1263,6 +1268,27 @@ pub(crate) use er_telemetry_core::counters::EBL_CENSUS_DONE;
 /// here but present on load 1, the mount-skip is the stall root; the m28 archive name is captured for the
 /// re-mount driver. Callable from ANY reliable stall path (the getter is silent some loads) -- e.g. the
 /// SWITCH-ORACLE mms_step=3 tick -- so the measurement fires whenever WORLD RES WAIT is reached.
+///
+/// IT HAS NEVER CENSUSED ANYTHING. Until 2026-08-30 `EBL_REGISTRY_GLOBAL_RVA` was 38.5 MiB outside the
+/// image, so this took the `registry null` early return on every run and the walk below is unexecuted
+/// code. The `EBL-MOUNT-CENSUS DONE: registry null` line the monitor tore down on was the read failing,
+/// not a finding -- and bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17` recorded
+/// it as "R is GENUINELY 0", which is refuted: the same global read through the uncorrupted
+/// `DL_FILE_DEVICE_MANAGER_SINGLETON_RVA` is non-null mid-reload (the DLC root self-heal walks it).
+///
+/// THE OFFSETS ABOVE ARE RIGHT, THOUGH -- checked before assuming otherwise. `GetFileDeviceManager`
+/// returns `DLFileDeviceManager*` (Ghidra 1.16.2), whose layout is `virtualRoots` @ `+0x48`,
+/// `bnd4FileEntries: BND4MountVector` @ `+0x88` and `mutex: DLPlainLightMutex` @ `+0xB8`. A 32-byte
+/// vector at `+0x88` puts start at `+0x90` and end at `+0x98`, and the lock lands exactly where this
+/// comment already said. The entry type checks out too: `DLFileDeviceManagerBNDMount` is `0x40` bytes
+/// (the stride), holding `name: DLString<wchar_t>` @ `+0x00` and `fileDevice` @ `+0x30`; and
+/// `DLString<wchar_t>` is `allocator` @ `+0x00` then the string body at `+0x08`, whose own
+/// `_Bx`/`_Mysize`/`_Myres` sit at `+0x00`/`+0x10`/`+0x18` -- i.e. exactly the MSVC `wstring` shape
+/// `read_msvc_wstring_ascii(entry + 0x8)` already assumes.
+///
+/// So every offset in this function is corroborated and only the ADDRESS was ever wrong: the walk
+/// should be structurally sound the first time it runs. The one correction is the label -- `+0x30` is
+/// a `DlFileDevice*`, not an `Archive*`, so the `archive=0x..` column names the mounted DEVICE.
 pub(crate) fn run_ebl_mount_census(src: &str) {
     if EBL_CENSUS_DONE.swap(1, Ordering::SeqCst) != 0 {
         return;
@@ -1361,9 +1387,28 @@ pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DECLINE_BOOT_LOGS;
 /// enough that it cannot crowd out the reload-phase reasons that actually matter.
 const MOUNT_GUARD_DECLINE_BOOT_LOG_CAP: usize = 3;
 
-/// True when the EBL mounted-archive registry `R = *(EBL_REGISTRY_GLOBAL_RVA)` is null/unreadable, i.e. no
-/// map archive is mounted yet (the mount step has not run). Used to gate the guard-flip: keep flipping
-/// only until the map mounts (R becomes non-null), so the fix self-limits.
+/// True when `R = *(EBL_REGISTRY_GLOBAL_RVA)` is null OR UNREADABLE. Used to gate the guard-flip: keep
+/// flipping only until the map mounts (R becomes non-null), so the fix self-limits.
+///
+/// UNEXERCISED UNTIL 2026-08-30, AND THE `false` BRANCH HAS NEVER RUN. The constant was `0x84864a8`
+/// from the day this was written until then -- 38.5 MiB outside the image (see the alias's own doc in
+/// `er-title-flow`). `game_rva` passes an out-of-image address straight through rather than refusing it,
+/// so the failure arrived here only as a failed `ReadProcessMemory`, which this chain folds into
+/// `is_none()` -- the same answer a genuinely null registry gives. Every observed run reported null.
+///
+/// Two live conclusions rested on the opposite reading and are WRONG. bd
+/// `correction-33-retries-are-our-own-fix-and-mount-flip-never-fires-2026-07-30` and
+/// `blockres-hook-reissues-cap-not-phase-force-and-reissue-works-2026-07-30` both name this function as
+/// the "prime suspect" for the flip never firing, on the theory that resident m61 tiles keep R non-null
+/// so the gate declines. It cannot have been: this returned `true`, so `!ebl_registry_is_null()` never
+/// declined anything. Whatever stopped the flip is upstream of here, or is
+/// `force_map_mount_guard_flip()` returning `ok == false`, which logs nothing at all.
+///
+/// The registry is also NOT null in reality. The same global, read through the uncorrupted
+/// `DL_FILE_DEVICE_MANAGER_SINGLETON_RVA`, is what `dlc_roots_self_heal` walks to find
+/// `mapstudio_dlc2` among ~100 entries -- and it healed the root mid-reload twice in two processes
+/// (bd `FIXED-CONFIRMED-2x-dlc-root-self-heal-resolves-reload-softlock-2026-07-30`). A null manager
+/// would have made that impossible.
 pub(crate) fn ebl_registry_is_null() -> bool {
     game_rva(EBL_REGISTRY_GLOBAL_RVA)
         .ok()
@@ -1415,11 +1460,19 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
     // to fix -- and with five ANDed conditions the log said nothing about which one. Name the first
     // failing condition, bounded, so the next run identifies it instead of leaving it to inference.
     //
-    // Standing suspicion to CONFIRM OR KILL with that line, not to assume: `ebl_registry_is_null()`
-    // reads a single global and asks "is ANY map archive mounted". On a same-area reload the m61
-    // overworld tiles stay resident, so the registry is non-null and this returns false -- declining
-    // the flip -- while the ONE archive the block actually needs (m28) is the one that is missing.
-    // A per-archive check would be required if that is what the line shows.
+    // THAT SUSPICION IS KILLED (2026-08-30). It read: `ebl_registry_is_null()` asks "is ANY map
+    // archive mounted", so with the m61 tiles resident the registry is non-null, this returns false,
+    // and the last condition declines the flip. The opposite was true. Its constant was 38.5 MiB
+    // outside the image, so the read always failed and the function always returned `true` -- the
+    // `!ebl_registry_is_null()` arm below has never declined anything, on any run, ever. Whatever
+    // stopped the flip is one of the FOUR conditions above it, or `force_map_mount_guard_flip()`
+    // answering `ok == false`, which takes the `if ok` branch below and logs NOTHING -- a third
+    // outcome that is invisible in the log and looks identical to a decline that was never printed.
+    //
+    // The constant is fixed now, so the arm is about to evaluate for the first time. Read the next
+    // run's MAP-MOUNT-GUARD-DECLINED[RELOAD] lines as new evidence, not as confirmation of the old
+    // theory; and if the flip still shows zero lines with zero declines, the silent `ok == false`
+    // path is the remaining explanation and needs a log line before another run is worth spending.
     let decline = if !blockres_stalecap_fix_enabled() {
         Some("kill-switch file present")
     } else if !in_world {

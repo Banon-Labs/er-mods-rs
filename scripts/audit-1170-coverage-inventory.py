@@ -22,6 +22,18 @@ them under-reports, and the third form has already cost a black screen:
      carries no `_RVA` name at all. er-reload-trace declares 39 addresses this way and
      er-invasion-warp's `MapSeam` table another 13.
 
+WHOSE MODULE IS IT
+------------------
+An address is a GAME address because of the BASE it is added to, NOT because its name ends in
+`_RVA`. One DLL's address list can name several modules: `er-invasion-warp` resolves Seamless
+Co-op with `GetModuleHandleA("ersc.dll")` and adds four RVAs to that base. Classifying by name
+put all four on the unmapped GAME work list, where translating one through the 1.17 map and
+detouring the result would have written five bytes of jmp into an unrelated `eldenring.exe`
+function. Those are reported under `foreign`, and literals that are not addresses at all --
+`*_RVA_LIMIT` plausibility bounds, the two ends of a `callstack_contains_game_rva(start, end)`
+RANGE -- under `not_addresses`. Both classes have `--selftest` cases, with real game addresses
+as the control so an exclusion that ate real work fails too.
+
 HOW IT CLASSIFIES
 -----------------
 The authority is not a TSV; it is the two tables `er-game-base/build.rs` generates, which this
@@ -55,6 +67,10 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RECON = os.path.join(REPO, "docs", "recon")
 BASE = 0x140000000
+# Hard safety cap for the one subprocess this script runs. `scripts/check-no-timeouts.py`
+# bans anything over 30s; `cargo metadata --no-deps` reads the manifests and does not build,
+# so it finishes in well under a second and the cap only bounds a wedged cargo.
+CARGO_METADATA_TIMEOUT_SECONDS = 30
 
 # ---------------------------------------------------------------- declaration forms
 CONST = re.compile(r"const\s+([A-Za-z0-9_]*RVA[A-Za-z0-9_]*)\s*:\s*(?:usize|u32|u64)\s*=\s*(0x[0-9a-fA-F_]+)")
@@ -75,14 +91,117 @@ DETOUR_FIELD = re.compile(r"\bdetour\s*:")
 SIGCHECK = re.compile(r"prologue|signature|EXPECTED|expected_", re.I)
 
 MIN_VERIFIED_INSNS = 12
+# Verdicts whose comparison covered the WHOLE of both bodies, and so take no instruction floor.
+# The same list lives in er-game-base/build.rs as EXHAUSTIVE_VERDICTS and in
+# verify-rva-map-1170.py, which writes the strings; this file exists to report what build.rs will
+# do, so it is wrong the moment the three disagree.
+EXHAUSTIVE_VERDICTS = {"BYTE-IDENTICAL", "IDENTICAL-WHOLE", "IDENTICAL-LEAF"}
+# The other floor-exempt class: verdicts where the two bodies DIFFER and the patch site does not,
+# so the difference is somewhere the five bytes MinHook writes never reach. Also mirrored from
+# er-game-base/build.rs (`PATCH_SITE_VERDICTS`); same drift risk, same reason it is listed.
+PATCH_SITE_VERDICTS = {"PATCH-SITE-IDENTICAL"}
+# The CALL-ONLY class: whole-body proof plus a hook MinHook itself refuses, so the row reaches
+# VERIFIED_1162_TO_1170 and never DETOUR_SAFE_1162_TO_1170. Mirrored from
+# er-game-base/build.rs (`CALLABLE_ONLY_VERDICTS`); same drift risk, and the same guard catches it
+# -- --selftest compares this reproduction against the table cargo really generated, which is what
+# caught this file modelling 497 CALL rows against a generated 499 on 2026-08-30.
+CALLABLE_ONLY_VERDICTS = {"IDENTICAL-LEAF-NOPATCH"}
 # Below the first page of the image nothing is a game address; a discriminant that small is a
 # mis-parse, not an RVA.
 MIN_PLAUSIBLE_RVA = 0x1000
 # Names that describe a RANGE, not an address -- `AV_GAME_TEXT_RVA_MAX`, `GX_CMD_QUEUE_WRAPPER_RVA_MIN`.
 # Translating a bound is a category error, and left in they outrank real work by sitting in hot
 # comparison code. Same filter `select-needed-1170-rows.py` applies, for the same reason.
-BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
+BOUND = re.compile(r"_(MIN|MAX|LIMIT|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 DETOURABLE_ENTRY = ("BOTH-ENTRIES", "NEITHER-ENTRY")
+
+# ---------------------------------------------------------------- WHOSE base is it added to?
+# An address is a GAME address because of the BASE it is added to -- never because its name ends
+# in `_RVA`. One cdylib's address list can name several modules: `er-invasion-warp` resolves
+# Seamless Co-op with `GetModuleHandleA("ersc.dll")` and adds four RVAs to THAT base (image base
+# 0x180000000, v1.9.9). An ELDEN RING patch does not move them, so they are not migration work --
+# and worse, translating one through the game map and detouring the result puts five bytes of jmp
+# into an unrelated `eldenring.exe` function. Classifying by name reported all four as unmapped
+# game addresses; two agents caught it by reading the code and no checker did.
+#
+# The stem must be one the FILE ITSELF resolves by name, so the game's own
+# `GetModuleHandleA(NULL)` / `game_module_base()` can never be mistaken for a foreign module.
+FOREIGN_HANDLE = re.compile(r'GetModuleHandle[AW]\s*\(\s*c?"([A-Za-z0-9_+.\-]+)\.dll"')
+MODBLOCK = re.compile(r"\bmod\s+(\w+)\s*\{")
+GAME_MODULE = "eldenring.exe"
+# `<stem>_module_base()` / `game_module_base()` -- what a nearby `base + 0x...` literal was added
+# to. Only consulted for the literal forms, which have no declaration site to attribute.
+BASE_FN_CALL = re.compile(r"\b([a-z0-9_]+)_module_base\s*\(")
+# How far above a literal a base binding still counts as ITS base.
+BASE_BIND_WINDOW_LINES = 40
+
+# ---------------------------------------------------------------- literals that are not addresses
+# `callstack_contains_game_rva(start_rva, end_rva)` takes a RANGE: a window around a real return
+# address, whose two ends are bounds and not functions. Translating a bound is a category error --
+# the same reason `BOUND` drops `*_RVA_MIN` / `*_RVA_MAX` / `*_RVA_LIMIT` by name.
+RANGE_ARG = re.compile(
+    r"\bcallstack_contains_game_rva\s*\(\s*(0x[0-9a-fA-F_]+)\s*,\s*(0x[0-9a-fA-F_]+)")
+# The same window, spelled as a Rust range instead of as two call arguments. MEASURED 2026-08-30:
+# `callstack_contains_game_rva(0x7a3000, 0x7a4000)` was refactored into
+# `const LEGACY_CONFIRM_CALLER_BAND: core::ops::Range<usize> = 0x7a3000..0x7a4000;`, the
+# call-shaped pattern above stopped matching (this scan is line by line, and the call arguments now
+# name the const's fields), and the two bounds were about to be inventoried as addresses to
+# translate. A literal `A..B` of two hex constants is a WINDOW by construction: its ends are
+# compared against a return address, never called and never hooked. Recognising the range form
+# means the exclusion survives the next such refactor instead of being re-broken by rustfmt.
+LITERAL_RANGE = re.compile(r"(0x[0-9a-fA-F_]+)\s*\.\.=?\s*(0x[0-9a-fA-F_]+)")
+
+
+def foreign_module_spans(text):
+    """`[(first_line, last_line, "ersc.dll")]` -- the `mod <stem> { ... }` blocks holding a
+    NON-game module's addresses, plus the set of foreign stems the file resolves by name."""
+    stems = {m.group(1).lower() for m in FOREIGN_HANDLE.finditer(text)}
+    spans = []
+    if not stems:
+        return spans, stems
+    for m in MODBLOCK.finditer(text):
+        stem = m.group(1).lower()
+        if stem not in stems:
+            continue
+        depth, i = 0, m.end() - 1
+        while i < len(text):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        spans.append((text[: m.start()].count("\n") + 1, text[:i].count("\n") + 1, f"{stem}.dll"))
+    return spans, stems
+
+
+def base_bindings(text, stems):
+    """`[(line, module)]` for every `*_module_base()` call, foreign or the game's own.
+
+    A file that resolves `ersc.dll` also resolves the game, so a literal is attributed to
+    whichever base was bound NEAREST above it -- not to "this file mentions ersc somewhere".
+    """
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        for m in BASE_FN_CALL.finditer(line):
+            stem = m.group(1).lower()
+            out.append((i, f"{stem}.dll" if stem in stems else GAME_MODULE))
+    return out
+
+
+def module_of_line(line, spans, binds):
+    """Which module's base a LITERAL on this line is added to, or None for the game's."""
+    for lo, hi, module in spans:
+        if lo <= line <= hi:
+            return module
+    nearest = None
+    for at, module in binds:
+        if at <= line and line - at <= BASE_BIND_WINDOW_LINES and (nearest is None or at >= nearest[0]):
+            nearest = (at, module)
+    if nearest and nearest[1] != GAME_MODULE:
+        return nearest[1]
+    return None
 
 
 def rs_files(root):
@@ -95,10 +214,27 @@ def rs_files(root):
 
 # ---------------------------------------------------------------- symbol table
 def build_symbol_table(paths):
-    """`name -> rva`, over all four declaration forms. Enum variants are keyed `Enum::Variant`."""
+    """`name -> rva`, over all four declaration forms. Enum variants are keyed `Enum::Variant`.
+
+    Also returns `name -> "ersc.dll"` for every constant DECLARED inside a foreign module's block.
+    The declaration site is the authoritative attribution: wherever such a constant is later used,
+    it is still added to that module's base, so it is never eldenring.exe migration work.
+    """
     consts, aliases, by_enum, any_variant, decl = {}, {}, {}, {}, {}
+    foreign = {}
     for path in paths:
         text = open(path, encoding="utf-8", errors="replace").read()
+        spans, _stems = foreign_module_spans(text)
+
+        def declared_in_foreign(char_pos, _text=text, _spans=spans):
+            if not _spans:
+                return None
+            line = _text[:char_pos].count("\n") + 1
+            for lo, hi, module in _spans:
+                if lo <= line <= hi:
+                    return module
+            return None
+
         for m in ENUMHEAD.finditer(text):
             name, depth, i = m.group(1), 0, m.end() - 1
             # ONLY `*Rva` enums. Every `pub enum` with hex discriminants was taken at first, and
@@ -114,21 +250,34 @@ def build_symbol_table(paths):
                     if depth == 0:
                         break
                 i += 1
+            enum_module = declared_in_foreign(m.start())
             for variant, value in VARIANT.findall(text[m.end():i]):
                 rva = int(value.replace("_", ""), 16)
                 by_enum[(name, variant)] = rva
                 any_variant.setdefault(variant, rva)
                 decl.setdefault(f"{name}::{variant}", (path, text[: m.end()].count("\n") + 1))
+                if enum_module:
+                    foreign.setdefault(f"{name}::{variant}", enum_module)
         for m in CONST.finditer(text):
             consts.setdefault(m.group(1), int(m.group(2).replace("_", ""), 16))
             decl.setdefault(m.group(1), (path, text[: m.start()].count("\n") + 1))
+            module = declared_in_foreign(m.start())
+            if module:
+                foreign.setdefault(m.group(1), module)
         for m in ALIAS.finditer(text):
             aliases.setdefault(m.group(1), (m.group(2), m.group(3)))
             decl.setdefault(m.group(1), (path, text[: m.start()].count("\n") + 1))
+            module = declared_in_foreign(m.start())
+            if module:
+                foreign.setdefault(m.group(1), module)
     for name, (enum, variant) in aliases.items():
         rva = by_enum.get((enum, variant), any_variant.get(variant))
         if rva is not None:
             consts.setdefault(name, rva)
+    for name, (enum, variant) in aliases.items():
+        module = foreign.get(f"{enum}::{variant}")
+        if module:
+            foreign.setdefault(name, module)
     for path in paths:
         text = open(path, encoding="utf-8", errors="replace").read()
         for m in DERIVE.finditer(text):
@@ -136,10 +285,12 @@ def build_symbol_table(paths):
             if name not in consts and source in consts:
                 consts[name] = consts[source]
                 decl.setdefault(name, (path, text[: m.start()].count("\n") + 1))
+                if source in foreign:
+                    foreign.setdefault(name, foreign[source])
     syms = dict(consts)
     for (enum, variant), rva in by_enum.items():
         syms[f"{enum}::{variant}"] = rva
-    return syms, decl
+    return syms, decl, foreign
 
 
 # ---------------------------------------------------------------- the maps, as build.rs reads them
@@ -159,8 +310,13 @@ def _rva(s):
 
 
 def verdict_table(path):
-    """(every source RVA, the DETOURABLE ones, the DIVERGES ones) -- build.rs's own filter."""
-    allr, det, div = set(), set(), set()
+    """(every source RVA, the DETOURABLE ones, the CALL-ONLY ones, the DIVERGES ones).
+
+    build.rs's own filters -- both of them. The CALL-only set is separate because build.rs reads it
+    with a separate function: such a verdict is admitted to the CALL map and refused the detour
+    map, and folding the two together is what would report a three-byte body as hookable.
+    """
+    allr, det, only, div = set(), set(), set(), set()
     for f in _rows(path):
         if len(f) < 3:
             continue
@@ -173,17 +329,21 @@ def verdict_table(path):
             continue
         if len(f) < 7:
             continue
+        if f[2] in CALLABLE_ONLY_VERDICTS:
+            if f[6].strip() in DETOURABLE_ENTRY:
+                only.add(src)
+            continue
         if f[2] == "IDENTICAL":
             try:
                 if int(f[4].strip()) < MIN_VERIFIED_INSNS:
                     continue
             except ValueError:
                 continue
-        elif f[2] != "BYTE-IDENTICAL":
+        elif f[2] not in EXHAUSTIVE_VERDICTS and f[2] not in PATCH_SITE_VERDICTS:
             continue
         if f[6].strip() in DETOURABLE_ENTRY:
             det.add(src)
-    return allr, det, div
+    return allr, det, only, div
 
 
 def plain_map(path):
@@ -191,8 +351,8 @@ def plain_map(path):
 
 
 def load_maps(extra_observed=None):
-    ver_all, ver_det, ver_div = verdict_table(os.path.join(RECON, "rva-map-1162-to-1170.verified.tsv"))
-    nv_all, nv_det, nv_div = verdict_table(os.path.join(RECON, "rva-map-1162-to-1170.needed-verified.tsv"))
+    ver_all, ver_det, ver_only, ver_div = verdict_table(os.path.join(RECON, "rva-map-1162-to-1170.verified.tsv"))
+    nv_all, nv_det, _nv_only, nv_div = verdict_table(os.path.join(RECON, "rva-map-1162-to-1170.needed-verified.tsv"))
     func = plain_map(os.path.join(RECON, "rva-map-1162-to-1170.needed.tsv"))
     data = plain_map(os.path.join(RECON, "rva-map-1162-to-1170.data.tsv"))
     quar = {_rva(f[0]) for f in _rows(os.path.join(RECON, "rva-1170-quarantine.tsv")) if _rva(f[0]) is not None}
@@ -222,8 +382,12 @@ def load_maps(extra_observed=None):
             observed.add(v - BASE if v >= BASE else v)
     return {
         "ver_all": ver_all, "ver_det": ver_det, "nv_all": nv_all, "nv_det": nv_det,
+        "ver_only": ver_only,
         "func": func, "data": data, "held": held, "observed": observed,
-        "call": (ver_det | func | data) - held,
+        # The CALL map takes the verified table's detourable rows AND its CALL-only ones. The
+        # detour map takes only the first kind, from either table -- `ver_only` appears in one of
+        # these two lines and deliberately not in the other.
+        "call": (ver_det | ver_only | func | data) - held,
         "detour": (ver_det | nv_det) - held,
     }
 
@@ -231,7 +395,10 @@ def load_maps(extra_observed=None):
 def provenance(rva, maps):
     if rva in maps["held"]:
         return "HELD-BACK"
-    if rva in maps["ver_det"] or rva in maps["nv_det"]:
+    if rva in maps["ver_det"] or rva in maps["nv_det"] or rva in maps["ver_only"]:
+        # VERIFIED covers the CALL-only rows too: their identity was proved over the whole of both
+        # bodies, which is what this word describes. Whether a detour is licensed is `detour_ok`,
+        # reported separately, and False for them.
         return "VERIFIED"
     if rva in maps["data"]:
         return "DATA"
@@ -244,7 +411,8 @@ def provenance(rva, maps):
 def collect(maps):
     meta = json.loads(subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        capture_output=True, text=True, cwd=REPO, check=True, timeout=60).stdout)
+        capture_output=True, text=True, cwd=REPO, check=True,
+        timeout=CARGO_METADATA_TIMEOUT_SECONDS).stdout)
     pkgs = {p["name"]: p for p in meta["packages"]}
     cdylibs = sorted(p["name"] for p in meta["packages"]
                      if any("cdylib" in t["kind"] for t in p["targets"]))
@@ -261,16 +429,30 @@ def collect(maps):
 
     srcs = {c: rs_files(os.path.join(os.path.dirname(pkgs[c]["manifest_path"]), "src")) for c in pkgs}
     all_paths = sorted({p for c in pkgs for p in srcs[c]})
-    syms, _decl = build_symbol_table(all_paths)
+    syms, _decl, foreign_syms = build_symbol_table(all_paths)
     ident = re.compile(r"\b(" + "|".join(sorted((re.escape(k) for k in syms), key=len, reverse=True)) + r")\b")
+
+    # Literals and named constants that are NOT game addresses, kept as their own class rather
+    # than silently dropped -- an excluded thing nobody can see is indistinguishable from a
+    # missed one, and both of these classes were being reported as unmapped migration work.
+    not_addresses = {}
+
+    def not_an_address(rva, name, reason, path, line, text):
+        e = not_addresses.setdefault(hex(rva), {"names": set(), "reason": reason, "sites": []})
+        e["names"].add(name)
+        if len(e["sites"]) < 8:
+            e["sites"].append([os.path.relpath(path, REPO), line, text.strip()[:140]])
 
     per_file = {}
     for path in all_paths:
-        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        raw = open(path, encoding="utf-8", errors="replace").read()
+        lines = raw.splitlines()
+        spans, stems = foreign_module_spans(raw)
+        binds = base_bindings(raw, stems) if stems else []
         file_hooks = any(HOOKPRIM.search(l) for l in lines)
         hits = []
 
-        def add(i, name, rva, forced_detour=False):
+        def add(i, name, rva, forced_detour=False, module=None):
             line = lines[i]
             window = "\n".join(lines[max(0, i - 30): i + 31])
             near = "\n".join(lines[max(0, i - 8): i + 9])
@@ -289,59 +471,103 @@ def collect(maps):
                 "line": i + 1, "name": name, "rva": rva, "kind": kind,
                 "detour": forced_detour or bool(file_hooks and HOOKPRIM.search(window)),
                 "gated": bool(GATED.search(near)), "sig": bool(SIGCHECK.search(near)),
-                "text": line.strip()[:140],
+                "text": line.strip()[:140], "module": module or GAME_MODULE,
             })
 
         for i, line in enumerate(lines):
             stripped = line.lstrip()
             if stripped.startswith("//") or stripped.startswith("*"):
                 continue
+            # A RANGE, not two addresses. Recorded so the exclusion is visible and testable.
+            for m in RANGE_ARG.finditer(line):
+                for end in (m.group(1), m.group(2)):
+                    not_an_address(int(end.replace("_", ""), 16), "(callstack range bound)",
+                                   "range argument, not an address", path, i + 1, line)
+            for m in LITERAL_RANGE.finditer(line):
+                for end in (m.group(1), m.group(2)):
+                    not_an_address(int(end.replace("_", ""), 16), "(literal range bound)",
+                                   "range literal, not an address", path, i + 1, line)
             for m in ident.finditer(line):
                 if re.search(r"\bconst\s+" + re.escape(m.group(1)) + r"\b", line):
                     continue
-                if syms[m.group(1)] < MIN_PLAUSIBLE_RVA or BOUND.search(m.group(1)):
+                if syms[m.group(1)] < MIN_PLAUSIBLE_RVA:
+                    not_an_address(syms[m.group(1)], m.group(1),
+                                   "below the first page of the image", path, i + 1, line)
                     continue
-                add(i, m.group(1), syms[m.group(1)])
+                if BOUND.search(m.group(1)):
+                    not_an_address(syms[m.group(1)], m.group(1),
+                                   "named bound/range, not an address", path, i + 1, line)
+                    continue
+                add(i, m.group(1), syms[m.group(1)], module=foreign_syms.get(m.group(1)))
             for m in RVA_FIELD.finditer(line):
                 rva = int(m.group(1).replace("_", ""), 16)
                 block = "\n".join(lines[max(0, i - 12): i + 12])
-                cn = re.search(r"const\s+([A-Z0-9_]+)\s*:", block)
-                nm = re.search(r'name\s*:\s*"([^"]+)"', block)
-                label = (f"(literal {cn.group(1)})" if cn else
-                         f'(literal "{nm.group(1)}")' if nm else f"(literal 0x{rva:x})")
-                add(i, label, rva, forced_detour=bool(DETOUR_FIELD.search(block)))
+                # The NEAREST label ABOVE the `rva:` line, not the first one in the window. A
+                # hook table is a run of adjacent `HookSpec { name, rva, detour }` records, so
+                # taking the first match in a +/-12 line block reads the PREVIOUS entry's name:
+                # 0xafbad0 was reported as `movemap_dispatcher2_afb880`, which is 0xafb880.
+                above = "\n".join(lines[max(0, i - 12): i + 1])
+                cn = (re.findall(r"const\s+([A-Z0-9_]+)\s*:", above)
+                      or re.findall(r"const\s+([A-Z0-9_]+)\s*:", block))
+                nm = (re.findall(r'name\s*:\s*"([^"]+)"', above)
+                      or re.findall(r'name\s*:\s*"([^"]+)"', block))
+                label = (f"(literal {cn[-1]})" if cn else
+                         f'(literal "{nm[-1]}")' if nm else f"(literal 0x{rva:x})")
+                add(i, label, rva, forced_detour=bool(DETOUR_FIELD.search(block)),
+                    module=module_of_line(i + 1, spans, binds))
             for m in BASE_PLUS_LIT.finditer(line):
                 rva = int(m.group(1).replace("_", ""), 16)
                 # Page-aligned means a RANGE bound, not a function: `openfile >= base + 0x0800_0000`
                 # is a sanity check on a runtime-resolved pointer, and it entered the inventory as
                 # game address 0x8000000. No real RVA in this tree is page-aligned.
                 if MIN_PLAUSIBLE_RVA <= rva <= 0x8000000 and rva & 0xFFF:
-                    add(i, f"(literal base+0x{rva:x})", rva)
+                    add(i, f"(literal base+0x{rva:x})", rva,
+                        module=module_of_line(i + 1, spans, binds))
+                else:
+                    not_an_address(rva, f"(literal base+0x{rva:x})",
+                                   "page-aligned or out-of-image bound", path, i + 1, line)
         per_file[path] = hits
 
     owner = {p: c for c in pkgs for p in srcs[c]}
-    out = {"cdylibs": cdylibs, "crates": {}, "classes": {}}
+    out = {"cdylibs": cdylibs, "crates": {}, "classes": {}, "foreign": {}, "not_addresses": {}}
+    foreign = {}
     for dll in cdylibs:
         addrs = {}
         for crate in closure(dll):
             for path in srcs[crate]:
                 for h in per_file.get(path, []):
-                    e = addrs.setdefault(h["rva"], {
+                    # Whose base? A foreign module's address is not eldenring.exe migration work,
+                    # and putting it on the unmapped list invites a translation that lands a
+                    # detour on an unrelated game function.
+                    bucket = addrs if h["module"] == GAME_MODULE else \
+                        foreign.setdefault(h["module"], {})
+                    e = bucket.setdefault(h["rva"], {
                         "names": set(), "detour": False, "kinds": set(), "crates": set(),
-                        "gated": 0, "ungated": 0, "sig": False, "sites": []})
+                        "dlls": set(), "gated": 0, "ungated": 0, "sig": False, "sites": []})
                     e["names"].add(h["name"])
                     e["detour"] |= h["detour"]
                     e["kinds"].add(h["kind"])
                     e["crates"].add(owner[path])
+                    e["dlls"].add(dll)
                     e["sig"] |= h["sig"]
                     e["gated" if h["gated"] else "ungated"] += 1
-                    e["sites"].append([os.path.relpath(path, REPO), h["line"], h["kind"],
-                                       h["detour"], h["gated"], h["text"]])
+                    if len(e["sites"]) < 40:
+                        e["sites"].append([os.path.relpath(path, REPO), h["line"], h["kind"],
+                                           h["detour"], h["gated"], h["text"]])
         out["crates"][dll] = {
             hex(r): {"names": sorted(v["names"]), "detour": v["detour"], "kinds": sorted(v["kinds"]),
                      "crates": sorted(v["crates"]), "gated": v["gated"], "ungated": v["ungated"],
                      "sig": v["sig"], "sites": v["sites"][:40]}
             for r, v in addrs.items()}
+    out["foreign"] = {
+        module: {hex(r): {"names": sorted(v["names"]), "detour": v["detour"],
+                          "kinds": sorted(v["kinds"]), "crates": sorted(v["crates"]),
+                          "dlls": sorted(v["dlls"]), "sites": v["sites"][:8]}
+                 for r, v in sorted(addrs.items())}
+        for module, addrs in sorted(foreign.items())}
+    out["not_addresses"] = {
+        r: {"names": sorted(v["names"]), "reason": v["reason"], "sites": v["sites"]}
+        for r, v in sorted(not_addresses.items(), key=lambda kv: int(kv[0], 16))}
     for rva in sorted({int(r, 16) for a in out["crates"].values() for r in a}):
         out["classes"][hex(rva)] = {
             "prov": provenance(rva, maps),
@@ -350,6 +576,29 @@ def collect(maps):
             "observed_refusal": rva in maps["observed"],
         }
     return out
+
+
+# The classification cases every future edit must keep answering the same way. Each was a real
+# misclassification: the first four were reported as unmapped GAME addresses and are Seamless
+# Co-op's, the next three are bounds that were being ranked as migration work above real
+# functions, and the last two are the control -- an exclusion that also ate real addresses would
+# look like progress.
+FOREIGN_CASES = [
+    (0x22D30, "ersc.dll", "SHOW_RVA -- ersc!show, the option-menu builder"),
+    (0x243E0, "ersc.dll", "INVADE_ACTION_RVA -- ersc \"Invade world\""),
+    (0x24460, "ersc.dll", "CANCEL_ACTION_RVA -- ersc \"Cancel search\""),
+    (0xABC20, "ersc.dll", "BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey"),
+]
+NOT_ADDRESS_CASES = [
+    (0x4000000, "GAME_TEXT_RVA_LIMIT -- plausibility bound in trace_first_game_caller_rva"),
+    (0x5000000, "SW_BP_RVA_LIMIT -- plausibility bound in the breakpoint-file parser"),
+    (0x7A3000, "callstack_contains_game_rva(0x7a3000, 0x7a4000) -- range start"),
+    (0x7A4000, "callstack_contains_game_rva(0x7a3000, 0x7a4000) -- range end"),
+]
+GAME_ADDRESS_CONTROLS = [
+    (0x749B20, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA"),
+    (0x5EEFB0, "GET_CURRENT_MAP_ID_RVA"),
+]
 
 
 def selftest(maps):
@@ -387,12 +636,32 @@ def selftest(maps):
     for base, dirs, files in os.walk(os.path.join(REPO, "crates")):
         dirs[:] = [d for d in dirs if d != "target"]
         paths += [os.path.join(base, f) for f in files if f.endswith(".rs")]
-    syms, _ = build_symbol_table(sorted(paths))
+    syms, _, foreign_syms = build_symbol_table(sorted(paths))
     # The enum-alias form, whose absence black-screened the game on 2026-08-29.
     if syms.get("TITLE_TOP_DIALOG_IS_IN_STATE_RVA") != 0x749B20:
         failures.append("enum-alias constants are invisible: TITLE_TOP_DIALOG_IS_IN_STATE_RVA")
     if syms.get("GET_CURRENT_MAP_ID_RVA") != 0x5EEFB0:
         failures.append("plain literal constants are invisible: GET_CURRENT_MAP_ID_RVA")
+    if foreign_syms.get("SHOW_RVA") != "ersc.dll":
+        failures.append("a constant declared inside `mod ersc` is not attributed to ersc.dll")
+
+    # --- classification by BASE, not by name -------------------------------------------------
+    inv = collect(maps)
+    game = {r for a in inv["crates"].values() for r in a}
+    for rva, module, why in FOREIGN_CASES:
+        if hex(rva) in game:
+            failures.append(f"{hex(rva)} ({why}) is classed as an eldenring.exe address; it is "
+                            f"{module}'s, and translating it would detour an unrelated function")
+        if hex(rva) not in inv["foreign"].get(module, {}):
+            failures.append(f"{hex(rva)} ({why}) is not reported under {module}")
+    for rva, why in NOT_ADDRESS_CASES:
+        if hex(rva) in game:
+            failures.append(f"{hex(rva)} ({why}) is classed as a game address; it is not one")
+        if hex(rva) not in inv["not_addresses"]:
+            failures.append(f"{hex(rva)} ({why}) is not reported as a non-address")
+    for rva, why in GAME_ADDRESS_CONTROLS:
+        if hex(rva) not in game:
+            failures.append(f"{hex(rva)} ({why}) is a REAL game address and the exclusions ate it")
     for line in failures:
         print(f"selftest FAIL: {line}")
     print(f"selftest: {len(failures)} failure(s)")
@@ -478,6 +747,32 @@ def per_address(inv):
     return out
 
 
+def detour_licence_only(inv):
+    """Addresses a call TRANSLATES and a detour REFUSES: `call_ok` yet not `detour_ok`.
+
+    Mapping cannot fix these -- the row already exists. What it lacks is the stricter evidence
+    `er-game-base/build.rs` demands before a row may carry a detour: an EXHAUSTIVE verdict
+    (BYTE-IDENTICAL, IDENTICAL-WHOLE, IDENTICAL-LEAF -- the whole of both bodies compared), or
+    IDENTICAL over at least `MIN_VERIFIED_INSNS` instructions, AND `BOTH-ENTRIES` /
+    `NEITHER-ENTRY` from `.pdata`. A detour overwrites five bytes, so a wrong answer corrupts a
+    live function rather than losing a feature; the gate is the point, not the obstacle.
+
+    `detour` here is the scan's ±30-line window heuristic, which over-reports: a data address
+    (`prov = DATA`) can never take a detour at all, so those rows are the heuristic firing on a
+    hook primitive that happens to sit near a vtable comparison. The column is kept so the
+    distinction is visible rather than assumed.
+    """
+    rows = []
+    for rva, v in per_address(inv).items():
+        if not v["detour"] or not inv["classes"][rva]["call_ok"] or inv["classes"][rva]["detour_ok"]:
+            continue
+        rows.append({"rva": rva, "prov": inv["classes"][rva]["prov"], "names": sorted(v["names"]),
+                     "dlls": sorted(v["dlls"]), "crates": sorted(v["crates"]),
+                     "kinds": sorted(v["kinds"]), "sites": v["sites"][:4]})
+    rows.sort(key=lambda r: int(r["rva"], 16))
+    return rows
+
+
 def rank(inv, maps):
     """The UNMAPPED addresses, worst blast radius first."""
     everything, rows = per_address(inv), []
@@ -549,6 +844,45 @@ def markdown(inv, maps, path):
     cc = collections.Counter(cls[r]["prov"] for r in every)
     w(f"| **DISTINCT** | | {len(every)} | {cc['VERIFIED']} | {cc['DATA']} | {cc['FUNCTION']} | "
       f"{cc['HELD-BACK']} | **{len(rows)}** | **{sum(1 for r in rows if r['detour'])}** |")
+    w("")
+    w("## Addresses that are NOT eldenring.exe's")
+    w("")
+    if not inv["foreign"]:
+        w("None found.")
+    for module, addrs in inv["foreign"].items():
+        w(f"`{module}` -- a separate image with its own base, resolved at runtime by name. An "
+          "ELDEN RING patch does not move these, so none of them is migration work; translating "
+          "one through the game map and detouring the result lands on an unrelated function.")
+        w("")
+        w("| RVA | constant | DLLs | first site |")
+        w("|---|---|---|---|")
+        for rva, v in addrs.items():
+            w(f"| `{rva}` | `{', '.join(v['names'])}` | {', '.join(v['dlls'])} | "
+              f"`{v['sites'][0][0]}:{v['sites'][0][1]}` |")
+        w("")
+    w("## Literals that are not addresses")
+    w("")
+    w("| value | why | named | first site |")
+    w("|---|---|---|---|")
+    for rva, v in inv["not_addresses"].items():
+        w(f"| `{rva}` | {v['reason']} | `{', '.join(v['names'])}` | "
+          f"`{v['sites'][0][0]}:{v['sites'][0][1]}` |")
+    w("")
+    w("## Mapped for a CALL, refused for a DETOUR")
+    w("")
+    w("Mapping cannot fix these: the row exists and `game_rva` translates it. What it lacks is "
+      "the stricter evidence `er-game-base/build.rs` requires before a row may carry a detour -- "
+      "an EXHAUSTIVE verdict (`BYTE-IDENTICAL`, `IDENTICAL-WHOLE`, `IDENTICAL-LEAF`), or "
+      "`IDENTICAL` over at least "
+      f"{MIN_VERIFIED_INSNS} instructions, AND `BOTH-ENTRIES`/`NEITHER-ENTRY` from `.pdata`. "
+      "`prov = DATA` rows are the detour heuristic over-reporting: a vtable or global cannot take "
+      "a detour at all.")
+    w("")
+    w("| RVA | prov | constant | DLLs | use | first site |")
+    w("|---|---|---|---|---|---|")
+    for r in detour_licence_only(inv):
+        w(f"| `{r['rva']}` | {r['prov']} | `{', '.join(r['names'])}` | {', '.join(r['dlls'])} | "
+          f"{', '.join(r['kinds'])} | `{r['sites'][0][0]}:{r['sites'][0][1]}` |")
     w("")
     w("## Ranked UNMAPPED list")
     w("")
@@ -627,9 +961,20 @@ def main():
                   f"{c['HELD-BACK']:4d} {len(unmapped):5d} "
                   f"{sum(1 for r in unmapped if a[r]['detour']):5d}")
         every = {r for a in inv["crates"].values() for r in a}
-        print(f"\n{len(every)} unique addresses; "
+        print(f"\n{len(every)} unique GAME addresses; "
               f"{sum(1 for r in every if cls[r]['call_ok'])} resolvable, "
               f"{sum(1 for r in every if not cls[r]['call_ok'])} UNMAPPED")
+        licence = detour_licence_only(inv)
+        print(f"{len(licence)} of the resolvable ones translate for a CALL and are refused for a "
+              f"DETOUR (mapping cannot fix those; they need entry/verdict evidence)")
+        for module, addrs in inv["foreign"].items():
+            print(f"{len(addrs)} address(es) belong to {module}, NOT eldenring.exe -- no ELDEN "
+                  f"RING patch moves them and none is migration work: "
+                  f"{', '.join(sorted(addrs))}")
+        if inv["not_addresses"]:
+            print(f"{len(inv['not_addresses'])} literal(s) excluded as NOT addresses "
+                  f"(bounds, ranges, sub-page values): "
+                  f"{', '.join(inv['not_addresses'])}")
     return 0
 
 

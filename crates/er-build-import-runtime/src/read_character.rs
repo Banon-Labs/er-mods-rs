@@ -241,6 +241,7 @@ type SlotsCountFn = unsafe extern "system" fn(usize, usize) -> u32;
 ///
 /// Game thread, `egd` live, `msg` a live `MsgRepositoryImp*`.
 unsafe fn read_slot(
+    get: ParamInSlotFn,
     module_base: usize,
     msg: usize,
     egd: usize,
@@ -248,8 +249,11 @@ unsafe fn read_slot(
     kind: Kind,
     equip_index: Option<u32>,
 ) -> SlotRead {
-    // Safety: verified RVA; a pure read of the slot's current param id.
-    let get: ParamInSlotFn = unsafe { core::mem::transmute(module_base + GET_PARAM_ID_IN_SLOT) };
+    // THE GETTER IS RESOLVED BY THE CALLER, not here, and that is the point. This function is
+    // called once per equipment slot; resolving inside it would ask the same question ~30 times
+    // per export and, on a build with no mapping, would answer `SlotRead::Empty` thirty times --
+    // an EXPORTED CHARACTER WEARING NOTHING, which is a plausible-looking document rather than a
+    // failure. `read_character` resolves once and refuses the whole export instead.
     // Safety: the caller's contract.
     let raw = unsafe { get(egd, slot) };
     // An empty slot reads as -1, and the engine also uses large sentinels for "nothing"; anything
@@ -489,6 +493,18 @@ pub unsafe fn equipped_weapon_arts_id(module_base: usize, slot: i32) -> Option<u
 pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Option<CharacterRead> {
     // Safety: the caller's contract.
     let pgd = unsafe { player_game_data() }?;
+    // RESOLVED ONCE, BEFORE ANYTHING IS READ. Every equipment slot below is answered by this one
+    // getter, so on a build where it has no mapping the honest answer is that the character
+    // cannot be read at all -- `None`, which the caller reports. Answering slot by slot would
+    // produce a fully-formed export document of a character wearing nothing, and a wrong document
+    // is worse than no document because it can be uploaded and shared.
+    let param_in_slot = crate::native::resolve(
+        module_base,
+        GET_PARAM_ID_IN_SLOT,
+        "CS::EquipGameData::GetParamIdInSlot",
+    )?;
+    // Safety: resolved for the running build immediately above.
+    let param_in_slot: ParamInSlotFn = unsafe { core::mem::transmute(param_in_slot) };
     let mut out = CharacterRead::default();
 
     // Safety: plain reads of live save data at offsets bound to the upstream typed layout.
@@ -526,8 +542,17 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     for (equip_index, slot) in ARMAMENT_CHR_ASM_SLOTS.into_iter().enumerate() {
         let equip_index = equip_index as u32;
         // Safety: the caller's contract.
-        let read =
-            unsafe { read_slot(module_base, msg, egd, slot, Kind::Weapon, Some(equip_index)) };
+        let read = unsafe {
+            read_slot(
+                param_in_slot,
+                module_base,
+                msg,
+                egd,
+                slot,
+                Kind::Weapon,
+                Some(equip_index),
+            )
+        };
         match read {
             SlotRead::Item(item) => out.armaments.push(item),
             SlotRead::Unnamed => unnamed += 1,
@@ -538,7 +563,17 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     for (offset, part) in PROTECTOR_PARTS.into_iter().enumerate() {
         let slot = CHR_ASM_SLOT_PROTECTOR_HEAD + offset as i32;
         // Safety: as above.
-        let read = unsafe { read_slot(module_base, msg, egd, slot, Kind::Protector, Some(0)) };
+        let read = unsafe {
+            read_slot(
+                param_in_slot,
+                module_base,
+                msg,
+                egd,
+                slot,
+                Kind::Protector,
+                Some(0),
+            )
+        };
         match read {
             SlotRead::Item(item) => out.protectors.push((part, item)),
             SlotRead::Unnamed => unnamed += 1,
@@ -551,6 +586,7 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
         // Safety: as above.
         let read = unsafe {
             read_slot(
+                param_in_slot,
                 module_base,
                 msg,
                 egd,
@@ -570,11 +606,26 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     // talismans, and the engine clamps it to 14.
     // Safety: one pointer read at the verified EquipGameData offset.
     let emd = unsafe { *((egd + EQUIP_GAME_DATA_MAGIC_OFFSET) as *const usize) };
-    if emd != 0 {
-        // Safety: verified RVAs.
-        let slots_count: SlotsCountFn =
-            unsafe { core::mem::transmute(module_base + GET_MAGIC_SLOTS_COUNT) };
-        let magic_id: MagicIdFn = unsafe { core::mem::transmute(module_base + GET_EQUIP_MAGIC_ID) };
+    // Resolved for the running build, and only once a character actually has magic data. A
+    // refusal leaves `magic_capacity` at zero and the spell list empty, which is the same shape
+    // as a character with no spells -- so it is SAID, once, by `crate::native`, rather than left
+    // to be read off a silently short list.
+    if emd != 0
+        && let Ok([slots_count, magic_id]) = crate::native::resolve_all(
+            module_base,
+            [
+                (
+                    GET_MAGIC_SLOTS_COUNT,
+                    "CS::EquipMagicData::GetMagicSlotsCount",
+                ),
+                (GET_EQUIP_MAGIC_ID, "GetEquipMagicId"),
+            ],
+        )
+    {
+        // Safety: both addresses were resolved for the running build immediately above.
+        let slots_count: SlotsCountFn = unsafe { core::mem::transmute(slots_count) };
+        // Safety: as above.
+        let magic_id: MagicIdFn = unsafe { core::mem::transmute(magic_id) };
         // Safety: a null SpecialEffect means "derive it from the player".
         out.magic_capacity = unsafe { slots_count(emd, 0) };
         for slot in 0..out.magic_capacity.min(i32::MAX as u32) as i32 {
@@ -608,19 +659,31 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
 
     // Physick. The field holds CATEGORY-TAGGED ids (a game-filled flask reads back as e.g.
     // `0x40001FC1`), so the nibble is masked off before the row is named.
-    // Safety: verified RVA; an out-parameter getter, which is why the destination is ours.
-    let get_tear: OutParamGetterFn =
-        unsafe { core::mem::transmute(module_base + GET_PHYSIC_TEAR_BY_SLOT) };
+    // Resolved for the running build; an out-parameter getter, which is why the destination is
+    // ours. On a refusal the two tear slots are pushed as `None` -- the same value an empty flask
+    // produces. That is a known imprecision and it is bounded by the fact that `crate::native`
+    // has already logged the getter as unavailable for this session; there is no third state in
+    // `Vec<Option<String>>` to put a refusal in without changing the exported document's shape.
+    let get_tear = crate::native::resolve(
+        module_base,
+        GET_PHYSIC_TEAR_BY_SLOT,
+        "CS::EquipGameData::GetPhysicTearBySlot",
+    );
     for index in 0..2i32 {
-        let mut raw = -1i32;
-        // Safety: our own slot, and the getter writes exactly one int through it.
-        unsafe { get_tear(egd, &raw mut raw, index) };
-        let tear = u32::try_from(raw)
-            .ok()
-            .filter(|id| *id != 0 && *id != u32::MAX)
-            .and_then(|id| unsafe {
-                name_for(Kind::Tool, msg, module_base, id & ITEM_ID_ROW_MASK)
-            });
+        let tear = get_tear.and_then(|get_tear| {
+            // Safety: resolved for the running build immediately above.
+            let get_tear: OutParamGetterFn = unsafe { core::mem::transmute(get_tear) };
+            let mut raw = -1i32;
+            // Safety: our own slot, and the getter writes exactly one int through it.
+            unsafe { get_tear(egd, &raw mut raw, index) };
+            u32::try_from(raw)
+                .ok()
+                .filter(|id| *id != 0 && *id != u32::MAX)
+                // Safety: the caller's contract.
+                .and_then(|id| unsafe {
+                    name_for(Kind::Tool, msg, module_base, id & ITEM_ID_ROW_MASK)
+                })
+        });
         out.crystal_tears.push(tear);
     }
 
@@ -628,18 +691,26 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     // through to `GetEquippedGreatrune(EquipItemData*, int *out, int slot)`, whose body begins
     // `*out = -1; if (slot == 0 && ...)`. Calling it with two leaves R8 holding whatever the call
     // site had and it reports -1 no matter what is equipped.
-    // Safety: verified RVA; the out slot is ours and outlives the call.
-    let get_rune: OutParamGetterFn =
-        unsafe { core::mem::transmute(module_base + GET_EQUIPPED_GREATRUNE) };
-    let mut rune = -1i32;
-    // Safety: as above.
-    unsafe { get_rune(egd, &raw mut rune, 0) };
-    out.great_rune = u32::try_from(rune)
-        .ok()
-        .filter(|id| *id != 0 && *id != u32::MAX)
-        .and_then(|id| unsafe {
-            name_for(Kind::GreatRune, msg, module_base, id & ITEM_ID_ROW_MASK)
-        });
+    // Resolved for the running build; the out slot is ours and outlives the call.
+    out.great_rune = crate::native::resolve(
+        module_base,
+        GET_EQUIPPED_GREATRUNE,
+        "CS::EquipItemData::GetEquippedGreatrune",
+    )
+    .and_then(|get_rune| {
+        // Safety: resolved for the running build immediately above.
+        let get_rune: OutParamGetterFn = unsafe { core::mem::transmute(get_rune) };
+        let mut rune = -1i32;
+        // Safety: as above.
+        unsafe { get_rune(egd, &raw mut rune, 0) };
+        u32::try_from(rune)
+            .ok()
+            .filter(|id| *id != 0 && *id != u32::MAX)
+            // Safety: the caller's contract.
+            .and_then(|id| unsafe {
+                name_for(Kind::GreatRune, msg, module_base, id & ITEM_ID_ROW_MASK)
+            })
+    });
 
     // Two-handing, from the same `ChrAsm::equipment.arm_style` the engine renders from.
     // Safety: a read of one enum-sized field at an offset bound to the upstream layout.

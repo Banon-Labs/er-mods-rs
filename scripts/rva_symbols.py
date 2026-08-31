@@ -1,0 +1,1257 @@
+#!/usr/bin/env python3
+"""Which SYMBOL declares this address? Every spelling this tree uses, or an honest "I cannot tell".
+
+WHY THIS EXISTS
+---------------
+Two gates were caught on 2026-08-30 giving a confidently wrong answer to the same question, for
+the same reason.
+
+  `check-stale-rva-calls.py` searched for a SCREAMING_SNAKE constant added to a module base. It
+  reported `1 known ungated site(s), none new` while roughly twenty real sites stood, because
+  `er-title-flow` spells most of its addresses as enum variants
+  (`ProfileLoadMenuRva::ProfileLoadSelectSaveSlot as usize`) and other crates reach one through its
+  module (`jp::GAME_MAN_GLOBAL_RVA`).
+
+  `check-1170-translation-collisions.py` searched for the literal `const NAME: usize = 0x<addr>;`
+  and, finding none, printed "row B is claimed by no feature: deleting it removes this collision at
+  zero cost." For 0xb0d400 that advice was WRONG AND DESTRUCTIVE. The declaration is
+  `MenuJobWait = 0x00b0d400` inside `#[repr(u32)] pub enum MenuTraceRva`, reached through
+  `pub const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;`. The hex literal
+  is in the tree; the SHAPE `const NAME: usize = 0x..;` is not. Its three live use sites are on the
+  autoload path (`native_title_job.rs`, and twice in `title_load_step_hooks.rs`; a fourth mention is
+  the string label passed beside one of them). Following the gate's own advice would have deleted a
+  working feature's address.
+
+Both failures are one failure: SEARCHING FOR A SPELLING FINDS SPELLINGS, NOT ADDRESSES. So this
+module resolves VALUES. It reads every declaration form in `crates/`, evaluates each to a number,
+and answers "which symbols equal this address" from the resolved values rather than from a regex
+over the source text.
+
+THE PART THAT MATTERS MORE THAN THE MATCHING
+--------------------------------------------
+"I found no reference" and "there is no reference" are different facts and MUST NOT print the same
+sentence. A resolver has a residue -- declarations whose right-hand side it could not evaluate --
+and while that residue is non-empty, any one of them could be the address. So `claims()` returns
+`proven_unclaimed` as a separate field from `found_nothing`, and it is True only when
+
+  * the walk read files (a scan that read nothing must never look like a clean scan);
+  * NO declaration in the integer-valued universe resolved to the address;
+  * NO bare hex literal of the address occurs in code (a `rva: 0xaec480` table field claims an
+    address with no constant name at all -- er-reload-trace shipped exactly that); and
+  * the residue that could hold THIS address is EMPTY.
+
+A caller may only advise deletion when `proven_unclaimed` is True. Anything else is
+"not proven", and the difference is a deleted feature.
+
+THE UNIVERSE, stated so the proof means something
+-------------------------------------------------
+An address constant in Rust is an integer-typed `const`/`static`, an integer-repr enum's
+discriminant, an element of an integer array/slice/tuple, or an integer `Range` band. Three classes
+are then subtracted, each for a reason about what the thing IS rather than what it is called --
+which is the discipline the failures above violated:
+
+  * a NON-INTEGER type. A `&str` cannot hold an address, so an unevaluated one does not weaken the
+    proof;
+  * a type TOO NARROW for the address being asked about. A `u8` cannot be 0x7ad710, so an
+    unevaluated `&[u8; 64]` byte string is not a declaration that might be it. This is
+    query-relative: the residue is smaller for a large address than for a small one;
+  * a value composed only of RUST TYPE LAYOUT -- `offset_of!`, `size_of`, `align_of` and integer
+    literals, recursively. Those are lengths and intra-struct offsets, not addresses in
+    eldenring.exe's image. A constant that ADDS a layout quantity to something else is NOT in this
+    class and stays in the residue.
+
+Measured on this tree, 2026-08-30: 5124 address-capable declarations, 285 unevaluated, 219 of them
+layout-derived, 66 genuinely unread, and 4 wide enough to hold a `.text` RVA. Those four are what
+stands between the three baselined collisions and a proof that nothing claims them.
+
+    python3 scripts/rva_symbols.py 0xb0d400        # who declares this address
+    python3 scripts/rva_symbols.py 0x140b0d400     # VA or RVA, both accepted
+    python3 scripts/rva_symbols.py --residue       # what the resolver could not evaluate
+    python3 scripts/rva_symbols.py --residue 0x7ad710   # ...only the ones wide enough to be it
+    python3 scripts/rva_symbols.py --selftest
+"""
+
+import argparse
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CRATES = os.path.join(ROOT, "crates")
+IMAGE_BASE = 0x140000000
+
+
+# --------------------------------------------------------------------------------------------
+# Source text
+# --------------------------------------------------------------------------------------------
+
+
+def code_only(text):
+    """`text` with every Rust comment AND string body blanked to spaces, offsets preserved.
+
+    MOVED HERE FROM `check-stale-rva-calls.py` ON 2026-08-30 so both gates share one dialect
+    instead of growing a third. That gate's baseline was contaminated by not doing this at all:
+    two of its three rows were prose -- a `//` paragraph in `er-game-base/src/game_build.rs`
+    explaining that "a stale address is equally reachable as a CALL (`transmute(base + RVA)`)",
+    and a `///` doc comment in `er-invasion-warp-core/src/lib.rs` saying every call "used to be a
+    bare `transmute(base + SOME_RVA)`". Both were recorded as findings. That is worse than a plain
+    false positive: a ratchet whose baseline holds non-findings stays green while real sites are
+    added beside them, and the next agent to shrink the baseline "fixes" a sentence.
+
+    It matters in the other direction here. All three collision addresses this module was written
+    for appear in `crates/` ONLY inside doc comments that describe the collision. Counting those
+    as claims would make every address look live and the gate's advice useless; failing to blank
+    them would be the mirror image of the bug it exists to fix.
+
+    String BODIES are blanked for the same reason comments are, and it is the same failure one
+    step along: `"// transmute(base + QUOTED_RVA)"` is a quoted example, not a call. Nothing
+    either gate looks for can legitimately live inside a string literal, so blanking the body
+    cannot hide a finding, while leaving it readable manufactures one.
+
+    The two are parsed together rather than in separate passes, because each can quote the other:
+    a `//` inside a string does not open a comment, and a `"` inside a comment does not open a
+    string. Getting that backwards would blank live code. Block comments nest, as they do in Rust;
+    raw strings honour their hash count; and a `'` is a char literal only when it closes,
+    otherwise it is a lifetime and is stepped over.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            depth = 0
+            while i < n:
+                if text.startswith("/*", i):
+                    depth += 1
+                    out[i] = out[i + 1] = " "
+                    i += 2
+                    continue
+                if text.startswith("*/", i):
+                    depth -= 1
+                    out[i] = out[i + 1] = " "
+                    i += 2
+                    if depth == 0:
+                        break
+                    continue
+                if text[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        if c == "r" and i + 1 < n and text[i + 1] in '#"':
+            j = i + 1
+            hashes = 0
+            while j < n and text[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and text[j] == '"':
+                close = '"' + "#" * hashes
+                end = text.find(close, j + 1)
+                stop = n if end < 0 else end
+                for k in range(j + 1, stop):
+                    if text[k] != "\n":
+                        out[k] = " "
+                i = n if end < 0 else end + len(close)
+                continue
+        if c == '"':
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    out[i] = " "
+                    if i + 1 < n and text[i + 1] != "\n":
+                        out[i + 1] = " "
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                if text[i] != "\n":
+                    out[i] = " "
+                i += 1
+            continue
+        if c == "'":
+            if i + 2 < n and text[i + 1] == "\\":
+                end = text.find("'", i + 2)
+                i = n if end < 0 else end + 1
+                continue
+            if i + 2 < n and text[i + 2] == "'":
+                i += 3
+                continue
+            i += 1  # a lifetime, not a literal
+            continue
+        i += 1
+    return "".join(out)
+
+
+def rust_sources(root=None):
+    """Every `.rs` file under `crates/`, as absolute paths, `target/` excluded."""
+    base = CRATES if root is None else root
+    out = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d != "target"]
+        out.extend(os.path.join(dirpath, name) for name in filenames if name.endswith(".rs"))
+    return sorted(out)
+
+
+# --------------------------------------------------------------------------------------------
+# Declaration forms
+# --------------------------------------------------------------------------------------------
+
+# An integer-valued type. The residue that blocks a deletion recommendation is counted over
+# declarations of THESE types only, so what counts is written down rather than assumed: a `&str`
+# or a struct literal cannot be an address, and letting one sit in the residue would suppress the
+# advice forever for no reason. `Range` is in because a band constant
+# (`const LEGACY_CONFIRM_CALLER_BAND: Range<usize> = 0x7a3000..0x7a4000;`) claims every address
+# inside it, and arrays/slices are in because a table of addresses claims each element.
+INT_SCALAR = r"(?:usize|isize|u8|u16|u32|u64|u128|i8|i16|i32|i64|i128)"
+INT_TYPE = re.compile(
+    r"^\s*(?:&'?\w*\s*)?(?:\[\s*)?"
+    r"(?:(?:core|std)::(?:primitive|ops)::)?"
+    r"(?:Range(?:Inclusive)?\s*<\s*)?"
+    r"(?:\(\s*)?"
+    + INT_SCALAR
+    + r"\b"
+)
+
+# A declaration is found by its HEAD and then SCANNED, not matched whole. A single regex cannot do
+# it: `const TABLE: [usize; 2] = [..];` puts a `;` inside the TYPE, and `const _: () = assert!(A ==
+# B);` puts an `=` inside the expression, so any `[^=;]` fence either drops array-typed address
+# tables or stops at the wrong character. Both forms carry addresses in this tree, so both are
+# scanned with bracket depth instead.
+DECLARATION_HEAD = re.compile(
+    r"(?:^|[\s;{}()])(?:pub(?:\s*\([^)]*\))?\s+)?(const|static)\s+(?:mut\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*:"
+)
+
+
+def _scan_declaration(text, start):
+    """From just after `NAME:`, return `(type, expr, end)` or None. Bracket-aware."""
+    depth, i, n = 0, start, len(text)
+    type_end = None
+    while i < n:
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return None
+            depth -= 1
+        elif depth == 0 and c == "=" and text[i - 1] not in "=!<>" and text[i + 1 : i + 2] != "=":
+            type_end = i
+            break
+        elif depth == 0 and c == ";":
+            return None  # a declaration with no initialiser (a trait const, an `extern` static)
+        i += 1
+    if type_end is None:
+        return None
+    depth, i = 0, type_end + 1
+    while i < n:
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and c == ";":
+            return text[start:type_end].strip(), text[type_end + 1 : i].strip(), i
+        i += 1
+    return None
+ENUM_HEAD = re.compile(
+    r"(?:#\[\s*repr\s*\(\s*([A-Za-z0-9_]+)\s*\)\s*\]\s*)?"
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?enum\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>{]*>\s*)?\{"
+)
+# `use a::b::OLD as NEW;` and `use a::{B as C, D as E};`. An alias does not declare a value, but it
+# is another NAME for one, and a gate that reports "no symbol claims this" while an alias points at
+# a claiming symbol is repeating the miss in a different key.
+USE_LINE = re.compile(r"(?:^|[\s;{}])(?:pub(?:\s*\([^)]*\))?\s+)?use\s+([^;]+);", re.S)
+# An identifier, and NOT the tail of a numeric literal. Without the lookbehind, `0x007a7b60`
+# yields the "identifier" `x007a7b60`, which resolves to nothing, and every hex constant in the
+# tree becomes unresolvable -- the residue swallows the universe and no address can ever be proven
+# unclaimed. A `.` is in the lookbehind so a method call is left as punctuation the arithmetic
+# filter then rejects, rather than being mistaken for a name.
+IDENTIFIER = re.compile(
+    r"(?<![0-9A-Za-z_.])[A-Za-z_][A-Za-z0-9_]*(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*"
+)
+HEX_LITERAL = re.compile(r"\b0[xX][0-9a-fA-F_]+\b")
+DEC_LITERAL = re.compile(r"(?<![\w.])[0-9][0-9_]*(?![\w.])")
+
+BUILTIN = {
+    "true": 1,
+    "false": 0,
+    "i8::MIN": -(1 << 7),
+    "i16::MIN": -(1 << 15),
+    "i32::MIN": -(1 << 31),
+    "i64::MIN": -(1 << 63),
+    "isize::MIN": -(1 << 63),
+    "i32::MAX": (1 << 31) - 1,
+    "usize::BITS": 64,
+    "u64::BITS": 64,
+    "u32::BITS": 32,
+    "u16::BITS": 16,
+    "u8::BITS": 8,
+    "usize::MAX": (1 << 64) - 1,
+    "u64::MAX": (1 << 64) - 1,
+    "u32::MAX": (1 << 32) - 1,
+    "u16::MAX": (1 << 16) - 1,
+    "u8::MAX": 0xFF,
+    "i64::MAX": (1 << 63) - 1,
+    "usize::MIN": 0,
+    "u32::MIN": 0,
+    "u64::MIN": 0,
+}
+
+ARITHMETIC_ONLY = re.compile(r"^[0-9a-fA-FxXoObB_+\-*/%()<>|&^~! ]*$")
+
+# HOW WIDE IS THE SLOT? The residue is what blocks a "nothing claims this" proof, so shrinking it
+# soundly matters more than shrinking it. This is the one sound way to shrink it: a `u8` cannot
+# hold 0x7ad710 no matter what expression fills it, so an unevaluated `&[u8; 64]` byte string is
+# not a declaration that "might be the address" -- it is one that PROVABLY is not.
+#
+# It is the same move `check-stale-rva-calls.py` makes when it excludes `PE_DOS_LFANEW_OFFSET` by
+# VALUE rather than by name: an exclusion has to rest on what the thing IS. Excluding byte arrays
+# because they "look like strings" would be the name-based reasoning this whole module exists to
+# stop.
+SCALAR_WIDTH = re.compile(r"\b(" + INT_SCALAR + r")\b")
+WIDTH = {
+    "u8": 8, "i8": 7, "u16": 16, "i16": 15, "u32": 32, "i32": 31,
+    "u64": 64, "i64": 63, "u128": 128, "i128": 127, "usize": 64, "isize": 63,
+}
+
+
+def _can_hold(type_text, value):
+    """Could a declaration of this type hold `value`? Unknown type -> yes, and stays residue."""
+    found = SCALAR_WIDTH.search(type_text or "")
+    if not found:
+        return True
+    bits = WIDTH.get(found.group(1))
+    return True if bits is None else value < (1 << bits)
+
+
+# RUST TYPE LAYOUT IS NOT A GAME ADDRESS. `offset_of!`, `size_of` and `align_of` compute the layout
+# of OUR OWN types: a byte offset inside a struct, or a length. Neither is an address in
+# eldenring.exe's image, so a declaration built ONLY from them and integer literals names no game
+# address whatever number it happens to evaluate to, and keeping it in the residue would suppress
+# every proof forever for no reason. Measured 2026-08-30: 219 of this tree's 285 unevaluated
+# address-capable declarations are exactly that (`PROFILE_SUMMARY_LEVEL_OFFSET`,
+# `PGD_NAME_9C_OFFSET`, the `read_character.rs` field table), leaving 66 that are genuinely
+# unread -- and 4 once the width test below has ruled out the ones too narrow to hold a game RVA.
+#
+# The exclusion is RECURSIVE and it is by WHAT THE EXPRESSION IS, not by what it is called -- the
+# same discipline as excluding a PE-header field by value. A constant that ADDS a layout quantity
+# to something else (`SOME_RVA + size_of::<T>()`) is NOT layout-derived: the other operand could be
+# a game address, so it stays in the residue and continues to block the proof.
+LAYOUT_CALL = re.compile(
+    r"(?:[A-Za-z_]\w*\s*::\s*)*(?:offset_of|size_of|align_of|size_of_val)\s*(?:!|::\s*<[^<>]*>)?\s*\("
+)
+
+
+def _strip_layout_calls(expr):
+    """`(expr with every layout intrinsic replaced by 0, how many were replaced)`."""
+    removed = 0
+    while True:
+        found = LAYOUT_CALL.search(expr)
+        if not found:
+            return expr, removed
+        depth, i = 0, found.end() - 1
+        while i < len(expr):
+            if expr[i] == "(":
+                depth += 1
+            elif expr[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        expr = expr[: found.start()] + "0" + expr[i + 1 :]
+        removed += 1
+
+
+class Decl:
+    """One declaration, with everything a failure message needs to be actionable."""
+
+    __slots__ = (
+        "path", "line", "symbol", "owner", "form", "type_text", "expr", "value", "band",
+    )
+
+    def __init__(self, path, line, symbol, owner, form, type_text, expr):
+        self.path, self.line, self.symbol, self.owner = path, line, symbol, owner
+        self.form, self.type_text, self.expr = form, type_text, expr
+        self.value = None  # set[int] of every integer the expression yields
+        self.band = None  # list[(lo, hi)] for range constants
+
+    @property
+    def qualified(self):
+        return f"{self.owner}::{self.symbol}" if self.owner else self.symbol
+
+    def where(self, root=ROOT):
+        rel = os.path.relpath(self.path, root) if self.path.startswith(root) else self.path
+        return f"{rel}:{self.line}"
+
+    def __repr__(self):
+        return f"<Decl {self.qualified} {self.form} {self.where()}>"
+
+
+class Literal:
+    """A bare hex literal in code -- an address claimed with no constant name at all."""
+
+    __slots__ = ("path", "line", "text", "value")
+
+    def __init__(self, path, line, text, value):
+        self.path, self.line, self.text, self.value = path, line, text, value
+
+    def where(self, root=ROOT):
+        rel = os.path.relpath(self.path, root) if self.path.startswith(root) else self.path
+        return f"{rel}:{self.line}"
+
+
+class Claims:
+    """The answer to "who claims this address", and how much of it is PROVEN."""
+
+    __slots__ = (
+        "address",
+        "declarations",
+        "aliases",
+        "literals",
+        "uses",
+        "residue",
+        "files_read",
+        "universe",
+    )
+
+    def __init__(self, address):
+        self.address = address
+        self.declarations = []
+        self.aliases = []
+        self.literals = []
+        self.uses = {}
+        self.residue = []
+        self.files_read = 0
+        self.universe = 0
+
+    @property
+    def found_nothing(self):
+        return not self.declarations and not self.literals
+
+    @property
+    def proven_unclaimed(self):
+        """True ONLY when nothing claims it AND the resolver could evaluate everything.
+
+        The two halves are separate on purpose. `found_nothing` is what a regex can tell you;
+        this is what a resolver can PROVE, and only this may be used to advise a deletion.
+        """
+        return self.files_read > 0 and self.found_nothing and not self.residue
+
+
+def _element_count(expr):
+    """How many elements a literal `[..]` / `&[..]` table has, or None if it is not one.
+
+    The ELEMENTS need not be numbers: `const ALL_SEAMS: &[MapSeam] = &[MapSeam { .. }, ..];`
+    yields no values at all, but its LENGTH is still an ordinary compile-time integer, and leaving
+    `ALL_SEAMS.len()` unresolved put a log-line limit into the residue that blocks every proof.
+    """
+    expr = expr.strip()
+    while expr.startswith("&"):
+        expr = re.sub(r"^&\s*(?:mut\s+|'\w+\s+)?", "", expr).strip()
+    if not (expr.startswith("[") and expr.endswith("]")):
+        return None
+    inner = expr[1:-1]
+    repeat = _split_top(inner, [";"])
+    if len(repeat) == 2:
+        return None  # `[0u8; 32]` is a repeat expression, not a list
+    return sum(1 for element in _split_top(inner, [","]) if element.strip())
+
+
+def _split_top(text, separators):
+    """Split on `separators` that are not inside (), [], <> or {}."""
+    parts, depth, angle, start = [], 0, 0, 0
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "<":
+            angle += 1
+        elif c == ">":
+            angle = max(0, angle - 1)
+        elif depth == 0 and angle == 0:
+            for sep in separators:
+                if text.startswith(sep, i):
+                    parts.append(text[start:i])
+                    i += len(sep)
+                    start = i
+                    break
+            else:
+                i += 1
+                continue
+            continue
+        i += 1
+    parts.append(text[start:])
+    return parts
+
+
+class Index:
+    """Every address-valued declaration in `crates/`, resolved to numbers where possible."""
+
+    def __init__(self):
+        self.decls = []
+        self.by_simple = {}
+        self.by_qualified = {}
+        self.aliases = {}  # alias name -> target path
+        self.literals = []
+        self.files_read = 0
+        self.text = {}  # path -> comment/string-stripped source
+
+    # -- building ----------------------------------------------------------------------------
+
+    @classmethod
+    def build(cls, sources=None, root=None):
+        index = cls()
+        for path in rust_sources(root) if sources is None else sources:
+            try:
+                raw = open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            index.files_read += 1
+            text = code_only(raw)
+            index.text[path] = text
+            index._read_declarations(path, text)
+            index._read_enums(path, text)
+            index._read_uses(path, text)
+            index._read_literals(path, text)
+        index._resolve_all()
+        return index
+
+    def _add(self, decl):
+        self.decls.append(decl)
+        self.by_simple.setdefault(decl.symbol, []).append(decl)
+        if decl.owner:
+            self.by_qualified.setdefault(decl.qualified, []).append(decl)
+
+    def _read_declarations(self, path, text):
+        for match in DECLARATION_HEAD.finditer(text):
+            scanned = _scan_declaration(text, match.end())
+            if scanned is None:
+                continue
+            type_text, expr, _ = scanned
+            # `match.start(1)`, not `match.start()`: the head pattern eats one leading character
+            # so it can anchor on a boundary, and counting newlines to it reports the PREVIOUS
+            # line whenever that character is the newline itself.
+            line = text.count("\n", 0, match.start(1)) + 1
+            self._add(Decl(path, line, match.group(2), None, match.group(1), type_text, expr))
+
+    def _read_enums(self, path, text):
+        for head in ENUM_HEAD.finditer(text):
+            repr_type, name = head.group(1), head.group(2)
+            body, close = self._enum_body(text, head.end() - 1)
+            if body is None:
+                continue
+            previous = None
+            for member in _split_top(body, [","]):
+                member = member.strip()
+                if not member or member.startswith("#"):
+                    continue
+                if "(" in member.split("=")[0] or "{" in member.split("=")[0]:
+                    previous = None  # a payload variant has no discriminant
+                    continue
+                variant, _, expr = member.partition("=")
+                variant = variant.strip()
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variant):
+                    continue
+                offset = text.find(variant, head.end())
+                line = text.count("\n", 0, offset) + 1 if offset >= 0 else 1
+                decl = Decl(
+                    path,
+                    line,
+                    variant,
+                    name,
+                    "enum-variant",
+                    repr_type or "isize",
+                    expr.strip() if expr.strip() else f"__IMPLICIT__{previous}",
+                )
+                self._add(decl)
+                previous = decl.qualified
+
+    @staticmethod
+    def _enum_body(text, open_brace):
+        depth = 0
+        for i in range(open_brace, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[open_brace + 1 : i], open_brace
+        return None, open_brace
+
+    def _read_uses(self, path, text):
+        for match in USE_LINE.finditer(text):
+            body = match.group(1)
+            prefix, _, braced = body.partition("{")
+            if braced:
+                prefix = prefix.strip()
+                for item in _split_top(braced.rsplit("}", 1)[0], [","]):
+                    self._alias(prefix + item.strip())
+            else:
+                self._alias(body)
+
+    def _alias(self, item):
+        item = " ".join(item.split())
+        found = re.match(r"^([A-Za-z_][A-Za-z0-9_:\s]*?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$", item)
+        if not found:
+            return
+        target = found.group(1).replace(" ", "")
+        self.aliases.setdefault(found.group(2), target)
+
+    def _read_literals(self, path, text):
+        for match in HEX_LITERAL.finditer(text):
+            token = match.group(0)
+            try:
+                value = int(token.replace("_", ""), 16)
+            except ValueError:
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            self.literals.append(Literal(path, line, token, value))
+
+    # -- evaluation --------------------------------------------------------------------------
+
+    def _resolve_all(self):
+        for decl in self.decls:
+            self.value_of(decl)
+
+    def in_universe(self, decl):
+        """Could this declaration hold an address at all? The residue is counted over these."""
+        if decl.form == "enum-variant":
+            return bool(re.fullmatch(INT_SCALAR, decl.type_text or ""))
+        return bool(INT_TYPE.match(decl.type_text or ""))
+
+    def value_of(self, decl, seen=None):
+        """`decl`'s value(s), or None. `seen` is the ANCESTOR PATH, not a visited set.
+
+        It has to be popped on the way out. Left as a visited set it also excludes SIBLINGS: one
+        traversal that happens to touch `QuitRow::SaveGame` and then, later in the same traversal,
+        needs it again gets None -- and the second answer was cached, so an ordinary implicit enum
+        discriminant was recorded as unresolvable and sat in the residue blocking every proof.
+        Successes are cached on the declaration; failures are not cached at all, because a failure
+        caused by the cycle guard is a fact about one traversal, not about the declaration.
+        """
+        if decl.value is not None or decl.band is not None:
+            return decl.value
+        seen = set() if seen is None else seen
+        key = id(decl)
+        if key in seen:
+            return None
+        seen.add(key)
+        try:
+            result = self._evaluate(decl.expr, seen, decl.path)
+        finally:
+            seen.discard(key)
+        if result is None:
+            return None
+        decl.value, decl.band = result
+        return decl.value
+
+    def _evaluate(self, expr, seen, scope=None):
+        """`(set_of_ints, list_of_(lo, hi))`, or None when the expression is not a number."""
+        expr = expr.strip()
+        if not expr:
+            return None
+        if expr.startswith("__IMPLICIT__"):
+            previous = expr[len("__IMPLICIT__") :]
+            if previous == "None":
+                return ({0}, [])
+            earlier = self._lookup(previous, seen, scope)
+            return (
+                ({min(earlier) + 1}, [])
+                if earlier and len(earlier) == 1
+                else None
+            )
+        # `&[..]`, `&FOO`
+        while expr.startswith("&"):
+            expr = expr[1:].strip()
+            expr = re.sub(r"^(?:mut|'\w+)\s+", "", expr).strip()
+        # A bracketed or parenthesised list: an array, slice or tuple of addresses. Each element
+        # is a claim, so every one is evaluated and the union returned.
+        if (expr.startswith("[") and expr.endswith("]")) or (
+            expr.startswith("(") and expr.endswith(")") and _split_top(expr[1:-1], [","])[1:]
+        ):
+            inner = expr[1:-1]
+            # `[0u8; 32]` is a repeat, not a list of addresses -- the count is not an address.
+            repeat = _split_top(inner, [";"])
+            if expr.startswith("[") and len(repeat) == 2:
+                inner = repeat[0]
+            values, bands, ok = set(), [], True
+            for element in _split_top(inner, [","]):
+                if not element.strip():
+                    continue
+                part = self._evaluate(element, seen, scope)
+                if part is None:
+                    ok = False
+                    continue
+                values |= part[0]
+                bands += part[1]
+            return (values, bands) if ok or values else None
+        # A range band: every address inside it is claimed.
+        for sep, inclusive in (("..=", True), ("..", False)):
+            halves = _split_top(expr, [sep])
+            if len(halves) == 2 and halves[0].strip() and halves[1].strip():
+                low = self._scalar(halves[0], seen, scope)
+                high = self._scalar(halves[1], seen, scope)
+                if low is None or high is None:
+                    return None
+                return (set(), [(low, high if inclusive else high - 1)])
+        scalar = self._scalar(expr, seen, scope)
+        return None if scalar is None else ({scalar}, [])
+
+    LEN_CALL = re.compile(r"(?<![\w.])((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*\.\s*len\s*\(\s*\)")
+
+    def _scalar(self, expr, seen, scope=None):
+        expr = expr.strip()
+        # `const STARTING_CLASS_COUNT: usize = STARTING_CLASSES.len();` -- the length of a literal
+        # table is known at parse time, and leaving it unresolved put a plain row count in the
+        # residue that blocks every unclaimed proof.
+        while True:
+            found = self.LEN_CALL.search(expr)
+            if not found:
+                break
+            table = self._table(found.group(1), scope)
+            count = None if table is None else _element_count(table.expr)
+            if count is None:
+                return None
+            expr = expr[: found.start()] + str(count) + expr[found.end() :]
+        # `X as usize`, `X as u32`, and the `::<..>` turbofish are noise for a value.
+        expr = re.sub(r"\s+as\s+[A-Za-z_][A-Za-z0-9_:]*", " ", expr)
+        # A typed literal suffix, `0x10usize` and `0x8007_007e_u32` alike. The underscore form is
+        # the one that matters: without it the `_u32` survives, the arithmetic filter rejects the
+        # `u`, and an ordinary HRESULT constant becomes unresolvable residue.
+        expr = re.sub(r"(?<=[0-9a-fA-F])_?(?:u|i)(?:8|16|32|64|128|size)\b", "", expr)
+        substituted, offset = [], 0
+        for match in IDENTIFIER.finditer(expr):
+            name = match.group(0).replace(" ", "")
+            if re.fullmatch(r"0[xXbBoO][0-9a-fA-F_]*", name):
+                continue
+            resolved = self._lookup(name, seen, scope)
+            if resolved is None or len(resolved) != 1:
+                return None
+            substituted.append((match.start(), match.end(), str(next(iter(resolved)))))
+        for start, end, replacement in reversed(substituted):
+            expr = expr[:start] + replacement + expr[end:]
+        # A multi-line expression is one expression. `const CURSOR_SLOT_MASK: usize = (1 <<
+        # slot::CURSOR_UP)\n | (1 << slot::CURSOR_DOWN) ...` resolved every name and then failed
+        # the arithmetic filter on the NEWLINES, which is a formatting accident recorded as
+        # "unknown value" and, downstream, as a reason no address can be proven unclaimed.
+        expr = " ".join(expr.split())
+        if not ARITHMETIC_ONLY.fullmatch(expr):
+            return None
+        expr = re.sub(r"(?<![/])/(?![/])", "//", expr)
+        # Rust spells bitwise NOT `!`; Python spells it `~`. `!X` is how this tree writes a
+        # sentinel (`const OWN_STEPPER_SLOT_NONE: i32 = !OWN_STEPPER_SLOT_ZERO;`).
+        expr = expr.replace("!", "~")
+        try:
+            value = eval(expr, {"__builtins__": {}}, {})  # noqa: S307 - digits and operators only
+        except Exception:
+            return None
+        return value if isinstance(value, int) else None
+
+    def _table(self, name, scope):
+        """The declaration a `NAME.len()` refers to, preferring the file that wrote it."""
+        last = name.split("::")[-1]
+        pool = self.by_simple.get(last, [])
+        local = [decl for decl in pool if decl.path == scope]
+        chosen = local or pool
+        return chosen[0] if len(chosen) == 1 else None
+
+    def _lookup(self, path, seen, scope=None):
+        """A name at a USE site -> its value(s). Aliases, module paths and enum variants alike.
+
+        `scope` is the FILE the name was written in, and its declarations are consulted first.
+        Without that, a short name that several crates declare independently -- `BASE` is declared
+        three times with three meanings -- reads as ambiguous and drags every constant built on it
+        into the residue, which is a wrong answer (it is not ambiguous at the site that wrote it)
+        that also suppresses every proof.
+        """
+        path = path.strip()
+        if path in BUILTIN:
+            return {BUILTIN[path]}
+        segments = [s for s in path.split("::") if s]
+        if not segments:
+            return None
+        # A declaration already being evaluated is NOT a candidate for its own value. This tree
+        # re-exports a crate-wide address under the SAME simple name in a hundred places
+        # (`const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;`), so
+        # without this a file-local preference resolves the name to the constant currently being
+        # resolved, hits the cycle guard, and reports a perfectly ordinary re-export as residue.
+        def candidates(pool):
+            return [decl for decl in pool if id(decl) not in seen]
+
+        last = segments[-1]
+        if len(segments) >= 2:
+            qualified = "::".join(segments[-2:])
+            pool = candidates(self.by_qualified.get(qualified, []))
+            local = [decl for decl in pool if decl.path == scope]
+            if local:
+                return self._first_value(local, seen)
+            if pool:
+                return self._first_value(pool, seen)
+        pool = candidates(self.by_simple.get(last, []))
+        local = [decl for decl in pool if decl.path == scope]
+        if local:
+            return self._first_value(local, seen)
+        if last in self.aliases and self.aliases[last] != path:
+            through = self._lookup(self.aliases[last], seen, scope)
+            if through is not None:
+                return through
+        if pool:
+            return self._first_value(pool, seen)
+        return None
+
+    def _first_value(self, decls, seen):
+        values = set()
+        for decl in decls:
+            got = self.value_of(decl, seen)
+            if got is not None:
+                values |= got
+        # A name declared twice with DIFFERENT values is AMBIGUOUS, and ambiguous is unresolved:
+        # picking one would be a guess wearing a number.
+        return values if len(values) == 1 else None
+
+    # -- querying ----------------------------------------------------------------------------
+
+    def layout_derived(self, decl, seen=None):
+        """Is this declaration built only from Rust type layout and integer literals?
+
+        `seen` is the ancestor PATH and is popped on the way out, for the same reason it is in
+        `value_of`: as a visited set it also rejects SIBLINGS, so a constant that adds two layout
+        offsets together decided the second one was unknown purely because the first had already
+        been looked at.
+        """
+        seen = set() if seen is None else seen
+        if id(decl) in seen:
+            return False
+        seen.add(id(decl))
+        try:
+            return self._layout_derived(decl, seen)
+        finally:
+            seen.discard(id(decl))
+
+    def _layout_derived(self, decl, seen):
+        decl_path = decl.path
+        # A `{ use a::b; <layout expr> }` block: the imports are not terms of the value.
+        stripped, removed = _strip_layout_calls(re.sub(r"\buse\s+[^;]*;", " ", decl.expr))
+        names = [
+            match.group(0).replace(" ", "")
+            for match in IDENTIFIER.finditer(stripped)
+            if match.group(0).replace(" ", "") not in BUILTIN
+        ]
+        # A literal is not layout-derived, and neither is an empty expression. An expression that
+        # is nothing but ANOTHER layout constant is -- `const ITEM_FUNCTOR_A8: usize =
+        # MENU_ITEM_FUNCTOR_A8_OFFSET;` re-exports a struct offset and is no more an address than
+        # the offset_of! it forwards.
+        if not removed and not names:
+            return False
+        for name in names:
+            pool = self.by_qualified.get(
+                "::".join(name.split("::")[-2:]), []
+            ) or self.by_simple.get(name.split("::")[-1], [])
+            # Same-file first, and never the declaration currently being judged: this tree
+            # re-exports a struct offset under its own name (`const GAME_MAN_FLAG_BC4_OFFSET:
+            # usize = crate::GAME_MAN_FLAG_BC4_OFFSET;`), and matching that against itself makes a
+            # plain forwarding constant look like something unknown.
+            pool = [decl for decl in pool if id(decl) not in seen]
+            local = [decl for decl in pool if decl.path == decl_path]
+            targets = local or pool
+            if not targets or not all(self.layout_derived(t, seen) for t in targets):
+                return False
+        return True
+
+    def residue(self):
+        """Declarations in the address-capable universe that could not be evaluated.
+
+        This is the reason a caller may not say "nothing claims this address". Each entry is a
+        declaration that MIGHT be the address and could not be read.
+        """
+        return [
+            decl
+            for decl in self.decls
+            if self.in_universe(decl)
+            and decl.value is None
+            and decl.band is None
+            and not self.layout_derived(decl)
+        ]
+
+    def universe_size(self):
+        return sum(1 for decl in self.decls if self.in_universe(decl))
+
+    def uses_of(self, symbol):
+        """Every line in `crates/` code that mentions `symbol`, minus its own declarations."""
+        declared = {(decl.path, decl.line) for decl in self.by_simple.get(symbol, [])}
+        token = re.compile(r"\b" + re.escape(symbol) + r"\b")
+        out = []
+        for path, text in self.text.items():
+            for match in token.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                if (path, line) in declared:
+                    continue
+                out.append((path, line))
+        return out
+
+    def claims(self, address):
+        """Everything that claims `address`, and whether "nothing does" is PROVEN.
+
+        Both the RVA and the `0x140000000 +` VA spelling are looked for, because the tree writes
+        an address either way and a resolver that only knew one would repeat the class of miss
+        this module exists to close.
+        """
+        rva = address - IMAGE_BASE if address >= IMAGE_BASE else address
+        wanted = {rva, rva + IMAGE_BASE}
+        result = Claims(rva)
+        result.files_read = self.files_read
+        result.universe = self.universe_size()
+        for decl in self.decls:
+            hit = (decl.value or set()) & wanted
+            in_band = any(
+                low <= value <= high for (low, high) in (decl.band or []) for value in wanted
+            )
+            if hit or in_band:
+                result.declarations.append(decl)
+        claimed_names = {decl.symbol for decl in result.declarations}
+        for alias, target in sorted(self.aliases.items()):
+            if target.split("::")[-1] in claimed_names:
+                result.aliases.append((alias, target))
+        declared_at = {(decl.path, decl.line) for decl in result.declarations}
+        for literal in self.literals:
+            if literal.value in wanted and (literal.path, literal.line) not in declared_at:
+                result.literals.append(literal)
+        for symbol in sorted(claimed_names):
+            result.uses[symbol] = self.uses_of(symbol)
+        # The residue is computed FOR THIS ADDRESS, not in the abstract: a declaration whose type
+        # cannot represent the address is not a declaration that might be it.
+        result.residue = [
+            decl
+            for decl in self.residue()
+            if any(_can_hold(decl.type_text, value) for value in wanted)
+        ]
+        return result
+
+
+_CACHE = {}
+
+
+def index(root=None):
+    """The index for a tree, built once per process."""
+    key = os.path.abspath(root or CRATES)
+    if key not in _CACHE:
+        _CACHE[key] = Index.build(root=key)
+    return _CACHE[key]
+
+
+def describe_claims(result, out=sys.stdout, indent="  "):
+    """Print who claims the address, and say plainly which of the three answers this is."""
+    pad = indent
+    if result.declarations:
+        print(f"{pad}0x{result.address:x} IS DECLARED, so the address carries a feature:", file=out)
+        for decl in result.declarations:
+            uses = result.uses.get(decl.symbol, [])
+            print(
+                f"{pad}  {decl.where()}  {decl.qualified}"
+                f"  ({decl.form}, {len(uses)} use site(s) elsewhere)",
+                file=out,
+            )
+        for alias, target in result.aliases:
+            print(f"{pad}  ...also reachable as `{alias}` (use {target} as {alias})", file=out)
+    if result.literals:
+        print(
+            f"{pad}0x{result.address:x} appears as a BARE LITERAL in code "
+            f"({len(result.literals)} site(s)) -- an address claimed with no constant name:",
+            file=out,
+        )
+        for literal in result.literals[:6]:
+            print(f"{pad}  {literal.where()}  {literal.text}", file=out)
+    if result.declarations or result.literals:
+        return "CLAIMED"
+    if result.proven_unclaimed:
+        print(
+            f"{pad}NOTHING in crates/ claims 0x{result.address:x}. PROVEN: all "
+            f"{result.universe} address-capable declarations were evaluated and none is this "
+            f"address,\n{pad}and no bare literal of it occurs in code.",
+            file=out,
+        )
+        return "PROVEN-UNCLAIMED"
+    print(
+        f"{pad}NOT PROVEN. No declaration or literal for 0x{result.address:x} was FOUND, but "
+        f"{len(result.residue)} of {result.universe} address-capable\n"
+        f"{pad}declarations could not be evaluated, so one of them may be it. This is "
+        f"\"I found no reference\", NOT\n{pad}\"there is no reference\" -- do not delete anything "
+        f"on this evidence. Run:\n{pad}  python3 scripts/rva_symbols.py --residue "
+        f"0x{result.address:x}",
+        file=out,
+    )
+    if result.files_read == 0:
+        print(
+            f"{pad}...and the walk read ZERO files, so nothing above was searched at all.",
+            file=out,
+        )
+    return "NOT-PROVEN"
+
+
+# --------------------------------------------------------------------------------------------
+# Selftest
+# --------------------------------------------------------------------------------------------
+
+# THE MATCHER THIS MODULE REPLACES, frozen as a LITERAL. `check-1170-translation-collisions.py`
+# built its question as `rf"const [A-Z0-9_]+: *usize *= *0x{rva:x}\b"` and, finding no match, told
+# the reader to delete the row. Kept here so the controls below can prove each widening is
+# load-bearing: a control the OLD pattern also catches would pass on the broken gate and prove
+# nothing.
+#
+# SPELLED OUT, NOT COMPOSED. A frozen control assembled from the live pieces is not frozen -- it
+# widens whenever they widen, and "the old matcher misses this" silently becomes "the new matcher
+# misses this", which is the opposite claim. That is exactly how `check-stale-rva-calls.py`'s
+# controls nearly stopped proving anything.
+def legacy_names_the_address(rva, text):
+    """The pre-2026-08-30 test, verbatim: a hex literal in a `const NAME: usize = ...;`."""
+    return re.findall(rf"const [A-Z0-9_]+: *usize *= *0x{rva:x}\b", text, re.I)
+
+
+ENUM_ONLY_SOURCE = """
+#[repr(u32)]
+pub enum MenuTraceRva {
+    TaskEnqueue = 0x007a7b60,
+    MenuJobWait = 0x00b0d400,
+}
+pub const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;
+"""
+
+
+def selftest():
+    import tempfile
+
+    failures = []
+
+    def check(name, got, want):
+        if got != want:
+            failures.append(f"{name}: got {got!r}, want {want!r}")
+
+    def tree(files):
+        scratch = tempfile.mkdtemp()
+        for name, body in files.items():
+            path = os.path.join(scratch, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "w", encoding="utf-8").write(body)
+        return Index.build(root=scratch)
+
+    # THE CONTROL THIS MODULE EXISTS FOR. An address declared ONLY as an enum discriminant. The
+    # old matcher cannot see it, and on that silence the gate recommended deleting the row.
+    check(
+        "the OLD matcher misses an enum-discriminant address (control is non-vacuous)",
+        legacy_names_the_address(0xB0D400, ENUM_ONLY_SOURCE),
+        [],
+    )
+    enum_index = tree({"crates/a/src/lib.rs": ENUM_ONLY_SOURCE})
+    found = enum_index.claims(0xB0D400)
+    check(
+        "an enum discriminant IS found",
+        sorted(d.qualified for d in found.declarations),
+        ["MenuTraceRva::MenuJobWait", "TITLE_MENU_JOB_WAIT_RVA"],
+    )
+    check("...so the address is not unclaimed", found.proven_unclaimed, False)
+    check("...and it is not merely 'found nothing'", found.found_nothing, False)
+
+    # THE OTHER DECLARATION FORMS, each one a spelling that defeated a matcher in this tree.
+    forms = tree(
+        {
+            "crates/a/src/lib.rs": (
+                "pub const PLAIN_RVA: usize = 0x111000;\n"
+                "pub const VA_FORM_RVA: usize = 0x140222000;\n"
+                "const DERIVED_RVA: usize = PLAIN_RVA + 0x10;\n"
+                "pub const TABLE: [usize; 2] = [0x333000, 0x444000];\n"
+                "pub const BAND: core::ops::Range<usize> = 0x555000..0x556000;\n"
+                "#[repr(usize)] pub enum E { A = 0x666000, B, }\n"
+                "static STATIC_RVA: u32 = 0x777000;\n"
+            ),
+            "crates/b/src/lib.rs": (
+                "use crate::a::PLAIN_RVA as RENAMED;\n"
+                "pub const VIA_ALIAS_RVA: usize = RENAMED;\n"
+                "const THROUGH_MODULE: usize = a::VA_FORM_RVA;\n"
+                "fn f() { let spec = HookSpec { rva: 0x888000 }; }\n"
+            ),
+        }
+    )
+    for label, address, want in (
+        ("a plain literal const", 0x111000, True),
+        ("an address written as a VA", 0x222000, True),
+        ("a const derived by arithmetic from another", 0x111010, True),
+        ("an element of a const array", 0x444000, True),
+        ("an address inside a Range band", 0x555800, True),
+        ("an enum discriminant", 0x666000, True),
+        ("an IMPLICIT enum discriminant (previous + 1)", 0x666001, True),
+        ("a static, not a const", 0x777000, True),
+        ("a bare literal in a table field, with no constant name", 0x888000, True),
+        ("an address nothing declares", 0x999000, False),
+    ):
+        got = forms.claims(address)
+        check(label, bool(got.declarations or got.literals), want)
+
+    check(
+        "an alias is reported as another name for a claimed address",
+        [a for a, _ in forms.claims(0x111000).aliases],
+        ["RENAMED"],
+    )
+    check(
+        "the VA spelling and the RVA spelling are the same address",
+        bool(forms.claims(0x140222000).declarations),
+        True,
+    )
+
+    # PROOF, NOT SILENCE. A tree the resolver fully understands may report an address unclaimed.
+    clean = tree({"crates/a/src/lib.rs": "pub const ONLY_RVA: usize = 0x111000;\n"})
+    check("a fully-resolved tree can PROVE an address unclaimed", clean.claims(0x999000).proven_unclaimed, True)
+
+    # ...and one it does NOT fully understand may not, even though it found nothing. This is the
+    # whole point: the two answers must not print the same sentence.
+    murky = tree(
+        {
+            "crates/a/src/lib.rs": (
+                "pub const ONLY_RVA: usize = 0x111000;\n"
+                "pub const OPAQUE_RVA: usize = some_fn(SOMETHING_ELSE);\n"
+            )
+        }
+    )
+    unknown = murky.claims(0x999000)
+    check("an unresolvable declaration is residue", len(unknown.residue), 1)
+    check("...so the address is NOT proven unclaimed", unknown.proven_unclaimed, False)
+    check("...even though nothing was found", unknown.found_nothing, True)
+
+    # A NON-ADDRESS type does not pollute the residue: a `&str` cannot be an address, and letting
+    # one block the proof forever would make the safe answer useless rather than safe.
+    strings = tree(
+        {
+            "crates/a/src/lib.rs": (
+                "pub const ONLY_RVA: usize = 0x111000;\n"
+                'pub const NAME: &str = concat!("a", "b");\n'
+            )
+        }
+    )
+    check("a &str const is outside the address universe", strings.claims(0x999000).proven_unclaimed, True)
+
+    # AN EMPTY WALK IS NOT A CLEAN WALK. A scan that read nothing must never look like proof.
+    empty = tree({})
+    check("a walk that read no files cannot prove anything", empty.claims(0x111000).proven_unclaimed, False)
+
+    # PROSE IS NOT A CLAIM. All three collision addresses appear in crates/ only inside doc
+    # comments that describe the collision; counting those would make every address look live.
+    prose = tree(
+        {
+            "crates/a/src/lib.rs": (
+                "pub const ONLY_RVA: usize = 0x111000;\n"
+                "/// the collision shape (`0x6156c0`, `0x7ad710`) bit us once\n"
+                'const NOTE: &str = "0x7ad710";\n'
+            )
+        }
+    )
+    check("a doc comment does not claim an address", prose.claims(0x7AD710).proven_unclaimed, True)
+
+    # AMBIGUITY IS UNRESOLVED, NOT A GUESS -- but only real ambiguity. A name declared in the
+    # SAME file as the use resolves there; a name that only two OTHER files declare, differently,
+    # does not, and the constant built on it stays residue rather than taking a number on faith.
+    ambiguous = tree(
+        {
+            "crates/a/src/lib.rs": "pub const DUP: usize = 0x1000;\n",
+            "crates/b/src/lib.rs": "pub const DUP: usize = 0x2000;\n",
+            "crates/c/src/lib.rs": "const X: usize = DUP + 1;\n",
+        }
+    )
+    check(
+        "a name two other files declare differently does not resolve",
+        [d.symbol for d in ambiguous.claims(0x999000).residue],
+        ["X"],
+    )
+    scoped = tree(
+        {
+            "crates/a/src/lib.rs": "pub const DUP: usize = 0x1000;\nconst X: usize = DUP + 1;\n",
+            "crates/b/src/lib.rs": "pub const DUP: usize = 0x2000;\n",
+        }
+    )
+    check(
+        "...while the file that declares it resolves its own",
+        bool(scoped.claims(0x1001).declarations),
+        True,
+    )
+
+    # THE REAL TREE. A resolver that only ever runs against its own fixtures is a fixture.
+    live = index()
+    check("the real walk reads a tree", live.files_read > 200, True)
+    check("the real universe is populated", live.universe_size() > 500, True)
+    real = live.claims(0xB0D400)
+    check(
+        "0xb0d400 is claimed in the real tree (the case the old matcher called unclaimed)",
+        sorted({d.qualified for d in real.declarations}),
+        ["MenuTraceRva::MenuJobWait", "TITLE_MENU_JOB_WAIT_RVA"],
+    )
+    check("...and it has live use sites", sum(len(u) for u in real.uses.values()) > 0, True)
+
+    for failure in failures:
+        print(f"rva_symbols selftest FAILED -- {failure}", file=sys.stderr)
+    if failures:
+        return 1
+    print(
+        f"rva_symbols selftest: OK ({live.files_read} sources, {len(live.decls)} declarations, "
+        f"{live.universe_size()} address-capable, {len(live.residue())} unresolved)"
+    )
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("address", nargs="*", help="an RVA or VA, e.g. 0xb0d400 or 0x140b0d400")
+    parser.add_argument("--residue", action="store_true", help="list what could not be evaluated")
+    parser.add_argument("--selftest", action="store_true")
+    args = parser.parse_args()
+    if args.selftest:
+        return selftest()
+    live = index()
+    if args.residue:
+        # With an address, the residue is the one that matters: a `u8` cannot hold 0x7ad710, so a
+        # byte-string constant is not a declaration that "might be it". Without one, the whole
+        # unevaluated set is printed, which is always the larger number.
+        if args.address:
+            for text in args.address:
+                value = int(text, 16 if text.lower().startswith("0x") else 0)
+                residue = live.claims(value).residue
+                print(
+                    f"\n0x{value:x}: {len(residue)} of {live.universe_size()} address-capable "
+                    f"declaration(s) could not be evaluated AND could hold this address."
+                )
+                for decl in residue:
+                    print(
+                        f"  {decl.where()}  {decl.qualified}: {decl.type_text} = "
+                        f"{' '.join(decl.expr.split())[:70]}"
+                    )
+            return 0
+        residue = live.residue()
+        print(
+            f"{len(residue)} of {live.universe_size()} address-capable declaration(s) could not be "
+            f"evaluated at all.\nWhile this is non-empty, no address can be PROVEN unclaimed. Pass "
+            f"an address as well to see\nonly the ones wide enough to hold it, which is a much "
+            f"shorter list."
+        )
+        for decl in residue:
+            print(
+                f"  {decl.where()}  {decl.qualified}: {decl.type_text} = "
+                f"{' '.join(decl.expr.split())[:70]}"
+            )
+        return 0
+    if not args.address:
+        parser.error("give an address, or --residue / --selftest")
+    for text in args.address:
+        value = int(text, 16 if text.lower().startswith("0x") else 0)
+        print(f"\n0x{value:x}:")
+        describe_claims(live.claims(value))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

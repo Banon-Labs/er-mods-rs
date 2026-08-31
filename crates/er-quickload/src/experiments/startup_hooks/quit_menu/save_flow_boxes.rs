@@ -76,7 +76,18 @@ pub(crate) static SAVE_FLOW_BOX_RECIPE: OnceLock<Option<SaveFlowBoxRecipe>> = On
 /// Resolve an RVA and confirm the live bytes still start with the prologue this address was
 /// verified against. Same fail-closed shape as `er_save_suppress::verify`: a mismatch means
 /// the running image is not the build these addresses came from, so we refuse to call it.
-pub(crate) fn save_flow_verify_rva(rva: u32, expected: &[u8], name: &str) -> Option<usize> {
+/// `mask` is the generated companion of `expected` (`<NAME>_MASK`): 0xff = compare exactly,
+/// 0x00 = a RIP-relative displacement. Those four bytes re-encode on every game build -- both
+/// the instruction and the global it names move -- so pinning them fails a target that is
+/// byte-for-byte the right function. `SAVE_REQUEST_RETRACT_B72_SIG` / `..._B73_SIG` disarmed
+/// exactly that way on 1.17. Nothing else is ever ignored; see
+/// `er_game_base::prologue::matches_masked`.
+pub(crate) fn save_flow_verify_rva(
+    rva: u32,
+    expected: &[u8],
+    mask: &[u8],
+    name: &str,
+) -> Option<usize> {
     let address = match game_rva(rva) {
         Ok(address) => address,
         Err(err) => {
@@ -94,9 +105,11 @@ pub(crate) fn save_flow_verify_rva(rva: u32, expected: &[u8], name: &str) -> Opt
         ));
         return None;
     }
-    if window != expected {
+    if !er_game_base::prologue::matches_masked(window, expected, mask) {
+        let ignored = er_game_base::prologue::ignored_count(mask);
+        let differing = er_game_base::prologue::compared_mismatches(window, expected, mask);
         append_autoload_debug(format_args!(
-            "save-flow-box: {name} @0x{address:x}: prologue mismatch (got {window:02x?}, want {expected:02x?}) -- refusing to call the MessageBoxBuilder recipe on this build"
+            "save-flow-box: {name} @0x{address:x}: prologue mismatch in {differing} compared byte(s) ({ignored} relocation byte(s) ignored) (got {window:02x?}, want {expected:02x?}) -- refusing to call the MessageBoxBuilder recipe on this build"
         ));
         return None;
     }
@@ -114,31 +127,37 @@ pub(crate) fn save_flow_box_recipe() -> Option<&'static SaveFlowBoxRecipe> {
                     ctor: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA,
                         SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG,
+                        SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG_MASK,
                         "MessageBoxBuilder ctor",
                     )?,
                     add_yes: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_ADD_YES_RVA,
                         SYSTEM_QUIT_MSGBOX_ADD_YES_SIG,
+                        SYSTEM_QUIT_MSGBOX_ADD_YES_SIG_MASK,
                         "MessageBoxBuilder AddYes",
                     )?,
                     add_no: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_ADD_NO_RVA,
                         SYSTEM_QUIT_MSGBOX_ADD_NO_SIG,
+                        SYSTEM_QUIT_MSGBOX_ADD_NO_SIG_MASK,
                         "MessageBoxBuilder AddNo",
                     )?,
                     default_last: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA,
                         SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG,
+                        SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG_MASK,
                         "MessageBoxBuilder DefaultLast",
                     )?,
                     finalize: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_FINALIZE_RVA,
                         SYSTEM_QUIT_MSGBOX_FINALIZE_SIG,
+                        SYSTEM_QUIT_MSGBOX_FINALIZE_SIG_MASK,
                         "MessageBoxBuilder Finalize",
                     )?,
                     dtor: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_DTOR_RVA,
                         SYSTEM_QUIT_MSGBOX_DTOR_SIG,
+                        SYSTEM_QUIT_MSGBOX_DTOR_SIG_MASK,
                         "MessageBoxBuilder dtor",
                     )?,
                     menu_string: game_rva(MENU_STRING_FROM_WIDE_RVA).ok()?,
@@ -608,6 +627,7 @@ pub(crate) fn install_menu_job_emit_result_hook() {
     let Some(addr) = save_flow_verify_rva(
         MENU_JOB_EMIT_RESULT_RVA,
         MENU_JOB_EMIT_RESULT_SIG,
+        MENU_JOB_EMIT_RESULT_SIG_MASK,
         "MenuJob::EmitResult",
     ) else {
         return;

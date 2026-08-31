@@ -4,45 +4,43 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, Once, OnceLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use er_hook::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
+use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use er_tpf::{DdsHeaderMode, DdsImage, Tpf};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
 use crate::compat::*;
 #[allow(unused_imports)]
 use crate::compat::*;
-
-
 
 pub fn arm_product_autoload_from_request(request: &SaveLoader) {
     // Product autoload is the release/default behavior. Do not make it depend on smoke-only env
@@ -179,10 +177,21 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     // occupies a moved global; the fault-tolerant reader is what makes a REFUSAL survivable,
     // because `game_data_addr` answers 0 when it will not translate and a raw `*(0 as *const _)`
     // turns a refusal into a crash. A probe must not be able to kill the boot it is observing.
-    let registry = read_global_ptr(module_base, SELECTBOT_REGISTRY_GLOBAL_RVA, "SELECTBOT_REGISTRY_GLOBAL_RVA");
-    let load_gate =
-        read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
-    let input_manager = read_global_ptr(module_base, SELECTBOT_INPUT_MANAGER_GLOBAL_RVA, "SELECTBOT_INPUT_MANAGER_GLOBAL_RVA");
+    let registry = read_global_ptr(
+        module_base,
+        SELECTBOT_REGISTRY_GLOBAL_RVA,
+        "SELECTBOT_REGISTRY_GLOBAL_RVA",
+    );
+    let load_gate = read_global_u8(
+        module_base,
+        SELECTBOT_LOAD_GATE_RVA,
+        "SELECTBOT_LOAD_GATE_RVA",
+    );
+    let input_manager = read_global_ptr(
+        module_base,
+        SELECTBOT_INPUT_MANAGER_GLOBAL_RVA,
+        "SELECTBOT_INPUT_MANAGER_GLOBAL_RVA",
+    );
     let pump_ran = if input_manager != TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { *((input_manager + SELECTBOT_PUMP_RAN_FLAG_OFFSET) as *const u8) }
     } else {
@@ -218,7 +227,11 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
                 TITLE_PROCEED_GATE_SET_VALUE,
             )
         };
-        let after = read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
+        let after = read_global_u8(
+            module_base,
+            SELECTBOT_LOAD_GATE_RVA,
+            "SELECTBOT_LOAD_GATE_RVA",
+        );
         append_autoload_debug(format_args!(
             "title_proceed_gate: stored={stored} value={after} at state {state} tick={tick}"
         ));
@@ -278,10 +291,19 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
                 unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
             let load14 =
                 unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
-            let latch =
-        read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
+            let latch = read_global_u8(
+                module_base,
+                SELECTBOT_LOAD_GATE_RVA,
+                "SELECTBOT_LOAD_GATE_RVA",
+            );
             let b72 = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
-            let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
+            let csfeman = unsafe {
+                *((er_game_base::mem::game_data_addr(
+                    module_base,
+                    CSFEMAN_SINGLETON_RVA,
+                    "CSFEMAN_SINGLETON_RVA",
+                )) as *const usize)
+            };
             append_autoload_debug(format_args!(
                 "native_autoload: observe slot={slot_now} b80={load_in_progress} load14={load14} latch={latch} b72={b72} csfeman=0x{csfeman:x} tick={tick}"
             ));
@@ -297,17 +319,35 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
     // CORRECTED recipe (native-continue-and-slotn-recipe-2026): the latch
     // 0x143d856a0 must stay CLEAR; the arm flag is [GameMan+0xb72]=1. (The old
     // code set the latch to 1, which the disasm proves aborts the load.)
-    let latch_before =
-        read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
-    let set_save_slot: unsafe extern "system" fn(i32) =
-        unsafe { std::mem::transmute(match title_fn(FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA, "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA") { Some(address) => address, None => return }) };
+    let latch_before = read_global_u8(
+        module_base,
+        SELECTBOT_LOAD_GATE_RVA,
+        "SELECTBOT_LOAD_GATE_RVA",
+    );
+    let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { set_save_slot(slot) };
     let slot_after = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
     unsafe {
         *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
     }
     NATIVE_AUTOLOAD_ARMED.store(true, Ordering::SeqCst);
-    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
+    let csfeman = unsafe {
+        *((er_game_base::mem::game_data_addr(
+            module_base,
+            CSFEMAN_SINGLETON_RVA,
+            "CSFEMAN_SINGLETON_RVA",
+        )) as *const usize)
+    };
     append_autoload_debug(format_args!(
         "native_autoload: armed slot={slot_after} b72=1 latch_left={latch_before} b80={load_in_progress} csfeman=0x{csfeman:x} tick={tick}"
     ));
@@ -336,20 +376,41 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
-    if dialog_vt != er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
+    if dialog_vt
+        != er_game_base::mem::game_data_addr(
+            module_base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "title-dialog-cleanup: skipped frame={frame} dialog=0x{dialog:x} vt=0x{dialog_vt:x} expected=0x{:x}",
-            er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA")
+            er_game_base::mem::game_data_addr(
+                module_base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA"
+            )
         ));
         return;
     }
-    let cleanup: unsafe extern "system" fn(usize) -> usize =
-        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_CLEANUP_RVA, "TITLE_TOP_DIALOG_CLEANUP_RVA") { Some(address) => address, None => return }) };
+    let cleanup: unsafe extern "system" fn(usize) -> usize = unsafe {
+        std::mem::transmute(
+            match title_fn(TITLE_TOP_DIALOG_CLEANUP_RVA, "TITLE_TOP_DIALOG_CLEANUP_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let ret = unsafe { cleanup(dialog) };
     let mut remaining_slots = TITLE_OWNER_SCAN_START_ADDRESS;
     let mut idx = ACTIVE_SCREEN_SLOT_START;
     while idx < ACTIVE_SCREEN_ARRAY_SLOTS {
-        let slot = er_game_base::mem::game_data_addr(module_base, ACTIVE_SCREEN_ARRAY_RVA, "ACTIVE_SCREEN_ARRAY_RVA") + idx * ACTIVE_SCREEN_ARRAY_STRIDE;
+        let slot = er_game_base::mem::game_data_addr_offset(
+            module_base,
+            ACTIVE_SCREEN_ARRAY_RVA,
+            "ACTIVE_SCREEN_ARRAY_RVA",
+            idx * ACTIVE_SCREEN_ARRAY_STRIDE,
+        );
         let ptr = unsafe { safe_read_usize(slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         if ptr != TITLE_OWNER_SCAN_START_ADDRESS {
             remaining_slots += ACTIVE_SCREEN_SLOT_STEP;
@@ -358,7 +419,11 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
     }
     append_autoload_debug(format_args!(
         "title-dialog-cleanup: called 0x{:x} frame={frame} owner=0x{owner_addr:x} dialog=0x{dialog:x} ret=0x{ret:x} remaining_active_slots={remaining_slots}",
-        er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_CLEANUP_RVA, "TITLE_TOP_DIALOG_CLEANUP_RVA")
+        er_game_base::mem::game_data_addr(
+            module_base,
+            TITLE_TOP_DIALOG_CLEANUP_RVA,
+            "TITLE_TOP_DIALOG_CLEANUP_RVA"
+        )
     ));
 }
 /// AUTONOMOUS press-any-button -> open-menu (zero-input): drive the title to the open main menu
@@ -383,7 +448,14 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     } else {
         0
     };
-    if dialog == 0 || dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
+    if dialog == 0
+        || dialog_vt
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
+    {
         return;
     }
     let a40 = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
@@ -397,9 +469,27 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     // Require the dialog SETTLED in Loop: the registrar internally set_state(TextFadeOut) re-checks
     // node flags&0x8f>=2 and bails if not settled (FadeIn would no-op / corrupt). Read-only probe.
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return }) };
-    let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) } != OWN_STEPPER_FALSE;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_TOP_DIALOG_IS_IN_STATE_RVA,
+                "TITLE_TOP_DIALOG_IS_IN_STATE_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let in_loop = unsafe {
+        is_in_state(
+            sm,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_STATE_DESC_LOOP_RVA,
+                "TITLE_STATE_DESC_LOOP_RVA",
+            ),
+        )
+    } != OWN_STEPPER_FALSE;
     if !in_loop {
         return;
     }
@@ -409,17 +499,36 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     // the byte left STALE may route the registrar into an error-modal branch. Replicate the press-accept
     // set (subagent-C static RE: product native-open with this byte set reached the menu with 0 msgbox).
     // Null-/readability-guarded; no save write, no input. bd er-effects-rs-0ye + title-accept-to-registrar-narrow-path-143d5dea8.
-    let transition_singleton =
-        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, TITLE_MENU_TRANSITION_SINGLETON_RVA, "TITLE_MENU_TRANSITION_SINGLETON_RVA")) }.unwrap_or(null);
+    let transition_singleton = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            TITLE_MENU_TRANSITION_SINGLETON_RVA,
+            "TITLE_MENU_TRANSITION_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(null);
     if transition_singleton != null && unsafe { safe_read_usize(transition_singleton) }.is_some() {
         unsafe { *(transition_singleton as *mut u8) = TITLE_MENU_TRANSITION_FLAG_SET_VALUE };
         append_autoload_debug(format_args!(
             "tfc-auto-open: set menu-transition mode byte [*(0x{:x})]+0=1 before open-menu (route registrar in-place)",
-            er_game_base::mem::game_data_addr(base, TITLE_MENU_TRANSITION_SINGLETON_RVA, "TITLE_MENU_TRANSITION_SINGLETON_RVA")
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_MENU_TRANSITION_SINGLETON_RVA,
+                "TITLE_MENU_TRANSITION_SINGLETON_RVA"
+            )
         ));
     }
-    let open_menu: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA") { Some(address) => address, None => return }) };
+    let open_menu: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_TOP_DIALOG_OPEN_MENU_RVA,
+                "TITLE_TOP_DIALOG_OPEN_MENU_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         open_menu(dialog)
     }));
@@ -427,7 +536,11 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     let _ = null;
     append_autoload_debug(format_args!(
         "tfc-auto-open: fired open-menu registrar 0x{:x}(dialog=0x{dialog:x}) on Loop+a40==0 (panicked={}) -- autonomous press-any-button equivalent, NO input",
-        er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA"),
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_OPEN_MENU_RVA,
+            "TITLE_TOP_DIALOG_OPEN_MENU_RVA"
+        ),
         r.is_err()
     ));
 }
@@ -483,7 +596,14 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     } else {
         0
     };
-    if dialog == 0 || dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
+    if dialog == 0
+        || dialog_vt
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
+    {
         return;
     }
     // Require the dialog SETTLED in Loop FIRST (read-only probe of the live state by name, no side
@@ -495,9 +615,27 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     // "set [..]=1 on settled TitleTopDialog" line, jumping straight to PRESS BUTTON ready). Returning here
     // while not-in-Loop preserves the one-shot so the byte is set once the title genuinely settles.
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return }) };
-    let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) } != OWN_STEPPER_FALSE;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_TOP_DIALOG_IS_IN_STATE_RVA,
+                "TITLE_TOP_DIALOG_IS_IN_STATE_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let in_loop = unsafe {
+        is_in_state(
+            sm,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_STATE_DESC_LOOP_RVA,
+                "TITLE_STATE_DESC_LOOP_RVA",
+            ),
+        )
+    } != OWN_STEPPER_FALSE;
     if !in_loop {
         return; // not settled (e.g. return-title teardown) -> wait; do NOT consume the one-shot
     }
@@ -512,13 +650,24 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     let first_arm = !TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst);
     let press_start_proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
     let press_start_vt = unsafe { safe_read_usize(press_start_proxy) }.unwrap_or(0);
-    let press_start_context = if press_start_vt == er_game_base::mem::game_data_addr(base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") {
+    let press_start_context = if press_start_vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            SCENE_OBJ_PROXY_VTABLE_RVA,
+            "SCENE_OBJ_PROXY_VTABLE_RVA",
+        ) {
         unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
             .unwrap_or(0)
     } else {
         0
     };
-    if press_start_vt == er_game_base::mem::game_data_addr(base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") {
+    if press_start_vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            SCENE_OBJ_PROXY_VTABLE_RVA,
+            "SCENE_OBJ_PROXY_VTABLE_RVA",
+        )
+    {
         unsafe {
             hide_title_press_start_proxy(base, dialog, press_start_proxy, press_start_context)
         };
@@ -582,7 +731,14 @@ pub unsafe fn force_offline_connection_bytes(base: usize) {
     const IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
     const SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let game_man = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, GAME_SAVE_SLOT_SINGLETON_RVA, "GAME_SAVE_SLOT_SINGLETON_RVA")) }.unwrap_or(null);
+    let game_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_SAVE_SLOT_SINGLETON_RVA,
+            "GAME_SAVE_SLOT_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(null);
     if game_man == null {
         return;
     }
@@ -631,7 +787,14 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         return;
     }
     // Require "the rest of GameMan is set up": the GetSaveSlot singleton (*(base+0x3d69918)) non-null.
-    let gm_singleton = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, GAME_SAVE_SLOT_SINGLETON_RVA, "GAME_SAVE_SLOT_SINGLETON_RVA")) }.unwrap_or(0);
+    let gm_singleton = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_SAVE_SLOT_SINGLETON_RVA,
+            "GAME_SAVE_SLOT_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if gm_singleton == null || gm_singleton == 0 {
         return;
     }
@@ -642,7 +805,14 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     } else {
         0
     };
-    if dialog == 0 || dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
+    if dialog == 0
+        || dialog_vt
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
+    {
         return;
     }
     // Require the MAIN MENU to be OPEN, not the bare press-any-button screen. State 10
@@ -731,7 +901,11 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         "fire-tfc-continue: SET *(tfc+0x{:x})=1 (was {before}) + mss+0x{:x}=slot {want_slot} (tfc=0x{tfc:x} dialog=0x{dialog:x} owner=0x{owner:x} mss={mss:?} gm_singleton=0x{gm_singleton:x}) -- now INVOKING selector 0x{:x} (NO input)",
         TFC_DISPATCH_STATE_14C_OFFSET,
         MSS_SAVE_SLOT_1200_OFFSET,
-        er_game_base::mem::game_data_addr(base, TITLE_CONTINUE_SELECTOR_RVA, "TITLE_CONTINUE_SELECTOR_RVA")
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CONTINUE_SELECTOR_RVA,
+            "TITLE_CONTINUE_SELECTOR_RVA"
+        )
     ));
     // INVOKE the Continue-item selector that consumes tfc+0x14c (it is NOT pumped from the idle menu).
     // Selector 0x1409a8eb0(rcx = &dialog_slot = owner+0xe0, rdx = out MenuJobResult*): reads
@@ -741,8 +915,14 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     let dialog_slot = owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
     let mut out_job: [usize; 4] = [0; 4];
     let out_ptr = out_job.as_mut_ptr() as usize;
-    let selector: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(match title_fn(TITLE_CONTINUE_SELECTOR_RVA, "TITLE_CONTINUE_SELECTOR_RVA") { Some(address) => address, None => return }) };
+    let selector: unsafe extern "system" fn(usize, usize) -> usize = unsafe {
+        std::mem::transmute(
+            match title_fn(TITLE_CONTINUE_SELECTOR_RVA, "TITLE_CONTINUE_SELECTOR_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let sel_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         selector(dialog_slot, out_ptr)
     }));
@@ -804,8 +984,14 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     // Assign(rcx = dest=&owner+0x130 active slot, rdx = &scratch, r8 = &src): unref old, install ours.
     let mut scratch: usize = 0;
     let mut src: usize = job;
-    let assign: unsafe extern "system" fn(usize, usize, usize) =
-        unsafe { std::mem::transmute(match title_fn(MENU_JOB_ASSIGN3_RVA, "MENU_JOB_ASSIGN3_RVA") { Some(address) => address, None => return }) };
+    let assign: unsafe extern "system" fn(usize, usize, usize) = unsafe {
+        std::mem::transmute(
+            match title_fn(MENU_JOB_ASSIGN3_RVA, "MENU_JOB_ASSIGN3_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let scratch_ptr = (&raw mut scratch) as usize;
     let src_ptr = (&raw mut src) as usize;
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {

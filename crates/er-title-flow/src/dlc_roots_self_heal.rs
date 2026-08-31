@@ -103,8 +103,11 @@ pub unsafe fn dlc_roots_self_heal_tick() {
         return;
     }
 
-    let csdlc = match unsafe { safe_read_usize(base + CSDLC_SINGLETON_RVA) } {
-        Some(p) if p > 0x10000 => p,
+    // Resolved for the running build. CSDLC moved 0x3d86bd8 -> 0x3d8ac58 on 1.17; the raw read
+    // would have succeeded against the 1.16.2 slot and handed a neighbouring global to the
+    // native roots refill below, which writes through it.
+    let csdlc = match er_game_base::mem::read_global_ptr(base, CSDLC_SINGLETON_RVA, "CSDLC_SINGLETON_RVA") {
+        p if p > 0x10000 => p,
         _ => return,
     };
     let orig = DLC_ROOTS_REFILL_ORIG.load(Ordering::SeqCst);

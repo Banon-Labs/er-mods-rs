@@ -17,6 +17,12 @@ use std::ptr::null_mut;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Whether an absolute address is a legitimate place to write into the RUNNING image, asked of
+/// that image's own function table. It is what a RUNTIME-DERIVED address gets instead of a
+/// version translation -- see the module docs for why an AOB hit needs the second question and
+/// cannot answer the first.
+mod detour_site;
+
 // ============================================================================
 // LOGGING SEAM. `mh.rs` logged union-chain and registry-collision events through the product DLL's
 // `telemetry::append_autoload_debug`. That sink is product-specific, so this shared crate calls
@@ -45,7 +51,7 @@ pub fn set_hook_logger(logger: HookLogFn) {
     er_game_base::game_build::set_address_logger(logger);
 }
 
-fn hook_log(args: std::fmt::Arguments<'_>) {
+pub(crate) fn hook_log(args: std::fmt::Arguments<'_>) {
     let raw = HOOK_LOGGER.load(Ordering::Acquire);
     if raw != 0 {
         // SAFETY: `raw` is only ever a `HookLogFn` stored by `set_hook_logger`.
@@ -134,6 +140,45 @@ pub unsafe fn register_union_hook(
     unsafe { register_union_hook_resolved(target, handler, orig_slot) }
 }
 
+/// [`register_union_hook`] for an address the caller DERIVED AT RUNTIME on the running build.
+///
+/// The precondition, in one line: the caller found this address by scanning or reading the image
+/// that is actually loaded -- an AOB hit in `.text`, a function pointer read out of a live vtable
+/// -- so it is already correct for this build and there is nothing to translate.
+///
+/// # Why this is not [`register_union_hook`] with the gate turned off
+///
+/// It is a DIFFERENT gate, not a missing one. The translating entry point asks a table keyed by
+/// 1.16.2 RVAs where an address moved to; a 1.17 address is not one of that table's keys, so the
+/// honest answer for a scanned address is REFUSED -- and on 2026-08-30 that refusal was turning
+/// off `er-armament-icons`' and `er-invasion-warp`' GFx tag-parse hooks for an address the scan
+/// had got RIGHT. Adding a ledger row would have been worse: the scan already returns the 1.17
+/// address, so a row would translate it a second time, `+0x1e00` into the middle of a live body.
+///
+/// What replaces the translation is `detour_site::write_site_is_sound`, which asks the RUNNING
+/// image's own `.pdata` whether this is a function entry (or an unwind-less leaf) with room for
+/// MinHook's five bytes, and refuses an address inside another function's body. A wrong absolute
+/// address is exactly as fatal as a stale one, so something has to ask.
+///
+/// # Safety
+/// Same contract as [`register_union_hook`], plus: `target` must have been derived from the
+/// running image. Passing a constant here is a bug this cannot detect -- it would be a 1.16.2
+/// address asserted to be a 1.17 one.
+pub unsafe fn register_union_hook_runtime_derived(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    #[cfg(windows)]
+    {
+        let what = format!("register_union_hook_runtime_derived 0x{target:x}");
+        if !detour_site::write_site_is_sound(target, detour_site::DETOUR_PATCH_BYTES, &what) {
+            return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+        }
+    }
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+}
+
 /// [`register_union_hook`] on an address that has ALREADY been resolved for the running build.
 ///
 /// RESOLUTION IS NOT IDEMPOTENT, and assuming it was is what made this split necessary. The
@@ -143,6 +188,20 @@ pub unsafe fn register_union_hook(
 /// to `register_shared_hook_with_budget`, which resolved again; `er-armament-icons` lost its
 /// file-open observer at 0x1411ced80 to `MH_ERROR_UNSUPPORTED_FUNCTION` even though that address is
 /// in the verified table and its 1.17 prologue is byte-identical and perfectly hookable.
+///
+/// # It stays PRIVATE, and the two ways in are the point
+///
+/// "Already correct for the running build" is true for two different reasons, and a caller has to
+/// say WHICH, because the checks they owe are different:
+///
+/// * [`register_union_hook`] resolved a 1.16.2 constant through the translation table, which is
+///   also what audits the destination as a detour target;
+/// * [`register_union_hook_runtime_derived`] took an address out of the running image, where there
+///   is nothing to translate, and audits it against that image's own function table instead.
+///
+/// A `pub` un-audited entry point here would be a third way -- one that skips BOTH -- and it would
+/// look exactly like the two legitimate ones at a call site. The shared path no longer resolves
+/// twice either: `register_shared_hook_with_budget` resolves once per branch, after the branch.
 ///
 /// # Safety
 /// Same contract as [`register_union_hook`], plus: `target` must already be correct for the
@@ -336,14 +395,11 @@ pub unsafe fn register_shared_hook(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<HookRoute, MH_STATUS> {
-    let target = match resolve_target(target, &format!("register_shared_hook 0x{target:x}")) {
-        Some(resolved) => resolved,
-        None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
-    };
-    // The RESOLVED path, deliberately: resolving twice refuses. See
-    // [`register_union_hook_resolved`] for what that cost.
+    // UNRESOLVED, deliberately -- see [`register_shared_hook_with_budget`], which owns the single
+    // resolve and must own it AFTER the branch, because the two branches resolve in different
+    // images.
     unsafe {
-        register_shared_hook_resolved(
+        register_shared_hook_with_budget(
             target,
             handler,
             orig_slot,
@@ -361,6 +417,25 @@ pub unsafe fn register_shared_hook(
 /// long before `CSTaskImp` exists -- so one probe is already the right answer there, and the
 /// polling budget would only be a stall on the game thread when the product is genuinely absent.
 ///
+/// # THE SINGLE RESOLVE, AND WHY IT HAPPENS AFTER THE BRANCH (2026-08-30)
+///
+/// `target` arrives UNRESOLVED and each branch resolves it exactly once, in the image that will
+/// own the detour. This used to resolve first and hand the RESOLVED address to both branches --
+/// and the product branch then resolved it a SECOND time, inside `er_quickload.dll`, because the
+/// `er_effects_union_register` export calls [`register_union_hook`] like any other caller.
+///
+/// A second resolve normally misses and `already_translated_in` hands the address back unchanged,
+/// which is why this survived. But a 1.17 destination can also be some OTHER row's 1.16.2 source,
+/// and then the second lookup does not miss -- it TRANSLATES AGAIN, to a third, unrelated
+/// function. Measured on er-reload-trace's own hook set: `native_submit` `0x7ac890 -> 0x7ad710`,
+/// and `0x7ad710` is itself a tracked source, `-> 0x7ae590`. Three detour rows have that collision
+/// shape (`0x6156c0`, `0x7ad710`, `0xbbbd90`), and `already_translated_in`'s own doc names two of
+/// them, because from a bare address the two cases are INDISTINGUISHABLE: the table cannot tell
+/// whether it is being asked about a source or about a destination that happens to look like one.
+///
+/// That is why the fix is structural rather than a smarter table. Resolve once, at one layer, and
+/// leave no path that hands an already-resolved address to something that resolves again.
+///
 /// # Safety
 /// Same contract as [`register_shared_hook`].
 #[cfg(windows)]
@@ -371,30 +446,11 @@ pub unsafe fn register_shared_hook_with_budget(
     tries: u32,
     sleep_ms: u32,
 ) -> Result<HookRoute, MH_STATUS> {
-    let target = match resolve_target(
-        target,
-        &format!("register_shared_hook_with_budget 0x{target:x}"),
-    ) {
-        Some(resolved) => resolved,
-        None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
-    };
-    unsafe { register_shared_hook_resolved(target, handler, orig_slot, tries, sleep_ms) }
-}
-
-/// [`register_shared_hook_with_budget`] on an already-resolved address. See
-/// [`register_union_hook_resolved`] for why the split exists.
-///
-/// # Safety
-/// Same contract, plus: `target` must already be correct for the running build.
-#[cfg(windows)]
-unsafe fn register_shared_hook_resolved(
-    target: usize,
-    handler: UnionFn,
-    orig_slot: &'static AtomicUsize,
-    tries: u32,
-    sleep_ms: u32,
-) -> Result<HookRoute, MH_STATUS> {
     if let Some(register) = resolve_product_union_register(tries, sleep_ms) {
+        hook_log(format_args!(
+            "HOOK SHARED (0x{target:x}): handing the UNRESOLVED address to er_quickload.dll's \
+             union, which owns the single resolve for this branch"
+        ));
         // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
         // own static is sound; our image outlives every dispatch.
         let slot_ptr = orig_slot.as_ptr();
@@ -406,6 +462,14 @@ unsafe fn register_shared_hook_resolved(
             code => Err(mh_status_from_i32(code)),
         };
     }
+    // The product is absent, so THIS image owns the one resolve.
+    let target = match resolve_target(
+        target,
+        &format!("register_shared_hook_with_budget 0x{target:x}"),
+    ) {
+        Some(resolved) => resolved,
+        None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
+    };
     unsafe { register_union_hook_resolved(target, handler, orig_slot) }
         .map(|()| HookRoute::LocalUnion)
 }
@@ -550,11 +614,16 @@ impl MH_STATUS {
 // happily. So the check has to be "is this the build these addresses came from", asked once, here,
 // where every detour in every DLL of this workspace passes through.
 //
-// Scope is deliberately the DETOUR installers only. The raw byte primitives below
-// (`write_code_byte`, `patch_3byte_stub`, `apply_xor_ret_stub`) stay ungated: the last two
-// validate the byte they overwrite and abort on a mismatch, and `write_code_byte` is what
-// `er-ersc-sigshim` uses to repair Seamless Co-op on exactly the builds this gate calls
-// unsupported -- gating it would break the one thing that currently works on 1.17.
+// Scope is the DETOUR installers plus the two RVA-taking byte primitives. `patch_3byte_stub` and
+// `apply_xor_ret_stub` were ungated until 2026-08-30 on the theory that validating the overwritten
+// byte was gate enough; it is not. They take a 1.16.2 `rva`, and on 1.17 all three call sites hit a
+// byte that is simply different, so each aborted reporting a signature mismatch while the map knew
+// exactly where the function had gone. They now resolve first and REFUSE when nothing knows.
+//
+// `write_code_byte` stays ungated on purpose: it takes an ABSOLUTE address that its callers
+// discover themselves (`er-ersc-sigshim` rebuilds Seamless Co-op's lost AOB landmarks in a FOREIGN
+// module on exactly the builds this gate calls unsupported), so there is no RVA to translate and
+// gating it would break the one thing that currently works on 1.17.
 // ============================================================================
 
 // Verified 1.16.2 -> 1.17 address pairs, generated by `build.rs` from
@@ -617,6 +686,51 @@ impl MhHook {
                 Some(resolved) => resolved as *mut c_void,
                 None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
             };
+        unsafe { Self::create(addr, hook_impl) }
+    }
+
+    /// [`MhHook::new`] for an address the caller DERIVED AT RUNTIME on the running build.
+    ///
+    /// The precondition, in one line: the caller found this address by scanning or reading the
+    /// image that is actually loaded -- an AOB hit in `.text`, a function pointer read out of a
+    /// live vtable -- so it is already correct for this build and there is nothing to translate.
+    ///
+    /// This is the [`MhHook`] half of [`register_union_hook_runtime_derived`], and the reasoning
+    /// is all there: translation is REFUSED for a scanned address rather than skipped, adding a
+    /// ledger row for one would translate it a second time, and what stands in for the version
+    /// gate is the running image's own `.pdata` -- entry or unwind-less leaf with room for
+    /// MinHook's five bytes, never an address inside another function's body.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`MhHook::new`], plus: `addr` must have been derived from the running
+    /// image. Passing a constant here is a bug this cannot detect -- it would be a 1.16.2 address
+    /// asserted to be a 1.17 one.
+    pub unsafe fn new_runtime_derived(
+        addr: *mut c_void,
+        hook_impl: *mut c_void,
+    ) -> Result<Self, MH_STATUS> {
+        #[cfg(windows)]
+        {
+            let what = format!("MhHook::new_runtime_derived 0x{:x}", addr as usize);
+            if !detour_site::write_site_is_sound(
+                addr as usize,
+                detour_site::DETOUR_PATCH_BYTES,
+                &what,
+            ) {
+                return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+            }
+        }
+        unsafe { Self::create(addr, hook_impl) }
+    }
+
+    /// The MinHook call itself, shared by both entry points so they can differ ONLY in how `addr`
+    /// was established. Duplicating these four lines is how the two would drift apart.
+    ///
+    /// # Safety
+    ///
+    /// `addr` must already be correct for the running build, by whichever of the two routes.
+    unsafe fn create(addr: *mut c_void, hook_impl: *mut c_void) -> Result<Self, MH_STATUS> {
         let mut trampoline = null_mut();
         let status = unsafe { MH_CreateHook(addr, hook_impl, &mut trampoline) };
         registry_record(addr as usize, hook_impl as usize, status);
@@ -784,10 +898,10 @@ impl CodePageOps for Win32CodePage {
 /// byte landed: a caller patching game code should read it back, because another mod can own the
 /// same address, and a successful `VirtualProtect` says nothing about that.
 ///
-/// Unlike [`patch_3byte_stub`] and [`apply_xor_ret_stub`], this does NOT validate the byte it
-/// overwrites. Those two abort when the existing byte is not the expected one, which is what stops
-/// a version-drifted RVA from being patched mid-instruction; a caller of this primitive gets no
-/// such guard and must check the address itself.
+/// Unlike [`patch_3byte_stub`] and [`apply_xor_ret_stub`], this neither RESOLVES the address for
+/// the running build nor validates the byte it overwrites. Those two take a 1.16.2 RVA and so can
+/// do both; this one takes an absolute address its caller discovered at runtime -- often in a
+/// foreign module -- so there is nothing to translate, and the caller owns the check.
 ///
 /// # Safety
 ///
@@ -802,6 +916,29 @@ pub unsafe fn write_code_byte(address: usize, value: u8) -> bool {
 /// Write a self-contained 3-byte return stub at `base+rva` after validating the expected first
 /// byte. RWX via VirtualProtect, write, restore, icache flush. Returns true on success. Shared by
 /// the gate-force patches (foreground / sign-in / user-index).
+///
+/// # Why the address is RESOLVED first (2026-08-30)
+///
+/// `rva` is a 1.16.2 RVA like every other address in this workspace, and the expected-first-byte
+/// check was doing double duty as a version gate. It is not one. Measured against
+/// `eldenring-deobf-1.17.bin`: at the stale 1.16.2 RVAs the three callers use, 1.17 holds `40 53`,
+/// `02 00` and `d5 00` where `0x40`, `0x40` and `0x4c` were expected -- so all three patches abort
+/// and report `byte ... is 0x02, expected 0x40`, which READS AS A STALE SIGNATURE and sends the
+/// reader hunting for a changed prologue. The real cause is that the function moved, and the map
+/// already knows where: 0xe56310 -> 0xe58110, 0x24129b0 -> 0x24151c0, 0x240f490 -> 0x2411ca0, each
+/// `IDENTICAL` over 71-90 instructions, and each destination starts with the byte the caller
+/// expects. Resolving first turns three silently dead features back on and makes an unmappable
+/// address say REFUSED instead of impersonating a signature change.
+///
+/// The byte check stays and still earns its place: it is what confirms the resolved destination is
+/// the entry the caller means. `resolve_game_address` (not `resolve_detour_address`) is the right
+/// question here -- this writes three self-contained bytes and relocates nothing, so it does not
+/// need MinHook's five-relocatable-bytes audit.
+///
+/// It is no longer the ONLY check, though, because on its own it is far too weak to be one: the
+/// resolved address is also audited by `detour_site::write_site_is_sound` for three bytes, which
+/// refuses an address inside another function's declared body. See the comment at that call for
+/// why a single REX prefix passes by coincidence.
 #[cfg(windows)]
 pub fn patch_3byte_stub(
     base: usize,
@@ -810,12 +947,26 @@ pub fn patch_3byte_stub(
     stub: [u8; STUB_LEN],
     label: &str,
 ) -> bool {
-    let target = (base + rva) as *mut u8;
+    let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
+        hook_log(format_args!(
+            "{label}: REFUSED -- rva 0x{rva:x} has no verified mapping for the running build, so \
+             writing a 3-byte stub there would overwrite whatever now occupies it"
+        ));
+        return false;
+    };
+    // ONE BYTE IS NOT A SIGNATURE, so the site is audited before it is trusted. `expected_first`
+    // is `0x48`, `0x40`, `0x40` and `0x4c` at the four live call sites -- REX prefixes, which open
+    // a large fraction of the image, so on a build that moved the function the check passes BY
+    // COINCIDENCE far more often than it fails and three bytes go into unrelated code. Measured
+    // 2026-08-30: at their stale 1.16.2 RVAs on 1.17, all four targets are MID-FUNCTION.
+    if !detour_site::write_site_is_sound(address, STUB_LEN as u32, label) {
+        return false;
+    }
+    let target = address as *mut u8;
     let existing = unsafe { *target };
     if existing != expected_first {
         hook_log(format_args!(
-            "{label}: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
-            base + rva
+            "{label}: ABORT -- byte at 0x{address:x} is 0x{existing:x}, expected 0x{expected_first:x}"
         ));
         return false;
     }
@@ -864,12 +1015,26 @@ pub fn apply_xor_ret_stub(
     stub: [u8; STUB_LEN],
     label: &str,
 ) {
-    let target = (base + rva) as *mut u8;
+    // RESOLVED FIRST, for the reason spelled out on `patch_3byte_stub`: the expected-first-byte
+    // check is an entry-point confirmation, not a version gate, and on a build that moved the
+    // function it reports a byte mismatch that reads as a changed signature.
+    let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
+        hook_log(format_args!(
+            "online-disable: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the \
+             running build, so writing xor eax,eax;ret there would neuter whatever now occupies it"
+        ));
+        return;
+    };
+    // Audited before the byte check, for the reason spelled out on [`patch_3byte_stub`]: one REX
+    // prefix is not a signature, and a mid-function address passes it routinely.
+    if !detour_site::write_site_is_sound(address, STUB_LEN as u32, label) {
+        return;
+    }
+    let target = address as *mut u8;
     let existing = unsafe { *target };
     if existing != expected_first {
         hook_log(format_args!(
-            "online-disable: ABORT {label} -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
-            base + rva
+            "online-disable: ABORT {label} -- byte at 0x{address:x} is 0x{existing:x}, expected 0x{expected_first:x}"
         ));
         return;
     }
@@ -903,8 +1068,7 @@ pub fn apply_xor_ret_stub(
         )
     };
     hook_log(format_args!(
-        "online-disable: patched {label} 0x{:x} -> xor eax,eax;ret (forces offline)",
-        base + rva
+        "online-disable: patched {label} 0x{address:x} -> xor eax,eax;ret (forces offline)"
     ));
 }
 

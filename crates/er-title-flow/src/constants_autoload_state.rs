@@ -568,15 +568,65 @@ pub static START_MENU_WINDOW_LATCH: Once = Once::new();
 /// guarded below. Address is deobf/live (dump AddCancelButton
 /// 0x140920d80 -> live 0x140920c90).
 pub const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
-/// Return address immediately after the first `AddCancelButton` in the Quit Game tab builder
-/// (live/deobf `FUN_140958910`). The first native row is Quit Game / return-to-title; the second
-/// native row is Return to Desktop and must not be cloned for quick-load.
-pub const SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA: usize = 0x958a20;
-/// Return address immediately after the second native `AddCancelButton` in the Quit Game tab builder
-/// (deobf `FUN_140958910`). Used to append exactly one third in-place-style row while preserving the
-/// native GameEnd GFx component.
-pub const SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA: usize = 0x958b37;
+/// The Quit Game tab builder, `FUN_140958910` -- the function whose two `AddCancelButton` calls
+/// the product clones its three rows from.
+///
+/// # Why the FUNCTION is the constant and the return addresses are offsets
+///
+/// Both row detections are RETURN ADDRESSES, captured off the live stack and compared against a
+/// 1.16.2 RVA. A return address is mid-function, so it can never appear in the 1.16.2 -> 1.17
+/// address map -- that map is keyed on `.pdata` function starts, which is what a masked signature
+/// can identify. `scripts/select-needed-1170-rows.py` could not see `0x958a20` at all, so on 1.17
+/// the two comparisons below simply never matched: no hook was refused, no address was resolved,
+/// nothing was logged, and the Load Character / Load Character from File / Load Build from URL
+/// rows were never cloned onto the tab. Silence, not a refusal.
+///
+/// Naming the containing function makes the pair mappable and lets the offsets ride along. Both
+/// are corroborated by `scripts/derive-callsite-1170.py`: the whole-image map carries
+/// `0x958910 -> 0x959ab0`, and at `+0x110` and `+0x227` BOTH images hold an `E8` whose callee is
+/// the mapped pair of `AddCancelButton` (`0x920c90 -> 0x921e30`). Same offsets, same callee, so
+/// the two calls are the same two calls.
+///
+/// Putting the return addresses themselves into a verdict table was the alternative, and it is
+/// the wrong one: `DETOURABLE_ENTRY_EVIDENCE` accepts `NEITHER-ENTRY`, so such a row would
+/// license a mid-function address as a DETOUR target and MinHook would write five bytes into the
+/// middle of a live function.
+pub const SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA: usize = 0x958910;
+/// Offset of the return after the FIRST `AddCancelButton` within the Quit Game tab builder. The
+/// first native row is Quit Game / return-to-title; the second is Return to Desktop and must not
+/// be cloned for quick-load. Same offset in 1.16.2 and 1.17.
+pub const SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_OFFSET: usize = 0x110;
+/// Offset of the return after the SECOND native `AddCancelButton`. Used to append exactly one
+/// third in-place-style row while preserving the native GameEnd GFx component. Same offset in
+/// 1.16.2 and 1.17.
+pub const SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_OFFSET: usize = 0x227;
 pub const SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES: usize = 0x20;
+
+/// The two Quit Game tab row return addresses as RVAs on the RUNNING build, or `None` when this
+/// build has no verified `FUN_140958910`.
+///
+/// One resolution for both, deliberately: they are two offsets into ONE function, so resolving
+/// twice would emit two refusal lines for one missing mapping and invite the two halves of the
+/// same fact to disagree.
+#[cfg(windows)]
+pub fn system_quit_row_return_rvas() -> Option<(usize, usize)> {
+    let first = er_game_base::game_build::resolve_call_site_rva(
+        SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA,
+        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_OFFSET,
+        "SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA (System>Quit row cloning)",
+    )?;
+    Some((
+        first,
+        first - SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_OFFSET
+            + SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_OFFSET,
+    ))
+}
+
+/// Host builds have no running game whose stack could carry these return addresses.
+#[cfg(not(windows))]
+pub fn system_quit_row_return_rvas() -> Option<(usize, usize)> {
+    None
+}
 /// Immediate byte in the Quit Game subdialog factory that selects the one-slot `GameEnd` GFX
 /// component (`movb $0xe, 0x20(%rsp)` in live/deobf `FUN_14093bba0`). For the duplicate-button
 /// proof, patch it to the multi-slot controls component index used by `FUN_140958d40`; the Quit
@@ -1404,8 +1454,48 @@ pub const GX_CMD_QUEUE_HIST_SLOTS: usize = 32;
 pub const GX_CMD_QUEUE_SELF_TAG: usize = 1 << 63;
 /// Deobf RVA band holding reserve_command_queue_slot and its 4 thin enqueue wrappers (dump
 /// 0x141aea930..0x141aeab60, shift +0x20); return addresses inside it are transport, not producers.
+///
+/// These two are 1.16.2 RVAs and are compared against LIVE stack frames, so on 1.17 they name the
+/// wrong bytes. Use [`gx_cmd_queue_wrapper_rva_band`] rather than the raw pair; it anchors both
+/// endpoints on [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`], which the address map does carry.
 pub const GX_CMD_QUEUE_WRAPPER_RVA_MIN: usize = 0x1aea900;
 pub const GX_CMD_QUEUE_WRAPPER_RVA_MAX: usize = 0x1aeaf60;
+/// Offsets of the band's endpoints from [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`] (0x1aeae60), which sits
+/// INSIDE the band and is a mapped function start.
+///
+/// # Why an anchored band is honest here and is not honest everywhere
+///
+/// A band spanning several functions only translates if those functions moved TOGETHER. This one
+/// does, and it was measured rather than assumed: all 12 mapped `.pdata` functions overlapping
+/// `0x1aea900..0x1aeaf60` move by exactly `+0x1e00` between 2.6.2.0 and 2.7.0.0, so the block is
+/// rigid and its width is preserved. Compare `0x7a3000..0x7a4000`, where seven different deltas
+/// occur across the band's functions -- that one cannot be anchored and is refused instead.
+pub const GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET: isize =
+    GX_CMD_QUEUE_WRAPPER_RVA_MIN as isize - GX_RESERVE_CMD_QUEUE_SLOT_RVA as isize;
+pub const GX_CMD_QUEUE_WRAPPER_BAND_END_OFFSET: isize =
+    GX_CMD_QUEUE_WRAPPER_RVA_MAX as isize - GX_RESERVE_CMD_QUEUE_SLOT_RVA as isize;
+
+/// The reserve/enqueue transport band as RVAs on the RUNNING build, or `None` when this build has
+/// no verified `reserve_command_queue_slot`.
+///
+/// A caller that gets `None` must NOT fall back to the raw 1.16.2 pair: with a stale band every
+/// transport frame reads as a producer, and the histogram then names the wrong function as the
+/// thing filling the command queue -- a wrong answer that looks exactly like a right one.
+#[cfg(windows)]
+pub fn gx_cmd_queue_wrapper_rva_band() -> Option<core::ops::Range<usize>> {
+    er_game_base::game_build::resolve_call_site_band(
+        GX_RESERVE_CMD_QUEUE_SLOT_RVA,
+        GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET,
+        GX_CMD_QUEUE_WRAPPER_BAND_END_OFFSET,
+        "GX_RESERVE_CMD_QUEUE_SLOT_RVA (cmd-queue producer attribution band)",
+    )
+}
+
+/// Host builds have no running game whose stack could hold a transport frame.
+#[cfg(not(windows))]
+pub fn gx_cmd_queue_wrapper_rva_band() -> Option<core::ops::Range<usize>> {
+    None
+}
 pub static GX_CMD_QUEUE_HIST_KEYS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
     [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
 pub static GX_CMD_QUEUE_HIST_COUNTS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =

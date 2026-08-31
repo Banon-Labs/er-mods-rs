@@ -37,7 +37,15 @@ use std::{
 };
 
 use iced_x86::code_asm::*;
-use iced_x86::{Code, IcedError, Instruction, MemoryOperand, Register};
+use iced_x86::{Code, Encoder, IcedError, Instruction, MemoryOperand, Register};
+
+/// Mask byte meaning "this position must match exactly".
+pub const PROLOGUE_BYTE_COMPARED: u8 = 0xff;
+/// Mask byte meaning "ignore this position".
+///
+/// The ONLY positions that ever get this value are the displacement bytes of a RIP-relative
+/// memory operand. See [`rip_relative_mask`] for why, and for what is deliberately NOT masked.
+pub const PROLOGUE_BYTE_IGNORED: u8 = 0x00;
 
 /// MSVC emits a REX prefix with every bit clear ahead of some single-byte pushes (`40 55` for
 /// `push rbp`). iced computes REX from the operands and exposes no way to request a redundant
@@ -52,6 +60,24 @@ pub enum Image {
     /// `eldenring.exe` 1.16.2. Ground truth is `eldenring-deobf.bin`, a FLAT image at base
     /// `0x140000000` in which file offset == RVA for every section.
     EldenRing,
+    /// `eldenring.exe` 1.17 -- the build the game has actually been since 2026-08-27. Ground
+    /// truth is `eldenring-deobf-1.17.bin`, flat in the same way.
+    ///
+    /// # Why the version has to be part of the spec
+    ///
+    /// A prologue constant is compared against the bytes of the RUNNING game, and 1.17 moved
+    /// things these bytes encode. The two save-request retractions are the clearest case: their
+    /// whole body is `mov rax,[rip+disp]; mov byte [rax+0xb72],0; ret`, and `disp` reaches the
+    /// GameMan singleton, which 1.17 moved by `+0x4070`. The instructions did not change and the
+    /// field offset did not change, but four bytes of the encoding did -- so a signature
+    /// generated against 1.16.2 fails its own byte check on 1.17, `call_verified_retract` fails
+    /// closed, and the retraction silently never fires.
+    ///
+    /// Mapping the RVA does not fix that. The address translation gets the call to the right
+    /// place; the check that decides whether to make the call is comparing against bytes from
+    /// the previous build. Both halves have to move, which is why the version is named here
+    /// rather than assumed.
+    EldenRing1170,
     /// Seamless Co-op's `ersc.dll`, preferred base `0x180000000`. Ground truth is the installed
     /// DLL, an ordinary PE whose section table has to be walked to turn an RVA into an offset.
     Ersc,
@@ -60,7 +86,7 @@ pub enum Image {
 impl Image {
     pub fn base(self) -> u64 {
         match self {
-            Self::EldenRing => 0x1_4000_0000,
+            Self::EldenRing | Self::EldenRing1170 => 0x1_4000_0000,
             Self::Ersc => 0x1_8000_0000,
         }
     }
@@ -68,6 +94,7 @@ impl Image {
     fn label(self) -> &'static str {
         match self {
             Self::EldenRing => "eldenring-deobf.bin",
+            Self::EldenRing1170 => "eldenring-deobf-1.17.bin",
             Self::Ersc => "ersc.dll",
         }
     }
@@ -75,6 +102,7 @@ impl Image {
     fn env_override(self) -> &'static str {
         match self {
             Self::EldenRing => "ER_DEOBF_BIN",
+            Self::EldenRing1170 => "ER_DEOBF_BIN_1170",
             Self::Ersc => "ER_ERSC_DLL",
         }
     }
@@ -87,7 +115,7 @@ impl Image {
             return path.is_file().then_some(path);
         }
         match self {
-            Self::EldenRing => manifest_dir
+            Self::EldenRing | Self::EldenRing1170 => manifest_dir
                 .ancestors()
                 .map(|ancestor| ancestor.join(self.label()))
                 .find(|candidate| candidate.is_file()),
@@ -103,7 +131,7 @@ impl Image {
         let image = fs::read(path).ok()?;
         let rva = va.checked_sub(self.base())?;
         let offset = match self {
-            Self::EldenRing => usize::try_from(rva).ok()?,
+            Self::EldenRing | Self::EldenRing1170 => usize::try_from(rva).ok()?,
             Self::Ersc => pe_rva_to_offset(&image, u32::try_from(rva).ok()?)?,
         };
         image
@@ -297,7 +325,7 @@ pub fn mov_rax_rip_absolute(asm: &mut CodeAssembler, target: u64) -> Result<(), 
 // Generation
 // ---------------------------------------------------------------------------------------------
 
-fn assemble(spec: &PrologueSpec, body: Assemble) -> Vec<u8> {
+fn assemble(spec: &PrologueSpec, body: Assemble) -> (Vec<u8>, Vec<u8>) {
     let mut asm = CodeAssembler::new(64).unwrap_or_else(|error| {
         panic!("{}: CodeAssembler::new failed: {error}", spec.name);
     });
@@ -307,6 +335,10 @@ fn assemble(spec: &PrologueSpec, body: Assemble) -> Vec<u8> {
             spec.name
         );
     });
+    // Captured BEFORE `assemble` because that call needs `&mut asm`. These are the same named
+    // instructions the pin is generated from, which is what makes the mask derivable rather than
+    // hand-marked.
+    let instructions: Vec<Instruction> = asm.instructions().to_vec();
     let bytes = asm.assemble(spec.va).unwrap_or_else(|error| {
         panic!("{}: encoding at 0x{:x} failed: {error}", spec.name, spec.va);
     });
@@ -321,7 +353,114 @@ fn assemble(spec: &PrologueSpec, body: Assemble) -> Vec<u8> {
         spec.name,
         bytes.len()
     );
-    bytes[..take].to_vec()
+    let kept = bytes[..take].to_vec();
+    let mask = rip_relative_mask(spec, &instructions, &kept);
+    (kept, mask)
+}
+
+/// The comparison mask for `bytes`: `PROLOGUE_BYTE_IGNORED` at every byte that belongs to the
+/// displacement of a RIP-relative memory operand, `PROLOGUE_BYTE_COMPARED` everywhere else.
+///
+/// # What is masked, and why exactly that
+///
+/// `mov rax, [rip+disp32]` encodes the delta from the END of the instruction to the global it
+/// names. Both ends move when the game is patched, so the four displacement bytes are GUARANTEED
+/// to re-encode across builds even when the function is byte-for-byte the same code doing the
+/// same job. A pin that includes them is pinning a value that cannot survive, and it disarms its
+/// hook on a target that translated perfectly. Measured on 1.17: three prologues
+/// (`SAVE_REQUEST_RETRACT_B72_SIG`, `..._B73_SIG`, `QUIT_PHASE_SETTLE_SIG`) differ from their
+/// 1.16.2 pin ONLY inside that field.
+///
+/// # What is deliberately NOT masked
+///
+/// * **Opcode and ModRM bytes.** They are the instruction's identity; masking them would turn the
+///   pin into "some instruction is here", which is not a pin at all.
+/// * **Register-base memory displacements** (`[rax+0xb72]`). They are struct field offsets, and
+///   they are the ONLY thing distinguishing `SAVE_REQUEST_RETRACT_B72_SIG` from `..._B73_SIG`:
+///   masking them would let each of those two pins accept the other function. `map-rvas`'s
+///   search matcher masks them because a search wants candidates; a gate wants identity.
+/// * **Immediates** (`cmp [rax+0xbc4], 2`) and **relative branch targets** (`jne +0xa`). A branch
+///   inside the checked window is relative to the function's OWN layout, so it does not move when
+///   the function moves -- it survived 1.17 unchanged, and it is evidence worth keeping.
+///
+/// # Fail-closed
+///
+/// Every uncertainty answers "compare this byte". If an instruction will not re-encode, or the
+/// re-encoded stream does not reproduce the assembled bytes exactly, the mask is all-COMPARED and
+/// the pin behaves exactly as it did before this function existed.
+fn rip_relative_mask(spec: &PrologueSpec, instructions: &[Instruction], bytes: &[u8]) -> Vec<u8> {
+    let all_compared = vec![PROLOGUE_BYTE_COMPARED; bytes.len()];
+    let mut mask = all_compared.clone();
+    let mut encoder = Encoder::new(64);
+    let mut stream: Vec<u8> = Vec::with_capacity(bytes.len());
+    for instruction in instructions {
+        let at = stream.len();
+        let length = match encoder.encode(instruction, spec.va + at as u64) {
+            Ok(length) => length,
+            // A declared-data pseudo-instruction (`db`, used for MSVC's redundant REX prefix) or
+            // anything else the encoder declines: give up on masking, keep every byte compared.
+            Err(_) => return all_compared,
+        };
+        let encoded = encoder.take_buffer();
+        if encoded.len() != length {
+            return all_compared;
+        }
+        let offsets = encoder.get_constant_offsets();
+        if instruction.is_ip_rel_memory_operand() && offsets.has_displacement() {
+            let start = at + offsets.displacement_offset();
+            for index in start..start + offsets.displacement_size() {
+                if index < mask.len() {
+                    mask[index] = PROLOGUE_BYTE_IGNORED;
+                }
+            }
+        }
+        stream.extend_from_slice(&encoded);
+        if stream.len() >= bytes.len() {
+            break;
+        }
+    }
+    // Self-validation: the per-instruction re-encode must reproduce the block-assembled bytes.
+    // If it does not, the offsets above describe a different byte stream than the pin, so the
+    // mask would be aimed at the wrong positions.
+    if stream.len() < bytes.len() || &stream[..bytes.len()] != bytes {
+        return all_compared;
+    }
+    // Structural invariants. A mask that reaches byte 0, that masks everything, or that masks a
+    // number of bytes no displacement field could account for, is a derivation bug, not a
+    // relocation -- and it would silently weaken a gate. Break the build instead.
+    let masked = mask.iter().filter(|&&m| m == PROLOGUE_BYTE_IGNORED).count();
+    assert!(
+        mask[0] == PROLOGUE_BYTE_COMPARED,
+        "{}: derived mask would ignore the opening byte",
+        spec.name
+    );
+    assert!(
+        masked < mask.len() && masked % 4 == 0,
+        "{}: derived mask ignores {masked} of {} bytes; a RIP disp32 field is 4 bytes",
+        spec.name,
+        mask.len()
+    );
+    mask
+}
+
+/// `[(start, len)]` for each masked run, for the generated doc comment.
+fn masked_runs(mask: &[u8]) -> Vec<(usize, usize)> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (index, &byte) in mask.iter().enumerate() {
+        match (byte == PROLOGUE_BYTE_IGNORED, start) {
+            (true, None) => start = Some(index),
+            (false, Some(from)) => {
+                runs.push((from, index - from));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        runs.push((from, mask.len() - from));
+    }
+    runs
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -332,29 +471,15 @@ fn hex(bytes: &[u8]) -> String {
         .join(" ")
 }
 
-fn render(spec: &PrologueSpec, bytes: &[u8]) -> String {
-    let mut out = String::new();
-    for line in spec.doc.lines().filter(|line| !line.is_empty()) {
-        writeln!(out, "/// {line}").expect("write to String");
-    }
-    writeln!(
-        out,
-        "/// Generated from named `iced-x86` instructions; see this crate's `build.rs`. Do not"
-    )
-    .expect("write to String");
-    writeln!(out, "/// hand-edit -- edit the instructions instead.").expect("write to String");
+fn declaration(spec: &PrologueSpec, name: &str, bytes: &[u8], out: &mut String) {
     let space = if spec.visibility.is_empty() { "" } else { " " };
     match spec.shape {
-        Shape::Slice => writeln!(
-            out,
-            "{}{space}const {}: &[u8] = &[",
-            spec.visibility, spec.name
-        ),
+        Shape::Slice => writeln!(out, "{}{space}const {}: &[u8] = &[", spec.visibility, name),
         Shape::Array => writeln!(
             out,
             "{}{space}const {}: [u8; {}] = [",
             spec.visibility,
-            spec.name,
+            name,
             bytes.len()
         ),
     }
@@ -370,6 +495,70 @@ fn render(spec: &PrologueSpec, bytes: &[u8]) -> String {
         out.push_str(",\n");
     }
     out.push_str("];\n");
+}
+
+fn render(spec: &PrologueSpec, bytes: &[u8], mask: &[u8]) -> String {
+    let mut out = String::new();
+    for line in spec.doc.lines().filter(|line| !line.is_empty()) {
+        writeln!(out, "/// {line}").expect("write to String");
+    }
+    writeln!(
+        out,
+        "/// Generated from named `iced-x86` instructions; see this crate's `build.rs`. Do not"
+    )
+    .expect("write to String");
+    writeln!(out, "/// hand-edit -- edit the instructions instead.").expect("write to String");
+    declaration(spec, spec.name, bytes, &mut out);
+    out.push('\n');
+
+    let runs = masked_runs(mask);
+    writeln!(
+        out,
+        "/// Comparison mask for [`{}`]: 0xff = compare, 0x00 = ignore.",
+        spec.name
+    )
+    .expect("write to String");
+    writeln!(out, "///").expect("write to String");
+    if runs.is_empty() {
+        writeln!(
+            out,
+            "/// Nothing is ignored -- this prologue has no RIP-relative operand, so every byte is"
+        )
+        .expect("write to String");
+        writeln!(
+            out,
+            "/// an exact-match byte and the comparison is identical to a plain `==`."
+        )
+        .expect("write to String");
+    } else {
+        let listed: Vec<String> = runs
+            .iter()
+            .map(|(start, length)| format!("+{start}..+{}", start + length))
+            .collect();
+        writeln!(
+            out,
+            "/// IGNORED: {}. Each run is the displacement field of a RIP-relative memory operand,",
+            listed.join(", ")
+        )
+        .expect("write to String");
+        writeln!(
+            out,
+            "/// which re-encodes on every build because both the instruction and the global it"
+        )
+        .expect("write to String");
+        writeln!(
+            out,
+            "/// names move. Opcode, ModRM, register-base displacements, immediates and relative"
+        )
+        .expect("write to String");
+        writeln!(
+            out,
+            "/// branch targets are all still compared. See `build-support/prologue_build.rs`."
+        )
+        .expect("write to String");
+    }
+    writeln!(out, "#[allow(dead_code)]").expect("write to String");
+    declaration(spec, &format!("{}_MASK", spec.name), mask, &mut out);
     out
 }
 
@@ -385,7 +574,7 @@ pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
     let mut unverified: Vec<&'static str> = Vec::new();
 
     for (spec, body) in specs {
-        let bytes = assemble(spec, *body);
+        let (bytes, mask) = assemble(spec, *body);
         assert_eq!(
             bytes.as_slice(),
             spec.pin,
@@ -412,7 +601,7 @@ pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
             },
             None => unverified.push(spec.name),
         }
-        generated.push_str(&render(spec, &bytes));
+        generated.push_str(&render(spec, &bytes, &mask));
         generated.push('\n');
     }
 
@@ -446,6 +635,7 @@ pub fn declare_rerun(build_script_relative_support_path: &str) {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={build_script_relative_support_path}");
     println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN");
+    println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN_1170");
     println!("cargo:rerun-if-env-changed=ER_ERSC_DLL");
     println!("cargo:rerun-if-env-changed=ME3_STEAM_DIR");
 }

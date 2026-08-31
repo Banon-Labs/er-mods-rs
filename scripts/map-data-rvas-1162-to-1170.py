@@ -142,6 +142,127 @@ def references(image: Image, target: int) -> list[int]:
     return sorted(hits)
 
 
+def range_references(image: Image, lo: int, hi: int) -> list[tuple[int, int]]:
+    """`(displacement offset, addressed RVA)` for every candidate reference landing in `[lo, hi)`.
+
+    `references` answers "who points at THIS address"; this answers "what does .text point at
+    anywhere in this window", which is the same arithmetic run in the other direction and costs the
+    same single vectorised pass. It exists so a bracket can be built: the addresses NEXT to a
+    candidate, and how far each of them moved, are the only local evidence available for a global
+    that has exactly one reference of its own. Candidates only -- every hit still has to be decoded.
+    """
+    import numpy as np
+
+    va, size = image.text
+    out: list[tuple[int, int]] = []
+    for start in range(va, va + size, CHUNK):
+        stop = min(start + CHUNK + 4, va + size)
+        raw = np.frombuffer(image.data[start:stop], dtype=np.uint8).astype(np.int64)
+        if raw.size < 5:
+            continue
+        dw = raw[0:-3] | (raw[1:-2] << 8) | (raw[2:-1] << 16) | (raw[3:] << 24)
+        dw = np.where(dw >= 1 << 31, dw - (1 << 32), dw)
+        idx = np.arange(start, start + dw.size, dtype=np.int64)
+        for tail in IMMEDIATE_TAILS:
+            addr = idx + tail + dw
+            for hit in np.nonzero((addr >= lo) & (addr < hi))[0]:
+                out.append((start + int(hit), int(addr[hit])))
+    return sorted(set(out))
+
+
+def window_anchors(
+    md, old: Image, new: Image, fmap: dict[int, int], lo: int, hi: int
+) -> dict[int, dict[int, int]]:
+    """Every 1.16.2 address in `[lo, hi)` that .text references, and where each reference re-reads.
+
+    One decode pass, shared by every candidate in the window. The value is the same vote dict
+    `carry` builds, so the same "two agreeing references" bar can be applied to an anchor.
+    """
+    old_starts = old.function_starts()
+    votes: dict[int, dict[int, int]] = {}
+    for disp_at, addressed in range_references(old, lo, hi):
+        func = enclosing(old_starts, disp_at)
+        if func is None or func not in fmap:
+            continue
+        found = instruction_index(md, old, func, disp_at, addressed)
+        if found is None:
+            continue
+        index, at_offset = found
+        moved = displacement_of(md, new, fmap[func], index, at_offset)
+        if moved is None:
+            continue
+        bucket = votes.setdefault(addressed, {})
+        bucket[moved] = bucket.get(moved, 0) + 1
+    return votes
+
+
+def bracket_confirms(
+    md,
+    old: Image,
+    new: Image,
+    fmap: dict[int, int],
+    src: int,
+    dst: int,
+    radius: int = 0x400,
+    min_votes: int = 2,
+) -> tuple[bool, str]:
+    """Whether the neighbourhood AGREES with `src -> dst`, and a one-line reason either way.
+
+    THIS IS A TEST, NEVER A SOURCE OF AN ADDRESS. It answers yes or no about a candidate some other
+    mechanism produced; it never proposes the majority delta as the answer. That distinction is
+    load-bearing. `WORLD_NVM_MANAGER_GLOBAL_RVA 0x3d75870` really does move +0x4078 -- measured
+    here at 323 of 327 of its own references, a third independent agreement with the ledger's
+    266/270 -- while the nearest anchor above it (0x3d7588c, 4/4) moves +0x4070 and the ones nine
+    bytes below (0x3d75879, 0x3d7587a) move +0x4062. Anything that "smoothed" it toward its
+    neighbours would be wrong. This function cannot: it is a predicate, and a row with hundreds of
+    its own votes never reaches it.
+
+    An anchor counts only when its references agree unanimously AND there are at least two of them
+    -- the same bar `carry` promotes on. The test is the NEAREST such anchor on each side: the
+    candidate has to sit inside a pair of independently-carried addresses that both moved by the
+    delta being claimed, which is what the word bracket means.
+
+    Why the nearest pair and not every anchor in the window: the strict "no anchor may disagree"
+    form was tried first and rejected `NAV_COST_TABLE_RVA` on 0x3d61ee2, an UNALIGNED byte
+    reference 0x122 above the target which moves +0x405d while its own immediate neighbours
+    0x3d61ee3 and 0x3d61ee4 (18 and 7 votes) move +0x4060. That is a field shifting three bytes
+    INSIDE a structure, which says nothing about where the structure's base went, and every one of
+    the ~40 other anchors within +-0x400 of the target -- including 222/223, 47/47, 43/43 and 20/20
+    -- moves +0x4060. The relaxation is not a loosening toward the answer wanted: run against
+    `WORLD_NVM_MANAGER`, the nearest-anchor form still FAILS (nearest above +0x4070, nearest below
+    +0x4062, claim +0x4078), so it continues to reject exactly the discontinuity it exists to
+    catch. Disagreeing anchors elsewhere in the window are still counted and reported.
+    """
+    delta = dst - src
+    anchors = window_anchors(md, old, new, fmap, src - radius, src + radius)
+    strong: list[tuple[int, int]] = []
+    for addressed, bucket in sorted(anchors.items()):
+        if addressed == src or len(bucket) != 1:
+            continue
+        moved, count = next(iter(bucket.items()))
+        if count >= min_votes:
+            strong.append((addressed, moved - addressed))
+    below = [entry for entry in strong if entry[0] < src]
+    above = [entry for entry in strong if entry[0] > src]
+    if not below or not above:
+        return False, (
+            f"no bracket within +-0x{radius:x}: {len(below)} anchor(s) below, {len(above)} above"
+        )
+    lo_rva, lo_delta = below[-1]
+    hi_rva, hi_delta = above[0]
+    if lo_delta != delta or hi_delta != delta:
+        return False, (
+            f"nearest anchors disagree with +0x{delta:x}: "
+            f"0x{lo_rva:x} moved +0x{lo_delta:x}, 0x{hi_rva:x} moved +0x{hi_delta:x}"
+        )
+    odd = [f"0x{a:x} +0x{d:x}" for a, d in strong if d != delta]
+    note = f" ({len(odd)} other anchor(s) in the window differ: {', '.join(odd[:3])})" if odd else ""
+    return True, (
+        f"bracketed by 0x{lo_rva:x} and 0x{hi_rva:x}, both +0x{delta:x} "
+        f"({len(strong)} anchor(s) within +-0x{radius:x}){note}"
+    )
+
+
 def call_references(image: Image, target: int) -> list[int]:
     """Offsets of the rel32 in every `call`/`jmp` in .text whose target is `target`.
 
@@ -296,7 +417,14 @@ def displacement_of(md, image: Image, func: int, index: int, at_offset: int | No
     disagreement between them is not resolved here -- the offset simply wins, and the vote across
     independent references is what catches a bad answer.
     """
-    window = image.data[func : func + 0x400]
+    # The window must reach the reference, and 0x400 does not: `MENU_PUMP_KICK_PTR_RVA`'s sole
+    # reference sits at byte +0x779 of its function, so a 0x400 decode stopped short, found neither
+    # the offset nor the index, and the address was reported "no usable reference" -- the same
+    # sentence a genuinely unreferenced address gets. Measured 2026-08-30: with the window opened to
+    # cover the offset the reference decodes, matches shape, and votes. Decoding past the function
+    # end is harmless because only an instruction that STARTS exactly at `at_offset` is consumed.
+    limit = max(0x400, (at_offset + 0x20) if at_offset is not None else 0)
+    window = image.data[func : func + limit]
     by_index = None
     for n, insn in enumerate(md.disasm(window, BASE + func)):
         pos = insn.address - BASE - func
@@ -374,28 +502,100 @@ def rtti_class_name(image: bytes, vtable_rva: int, image_base: int = 0x140000000
     return name.decode("ascii", "replace") if name.startswith(b".?A") else None
 
 
+# MSVC tags each translation unit's ANONYMOUS NAMESPACE with a per-build hash, so the same class
+# is `...@?A0x7c8d539b@@...` in 1.16.2 and `...@?A0x8fca6706@@...` in 1.17. Comparing the raw
+# names therefore makes an anonymous-namespace vtable structurally unable to rescue itself here --
+# and it declines SILENTLY, as "not the same class", which is indistinguishable from a genuinely
+# wrong candidate. Measured 2026-08-30 on `SELECTOR_STEP_VTABLE_RVA` (0x2ac71e0 -> 0x2aca260):
+# `MenuJobWithContext<LoadJobContext@?A0x...,lambda_1af212c9...>` differs between the images in the
+# namespace tag and NOTHING else -- the LAMBDA hash is stable across builds. That row happened to
+# have two agreeing references and never needed the rescue; the next one may not.
+#
+# Only the namespace tag is masked. Class names, template arguments and lambda hashes are compared
+# verbatim, so two genuinely different classes still differ, and the crossed-position guard below
+# still runs on the masked names -- a region that did not move cannot pass by accident.
+ANON_NAMESPACE = re.compile(r"\?A0x[0-9a-f]{8}")
+
+
+def canonical_class(name: str | None) -> str | None:
+    return None if name is None else ANON_NAMESPACE.sub("?A0x@ANON@", name)
+
+
 def rtti_confirms(old_image: bytes, new_image: bytes, src_rva: int, dst_rva: int) -> str | None:
     """The shared mangled name when `src` in the old image and `dst` in the new are the same class.
 
     Requires the crossed positions NOT to carry that name, so a region that happens not to have
     moved cannot pass by accident.
     """
-    src_name = rtti_class_name(old_image, src_rva)
-    if src_name is None or src_name != rtti_class_name(new_image, dst_rva):
+    src_name = canonical_class(rtti_class_name(old_image, src_rva))
+    if src_name is None or src_name != canonical_class(rtti_class_name(new_image, dst_rva)):
         return None
-    if rtti_class_name(new_image, src_rva) == src_name or rtti_class_name(old_image, dst_rva) == src_name:
+    if (
+        canonical_class(rtti_class_name(new_image, src_rva)) == src_name
+        or canonical_class(rtti_class_name(old_image, dst_rva)) == src_name
+    ):
         return None
     return src_name
 
 
-CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9a-fA-F_]+)")
+# The TYPE is not part of what makes something a game address, and requiring `usize` here made
+# every `: u32` constant INVISIBLE to this scanner -- never scanned, never voted on, never
+# written to the data map, and read stale at runtime with no log line. This is the same defect
+# select-needed-1170-rows.py records and fixed for the FUNCTION map (see its RVA_TYPE note); it
+# survived here. Measured 2026-08-30: er-invasion-path declares NAV_COST_TABLE_RVA,
+# HK_AI_MANAGER_GLOBAL_RVA, WORLD_NVM_MANAGER_GLOBAL_RVA and GLOBAL_CSSFX_RVA as `: u32`
+# (navpath.rs:44,49,83; sfx.rs:28), so all four were absent from the data map while the nav
+# request and the SFX read went to 1.16.2 addresses on 1.17. Reading a stale global is the
+# failure this file's own header calls "quiet and then fatal".
+RVA_TYPE = r"(?:usize|u32|u64)"
+# THE WHOLE INITIALISER, NOT ITS FIRST LITERAL.
+#
+# The previous form stopped at `(0x[0-9a-fA-F_]+)`, which reads the first hex literal it meets and
+# calls that the address. For `= 0x142658c60 - 0x140000000` that is the MINUEND -- an absolute VA,
+# not the RVA the constant actually holds. Measured 2026-08-30 on
+# `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA`: the scraper recorded 0x142658c60, which is 1.1 GB past the
+# end of the image, so nothing in `.text` could reference it and it was filed in this map's UNUSED
+# list as an unmappable DATA global. It is neither unmappable nor data: its real value is RVA
+# 0x2658c60, a `.text` function that the FUNCTION map already carries to 0x265b470.
+#
+# The failure mode is what makes this worth a regex change rather than a one-line exception. The
+# tool did not refuse and did not warn; it produced a confident classification of an address that
+# does not exist, in a file whose entire purpose is to be trusted about addresses. So the
+# initialiser is now captured whole and evaluated, and an initialiser this cannot evaluate is
+# REPORTED rather than half-read.
+CONST = re.compile(
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*([^;]+);"
+)
+LITERAL_ARITHMETIC = re.compile(r"\A\s*0x[0-9a-fA-F_]+(?:\s*[-+]\s*0x[0-9a-fA-F_]+)*\s*\Z")
+
+
+def const_value(initialiser: str) -> int | None:
+    """The value of an `*_RVA` initialiser, or None when it is not hex-literal arithmetic.
+
+    Only `0x..`, `0x.. - 0x..` and `0x.. + 0x..` chains evaluate. Anything else -- an alias to
+    another constant, an `as` cast, a decimal, a call -- returns None and is reported by the
+    caller, because a partial read is how a subtrahend became an address.
+    """
+    if not LITERAL_ARITHMETIC.match(initialiser):
+        return None
+    total, sign = 0, 1
+    for token in re.findall(r"[-+]|0x[0-9a-fA-F_]+", initialiser):
+        if token == "+":
+            sign = 1
+        elif token == "-":
+            sign = -1
+        else:
+            total += sign * int(token.replace("_", ""), 16)
+    return total if total >= 0 else None
 # `pub const FOO_RVA: usize = SomeEnum::Variant as usize;` -- the value lives on the enum, so a
 # literal scan never sees it. SESSION_SINGLETON_144588E98_RVA is written this way, wrapped across
 # two lines, and its absence from this map stalled the 1.17 autoload at `session=0x0`: the title
 # owner was found, state 10/10, and core readiness then waited forever on a singleton whose
 # address had no 1.17 mapping. It maps cleanly once seen -- 0x4588e98 -> 0x458cf18, 28 agreeing
 # references -- so the only thing missing was the scanner looking for this spelling.
-ALIAS = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(\w+)::(\w+)\s+as\s+usize")
+ALIAS = re.compile(
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*(\w+)::(\w+)\s+as\s+" + RVA_TYPE
+)
 VARIANT = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9a-fA-F_]+)\s*,", re.M)
 BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 DATA_MAP = "docs/recon/rva-map-1162-to-1170.data.tsv"
@@ -435,6 +635,152 @@ SHAPE_RESCUED = {
 }
 
 
+# --- SINGLE-REFERENCE RESCUE ------------------------------------------------------------------
+# Ten globals the vote refuses on its own. Every one has exactly one rip-relative reference (or, for
+# the task table, none at all), and one unopposed vote is precisely what this file declines to
+# promote -- correctly, because a lone reference inside a function that happened to be edited is how
+# a confident wrong address is produced.
+#
+# What makes them promotable is a SECOND line of evidence that does not come from the reference at
+# all, re-derived here at every `--refresh` from the two images rather than trusted from this table:
+#
+#   unique   the datum is a string that occurs EXACTLY ONCE in each image, at the source in 1.16.2
+#            and at the candidate in 1.17. A name that occurs once per image is stronger evidence
+#            than any number of agreeing displacements (the same argument the RTTI rescue rests on).
+#   fnptr    the datum is a table of code pointers, and the entries that the FUNCTION map can carry
+#            all land exactly where they should, with the identical test at +-0x8 and +-0x10 failing.
+#   bracket  the nearest independently-carried anchor on each side moved by the same delta being
+#            claimed. See `bracket_confirms` for why this rejects `WORLD_NVM_MANAGER`.
+#
+# The table stores the ANSWER, and the checks either confirm it or drop the row to UNUSED; a check
+# never supplies or adjusts an address. A row whose own reference votes for something OTHER than the
+# tabled address is refused outright rather than rescued -- that is a contradiction, not weak
+# evidence, and this file's failure mode is a wrong address, not a missing one.
+REFSITE_RESCUED = {
+    # No rip-relative reference of any kind: an 8-entry table of menu-task update callbacks, reached
+    # only through a register. Two of the eight entries are functions the function map carries, and
+    # both land exactly right; the same test one slot either way scores 0 correct / 2 mismatch.
+    0x2AC72A0: (0x2ACA320, "TRACE_MENU_TASK_UPDATE_TABLE_RVA", "fnptr+bracket"),
+    # ASCII "PressStart", the title's press-any-button state name. One occurrence per image.
+    0x2B26500: (0x2B29580, "TITLE_PRESS_START_NAME_RVA", "unique+bracket"),
+    # ASCII "TosTitle/Text", the terms-of-service dialog's text path. One occurrence per image.
+    0x2B27330: (0x2B2A3B0, "POLICY_TOS_TITLE_TEXT_PATH_RVA", "unique+bracket"),
+    # UTF-16 "m60_42_34_00". One occurrence per image, and the ONLY one of the ten with no usable
+    # neighbourhood at all -- it sits in string soup where nothing else has two references -- so the
+    # bracket cannot be asked for and the unique name is the whole of the corroboration.
+    0x2B62C70: (0x2B65D20, "DEFAULT_MAP_STRING_RVA", "unique"),
+    # Its one reference is at byte +0x779 of its function, which is why this was reported "no usable
+    # reference" until the decode window was opened past 0x400. The stored code pointer moves
+    # +0x1250 -- the same delta as the referencing function itself.
+    0x3B37C98: (0x3B3BCA8, "MENU_PUMP_KICK_PTR_RVA", "bracket"),
+    0x3B39848: (0x3B3D858, "PROFILE_OFFSCREEN_SIZE_TABLE_RVA", "bracket"),
+    # The stored thunk sits 0xb0 past its referencing function in BOTH images.
+    0x3B48FF0: (0x3B4D050, "STEAM_INTERFACE_GUARD_RVA", "bracket"),
+    0x3D61DC0: (0x3D65E20, "NAV_COST_TABLE_RVA", "bracket"),
+    # Slots 6 and 10 of the `TitleStep` step table, which `own_stepper_patch_once` writes our
+    # handler into. Each has exactly one reference -- the store that fills it -- so the vote alone
+    # refuses, and the `bracket` recorded here understates what is actually known. The initialiser
+    # 0xa4f50 fills the whole table in one straight-line run of 24 stores, and BOTH images decode
+    # to the same 24 byte offsets, so every slot is aligned by byte offset rather than by a delta.
+    # On top of that each slot carries two corroborations that owe nothing to its displacement:
+    # the function pointer it stores carries through the function map to the value the 1.17
+    # initialiser stores (9 of 12 in the map, 0 mismatched), and the neighbouring slot holds the
+    # step's UTF-16 NAME -- "TitleStep::STEP_GameStepWait" for 6, "TitleStep::STEP_MenuJobWait"
+    # for 10 -- each occurring EXACTLY ONCE per image, at the source in 1.16.2 and at candidate+8
+    # in 1.17. The slot names itself; no delta is being trusted. Every neighbour at +-0x8/+-0x10 is
+    # provably the destination of a DIFFERENT store in the same run, so no competing candidate has
+    # any support at all. Re-derive the whole table, checks included:
+    #   python3 scripts/carry-step-table-slots.py
+    0x3D715E0: (0x3D75650, "TITLE_STEP_IDX6_SLOT_RVA", "bracket"),
+    0x3D71620: (0x3D75690, "TITLE_STEP_IDX10_SLOT_RVA", "bracket"),
+}
+
+
+def string_at(image: bytes, rva: int) -> bytes | None:
+    """The NUL-terminated ASCII or UTF-16 string at `rva`, terminator included, or None.
+
+    The terminator is part of the blob on purpose: without it "PressStart" would also match inside
+    a hypothetical "PressStartButton", and the whole value of this check is that the match is
+    unique.
+    """
+    for width, decoder in ((1, "ascii"), (2, "utf-16-le")):
+        end = rva
+        while end + width <= len(image) and image[end : end + width] != b"\0" * width:
+            end += width
+        text = image[rva:end]
+        if len(text) < 6 * width or end == rva:
+            continue
+        try:
+            decoded = text.decode(decoder)
+        except UnicodeDecodeError:
+            continue
+        if decoded.isprintable() and not decoded.isspace():
+            return image[rva : end + width]
+    return None
+
+
+def unique_content_confirms(old_image: bytes, new_image: bytes, src: int, dst: int) -> tuple[bool, str]:
+    """`src` holds a string that occurs once per image, and in 1.17 that one occurrence is at `dst`."""
+    blob = string_at(old_image, src)
+    if blob is None:
+        return False, "no printable string at the source"
+    if old_image.count(blob) != 1:
+        return False, f"{old_image.count(blob)} occurrences in 1.16.2, need exactly 1"
+    if new_image.count(blob) != 1:
+        return False, f"{new_image.count(blob)} occurrences in 1.17, need exactly 1"
+    if new_image.find(blob) != dst:
+        return False, f"the 1.17 occurrence is at 0x{new_image.find(blob):x}, not 0x{dst:x}"
+    shown = blob[:-1].decode("ascii", "replace") if blob[-2:-1] != b"\0" else blob[:-2].decode("utf-16-le", "replace")
+    return True, f'"{shown}" occurs exactly once in each image, at the source and at the candidate'
+
+
+def fnptr_table_confirms(
+    old_image: bytes, new_image: bytes, fmap: dict[int, int], src: int, dst: int, entries: int = 8
+) -> tuple[bool, str]:
+    """Code pointers stored at `src` land, in 1.17, exactly where the FUNCTION map says they went."""
+
+    def score(at: int) -> tuple[int, int]:
+        ok = bad = 0
+        for i in range(entries):
+            a = struct.unpack_from("<Q", old_image, src + 8 * i)[0]
+            b = struct.unpack_from("<Q", new_image, at + 8 * i)[0]
+            rva = a - BASE
+            if not 0 <= rva < len(old_image) or rva not in fmap:
+                continue
+            ok, bad = (ok + 1, bad) if b == BASE + fmap[rva] else (ok, bad + 1)
+        return ok, bad
+
+    good, bad = score(dst)
+    if bad or not good:
+        return False, f"{good} entry(ies) correct, {bad} mismatched at 0x{dst:x}"
+    for step in (-0x10, -0x8, 0x8, 0x10):
+        near_good, near_bad = score(dst + step)
+        if near_good and not near_bad:
+            return False, f"the same test also passes at 0x{dst + step:x}, so it does not select"
+    return True, (
+        f"{good} of {entries} entries carry through the function map with 0 mismatches, "
+        "and the identical test fails at every +-0x8/+-0x10 neighbour"
+    )
+
+
+def rescue_confirms(md, old: Image, new: Image, fmap, src: int, dst: int, kind: str):
+    """Run every corroboration named in `kind`; all must pass."""
+    reasons = []
+    for part in kind.split("+"):
+        if part == "unique":
+            ok, why = unique_content_confirms(old.data, new.data, src, dst)
+        elif part == "fnptr":
+            ok, why = fnptr_table_confirms(old.data, new.data, fmap, src, dst)
+        elif part == "bracket":
+            ok, why = bracket_confirms(md, old, new, fmap, src, dst)
+        else:
+            ok, why = False, f"unknown corroboration {part!r}"
+        if not ok:
+            return False, f"{part} FAILED: {why}"
+        reasons.append(f"{part}: {why}")
+    return True, "; ".join(reasons)
+
+
 def already_mapped(repo: Path) -> set[int]:
     """RVAs the function map and the byte verifier already answer for."""
     out: set[int] = set()
@@ -464,9 +810,23 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         for variant, value in VARIANT.findall(path.read_text(encoding="utf-8", errors="replace")):
             enum_variants.setdefault(variant, int(value.replace("_", ""), 16))
 
+    unevaluated: dict[str, str] = {}
     for path in sorted(repo.glob("crates/**/*.rs")):
         source = path.read_text(encoding="utf-8", errors="replace")
-        literals = [(n, int(v.replace("_", ""), 16)) for n, v in CONST.findall(source)]
+        literals = []
+        for n, initialiser in CONST.findall(source):
+            value = const_value(initialiser.strip())
+            if value is None:
+                # Reported, not silently dropped -- but only the dangerous class. An initialiser
+                # with no hex literal in it at all is an alias or a decimal: `ALIAS` already
+                # handles the enum spelling, and a path alias is carried under the constant it
+                # names, so there is nothing to warn about and 180-odd such lines would bury
+                # everything else. An initialiser that DOES contain a hex literal and still could
+                # not be evaluated is the shape that produced the phantom address, so it prints.
+                if "0x" in initialiser:
+                    unevaluated.setdefault(n, initialiser.strip().replace("\n", " ")[:60])
+                continue
+            literals.append((n, value))
         for n, _enum, variant in ALIAS.findall(source):
             value = enum_variants.get(variant)
             if value is not None:
@@ -555,11 +915,44 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             weak[:] = [entry for entry in weak if entry[1] != rva]
         else:
             weak.append((name, rva, f"{kind} rescue FAILED: {src_sites} source vs {dst_sites} target site(s)"))
+
+    # Single-reference rescues, re-derived here for the same reason: the corroboration is recomputed
+    # from the two images on every refresh, so a future patch that moves the string, edits the task
+    # table or shifts the neighbourhood drops the row instead of carrying a stale answer forward.
+    refsite_rescued = []
+    for rva, (moved, name, kind) in sorted(REFSITE_RESCUED.items()):
+        if any(row[1] == rva for row in rows):
+            continue
+        voted, _note, votes = carry(md, old, new, fmap, rva)
+        if voted is not None and voted != moved:
+            # A contradiction, not weak evidence. The table says one address and the code that
+            # actually references the global says another; refusing is the only safe answer.
+            weak.append((name, rva, f"REFUSED: reference votes 0x{voted:x}, table says 0x{moved:x}"))
+            continue
+        ok, why = rescue_confirms(md, old, new, fmap, rva, moved, kind)
+        if not ok:
+            weak.append((name, rva, f"{kind} rescue FAILED: {why}"))
+            continue
+        # `0/0` when the global has no rip-relative reference at all, which is the literal truth
+        # and is why the suffix names the corroboration that actually carried it. Writing `1/1`
+        # here would claim a reference vote that was never cast.
+        best = votes.get(moved, 0)
+        total = sum(votes.values())
+        rows.append((name, rva, moved, best, total))
+        refsite_rescued.append((name, rva, moved, kind, why))
+        weak[:] = [entry for entry in weak if entry[1] != rva]
     rows.sort(key=lambda row: row[1])
 
     head = [
         "# 1.16.2 RVA\t1.17 RVA\tconstant\tvotes",
         "# Generated by scripts/map-data-rvas-1162-to-1170.py --refresh.",
+        "# GENERATED WHOLESALE -- DO NOT HAND-EDIT A ROW INTO THIS FILE. --refresh rewrites every",
+        "# line below from the two images. A row it cannot reproduce now STOPS the write and is",
+        "# named, instead of being deleted at exit 0 with nothing to read afterwards but an address",
+        "# that looks like it was never mapped. Hand knowledge belongs in SHAPE_RESCUED /",
+        "# REFSITE_RESCUED inside that script, where the corroboration is re-derived from both",
+        "# images on every refresh; a hand-derived pair for a FUNCTION belongs in",
+        "# rva-map-1162-to-1170.verified.tsv, the curated ledger.",
         "# Data has no content to compare, so each row is carried by the CODE that references it:",
         "# every rip-relative reference in 1.16.2 .text is mapped onto its 1.17 function and the",
         "# same instruction re-read there. `votes` is agreeing references / total. A row with",
@@ -573,9 +966,15 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         "# delta AND its one referencing instruction shape reaches the candidate exactly as often",
         "# in 1.17 as it reached the source in 1.16.2 -- the fallback for a global referenced only",
         "# from trampoline rubble, where there is no mappable function to vote with.",
+        "# A `unique`, `fnptr` or `bracket` suffix means one unopposed reference was promoted by a",
+        "# SECOND line of evidence that does not come from that reference: a string occurring exactly",
+        "# once per image, a table of code pointers that carry through the function map, or the",
+        "# nearest independently-carried anchor on each side having moved by the same delta. All",
+        "# three are recomputed from the two images on every refresh -- see REFSITE_RESCUED.",
     ]
     rescued_names = {name for name, _rva, _moved, _cls in rtti_rescued}
     shape_names = {name for name, _rva, _moved, _kind, _n in shape_rescued}
+    refsite_kinds = {name: kind for name, _rva, _moved, kind, _why in refsite_rescued}
     body = [
         f"0x{rva:x}\t0x{moved:x}\t{name}\t"
         + (
@@ -583,17 +982,79 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             if name in rescued_names
             else f"{best}/{total} shape"
             if name in shape_names
+            else f"{best}/{total} {refsite_kinds[name]}"
+            if name in refsite_kinds
             else f"{best}/{total}"
         )
         for name, rva, moved, best, total in rows
     ]
     tail = ["#", "# UNUSED -- not enough agreement to be worth trusting:"]
     tail += [f"# {name}\t0x{rva:x}\t{note}" for name, rva, note in weak]
+
+    # A ROW THIS REFRESH DID NOT PRODUCE IS A ROW SOMEBODY TYPED IN.
+    #
+    # This write is wholesale, and before 2026-08-30 that meant a hand-added pair vanished at exit
+    # 0 with nothing naming it -- and the loss reads afterwards as an address that was never
+    # mapped, not as one that was deleted. Unlike `select-needed-1170-rows.py`, this file does not
+    # carry such a row forward: every line here is supposed to have been re-derived from the two
+    # images by THIS run, and silently keeping a row that no longer earns its votes would turn the
+    # ledger into a place where a wrong address can hide behind an old derivation. So it stops
+    # instead, names the addresses, and points at the two tables where hand knowledge belongs --
+    # `SHAPE_RESCUED` and `REFSITE_RESCUED`, which are re-checked against the images on every
+    # refresh, which is exactly the property a hand-typed TSV row does not have.
+    produced = {rva: moved for _name, rva, moved, _best, _total in rows}
+    withheld = {rva: note for _name, rva, note in weak}
+    strays, retired = [], []
+    for line in (repo / DATA_MAP).read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) < 2:
+            continue
+        try:
+            rva, moved = int(fields[0], 16), int(fields[1], 16)
+        except ValueError:
+            continue
+        rva = rva - BASE if rva >= BASE else rva
+        moved = moved - BASE if moved >= BASE else moved
+        if produced.get(rva) == moved:
+            continue
+        if rva in produced:
+            # The file and this run disagree about where the datum went. One of the two is a
+            # wrong address at a live-looking value, which is the failure that cost a boot.
+            strays.append((rva, line, f"this refresh carries it to 0x{produced[rva]:x}"))
+        elif rva in withheld:
+            # Wanted, and this run declined to carry it. Either somebody typed the pair in to
+            # override the vote, or the row used to carry and no longer does. Both are worth a
+            # human; neither is worth a silent delete.
+            strays.append((rva, line, f"this refresh WITHHELD it: {withheld[rva]}"))
+        else:
+            # Nothing wants it any more -- the constant left `crates/`, or a stronger map now
+            # answers it. Dropping is right, but it is still named.
+            retired.append((rva, line))
+    for rva, line in sorted(retired):
+        print(f"  retired (nothing declares 0x{rva:x} any more): {line}")
+    if strays:
+        for rva, line, why in sorted(strays):
+            print(f"UNREPRODUCED: 0x{rva:x}  {line}   -- {why}")
+        print(
+            f"REFUSING to write {DATA_MAP}: {len(strays)} row(s) in it were not produced by this "
+            "refresh, and a wholesale rewrite would delete them with no diagnostic. If the pair is "
+            "right, move it into SHAPE_RESCUED or REFSITE_RESCUED in this script, where its "
+            "corroboration is re-derived from both images every time. If it is stale, delete the "
+            "line. Do not let the truncate decide."
+        )
+        return 1
+
     (repo / DATA_MAP).write_text("\n".join(head + body + tail) + "\n", encoding="utf-8")
     for name, rva, moved, cls in rtti_rescued:
         print(f"  rtti rescue: {name} 0x{rva:x} -> 0x{moved:x}  {cls[:90]}")
     for name, rva, moved, kind, sites in shape_rescued:
         print(f"  {kind} rescue: {name} 0x{rva:x} -> 0x{moved:x}  ({sites} matching site(s) each side)")
+    for name, rva, moved, kind, why in refsite_rescued:
+        print(f"  {kind} rescue: {name} 0x{rva:x} -> 0x{moved:x}  {why}")
+    for name, initialiser in sorted(unevaluated.items()):
+        print(f"  not a literal address, skipped: {name} = {initialiser}")
     print(
         f"wrote {DATA_MAP}: {len(rows)} usable row(s) "
         f"({len(rtti_rescued)} carried by RTTI), {len(weak)} withheld"
@@ -798,6 +1259,47 @@ def confirm(md, old: Image, new: Image, target: int, candidate: int) -> int:
     return 1
 
 
+# The shapes an `*_RVA` initialiser is written in, and what each must evaluate to. The subtraction
+# is the whole reason this exists: `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 -
+# 0x140000000` was read as 0x142658c60 -- the MINUEND -- and that phantom address, 1.1 GB past the
+# image, was published in this map's UNUSED list as an unmappable data global for as long as the
+# list has existed. It is a `.text` function the FUNCTION map already carries. A scraper that
+# mis-classifies without complaining is the same failure family as an audit that reports zero while
+# real sites exist, so the shape is pinned rather than left to a regex nobody re-reads.
+CONST_PARSER_CASES = [
+    ("pub const A_RVA: usize = 0x142658c60 - 0x140000000;", "A_RVA", 0x2658C60),
+    ("const B_RVA: u32 = 0x48464a8;", "B_RVA", 0x48464A8),
+    ("const C_RVA: usize = 0x3d8_567c;", "C_RVA", 0x3D8567C),
+    ("const D_RVA: usize = 0x140000000 + 0x1000;", "D_RVA", 0x140001000),
+    ("const E_RVA: usize = 0x2000 - 0x1000 - 0x500;", "E_RVA", 0xB00),
+    ("const F_RVA: usize = er_game_base::rva::G_RVA;", "F_RVA", None),
+    ("const G_RVA: usize = 50;", "G_RVA", None),
+    ("const H_RVA: usize = SIZE_RVA as usize;", "H_RVA", None),
+    ("const I_RVA: usize = 0x1000 - 0x2000;", "I_RVA", None),
+]
+
+
+def selftest_const_parser() -> int:
+    """Every `*_RVA` initialiser shape evaluates whole, or is refused -- never half-read."""
+    bad = 0
+    for source, name, want in CONST_PARSER_CASES:
+        found = CONST.findall(source)
+        if not found:
+            print(f"SELFTEST FAIL: {name}: the declaration regex did not match {source!r}")
+            bad += 1
+            continue
+        got_name, initialiser = found[0]
+        got = const_value(initialiser.strip())
+        if got_name != name or got != want:
+            print(
+                f"SELFTEST FAIL: {source!r} -> ({got_name}, "
+                f"{got if got is None else hex(got)}), want ({name}, {want if want is None else hex(want)})"
+            )
+            bad += 1
+    print(f"  const parser: {len(CONST_PARSER_CASES) - bad}/{len(CONST_PARSER_CASES)} shapes correct")
+    return bad
+
+
 def main() -> int:
     _ensure("capstone")
     _ensure("numpy")
@@ -838,6 +1340,11 @@ def main() -> int:
     )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
+
+    # Runs before the images are even looked for: it is a pure source-parsing contract, and a
+    # checkout without the two binaries must still be able to fail on a regressed scraper.
+    if args.selftest and selftest_const_parser():
+        return 1
 
     for path in (args.old, args.new, args.map):
         if not path.is_file():

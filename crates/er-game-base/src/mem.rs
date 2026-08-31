@@ -118,6 +118,31 @@ pub fn game_data_addr(base: usize, rva: usize, what: &'static str) -> usize {
     crate::game_build::resolve_game_address(base + rva, what).unwrap_or(0)
 }
 
+/// [`game_data_addr`] for an INDEXED global -- a table row, an array element -- returning
+/// `base + rva + byte_offset`, or `0` when the base RVA has no mapping.
+///
+/// # Why the plain form is not enough
+///
+/// [`game_data_addr`] answers `0` for a refusal, and every caller's null check depends on that
+/// `0` surviving. `game_data_addr(base, TABLE_RVA, "TABLE") + slot * 8` destroys it: a refusal on
+/// slot 3 produces the address `24`, which is not zero, so an `if address != 0` guard PASSES and
+/// the caller dereferences page zero. Reads survive that (`safe_read_*` is kernel-validated and
+/// merely fails), but a WRITE faults -- and there is such a write: the loading-portrait teardown
+/// nulls `table[slot]` to spare a renderer from the native delete.
+///
+/// Adding the offset here keeps the refusal a refusal all the way to the caller.
+pub fn game_data_addr_offset(
+    base: usize,
+    rva: usize,
+    what: &'static str,
+    byte_offset: usize,
+) -> usize {
+    match game_data_addr(base, rva, what) {
+        ZERO => ZERO,
+        address => address + byte_offset,
+    }
+}
+
 /// Read a pointer-sized game global by RVA: resolve the address for the running build, then read
 /// it fault-tolerantly. `0` for a refusal, an unmapped address, or a genuinely null global.
 ///

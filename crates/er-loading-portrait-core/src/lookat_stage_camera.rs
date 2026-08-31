@@ -349,13 +349,21 @@ pub fn profile_lookat_phase_diag_tick() {
         let null = TITLE_OWNER_SCAN_START_ADDRESS;
         let (mut built_r, mut built_m) = (0u32, 0u32);
         if let Ok(b) = game_module_base() {
+            // Resolved, not `b + <1.16.2 RVA>`: the vtable moved 0x2b80128 -> 0x2b831d8 on 1.17, and
+            // a raw add never reaches the resolver, so this comparison matched nothing and reported
+            // built[r]=0/built[m]=0 forever without a single refusal line to say why.
+            let want_vt = er_game_base::mem::game_data_addr(
+                b,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            );
             for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
                 let r =
                     unsafe { safe_read_usize(portrait_renderer_table_entry(b, s)) }.unwrap_or(0);
-                if r != 0
+                if want_vt != 0
+                    && r != 0
                     && r != null
-                    && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                        == b + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    && unsafe { safe_read_usize(r) }.unwrap_or(0) == want_vt
                 {
                     built_r += 1;
                     let m = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }

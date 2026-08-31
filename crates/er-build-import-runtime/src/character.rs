@@ -132,10 +132,23 @@ pub unsafe fn set_class(pgd: usize, class_name: &str) -> Option<(u8, u8)> {
 /// Game thread, character in the world. `ApplyMainPlayerStats` `DLPanic`s on a null
 /// `CSMenuMan`/`WorldChrMan` and skips the vitals recompute if `mainPlayerIns` is null, so
 /// the caller's in-world gate is a precondition, not a nicety.
-pub unsafe fn apply_stats(module_base: usize, pgd: usize, doc: &BuildDoc) -> StatsOutcome {
-    let get: GetStatsFn = unsafe { core::mem::transmute(module_base + GET_MAIN_PLAYER_STATS) };
-    let apply: ApplyStatsFn =
-        unsafe { core::mem::transmute(module_base + APPLY_MAIN_PLAYER_STATS) };
+pub unsafe fn apply_stats(module_base: usize, pgd: usize, doc: &BuildDoc) -> Option<StatsOutcome> {
+    // NOT `StatsOutcome::default()` ON REFUSAL, and the difference is the whole reason this
+    // returns an `Option`. A default outcome has an empty `wrong` list, so `is_correct()` answers
+    // TRUE and the caller logs "every attribute matches the build" for a character whose stats
+    // were never written. A refusal has to be unrepresentable as a success.
+    let [get, apply] = crate::native::resolve_all(
+        module_base,
+        [
+            (GET_MAIN_PLAYER_STATS, "GetMainPlayerStats"),
+            (APPLY_MAIN_PLAYER_STATS, "ApplyMainPlayerStats"),
+        ],
+    )
+    .ok()?;
+    // Safety: both addresses were resolved for the running build immediately above.
+    let get: GetStatsFn = unsafe { core::mem::transmute(get) };
+    // Safety: as above.
+    let apply: ApplyStatsFn = unsafe { core::mem::transmute(apply) };
 
     let mut stats = [0i32; 10];
     // Safety: the engine fills exactly ten ints.
@@ -181,7 +194,7 @@ pub unsafe fn apply_stats(module_base: usize, pgd: usize, doc: &BuildDoc) -> Sta
             outcome.wrong.push((name, wanted, got));
         }
     }
-    outcome
+    Some(outcome)
 }
 
 /// What the spell pass achieved.
@@ -204,7 +217,11 @@ pub struct SpellOutcome {
 /// # Safety
 ///
 /// Game thread, character loaded, `egd` live.
-pub unsafe fn memorise_spells(module_base: usize, egd: usize, spells: &[EquipRef]) -> SpellOutcome {
+pub unsafe fn memorise_spells(
+    module_base: usize,
+    egd: usize,
+    spells: &[EquipRef],
+) -> Option<SpellOutcome> {
     let mut outcome = SpellOutcome {
         wanted: spells.len(),
         ..SpellOutcome::default()
@@ -213,13 +230,32 @@ pub unsafe fn memorise_spells(module_base: usize, egd: usize, spells: &[EquipRef
     // Safety: one pointer read at the verified EquipGameData offset.
     let emd = unsafe { *((egd + EQUIP_GAME_DATA_MAGIC_OFFSET) as *const usize) };
     if emd == 0 {
-        return outcome;
+        return Some(outcome);
     }
 
-    let slots_count: SlotsCountFn =
-        unsafe { core::mem::transmute(module_base + GET_MAGIC_SLOTS_COUNT) };
-    let equip: EquipMagicFn = unsafe { core::mem::transmute(module_base + EQUIP_MAGIC_IN_SLOT) };
-    let magic_id: MagicIdFn = unsafe { core::mem::transmute(module_base + GET_EQUIP_MAGIC_ID) };
+    // The three move together: without the capacity there is no bound to write within, without
+    // the writer nothing is memorised, and without the read-back nothing is PROVEN memorised --
+    // and this module's header says no number in it is derived from a call having been made.
+    // `None` here is "the spell pass did not run", which the caller says out loud; a zeroed
+    // outcome would read as "the game reports zero memory slots", which is a different claim.
+    let [slots_count, equip, magic_id] = crate::native::resolve_all(
+        module_base,
+        [
+            (
+                GET_MAGIC_SLOTS_COUNT,
+                "CS::EquipMagicData::GetMagicSlotsCount",
+            ),
+            (EQUIP_MAGIC_IN_SLOT, "EquipMagicInSlot"),
+            (GET_EQUIP_MAGIC_ID, "GetEquipMagicId"),
+        ],
+    )
+    .ok()?;
+    // Safety: all three addresses were resolved for the running build immediately above.
+    let slots_count: SlotsCountFn = unsafe { core::mem::transmute(slots_count) };
+    // Safety: as above.
+    let equip: EquipMagicFn = unsafe { core::mem::transmute(equip) };
+    // Safety: as above.
+    let magic_id: MagicIdFn = unsafe { core::mem::transmute(magic_id) };
 
     // Ask the game, never assume: this accounts for Memory Stones and talismans, and the
     // engine clamps it to 14.
@@ -246,7 +282,7 @@ pub unsafe fn memorise_spells(module_base: usize, egd: usize, spells: &[EquipRef
         }
     }
 
-    outcome
+    Some(outcome)
 }
 
 /// `PlayerGameData::runeArcActive`.

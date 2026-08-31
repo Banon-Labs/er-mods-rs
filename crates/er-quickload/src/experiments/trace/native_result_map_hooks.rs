@@ -12,21 +12,23 @@ use crate::{
         PE_FILE_SIZE_OPT_HEADER_OFFSET, PE_OPT_HEADER_OFFSET, PE_SECTION_HEADER_SIZE,
         PE_SECTION_SCAN_START, PE_SECTION_VADDR_OFFSET, PE_SECTION_VSIZE_OFFSET,
         PE_TEXT_SECTION_NAME, PE_U16_MASK, PE_U32_MASK, REQUEST_SAVE_ORIG,
-        RESULT_ACTION_BUILDER_HITS, RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_BUILDER_RVA,
-        RESULT_ACTION_INSERT_HITS, RESULT_ACTION_LAST_EVENT, RESULT_ACTION_LAST_INSERT_ARG0,
-        RESULT_ACTION_LAST_INSERT_ARG1, RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA,
-        RESULT_ACTION_LAST_INSERT_RET, RESULT_ACTION_LAST_INSERT_RET_UPDATE_RVA,
-        RESULT_ACTION_LAST_RESULT, RESULT_ACTION_LAST_WORD0, RESULT_ACTION_LAST_WORD1,
-        RESULT_ACTION_LAST_WRAPPER_BUILDER_R8, RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX,
-        RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX, RESULT_ACTION_LAST_WRAPPER_BUILDER_RET,
-        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA, RESULT_ACTION_WRAPPER_BUILDER_HITS,
-        RESULT_EVENT_HANDLER_HITS, RESULT_EVENT_HANDLER_ORIG, RESULT_EVENT_LAST_EVENT,
-        RESULT_EVENT_LAST_FD4_ARG, RESULT_EVENT_LAST_FD4_CODE, RESULT_EVENT_LAST_RAW_QWORD0,
-        RESULT_EVENT_LAST_RESULT, SAFE_INPUT_CONFIRM_FRAMES_REMAINING,
-        SAFE_INPUT_CONFIRM_PULSE_SEQ, SAVE_LOAD_STATE_INIT_ORIG, SAVE_REQUEST_PROFILE_ORIG,
-        SET_SAVE_SLOT_ORIG, TASK_ENQUEUE_TRACE_COUNT, TASK_ENQUEUE_TRACE_INCREMENT,
-        TASK_ENQUEUE_TRACE_LIMIT, TITLE_HANDOFF_COMPLETE, TITLE_HANDOFF_COMPLETE_VALUE,
-        TITLE_OWNER_SCAN_START_ADDRESS, TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
+        RESULT_ACTION_BUILDER_HITS, RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_INSERT_HITS,
+        RESULT_ACTION_LAST_EVENT, RESULT_ACTION_LAST_INSERT_ARG0, RESULT_ACTION_LAST_INSERT_ARG1,
+        RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA, RESULT_ACTION_LAST_INSERT_RET,
+        RESULT_ACTION_LAST_INSERT_RET_UPDATE_RVA, RESULT_ACTION_LAST_RESULT,
+        RESULT_ACTION_LAST_WORD0, RESULT_ACTION_LAST_WORD1, RESULT_ACTION_LAST_WRAPPER_BUILDER_R8,
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX, RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX,
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET, RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA,
+        RESULT_ACTION_WRAPPER_BUILDER_HITS, RESULT_EVENT_HANDLER_HITS, RESULT_EVENT_HANDLER_ORIG,
+        RESULT_EVENT_LAST_EVENT, RESULT_EVENT_LAST_FD4_ARG, RESULT_EVENT_LAST_FD4_CODE,
+        RESULT_EVENT_LAST_RAW_QWORD0, RESULT_EVENT_LAST_RESULT,
+        SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ,
+        SAVE_LOAD_STATE_INIT_ORIG, SAVE_REQUEST_PROFILE_ORIG, SET_SAVE_SLOT_ORIG,
+        TASK_ENQUEUE_TRACE_COUNT, TASK_ENQUEUE_TRACE_INCREMENT, TASK_ENQUEUE_TRACE_LIMIT,
+        TITLE_HANDOFF_COMPLETE, TITLE_HANDOFF_COMPLETE_VALUE, TITLE_OWNER_SCAN_START_ADDRESS,
+        TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
+        menu_continue_idle_insert_call_site, menu_continue_idle_insert_caller_band,
+        result_action_builder_trace_band,
     },
     crashlog::{
         callstack_contains_game_rva, object_vtable_summary, trace_callers_summary,
@@ -170,11 +172,10 @@ pub(crate) unsafe extern "system" fn result_event_wrapper_builder_hook(
     r8: usize,
 ) -> usize {
     const TRACE_FIRST: usize = 16;
-    const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
-    let from_result_action_builder = callstack_contains_game_rva(
-        RESULT_ACTION_BUILDER_RVA as usize,
-        RESULT_ACTION_BUILDER_RVA as usize + RESULT_ACTION_BUILDER_TRACE_SIZE,
-    );
+    // Resolved for the running build: raw, this compared a live frame against a 1.16.2 RVA and
+    // simply never matched off 1.16.2, so the trace went quiet without ever saying why.
+    let from_result_action_builder = result_action_builder_trace_band()
+        .is_some_and(|band| callstack_contains_game_rva(band.start, band.end));
     let result = unsafe { call_wrapper_builder_original(rcx, rdx, r8) }.unwrap_or(rcx);
     if from_result_action_builder {
         let seq = RESULT_ACTION_WRAPPER_BUILDER_HITS
@@ -361,7 +362,16 @@ unsafe fn capture_continue_task_node_candidate(base: usize, candidate: usize, la
         return;
     }
     let update_rva = unsafe { task_node_update_rva(base, candidate) };
-    if update_rva != TRACE_MENU_CONTINUE_WRAPPER_RVA as usize {
+    // `task_node_update_rva` returns a LIVE RVA (`update - base`), so comparing it to the 1.16.2
+    // constant is the same stale-address defect as a raw `base + RVA` with the base cancelled off
+    // both sides -- and invisible to any scan for `base +`. The Continue task wrapper moved on
+    // 1.17 (0x82bac0 -> 0x82cab0), so no task node was ever captured. Compare ADDRESSES instead.
+    let want_wrapper = er_game_base::mem::game_data_addr(
+        base,
+        TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
+        "TRACE_MENU_CONTINUE_WRAPPER_RVA",
+    );
+    if update_rva == null || want_wrapper == null || base + update_rva != want_wrapper {
         return;
     }
     if MENU_CONTINUE_TASK_NODE
@@ -400,7 +410,17 @@ unsafe fn capture_continue_member_node_candidate(base: usize, candidate: usize, 
     if member_fn == null {
         return;
     }
-    let continue_wrapper = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
+    // Same constant, same 1.17 move (0x82bac0 -> 0x82cab0): the raw form matched nothing, so the
+    // registered TitleTopDialog Continue `MenuMemberFuncJob` was never captured. Refuse rather
+    // than compare 0 -- `target` walks to 0 on an unreadable hop.
+    let continue_wrapper = er_game_base::mem::game_data_addr(
+        base,
+        TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
+        "TRACE_MENU_CONTINUE_WRAPPER_RVA",
+    );
+    if continue_wrapper == null {
+        return;
+    }
     let mut target = member_fn;
     let mut hop = 0;
     while hop < JMP_HOPS && target != null {
@@ -483,9 +503,13 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
         }
         _ => {}
     }
-    const MENU_CONTINUE_IDLE_INSERT_CALLER_RVA: usize = 0x0076432c;
-    const MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA: usize = 0x007642b0;
-    const MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA: usize = 0x007643c0;
+    // Both were raw 1.16.2 return addresses compared against live frames. They now name the
+    // containing function and an offset, resolved for the running build; when this build has no
+    // pair for that function BOTH come back `None` and the two caller-shaped matches below are
+    // skipped, leaving the three object-identity matches -- which do not depend on a game version
+    // at all and were always the stronger evidence.
+    let idle_call_site = menu_continue_idle_insert_call_site();
+    let idle_caller_band = menu_continue_idle_insert_caller_band();
     let idle_ctor_out_slot =
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT.load(Ordering::SeqCst);
     let idle_ctor_item = MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.load(Ordering::SeqCst);
@@ -495,11 +519,9 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
     const TASK_ENQUEUE_IDLE_MATCH_ARG0_OUT_SLOT: usize = 3;
     const TASK_ENQUEUE_IDLE_MATCH_ARG0_POINTEE: usize = 4;
     const TASK_ENQUEUE_IDLE_MATCH_ARG1_ITEM: usize = 5;
-    let stack_contains_idle_caller = callstack_contains_game_rva(
-        MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA,
-        MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA,
-    );
-    let idle_match_kind = if caller_rva == MENU_CONTINUE_IDLE_INSERT_CALLER_RVA {
+    let stack_contains_idle_caller =
+        idle_caller_band.is_some_and(|band| callstack_contains_game_rva(band.start, band.end));
+    let idle_match_kind = if idle_call_site == Some(caller_rva) {
         TASK_ENQUEUE_IDLE_MATCH_CALLER_EXACT
     } else if stack_contains_idle_caller {
         TASK_ENQUEUE_IDLE_MATCH_CALLER_RANGE
@@ -547,11 +569,9 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
             ));
         }
     }
-    const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
-    if callstack_contains_game_rva(
-        RESULT_ACTION_BUILDER_RVA as usize,
-        RESULT_ACTION_BUILDER_RVA as usize + RESULT_ACTION_BUILDER_TRACE_SIZE,
-    ) {
+    if result_action_builder_trace_band()
+        .is_some_and(|band| callstack_contains_game_rva(band.start, band.end))
+    {
         let hit = RESULT_ACTION_INSERT_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
             + OWN_STEPPER_CALL_INC;
         RESULT_ACTION_LAST_INSERT_ARG0.store(arg0 as usize, Ordering::SeqCst);

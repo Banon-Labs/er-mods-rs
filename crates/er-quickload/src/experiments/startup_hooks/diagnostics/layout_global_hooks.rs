@@ -101,7 +101,16 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as Load Profile and Load Save Profiles at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
+                        // Print the return address this build will actually compare against, not
+                        // the 1.16.2 constant. The old line printed 0x958a20 on every build --
+                        // including the ones where nothing was ever going to match it, which made
+                        // the log read like the feature was armed when it was inert.
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone the Quit Game row as Load Character / Load Character from File / Load Build from URL at caller rva {}",
+                        match er_title_flow::system_quit_row_return_rvas() {
+                            Some((first, second)) =>
+                                format!("0x{first:x} (second row 0x{second:x})"),
+                            None => "UNRESOLVED on this build -- no rows will be cloned".to_owned(),
+                        }
                     ));
                 }
                 status => append_autoload_debug(format_args!(

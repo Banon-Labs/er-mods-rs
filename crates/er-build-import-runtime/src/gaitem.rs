@@ -98,9 +98,17 @@ impl GaitemLookupResult {
         if handle == 0 || handle == u32::MAX {
             return None;
         }
-        // Safety: verified 1.16.2 RVA inside the loaded image.
-        let ctor: LookupCtorFn =
-            unsafe { core::mem::transmute(module_base + GAITEM_LOOKUP_RESULT_CTOR) };
+        // Resolved for the RUNNING build, not added blind: this is a direct CALL into game code
+        // at a 1.16.2 address, and on a build that moved it that is a control transfer into
+        // whatever now occupies those bytes. `None` means the handle cannot be resolved, which is
+        // the answer this function already has a shape for.
+        let ctor = crate::native::resolve(
+            module_base,
+            GAITEM_LOOKUP_RESULT_CTOR,
+            "GaitemLookupResult constructor",
+        )?;
+        // Safety: resolved for the running build immediately above.
+        let ctor: LookupCtorFn = unsafe { core::mem::transmute(ctor) };
         // The constructor reads the handle THROUGH a pointer, so it needs a place to live. The
         // fields below are overwritten by the constructor; they are named rather than zeroed
         // wholesale so a future field cannot be added without a value being chosen for it.
@@ -129,9 +137,16 @@ impl GaitemLookupResult {
     ///
     /// Game thread; `module_base` the loaded image base and this record freshly resolved.
     pub unsafe fn sword_arts_id(&mut self, module_base: usize) -> Option<u32> {
-        // Safety: verified 1.16.2 RVA inside the loaded image.
+        // Resolved for the running build; `None` is "this armament's skill is unknown", which
+        // is already this function's answer for an armament that has none.
+        let arts_for_weapon = crate::native::resolve(
+            module_base,
+            GET_SWORD_ARTS_PARAM_FOR_WEAPON,
+            "GetSwordArtsParamForWeapon",
+        )?;
+        // Safety: resolved for the running build immediately above.
         let arts_for_weapon: SwordArtsForWeaponFn =
-            unsafe { core::mem::transmute(module_base + GET_SWORD_ARTS_PARAM_FOR_WEAPON) };
+            unsafe { core::mem::transmute(arts_for_weapon) };
         let mut arts = SwordArtsParamLookupResult::default();
         // Safety: both records are ours and are the length the engine writes.
         unsafe { arts_for_weapon(&raw mut *self, &raw mut arts) };
@@ -161,9 +176,15 @@ impl GaitemLookupResult {
     ///
     /// Game thread; `module_base` the loaded image base, and `self` a record the engine filled.
     pub unsafe fn mounted_gem_row(&mut self, module_base: usize) -> Option<u32> {
-        // Safety: verified RVA inside the loaded image.
-        let from_weapon: GemHandleFromWeaponFn =
-            unsafe { core::mem::transmute(module_base + GET_GEM_HANDLE_FROM_WEAPON) };
+        // Resolved for the running build; `None` is "no gem", which is this function's own
+        // answer for an armament that carries none.
+        let from_weapon = crate::native::resolve(
+            module_base,
+            GET_GEM_HANDLE_FROM_WEAPON,
+            "GaitemLookupResult::GetGemGaitemHandleFromWeapon",
+        )?;
+        // Safety: resolved for the running build immediately above.
+        let from_weapon: GemHandleFromWeaponFn = unsafe { core::mem::transmute(from_weapon) };
         let mut handle = 0u32;
         // Safety: our own destination; the engine writes one `uint` through it and zeroes it when
         // the armament carries no gem.
@@ -190,9 +211,15 @@ impl GaitemLookupResult {
 ///
 /// Game thread; `module_base` the loaded image base and `player` a live `PlayerIns*`.
 pub unsafe fn worn_weapon_handle(module_base: usize, player: usize, slot: i32) -> Option<u32> {
-    // Safety: verified 1.16.2 RVA inside the loaded image.
-    let handle_by_slot: GaitemHandleBySlotFn =
-        unsafe { core::mem::transmute(module_base + GET_WEAPON_GAITEM_HANDLE_BY_SLOT) };
+    // Resolved for the running build; `None` is "the slot is empty", which is this function's
+    // own answer for a hand holding nothing.
+    let handle_by_slot = crate::native::resolve(
+        module_base,
+        GET_WEAPON_GAITEM_HANDLE_BY_SLOT,
+        "ChrAsm::GetEquipmentGaitemHandleBySlot",
+    )?;
+    // Safety: resolved for the running build immediately above.
+    let handle_by_slot: GaitemHandleBySlotFn = unsafe { core::mem::transmute(handle_by_slot) };
     let mut handle = 0u32;
     // Safety: our own destination; the engine writes exactly one `uint` through it, and zeroes
     // it first when the slot is out of its own range.

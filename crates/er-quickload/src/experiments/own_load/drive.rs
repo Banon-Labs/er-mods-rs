@@ -1348,7 +1348,14 @@ pub(crate) unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_own
         None => OWN_LOAD_STREAM_FIELD_UNREAD,
     };
     // IO device inflight / started-request handle.
-    let iodev = deref(base + IODEV_GLOBAL_RVA);
+    // RESOLVED: a `.data` global, and they all moved on 1.17 (0x4589390 -> 0x458d3f0). Read raw,
+    // `deref` SUCCEEDS on whatever now occupies the old slot and the IO telemetry reports another
+    // object's inflight/handle as the loader's. A refusal is 0, which `deref` answers `None` for.
+    let iodev = deref(er_game_base::mem::game_data_addr(
+        base,
+        IODEV_GLOBAL_RVA,
+        "IODEV_GLOBAL_RVA",
+    ));
     let io_inflight = match iodev {
         Some(dev) => unsafe { safe_read_usize(dev + IODEV_INFLIGHT_10_OFFSET) }
             .map(|v| v as i64)
@@ -1577,7 +1584,12 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
             .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
         None => OWN_LOAD_STREAM_FIELD_UNREAD,
     };
-    let iodev = deref(base + IODEV_GLOBAL_RVA);
+    // Same global, same reason as the sibling snapshot above.
+    let iodev = deref(er_game_base::mem::game_data_addr(
+        base,
+        IODEV_GLOBAL_RVA,
+        "IODEV_GLOBAL_RVA",
+    ));
     let io_inflight = match iodev {
         Some(dev) => unsafe { safe_read_usize(dev + IODEV_INFLIGHT_10_OFFSET) }
             .map(|v| v as i64)

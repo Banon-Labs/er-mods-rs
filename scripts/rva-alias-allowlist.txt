@@ -20,7 +20,6 @@
 0x74a2f0    exempt:role-alias         # ASSIGN_COMPONENT_WITH_NAME_RVA, TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND  || `SceneObjProxy * CS::SceneObjProxy::assignComponentWithName(Scen
 0x7ad1c0    exempt:role-alias         # LEAF_UPDATE_RVA, MENU_WINDOW_JOB_RUN_RVA, PAB_NODE_UPDATE_RVA  || `CS::MenuWindowJob::Run` -- vtable slot 2 (+0x10) of the MenuWin
 0x7ad810    todo:centralize-function-rva  # MENU_ITEM_ACCEPT_NATIVE_RVA || FUN_1407ad810 returns the inverse of CSMenuMan predicate FUN_140765f20; duplicated in continue/menu-constructor probes.
-0x7add70    todo:centralize-code-label    # MENU_ITEM_ACCEPT_IDLE_RVA || LAB_1407add70 is the zero-arg std::function thunk stored by FUN_1407acf80 when constructing MenuWindowJob accept functors.
 0x826510    exempt:role-alias         # CAP_BUILDER_RVA, LOADGAME_JOB_BUILD_RVA, SYSTEM_QUIT_PROFILE_LOAD_JOB_  || The LoadGame MenuJob factory. `__fastcall(rcx = out *DLRefCountP
 0x93b760    exempt:role-alias         # OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA, OPTIONSETTING_TAB_SELEC  || CompositeOptionSettingDialog per-tab activation: fn(composite, t
 0x9a4670    exempt:role-alias         # CAP_LOAD_ACTIVATE_RVA, PROFILE_LOAD_ACTIVATE_RVA, SYSTEM_QUIT_PROFILE_  || CS::ProfileLoadDialog vtable slot +0xa0 (slot 20) -- the "decide

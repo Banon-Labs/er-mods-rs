@@ -118,8 +118,17 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
                 .unwrap_or(0)
         }
     };
+    // RESOLVED, through the INDEXED form. `GAME_DATA_MAN_GLOBAL_RVA` moved +0x4060 on 1.17
+    // (0x3d5df38 -> 0x3d61f98), so the raw read succeeded and handed back whatever now sits at the
+    // old address + 8, which became the recipe owner. `game_data_addr_offset` keeps a refusal a
+    // refusal: plain `+ FULLREAD_OWNER_GDM_08` would turn 0 into the address 8.
     let recipe_owner = unsafe {
-        safe_read_usize(base + CONTINUE_MANAGER_GLOBAL_RVA + FULLREAD_OWNER_GDM_08_OFFSET)
+        safe_read_usize(er_game_base::mem::game_data_addr_offset(
+            base,
+            CONTINUE_MANAGER_GLOBAL_RVA,
+            "CONTINUE_MANAGER_GLOBAL_RVA",
+            FULLREAD_OWNER_GDM_08_OFFSET,
+        ))
     }
     .unwrap_or(null);
     let manager_vtable = unsafe {

@@ -500,32 +500,47 @@ pub fn install_tip_suppression_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(KNOWLEDGE_TIP_REFRESH_RVA as u32) else {
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            target as *mut c_void,
-            knowledge_tip_refresh_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            KNOWLEDGE_TIP_REFRESH_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if unsafe { hook.queue_enable() }.is_err() {
-                append_autoload_debug(format_args!(
-                    "stats-text: tip-suppression queue_enable failed for 0x{target:x}"
-                ));
-                return;
-            }
-            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-            // address -- so letting the handle go does NOT uninstall the hook.
-        }
-        Err(status) => {
+    // TWO INDEPENDENT DETOURS (2026-08-30). This was a bare `let Ok(..) else { return; }` with no
+    // log, so a refused tip-refresh RVA on 1.17 silently took the tip-ADVANCE detour with it -- the
+    // one whose own comment says its failure is meant to "log and continue rather than abort the
+    // batch". A refusal is now local and named, and the pair is honestly reported.
+    // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    let refresh_target = match game_rva(KNOWLEDGE_TIP_REFRESH_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
             append_autoload_debug(format_args!(
-                "stats-text: tip-suppression MhHook::new failed: {status:?}"
+                "stats-text: REFUSED tip-suppression -- rva 0x{KNOWLEDGE_TIP_REFRESH_RVA:x} has no verified mapping for the running build; the tip-advance detour is unaffected"
             ));
-            return;
+            None
+        }
+    };
+    let mut refresh_queued = false;
+    if let Some(target) = refresh_target {
+        match unsafe {
+            MhHook::new(
+                target as *mut c_void,
+                knowledge_tip_refresh_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                KNOWLEDGE_TIP_REFRESH_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if unsafe { hook.queue_enable() }.is_err() {
+                    append_autoload_debug(format_args!(
+                        "stats-text: tip-suppression queue_enable failed for 0x{target:x}"
+                    ));
+                    KNOWLEDGE_TIP_REFRESH_ORIG.store(0, Ordering::SeqCst);
+                } else {
+                    refresh_queued = true;
+                }
+                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address -- so letting the handle go does NOT uninstall the hook.
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "stats-text: tip-suppression MhHook::new failed: {status:?}"
+                ));
+            }
         }
     }
     // Second detour in the same apply batch: the advance enabled-predicate. A failure here degrades to
@@ -559,14 +574,23 @@ pub fn install_tip_suppression_hook() {
             }
         }
     }
+    if !refresh_queued && advance_target == 0 {
+        append_autoload_debug(format_args!(
+            "stats-text: NOTHING ARMED -- neither the tip-suppression nor the tip-advance detour \
+             queued; native tips keep rotating this run"
+        ));
+        return;
+    }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
-            KNOWLEDGE_TIP_REFRESH_INSTALLED.store(1, Ordering::SeqCst);
+            if refresh_queued {
+                KNOWLEDGE_TIP_REFRESH_INSTALLED.store(1, Ordering::SeqCst);
+            }
             if advance_target != 0 {
                 KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED.store(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "stats-text: installed tip-suppression detour 0x{target:x} + advance-disable 0x{advance_target:x} (native tips + keyguide -> our stats text)"
+                "stats-text: tip-suppression detour {refresh_target:x?} + advance-disable 0x{advance_target:x} (None/0 = refused for this build; native tips + keyguide -> our stats text)"
             ));
         }
         status => append_autoload_debug(format_args!(

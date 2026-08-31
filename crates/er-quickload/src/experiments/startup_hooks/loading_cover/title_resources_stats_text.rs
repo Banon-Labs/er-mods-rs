@@ -17,26 +17,37 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_MENU_RESOURCE_ACQUIRE_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-resource-observer: failed to resolve AcquireMenuResource rva 0x{TITLE_MENU_RESOURCE_ACQUIRE_RVA:x}"
-        ));
-        return;
+    // THREE ADDRESSES, THREE INDEPENDENT OBSERVERS (2026-08-30). These were three `let Ok(..) else
+    // { log; return; }` bindings ahead of all three installs, so ONE unmapped RVA on 1.17 refused
+    // the other two before either was attempted -- and the Scaleform file-open row is the one this
+    // DLL SHARES with er-armament-icons through the hook union, so losing it silently breaks a
+    // second DLL too. Each row is now resolved into an `Option` and skipped alone; the three
+    // outcomes stay distinguishable (REFUSED = no map row, FAILED = MinHook said no).
+    // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    let resolve = |rva: u32, label: &str| -> Option<usize> {
+        match game_rva(rva) {
+            Ok(addr) => Some(addr),
+            Err(_) => {
+                append_autoload_debug(format_args!(
+                    "title-resource-observer: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the running build; the other observers are unaffected"
+                ));
+                None
+            }
+        }
     };
-    let Ok(file_open_addr) = game_rva(TITLE_SCALEFORM_FILE_OPEN_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-resource-observer: failed to resolve Scaleform file-open rva 0x{TITLE_SCALEFORM_FILE_OPEN_RVA:x}"
-        ));
-        return;
-    };
-    let Ok(resource_ctor_addr) = game_rva(TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-resource-observer: failed to resolve Scaleform resource-ctor rva 0x{TITLE_SCALEFORM_RESOURCE_CTOR_RVA:x}"
-        ));
-        return;
-    };
+    let addr = resolve(
+        TITLE_MENU_RESOURCE_ACQUIRE_RVA as u32,
+        "AcquireMenuResource",
+    );
+    let file_open_addr = resolve(TITLE_SCALEFORM_FILE_OPEN_RVA as u32, "Scaleform file-open");
+    let resource_ctor_addr = resolve(
+        TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32,
+        "Scaleform resource-ctor",
+    );
     let mut ok = true;
-    if TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) == 0 {
+    if let Some(addr) = addr
+        && TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) == 0
+    {
         match unsafe {
             MhHook::new(
                 addr as *mut c_void,
@@ -67,7 +78,9 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     // reaches this same union from its own image through the `er_effects_union_register` export.
     // The union enables its hook immediately rather than through MinHook's queue, so this
     // deliberately sits outside the `MH_ApplyQueued` batch the other two observers share.
-    if TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) == 0 {
+    if let Some(file_open_addr) = file_open_addr
+        && TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) == 0
+    {
         match unsafe {
             crate::mh::register_union_hook(
                 file_open_addr,
@@ -84,7 +97,9 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             }
         }
     }
-    if TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) == 0 {
+    if let Some(resource_ctor_addr) = resource_ctor_addr
+        && TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) == 0
+    {
         match unsafe {
             MhHook::new(
                 resource_ctor_addr as *mut c_void,
@@ -113,8 +128,10 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
             // file-open is NOT set here: the union already enabled and flagged it above.
             TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+            // `{:x?}` on the Options, not `{:x}` on a usize: a refused row now reports `None`
+            // instead of being absent from a line that claims all three were hooked.
             append_autoload_debug(format_args!(
-                "title-resource-observer: hooked AcquireMenuResource 0x{addr:x}, Scaleform file-open 0x{file_open_addr:x}, resource-ctor 0x{resource_ctor_addr:x}; observe-only"
+                "title-resource-observer: AcquireMenuResource {addr:x?}, Scaleform file-open {file_open_addr:x?}, resource-ctor {resource_ctor_addr:x?} (None = refused for this build); observe-only"
             ));
         }
         status => append_autoload_debug(format_args!(

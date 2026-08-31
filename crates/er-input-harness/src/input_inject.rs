@@ -115,7 +115,18 @@ pub fn request_open_ingame_menu(input_manager_ptr: usize) -> bool {
 
 /// Resolve the dereferenced input-manager pointer, or `None` before it is initialized.
 pub fn input_manager(base: usize) -> Option<usize> {
-    unsafe { read_usize(base + INPUT_MANAGER_GLOBAL_RVA) }.filter(|p| *p >= HEAP_LO)
+    // RESOLVED, NOT ADDED: this pointer is the root of a chain that ends in raw byte STORES (the
+    // keystate bitmap and the popup request byte), and every `.data` global moved on 1.17. A raw
+    // `base + rva` would read a moved slot, and `>= HEAP_LO` is far too coarse to catch it.
+    let address = er_game_base::mem::game_data_addr(
+        base,
+        INPUT_MANAGER_GLOBAL_RVA,
+        "INPUT_MANAGER_GLOBAL_RVA",
+    );
+    if address == 0 {
+        return None;
+    }
+    unsafe { read_usize(address) }.filter(|p| *p >= HEAP_LO)
 }
 
 // --- NATIVE EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---

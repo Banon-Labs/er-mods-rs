@@ -85,7 +85,7 @@ def addresses_from_refusal_log(path):
     return seen
 
 
-def build_masked_pattern(image, offset, want_bytes):
+def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_return=True):
     """Decode from `offset` and return `(pattern, mask)` with every version-fragile operand byte
     wildcarded.
 
@@ -99,8 +99,27 @@ def build_masked_pattern(image, offset, want_bytes):
     * Immediates -- ids and sizes get retuned across patches.
 
     What survives is opcode shape and register allocation, which is what identifies a function.
+
+    SEARCHING vs. GATING -- what `rip_only` is for
+    ----------------------------------------------
+    The masking above is tuned for FINDING a function: a candidate set is fine, and the caller
+    then reads the match. A detour's install-time prologue GATE has the opposite need. It already
+    knows the address and is asking "is this the right function", so masking a register-base
+    displacement would make `SAVE_REQUEST_RETRACT_B72_SIG` (`mov byte [rax+0xb72],0`) accept
+    `..._B73_SIG` -- the field offset is the ONLY thing telling the two apart. `rip_only=True`
+    narrows the mask to the strict subset that a gate can justify: the displacement of a
+    RIP-relative memory operand, which re-encodes on every build because both the instruction and
+    the global it names move. Everything else stays compared.
+
+    `build-support/prologue_build.rs` derives exactly that subset with `iced-x86` at build time;
+    `scripts/verify-prologue-masks-1170.py` calls this function to check the two agree, so the
+    rule has one statement and two independent decoders confirming it.
+
+    `stop_at_return=False` keeps decoding past a `ret`/`jmp`, which a gate needs: a generated
+    prologue may legitimately contain one (`QUIT_PHASE_SETTLE_SIG` ends on a `jne`) and the mask
+    must cover the whole pin, not the part before the first terminator.
     """
-    from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+    from capstone import CS_ARCH_X86, CS_MODE_64, Cs, x86_const
 
     md = Cs(CS_ARCH_X86, CS_MODE_64)
     md.detail = True
@@ -113,20 +132,34 @@ def build_masked_pattern(image, offset, want_bytes):
         raw = bytearray(insn.bytes)
         keep = bytearray(b"\x01" * len(raw))
         encoding = getattr(insn, "encoding", None)
-        if encoding is not None:
-            for at, size in (
+        if rip_only:
+            rip_relative = any(
+                operand.type == x86_const.X86_OP_MEM
+                and operand.mem.base == x86_const.X86_REG_RIP
+                for operand in insn.operands
+            )
+            fields = (
+                ((encoding.disp_offset, encoding.disp_size),)
+                if encoding is not None and rip_relative
+                else ()
+            )
+        elif encoding is not None:
+            fields = (
                 (encoding.disp_offset, encoding.disp_size),
                 (encoding.imm_offset, encoding.imm_size),
-            ):
-                if size:
-                    for i in range(at, min(at + size, len(keep))):
-                        keep[i] = 0
+            )
+        else:
+            fields = ()
+        for at, size in fields:
+            if size:
+                for i in range(at, min(at + size, len(keep))):
+                    keep[i] = 0
         pattern += raw
         mask += keep
         consumed += len(raw)
         # A `ret`/`jmp` is a natural end; stopping there keeps a short function's signature from
         # reaching into whatever follows it, which is exactly what defeated the 40-byte default.
-        if insn.mnemonic in ("ret", "jmp"):
+        if stop_at_return and insn.mnemonic in ("ret", "jmp"):
             break
     if not pattern:
         return None, None

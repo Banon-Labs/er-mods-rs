@@ -368,13 +368,18 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        unsafe {
-            *(r8 as *mut usize) = er_game_base::mem::game_data_addr(
-                base,
-                FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
-                "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
-            )
-        };
+        // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+        // moved this vftable and nothing verified where to, and a 0 here is not a
+        // degraded value -- it is a NULL vptr in an object the engine will later
+        // call through. Leaving the field as the native left it is strictly safer.
+        let vftable = er_game_base::mem::game_data_addr(
+            base,
+            FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+            "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+        );
+        if vftable != null {
+            unsafe { *(r8 as *mut usize) = vftable };
+        }
     }
     if NETWORK_CHECK_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(
@@ -589,13 +594,18 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                 && r8 > null
                 && unsafe { safe_read_usize(r8) }.is_some()
             {
-                unsafe {
-                    *(r8 as *mut usize) = er_game_base::mem::game_data_addr(
-                        base,
-                        FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
-                        "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
-                    )
-                };
+                // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+                // moved this vftable and nothing verified where to, and a 0 here is not a
+                // degraded value -- it is a NULL vptr in an object the engine will later
+                // call through. Leaving the field as the native left it is strictly safer.
+                let vftable = er_game_base::mem::game_data_addr(
+                    base,
+                    FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+                    "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+                );
+                if vftable != null {
+                    unsafe { *(r8 as *mut usize) = vftable };
+                }
             }
             if d < 16 || d.is_power_of_two() {
                 append_autoload_debug(format_args!(
@@ -637,13 +647,18 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        unsafe {
-            *(r8 as *mut usize) = er_game_base::mem::game_data_addr(
-                base,
-                FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
-                "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
-            )
-        };
+        // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+        // moved this vftable and nothing verified where to, and a 0 here is not a
+        // degraded value -- it is a NULL vptr in an object the engine will later
+        // call through. Leaving the field as the native left it is strictly safer.
+        let vftable = er_game_base::mem::game_data_addr(
+            base,
+            FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+            "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+        );
+        if vftable != null {
+            unsafe { *(r8 as *mut usize) = vftable };
+        }
     }
     if SHOW_PROGRESS_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(
@@ -1057,7 +1072,11 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
             TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
             "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA"
         ),
-        base + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
+            "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA"
+        ),
     ));
     native_ret
 }

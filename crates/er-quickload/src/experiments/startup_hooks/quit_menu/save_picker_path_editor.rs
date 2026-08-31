@@ -468,36 +468,43 @@ fn software_keyboard_recipe() -> Option<&'static SoftwareKeyboardRecipe> {
                 ctor: save_flow_verify_rva(
                     SOFTWARE_KEYBOARD_JOB_CTOR_RVA,
                     SOFTWARE_KEYBOARD_JOB_CTOR_SIG,
+                    SOFTWARE_KEYBOARD_JOB_CTOR_SIG_MASK,
                     "SoftwareKeyboardJob ctor",
                 )?,
                 validator_init: save_flow_verify_rva(
                     SOFTWARE_KEYBOARD_VALIDATOR_INIT_RVA,
                     SOFTWARE_KEYBOARD_VALIDATOR_INIT_SIG,
+                    SOFTWARE_KEYBOARD_VALIDATOR_INIT_SIG_MASK,
                     "SoftwareKeyboard validator init",
                 )?,
                 validator_dtor: save_flow_verify_rva(
                     SOFTWARE_KEYBOARD_VALIDATOR_DTOR_RVA,
                     SOFTWARE_KEYBOARD_VALIDATOR_DTOR_SIG,
+                    SOFTWARE_KEYBOARD_VALIDATOR_DTOR_SIG_MASK,
                     "SoftwareKeyboard validator dtor",
                 )?,
                 enter_name: save_flow_verify_rva(
                     SOFTWARE_KEYBOARD_ENTER_NAME_RVA,
                     SOFTWARE_KEYBOARD_ENTER_NAME_SIG,
+                    SOFTWARE_KEYBOARD_ENTER_NAME_SIG_MASK,
                     "SoftwareKeyboard EnterName preset",
                 )?,
                 set_initial: save_flow_verify_rva(
                     SOFTWARE_KEYBOARD_SET_INITIAL_RVA,
                     SOFTWARE_KEYBOARD_SET_INITIAL_SIG,
+                    SOFTWARE_KEYBOARD_SET_INITIAL_SIG_MASK,
                     "SoftwareKeyboard initial text setter",
                 )?,
                 set_max: save_flow_verify_rva(
                     SOFTWARE_KEYBOARD_SET_MAX_RVA,
                     SOFTWARE_KEYBOARD_SET_MAX_SIG,
+                    SOFTWARE_KEYBOARD_SET_MAX_SIG_MASK,
                     "SoftwareKeyboard max-length setter",
                 )?,
                 heap_alloc: save_flow_verify_rva(
                     GAME_HEAP_ALLOC_RVA as u32,
                     GAME_HEAP_ALLOC_SIG,
+                    GAME_HEAP_ALLOC_SIG_MASK,
                     "game heap allocator",
                 )?,
                 queue_ready: game_rva(MENU_JOB_QUEUE_READY_RVA).ok()?,
@@ -518,6 +525,7 @@ fn install_software_keyboard_result_hooks() -> bool {
     let Some(address) = save_flow_verify_rva(
         SOFTWARE_KEYBOARD_RESULT_GATE_RVA,
         SOFTWARE_KEYBOARD_RESULT_GATE_SIG,
+        SOFTWARE_KEYBOARD_RESULT_GATE_SIG_MASK,
         "SoftwareKeyboard accepted/cancel gate",
     ) else {
         return false;
@@ -534,6 +542,7 @@ fn install_software_keyboard_result_hooks() -> bool {
     let Some(terminal) = save_flow_verify_rva(
         SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_RVA,
         SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_SIG,
+        SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_SIG_MASK,
         "SoftwareKeyboard terminal callback",
     ) else {
         return false;

@@ -185,10 +185,48 @@ python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
 # the ones it cannot place. Nothing looked at a game address reached as a direct CALL --
 # `transmute(base + SOME_RVA)` -- and that is the worse of the two: a refused detour makes one
 # feature inert and logs why, while a stale call transfers control into whatever now occupies
-# those bytes and faults with no unwind and no record naming anything of ours. 160 such sites
-# exist; this refuses a 161st while they are converted to er_game_base::mem::game_rva.
+# those bytes and faults with no unwind and no record naming anything of ours. ONE such site is
+# left; this refuses a second while it is converted to er_game_base::mem::game_rva.
+#
+# Two defects in the gate itself were fixed on 2026-08-30, and both had made it report a number
+# that was not the truth. It required the constant to be spelled `*RVA*`, so forty converted-since
+# sites in er-build-import-runtime named `GET_MAIN_PLAYER_STATS` were never visible to it; and it
+# matched raw file text, so two of the three rows in its baseline were DOC COMMENTS describing the
+# hazard. The baseline was re-derived from scratch rather than edited, because a ratchet is only
+# meaningful when every row in it is a finding somebody consciously accepted.
+# THE SHARED SYMBOL RESOLVER, gated first because two gates now ask it their central question.
+# It answers "which symbol declares this address" by evaluating VALUES -- literal consts and
+# statics, enum discriminants, `use X as Y` aliases, `const A = path::B` indirection,
+# module-qualified names, arrays, Range bands, bare hex literals in table fields -- rather than by
+# searching for one spelling, which is how both callers were wrong on 2026-08-30. Its controls
+# include an address declared ONLY as an enum discriminant, checked against the frozen pre-fix
+# matcher so the proof that the widening is load-bearing cannot quietly widen with it.
+python3 "$repo_root/scripts/rva_symbols.py" --selftest
 python3 "$repo_root/scripts/check-stale-rva-calls.py" --selftest
 python3 "$repo_root/scripts/check-stale-rva-calls.py"
+# THE HAND-ROW GUARD (2026-08-30). `select-needed-1170-rows.py --refresh` rewrites
+# docs/recon/rva-map-1162-to-1170.needed.tsv WHOLESALE, so until today a pair somebody derived by
+# hand and typed in -- exactly the short .pdata records and body-changed functions the machine map
+# cannot carry -- was deleted by the next refresh at exit 0, with nothing printed and nothing in
+# the diff anyone reads. The loss does not read as a loss afterwards: the address reads as one that
+# was never mapped. The selftest asserts on a fabricated table that such a row is carried forward
+# and that a pair contradicting the function map stops the write instead of being merged. Only the
+# selftest runs here; the `--refresh`/current check is not wired in, because the tracked file
+# tracks constants that land continuously and would make this gate red on somebody else's commit.
+python3 "$repo_root/scripts/select-needed-1170-rows.py" --selftest
+# THE SILENT-COMPARISON GATE (2026-08-30). The two gates above catch stale addresses that are
+# DETOURED or CALLED; both of those announce themselves when they fail. A stale address that is
+# only COMPARED does not. `trace_first_game_caller_rva()` / `callstack_contains_game_rva()` take a
+# return address off the live stack, subtract the module base, and test it against a 1.16.2
+# constant -- nothing is resolved, so nothing is refused, and on a moved build the comparison
+# simply stops matching with no log line anywhere. Nine such sites existed; two of them were
+# user-visible features that were dead on 1.17 in total silence (the three cloned System>Quit rows,
+# and the title FadeIn suppression). The constants are mid-function return addresses, which the
+# address map structurally cannot carry, so the fix is to name the containing function and add the
+# offset at the use site -- see the script's docstring and `scripts/derive-callsite-1170.py`.
+python3 "$repo_root/scripts/check-no-stale-callsite-rva.py" --selftest
+python3 "$repo_root/scripts/check-no-stale-callsite-rva.py"
+python3 "$repo_root/scripts/derive-callsite-1170.py" --selftest
 # THE SILENT-REFUSAL GATE (2026-08-28). Every cdylib statically links its own er-hook/er-game-base,
 # so the log sink is a PER-DLL static and a DLL that never installs one says nothing when the build
 # gate refuses an address. Measured cost: er-armament-icons reported four
@@ -204,6 +242,103 @@ python3 "$repo_root/scripts/check-hook-log-sink.py"
 # implementation of the entry check called 20 of those mid-function, and calibration is what
 # caught it.
 python3 "$repo_root/scripts/audit-1170-hook-targets.py" --selftest
+# THE MID-FUNCTION GATE. `NEITHER-ENTRY` in a verdict table is TWO verdicts wearing one name: a
+# leaf function the x64 ABI let omit unwind data (safe to hook), and an address INSIDE another
+# function (MinHook writes five bytes into a live body). build.rs accepts the word for detours
+# because refusing it would throw away every legitimate leaf, and nothing downstream re-checked
+# which sense it was. MEASURED 2026-08-30, in one merge wave: six mid-function addresses reached
+# or nearly reached the verified table, every one of them carrying `IDENTICAL` over 20-94
+# instructions -- because a mid-function address verifies BETTER than a real entry, sitting in a
+# neighbourhood that did not change. One (0x140aec480, +0x360 inside 0x140aec120) was merged with
+# its own note saying `containing-fn-offset-0x360`, while the real entry (0x140aec570) was already
+# written down in crates/er-title-flow, and crates/er-reload-trace carried a raw `rva: 0xaec480`
+# HookSpec that would have consumed the licence (since removed, on the same day, by a different
+# agent who reached the same address from the other direction).
+#
+# The inversion, stated once: that impostor row is IDENTICAL over 56 instructions and would carry a
+# detour; the CORRECT pair 0xaec570 -> 0xaed880 is IDENTICAL over 9 and is refused one by
+# MIN_VERIFIED_INSNS. The wrong address had the better-looking evidence.
+#
+# So a clean verdict is not evidence of a valid hook target, and no reviewer can be the check.
+# Selftest first, so the gate is never trusted on its own say-so: it builds a .pdata table in
+# memory and proves BOTH senses of NEITHER-ENTRY are separated, then drives the whole failure path
+# on a synthetic mid-function row. The live half skips, saying so, on a checkout without the
+# de-Arxan'd images (they are untracked by policy).
+python3 "$repo_root/scripts/classify-1170-entry-kind.py" --selftest
+python3 "$repo_root/scripts/classify-1170-entry-kind.py" --fail-on-mid
+# THE DUPLICATE-ROW GATE (2026-08-30). er-game-base/build.rs concatenates four address ledgers and
+# finishes with `rows.sort_unstable(); rows.dedup_by_key(|(old, _)| *old)`. `sort_unstable` orders
+# by the WHOLE tuple, so among rows sharing a source the survivor is the one with the numerically
+# SMALLEST destination -- a choice nobody made, applied silently, with the losing row leaving no
+# trace anywhere. Nothing gated ledger duplicates: check-rva-alias-drift.py gates Rust
+# DECLARATIONS, the double-resolve gate below gates a destination that is also somebody's source,
+# and a verdict table verifies a pair without asking whether it was written down twice. MEASURED
+# 2026-08-30: the curated ledger declared 0x1408c47c0 and 0x1409b72b0 twice each. Both pairs
+# agreed, so the maps were right by luck -- and the two 0x1408c47c0 rows disagreed in prose about
+# whether its .pdata record is a chained continuation (it is a ROOT), which is exactly the drift a
+# second row hides.
+#
+# A GENERATED ledger legitimately repeats a source: select-needed-1170-rows.py emits one row per
+# DECLARING NAME, 85 of them today. So the repeat rule applies only to the CURATED ledger, and the
+# selftest carries a false-positive control that fails if anyone widens it. The selftest plants
+# each defect into a COPY of the real tracked ledgers and requires the verdict to flip; 7 of 7
+# mutations of the gate's own rules are caught by it.
+python3 "$repo_root/scripts/check-no-duplicate-ledger-rows.py" --selftest
+python3 "$repo_root/scripts/check-no-duplicate-ledger-rows.py"
+# THE DOUBLE-RESOLVE GATE. A row's 1.17 DESTINATION can also be some other row's 1.16.2 SOURCE,
+# and then translating an address twice does not fail -- it SUCCEEDS, returning a third, unrelated
+# function. The table is keyed by the 1.16.2 side and an address carries no label saying which side
+# it came from, so the second lookup cannot tell an already-translated address from an untranslated
+# one: nothing errors, nothing logs, and a hook lands somewhere it was never meant to. MEASURED
+# 2026-08-30: er-reload-trace's `native_submit` resolved 0x7ac890 -> 0x7ad710 in er-hook, which
+# handed the RESOLVED address to the product's union register, which resolved again -- and
+# 0x7ad710 is itself a tracked source, -> 0x7ae590. Both rows are BYTE-IDENTICAL/BOTH-ENTRIES, so
+# no verdict, audit or entry check had anything to object to.
+#
+# That call path was restructured to resolve exactly once per branch and
+# `register_shared_hook_resolved` was deleted, but single-resolve is a CONVENTION across six crates
+# and the ledgers went from 80 to 470+ rows in a day. This is the machine check the convention did
+# not have: er-game-base's `verified_map_is_idempotent` reads like it covers this and cannot -- it
+# filters to rows where `from != moved`, then asks a predicate requiring `from == moved`, so it is
+# a tautology. Selftest first, so the gate is never trusted on its own say-so; it drives the whole
+# path over synthetic ledgers and re-reads every admission rule out of build.rs rather than
+# copying it, because a copied `EXHAUSTIVE_VERDICTS` already reported one of these tables as 42
+# rows instead of 374.
+#
+# Its claimed-by-no-feature test was fixed on 2026-08-30, and that one had passed WHILE
+# recommending a destructive action: it searched for `const NAME: usize = 0x<addr>;`, and printed
+# "claimed by no feature: deleting it removes this collision at zero cost" whenever it found none.
+# 0xb0d400 is declared `MenuJobWait = 0x00b0d400` inside an enum, reached as
+# TITLE_MENU_JOB_WAIT_RVA, with live uses on the autoload path -- the shape it demanded never
+# occurs, so its advice would have deleted a working feature's address. The answer now has three
+# values (CLAIMED / PROVEN UNCLAIMED / NOT PROVEN) and only the middle one licenses a deletion,
+# and the baselined NOTES are held to the same rule since a note is what a reader actually sees.
+python3 "$repo_root/scripts/check-1170-translation-collisions.py" --selftest
+python3 "$repo_root/scripts/check-1170-translation-collisions.py"
+# THE SECOND OPINION ON THE DATA MAP'S VTABLE ROWS. `map-data-rvas-1162-to-1170.py` carries every
+# datum by the CODE that references it, so each row depends on the function map being right about
+# one function. RTTI depends on none of that: a vtable's [base-8] points at its
+# CompleteObjectLocator, whose TypeDescriptor holds the class's mangled name, and a name occurring
+# once per image identifies its vtable outright. Two methods with disjoint failure modes.
+#
+# This is the gate the failure it guards did not have. `TITLE_OWNER_VTABLE_RVA` is `CS::TitleStep`
+# in 1.16.2 and not a vtable at all at the same address in 1.17, and its three scans had been
+# finding no title owner, forever, with no refusal line and no fault -- a wrong data address does
+# not crash, the comparison simply never matches. 31 of the map's rows are vtables and all 31 are
+# checked here. The selftest runs first and carries its own negative control (every destination
+# shifted onto the next vtable must be rejected); `--prove-selftest-catches-regression` blinds the
+# matcher and requires the selftest to go red, so a green here cannot be vacuous. SKIPs at exit 0
+# without the two gitignored images.
+python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" --selftest
+python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
+# THE WORK-LIST AUDIT. The inventory that says how much of the 1.17 migration is left classified
+# every `*_RVA` constant in a cdylib as an eldenring.exe address, by NAME. Four of them are
+# Seamless Co-op's, added to `GetModuleHandleA("ersc.dll")`, and an ELDEN RING patch does not move
+# them: translating one through the game map and detouring the result would have put five bytes of
+# jmp into an unrelated game function. Two agents caught it by reading the code and no checker did.
+# The selftest pins the four foreign addresses, the plausibility bounds that are not addresses at
+# all, and two REAL game addresses as the control, so an exclusion that ate real work fails too.
+python3 "$repo_root/scripts/audit-1170-coverage-inventory.py" --selftest
 # THE VERSION GATE. On 2026-08-29 every product DLL died within a second of loading, and it took
 # eight game launches to find out why: `ERGameVersion::from_lang_version` in the sibling
 # fromsoftware-rs checkout accepted only "2.6.2.0" and "2.6.2.1", the game had become 2.7.0.0, and
@@ -330,6 +465,25 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-invasion-path
 # nothing to run here for those two: `check-rust-build.sh` keeps them building for the shipping
 # target, and the DLL half is proven in game.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
+
+# Two gates the repo had no equivalent of, both reading the INSTALLED regulation.bin. 1.17 added
+# CharaInitParam rows 3010/3011 -- two new starting classes -- and nothing in Rust could notice:
+# STARTING_CLASSES was a [&str; 10], so build export answered None for an Idus Knight and import
+# never set the class (er-effects-rs-d3jz). The effects.json check replaces `er-param-inspect
+# validate`, which needs a Smithbox checkout and a dotnet bridge to reach a verdict that needs
+# neither (er-effects-rs-7ics). Both are dependency-free and sub-second.
+#
+# They run HERE and nowhere else on purpose. Their authority is the regulation.bin of the game
+# installed on this machine, so a missing regulation is exit 2 rather than a pass -- "could not
+# look" must never read as "agreed". The single escape hatch is an explicit
+# ER_ALLOW_MISSING_REGULATION=1, which downgrades that to a printed `SKIPPED: ... was NOT checked`
+# line on stderr. Do NOT set it on a developer machine that has the game: it converts the only
+# gate that reads real param data into a line of log noise. .github/workflows/check.yml does not
+# invoke this script -- it re-implements a chosen subset of these steps as its own job steps -- and
+# a GitHub runner has no game install, so these two are deliberately absent from CI. Adding them
+# there would print SKIPPED on every run forever, which is a green that means nothing.
+python3 "$repo_root/scripts/diff-regulation-params.py" --effects-json
+python3 "$repo_root/scripts/check-starting-classes.py"
 
 # er-telemetry-core's host-portable logic. The workspace pins `default-members` to the DLL crate, so the
 # windows-target `cargo xwin test --lib` below selects er-quickload ONLY and never ran these -- a
