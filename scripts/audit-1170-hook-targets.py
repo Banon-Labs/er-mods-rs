@@ -49,6 +49,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMAGE_1170 = os.path.join(ROOT, "eldenring-deobf-1.17.bin")
 IMAGE_1162 = os.path.join(ROOT, "eldenring-deobf.bin")
 VERIFIED = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.verified.tsv")
+NEEDED_VERIFIED = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.needed-verified.tsv")
+# BOTH ledgers, because `emit_address_map` builds DETOUR_SAFE_1162_TO_1170 from BOTH:
+#
+#     let mut detour_safe: Vec<(u32, u32)> = verified_detourable;          // VERIFIED_MAP
+#     detour_safe.extend(detourable_pairs(&...join(NEEDED_VERIFIED_MAP))); // NEEDED_VERIFIED_MAP
+#
+# Until 2026-08-31 this file read only the first of the two, so it judged ~100 of the ~450
+# addresses that actually reach a detour and reported the other ~350 as if they had been
+# examined. That is the SAME defect one level up as the vacuity bug `rva_admission` exists to
+# stop: "no admitted row is mid-function" is a claim about the rows you looked at, and half the
+# table was outside the quantifier. It is also exactly where the 2026-08-31 incident lived --
+# `0x140001000` (er-hook's `FIRST_SECTION_RVA`, a PE section-boundary constant harvested as
+# though it were a function address) is a needed-verified row, and the mid-function address the
+# gate flagged that day, `0x140001050`, is 0x10 bytes into its neighbour.
+DETOUR_SAFE_LEDGERS = (VERIFIED, NEEDED_VERIFIED)
 BASE = 0x140000000
 # er-game-base/build.rs admits exactly these rows; the audit must see the same set it will
 # install, so the admission rule is READ OUT OF build.rs rather than transcribed here.
@@ -132,23 +147,32 @@ def build_rs_admission():
 def rows(path=None, rule_set=None):
     """(1.16.2 VA, 1.17 VA) exactly as `er-game-base/build.rs::detourable_pairs` filters them.
 
+    With no `path`, this is the WHOLE detour table: both ledgers `emit_address_map` unions into
+    `DETOUR_SAFE_1162_TO_1170`. See [`DETOUR_SAFE_LEDGERS`] for why reading one of them was a
+    hole rather than a shortcut.
+
     `path`/`rule_set` exist so the selftest can point the SAME filter at a synthetic table and
     watch it go red; a gate whose real input is its only input cannot be shown to have teeth.
     """
     rule_set = rule_set or build_rs_admission()
-    table = path or VERIFIED
-    # `admit_rows` refuses outright when a non-empty table yields no admitted rows -- the vacuity
-    # this gate spent part of 2026-08-30 wearing as a green tick.
-    admitted, _unknown = rva_admission.admit_rows(
-        table,
-        rule_set,
-        label=f"detourable rows of {os.path.relpath(table, ROOT)}",
-    )
-    # A SET, because the table records provenance as well as addresses and the same pair can be
-    # written twice by two agents who found it two ways -- 0x1409b72b0 and 0x1408c47c0 each appear
-    # with two different "how it was mapped" notes. Judged as a list they became two targets zero
-    # bytes apart, and the OVERLAP check dutifully reported each as colliding with itself.
-    out = {(int(f[0], 16), int(f[1], 16)) for f in admitted}
+    tables = [path] if path else list(DETOUR_SAFE_LEDGERS)
+    out = set()
+    for table in tables:
+        # `admit_rows` refuses outright when a non-empty table yields no admitted rows -- the
+        # vacuity this gate spent part of 2026-08-30 wearing as a green tick. Per LEDGER, not over
+        # the union: a union stays comfortably non-empty while one of its two halves silently
+        # stops matching, which is the same green tick with an extra step in front of it.
+        admitted, _unknown = rva_admission.admit_rows(
+            table,
+            rule_set,
+            label=f"detourable rows of {os.path.relpath(table, ROOT)}",
+        )
+        # A SET, because the table records provenance as well as addresses and the same pair can be
+        # written twice by two agents who found it two ways -- 0x1409b72b0 and 0x1408c47c0 each
+        # appear with two different "how it was mapped" notes, and the two ledgers overlap outright.
+        # Judged as a list they became two targets zero bytes apart, and the OVERLAP check dutifully
+        # reported each as colliding with itself.
+        out.update((int(f[0], 16), int(f[1], 16)) for f in admitted)
     return sorted(out, key=lambda pair: pair[1])
 
 
@@ -157,8 +181,19 @@ def xref_targets(blob, wanted):
 
     One linear pass for the relative forms (every 0xE8/0xE9 byte is treated as a candidate
     opcode and its rel32 resolved -- false candidates resolve outside the image or miss the
-    set), plus a direct search for each address's little-endian 8-byte encoding, which is how
-    a vtable slot or a jump table names a function.
+    set), plus a search for the little-endian 8-byte encoding, which is how a vtable slot or a
+    jump table names a function.
+
+    THE POINTER SEARCH IS SHARED, NOT PER-ADDRESS, and that is what makes the cost independent
+    of how many rows the ledgers hold. Searching each address's own 8-byte needle meant one
+    98 MB scan per address: fine at the 100 rows this file used to judge, 34s at the 422 it
+    judges now, and past `audit-selftest-vacuity.py`'s 25s per-script cap -- i.e. widening the
+    scope to close a coverage hole would have made a DIFFERENT gate go red, which is how a hole
+    gets argued for on cost. Every needle for a VA in this image ends in the same five bytes
+    (`<0x40|0x41|0x42> 01 00 00 00`), so scanning for those few suffixes and reconstructing the
+    low three bytes at each hit finds exactly the same occurrences -- unaligned ones included --
+    in a fixed handful of passes. Asserted equivalent against the per-address form over the live
+    address set before replacing it.
     """
     hits = {va: {"call": 0, "jmp": 0, "ptr": 0} for va in wanted}
     limit = len(blob)
@@ -170,11 +205,33 @@ def xref_targets(blob, wanted):
             if dest in hits:
                 hits[dest][kind] += 1
             pos = blob.find(bytes([opcode]), pos + 1)
+    # The distinct high halves actually present, so an address outside 0x140-0x142 (or a future
+    # image with a fourth) still gets its own pass rather than being silently skipped.
+    for suffix in {va.to_bytes(8, "little")[3:] for va in wanted}:
+        pos = blob.find(suffix)
+        while pos != -1:
+            if pos >= 3:
+                va = int.from_bytes(blob[pos - 3 : pos + 5], "little")
+                if va in hits:
+                    hits[va]["ptr"] += 1
+            pos = blob.find(suffix, pos + 1)
+    return hits
+
+
+def _per_address_pointer_scan(blob, wanted):
+    """The straightforward one-scan-per-address pointer search, kept as an equivalence fixture.
+
+    `xref_targets` replaced it with a shared-suffix scan for SPEED, and a faster thing that
+    quietly finds fewer references would turn ENTRY-OK rows into MID-FUNCTION ones -- the exact
+    false positive this file was rebuilt to stop making. So the obvious implementation stays here
+    and the selftest asserts the two agree, rather than the docstring asserting it once.
+    """
+    hits = {va: 0 for va in wanted}
     for va in wanted:
         needle = va.to_bytes(8, "little")
         pos = blob.find(needle)
         while pos != -1:
-            hits[va]["ptr"] += 1
+            hits[va] += 1
             pos = blob.find(needle, pos + 1)
     return hits
 
@@ -269,6 +326,51 @@ def entry_verdict(hit, pdata_starts=None, va=None, pdata_spans=None):
             f"0x{BASE + enclosing[0]:x}"
         )
     return False, "nothing references it and .pdata declares no entry"
+
+
+def instruction_boundary(blob, va, enclosing):
+    """Is `va` even an instruction boundary of the function `.pdata` declares at `enclosing`?
+
+    THIS IS THE DISCRIMINATOR THE MID-FUNCTION FLAG WAS MISSING, and without it that flag hands
+    the reader a disjunction it cannot resolve. `entry_verdict` answering "inside a declared
+    function" has two causes with opposite fixes:
+
+      * the CHECK is wrong -- `.pdata` merged a tail, or declared an extent covering a second
+        real entry, so a perfectly good target reads as interior. That is not hypothetical: the
+        ENTRY check this file replaced called 20 of the project's 27 known-good hook targets
+        mid-function, and a boundary source can be wrong the same way again; or
+      * the DATA is wrong -- somebody put an address in a detour ledger that is not a function.
+
+    Decoding forward from the declared start separates them, because an address that is not on an
+    instruction boundary CANNOT be a function entry in any build, under any boundary source, no
+    matter how wrong `.pdata` is. There is nothing to argue about and nothing to loosen: MinHook
+    would relocate the tail of one instruction and the head of the next, and the trampoline would
+    return into the middle of an operand.
+
+    Measured on the address that prompted this (2026-08-31): 1.16.2 `0x140001050` sits 4 bytes
+    into the 7-byte `lea rdx, [rip + 0x30a5c75]` at `0x14000104c`, inside `0x140001040`
+    (`.pdata` 0x1040..0x111c; Ghidra's independent analysis says entry 0x140001040, body end
+    0x14000111b -- three sources, one answer).
+
+    Returns `(on_boundary, detail)`. `on_boundary` is None when the decode desynchronised or ran
+    off the end before reaching `va`, which is an answer about the DECODE and must not be read as
+    either verdict.
+    """
+    start = BASE + enclosing[0]
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = False
+    previous = None
+    for insn in md.disasm(blob[enclosing[0] : enclosing[1]], start):
+        if insn.address == va:
+            return True, f"on an instruction boundary of 0x{start:x} ({insn.mnemonic} {insn.op_str})"
+        if insn.address > va:
+            return False, (
+                f"NOT an instruction boundary: it is {va - previous.address} bytes into the "
+                f"{previous.size}-byte `{previous.mnemonic} {previous.op_str}` at "
+                f"0x{previous.address:x}"
+            )
+        previous = insn
+    return None, f"the decode of 0x{start:x} did not reach it -- boundary unknown"
 
 
 def trampoline_walk(blob, va):
@@ -531,9 +633,15 @@ def audit(image_path, pairs, column, label):
         va = pair[column]
         flags = []
         ok, why = entry_verdict(hits[va], starts, va, spans)
-        detail = why
         if not ok:
+            # Say WHICH of the flag's two causes it is, rather than leaving the reader to guess
+            # and reach for the checker. See `instruction_boundary`.
+            enclosing = _inside_declared_function(va - BASE, spans)
+            if enclosing is not None:
+                _on_boundary, boundary_why = instruction_boundary(blob, va, enclosing)
+                why = f"{why}; {boundary_why}"
             flags.append(f"MID-FUNCTION ({why})")
+        detail = why
         ok, why = patch_safe(blob, va)
         if not ok:
             flags.append(f"PATCH-UNSAFE ({why})")
@@ -596,20 +704,35 @@ PATCH_SAFE_CASES = (
 def selftest():
     """Calibrate on input whose answer is already known, then assert the deliberate negatives.
 
-    The 1.16.2 SOURCE addresses are hooked successfully today, so a check that calls any of them
-    mid-function or unpatchable is broken -- which is exactly how the previous ENTRY check was
-    caught, and how the first draft of the current PATCH check was caught. The negative controls
-    are an address two bytes into a known entry, and the byte-dictated `PATCH_SAFE_CASES`.
+    Most of the 1.16.2 SOURCE addresses are hooked successfully today, so a check that calls the
+    long-standing ones mid-function or unpatchable is broken -- which is exactly how the previous
+    ENTRY check was caught, and how the first draft of the current PATCH check was caught. That
+    inference is NOT a licence to read every calibration failure as "the check is broken": the set
+    is every row both detour ledgers admit, it grows, and a new row can be genuinely bad. The
+    positive control below plants exactly such a row and requires the gate to catch it.
+
+    The negative controls are an address two bytes into a known entry, and the byte-dictated
+    `PATCH_SAFE_CASES`.
     """
     pairs = rows()
     # An empty calibration passes `bad == 0` while checking nothing. That is how this gate spent
     # part of 2026-08-30 green: the verifier renamed its verdicts and `rows()` matched none of
-    # them. There is no plausible state of the verified table in which zero rows are detourable.
+    # them. There is no plausible state of these tables in which zero rows are detourable.
     assert pairs, (
-        f"{os.path.relpath(VERIFIED, ROOT)} yielded NO detourable rows -- the admission rule read "
-        f"out of {os.path.relpath(BUILD_RS, ROOT)} matched nothing. Realign it; do not let the "
+        "neither "
+        + " nor ".join(os.path.relpath(p, ROOT) for p in DETOUR_SAFE_LEDGERS)
+        + f" yielded any detourable rows -- the admission rule read out of "
+        f"{os.path.relpath(BUILD_RS, ROOT)} matched nothing. Realign it; do not let the "
         "calibration pass on an empty set."
     )
+    # ...and BOTH ledgers must contribute, because they are unioned. One of them quietly falling to
+    # zero leaves a comfortably non-empty union and the same unexamined half the 2026-08-31
+    # incident lived in.
+    for ledger in DETOUR_SAFE_LEDGERS:
+        assert rows(ledger), (
+            f"{os.path.relpath(ledger, ROOT)} contributes NO detourable rows to "
+            "DETOUR_SAFE_1162_TO_1170, so nothing in it is being audited. build.rs still reads it."
+        )
 
     # THE NEGATIVE CONTROL FOR THE VACUITY CLASS. The control this class needs is NOT "plant a bad
     # row and see it caught" -- a filter matching zero rows catches nothing at all, planted or
@@ -659,9 +782,20 @@ def selftest():
         + "\n".join(f"    {arrow}  {why}" for arrow, why in bad)
         + "\n\nRead this failure carefully before touching anything, because it has two very "
         "different causes and only one of them is here.\n"
-        "  * If a row is flagged MID-FUNCTION or the byte counts look impossible, the CHECK is "
-        "broken -- that is how the previous ENTRY check (20 of 27 known-good addresses called "
-        "mid-function) and the first draft of this PATCH check were both caught. Fix it here.\n"
+        "  * A MID-FUNCTION flag NOW CARRIES ITS OWN DISCRIMINATOR -- read to the end of the "
+        "parenthesis. `NOT an instruction boundary` means the DATA is wrong and nothing here can "
+        "or should be changed: an address that is not an instruction boundary cannot be a "
+        "function entry in ANY build, under ANY boundary source. Find what put that row in the "
+        "ledger. Measured example, 2026-08-31: 1.16.2 `0x140001050` is 4 bytes into the 7-byte "
+        "`lea` at `0x14000104c`, inside the function `.pdata` declares at `0x140001040` -- "
+        "confirmed identically by `.pdata`, by capstone, and by Ghidra's own analysis.\n"
+        "  * `on an instruction boundary` (or `boundary unknown`) is the case where the CHECK may "
+        "be at fault, because `.pdata` can merge a tail or cover a second real entry -- that is "
+        "how the previous ENTRY check (20 of 27 known-good addresses called mid-function) and the "
+        "first draft of this PATCH check were both caught. Fix it here.\n"
+        "  * Do NOT read the calibration set as `the 27 addresses we hook today`. It is every row "
+        "BOTH detour ledgers admit (see DETOUR_SAFE_LEDGERS), it grows as agents add rows, and a "
+        "newly added bad row is now the likelier of the two explanations.\n"
         "  * If a row is flagged PATCH-UNSAFE on a short function, the DATA is wrong and this "
         "file is right. `IDENTICAL-LEAF` grants a detour licence after checking that no branch "
         "targets the patched bytes, but NOT that those five bytes exist: a 3-byte leaf with no "
@@ -677,6 +811,51 @@ def selftest():
     starts, spans = pdata_functions(blob)
     ok, why = entry_verdict(hits[inside], starts, inside, spans)
     assert not ok, f"an address inside a function must not read as an entry, got {why}"
+
+    # THE POSITIVE CONTROL, end to end, on the address from the 2026-08-31 incident. The control
+    # above exercises `entry_verdict` in isolation; this one drives the whole path a bad LEDGER ROW
+    # takes -- `audit()` over a planted pair -- and requires the gate to go red, name the containing
+    # function, and say the row is not even an instruction boundary. Without it "the gate would
+    # catch a mid-function row" is a claim nobody has watched come true, and the calibration going
+    # green means only that today's rows are fine.
+    #
+    # 1.16.2 0x140001050 is 0x10 bytes into the function `.pdata` declares at 0x140001040
+    # (0x1040..0x111c) and 4 bytes into the 7-byte `lea rdx, [rip + 0x30a5c75]` at 0x14000104c.
+    # Ghidra's independent analysis of the same image: entry 0x140001040, body end 0x14000111b.
+    planted = 0x140001050
+    caught = audit(IMAGE_1162, [(planted, planted)], 0, "1.16.2 (positive control)")
+    assert caught, (
+        f"POSITIVE CONTROL FAILED: 0x{planted:x} is 4 bytes into a `lea` inside the function "
+        "`.pdata` declares at 0x140001040, and the audit passed it. The gate cannot catch the "
+        "defect it exists to catch."
+    )
+    _arrow, reason = caught[0]
+    assert "MID-FUNCTION" in reason and "0x140001040" in reason, (
+        f"the positive control was flagged, but not as a mid-function landing in 0x140001040, so "
+        f"it is proving something else: {reason}"
+    )
+    assert "NOT an instruction boundary" in reason, (
+        "the flag must say WHICH of its two causes this is, or the reader is sent to loosen the "
+        f"checker over a row that is simply wrong: {reason}"
+    )
+    print("positive control: a genuinely mid-function ledger row is caught and named as bad DATA")
+
+    # THE POINTER SCAN'S EQUIVALENCE, measured rather than asserted in prose. A sample, because
+    # the fixture is one 98MB scan per address and the whole point of the replacement was that
+    # that does not scale; a handful is enough to catch a suffix/offset error, which would be
+    # wrong for every address rather than for a rare one. Addresses whose ONLY entry evidence is
+    # a stored pointer are picked first, since those are the rows a missed hit would flip.
+    sample = [old for old, _new in pairs[:6]]
+    sample += [0x140001000, planted]  # the image-floor `.pdata` entry, and the planted interior
+    reference = _per_address_pointer_scan(images["1.16.2"], set(sample))
+    measured = xref_targets(images["1.16.2"], set(sample))
+    for va in sample:
+        assert measured[va]["ptr"] == reference[va], (
+            f"the shared-suffix pointer scan disagrees with the per-address one at 0x{va:x}: "
+            f"{measured[va]['ptr']} vs {reference[va]}. A scan that finds fewer references turns "
+            "ENTRY-OK rows into MID-FUNCTION ones."
+        )
+    print(f"pointer scan: shared-suffix and per-address agree on {len(sample)} addresses")
     print("\nselftest OK")
     return 0
 
