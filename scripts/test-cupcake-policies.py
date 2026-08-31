@@ -150,11 +150,20 @@ def run_case(case: PolicyCase) -> None:
 # The protected-paths suite is the one that matters most, because
 # BUILTIN-PROTECTED-PATHS-PARENT and -WRAPPER are the rules standing between an
 # agent and a root delete, and until today nothing ran their tests at all.
+# It is also where a NEW suite belongs. check.sh lists its `opa test` invocations
+# one line at a time, so a suite added to .cupcake/tests/ without an edit to that
+# list is born orphaned -- which is how four of them accumulated 89 never-executed
+# assertions. `opa test .cupcake/` would run everything and no gate calls it.
 ORPHANED_REGO_SUITES = [
     [
         ".cupcake/system/commands.rego",
         ".cupcake/policies/claude/builtins/protected_paths.rego",
         ".cupcake/tests/protected_paths_test.rego",
+    ],
+    [
+        ".cupcake/system/commands.rego",
+        ".cupcake/policies/claude/guard_layer_destructive_guard.rego",
+        ".cupcake/tests/guard_layer_destructive_guard_test.rego",
     ],
     [
         ".cupcake/policies/claude/edit_no_tmp_scripts_guard.rego",

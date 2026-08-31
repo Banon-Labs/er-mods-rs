@@ -772,6 +772,256 @@ def check_hooks_path_forms() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 6. A CONFIGURED BUILTIN IS NOT AN ENABLED BUILTIN
+# ---------------------------------------------------------------------------
+#
+# `rulebook_security_guardrails` -- upstream's TOTAL LOCKDOWN of `.cupcake/` and
+# `.git/hooks/` -- was configured in .cupcake/rulebook.yml with a message and a
+# protected_paths list, and it had never run once. cupcake 0.5.2 treats a builtin
+# as DISABLED unless its block carries an explicit `enabled: true`, so the engine
+# logged `Skipping disabled builtin policy` and the rulebook's own comment
+# ("Builtins are ENABLED BY DEFAULT when configured") was simply false.
+#
+# An agent editing `.cupcake/` all session believed it was locked down. Nothing
+# in either test suite could have told it otherwise, because a policy that is
+# never compiled produces no decisions -- and no decisions is indistinguishable
+# from a clean event.
+#
+# So the mechanism is pinned here by MEASUREMENT, in both directions: the live
+# tree must not enable it, and a copy differing by that one line must deny what
+# the live tree allows. If a cupcake upgrade changes the default, or someone adds
+# the key, this goes red and the decision recorded in .cupcake/rulebook.yml gets
+# re-made deliberately instead of drifting.
+LOCKDOWN_BUILTIN = "rulebook_security_guardrails"
+EXPECTED_ENABLED_BUILTINS = {"git_pre_check", "protected_paths", "git_block_no_verify"}
+
+
+def _enabled_builtins() -> set[str]:
+    result = subprocess.run(
+        ["cupcake", "eval", "--harness", "claude", "--log-level", "info",
+         "--policy-dir", str(CUPCAKE_DIR)],
+        cwd=REPO_ROOT,
+        input=json.dumps(bash_event("echo hi")),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=25,
+        env={**os.environ, **BASE_ENV},
+    )
+    match = re.search(r"Enabled builtins: \[([^\]]*)\]", result.stdout + result.stderr)
+    if not match:
+        raise Failure(
+            "cupcake no longer logs an `Enabled builtins:` line, so which builtins are live "
+            "can no longer be measured here."
+        )
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+def _write_verdict(policy_dir: Path, file_path: str) -> bool:
+    """True when a Write to `file_path` is ALLOWED by the policies in `policy_dir`."""
+    event = {
+        "session_id": "cupcake-delivered-shape",
+        "transcript_path": "/tmp/cupcake-delivered-shape.jsonl",
+        "cwd": str(REPO_ROOT),
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "permission_mode": "default",
+        "tool_input": {"file_path": file_path, "content": "package probe"},
+        "signals": {},
+    }
+    result = subprocess.run(
+        ["cupcake", "eval", "--harness", "claude", "--log-level", "error",
+         "--policy-dir", str(policy_dir)],
+        cwd=REPO_ROOT,
+        input=json.dumps(event),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=25,
+        env={**os.environ, **BASE_ENV},
+    )
+    body = {}
+    try:
+        body = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        pass
+    return (body.get("hookSpecificOutput") or {}).get("permissionDecision", "allow") != "deny"
+
+
+def check_lockdown_builtin_is_off() -> list[str]:
+    findings = []
+
+    enabled = _enabled_builtins()
+    if LOCKDOWN_BUILTIN in enabled:
+        raise Failure(
+            f"{LOCKDOWN_BUILTIN} is now ENABLED. That is a total lockdown of .cupcake/ -- no "
+            "read, no write, no Grep, no Task prompt mentioning it -- which makes the policy "
+            "layer unauditable and denies `opa test`, `git commit --` and every inspection "
+            "one-liner against it. .cupcake/rulebook.yml records why it is off; re-read that "
+            "before turning it on."
+        )
+    if not EXPECTED_ENABLED_BUILTINS <= enabled:
+        raise Failure(
+            f"a builtin that WAS enabled has gone quiet: expected {sorted(EXPECTED_ENABLED_BUILTINS)}, "
+            f"engine reports {sorted(enabled)}. A builtin drops off this list the moment its "
+            "`enabled: true` is removed, and it fails silent."
+        )
+    findings.append(f"{LOCKDOWN_BUILTIN} is not among the enabled builtins: {sorted(enabled)}")
+
+    # The flip, measured. Same tree, one added line.
+    probe_path = str(CUPCAKE_DIR / "policies" / "claude" / "delivered_shape_probe.rego")
+    if not _write_verdict(CUPCAKE_DIR, probe_path):
+        raise Failure(
+            "a Write into the policy tree is now DENIED against the live configuration. "
+            "Something enabled a lockdown; see .cupcake/rulebook.yml."
+        )
+
+    staging = tempfile.mkdtemp(prefix="cupcake-lockdown-flip-")
+    try:
+        copy = Path(staging) / ".cupcake"
+        shutil.copytree(CUPCAKE_DIR, copy)
+        rulebook = copy / "rulebook.yml"
+        text = rulebook.read_text(encoding="utf-8")
+        anchor = f"  {LOCKDOWN_BUILTIN}:\n    enabled: false\n"
+        if anchor not in text:
+            raise Failure(
+                f"the {LOCKDOWN_BUILTIN} block is no longer spelled `enabled: false` in "
+                ".cupcake/rulebook.yml, so this measurement cannot flip it. If the block was "
+                "removed, remove this check with it -- do not leave it asserting nothing."
+            )
+        rulebook.write_text(
+            text.replace(anchor, f"  {LOCKDOWN_BUILTIN}:\n    enabled: true\n"), encoding="utf-8"
+        )
+        if _write_verdict(copy, probe_path):
+            raise Failure(
+                "flipping `enabled: false` to `enabled: true` no longer changes the verdict. "
+                "Either the builtin's semantics changed or the `enabled` key stopped being what "
+                "gates it -- the claim in .cupcake/rulebook.yml is then stale."
+            )
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    findings.append(
+        "`enabled: true` is what gates a builtin: the same Write is allowed at false, denied at true"
+    )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# 7. The guard-layer destructive rule, through the production path
+# ---------------------------------------------------------------------------
+#
+# CLAUDE-GUARD-LAYER-DESTRUCTIVE is what replaced the lockdown: it denies
+# destructive SHELL operations on `.cupcake` and `.git/hooks` and leaves reading,
+# editing and testing alone. The `opa test` suite covers its matching; these
+# cases cover the two things the interpreter cannot see -- a multi-line command
+# (whose second statement exists only because the hook shim rewrites the newline)
+# and the engine's own normalisation of the text before any policy runs.
+#
+# Assembled from tokens for the reason this whole file is: written whole, a
+# heredoc editing this file would carry a destructive verb beside `.cupcake` in
+# command position, and the rule under test would deny the edit.
+CUPCAKE_DIR_TOKEN = "." + "cupcake"
+GIT_HOOKS_TOKEN = ".git/" + "hooks"
+DELETE_RECURSIVE = " ".join(["rm", "-rf"])
+GUARD_LAYER_REASON = "Destructive shell operation on the guard layer"
+
+# (name, command, expect_allow)
+GUARD_LAYER_CASES = [
+    # ---- must be DENIED ------------------------------------------------------
+    ("recursive delete of the policy tree", f"{DELETE_RECURSIVE} {CUPCAKE_DIR_TOKEN}", False),
+    (
+        "MULTI-LINE: a destructive SECOND line, visible only through the shim's `; `",
+        f"echo tidying up\n{DELETE_RECURSIVE} {CUPCAKE_DIR_TOKEN}",
+        False,
+    ),
+    (
+        "inside a fish -c wrapper payload -- the form AGENTS.md recommends",
+        f"fish -c '{DELETE_RECURSIVE} {CUPCAKE_DIR_TOKEN}'",
+        False,
+    ),
+    ("reverting uncommitted guard work", f"git checkout -- {CUPCAKE_DIR_TOKEN}", False),
+    ("deleting the git hooks directory", f"{DELETE_RECURSIVE} {GIT_HOOKS_TOKEN}", False),
+    # ---- must be ALLOWED: this layer has to stay maintainable -----------------
+    ("running the policy suite", f"opa test {CUPCAKE_DIR_TOKEN}/", True),
+    (
+        "committing a policy change by explicit path",
+        f"git commit -F /tmp/msg.txt -- {CUPCAKE_DIR_TOKEN}/rulebook.yml",
+        True,
+    ),
+    (
+        "an unrelated delete beside a policy read -- segments must not share operands",
+        f"rm -f /tmp/scratch.json && opa test {CUPCAKE_DIR_TOKEN}/",
+        True,
+    ),
+    (
+        "a doc heredoc that merely QUOTES the destructive command",
+        f"cat > docs/guards.md <<'EOF'\n{DELETE_RECURSIVE} {CUPCAKE_DIR_TOKEN}\nEOF",
+        True,
+    ),
+    # THE IN-VIVO FALSE POSITIVE. `{` is a command-position anchor and is the one
+    # such character that quoted-span blanking does NOT neutralise, so an inline
+    # python set literal put `rm` in command position and the rule denied the
+    # one-liner that was auditing it. It belongs here rather than only in
+    # `opa test` because the blanking that creates the shape happens in the
+    # engine, on text the interpreter never sees.
+    (
+        "an inline python script naming a verb and a policy path",
+        "python3 -c \"s={'" + "rm" + "'}; open('"
+        + CUPCAKE_DIR_TOKEN
+        + "/policies/claude/x.rego')\"",
+        True,
+    ),
+]
+
+
+def check_guard_layer_forms() -> list[str]:
+    """Both directions through the shim, with the same vacuity guard as section 5.
+
+    An allow-case passes just as happily when the engine has eaten the path token
+    before any policy ran, and then it proves nothing. So every allow-case also
+    asserts the guard-layer path is still present in the DELIVERED text.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def measure(case):
+        name, command, expect_allow = case
+        # The delivered text is only needed to prove an allow is not vacuous;
+        # fetching it costs a second process, so deny-cases skip it.
+        direct = eval_bash(command) if expect_allow else None
+        return name, command, expect_allow, eval_through_shim(command), direct
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        measured = list(pool.map(measure, GUARD_LAYER_CASES))
+
+    rows = []
+    for name, command, expect_allow, outcome, direct in measured:
+        if outcome["allowed"] != expect_allow:
+            raise Failure(
+                f"guard-layer case {name!r}: expected "
+                f"{'allow' if expect_allow else 'deny'} from the production path, got "
+                f"{'allow' if outcome['allowed'] else 'deny'}\n"
+                f"  typed  {command!r}\n"
+                f"  reason {outcome['reason'][:300]}"
+            )
+        if not expect_allow and GUARD_LAYER_REASON not in outcome["reason"]:
+            raise Failure(
+                f"guard-layer case {name!r}: denied, but not by CLAUDE-GUARD-LAYER-DESTRUCTIVE "
+                f"(no {GUARD_LAYER_REASON!r} in the reason). A denial from another rule is not "
+                f"evidence that this one works.\n  reason {outcome['reason'][:300]}"
+            )
+        if expect_allow:
+            delivered = (direct["delivered"] or "").lower()
+            if CUPCAKE_DIR_TOKEN not in delivered:
+                raise Failure(
+                    f"guard-layer case {name!r} is VACUOUS: the delivered text no longer names "
+                    "the guard layer, so this allow says nothing about whether the rule is "
+                    f"scoped correctly.\n  typed     {command!r}\n  delivered {direct['delivered']!r}"
+                )
+        rows.append(f"{'allow' if expect_allow else 'deny ':<5} {name}")
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # selftest
 # ---------------------------------------------------------------------------
 
@@ -820,7 +1070,11 @@ def selftest() -> int:
         globals()["load_delivered_cases"] = original
     print("test-cupcake-delivered-shape: selftest OK (a fictional fixture is rejected)")
 
-    return selftest_hooks_path()
+    for stage in (selftest_hooks_path, selftest_guard_layer, selftest_lockdown_flip):
+        rc = stage()
+        if rc:
+            return rc
+    return 0
 
 
 def selftest_hooks_path() -> int:
@@ -871,6 +1125,81 @@ def selftest_hooks_path() -> int:
     return 0
 
 
+def selftest_guard_layer() -> int:
+    """Sabotage the guard-layer table and prove the check goes red both ways.
+
+    The two failure directions are not symmetric in consequence, so both are
+    exercised: a destructive command wrongly claimed allowed (the guard is dead),
+    and a maintenance command wrongly claimed denied (the guard is theatre that
+    will be worked around).
+    """
+    original = GUARD_LAYER_CASES[:]
+    sabotage = [
+        (
+            "claims a recursive delete of the policy tree is allowed",
+            [("sabotage-delete", f"{DELETE_RECURSIVE} {CUPCAKE_DIR_TOKEN}", True)],
+            "expected allow",
+        ),
+        (
+            "claims running the policy suite is denied",
+            [("sabotage-opa-test", f"opa test {CUPCAKE_DIR_TOKEN}/", False)],
+            "expected deny",
+        ),
+    ]
+    try:
+        for label, cases, fragment in sabotage:
+            GUARD_LAYER_CASES[:] = cases
+            try:
+                check_guard_layer_forms()
+            except Failure as exc:
+                if fragment not in str(exc):
+                    print(f"selftest FAILED ({label}): caught the wrong failure:\n{exc}")
+                    return 1
+            else:
+                print(
+                    f"selftest FAILED ({label}): the check accepted a sabotaged expectation, "
+                    "so it is not asserting anything."
+                )
+                return 1
+    finally:
+        GUARD_LAYER_CASES[:] = original
+    print("test-cupcake-delivered-shape: selftest OK (both guard-layer sabotages go red)")
+    return 0
+
+
+def selftest_lockdown_flip() -> int:
+    """Prove the `enabled:` measurement is a measurement.
+
+    Both halves are load-bearing and both are blinded here by replacing the
+    verdict function, because a check that reads the same answer either way would
+    look identical to one that reads the engine.
+    """
+    original = globals()["_write_verdict"]
+    sabotage = [
+        ("verdict always ALLOW", lambda *_a, **_k: True, "no longer changes the verdict"),
+        ("verdict always DENY", lambda *_a, **_k: False, "is now DENIED against the live"),
+    ]
+    try:
+        for label, stub, fragment in sabotage:
+            globals()["_write_verdict"] = stub
+            try:
+                check_lockdown_builtin_is_off()
+            except Failure as exc:
+                if fragment not in str(exc):
+                    print(f"selftest FAILED ({label}): caught the wrong failure:\n{exc}")
+                    return 1
+            else:
+                print(
+                    f"selftest FAILED ({label}): the lockdown measurement accepted a stubbed "
+                    "verdict, so it is not measuring the engine."
+                )
+                return 1
+    finally:
+        globals()["_write_verdict"] = original
+    print("test-cupcake-delivered-shape: selftest OK (both lockdown-flip sabotages go red)")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return selftest()
@@ -882,6 +1211,8 @@ def main(argv: list[str]) -> int:
         load_bearing = check_shim_is_load_bearing()
         production = check_production_path()
         hooks_path = check_hooks_path_forms()
+        lockdown = check_lockdown_builtin_is_off()
+        guard_layer = check_guard_layer_forms()
     except Failure as exc:
         print(f"test-cupcake-delivered-shape: FAILED\n{exc}", file=sys.stderr)
         return 1
@@ -905,11 +1236,18 @@ def main(argv: list[str]) -> int:
         print("core.hooksPath: THE TWO TOKENS MUST BE ONE ASSIGNMENT")
         for line in hooks_path:
             print(f"  {line}")
+        print("A CONFIGURED BUILTIN IS NOT AN ENABLED BUILTIN")
+        for line in lockdown:
+            print(f"  {line}")
+        print("GUARD LAYER: DESTRUCTIVE SHELL OPERATIONS ONLY")
+        for line in guard_layer:
+            print(f"  {line}")
     print(
         f"test-cupcake-delivered-shape: ok ({len(contract)} enrichment pins, "
         f"{len(table)} delivered cases, {len(inventory)} dead-logic assertions, "
         f"{len(load_bearing)} shim-divergence cases, {len(production)} production-path cases, "
-        f"{len(hooks_path)} core.hooksPath cases)"
+        f"{len(hooks_path)} core.hooksPath cases, {len(lockdown)} lockdown measurements, "
+        f"{len(guard_layer)} guard-layer cases)"
     )
     return 0
 
