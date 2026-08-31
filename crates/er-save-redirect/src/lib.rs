@@ -917,12 +917,127 @@ pub fn plan_create_file_open(
 }
 
 /// Why a candidate save source was rejected before redirect planning.
+///
+/// `MissingOrNotFile` and `Inaccessible` are deliberately separate, and that split is why these
+/// variants carry an errno at all. Both used to arrive here as `MissingOrNotFile`, because
+/// `validate_save_file_path` wrote `map_err(|_| ...)` and threw the OS error away -- so a save
+/// sitting on a dropped network mount was reported in the exact words used for a save the user
+/// had deleted. Those are different problems with opposite fixes: one is "correct the path", the
+/// other is "the path is already correct, the storage behind it is gone". Reporting the second as
+/// the first sends whoever is debugging it to edit a config line that was never wrong, while the
+/// game quietly boots a different character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveSourceRejection {
+    /// The path is genuinely absent, or names something that is not a file.
     MissingOrNotFile,
-    WrongSize { len: u64, expected: u64 },
+    /// The path could not be examined at all, and NOT because it is absent: a dropped or stale
+    /// network mount, an unmounted drive, a permission denial, a device-level IO error.
+    ///
+    /// `raw_os_error` is what the stat actually failed with -- under Wine, the Win32 code Wine
+    /// mapped the host errno onto. It is kept because after the fact it is the only thing that
+    /// separates these causes from each other; the observed case that prompted this variant was
+    /// a NAS export whose `stat` returned `ENODEV` while its parent directories still resolved.
+    Inaccessible {
+        raw_os_error: Option<i32>,
+    },
+    WrongSize {
+        len: u64,
+        expected: u64,
+    },
     NotBnd4,
-    Unreadable,
+    /// Stattable, and the right size, but the read failed -- e.g. the mount dropped between the
+    /// stat and the read.
+    Unreadable {
+        raw_os_error: Option<i32>,
+    },
+}
+
+impl SaveSourceRejection {
+    /// One log-ready clause naming the cause, written to complete the sentence
+    /// "... could not be used because <describe()>".
+    ///
+    /// It exists so a log line cannot report a rejection more vaguely than the enum already knows.
+    /// The `{err:?}` form this replaced printed `MissingOrNotFile` for an unreachable mount, which
+    /// is both true of the variant and false about the world.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::MissingOrNotFile => "the path does not exist, or does not name a file".to_owned(),
+            Self::Inaccessible { raw_os_error } => format!(
+                "the path could NOT BE REACHED ({}). This is NOT a missing file: the configured \
+                 path may be exactly right and the storage behind it unavailable -- a dropped or \
+                 stale network mount, an unmounted drive, or a permission denial. Fix the storage, \
+                 not the path",
+                describe_os_error(*raw_os_error)
+            ),
+            Self::WrongSize { len, expected } => {
+                format!("it is {len} bytes, and an Elden Ring save container is exactly {expected}")
+            }
+            Self::NotBnd4 => "it is not a readable BND4 save container".to_owned(),
+            Self::Unreadable { raw_os_error } => format!(
+                "it exists at the right size but could not be read ({}) -- storage that \
+                 disappeared between the stat and the read looks like this",
+                describe_os_error(*raw_os_error)
+            ),
+        }
+    }
+
+    /// The same rejection worded for a user standing at a picker: `(title, body)`.
+    ///
+    /// Returned as plain strings rather than a `PickerStatusMessage` because that type lives in
+    /// `er-save-picker-core`, which this crate deliberately does not depend on. Both picker
+    /// surfaces -- the product's in-game browser and the standalone shell -- had their own copy of
+    /// this match, which is how the same failure could end up described two ways.
+    pub fn picker_status(&self) -> (&'static str, String) {
+        match self {
+            Self::MissingOrNotFile => (
+                "SAVE NOT FOUND",
+                "The selected path is missing or is not a file.".to_owned(),
+            ),
+            // Distinct from SAVE NOT FOUND on purpose: "missing" tells the user to fix the path,
+            // and for a disconnected network drive or an unmounted disk the path is the one thing
+            // that is not wrong.
+            Self::Inaccessible { raw_os_error } => (
+                "SAVE UNREACHABLE",
+                format!(
+                    "The storage behind this path did not answer ({}). A network drive or \
+                     removable disk may be disconnected; the path itself may be correct.",
+                    describe_os_error(*raw_os_error)
+                ),
+            ),
+            Self::WrongSize { len, expected } => (
+                "WRONG SAVE SIZE",
+                format!("Expected {expected} bytes, but this file is {len} bytes."),
+            ),
+            Self::NotBnd4 => (
+                "NOT AN ELDEN RING SAVE",
+                "The file is not a readable BND4 save container.".to_owned(),
+            ),
+            Self::Unreadable { raw_os_error } => (
+                "SAVE UNREADABLE",
+                format!(
+                    "The save exists at the right size, but could not be read ({}).",
+                    describe_os_error(*raw_os_error)
+                ),
+            ),
+        }
+    }
+}
+
+/// An OS error code spelled out, for logs and for picker status text alike.
+///
+/// Public so the two surfaces that report a `SaveSourceRejection` -- the product's autoload debug
+/// log and the save picker's on-screen status -- word it identically. `er-save-redirect` cannot
+/// depend on `er-save-picker-core`, so the status-message mapping has to stay with the picker;
+/// this is the piece that can be shared, and sharing it is what stops the two from drifting into
+/// describing the same failure differently.
+pub fn describe_os_error(raw_os_error: Option<i32>) -> String {
+    match raw_os_error {
+        Some(code) => format!(
+            "os error {code}: {}",
+            std::io::Error::from_raw_os_error(code)
+        ),
+        None => "no OS error code was reported".to_owned(),
+    }
 }
 
 /// UTF-16 Wine/Windows save-root path without a trailing separator or NUL terminator.
@@ -975,7 +1090,18 @@ impl SaveSourcePlan {
 /// Validate a candidate picked/configured save. This is stronger than size-only: it also proves the
 /// file is a structurally readable BND4 container.
 pub fn validate_save_file_path(path: PathBuf) -> Result<PathBuf, SaveSourceRejection> {
-    let meta = std::fs::metadata(&path).map_err(|_| SaveSourceRejection::MissingOrNotFile)?;
+    // NOT `map_err(|_| MissingOrNotFile)`. Only `NotFound` means the file is absent; every other
+    // stat failure means the path could not be examined, which is a different fact with a
+    // different fix. See `SaveSourceRejection`.
+    let meta = std::fs::metadata(&path).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            SaveSourceRejection::MissingOrNotFile
+        } else {
+            SaveSourceRejection::Inaccessible {
+                raw_os_error: err.raw_os_error(),
+            }
+        }
+    })?;
     if !meta.is_file() {
         return Err(SaveSourceRejection::MissingOrNotFile);
     }
@@ -985,7 +1111,9 @@ pub fn validate_save_file_path(path: PathBuf) -> Result<PathBuf, SaveSourceRejec
             expected: EXPECTED_SAVE_FILE_BYTES,
         });
     }
-    let bytes = std::fs::read(&path).map_err(|_| SaveSourceRejection::Unreadable)?;
+    let bytes = std::fs::read(&path).map_err(|err| SaveSourceRejection::Unreadable {
+        raw_os_error: err.raw_os_error(),
+    })?;
     er_save_loader::bnd4::parse_entries(&bytes).map_err(|_| SaveSourceRejection::NotBnd4)?;
     Ok(path)
 }
@@ -1827,8 +1955,28 @@ mod tests {
         out
     }
 
+    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    ///
+    /// The pid is what makes these tests independent of each other's RUNS. `std::env::temp_dir()`
+    /// is one directory shared by every process on the machine -- and under this repo's wine
+    /// runner `%TEMP%` resolves to the host `/tmp`, so a windows-target test binary lands in the
+    /// same place a host one does. A name keyed only by `tag` was therefore the SAME directory in
+    /// two test binaries at once, which is the ordinary case here: two agents running
+    /// `scripts/check.sh` concurrently, the gate run twice over, or a second checkout. Each run's
+    /// `remove_dir_all` on entry then deleted the other's files mid-test.
+    ///
+    /// Measured before the pid was added, with eight concurrent copies of this crate's test
+    /// binary: SEVEN of the eight went red, and every one of the failures accused the code under
+    /// test of something it had not done -- `validate_save_source` answering
+    /// `WrongSize { len: 0 }` for a container another process had truncated to nothing,
+    /// `MissingOrNotFile` for one it had already deleted, and `scratch dir must be creatable:
+    /// AlreadyExists` when two processes raced the `create_dir_all`. Nothing in the product was
+    /// wrong either time. With the pid in the name, eight of eight are green.
     fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("er-save-redirect-{tag}"));
+        let dir = std::env::temp_dir().join(format!(
+            "er-save-redirect-{tag}-p{pid}",
+            pid = std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir must be creatable");
         dir
@@ -2341,6 +2489,59 @@ mod tests {
         assert_eq!(
             validate_save_file_path(garbage),
             Err(SaveSourceRejection::NotBnd4)
+        );
+    }
+
+    #[test]
+    fn an_unexaminable_path_is_not_reported_as_a_missing_file() {
+        // The case this guards is a configured save on a network mount that dropped: `stat`
+        // returns ENODEV while the parent directories still resolve. That cannot be produced in a
+        // test without a mount, but it is one member of a class -- "the stat failed for a reason
+        // other than the leaf being absent" -- and a regular file used as a directory component
+        // produces another member of the same class (ENOTDIR) with no privileges at all.
+        let dir = scratch_dir("unreachable");
+        let blocker = dir.join("not-a-directory");
+        std::fs::write(&blocker, b"x").unwrap();
+
+        match validate_save_file_path(blocker.join("ER0000.sl2")) {
+            Err(SaveSourceRejection::Inaccessible { raw_os_error }) => assert!(
+                raw_os_error.is_some(),
+                "the OS error is the only thing that distinguishes a dropped mount from a \
+                 permission denial after the fact; it must survive"
+            ),
+            other => panic!(
+                "a path that could not be examined must not be reported as a missing file: {other:?}"
+            ),
+        }
+
+        // The split has to cut both ways: a genuinely absent file is still MissingOrNotFile.
+        assert_eq!(
+            validate_save_file_path(dir.join("definitely-not-here.sl2")),
+            Err(SaveSourceRejection::MissingOrNotFile)
+        );
+    }
+
+    #[test]
+    fn an_unreachable_path_is_described_as_unreachable_and_not_as_missing() {
+        // `describe()` is what reaches a human. A wording regression here would restore exactly
+        // the defect the variant was added for, with the enum still correct underneath.
+        let described = SaveSourceRejection::Inaccessible {
+            raw_os_error: Some(19),
+        }
+        .describe();
+        assert!(
+            described.contains("NOT BE REACHED"),
+            "unreachable storage must be named as such: {described}"
+        );
+        assert!(
+            described.contains("NOT a missing file"),
+            "the description must rule out the reading it used to be given: {described}"
+        );
+        assert!(
+            SaveSourceRejection::MissingOrNotFile
+                .describe()
+                .contains("does not exist"),
+            "a genuinely absent file must still read as absent"
         );
     }
 

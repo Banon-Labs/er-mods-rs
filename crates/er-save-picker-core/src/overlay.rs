@@ -1382,11 +1382,12 @@ fn overlay_character_stage_onto(
 mod mouse_hit_tests {
     use super::*;
 
+    /// This module's namespace inside the crate-wide [`crate::picker_scratch_dir`], which is
+    /// what keys the directory to this PROCESS as well as to `tag`. The prefix is all that is
+    /// left here: one implementation of the wipe-and-create, so the pid cannot be present in one
+    /// module and missing in the next.
     fn scratch_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("er-save-picker-mouse-hit-{tag}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
-        dir
+        crate::picker_scratch_dir(&format!("mouse-hit-{tag}"))
     }
 
     fn click_on_file_row(model: &SavePickerModel, row: usize) -> MouseClick {

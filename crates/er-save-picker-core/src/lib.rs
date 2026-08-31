@@ -101,3 +101,37 @@ pub use model::*;
 pub use os_dialog::*;
 pub use slots::*;
 pub use surface::*;
+
+/// Scratch directory for one test, keyed by PROCESS as well as by name.
+///
+/// Every filesystem test in this crate wants a directory it can wipe on entry and then assert the
+/// exact contents of. `std::env::temp_dir()` is ONE directory shared by every process on the
+/// machine -- and under this repo's wine runner `%TEMP%` resolves to the host `/tmp`, so a
+/// windows-target test binary lands in the same place a host one does. A FIXED name therefore
+/// names the SAME directory in two test binaries at once, and two at once is the normal case
+/// here: two agents running `scripts/check.sh` concurrently, the gate run twice over, or a second
+/// checkout of this repo. The two runs then delete each other's files mid-test, and the
+/// assertions fail with nothing whatever wrong in the code under test -- the worst shape of test
+/// failure, because it sends the reader into product code that is correct.
+///
+/// Measured on this crate before the pid was added, ten rounds of eight concurrent copies of the
+/// test binary: 10 of 80 runs red, spread across four different tests. `temp file must be
+/// writable: ... No such file or directory` came from an `fs::write` into a directory a sibling
+/// process had wiped between this process's `create_dir_all` and its write; `temp dir must be
+/// removable` came from a `remove_dir_all` that lost the race to remove it. With the pid in the
+/// name, 80 of 80 are green.
+///
+/// It lives at CRATE scope rather than inside any one `#[cfg(test)]` module so the whole crate
+/// shares ONE implementation. Private per-module copies are exactly how the fixed names got here
+/// in the first place: three modules each grew their own `scratch_dir`, so there was no single
+/// place a fix could land and reach all of them.
+#[cfg(test)]
+pub(crate) fn picker_scratch_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "er-save-picker-{tag}-p{pid}",
+        pid = std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+    dir
+}

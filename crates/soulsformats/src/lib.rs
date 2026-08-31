@@ -585,9 +585,35 @@ mod tests {
         assert_eq!(tfm_from_csproj("<TargetFramework></TargetFramework>"), None);
     }
 
+    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    ///
+    /// Both filesystem tests below build a tree under `std::env::temp_dir()` and then delete it,
+    /// and `std::env::temp_dir()` is ONE directory shared by every process on the machine. A name
+    /// keyed only by `tag` is therefore the same directory in two test binaries at once, which is
+    /// the ordinary case in this repo: two agents running `scripts/check.sh` concurrently, the
+    /// gate run twice over, or a second checkout. Each run's cleanup then deletes the other's
+    /// tree while it is still being asserted on.
+    ///
+    /// Measured before the pid was added, with eight concurrent copies of this crate's test
+    /// binary: two of the eight went red on `identical rewrite: BridgeWriteFailed(... No such
+    /// file or directory)` -- `write_if_changed` being blamed for a directory a sibling process
+    /// had removed underneath it. With the pid in the name, eight of eight are green.
+    ///
+    /// The directory is created here and wiped first, so a test never inherits a leftover tree
+    /// from a run of ITS OWN pid that was killed before its cleanup line.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "er-soulsformats-{tag}-p{pid}",
+            pid = std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir must be creatable");
+        dir
+    }
+
     #[test]
     fn detects_source_and_binary_smithbox_layouts() {
-        let base = std::env::temp_dir().join("er-soulsformats-layout-test");
+        let base = scratch_dir("layout-test");
 
         let source_root = base.join("source");
         let project_dir = andre_formats_project_path(&source_root);
@@ -635,8 +661,7 @@ mod tests {
 
     #[test]
     fn write_if_changed_skips_identical_contents() {
-        let dir = std::env::temp_dir().join("er-soulsformats-write-if-changed-test");
-        fs::create_dir_all(&dir).expect("create temp dir");
+        let dir = scratch_dir("write-if-changed-test");
         let path = dir.join("file.txt");
 
         write_if_changed(&path, "first").expect("initial write");

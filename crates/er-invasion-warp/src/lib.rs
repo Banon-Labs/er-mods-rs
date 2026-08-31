@@ -349,10 +349,36 @@ mod tests {
         }
     }
 
+    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    ///
+    /// `std::env::temp_dir()` is ONE directory shared by every process on the machine, so a name
+    /// keyed only by `tag` is the same directory -- and here the same FILE, since the leaf is the
+    /// fixed artifact name this DLL writes -- in two test binaries at once. Two at once is the
+    /// ordinary case in this repo: two agents running `scripts/check.sh` concurrently, the gate
+    /// run twice over, or a second checkout. The test below writes a long document, overwrites it
+    /// with a short one and requires the short one to have TRUNCATED the long one; a second
+    /// process writing its own long document into that same path between this one's rewrite and
+    /// its read-back makes the truncation look as though it never happened.
+    ///
+    /// Measured before the pid was added, over ten rounds of eight concurrent copies of this
+    /// crate's test binary: one of the 80 runs went red, `assertion left == right failed, left:
+    /// "", right: "{}"` -- the read landing between a sibling's `write` and its content, and the
+    /// truncating-write contract taking the blame. Rare is not benign here: the gate runs this
+    /// crate on every invocation, and a one-in-eighty red with a product-shaped message costs
+    /// more to diagnose than a reliable one.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "er-invasion-warp-{tag}-p{pid}",
+            pid = std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        dir
+    }
+
     #[test]
     fn the_telemetry_sink_writes_the_document_verbatim_and_replaces_the_previous_one() {
-        let dir = std::env::temp_dir().join("er-invasion-warp-telemetry-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = scratch_dir("telemetry-test");
         let path = dir.join(TELEMETRY_FILE_NAME);
         let long = er_invasion_warp_core::catalog_oracle_json("sampling", "first");
         std::fs::write(&path, long.as_bytes()).expect("write");
