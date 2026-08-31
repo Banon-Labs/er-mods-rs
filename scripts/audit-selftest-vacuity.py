@@ -16,6 +16,16 @@ whether the selftest noticed.
                                       from a clean tree)
     non-zero under a blind matcher -> PROVABLE (something is watching)
 
+A SHELL gate has no ``re`` module to lobotomise, and every ``.sh`` in check.sh
+was silently skipped here -- ``--only check-git-hooks-installed`` printed nothing
+at all, which reads exactly like a gate that was judged and had no findings. Its
+matchers are external comparators instead, so the equivalent blinding is a PATH
+shim that makes ``cmp``, ``diff`` and ``grep`` all report SAMENESS/PRESENCE. A
+shell selftest that still passes when nothing can ever differ is asserting, not
+proving. Note the one asymmetry with the python blinding: a PATH shim is not
+caller-aware, so it blinds the whole process tree rather than only callers under
+``scripts/``.
+
 Usage:
     python3 scripts/audit-selftest-vacuity.py            # sweep check.sh's gates
     python3 scripts/audit-selftest-vacuity.py --only rva
@@ -163,6 +173,76 @@ def run_blind(script: str, argv: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------
+# shell blinding
+# --------------------------------------------------------------------------
+# The comparators a bash gate matches WITH. `cmp` and `diff` answer "are these the same
+# bytes", `grep` answers "is this present"; forcing all three to say yes is the shell
+# equivalent of a regex that can never fail to match.
+SHELL_COMPARATORS = ("cmp", "diff", "grep")
+
+
+def run_shell_blinded(path: Path, args: list[str]) -> "tuple[int, str, int]":
+    """Run a bash gate with every content comparator forced to report sameness.
+
+    Each shim appends one byte to $VACUITY_COUNT_FILE before exiting 0, so the count is the
+    file's size -- a gate that never invoked a comparator is a stronger vacuity than one
+    whose comparators were ignored, and the two must not look alike.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        shim_dir = Path(td) / "blind"
+        shim_dir.mkdir()
+        count_path = Path(td) / "count"
+        count_path.write_bytes(b"")
+        for tool in SHELL_COMPARATORS:
+            shim = shim_dir / tool
+            shim.write_text(
+                "#!/bin/sh\n"
+                'printf x >> "$VACUITY_COUNT_FILE"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+        env = dict(
+            os.environ,
+            PATH=f"{shim_dir}:{os.environ.get('PATH', '')}",
+            VACUITY_COUNT_FILE=str(count_path),
+        )
+        rc, out = run(["bash", str(path)] + args, env=env)
+        try:
+            n = len(count_path.read_bytes())
+        except OSError:
+            n = -1
+    return rc, out, n
+
+
+def judge_shell(name: str, path: Path, arglists: "list[str]") -> dict:
+    """Verdict for one bash gate, in the same vocabulary the python sweep uses."""
+    args = ["--selftest"] if any("--selftest" in a for a in arglists) else []
+    if not args:
+        return {"script": name, "verdict": "NO-SELFTEST",
+                "detail": "no --selftest invocation in check.sh"}
+    base_rc, _ = run(["bash", str(path)] + args)
+    blind_rc, blind_out, blinded = run_shell_blinded(path, args)
+    if base_rc == 124:
+        return {"script": name, "ran": path.name, "verdict": "TIMEOUT",
+                "detail": f"the selftest did not finish inside {PER_SCRIPT_TIMEOUT}s"}
+    if base_rc != 0:
+        return {"script": name, "ran": path.name, "verdict": "BASELINE-RED",
+                "detail": f"baseline exit {base_rc} (pre-existing, not judged)"}
+    if blinded <= 0:
+        return {"script": name, "ran": path.name, "verdict": "NO-MATCHER-RUN",
+                "detail": "the selftest ran zero cmp/diff/grep calls"}
+    if blind_rc == 0:
+        return {"script": name, "ran": path.name, "verdict": "ASSERTED",
+                "detail": f"passes with all {blinded} comparator call(s) forced to agree"}
+    tail = [ln for ln in blind_out.strip().splitlines() if ln.strip()][-1:]
+    return {"script": name, "ran": path.name, "verdict": "PROVABLE",
+            "detail": f"blinded {blinded}, exit {blind_rc}: {tail[0][:100] if tail else ''}"}
+
+
+# --------------------------------------------------------------------------
 # sweep
 # --------------------------------------------------------------------------
 def check_sh_invocations() -> "dict[str, list[str]]":
@@ -236,12 +316,17 @@ def sweep(only: str | None, out_json: Path | None, mode: str = "regex") -> int:
     invocations = check_sh_invocations()
     rows = []
     for name, arglists in sorted(invocations.items()):
-        if not name.endswith(".py"):
-            continue
         if only and only not in name:
             continue
         path = SCRIPTS / name
         if not path.exists():
+            continue
+        if name.endswith(".sh"):
+            row = judge_shell(name, path, arglists)
+            rows.append(row)
+            print(f"{name:<44}  {row['verdict']:<15}  {row['detail']}", flush=True)
+            continue
+        if not name.endswith(".py"):
             continue
         args = ["--selftest"] if any("--selftest" in a for a in arglists) else []
         if not args:
@@ -300,6 +385,10 @@ def sweep(only: str | None, out_json: Path | None, mode: str = "regex") -> int:
 def judge_one(path: Path, mode: str = "regex") -> int:
     """Judge a single script, including one check.sh never runs."""
     args = ["--selftest"] if "--selftest" in path.read_text(encoding="utf-8", errors="replace") else []
+    if path.suffix == ".sh":
+        row = judge_shell(path.name, path, args or [""])
+        print(f"{path.name}: {row['verdict']} -- {row['detail']}")
+        return 0
     base_rc, base_out = run([sys.executable, str(path)] + args)
     blind_rc, blind_out, blinded = run_mutated(path, args, mode)
     print(f"baseline : exit {base_rc}")
@@ -389,6 +478,41 @@ def selftest() -> int:
                     f"a self-re-execing gate must read UNMEASURED (-1), got {n} -- "
                     "a false zero here is this tool committing the sin it hunts"
                 )
+
+            # THE SHELL BLINDER, which has no `re` to neuter and shims the comparators
+            # instead. The toy gate DETECTS A DIFFERENCE, so forcing `cmp` to agree must
+            # flip it -- the same shape as the fallback-stub arm in
+            # check-git-hooks-installed.sh, which is the gate this path exists to judge.
+            sh_probe = holder / "toy_gate.sh"
+            sh_probe.write_text(
+                "#!/usr/bin/env bash\n"
+                'd=$(mktemp -d)\n'
+                'printf a > "$d/x"; printf b > "$d/y"\n'
+                'cmp -s "$d/x" "$d/y" && { rm -rf "$d"; exit 3; }\n'
+                'rm -rf "$d"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            sh_probe.chmod(0o755)
+            rc, out = run(["bash", str(sh_probe), "--selftest"])
+            if rc != 0:
+                failures.append(f"toy shell gate should pass unmutated, got exit {rc}")
+            rc, out, n = run_shell_blinded(sh_probe, ["--selftest"])
+            if rc == 0:
+                failures.append("shell blinder failed to blind: the toy gate still saw a difference")
+            if n != 1:
+                failures.append(f"shell blinder should have counted 1 comparator call, counted {n}")
+
+            # ...and a shell gate that compares nothing must be untouched, and counted zero,
+            # so NO-MATCHER-RUN stays distinguishable from ASSERTED.
+            sh_inert = holder / "toy_inert.sh"
+            sh_inert.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            sh_inert.chmod(0o755)
+            rc, out, n = run_shell_blinded(sh_inert, [])
+            if rc != 0:
+                failures.append(f"shell blinder broke a comparator-free script, exit {rc}")
+            if n != 0:
+                failures.append(f"comparator-free shell script should blind 0 calls, counted {n}")
 
             # NEGATIVE CONTROL: a fixture OUTSIDE scripts/ must NOT be blinded,
             # so the runner cannot pass this suite by neutering everything.
