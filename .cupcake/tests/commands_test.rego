@@ -338,6 +338,67 @@ test_has_verb_still_matches_prose_so_the_two_are_not_interchangeable if {
 	commands.has_verb("echo the installer will install things", "install")
 }
 
+# --- ABSOLUTE/RELATIVE PATH INVOCATION (2026-08-31, bd er-effects-rs-5z75) ----
+#
+# command_position_prefix_pattern's anchor class is `(^|[;&|(){}\n])` -- a
+# leading path component (`/bin/`, `/usr/bin/`, `./`) is none of those
+# characters, and the character immediately before the verb is `/`, so before
+# this fix the anchor never lined up and `/bin/rm -rf .cupcake` was allowed
+# outright by CLAUDE-GUARD-LAYER-DESTRUCTIVE and BUILTIN-GIT-BLOCK-NO-VERIFY
+# alike (measured against the live policies, not just this helper).
+
+abs_root_delete := concat(" ", ["/bin/rm", "-rf", "/"])
+
+test_command_verb_behind_absolute_path_bin if {
+	commands.has_command_verb(abs_root_delete, "rm")
+}
+
+test_command_verb_behind_absolute_path_usr_bin if {
+	commands.has_command_verb(concat(" ", ["/usr/bin/rm", "-rf", "/"]), "rm")
+}
+
+test_command_verb_behind_relative_path_dot_slash if {
+	commands.has_command_verb(concat(" ", ["./rm", "-rf", "/"]), "rm")
+}
+
+test_command_verb_behind_nested_relative_path if {
+	commands.has_command_verb(concat(" ", ["../scripts/rm", "-rf", "/"]), "rm")
+}
+
+# Wrappers and an absolute-path verb compose: tightening one gap cannot re-open
+# the other.
+test_command_verb_behind_sudo_and_absolute_path if {
+	commands.has_command_verb(concat(" ", ["sudo", abs_root_delete]), "rm")
+}
+
+# After a real separator too, not just at the start of the text.
+test_command_verb_behind_absolute_path_after_semicolon if {
+	commands.has_command_verb(concat("", ["echo hi; ", abs_root_delete]), "rm")
+}
+
+# THE NEGATIVE HALF, and the reason the group requires a trailing slash rather
+# than being a bare optional prefix: a word merely ENDING in the verb must not
+# match just because there happens to be a slash earlier in the same operand,
+# and a verb-shaped suffix with no preceding path component at all must not
+# match either.
+
+test_word_ending_in_verb_with_path_prefix_is_not_a_command_verb if {
+	not commands.has_command_verb("scripts/confirm foo", "rm")
+}
+
+test_word_ending_in_verb_with_no_path_prefix_is_not_a_command_verb if {
+	not commands.has_command_verb("xmv foo bar", "mv")
+}
+
+# A slash-terminated substring deep inside an unrelated operand must not
+# manufacture a match either: there is no real anchor (string start or a
+# separator character) immediately before it, only a plain space, which
+# command_position_prefix_pattern does not treat as an anchor on its own.
+test_path_operand_mid_command_is_not_a_command_verb if {
+	not commands.has_command_verb("cp foo /path/to/rm-similar-file", "rm")
+	not commands.has_command_verb("chmod +x /path/to/rm", "rm")
+}
+
 # --- shell segmentation (2026-08-31, bd er-effects-rs-c0t9) -------------------
 #
 # shell_segments moved here from guard_layer_destructive_guard.rego so the

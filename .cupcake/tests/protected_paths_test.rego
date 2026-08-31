@@ -338,6 +338,33 @@ test_deny_env_assignment_prefixed_root_delete if {
 	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)
 }
 
+# Absolute/relative path invocation (2026-08-31, bd er-effects-rs-5z75): the verb
+# was invisible to command position when reached through a leading path component,
+# so `/bin/rm -rf /` and `/usr/bin/rm -rf /` were allowed outright. Measured
+# against this exact policy before the fix.
+test_deny_bin_absolute_path_root_delete if {
+	denials := protected.halt with input as bash_event("/bin/rm -rf /", ["/"])
+	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)
+}
+
+test_deny_usr_bin_absolute_path_root_delete if {
+	denials := protected.halt with input as bash_event("/usr/bin/rm -rf /", ["/"])
+	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)
+}
+
+test_deny_dot_slash_relative_path_root_delete if {
+	denials := protected.halt with input as bash_event("./rm -rf /", ["/"])
+	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)
+}
+
+# A word merely ending in the verb, reached through a path prefix, must still
+# not be read as invoking it -- the trailing-slash requirement on the prefix
+# group is what keeps this allowed.
+test_allow_path_prefixed_word_merely_ending_in_verb if {
+	denials := protected.halt with input as bash_event("scripts/confirm /", ["/"])
+	count(denials) == 0
+}
+
 test_deny_root_delete_inside_command_substitution if {
 	denials := protected.halt with input as bash_event("echo $(rm -rf /)", ["/"])
 	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)

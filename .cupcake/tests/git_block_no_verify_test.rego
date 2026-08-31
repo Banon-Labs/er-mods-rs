@@ -264,6 +264,24 @@ test_deny_rm_behind_an_env_assignment if {
 	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
 }
 
+# The verb reached by absolute/relative path (2026-08-31, bd er-effects-rs-5z75):
+# a leading path component is none of command_position_prefix_pattern's anchor
+# characters, so `/bin/rm -rf <hooks dir>` was measured ALLOWED before the fix.
+test_deny_rm_behind_bin_absolute_path if {
+	denials := guard.deny with input as bash_event(concat("", ["/bin/rm -rf ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_behind_usr_bin_absolute_path if {
+	denials := guard.deny with input as bash_event(concat("", ["/usr/bin/rm -rf ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
+test_deny_rm_behind_dot_slash_relative_path if {
+	denials := guard.deny with input as bash_event(concat("", ["./rm -rf ", hooks_dir]))
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
+}
+
 # The removal is in the SECOND statement. Per-statement matching must find it
 # there, not only at the start of the command.
 test_deny_rm_in_a_later_statement if {

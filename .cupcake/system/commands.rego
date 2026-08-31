@@ -58,8 +58,34 @@ has_dangerous_verb(command, verb_set) if {
 # make the verb test match MORE commands, never fewer.
 command_position_prefix_pattern := `(^|[;&|(){}\n])[ \t]*(([A-Za-z_][A-Za-z0-9_]*=[^ \t]*|-{1,2}[A-Za-z0-9][^ \t]*|sudo|doas|env|command|nohup|time|exec|xargs|then|else|do)[ \t]+|(sudo|doas|env|command|nohup|time|exec|xargs)[ \t]+([^ \t;&|(){}]+[ \t]+){1,4})*`
 
+# An optional path COMPONENT PREFIX immediately before a program name --
+# `/bin/`, `/usr/bin/`, `./`, `../scripts/`. REQUIRES a trailing slash (the `?`
+# makes the whole group optional, not the slash inside it), which is what stops
+# a longer word that merely ENDS in the verb (`confirm` for `rm`, `xmv` for
+# `mv`) from matching: the group can only consume characters that are
+# immediately followed by a literal `/`, so a verb-shaped suffix with no
+# preceding slash falls through to the zero-width alternative and then must
+# match the verb starting exactly at the anchor. Shared with shell_name_pattern
+# below rather than re-spelled, so the two callers cannot drift apart.
+path_prefix_pattern := `([^ \t;&|()'"]*/)?`
+
+# has_command_verb answers "is this word the program a shell would run", which
+# command_position_prefix_pattern alone gets right for a BARE verb (`rm -rf x`)
+# but not for one invoked by absolute or relative PATH (`/bin/rm -rf x`,
+# `./rm -rf x`) -- measured 2026-08-31 (bd er-effects-rs-5z75): a leading path
+# component is none of the anchor's separator characters, and the character
+# immediately before the verb is `/`, so the anchor never lined up and
+# `/bin/rm -rf .cupcake` / `/usr/bin/rm -rf .cupcake` were allowed outright by
+# every guard that reads this function. NOT a regression: has_verb's
+# `(^|\s)verb(\s|$)` boundary missed it identically, so this predates both the
+# command-position work and the segmentation work that came before it -- it was
+# simply never covered. Splicing path_prefix_pattern in between the
+# command-position prefix and the verb closes it: the prefix must still resolve
+# back to a real anchor (string start, a separator, or consumed wrapper words),
+# so a slash deep inside an unrelated operand still cannot manufacture a match
+# (see commands_test.rego for the negative cases this reasoning predicts).
 has_command_verb(command, verb) if {
-	pattern := concat("", [command_position_prefix_pattern, verb, `([ \t\n;&|(){}]|$)`])
+	pattern := concat("", [command_position_prefix_pattern, path_prefix_pattern, verb, `([ \t\n;&|(){}]|$)`])
 	regex.match(pattern, command)
 }
 
@@ -271,11 +297,12 @@ odd_span_blanked(index, text) := blanked_anchors(text) if {
 # is not on this list is not a hypothetical gap; it is a working bypass of every
 # guard that reads executed_texts.
 #
-# The leading `([^ \t;&|()'"]*/)?` is what admits `/bin/bash`, and it REQUIRES a
+# The leading path_prefix_pattern is what admits `/bin/bash`, and it REQUIRES a
 # trailing slash, so a longer word that merely ends in one of these names (`mycsh`,
 # `wifish`) cannot match: the alternation has to consume the token whole from its
-# boundary.
-shell_name_pattern := `([^ \t;&|()'"]*/)?(ba|z|k|da|a|fi|c|tc)?sh`
+# boundary. Shared with has_command_verb above (2026-08-31, bd er-effects-rs-5z75)
+# rather than re-spelled, so the two cannot drift apart.
+shell_name_pattern := concat("", [path_prefix_pattern, `(ba|z|k|da|a|fi|c|tc)?sh`])
 
 # A shell wrapper whose program text is the NEXT argument: `bash -c`, `sh -c`,
 # `zsh -c`, `ksh -c`, `dash -c`, `fish -c`, `bash -lc`, `/bin/bash --norc -c`,
