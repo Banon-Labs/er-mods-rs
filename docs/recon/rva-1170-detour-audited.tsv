@@ -22,7 +22,6 @@
 # This exists because allowing un-audited rows to carry detours cost a boot: on
 # 2026-08-29 er-armament-icons installed five of them and the game died at the first
 # overlay draw, having lived when the same hooks were refused as unmapped.
-0x140001000	0x140001000	0 call, 0 jmp, 1 ptr	5B relocatable
 0x1400abc20	0x1400abc20	0 call, 0 jmp, 1 ptr	11B relocatable
 0x140116c70	0x140116c70	486 call, 3 jmp, 0 ptr	5B relocatable
 0x140117910	0x140117910	649 call, 0 jmp, 0 ptr	5B relocatable
@@ -37,15 +36,25 @@
 0x140241130	0x140241130	2 call, 0 jmp, 0 ptr	5B relocatable
 0x1402413f0	0x1402413f0	47 call, 0 jmp, 0 ptr	7B relocatable
 0x140245c00	0x140245c00	5 call, 3 jmp, 0 ptr	5B relocatable
+0x140246480	0x140246480	33 call, 0 jmp, 0 ptr	6B relocatable
+0x140246840	0x140246840	7 call, 0 jmp, 0 ptr	6B relocatable
 0x1402470e0	0x1402470e0	19 call, 0 jmp, 0 ptr	6B relocatable
 0x140247900	0x140247900	3 call, 0 jmp, 0 ptr	6B relocatable
 0x140247b30	0x140247b30	5 call, 0 jmp, 0 ptr	7B relocatable
+0x140247ee0	0x140247ee0	25 call, 0 jmp, 0 ptr	6B relocatable
+0x140248440	0x140248440	4 call, 1 jmp, 0 ptr	5B relocatable
+0x140249160	0x140249160	41 call, 0 jmp, 0 ptr	5B relocatable
+0x140249a90	0x140249a90	11 call, 1 jmp, 0 ptr	5B relocatable
 0x14024a1a0	0x14024a1a0	5 call, 0 jmp, 0 ptr	5B relocatable
 0x14024c1b0	0x14024c1b0	12 call, 0 jmp, 0 ptr	5B relocatable
+0x14024c460	0x14024c460	8 call, 0 jmp, 0 ptr	6B relocatable
 0x14024c560	0x14024c560	34 call, 1 jmp, 0 ptr	6B relocatable
+0x14024c630	0x14024c630	3 call, 2 jmp, 0 ptr	5B relocatable
+0x14024c7b0	0x14024c7b0	8 call, 0 jmp, 0 ptr	6B relocatable
 0x14024db90	0x14024db90	4 call, 0 jmp, 0 ptr	5B relocatable
 0x14024dff0	0x14024dff0	1 call, 1 jmp, 0 ptr	5B relocatable
 0x14024e3d0	0x14024e3d0	3 call, 0 jmp, 0 ptr	5B relocatable
+0x140250490	0x140250490	3 call, 0 jmp, 0 ptr	5B relocatable
 0x140250580	0x140250580	2 call, 2 jmp, 0 ptr	6B relocatable
 0x140252160	0x140252130	10 call, 1 jmp, 0 ptr	7B relocatable
 0x140252f70	0x140252f40	8 call, 4 jmp, 0 ptr	9B relocatable
@@ -64,6 +73,7 @@
 0x14061e120	0x14061ef70	64 call, 2 jmp, 0 ptr	5B relocatable
 0x140624bd0	0x140625a20	1 call, 0 jmp, 0 ptr	5B relocatable
 0x140656920	0x140657770	0 call, 0 jmp, 2 ptr	6B relocatable
+0x140658c90	0x140659ae0	10 call, 0 jmp, 0 ptr	11B relocatable
 0x1406610e0	0x140661f30	1 call, 0 jmp, 0 ptr	5B relocatable
 0x140669af0	0x14066a940	2 call, 0 jmp, 0 ptr	5B relocatable
 0x140669ea0	0x14066acf0	10 call, 0 jmp, 0 ptr	8B relocatable
@@ -72,13 +82,18 @@
 0x140671130	0x140671f80	1 call, 0 jmp, 0 ptr	6B relocatable
 0x140671670	0x1406724c0	1 call, 0 jmp, 0 ptr	8B relocatable
 0x140671810	0x140672660	3 call, 0 jmp, 0 ptr	8B relocatable
+0x140671ce0	0x140672b30	5 call, 0 jmp, 0 ptr	5B relocatable
 0x140672560	0x1406733b0	1 call, 0 jmp, 0 ptr	5B relocatable
+0x1406726c0	0x140673510	62 call, 0 jmp, 0 ptr	6B relocatable
 0x140672e40	0x140673c90	2 call, 1 jmp, 0 ptr	8B relocatable
+0x140673e30	0x140674c80	11 call, 0 jmp, 0 ptr	5B relocatable
 0x140673f30	0x140674d80	4 call, 0 jmp, 0 ptr	5B relocatable
 0x1406758a0	0x1406766f0	46 call, 0 jmp, 0 ptr	5B relocatable
 0x140678a50	0x1406798a0	1 call, 0 jmp, 0 ptr	6B relocatable
+0x140678e00	0x140679c50	1 call, 0 jmp, 0 ptr	9B relocatable
 0x140679180	0x140679fd0	5 call, 0 jmp, 0 ptr	5B relocatable
 0x140679340	0x14067a190	7 call, 0 jmp, 0 ptr	7B relocatable
+0x1406794b0	0x14067a300	1 call, 0 jmp, 0 ptr	9B relocatable
 0x140679510	0x14067a360	2 call, 0 jmp, 0 ptr	9B relocatable
 0x14067a050	0x14067aea0	1 call, 0 jmp, 0 ptr	7B relocatable
 0x14067a3a0	0x14067b1f0	1 call, 2 jmp, 0 ptr	11B relocatable
@@ -97,6 +112,7 @@
 0x14067bc10	0x14067ca60	1 call, 0 jmp, 0 ptr	11B relocatable
 0x14067bd70	0x14067cbc0	2 call, 1 jmp, 0 ptr	7B relocatable
 0x14067dc00	0x14067ea50	3 call, 1 jmp, 0 ptr	5B relocatable
+0x140682480	0x1406832d0	138 call, 113 jmp, 0 ptr	13B relocatable
 0x1406fb520	0x1406fc370	2 call, 0 jmp, 0 ptr	9B relocatable
 0x14071fd60	0x140720bb0	19 call, 0 jmp, 0 ptr	5B relocatable
 0x140720210	0x140721060	25 call, 0 jmp, 0 ptr	6B relocatable
@@ -110,6 +126,7 @@
 0x14073d3e0	0x14073e230	8 call, 0 jmp, 0 ptr	5B relocatable
 0x140742c90	0x140743ae0	266 call, 187 jmp, 0 ptr	5B relocatable
 0x140744a60	0x1407458b0	351 call, 0 jmp, 0 ptr	5B relocatable
+0x140744dd0	0x140745c20	3 call, 0 jmp, 0 ptr	9B relocatable
 0x1407451c0	0x140746010	11 call, 0 jmp, 0 ptr	5B relocatable
 0x140745510	0x140746360	0 call, 0 jmp, 1 ptr	5B relocatable
 0x140746a00	0x140747850	1 call, 0 jmp, 0 ptr	5B relocatable
@@ -118,6 +135,8 @@
 0x1407499e0	0x14074a830	76 call, 10 jmp, 0 ptr	5B relocatable
 0x140749b20	0x14074a970	36 call, 4 jmp, 0 ptr	5B relocatable
 0x14074a000	0x14074ae50	226 call, 5 jmp, 0 ptr	6B relocatable
+0x14074a2f0	0x14074b140	1295 call, 0 jmp, 0 ptr	5B relocatable
+0x14074a700	0x14074b550	1 call, 0 jmp, 0 ptr	5B relocatable
 0x14074bcc0	0x14074cb10	60 call, 0 jmp, 0 ptr	12B relocatable
 0x14074dad0	0x14074e920	1 call, 1 jmp, 0 ptr	6B relocatable
 0x14074db60	0x14074e9b0	2 call, 0 jmp, 0 ptr	8B relocatable
@@ -126,8 +145,14 @@
 0x14075f800	0x140760650	18 call, 0 jmp, 0 ptr	5B relocatable
 0x140760790	0x1407615e0	144 call, 0 jmp, 1 ptr	11B relocatable
 0x140762d50	0x140763ba0	80 call, 0 jmp, 1 ptr	5B relocatable
+0x1407633d0	0x140764220	25 call, 0 jmp, 0 ptr	5B relocatable
+0x1407638b0	0x140764700	5 call, 0 jmp, 0 ptr	5B relocatable
 0x140786430	0x1407872b0	1 call, 0 jmp, 0 ptr	6B relocatable
 0x140786810	0x140787690	5 call, 0 jmp, 0 ptr	12B relocatable
+0x140787c30	0x140788ab0	4 call, 0 jmp, 0 ptr	5B relocatable
+0x140788360	0x1407891e0	1 call, 0 jmp, 0 ptr	5B relocatable
+0x140788a90	0x140789910	6 call, 0 jmp, 0 ptr	5B relocatable
+0x140788cf0	0x140789b70	1 call, 1 jmp, 0 ptr	5B relocatable
 0x14078d2c0	0x14078e140	1 call, 0 jmp, 0 ptr	11B relocatable
 0x14078dfd0	0x14078ee50	0 call, 2 jmp, 11 ptr	6B relocatable
 0x14078e030	0x14078eeb0	6 call, 0 jmp, 14 ptr	9B relocatable
@@ -152,6 +177,7 @@
 0x1407ad1c0	0x1407ae040	0 call, 0 jmp, 2 ptr	5B relocatable
 0x1407ad710	0x1407ae590	16 call, 0 jmp, 0 ptr	5B relocatable
 0x1407ad810	0x1407ae690	no literal reference, but .pdata declares a function entry here	11B relocatable
+0x1407ada40	0x1407ae8c0	5 call, 0 jmp, 0 ptr	9B relocatable
 0x1407af730	0x1407b05b0	18 call, 0 jmp, 0 ptr	11B relocatable
 0x1407b0140	0x1407b0fc0	19 call, 17 jmp, 0 ptr	5B relocatable
 0x1407b10f0	0x1407b1f70	12 call, 0 jmp, 0 ptr	5B relocatable
@@ -179,6 +205,7 @@
 0x14082dbf0	0x14082ebe0	1 call, 0 jmp, 0 ptr	5B relocatable
 0x14082faf0	0x140830ae0	1 call, 0 jmp, 0 ptr	8B relocatable
 0x1408349c0	0x1408359b0	0 call, 0 jmp, 1 ptr	5B relocatable
+0x14083ac60	0x14083bc50	3 call, 0 jmp, 0 ptr	5B relocatable
 0x1408486e0	0x1408496d0	11 call, 0 jmp, 0 ptr	5B relocatable
 0x140849880	0x14084a870	5 call, 0 jmp, 0 ptr	5B relocatable
 0x1408752c0	0x1408762b0	1 call, 0 jmp, 0 ptr	11B relocatable
@@ -210,22 +237,32 @@
 0x140927d30	0x140928ed0	1 call, 0 jmp, 5 ptr	6B relocatable
 0x14093b760	0x14093c900	1 call, 0 jmp, 0 ptr	5B relocatable
 0x14093bab0	0x14093cc50	1 call, 0 jmp, 0 ptr	11B relocatable
+0x140951220	0x1409523c0	0 call, 1 jmp, 0 ptr	9B relocatable
 0x140958910	0x140959ab0	no literal reference, but .pdata declares a function entry here	5B relocatable
+0x1409749f0	0x140975b90	0 call, 0 jmp, 1 ptr	11B relocatable
 0x140974b00	0x140975ca0	1 call, 0 jmp, 0 ptr	5B relocatable
 0x1409a4670	0x1409a5810	0 call, 0 jmp, 1 ptr	6B relocatable
+0x1409a4d90	0x1409a5f30	0 call, 0 jmp, 1 ptr	6B relocatable
 0x1409a4ed0	0x1409a6070	no literal reference, but .pdata declares a function entry here	11B relocatable
+0x1409a6180	0x1409a7320	2 call, 0 jmp, 0 ptr	5B relocatable
 0x1409a62a0	0x1409a7440	2 call, 0 jmp, 0 ptr	7B relocatable
 0x1409a8890	0x1409a9a30	1 call, 0 jmp, 0 ptr	5B relocatable
 0x1409a8eb0	0x1409aa050	1 call, 0 jmp, 0 ptr	5B relocatable
 0x1409aa290	0x1409ab430	1 call, 0 jmp, 0 ptr	5B relocatable
+0x1409aa680	0x1409ab820	2 call, 0 jmp, 0 ptr	5B relocatable
 0x1409aaba0	0x1409abd40	0 call, 0 jmp, 1 ptr	5B relocatable
 0x1409aac10	0x1409abdb0	0 call, 0 jmp, 1 ptr	5B relocatable
 0x1409ac760	0x1409ad9b0	1 call, 0 jmp, 0 ptr	6B relocatable
 0x1409b24e0	0x1409b3730	2 call, 2 jmp, 0 ptr	6B relocatable
+0x1409b2db0	0x1409b4000	2 call, 0 jmp, 0 ptr	5B relocatable
 0x1409b2f00	0x1409b4150	no literal reference, but .pdata declares a function entry here	6B relocatable
+0x1409b3070	0x1409b42c0	1 call, 0 jmp, 0 ptr	5B relocatable
 0x1409b49f0	0x1409b5c40	1 call, 0 jmp, 0 ptr	5B relocatable
 0x1409b5970	0x1409b6bc0	1 call, 0 jmp, 0 ptr	6B relocatable
+0x1409b6070	0x1409b72c0	0 call, 1 jmp, 0 ptr	5B relocatable
+0x1409b6140	0x1409b7390	0 call, 1 jmp, 0 ptr	11B relocatable
 0x1409b6b30	0x1409b7d80	1 call, 1 jmp, 0 ptr	5B relocatable
+0x1409b72b0	0x1409b8500	0 call, 0 jmp, 1 ptr	6B relocatable
 0x140a9cca0	0x140a9dfa0	1 call, 0 jmp, 0 ptr	7B relocatable
 0x140aebdc0	0x140aed0d0	5 call, 0 jmp, 0 ptr	5B relocatable
 0x140aec050	0x140aed360	no literal reference, but .pdata declares a function entry here	6B relocatable
@@ -249,6 +286,7 @@
 0x140b0c2a0	0x140b0d940	no literal reference, but .pdata declares a function entry here	9B relocatable
 0x140b0d400	0x140b0eaa0	no literal reference, but .pdata declares a function entry here	8B relocatable
 0x140b0d960	0x140b0f000	10 call, 4 jmp, 0 ptr	6B relocatable
+0x140b0e180	0x140b0f820	0 call, 0 jmp, 1 ptr	6B relocatable
 0x140b83680	0x140b84d30	3 call, 0 jmp, 0 ptr	5B relocatable
 0x140bb8ca0	0x140bba350	1 call, 0 jmp, 0 ptr	7B relocatable
 0x140bba210	0x140bbb8c0	9 call, 0 jmp, 0 ptr	8B relocatable
@@ -264,22 +302,32 @@
 0x140bdf610	0x140be0ce0	2 call, 1 jmp, 0 ptr	5B relocatable
 0x140bdfde0	0x140be14b0	2 call, 1 jmp, 0 ptr	6B relocatable
 0x140be4880	0x140be5f50	10 call, 0 jmp, 0 ptr	5B relocatable
+0x140c575e0	0x140c58cb0	0 call, 0 jmp, 1 ptr	5B relocatable
 0x140cab230	0x140cac900	29 call, 0 jmp, 0 ptr	11B relocatable
 0x140cafc30	0x140cb1300	7 call, 1 jmp, 0 ptr	5B relocatable
 0x140cf9500	0x140cfabd0	61 call, 122 jmp, 0 ptr	5B relocatable
 0x140cfae60	0x140cfc530	24 call, 0 jmp, 0 ptr	11B relocatable
 0x140cfaff0	0x140cfc6c0	37 call, 0 jmp, 0 ptr	11B relocatable
+0x140d0fda0	0x140d11470	1 call, 2 jmp, 0 ptr	5B relocatable
+0x140d0ff70	0x140d11640	no literal reference, but .pdata declares a function entry here	5B relocatable
+0x140d103d0	0x140d11aa0	0 call, 1 jmp, 0 ptr	5B relocatable
+0x140d10600	0x140d11cd0	2 call, 2 jmp, 0 ptr	5B relocatable
 0x140d10b60	0x140d12230	2 call, 0 jmp, 0 ptr	5B relocatable
+0x140d10d90	0x140d12460	0 call, 1 jmp, 0 ptr	5B relocatable
+0x140d11370	0x140d12a40	1 call, 1 jmp, 0 ptr	5B relocatable
 0x140d25c30	0x140d27340	4 call, 0 jmp, 0 ptr	6B relocatable
 0x140d3d5f0	0x140d3ed40	1 call, 0 jmp, 0 ptr	6B relocatable
+0x140d3ed90	0x140d404e0	1 call, 0 jmp, 0 ptr	6B relocatable
 0x140d50cc0	0x140d52a00	16 call, 0 jmp, 0 ptr	6B relocatable
 0x140d697d0	0x140d6b510	1 call, 0 jmp, 0 ptr	8B relocatable
+0x140d78630	0x140d7a370	1 call, 0 jmp, 0 ptr	5B relocatable
 0x140d7f850	0x140d81590	2121 call, 2383 jmp, 0 ptr	5B relocatable
 0x140d81970	0x140d836b0	3 call, 0 jmp, 0 ptr	6B relocatable
 0x140d81fb0	0x140d83cf0	11 call, 0 jmp, 0 ptr	6B relocatable
 0x140d82570	0x140d842b0	9 call, 0 jmp, 0 ptr	7B relocatable
 0x140d83e20	0x140d85b60	19 call, 0 jmp, 0 ptr	7B relocatable
 0x140d84090	0x140d85dd0	6 call, 0 jmp, 0 ptr	5B relocatable
+0x140d844d0	0x140d86210	0 call, 1 jmp, 0 ptr	5B relocatable
 0x140d95280	0x140d96fc0	11 call, 0 jmp, 0 ptr	5B relocatable
 0x140e05fb0	0x140e07db0	1 call, 1 jmp, 0 ptr	6B relocatable
 0x140e06490	0x140e08290	1 call, 0 jmp, 0 ptr	5B relocatable
@@ -301,14 +349,17 @@
 0x140ec9530	0x140ecb330	5 call, 0 jmp, 0 ptr	6B relocatable
 0x141140ec0	0x141142cc0	112 call, 0 jmp, 0 ptr	5B relocatable
 0x14114bf10	0x14114dd10	29 call, 0 jmp, 0 ptr	7B relocatable
+0x14116a910	0x14116c710	4 call, 0 jmp, 0 ptr	5B relocatable
 0x141198e50	0x14119ac50	4 call, 2 jmp, 0 ptr	5B relocatable
 0x1411a8900	0x1411aa700	3 call, 0 jmp, 0 ptr	6B relocatable
+0x1411ced80	0x1411d0b80	6 call, 0 jmp, 0 ptr	5B relocatable
 0x141653350	0x141655150	4 call, 3 jmp, 0 ptr	8B relocatable
 0x1419e0e10	0x1419e2c10	44 call, 0 jmp, 0 ptr	5B relocatable
 0x1419e5830	0x1419e7630	8 call, 1 jmp, 0 ptr	6B relocatable
 0x1419eaa20	0x1419ec820	6 call, 2 jmp, 0 ptr	5B relocatable
 0x141aeae60	0x141aecc60	4 call, 0 jmp, 0 ptr	6B relocatable
 0x141aeaf40	0x141aecd40	5 call, 0 jmp, 0 ptr	6B relocatable
+0x141b3bda0	0x141b3dba0	1 call, 0 jmp, 0 ptr	5B relocatable
 0x141eb97a0	0x141ebb5a0	29454 call, 89 jmp, 0 ptr	5B relocatable
 0x141eba960	0x141ebc760	2139 call, 0 jmp, 0 ptr	9B relocatable
 0x141f6bad0	0x141f6d8d0	0 call, 0 jmp, 1 ptr	5B relocatable
@@ -316,6 +367,7 @@
 0x1420b6370	0x1420b8170	7 call, 0 jmp, 0 ptr	5B relocatable
 0x1420b63c0	0x1420b81c0	26 call, 7 jmp, 0 ptr	5B relocatable
 0x1420b6ac0	0x1420b88c0	35 call, 21 jmp, 0 ptr	5B relocatable
+0x14223a130	0x14223c8c0	3 call, 0 jmp, 0 ptr	5B relocatable
 0x1423f1bf0	0x1423f4400	9 call, 1 jmp, 0 ptr	5B relocatable
 0x14240a1f0	0x14240ca00	7 call, 0 jmp, 0 ptr	6B relocatable
 0x14240a2a0	0x14240cab0	5 call, 0 jmp, 0 ptr	5B relocatable
