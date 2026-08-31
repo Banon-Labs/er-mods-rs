@@ -40,9 +40,17 @@ HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.d
 # oracle_tick_ms, so a product load2/load3 run can be tested for single-core contention (bd NEXT-telemetry
 # -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
+# EVERY per-run log this probe relies on is redirected into ARTIFACT_DIR, because anything left in
+# GAME_DIR is single-slot and the NEXT launch destroys it. Measured 2026-08-31: this harness already
+# redirected the autoload debug log, but NOT the continue trace -- so the 11:09 run overwrote the
+# 5.4 MB `er-quickload-continue-trace.log` belonging to the 09:07 run, whose evidence nobody had read
+# yet. The DLL honours ER_QUICKLOAD_TRACE_CONTINUE_PATH (save_policy_logs.rs `continue_trace_log_path`)
+# and falls back to GAME_DIR only when it is unset. Add a line here for any future log rather than
+# copying it out afterwards: a copy after teardown cannot recover a file the run itself clobbered.
 LAUNCH_ENV_VARS=(
 	"ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-quickload-autoload-debug.log"
 	"ER_QUICKLOAD_CRASH_LOG_PATH=$ARTIFACT_DIR/er-quickload-crash.log"
+	"ER_QUICKLOAD_TRACE_CONTINUE_PATH=$ARTIFACT_DIR/er-quickload-continue-trace.log"
 )
 # RENDERDOC=1: the Windows RenderDoc DLL, loaded as a me3 native to hook ER's D3D12 device.
 RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
@@ -77,10 +85,17 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
-[[ -f "$PRODUCT_DLL" ]] || fail "product DLL not built: $PRODUCT_DLL"
-[[ -f "$TRACE_DLL" ]] || fail "trace DLL not built: $TRACE_DLL"
-[[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness)"
-[[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry)"
+# FRESHNESS, NOT EXISTENCE. These four `[[ -f ]]` checks used to be the only thing between this
+# probe and week-old code: the profile written below points me3 straight at target/.../release,
+# so a DLL that merely EXISTS is what gets loaded. All four are checked, not just the product --
+# this run's whole claim is about how the four interact, and one stale companion invalidates it
+# exactly as thoroughly as a stale product would. Refusing beats running: a launch on the wrong
+# bytes yields evidence indistinguishable from the feature not working.
+# shellcheck source=scripts/er-dll-freshness.sh
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/er-dll-freshness.sh"
+require_fresh_dlls "$PRODUCT_DLL" "$TRACE_DLL" "$HARNESS_DLL" "$TELEM_DLL" ||
+	fail "refusing to launch against DLLs that are not this source tree (see above)"
 [[ "${RENDERDOC:-0}" != "1" || -f "$RDOC_DLL" ]] || fail "RENDERDOC=1 but renderdoc.dll not found at '$RDOC_DLL' (set RENDERDOC_DLL=<path to Windows renderdoc.dll>)."
 
 if [[ -z "${ME3:-}" ]]; then
@@ -177,6 +192,12 @@ cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.effective" 
 } >"$GAME_DIR/er-quickload-autoload.txt"
 cp -f "$GAME_DIR/er-quickload-autoload.txt" "$ARTIFACT_DIR/autoload-request.txt"
 LAUNCH_ENV_VARS+=("ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD=1")
+# The DLL now IGNORES `slot=` in er-quickload-autoload.txt by default: a stale copy of that file
+# silently chose the loading screen's character in run br-20260831-014208-b1d6, so it is no longer
+# a product slot channel. This probe genuinely wants it, so it opts in explicitly through the same
+# deprecated-probe gate the other smoke scripts already use (AGENTS.md 2026-07-08). Without this
+# line $BOOT_SLOT above would be read, refused, and logged -- not silently obeyed.
+LAUNCH_ENV_VARS+=("ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1")
 
 # NO env/marker arming: the input-harness DLL is enabled purely by its PRESENCE in the profile above.
 # Sweep any stale legacy sq-repro/probe markers so a prior run cannot pollute this one.
