@@ -1,9 +1,238 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# THIS SUITE ACCUMULATES FAILURES. IT DOES NOT STOP AT THE FIRST ONE.
+#
+# It used to run under `set -e`, and the cost of that was measured twice on 2026-08-31: it went red
+# at line 46 on `test-input-harness-static.py` -- whose subject, crates/er-input-harness/src/pad_inject.rs,
+# was mid-edit by another agent -- and the ~130 gate invocations after it produced NO VERDICT AT ALL.
+# Not pass, not fail, nothing. Earlier the same day the abort was at check-crate-extraction-roadmap.py.
+#
+# That is the same defect every gate in this file exists to refuse: A GATE THAT NEVER EXECUTED IS
+# INDISTINGUISHABLE FROM A GATE THAT PASSED. Agents reported "check.sh is red at X" while holding no
+# information whatever about the checks behind X, and several then called their own change green on
+# the strength of running a handful by hand. `set -e` also silently made a check's POSITION its
+# authority: the identical check is load-bearing at line 46 and decorative at line 900, because
+# anything ahead of it going red erases it. In a tree six agents edit concurrently an early red is
+# the normal case, so most of this suite was unobserved for most of a day.
+#
+# So: every step runs, every failure is collected, and the summary at the end gives EVERY step one
+# of four states -- passed, FAILED, INCONCLUSIVE (killed before it reached a verdict) and, the
+# load-bearing one, NOT RUN, which must never be silent. Exit is non-zero unless every step ran and
+# passed; NOT RUN and INCONCLUSIVE are not passes.
+#
+# ADDING A GATE IS STILL ONE LINE. Nothing has to be registered anywhere: put the invocation on its
+# own line, starting in column 1 with `python3` / `bash` / `cargo` / `shellcheck` / `rustfmt` /
+# `cupcake` / `opa` / `command -v`, exactly as every line below does. The summary discovers the
+# step list by reading THIS FILE back at exit, so an appended gate is classified automatically and
+# a `\`-continued multi-line invocation counts once, at its first line. Comments between steps are
+# free. The only way to write a step the summary cannot see is to indent it or to hide it inside a
+# function or subshell -- so don't.
+#
+# FAIL-FAST IS STILL AVAILABLE, AS AN EXPLICIT, JUSTIFIED EXCEPTION -- never as the default for all
+# ~190 steps. Use it only where a LATER check consumes this step's output, so continuing would
+# produce verdicts that are not about anything. The live example is the `command -v cupcake` guard
+# below: `|| { echo ...; exit 127; }`. Write that shape deliberately, with the reason next to it;
+# the EXIT trap then reports everything after it as NOT RUN instead of letting it vanish.
+set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
+# --- failure accumulation ------------------------------------------------------------------
+# The ERR trap fires on exactly the commands `set -e` would have exited on -- and, verified on
+# this bash, NOT on the left side of `||`/`&&` -- so the `command -v opa >/dev/null && opa test ...`
+# guards below keep behaving as they always did when opa is absent.
+#
+# EVERY STEP IS CLASSIFIED BY ITS OWN SOURCE LINE, not by a running count. A count cannot answer
+# "which checks have no verdict", which is the only question that matters after an early exit; and
+# the count was wrong anyway -- bash fires the DEBUG trap TWICE for a command that goes on to fire
+# the ERR trap (measured on this bash), so every failing step was counted as two steps run. Both
+# problems disappear when the DEBUG trap records a SET of line numbers and the summary diffs that
+# set against the step lines it reads back out of this file.
+#
+# The step list is SNAPSHOT NOW, at startup, and never re-read. The summary used to grep this file
+# back when it finished; that is fine until somebody edits check.sh while a run is in flight, which
+# is ordinary in a tree several agents share and happened during this very rewrite. The recorded
+# line numbers then point into a file that no longer exists, every row shifts, and the table becomes
+# confident nonsense -- the exact failure class this suite exists to refuse, produced by the
+# instrument reporting it.
+_check_step_pattern='^[[:space:]]*(python3|bash|cargo|shellcheck|rustfmt|cupcake|opa|command -v)[[:space:]]'
+mapfile -t _check_step_rows < <(grep -nE "$_check_step_pattern" "${BASH_SOURCE[0]}" 2>/dev/null || true)
+_check_failed_lines=()
+_check_failed_cmds=()
+_check_inconclusive_lines=()
+_check_inconclusive_cmds=()
+declare -A _check_ran_at=()
+_check_ran=0
+_check_reached_end=0
+
+_check_note_failure() {
+	local status="$1" line="$2" cmd="$3"
+	# THREE OUTCOMES, NOT TWO. 124 is GNU `timeout` reporting its deadline; >=128 is death by
+	# signal N-128 (137 SIGKILL, 143 SIGTERM -- how an agent harness reclaims a long-running
+	# process). A step that was KILLED produced no verdict: calling it FAILED would let a check
+	# that never finished look sensitive to the tree, and calling it passed is the defect this
+	# whole file exists to refuse. So it is INCONCLUSIVE, and it is not a pass.
+	#
+	# This is not hypothetical here, and this whole suite is far past any 30s per-command cap
+	# regardless, so run it in the background, never inside a capped foreground shell.
+	#
+	# Measured 2026-08-31, since which steps those are had drifted. check-no-timeouts.py was 28-31s
+	# and is now ~2s: 97% of it was `rglob`-ing 1,117,583 filesystem entries to find the 1112 files
+	# `git ls-files` lists in 0.011s. check-oracle-writers.py at ~22s is genuine work over
+	# crates/**/*.rs, not a whole-tree scan, and is left alone.
+	#
+	# THE ONE STILL OVER THE CAP is test-cupcake-policies.py. It was 34.5s, of which ~13s was it
+	# shelling out to test-cupcake-delivered-shape.py that lines 421/422 below ALREADY run; that
+	# duplication is gone. What is left does not compress: 176 `cupcake eval` spawns, ~237
+	# CPU-seconds, one event per process (there is no batch mode). Wall clock is that floor divided
+	# by whatever cores the rest of this box leaves free -- three runs of the identical code came
+	# back 20.4s, 23.4s and 35.0s -- so it is over the cap whenever the machine is busy, and that
+	# is not something the script can fix. It now says so on its own stdout before it starts work,
+	# so an agent killed at 30s has already been told why rather than inferring a hang.
+	if [[ $status -eq 124 || $status -ge 128 ]]; then
+		_check_inconclusive_lines+=("$line")
+		_check_inconclusive_cmds+=("$cmd")
+		printf '\n>>> check.sh INCONCLUSIVE at line %s (exit %s, killed): %s\n>>> no verdict from this step; NOT a pass\n\n' \
+			"$line" "$status" "$cmd" >&2
+		return 0
+	fi
+	_check_failed_lines+=("$line")
+	_check_failed_cmds+=("$cmd")
+	printf '\n>>> check.sh FAILED at line %s: %s\n>>> continuing; the summary at the end is the verdict\n\n' \
+		"$line" "$cmd" >&2
+}
+trap '_check_note_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
+# Record WHICH steps executed, so the summary can name the ones that did not.
+# A DEBUG trap is NOT inherited by shell functions unless `set -T` is on, so this only ever sees
+# top-level commands; the subshell test keeps command substitutions out, and the case filter keeps
+# it to step-shaped lines. (A `${#FUNCNAME[@]} -eq 1` guard was tried and is WRONG: bash reports
+# depth 2 for a function invoked from a DEBUG trap here, so it counted zero steps while reporting
+# every one of them as NOT RUN -- a summary that lied in the safe direction, but still lied.)
+# `$LINENO` here is the line the command STARTS on, verified against a `\`-continued multi-line
+# `cargo test`, which is what lets the summary pair a run with the source line it came from.
+_check_count_step() {
+	if [[ ${BASH_SUBSHELL} -eq 0 ]]; then
+		case "$2" in
+		python3\ * | bash\ * | cargo\ * | shellcheck\ * | rustfmt\ * | opa\ * | cupcake\ * | command\ *)
+			_check_ran_at[$1]=1
+			;;
+		esac
+	fi
+	return 0
+}
+trap '_check_count_step "$LINENO" "$BASH_COMMAND"' DEBUG
+
+_check_summary() {
+	local rc=$?
+	trap - ERR DEBUG EXIT
+	local failed=${#_check_failed_lines[@]}
+	local inconclusive=${#_check_inconclusive_lines[@]}
+	local total=0 not_run=0 passed=0 i line text state
+	declare -A failed_at=() inconclusive_at=()
+	for ((i = 0; i < failed; i++)); do failed_at[${_check_failed_lines[i]}]=1; done
+	for ((i = 0; i < inconclusive; i++)); do inconclusive_at[${_check_inconclusive_lines[i]}]=1; done
+	_check_ran=${#_check_ran_at[@]}
+
+	# THE PER-GATE TABLE. Read the step lines back out of THIS file and give every one of them a
+	# state. A gate that never ran is the one thing a summary must never omit -- omission is what
+	# made "check.sh is green" and "check.sh got as far as line 46" indistinguishable.
+	local table="" row
+	for row in ${_check_step_rows[@]+"${_check_step_rows[@]}"}; do
+		line=${row%%:*}
+		text=${row#*:}
+		[[ -z $line ]] && continue
+		total=$((total + 1))
+		if [[ -n ${failed_at[$line]:-} ]]; then
+			state="FAILED      "
+		elif [[ -n ${inconclusive_at[$line]:-} ]]; then
+			state="INCONCLUSIVE"
+		elif [[ -n ${_check_ran_at[$line]:-} ]]; then
+			state="passed      "
+			passed=$((passed + 1))
+		else
+			state="NOT RUN     "
+			not_run=$((not_run + 1))
+		fi
+		table+=$(printf '  %s  line %-5s %.96s' "$state" "$line" "${text# }")
+		table+=$'\n'
+	done
+
+	echo
+	echo "======================================================================"
+	echo "== check.sh summary                                                 =="
+	echo "======================================================================"
+	printf 'steps run     : %s of %s\n' "$_check_ran" "$total"
+	printf 'passed        : %s\n' "$passed"
+	printf 'FAILED        : %s\n' "$failed"
+	printf 'INCONCLUSIVE  : %s\n' "$inconclusive"
+	printf 'NOT RUN       : %s\n' "$not_run"
+
+	if [[ $failed -gt 0 ]]; then
+		echo
+		echo "failing steps:"
+		for ((i = 0; i < failed; i++)); do
+			printf '  line %-5s %s\n' "${_check_failed_lines[i]}" "${_check_failed_cmds[i]}"
+		done
+	fi
+	if [[ $inconclusive -gt 0 ]]; then
+		echo
+		echo "INCONCLUSIVE steps (killed before reaching a verdict -- NOT passes):"
+		for ((i = 0; i < inconclusive; i++)); do
+			printf '  line %-5s %s\n' "${_check_inconclusive_lines[i]}" "${_check_inconclusive_cmds[i]}"
+		done
+	fi
+
+	echo
+	echo "per-step state (passed / FAILED / INCONCLUSIVE / NOT RUN):"
+	printf '%s' "$table"
+
+	if [[ $_check_reached_end -ne 1 ]]; then
+		echo
+		echo "!! THE SUITE DID NOT REACH THE END. The $not_run step(s) marked NOT RUN above have"
+		echo "!! NO VERDICT -- do not read that as a pass for any of them."
+		echo "!! Something exited early: an explicit fail-fast guard (see the header), a missing"
+		echo "!! required command, or an interrupt."
+		[[ $rc -eq 0 ]] && rc=1
+	elif [[ $failed -gt 0 || $inconclusive -gt 0 || $not_run -gt 0 ]]; then
+		rc=1
+	else
+		rc=0
+		echo
+		echo "all steps ran; none failed"
+	fi
+
+	# A GREEN HERE IS NOT THE STRONGEST STATEMENT AVAILABLE, and a reader who does not know that
+	# will over-read it. This file proves each gate RUNS and agrees with the tree; it does not
+	# prove any gate would NOTICE the defect it exists to catch. That question is answered by
+	# planting the real defect in the real tree and requiring the real gate to name it:
+	echo
+	echo "the stronger check this file cannot run: scripts/prove-gate-positive-controls.py"
+	echo "  (66 positive controls over 31 gates; --list / --only <gate> / --fast). NOT wired in"
+	echo "  here on purpose -- it mutates tracked files while it runs, which is unsafe in a tree"
+	echo "  other agents are editing. Run it by hand on a quiet tree."
+	exit "$rc"
+}
+trap _check_summary EXIT
+# -------------------------------------------------------------------------------------------
+
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
+# THE METER ON THE METERS. Almost every gate below is prefaced by its own `--selftest`, and the
+# whole value of that convention rests on one tool that was itself never run by anything:
+# audit-selftest-vacuity.py re-runs each of those selftests with the gate's matcher lobotomised
+# (`--mode regex`) or with every file it reads coming back EMPTY (`--mode reads`) and reports which
+# selftests do not notice. Its own selftest is sub-second and side-effect-free, so it belongs here;
+# the two SWEEPS take minutes and stay manual. The direct question -- plant the real defect in the
+# real tree and require the gate to name it -- is scripts/prove-gate-positive-controls.py, which is
+# deliberately NOT wired because it mutates tracked files while it runs.
+python3 "$repo_root/scripts/audit-selftest-vacuity.py" --selftest
+# ...and the suite's own execution semantics, which are load-bearing for every verdict below it.
+# This file collected NO verdict for ~130 of its own steps twice on 2026-08-31 because `set -e`
+# aborted it at line 46 on a gate whose subject was mid-edit by another agent. A gate that never
+# executed is indistinguishable from a gate that passed, so "does check.sh actually run all of
+# check.sh" is itself a gate. It lifts the preamble out of THIS file (never a copy) and drives it
+# over synthetic suites, and its own non-vacuity control deletes the ERR trap and requires the
+# cases to go red.
+python3 "$repo_root/scripts/test-check-sh-accumulates.py"
 python3 "$repo_root/scripts/check-no-timeouts.py"
 python3 "$repo_root/scripts/check-no-committed-build-artifacts.py" --selftest
 python3 "$repo_root/scripts/check-no-committed-build-artifacts.py"
@@ -13,6 +242,16 @@ bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
 # so the gate is never trusted on its own say-so (er-effects-rs-56fx).
 python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
 python3 "$repo_root/scripts/check-oracle-writers.py"
+# The counter gate above asks whether an oracle has a writer. This one asks where its READS point.
+# `standalone_tick` reached four game singletons through `safe_read_usize(base + rva)` with the RVA
+# hidden behind a closure parameter, so no name-keyed gate could see it -- and on 1.17 all four
+# fields went CONSTANT for a whole 4,350-record run rather than going quiet. Selftest first; its
+# blinds revert the ledger rows to their 1.16.2 values and confirm the gate turns red.
+# UNWIRED 2026-08-31, and it is the wiring that is missing, not the gate. The gate itself is
+# derived against crates/er-input-harness/src/pad_inject.rs and crates/er-title-flow/*, all of which
+# are mid-edit in somebody's working tree. Re-arm both lines in the commit that lands those files.
+# python3 "$repo_root/scripts/check-oracle-singleton-globals.py" --selftest
+# python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # The workspace uses `../fromsoftware-rs` PATH dependencies, and CI clones that sibling at ONE
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
 # types upstream does not have. Everything below compiles against the developer's copy, so it
@@ -21,6 +260,43 @@ python3 "$repo_root/scripts/check-oracle-writers.py"
 python3 "$repo_root/scripts/check-fromsoftware-symbols.py" --selftest
 python3 "$repo_root/scripts/check-fromsoftware-symbols.py"
 python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
+# DOES A LAUNCH DESTROY THE PREVIOUS RUN'S EVIDENCE? (wired 2026-08-31.) A game-directory artifact
+# is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames `<name>` to `<name>.prev` and
+# truncates on the first write of each process, so two launches and run N-2 is gone -- and several
+# sessions launch concurrently here, which makes that the normal case rather than a race. Measured
+# 2026-08-31: an 11:09 launch destroyed the 09:07 run's 5.4 MB continue trace before anyone read
+# it, and three artifacts keep ZERO generations because they are `fs::write`, not a rotating log.
+# It ENUMERATES rather than pattern-matches -- it reads the knob table out of the Rust sources (the
+# `env::var` call plus its resolver's own fallback, following `const` identifiers) and finds
+# launchers by their actual launch command. That distinction is the point: pattern-matching is how
+# this class hid.
+#
+# The live run PASSES while printing 98 known gaps across 13 launchers, held in
+# `scripts/er-artifact-redirect-audit.baseline.txt`. Read that count as a TO-DO LIST, not an
+# approval: the baseline records what is already broken, and only NEW drift fails. The count is
+# printed on PASSING runs precisely so it cannot rot unseen. 1.2s each.
+# Positive control: deleting one knob from `capture-er-frame.sh` (a launcher that currently
+# redirects everything, so the gap is genuinely new) goes RED naming the launcher, the knob and the
+# consequence -- the baseline does NOT absorb it. Moving the same export line stays green.
+#
+# TRANSIENTLY RED AS OF 2026-08-31, AND DELIBERATELY LEFT THAT WAY. Six knobs --
+# ER_QUICKLOAD_{CPU_PROFILE,DIAG_HARNESS,INPUT_HARNESS_LOG,INPUT_HARNESS_PHASES,RELOAD_TRACE,
+# TIMESERIES}_PATH -- appeared in the working tree while this gate was being wired. Measured with
+# `git grep <knob> HEAD`: all six are ABSENT at HEAD, so they are another agent's uncommitted
+# in-flight work, and that agent has already converted 6 of the 19 launchers. The remaining 13
+# have not caught up, which is what the gate is reporting, correctly and for the first time.
+#
+# The fix is that agent finishing, NOT `--write-baseline`. Regenerating now would freeze somebody
+# else's half-done change as ~78 rows of accepted debt and call it green -- which is the precise
+# failure this whole sweep was called to undo. Leave it red until the launchers land; the suite
+# accumulates failures rather than aborting, so a truthful red here costs a line in the summary
+# and nothing else.
+# UNWIRED 2026-08-31: scripts/er-artifact-redirect-audit.py and its .baseline.txt are STAGED by
+# another agent, and the launcher redirects the live run counts as gaps are uncommitted too, so at
+# THIS commit the selftest loses 4 reader cases and the live run reports 185 gaps. Re-arm both lines
+# in the commit that lands the audit script, its baseline and the launcher changes together.
+# python3 "$repo_root/scripts/er-artifact-redirect-audit.py" --selftest
+# python3 "$repo_root/scripts/er-artifact-redirect-audit.py"
 python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
 python3 "$repo_root/scripts/test-runtime-probe-contract.py"
 python3 "$repo_root/scripts/test-er-readiness-watch.py"
@@ -42,6 +318,23 @@ python3 "$repo_root/scripts/test-autoload-happy-path.py"
 # the nonzero recurrence semaphore so the 120,959-call identical-rejection loop cannot return.
 python3 "$repo_root/scripts/check-own-load-save-rejection-guard.py" --selftest
 python3 "$repo_root/scripts/check-own-load-save-rejection-guard.py"
+# TWO GATES THAT EXISTED AND RAN NOWHERE (wired 2026-08-31), 0.08s for the pair.
+#
+# The first is the TEST OF ANOTHER GATE. `check-ifpe-finalization-proof.py` scores a live run's
+# artifacts, so it cannot run here; its test is fully synthetic tempdirs, asserts the four failure
+# strings in a red case and an empty verdict in a green one, and needs no game and no corpus.
+# Nothing ran it, so the scorer's own logic was unguarded. Control: making its `failures.append`
+# calls no-ops turns this red; rewording a failure message leaves it green.
+#
+# The second holds the line that a BLIND census cannot pass. `check-save-suppression.py` returns a
+# single verdict by crossing an in-process census against an offline byte witness, and the branch
+# that matters is the one where the census reports zero writes while the bytes on disk moved -- it
+# must come back FAIL, not PASS. Its ~20 red/green fixtures cover every verdict branch; only
+# `--selftest` runs here, because the scoring path needs a real run's telemetry and witness
+# snapshots. Control: forcing `evaluate()` to always return passed=True turns this red and names
+# `blind census` and `no offline witness` by branch; a comment-only edit stays green.
+python3 "$repo_root/scripts/test-ifpe-finalization-proof.py"
+python3 "$repo_root/scripts/check-save-suppression.py" --selftest
 python3 "$repo_root/scripts/check-yk0j-runtime-proof.py" --selftest
 python3 "$repo_root/scripts/check-user-release-package.py"
 python3 "$repo_root/scripts/check-native-continue-static.py"
@@ -51,8 +344,19 @@ python3 "$repo_root/scripts/check-menu-constructor-static.py"
 # write and logged 339,764 anonymous refusals in a single session. Selftest first.
 python3 "$repo_root/scripts/check-no-rva-zero.py" --selftest
 python3 "$repo_root/scripts/check-no-rva-zero.py"
+# Selftest first (mirrors check-no-rva-zero above). Both gates read Rust and Rego through
+# `code_only`; their --selftest carries the frozen controls plus the non-vacuity proof that
+# blinding the matcher turns them red. Without it a blinded matcher reports a clean tree.
+# UNWIRED 2026-08-31: the COMMITTED check-env-gate-comments.py has no --selftest -- the flag lives
+# in that script's uncommitted edit, so at this commit the step exits 2 with `unrecognized arguments`
+# -- a step that produces no verdict about anything, which is the one thing this file refuses.
+# Re-arm it in the commit that lands scripts/check-env-gate-comments.py.
+# python3 "$repo_root/scripts/check-env-gate-comments.py" --selftest
 python3 "$repo_root/scripts/check-env-gate-comments.py"
 python3 "$repo_root/scripts/test-env-gate-comments.py"
+# UNWIRED 2026-08-31: same shape as the --selftest two rows up. The committed check-marker-file-gates.py
+# has no --selftest either. Re-arm it in the commit that lands scripts/check-marker-file-gates.py.
+# python3 "$repo_root/scripts/check-marker-file-gates.py" --selftest
 python3 "$repo_root/scripts/check-marker-file-gates.py"
 python3 "$repo_root/scripts/test-marker-file-gates.py"
 python3 "$repo_root/scripts/check-reload-trace-policy.py" --audit
@@ -108,11 +412,62 @@ command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.
 # er-effects-rs-dt2e). It is the one place that decides what counts as EXECUTED
 # rather than quoted, so a regression here silently re-opens four guards at once.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/tests/commands_test.rego"
+# FOUR SUITES, 89 ASSERTIONS, WRITTEN AND COMMITTED AND NEVER EXECUTED ONCE (wired 2026-08-31).
+# Among them is every test of the two rules standing between an agent and a root delete. They had
+# no runner at all: not here, not in CI, nowhere. 0.16s for all four -- the cost was never why.
+#
+# They were briefly reachable only through `scripts/test-cupcake-policies.py`'s internals. That
+# works, but a suite reached through another script's guts is one refactor from going quiet again,
+# which is precisely how it got here, so they get their own lines.
+#
+# What the fish/csh/tcsh line is about: `(ba|z|k|da|a|fi|c|tc)?sh` in commands.rego is the shell
+# alternation the command decomposition recognises, and `fi|c|tc` were MISSING until 2026-08-31 --
+# so `fish -c '<guarded command>'` decomposed to nothing and walked through every executed-text
+# guard, while AGENTS.md actively instructs agents to wrap commands for fish. A documented
+# workflow straight through the enforcement. 18 commands flipped ALLOW->DENY closing it.
+# Positive control (run against COPIES; .cupcake is not edited): dropping `fi|c|tc` back out of
+# that alternation takes protected_paths_test from PASS 73/73 to FAIL 2/73 and commands_test from
+# 58/58 to FAIL 3/58. The bypass is genuinely gated, by these suites, now that they run.
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/builtins/protected_paths.rego" "$repo_root/.cupcake/tests/protected_paths_test.rego"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_tmp_scripts_guard.rego" "$repo_root/.cupcake/tests/edit_no_tmp_scripts_guard_test.rego"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
+# AND THE HALF `opa test` CANNOT REACH. A green policy suite does not mean production-allowed or
+# production-denied: these suites feed raw multi-line text the engine never delivers -- it
+# collapses newlines to spaces outside balanced quoted spans, and the production shim rewrites
+# unquoted `\n` to `; ` before cupcake sees the command. Measured: one test was green in `opa test`
+# AND ALLOW in production, and another asserted production allows a push it has denied since the
+# shim landed. A suite that never runs against the DELIVERED shape is a weaker form of the same
+# defect as one that never runs at all. 1.0s selftest + 12.9s live.
+# Control note, stated honestly: its `--selftest` proves it rejects a fictional fixture, and that
+# passes. A real-drift control would have to mutate `.cupcake/**`, which this agent is not
+# permitted to edit; a scratch-copy harness came back red in all three states, so it proved
+# nothing and is NOT counted as a control. The fish/csh/tcsh drift above IS proven gated, by the
+# four opa suites.
+python3 "$repo_root/scripts/test-cupcake-delivered-shape.py" --selftest
+python3 "$repo_root/scripts/test-cupcake-delivered-shape.py"
 # These two had test files but no runner: written, committed, and never executed
 # once. Both carried the same wrapper hole as the guards above, and neither test
 # suite could have caught it because neither ever ran.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_fresh_origin_main.rego" "$repo_root/.cupcake/tests/git_require_fresh_origin_main_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/builtins/git_block_no_verify.rego" "$repo_root/.cupcake/tests/git_block_no_verify_test.rego"
+# ...AND THE SWEEP THAT MAKES THE ENUMERATION UNNECESSARY (2026-08-31). Every line above NAMES its
+# suite, and that is precisely why four of them sat committed for weeks with no runner anywhere and
+# 89 assertions that had never executed once -- among them every test of the rules standing between
+# an agent and a root delete. A new `.rego` suite is born uncovered and NOTHING says so, so this
+# gate's reach was only ever whatever somebody last remembered to type. `opa test` takes a
+# DIRECTORY and loads it recursively, so this single line covers every suite in .cupcake/ from the
+# moment the file exists. It already picks up guard_layer_destructive_guard_test.rego (40 cases),
+# which landed today reachable only through scripts/test-cupcake-policies.py's ORPHANED_REGO_SUITES
+# table -- a suite reached through another script's internals is one refactor from going quiet
+# again, which is exactly how this class started.
+#
+# The per-suite lines above STAY. They attribute a failure to one suite and one row of this file's
+# summary table, which a 662-case sweep cannot. Cost is not the trade-off it looks like: measured
+# 0.79s wall for all 662 assertions (3.9s CPU, parallel) against 0.16s for the four lines above, in
+# a suite whose neighbouring delivered-shape gate spends 19.9s. It also PRODUCES the 662/662 figure
+# that reports have been quoting from a hand-run command no gate computed.
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # A NUL-terminator walk over a pointer we did not create is how both testers' games died on
 # 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage NON-null
@@ -204,6 +559,22 @@ python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
 python3 "$repo_root/scripts/rva_symbols.py" --selftest
 python3 "$repo_root/scripts/check-stale-rva-calls.py" --selftest
 python3 "$repo_root/scripts/check-stale-rva-calls.py"
+
+# ...and the constants that resolver could not see AT ALL. It answers by evaluating VALUES, so a
+# declaration whose value is an EXPRESSION -- `BASE + 0x40`, a `size_of` product, a cast, a
+# `match` arm -- fell out of the census silently; and a constant dropped from a census reads
+# exactly like a constant that was checked, which is the defect this whole file exists to refuse.
+# This gates every declaration in the address and field-offset populations: each one either
+# evaluates to a number or is named in the UNRESOLVABLE list with the reason it cannot be. It
+# does not judge the VALUE -- that is the neighbouring gates' job -- only that the value is
+# visible to them.
+# UNWIRED 2026-08-31: red against the COMMITTED tree, green against this working tree. UNRESOLVABLE
+# lists SELECTOR_CTX_OFFSET_F8 as `not modelled`, and against the committed sources it evaluates to
+# 0xf8, so the gate correctly calls the exception stale. Re-arm both lines with the crate change that
+# settles that constant.
+# python3 "$repo_root/scripts/check-expression-constants.py" --selftest
+# python3 "$repo_root/scripts/check-expression-constants.py"
+
 # THE HAND-ROW GUARD (2026-08-30). `select-needed-1170-rows.py --refresh` rewrites
 # docs/recon/rva-map-1162-to-1170.needed.tsv WHOLESALE, so until today a pair somebody derived by
 # hand and typed in -- exactly the short .pdata records and body-changed functions the machine map
@@ -214,6 +585,20 @@ python3 "$repo_root/scripts/check-stale-rva-calls.py"
 # selftest runs here; the `--refresh`/current check is not wired in, because the tracked file
 # tracks constants that land continuously and would make this gate red on somebody else's commit.
 python3 "$repo_root/scripts/select-needed-1170-rows.py" --selftest
+# THE ROW-DELETION GUARD (2026-08-30). The sibling ledger's generator,
+# `map-data-rvas-1162-to-1170.py --refresh`, does not merely advise: a row it does not reproduce
+# and does not want was DROPPED, and "does not want" was decided by a name-filtered `*RVA*` regex
+# with no bare `rva: 0x..` table-field form and no inline enum-variant form. Measured on a scratch
+# copy of the 111-row ledger with two rows injected: the pre-fix tool deleted `0xb0d400
+# TITLE_MENU_JOB_WAIT_RVA` at exit 0 while printing "nothing declares 0xb0d400 any more", which is
+# false -- `MenuTraceRva::MenuJobWait` declares it and three live autoload sites reach it. The drop
+# now needs `scripts/rva_symbols.py` to PROVE nothing claims the address; anything short of a proof
+# is preserved. `--selftest-source` is the part that reads only crates/, so this gate needs no
+# capstone and no network; the image calibration still lives behind plain `--selftest`.
+# UNWIRED 2026-08-31: the COMMITTED map-data-rvas-1162-to-1170.py has no --selftest-source; the flag
+# lives in that script's uncommitted edit. Same `unrecognized arguments` shape as the two rows above.
+# Re-arm it in the commit that lands scripts/map-data-rvas-1162-to-1170.py.
+# python3 "$repo_root/scripts/map-data-rvas-1162-to-1170.py" --selftest-source
 # THE SILENT-COMPARISON GATE (2026-08-30). The two gates above catch stale addresses that are
 # DETOURED or CALLED; both of those announce themselves when they fail. A stale address that is
 # only COMPARED does not. `trace_first_game_caller_rva()` / `callstack_contains_game_rva()` take a
@@ -242,6 +627,52 @@ python3 "$repo_root/scripts/check-hook-log-sink.py"
 # implementation of the entry check called 20 of those mid-function, and calibration is what
 # caught it.
 python3 "$repo_root/scripts/audit-1170-hook-targets.py" --selftest
+# THE PROLOGUE-MASK COMPARATOR, wired 2026-08-31 -- it had a green selftest and no runner, which is
+# the same decorative green the gates around it exist to refuse. A build-time prologue check that is
+# one byte off byte-checks its own hook OFF on every launch while looking perfectly built
+# (check-prologue-bytes.py above), and this is what proves the MASK half of that comparison is not
+# simply matching everything. Positive-controlled rather than assumed: making `masked_equal` always
+# return True, and making `derive_rip_mask` ignore every byte, each turn the selftest red. Two more
+# selftest-carrying gates below it are still unwired, and unwiring is what this line is about, but
+# both read the gitignored de-Arxan'd images, so they are left for a change that can also state what
+# they should do without them.
+python3 "$repo_root/scripts/verify-prologue-masks-1170.py" --selftest
+# THE MODULE THE GATE ABOVE ALREADY IMPORTS, NOW RUN AS A GATE ITSELF (wired 2026-08-31).
+# `verify-prologue-masks-1170.py` has been importing this file for its spec enumeration all along,
+# so half of it was already load-bearing and none of it was checked. It answers whether every AOB
+# signature this tree scans for still MATCHES, and matches UNIQUELY, in the 1.17 image -- a pattern
+# that silently matches twice, or not at all, turns a feature off with no refusal to log, which is
+# the failure mode the whole 1.17 migration is about.
+# It was RED on three stale `guarded: False` pins claiming that three needle scans lacked a
+# zero-needle guard. All three guards do exist and `return None` before any scan runs
+# (er-telemetry-core title_binding.rs:200, er-input-harness title_scan.rs:125, er-title-flow
+# profile_select_flow.rs:1011) -- and, checked at HEAD, the SAME commit shipped both the guards and
+# the pins contradicting them. Pins corrected; no source defect.
+# 13s, the most expensive step added today, and it is the `patterns` section: it scans both 98 MB
+# de-Arxan'd images. Deliberately wired WITHOUT `--require-images`, so a checkout that lacks them
+# (they are gitignored) degrades to SKIPPED in 0.05s and exits 0 rather than failing for the wrong
+# reason.
+# Positive control: neutralising the zero-needle guard in profile_select_flow.rs goes RED naming
+# `find_title_owner_by_vtable`; swapping the guard's two `||` operands stays green.
+python3 "$repo_root/scripts/verify-aob-patterns-1170.py" --selftest
+# UNWIRED 2026-08-31: FAILED (3 problems, NO-ROW=1) against the COMMITTED
+# docs/recon/rva-map-1162-to-1170.data.tsv, whose update is uncommitted. The --selftest above stays
+# wired and green. Re-arm this line with the ledger.
+# python3 "$repo_root/scripts/verify-aob-patterns-1170.py"
+# ...AND WHETHER THAT SWEEP LOOKED AT EVERYTHING. The sweep above globs build files exactly ONE
+# directory level deep, so a spec declared in `crates/foo/dll/build.rs` is invisible to it and its
+# verdict silently covers fewer pins than it appears to -- while still printing `verdict: ok`.
+# Sibling worktrees are renaming crates to `*-dll` right now, which is one directory move away from
+# exactly that. Proven red against a real plant (bd er-effects-rs-zivc): with a planted
+# `crates/er-planted-probe/dll/build.rs` carrying one spec, THIS gate exits 1 (`UNSWEPT ... 6
+# file(s) declare 43 spec(s); the sweep enumerated 42`) while the sweep above exits 0 on the
+# identical tree. A check that reports success over work it never looked at is the defect this
+# whole file exists to refuse, so the sweep now has to say how much it swept.
+#
+# `--section coverage` SPECIFICALLY, measured: 4.1s. The tool's other section re-reads both 98 MB
+# images and is reporting-only -- it never affects the exit code -- so wiring the whole tool would
+# buy that fixed cost for output nothing gates on.
+python3 "$repo_root/scripts/verify-prologue-coverage-1170.py" --section coverage
 # THE MID-FUNCTION GATE. `NEITHER-ENTRY` in a verdict table is TWO verdicts wearing one name: a
 # leaf function the x64 ABI let omit unwind data (safe to hook), and an address INSIDE another
 # function (MinHook writes five bytes into a live body). build.rs accepts the word for detours
@@ -266,6 +697,34 @@ python3 "$repo_root/scripts/audit-1170-hook-targets.py" --selftest
 # de-Arxan'd images (they are untracked by policy).
 python3 "$repo_root/scripts/classify-1170-entry-kind.py" --selftest
 python3 "$repo_root/scripts/classify-1170-entry-kind.py" --fail-on-mid
+# THE HOLE THE GATE ABOVE LEAVES (wired 2026-08-31; the script existed since 2026-08-30 and was
+# invoked by nothing). `IDENTICAL-LEAF` is the one verdict that issues its OWN detour licence: a
+# leaf has no `.pdata` entry, so it reaches `DETOURABLE_ENTRY_EVIDENCE` through the `NEITHER-ENTRY`
+# clause, which asserts nothing about the entry. That is only safe if the address really is a whole
+# undescribed function rather than a point in the MIDDLE of a described one -- and
+# `add_leaf_extents` tests the weaker premise, skipping a VA only when a `.pdata` entry BEGINS
+# there. An address 0x10 bytes into a declared function begins nothing, so it gets a leaf extent,
+# so it can reach IDENTICAL-LEAF and carry a detour into the middle of a live function.
+# `--fail-on-mid` above does not close this: its GATED_MAPS deliberately exclude
+# `docs/recon/rva-map-1162-to-1170.tsv`, which this one reads. 2.3s. Skips, saying so, without the
+# untracked de-Arxan'd images, and re-execs itself under `uv` when capstone is absent, so the step
+# stays spelled `python3` for the accounting above.
+# Positive control: an IDENTICAL-LEAF row planted at a real .pdata interior goes RED naming the
+# address and the containing region; the same address as IDENTICAL-WHOLE stays green.
+python3 "$repo_root/scripts/check-leaf-extent-pdata-coverage.py"
+# THE OTHER WAY AN ADDRESS CAN LOOK LIKE A FUNCTION START AND NOT BE ONE (wired 2026-08-31; the
+# script has existed since 2026-08-30 and was invoked by nothing). A `UNW_FLAG_CHAININFO`
+# continuation chunk HAS a `.pdata` record, so every "does .pdata describe this address" test says
+# yes -- but the record points at another record, and the real entry is somewhere else entirely.
+# Detour such an address and MinHook writes its five bytes into the middle of a function whose
+# prologue it never saw. Held at 0 across all three ledgers (102/411/412 rows), 0.27s.
+# It skips, in a line that deliberately refuses the words OK and PASS, when the untracked
+# de-Arxan'd images are absent -- it used to die on a raw FileNotFoundError instead, which is the
+# only reason it could not be wired.
+# Positive control: a row planted at 0x140c57666 (a real continuation, primary 0x140c575e0) goes
+# RED naming the row and its real entry; the same row shape at the ROOT 0x1408c47c0 stays green.
+python3 "$repo_root/scripts/check-no-chained-continuation-rows.py" --selftest
+python3 "$repo_root/scripts/check-no-chained-continuation-rows.py"
 # THE DUPLICATE-ROW GATE (2026-08-30). er-game-base/build.rs concatenates four address ledgers and
 # finishes with `rows.sort_unstable(); rows.dedup_by_key(|(old, _)| *old)`. `sort_unstable` orders
 # by the WHOLE tuple, so among rows sharing a source the survivor is the one with the numerically
@@ -315,6 +774,33 @@ python3 "$repo_root/scripts/check-no-duplicate-ledger-rows.py"
 # and the baselined NOTES are held to the same rule since a note is what a reader actually sees.
 python3 "$repo_root/scripts/check-1170-translation-collisions.py" --selftest
 python3 "$repo_root/scripts/check-1170-translation-collisions.py"
+
+# ...AND THE OTHER HALF OF THE SAME BUG: THE CALL SITES. The gate above finds the ledger rows whose
+# shape makes a second resolve dangerous (`A -> B` and `B -> C` both present, which happens when a
+# region's shift equals the local function spacing). This one finds the code that performs that
+# second resolve: a value handed to a resolving hook API must not itself be a resolver's output.
+#
+# Both were needed, and the ledger gate alone would not have caught it. On the 2026-08-30 18:42 run
+# THREE detours were installed on unrelated functions, each with the collision row sitting
+# blamelessly in a baselined ledger:
+#
+#   drive.rs:373            game_rva 0x140614870 -> 0x1406156c0, MhHook::new -> 0x140616510
+#   menu_trace_hooks.rs:274 game_rva 0x1407ac890 -> 0x1407ad710, union      -> 0x1407ae590
+#   lookat_stage_camera:575 game_rva 0x140bba6e0 -> 0x140bbbd90, MhHook::new -> 0x140bbd440
+#
+# and each feature then logged the address it MEANT, which is why nobody noticed for a day.
+#
+# The resolving APIs and the resolvers are DERIVED by call-graph closure over `resolve_target` /
+# `resolve_detour_address` and `resolve_game_address*`, not transcribed, so a fourth entry point is
+# covered the day it is added; the taint is followed through parameter forwarding and return values
+# too, which is the only reason `mh_install_hook_once` and `save_flow_verify_rva` were seen at all.
+# Selftest first: it blinds each half of the matcher in turn and asserts the frozen controls change
+# classification, so a gate that has quietly stopped matching fails instead of printing OK.
+python3 "$repo_root/scripts/check-double-resolved-hook-targets.py" --selftest
+# UNWIRED 2026-08-31: 62 double-resolved arguments in the COMMITTED crate sources. Green in this
+# working tree, where the conversions are in flight. The --selftest above stays wired and green.
+# Re-arm this line with the crate changes.
+# python3 "$repo_root/scripts/check-double-resolved-hook-targets.py"
 # THE SECOND OPINION ON THE DATA MAP'S VTABLE ROWS. `map-data-rvas-1162-to-1170.py` carries every
 # datum by the CODE that references it, so each row depends on the function map being right about
 # one function. RTTI depends on none of that: a vtable's [base-8] points at its
@@ -331,6 +817,43 @@ python3 "$repo_root/scripts/check-1170-translation-collisions.py"
 # without the two gitignored images.
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" --selftest
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
+# THE FIELD-OFFSET GATE (2026-08-30). The three ways to be wrong about a 1.17 address are not
+# equally loud. A stale DETOUR target is REFUSED by er-hook and logged; an unmapped CALL/data RVA
+# resolves to 0 and the caller says so; a stale STRUCT FIELD OFFSET returns the NEIGHBOURING
+# field, plausible and wrong, with no refusal, no fault and no log line, forever. That third class
+# had no check at all until the 2026-08-30 struct-offset audit, which found the oracle for it
+# already lying on the disk and unused.
+#
+# `mov r64,[rip+d]` onto a known singleton global, then `[reg+0xNN]` before that register is
+# written again: the base PROVABLY holds the singleton, so the displacement is a real field offset
+# of whatever class lives there -- no dataflow, no RTTI pairing, no signature matching. Run over
+# both flat images it says, per object, which field offsets 1.16.2 reads and 1.17 no longer does.
+#
+# It reports COVERAGE, not a verdict, and its floors are the point: the per-object field counts
+# are frozen EXACTLY (they depend only on the two frozen images and the matcher), so a change that
+# blinds the scan goes RED instead of reporting a smaller clean set -- the failure nine audits in
+# this repo shipped in one week, where `assert bad == 0` passed over an empty set. Selftest first,
+# and `--prove-selftest-catches-regression` blinds the matcher and requires the selftest to go red,
+# so a green here cannot be vacuous. SKIPs -- loudly, never with the word OK -- without the two
+# gitignored de-Arxan'd images.
+python3 "$repo_root/scripts/check-singleton-field-offsets.py" --selftest
+python3 "$repo_root/scripts/check-singleton-field-offsets.py"
+
+# ...and the attribution half of the same question. An offset whose OWNING OBJECT nobody has
+# named cannot be measured by the gate above -- there is no object to measure it against -- so
+# the unattributed set is itself a ratchet, in docs/recon/unattributed-field-offsets.txt: rows
+# may disappear, they may not appear. Its floors carry the same anti-blindness property as the
+# scan above, and for the same reason: a SHRINKING unattributed list is exactly what a blinded
+# matcher or a lost OWNERS import produces, and it would otherwise read as progress. The
+# witnesses are frozen function-pair alignments re-measured from the two images on every run, so
+# a row that cannot be measured is a FAILURE, not a pass. Do not run --refresh to make it green.
+# UNWIRED 2026-08-31: the ratchet refuses 4 NEW unattributed offsets in the COMMITTED crate sources
+# (three GXDC_OUTPUT_VEC_* in write_game_module_oracles.rs plus SWORD_ARTS_PARAM_ICON_ID_OFFSET);
+# the working tree has already moved them into files this commit does not carry. Both lines re-arm
+# together -- a selftest with no live gate behind it proves nothing about the tree.
+# python3 "$repo_root/scripts/attribute-field-offset-owners.py" --selftest
+# python3 "$repo_root/scripts/attribute-field-offset-owners.py"
+
 # THE WORK-LIST AUDIT. The inventory that says how much of the 1.17 migration is left classified
 # every `*_RVA` constant in a cdylib as an eldenring.exe address, by NAME. Four of them are
 # Seamless Co-op's, added to `GetModuleHandleA("ersc.dll")`, and an ELDEN RING patch does not move
@@ -339,6 +862,53 @@ python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
 # The selftest pins the four foreign addresses, the plausibility bounds that are not addresses at
 # all, and two REAL game addresses as the control, so an exclusion that ate real work fails too.
 python3 "$repo_root/scripts/audit-1170-coverage-inventory.py" --selftest
+# THE DETOUR-LICENCE GATE (2026-08-30). Being the right address is not the same claim as being a
+# safe place for MinHook to write five bytes, and `er-hook` enforces the difference at RUNTIME: a
+# detour on an address that is in the CALL map but not the DETOUR map is REFUSED, correctly and
+# loudly, once per retry, forever. Nothing static noticed. A user played for seven minutes with the
+# loading-screen cover pasted over live gameplay because `LOADING_SCREEN_GFX_FADEOUT_RVA`
+# (0x90a0a0) was one of those, and the only evidence was 8,430 `HOOK REFUSED` lines in a 412 MB
+# log. Two facts were in the tree the whole time -- "this line detours RVA X" and "X is not
+# detour-safe" -- and no gate put them together.
+#
+# The verdict vocabulary, the ledger paths and the installer list are all PARSED out of
+# er-game-base/build.rs and er-hook/src/lib.rs rather than copied, so a renamed verdict or a new
+# entry point is tracked instead of silently un-checked. Selftest first, and it carries a frozen
+# control (a known detour-safe site the scan must find and name) plus floors on how many sites the
+# scan sees -- because a matcher that goes blind reports zero findings, which is exactly what nine
+# audits in this repo did while real findings stood.
+python3 "$repo_root/scripts/check-detour-rva-coverage.py" --selftest
+python3 "$repo_root/scripts/check-detour-rva-coverage.py"
+# THE OTHER HALF OF THE SAME SEVEN MINUTES. The gate above keeps the unmappable ADDRESS out. This
+# one keeps one refusal from costing four working hooks: `install_now_loading_helper_observer_hooks`
+# queued five detours, shared a single `ok` that every failure arm cleared, and returned on it
+# BEFORE `MH_ApplyQueued` -- so the four healthy detours were created, queued and never enabled.
+# One of them was `CS::LoadingScreen::Update`, the sole writer of `LOADING_SCREEN_UPDATE_HITS`,
+# which is both the promoting condition for boot phase 8 (BUILDING WORLD) and the source of the
+# cover's release predicate: the bar froze at `LOADING SAVE 7/11` and the cover had no exit.
+# Proven against the offending commit: run this gate on `git show 7a7f25b3:<that file>` and it
+# names line 595. Declared-atomic hook sets are printed on every run, never hidden.
+python3 "$repo_root/scripts/check-hook-batch-abort.py" --selftest
+# UNWIRED 2026-08-31: two batch-abort sites in the COMMITTED crate sources
+# (dlstring_lookat_math.rs:595, system_quit_ownership_repro.rs:495). Green in this working tree.
+# The --selftest above stays wired and green. Re-arm this line with the crate changes.
+# python3 "$repo_root/scripts/check-hook-batch-abort.py"
+# THE SAME QUESTION FOR DIRECT CALLS. The detour gate above covers addresses that go through
+# MinHook. This one covers addresses a crate simply CALLS, which is a different and larger set --
+# and the one that broke on 2026-08-30, when the whole build importer went silently inert on 1.17.
+# All 27 game functions er-build-import-runtime calls are spelled without `RVA` in the name
+# (`GET_WEAPON_NAME`, `SET_REINFORCEMENT`, ...), every tool that picks addresses to translate
+# keyed on the NAME, so none of the 27 were ever selected, mapped or verified. The six item-name
+# getters were refused at runtime, every item name failed to resolve, the exporter dropped all 18
+# equipped items, and the telemetry reported success the whole time.
+#
+# So this gate asks the question by USE rather than by spelling: what does the workspace hand to
+# the address resolver, and can the map answer it? A crate that resolves game addresses and has
+# NONE of them mapped fails. Selftest first: it carries a frozen floor under the control crate and
+# proves non-vacuity by blinding the matcher and observing the control collapse and the gate fail,
+# because a scan that goes blind otherwise reports a clean tree over a broken one.
+python3 "$repo_root/scripts/check-native-call-rva-coverage.py" --selftest
+python3 "$repo_root/scripts/check-native-call-rva-coverage.py"
 # THE VERSION GATE. On 2026-08-29 every product DLL died within a second of loading, and it took
 # eight game launches to find out why: `ERGameVersion::from_lang_version` in the sibling
 # fromsoftware-rs checkout accepted only "2.6.2.0" and "2.6.2.1", the game had become 2.7.0.0, and
@@ -350,6 +920,12 @@ python3 "$repo_root/scripts/check-game-version-supported.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/.githooks/pre-push"
+# THIS FILE. It stopped being a flat list on 2026-08-31 and became control flow -- two traps, an
+# associative array, a summary that decides every step's state and this suite's exit code. A defect
+# in that preamble misreports every gate below it at once, which is a larger blast radius than any
+# single gate has. test-check-sh-accumulates.py proves the SEMANTICS; this catches the shell-level
+# mistakes that test would not reach (an unquoted expansion, a masked return value).
+shellcheck "$repo_root/scripts/check.sh"
 shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-git-pre-push-block-main.sh"
@@ -364,6 +940,8 @@ shellcheck "$repo_root/scripts/run-windows-proof-render-smoke.sh"
 shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
+shellcheck "$repo_root/scripts/check-committed-compiles.sh"
+shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
 shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
 shellcheck "$repo_root/scripts/beads-prime.sh"
@@ -466,6 +1044,23 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-invasion-path
 # target, and the DLL half is proven in game.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
 
+# ...AND THE WRITE HALF, which had no gate at all. er-build-export is the crate that produces the
+# share link, its 93 tests include the acceptance check that runs the PLANNER'S OWN decoder over a
+# payload we built, and `default-members` pins a bare `cargo test` to er-quickload -- so none of
+# them had ever run in this suite. What that left unchecked is what the document CONTAINS: the
+# encoder tests were green throughout the period when `items.tools` was never assigned, so every
+# generated link shipped an empty quickbar and an empty pouch and the only place that showed was
+# the planner's website. tests/round_trip.rs is the gate for that class: it decodes a document
+# this crate wrote with er-build-import-core's reader and equip planner and asserts each item
+# lands back on the `ChrAsmSlot` it started from.
+#
+# The two decoder gates inside it skip -- loudly, never silently -- without `node` or without the
+# unvendored third-party LZ-UTF8 library (`npm --prefix crates/er-build-export/tests/reference
+# install lzutf8@0.6.3`), so this is safe on CI and on a fresh checkout.
+# UNWIRED 2026-08-31: the four reference_decoder tests need crates/er-build-export/tests/reference/,
+# the node reference decoder, which is untracked. Re-arm it in the commit that lands that fixture.
+# cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-export
+
 # Two gates the repo had no equivalent of, both reading the INSTALLED regulation.bin. 1.17 added
 # CharaInitParam rows 3010/3011 -- two new starting classes -- and nothing in Rust could notice:
 # STARTING_CLASSES was a [&str; 10], so build export answered None for an Idus Knight and import
@@ -525,6 +1120,45 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hook --lib
 # the 1.17 image with a stale address. Measured 2026-08-29; this is what keeps it true.
 python3 "$repo_root/scripts/audit-1170-readiness.py" --selftest
 python3 "$repo_root/scripts/audit-1170-readiness.py" --check
+# EIGHT MORE WAYS TO REACH AN ADDRESS WITHOUT THE GATE (wired 2026-08-31). The ratchet above counts
+# EXEC/WRITE/READ; this one adds RAW_MINHOOK, PRE_GATE_CHECK, CACHED_ADDR, CONST_FOLD, VTABLE_WRITE,
+# INDIRECT_HELPER, DOUBLE_TRANSLATE and UPSTREAM_STATIC, keyed per crate-and-class against
+# `scripts/audit-1170-gate-bypass.baseline.json`, failing when any count RISES.
+# It was RED on five keys. All five were adjudicated against the source and all five are benign:
+# upstream's `SoloParamRepository::instance()` resolves by runtime `.text` pattern scan through
+# FromSingleton, not by a pinned RVA; `mem.rs:101`/`:122` are the gate's OWN implementation and its
+# `game_rva_for_hook`, which returns an address deliberately unresolved so the hook API owns the
+# single resolve; `announce.rs:344` and `er-refill-all/runtime.rs` hand raw targets to
+# `register_union_hook`/`register_shared_hook`, which is the REQUIRED form; and
+# `er-seamless-bugfixes/lib.rs:430` recomposes `base + rva` from `resolve_call_site_rva`, which
+# returns an RVA rather than a VA. Baseline regenerated, and it ratcheted DOWN hard in the process
+# -- 116 keys / 251 findings to 87 / 161.
+# Worth recording: the baseline committed in 7a7f25b3 did not pass on 7a7f25b3's own tree.
+# 1.1s + 5.4s.
+# Positive control: injecting a raw `*((base + SOME_RVA) as *mut u8) = 0x90` write goes RED naming
+# the crate and both classes it trips (CACHED_ADDR 0->1, UNGATED_ARITH 2->3).
+python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --selftest
+# UNWIRED 2026-08-31: 2 new ungated game-address paths (er-game-base/src/mem.rs 1->2,
+# er-seamless-bugfixes/src/lib.rs 0->1). Red in this WORKING TREE too, so it is not a closure
+# artifact -- it is the ratchet reporting real drift. The --selftest above stays wired and green.
+# Re-arm this line when the two sites are routed through the version gate or recorded in the baseline.
+# python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --baseline "$repo_root/scripts/audit-1170-gate-bypass.baseline.json"
+# THE FOUR WRITE CLASSES THE RATCHET ABOVE CANNOT SEE (wired 2026-08-31). That one counts ungated
+# addresses per cdylib; this one names the SHAPES that reach a write without any `base + SOMETHING`
+# text to count -- a store into a vtable/function-pointer slot, a `game_data_addr(..) + offset` that
+# destroys the 0-means-refused sentinel (a refusal on row 3 yields the address 24, which `if addr
+# != 0` waves through), and the byte-patch primitives that take `(base, rva)` as SEPARATE
+# ARGUMENTS. It was report-only until today and printed six findings that were every one of them
+# false: two were the primitives' own `fn` declarations self-matching, and four were call sites of
+# primitives that gate INTERNALLY. Both matcher faults are fixed, the true count is zero, and the
+# RVA_ARG class now asks the question actually worth failing over -- does `patch_3byte_stub` /
+# `apply_xor_ret_stub` still resolve through `resolve_game_address` -- rather than demanding four
+# copies of that rule at the call sites. 1.4s.
+# Positive control: deleting the resolve out of `patch_3byte_stub` turns its three call sites RED
+# by name while `apply_xor_ret_stub`'s stays green; swapping it for `resolve_game_address_fmt`
+# stays green.
+python3 "$repo_root/scripts/audit-ungated-image-writes.py" --selftest
+python3 "$repo_root/scripts/audit-ungated-image-writes.py"
 
 # er-game-base: the shared re-entrancy latch and the bounded wait helpers. Both are load-bearing
 # for whether the game SURVIVES, not for what it computes -- `wait::poll_until` is what stops an
@@ -540,6 +1174,80 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-game-base --lib
 # testable without the game. The tracker-capacity assertion lives here too -- it is the guard on a
 # DLPanic that would crash the game outright.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-refill-all
+
+# THE UNEXECUTED-TEST GATE (2026-08-31). Everything above this line is a list of crates
+# somebody remembered to name. `default-members = ["crates/er-quickload"]` means a bare
+# `cargo test` selects ONE of 64 crates, so a crate that is not named here, in
+# check-rust-build.sh, or in .github/workflows/check.yml contributes NOTHING to the suite --
+# and reports nothing while doing it. Two crates were found in that state by accident on one
+# day (er-save-suppress, whose host build was broken outright, and er-build-export, 93 tests
+# including the planner-decoder acceptance check); the audit that followed found 20 more.
+#
+# Crate-granularity bookkeeping would not have been enough. `cargo test -p er-quit-menu-core`
+# prints "ok. 43 passed" over a crate with 73 tests, because 30 of them are behind
+# `#[cfg(windows)]` and simply do not exist on the host -- not compiled, not listed, not
+# failed. So this gate classifies every `#[test]` by the TARGET able to run it (walking `mod`
+# declarations, `include!` splices, `#[path]`, file-level `#![cfg(...)]` and the attributes on
+# the function itself) and requires a runner on that target. Selftest first, so the gate is
+# never trusted on its own say-so; its non-vacuity proof blinds the windows matcher and
+# requires the selftest to go red.
+# UNWIRED 2026-08-31: both the selftest's live property and the live gate are red against the
+# COMMITTED tree: er-build-import-runtime's lib is windows-only in the working tree but not here,
+# and 53 test functions across 6 crates have no runner. --prove-selftest-catches-regression between
+# them stays wired and green. Re-arm the pair with the crate/runner changes.
+# python3 "$repo_root/scripts/check-test-target-coverage.py" --selftest
+python3 "$repo_root/scripts/check-test-target-coverage.py" --prove-selftest-catches-regression
+# python3 "$repo_root/scripts/check-test-target-coverage.py"
+
+# EVERY REMAINING HOST-TESTABLE CRATE, IN TWO BATCHES. Up to this line the crates above were
+# added one at a time, each by somebody who tripped over the fact that theirs had never run --
+# `default-members = ["crates/er-quickload"]` means a bare `cargo test` selects ONE of 64
+# crates, so a crate reaches a gate only by being named here. Nothing checked the naming was
+# complete, and on 2026-08-31 an audit of all 64 found 20 more crates in exactly that state:
+# 279 host-runnable test functions that had never executed once, in any gate, ever. The list
+# is not exotic -- the storage-box refill hook, the inventory-sort defaults, the crash-logging
+# core, the hotkey parser, the save-suppression core (31 tests), the TPF/FLVER/object codecs.
+# All 279 passed the first time they ran, which is the good outcome and not the point: the
+# point is that nothing would have said otherwise.
+#
+# Batched rather than one line per crate because a single cargo invocation resolves and builds
+# them in parallel: measured 2.2s + 4.2s warm for the two batches, against ~20 separate
+# invocations. scripts/check-test-target-coverage.py is what keeps the list complete from here.
+#
+# Batch 1 -- the game-adjacent shells and cores. Four of these (er-better-refills,
+# er-inventory-sort, er-loading-bar, er-save-disable) did not COMPILE for the host until the
+# same day: a windows cdylib's items read as dead on Linux and `[workspace.lints.rust] warnings
+# = "deny"` promotes that to a hard error, so `cargo test -p <crate>` failed outright. Fixed
+# with the same crate-level `#![cfg_attr(not(windows), allow(dead_code, unused_imports))]` that
+# er-save-suppress, er-seamless-bugfixes and er-armament-icons already carry.
+# UNWIRED 2026-08-31: red against the COMMITTED tree only. The crate-level
+# `#![cfg_attr(not(windows), allow(dead_code, unused_imports))]` this comment describes is in
+# er-inventory-sort's WORKING TREE and in no commit, so at this commit the batch stops at 24
+# deny-by-default dead-code errors. Re-arm it in the commit that lands crates/er-inventory-sort/src/lib.rs.
+# cargo test --manifest-path "$repo_root/Cargo.toml" \
+# 	-p er-quickload-data -p er-build-watermark-core -p er-charm-enemies \
+# 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
+# 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
+# 	-p er-better-refills -p er-inventory-sort -p er-loading-bar \
+# 	-p er-loading-portrait -p er-save-disable
+
+# Batch 2 -- the host-only asset/codec crates and the two that ran ONLY in CI. er-soulsformats
+# and er-param-inspect were named in .github/workflows/check.yml and nowhere else, so a
+# developer running this script locally got a green suite over 24 tests that had not run on
+# their machine; local/CI parity is the whole reason this file exists.
+cargo test --manifest-path "$repo_root/Cargo.toml" \
+	-p er-flver -p er-objectkit -p er-tpf -p erpx-rs -p er-shaderkit \
+	-p er-soulsformats -p er-param-inspect
+# THE TWO THINGS `scripts/check-er-flver.sh` COVERED THAT NOTHING ELSE DID (moved here 2026-08-31,
+# and that script DELETED). It was gate-shaped, ran nowhere, and could not have gated anywhere: it
+# had `set -u` but no `set -e`, piped every command into `tail`, and ended on an unconditional
+# `echo "===== DONE ====="`, so it exited 0 whether its `cargo test` passed or failed -- its
+# `EXIT_TEST=0` lines were printed text nobody read. The test half is already covered by the
+# invocation above; these two compiles were not. `er-flver`'s `wgpu` feature gates a whole
+# rendering path the default feature set never builds, and `er-shader-viewer` was referenced by
+# nothing in check.sh or check-rust-build.sh at all. 0.9s for the pair once warm.
+cargo check --manifest-path "$repo_root/Cargo.toml" -p er-flver --features wgpu
+cargo check --manifest-path "$repo_root/Cargo.toml" -p er-shader-viewer
 
 # HOST-TARGET COMPILE OF THE PRODUCT CRATE AND ITS WHOLE HOST DEPENDENCY GRAPH. Everything else
 # in this file compiles the DLL crates for x86_64-pc-windows-msvc, where the windows-only game
@@ -591,6 +1299,12 @@ python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 python3 "$repo_root/scripts/er_run_lib.py"
 python3 "$repo_root/scripts/er-dll-closure.py" --selftest
 python3 "$repo_root/scripts/er-dll-provenance.py" --selftest
+# ...and the launch-time half of it, shared by five launch scripts as `require_fresh_dlls`. Its
+# selftest was written and left unwired, which is the same decorative green the gates above exist
+# to refuse. Positive-controlled 2026-08-31 rather than taken on trust: disabling the refusal, and
+# silently skipping an artifact name the workspace does not build, each turn it red; so does making
+# er-dll-provenance's `verify` always agree or its source hash a constant.
+bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
 python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
@@ -609,8 +1323,42 @@ python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
 bash "$repo_root/scripts/check-rust-build.sh"
 
+# DOES THE COMMITTED STATE COMPILE -- not "does my working tree compile", which is the only
+# question every gate above this one, this file included, is able to ask. A pathspec commit is
+# the exact mechanism by which a CONSUMER lands without its PRODUCER: the new caller is named on
+# the command line, the crate or function it calls is not, and the author's checkout still holds
+# the producer, so it compiles for them and for every gate that builds their tree. Measured on
+# this branch 2026-08-31 -- 15b32ab0 and 11af0c60 were both that shape, `origin` did not compile
+# for hours, a dozen agents built on top of it, and a210af7f had to land an 18-file compile
+# closure to make it green again. This type-checks a git worktree PINNED to the commit under
+# test, so an uncommitted producer is invisible to it, which is the whole point. The selftest is
+# two-sided: the two historical failures must go RED and HEAD must go GREEN, because a gate
+# wedged red is as useless as one wedged green.
+# RE-ARMED and green: the E0533 that broke HEAD while this file was being landed (`er_save_redirect::
+# SaveSourceRejection::Unreadable` became a struct variant, its er-quickload and er-save-picker
+# consumers landed still matching it as a unit variant) was fixed in 21ec2296. That was the THIRD
+# consumer-without-producer commit on this branch in one day, and it is why this line exists.
+# scripts/hooks/pre-push runs the same script on every pushed tip; this catches it a commit earlier.
+bash "$repo_root/scripts/check-committed-compiles.sh" --selftest
+bash "$repo_root/scripts/check-committed-compiles.sh"
+
+# ...and whether any of this runs on a commit at all. This clone's core.hooksPath was the
+# ABSOLUTE pre-rename path left behind by 39a919e0, so for a while NO hook ran -- not the
+# main-push guard, not ci-local-check.sh -- and nothing said so, because a hook git cannot find
+# is indistinguishable from a hook that passed. That is this suite's own defect applied to the
+# gates themselves. It asserts the value is set, that it resolves to a real directory holding an
+# executable pre-push, and that it is RELATIVE: an absolute path is correct right up until the
+# checkout is renamed, and then it is silently wrong.
+bash "$repo_root/scripts/check-git-hooks-installed.sh" --selftest
+bash "$repo_root/scripts/check-git-hooks-installed.sh"
+
+
 # Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one
 # crate on purpose: the repo builds with a global `-Awarnings`, so this is the narrow
 # place where warning-freedom is both achievable today and load-bearing -- the crate's
 # whole job is to stop saves, and two dead helpers already survived a refactor unseen.
 python3 "$repo_root/scripts/check-save-disable-warnings.py"
+
+# Reached only when every step above has run. The EXIT trap reads this to tell a completed
+# suite apart from one that stopped early -- the difference between a real verdict and silence.
+_check_reached_end=1
