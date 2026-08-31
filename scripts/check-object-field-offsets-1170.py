@@ -63,14 +63,47 @@ in (0x560, 0x580], so the band between them shifts +8 while the object size is u
 ends hold. A "+8 above the insertion" rule applied here would have corrupted
 `PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET` = 0x6b8, which is witnessed HELD twice.
 
+THE OTHER HALF OF THE QUESTION: WHICH OBJECT
+--------------------------------------------
+Everything above is about where a FIELD sits, and for a READ that is the whole question. For a
+WRITE it is the smaller half. A wrong offset returns the neighbouring member; a wrong OBJECT
+corrupts the heap, and until 2026-08-31 nothing in this tree checked the second thing.
+
+The bug that proved it: `stamp_vk_direct` wrote `object + 0x88 + (id - 1000) * 2` for ids up to
+1080 -- byte 0x128 -- into what it believed was a `CS::CSInGamePad`, which is `HeapAlloc(0x98)` =
+152 bytes. The offset 0x88 was right and had not moved. The class was wrong. It never fired only
+because the TypeID needles were `.data` RVAs with no 1.17 mapping, which is a reason it was never
+observed, not a reason it was safe.
+
+So `ALLOC_WITNESSES` pins each written-into object by the two facts that can refute a
+misattribution: the literal the game's own allocator is called with, and an identity anchor in the
+same decoded window -- the constructor that allocation is handed to, or the vtable it is stamped
+with. `WRITE_REACH` then recomputes, from the repo's OWN live literals, the highest byte this
+repo's writes can reach in that object, and fails if it is not inside. Raising a bound (a slot
+count, a virtual-key ceiling, a field offset) now fails here instead of at the far end of a
+`HeapAlloc`.
+
+Two of the measured objects have almost no slack, which is why the reach is computed rather than
+eyeballed: `CS::ProfileSummary` is `0x18 + 10 * 0x2a0 = 0x1a58` and the repo's record writes reach
+its final byte EXACTLY (slot 10 would overrun by a whole 0x2a0 record, and only a `slot <
+PROFILE_SUMMARY_SLOT_COUNT` clamp stands in the way), and `CS::MoveMapStep` writes 0x4b8 of a
+0x4c0 object -- seven bytes to spare.
+
 WHAT THE GATE ASSERTS
 ---------------------
   1. IMAGE half -- every frozen witness row re-measures to the same pair, live, from the two
      de-Arxan'd images. A row that cannot be measured is a FAILURE, not a pass: nine "audits" in
      this repo have reported zero findings from a matcher that had gone blind.
   2. SOURCE half -- each repo constant that names a field of these two objects still holds the
-     1.16.2 literal this gate verified, at the file and line where it lives.
-  3. THE LATENT ONE, which is the reason to have a gate rather than a report. 44 sites compute
+     1.16.2 literal this gate verified, at the file and line where it lives. A constant derived
+     from `offset_of!`/`size_of!` carries no literal at its definition, so its `const _: () =
+     assert!(NAME == 0x..)` counts as the pin -- otherwise the whole `CS::ProfileSummary` typed
+     layout would sit unwatched behind an expression.
+  3. OBJECT half -- every allocation size above re-decodes to the same literal in BOTH images and
+     is still tied to its class by a constructor call or a vtable reference within the same
+     window, and no repo write reaches past it. Unmeasurable is a failure here too: a size
+     instruction that no longer decodes says nothing about whether a write fits.
+  4. THE LATENT ONE, which is the reason to have a gate rather than a report. 44 sites compute
      `offset_of!(PlayerGameData, ...)` against the sibling `fromsoftware-rs` binding, which is a
      1.16.2 model. Every field referenced TODAY sits below 0x960, so nothing is wrong -- but the
      mechanism looks maximally trustworthy (the compiler computed it) and is one added field
@@ -85,6 +118,15 @@ USAGE
 The IMAGE half skips when the two images are absent (they are gitignored game-derived binaries);
 the SOURCE half always runs, and `--selftest` REQUIRES the images so a green selftest can never
 mean "the image half never ran".
+
+NOT YET WIRED INTO `scripts/check.sh` -- several agents have held that file all day and it is
+edit-forbidden in the brief this was written under. The two lines the next agent should add:
+
+    run python3 "$repo_root/scripts/check-object-field-offsets-1170.py" --selftest
+    run python3 "$repo_root/scripts/check-object-field-offsets-1170.py"
+
+The plain run takes a few seconds; the selftest re-aligns every frozen row once per perturbation
+and takes a couple of minutes, so put it wherever the suite keeps its slow selftests.
 """
 
 from __future__ import annotations
@@ -283,6 +325,320 @@ WITNESSES = (
     ),
 )
 
+# --------------------------------------------------------------------------------------------
+# THE OBJECT, NOT JUST THE OFFSET.
+#
+# Everything above measures where a FIELD sits. That is the wrong half of the question for a
+# WRITE. A wrong offset misinforms -- `*(this + 0xNN)` returns the neighbouring member. A wrong
+# OBJECT corrupts the heap: `stamp_vk_direct` wrote `object + 0x88 + (id - 1000) * 2` for ids up to
+# 1080, which reaches byte 0x128, into an object that turned out to be `HeapAlloc(0x98)` = 152
+# bytes. The offset 0x88 was correct and had not moved. The class was wrong, and nothing in this
+# tree checked the class.
+#
+# So each row below pins an object this repo writes into by the only two facts that can refute a
+# misattribution:
+#
+#   * ITS SIZE -- the literal operand of the allocation the game makes for it, re-decoded from
+#     BOTH images every run. Not Ghidra's inferred `getStructure` size, which is an analysis
+#     guess: the number the allocator is actually called with.
+#   * ITS IDENTITY -- an anchor within the same decoded window tying that allocation to THIS
+#     class: the constructor the allocation is handed to, or the vtable it is stamped with. A size
+#     without an identity anchor is just a number at an address, and an address is exactly what
+#     was wrong last time.
+#
+# `WRITE_REACH` below then asserts the arithmetic that actually matters: the highest byte this
+# repo's writes can reach in that object, recomputed from the repo's own live literals, is inside
+# the measured allocation. Two of these have almost no slack (`CS::ProfileSummary` reaches its
+# final byte exactly; `CS::MoveMapStep` leaves 7 bytes), which is the whole reason to compute the
+# reach rather than eyeball it.
+ALLOC_IMM = "mov reg32, imm32"
+ALLOC_DISP = "lea reg32, [reg + disp]"
+IDENT_CALL = "call"
+IDENT_RIP = "rip-relative reference"
+
+
+def alloc_row(
+    obj, size, form, va16, va17, ident_kind, ident16, ident17, how, scan16=None, scan17=None,
+    scan_len=0x40,
+):
+    """One measured allocation: `size` at `va`, tied to `obj` by `ident` in the same window."""
+    return dict(
+        obj=obj,
+        size=size,
+        form=form,
+        va=(va16, va17),
+        ident_kind=ident_kind,
+        ident=(ident16, ident17),
+        scan=(scan16 if scan16 is not None else va16, scan17 if scan17 is not None else va17),
+        scan_len=scan_len,
+        how=how,
+    )
+
+
+ALLOC_WITNESSES = (
+    alloc_row(
+        "Scaleform::MemoryFile",
+        0x30,
+        ALLOC_DISP,
+        0x1411645FC,
+        0x1411663FC,
+        IDENT_RIP,
+        0x142BA4C80,
+        0x142BA7D70,
+        "`lea 0x30(%r12),%edx` (r12 is zero here) into the Scaleform allocator's vtable slot +0x50;"
+        " 0x44 bytes later the object is stamped with `Scaleform::MemoryFile::vftable`, and the"
+        " SAME constructor writes the three fields this repo overwrites -- data@0x18 (`mov"
+        " %r15,0x18(%rdi)`), len@0x20, cursor@0x24. Every one of the 14 repo write sites gates on"
+        " that vtable being the resolved MemoryFile vtable for the running build, so the identity"
+        " is enforced at runtime as well as measured here",
+        scan_len=0x60,
+    ),
+    alloc_row(
+        "CS::ProfileSummary",
+        0x1A58,
+        ALLOC_IMM,
+        0x140254B12,
+        0x140254AE2,
+        IDENT_CALL,
+        0x1402619E0,
+        0x1402619F0,
+        "`mov $0x1a58,%ecx` in `CS::GameData`, handed straight to"
+        " `CS::ProfileSummary::ProfileSummary`; the result is stored at `GameDataMan + 0x78`,"
+        " which is exactly where this repo reads it from",
+    ),
+    alloc_row(
+        "CS::ProfileSummary record stride",
+        0x2A0,
+        ALLOC_IMM,
+        0x140261A2F,
+        0x140261A3F,
+        IDENT_RIP,
+        0x1429E60E8,
+        0x1429E90E8,
+        "the `_eh_vector_constructor_iterator_` stride inside `CS::ProfileSummary::ProfileSummary`,"
+        " whose own vtable store anchors the window. This is the bound the repo's `slot <"
+        " PROFILE_SUMMARY_SLOT_COUNT` clamp is protecting: 0x18 + 10 * 0x2a0 == 0x1a58 leaves"
+        " ZERO slack, so slot 10 would overrun by a whole record",
+        scan16=0x1402619E0,
+        scan17=0x1402619F0,
+        scan_len=0x60,
+    ),
+    alloc_row(
+        "CS::ProfileSummary record count",
+        0xA,
+        ALLOC_IMM,
+        0x140261A34,
+        0x140261A44,
+        IDENT_RIP,
+        0x1429E60E8,
+        0x1429E90E8,
+        "the element count passed beside the stride above -- the game's own answer to `how many"
+        " slots`, and the number `PROFILE_SUMMARY_SLOT_COUNT` claims",
+        scan16=0x1402619E0,
+        scan17=0x1402619F0,
+        scan_len=0x60,
+    ),
+    alloc_row(
+        "CS::GameMan",
+        0xE80,
+        ALLOC_IMM,
+        0x1406798A0,
+        0x14067A6F0,
+        IDENT_CALL,
+        0x140675EA0,
+        0x140676CF0,
+        "`mov $0xe80,%ecx` then `GameMan::GameMan`; the result is stored to the singleton this"
+        " repo resolves as GAME_MAN_SINGLETON_RVA (0x3d69918 -> 0x3d6d988, which the store"
+        " immediately after the constructor call independently confirms)",
+    ),
+    alloc_row(
+        "CS::CSMenuManImp",
+        0x8A0,
+        ALLOC_IMM,
+        0x140DEFC58,
+        0x140DF1A58,
+        IDENT_CALL,
+        0x1407650A0,
+        0x140765EF0,
+        "`mov $0x8a0,%ecx` then `CSMenuManImp::CSMenuManImp`; stored to CS_MENU_MAN_GLOBAL_RVA"
+        " (0x3d6b7b0 -> 0x3d6f820), again confirmed by the store beside the call",
+    ),
+    alloc_row(
+        "CS::CSMenuData",
+        0xF0,
+        ALLOC_IMM,
+        0x140765248,
+        0x140766098,
+        IDENT_CALL,
+        0x140767430,
+        0x1407682B0,
+        "`mov $0xf0,%ecx` then `CSMenuData::CSMenuData`, inside the CSMenuManImp constructor that"
+        " stores it at `CSMenuManImp + 0x8` -- the path this repo walks to reach it",
+    ),
+    alloc_row(
+        "CS::MoveMapStep",
+        0x4C0,
+        ALLOC_IMM,
+        0x140AEC1CA,
+        0x140AED4DA,
+        IDENT_CALL,
+        0x140AF28D0,
+        0x140AF3BE0,
+        "`mov $0x4c0,%ecx` then `MoveMapStep::MoveMapStep`, in `STEP_MoveMap_Init`",
+    ),
+    # ---- the pad device family, which is where BOTH of this branch's heap overruns lived --------
+    # `DLUserInputManagerImpl`'s device factory (1.16.2 0x141f28a80 -> 1.17 0x141f2a880) hands out
+    # FOUR differently-sized classes from one call, and a write ending at 0x8a4 fits in only two of
+    # them. That is the entire bug: `+0x89c`/`+0x8a0` are fields of `DLUID::PadDevice`, and
+    # `can_move_probe` was writing them into the object at `FD4PadDevice + 0x8`, which the
+    # FD4PadDevice constructor fills from the factory with type 7 -- the 0x7f8 VirtualMultiDevice.
+    # Both sizes are frozen here so the pair can never silently converge or diverge unnoticed.
+    alloc_row(
+        "DLUID::PadDevice",
+        0xA68,
+        ALLOC_IMM,
+        0x141F28C2A,
+        0x141F2AA2A,
+        IDENT_CALL,
+        0x141F6AF00,
+        0x141F6CD00,
+        "`mov $0xa68,%ecx` then `DLUID::PadDevice::PadDevice` in the device factory. This is the "
+        "class that owns the analog-stick floats at +0x89c/+0x8a0 -- the game's own poll "
+        "(0x141f6bad0 -> 0x141f6d8d0, the ONLY vtable slot referencing that function, in "
+        "DLUID::PadDevice's vtable 0x1430c9f08 -> 0x1430cd048) writes both of them on its `this`",
+        scan_len=0x50,
+    ),
+    alloc_row(
+        "DLUID::VirtualMultiDevice",
+        0x7F8,
+        ALLOC_IMM,
+        0x141F28CBB,
+        0x141F2AABB,
+        IDENT_CALL,
+        0x141F6DF20,
+        0x141F6FD20,
+        "`mov $0x7f8,%ecx` then `DLUID::VirtualMultiDevice::VirtualMultiDevice` -- the factory's "
+        "answer to device type 7, which is what `FD4PadDevice + 0x8` holds. 2040 bytes, so a "
+        "float written at +0x8a0 lands 168..171 bytes PAST IT. Frozen as the negative: this row "
+        "exists to make the wrong target's size visible next to the right one",
+        scan_len=0x50,
+    ),
+    alloc_row(
+        "FD4::FD4PadDevice",
+        0x3C0,
+        ALLOC_IMM,
+        0x142667490,
+        0x142669CA0,
+        IDENT_CALL,
+        0x142663880,
+        0x142666090,
+        "`mov $0x3c0,%ecx` then `FD4::FD4PadDevice::FD4PadDevice` in `FD4PadManager::Init`. The "
+        "virtual-key array the input harness stamps lives at +0x88 of THIS object; the class it "
+        "was attributed to until 2026-08-31 (`CS::CSInGamePad`) is HeapAlloc(0x98), which is why "
+        "ids from 1008 up wrote off the end",
+        scan_len=0x30,
+    ),
+    alloc_row(
+        "CS::CSInGamePad",
+        0x98,
+        ALLOC_IMM,
+        0x14024168F,
+        0x14024168F,
+        IDENT_CALL,
+        0x1426647A0,
+        0x142666FB0,
+        "`mov $0x98,%ecx` then, 0xa7 bytes later, `CS::CSInGamePad::CSInGamePad`. THE HISTORICAL "
+        "WRONG OBJECT, frozen so its size sits beside the right one: 152 bytes, against a "
+        "virtual-key stamp reaching 0x129. Note both builds allocate it at the SAME address, "
+        "which is precisely why an address alone is not identity",
+        scan_len=0xC0,
+    ),
+    alloc_row(
+        "CS::CSMenuProfModelRend",
+        0xA30,
+        ALLOC_IMM,
+        0x1409AF421,
+        0x1409B0671,
+        IDENT_CALL,
+        0x140BBDF20,
+        0x140BBF5F0,
+        "`mov $0xa30,%ecx` then the CSMenuProfModelRend constructor -- the same constructor that"
+        " stores its own vtable at [this+0], which is how the class was established in the first"
+        " place. The loading-screen portrait camera writes reach 0xa24 of this 0xa30 object",
+    ),
+)
+
+# What this repo's writes can reach in each object above, recomputed from the repo's OWN live
+# literals rather than from a number typed here. Each term is `addend + sum(coefficient * literal)`
+# and the result must be <= the measured allocation size.
+#
+# Why compute it: the reach is what turns a measured size into a safety claim, and it moves when
+# someone edits a constant. `FD4PadDevice` is the worked example -- its reach is
+# `0x88 + (VK_ID_MAX - VK_ID_MIN) * 2 + 1`, so raising VK_ID_MAX past 1435 would walk off the end
+# of the device and this gate would say so before the game did.
+WRITE_REACH = (
+    (
+        "Scaleform::MemoryFile",
+        4,
+        ((1, "MEMORY_FILE_CURSOR_OFFSET"),),
+        "cursor is the highest of the three fields; +4 for its u32 width",
+    ),
+    (
+        "CS::ProfileSummary",
+        0,
+        ((1, "PROFILE_SUMMARY_RECORD_BASE"), (10, "PROFILE_SUMMARY_RECORD_STRIDE")),
+        "record base plus all ten records -- the repo zeroes and rewrites whole records, so the"
+        " reach is the end of slot 9. The coefficient 10 is PROFILE_SUMMARY_SLOT_COUNT, pinned"
+        " separately below so a changed slot count cannot slip through as a changed coefficient",
+    ),
+    (
+        "CS::GameMan",
+        1,
+        ((1, "SERVER_CONNECTION_ENABLED_BC9_OFFSET"),),
+        "0xbc9 is the highest byte any repo write touches in GameMan",
+    ),
+    (
+        "CS::CSMenuManImp",
+        1,
+        ((1, "CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET"),),
+        "the only field this repo writes in CSMenuManImp",
+    ),
+    (
+        "CS::CSMenuData",
+        1,
+        ((1, "CS_MENU_DATA_ENDING_FLAG_5E_OFFSET"),),
+        "the higher of the two bytes this repo clears (0x5d / 0x5e)",
+    ),
+    (
+        "CS::MoveMapStep",
+        1,
+        ((1, "MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET"),),
+        "0x4b8 in a 0x4c0 object: SEVEN bytes of headroom, the tightest write in the tree after"
+        " ProfileSummary",
+    ),
+    (
+        "CS::CSMenuProfModelRend",
+        4,
+        ((1, "PROFILE_CAM_FOV_OFFSET"),),
+        "the view matrix at 0x9e0 spans 64 bytes to 0xa20 and fov is written at 0xa20 itself, so"
+        " fov+4 is the reach",
+    ),
+    (
+        "FD4::FD4PadDevice",
+        1,
+        ((1, "VK_ARRAY_88_OFFSET"), (2, "VK_ID_MAX"), (-2, "VK_ID_MIN")),
+        "`0x88 + (id - 1000) * 2` for every id the harness will accept. This is the row that would"
+        " have caught the original bug had the object been right: against `CS::CSInGamePad`'s 0x98"
+        " it reads 0x129 > 0x98 and goes red on sight",
+    ),
+    (
+        "DLUID::PadDevice",
+        4,
+        ((1, "PAD_STICK_LY_OFFSET"),),
+        "the forward-stick float the move probe writes; LY is the higher of the two (LX is 0x89c)",
+    ),
+)
+
 # The drift model the witnesses above establish, expressed as the SAFE region per object: an
 # offset in one of these ranges is the same field in both builds. Anything outside needs a
 # version-aware constant, which this workspace does not have for either object.
@@ -324,6 +680,39 @@ PINNED_CONSTANTS = (
     ("PROFILE_CAM_YAW_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0x9C8, "CSMenuProfModelRend"),
     ("PROFILE_CAM_PITCH_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0x9CC, "CSMenuProfModelRend"),
     ("PROFILE_CAM_ASPECT_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0xA24, "CSMenuProfModelRend"),
+    # ---- the WRITE-target constants, whose literals feed WRITE_REACH above -------------------
+    # Duplicated deliberately across crates that ship independently; the gate looks for the name
+    # everywhere and checks every definition it finds, so a drifted copy fails even if the
+    # original is right.
+    ("MEMORY_FILE_DATA_OFFSET", "crates/er-invasion-warp/src/map_gfx.rs", 0x18, "Scaleform::MemoryFile"),
+    ("MEMORY_FILE_LEN_OFFSET", "crates/er-invasion-warp/src/map_gfx.rs", 0x20, "Scaleform::MemoryFile"),
+    ("MEMORY_FILE_CURSOR_OFFSET", "crates/er-invasion-warp/src/map_gfx.rs", 0x24, "Scaleform::MemoryFile"),
+    ("SCALEFORM_MEMORY_FILE_DATA_OFFSET", "crates/er-loading-portrait-core/src/layout.rs", 0x18, "Scaleform::MemoryFile"),
+    ("SCALEFORM_MEMORY_FILE_LEN_OFFSET", "crates/er-loading-portrait-core/src/layout.rs", 0x20, "Scaleform::MemoryFile"),
+    ("SCALEFORM_MEMORY_FILE_CURSOR_OFFSET", "crates/er-quickload/src/constants/stats_panel_text.rs", 0x24, "Scaleform::MemoryFile"),
+    # `CS::ProfileSummary`. These four are `offset_of!`/`size_of!` expressions, so their literal
+    # lives in the `const _: () = assert!(NAME == 0x..)` beside them -- which this gate reads as a
+    # pin in its own right. The record write reaches the FINAL byte of the allocation exactly, so
+    # every one of these is load-bearing.
+    ("GAME_DATA_MAN_PROFILE_SUMMARY_OFFSET", "crates/er-game-base/src/profile_summary.rs", 0x78, "CS::GameDataMan"),
+    ("PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET", "crates/er-game-base/src/profile_summary.rs", 0x08, "CS::ProfileSummary"),
+    ("PROFILE_SUMMARY_RECORD_BASE", "crates/er-game-base/src/profile_summary.rs", 0x18, "CS::ProfileSummary"),
+    ("PROFILE_SUMMARY_RECORD_STRIDE", "crates/er-game-base/src/profile_summary.rs", 0x2A0, "CS::ProfileSummary"),
+    ("PROFILE_SUMMARY_TOTAL_BYTES", "crates/er-game-base/src/profile_summary.rs", 0x1A58, "CS::ProfileSummary"),
+    ("PROFILE_SUMMARY_SLOT_COUNT", "crates/er-game-base/src/profile_summary.rs", 10, "CS::ProfileSummary"),
+    ("SERVER_CONNECTION_ENABLED_BC9_OFFSET", "crates/er-title-flow/src/product_autoload_gates.rs", 0xBC9, "CS::GameMan"),
+    ("CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0x13C, "CS::CSMenuManImp"),
+    ("CS_MENU_DATA_ENDING_FLAG_5E_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0x5E, "CS::CSMenuData"),
+    ("MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0x4B8, "CS::MoveMapStep"),
+    ("PROFILE_CAM_FOV_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0xA20, "CSMenuProfModelRend"),
+    # The two bounds that keep the virtual-key stamp inside `FD4PadDevice`. They are the reach
+    # itself, not a field offset: `0x88 + (VK_ID_MAX - VK_ID_MIN) * 2 + 1`.
+    ("VK_ID_MIN", "crates/er-input-harness/src/pad_inject.rs", 1000, "FD4PadDevice"),
+    ("VK_ID_MAX", "crates/er-input-harness/src/pad_inject.rs", 1080, "FD4PadDevice"),
+    # The analog-stick field the move probe writes. It belongs to `DLUID::PadDevice` (0xa68) and
+    # to nothing else in that four-class family, which is what the sweep's vtable test enforces.
+    ("PAD_STICK_LY_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x8A0, "DLUID::PadDevice"),
+    ("PAD_STICK_LX_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x89C, "DLUID::PadDevice"),
 )
 
 # Every `PlayerGameData` field this workspace reaches through `offset_of!`, with the offset the
@@ -375,7 +764,12 @@ PGD_REFERENCED_FIELDS = {
 }
 
 OFFSET_OF_PGD = re.compile(r"offset_of!\s*\(\s*PlayerGameData\s*,\s*([A-Za-z0-9_]+)")
-CONST_DEF = r"const\s+{name}\s*:\s*usize\s*=\s*(0x[0-9a-fA-F]+)\s*;"
+# Two ways a pinned literal appears in this tree, and both count. A plain definition is the usual
+# one; but a constant derived from `offset_of!`/`size_of!` has no literal at its definition and its
+# real pin is the `const _: () = assert!(NAME == 0x..)` beside it. Reading only the first form
+# would leave every typed-layout constant -- the whole `CS::ProfileSummary` ABI -- unwatched.
+CONST_DEF = r"const\s+{name}\s*:\s*[A-Za-z0-9_]+\s*=\s*(0x[0-9a-fA-F]+|[0-9]+)\s*;"
+CONST_ASSERT = r"assert!\(\s*{name}\s*==\s*(0x[0-9a-fA-F]+|[0-9]+)\s*[,)]"
 
 
 _MATCHER = []
@@ -405,8 +799,12 @@ def rust_files():
                 yield Path(root) / name
 
 
-def source_findings(read_text=None):
-    """Constant pins and the `offset_of!` reference guard. Never touches the images."""
+def _int_literal(text):
+    return int(text, 16) if text.lower().startswith("0x") else int(text, 10)
+
+
+def source_findings(read_text=None, reach_rows=WRITE_REACH, alloc_rows=ALLOC_WITNESSES):
+    """Constant pins, the reach arithmetic and the `offset_of!` guard. Never touches the images."""
     read = read_text or (lambda p: p.read_text(encoding="utf-8", errors="replace"))
     findings = []
     # One pass over the tree: constant definitions and `offset_of!` references together. The
@@ -415,24 +813,29 @@ def source_findings(read_text=None):
     # quiet when a constant moves file is a gate that stops watching exactly when someone edits it.
     definitions = {name: [] for name, _rel, _expected, _obj in PINNED_CONSTANTS}
     patterns = {
-        name: re.compile(CONST_DEF.format(name=re.escape(name)))
+        name: (
+            re.compile(CONST_DEF.format(name=re.escape(name))),
+            re.compile(CONST_ASSERT.format(name=re.escape(name))),
+        )
         for name, _rel, _expected, _obj in PINNED_CONSTANTS
     }
     referenced = {}
     for path in rust_files():
         text = read(path)
         where = str(path.relative_to(REPO))
-        for name, pattern in patterns.items():
-            for match in pattern.finditer(text):
-                definitions[name].append((where, int(match.group(1), 16)))
+        for name, (definition, assertion) in patterns.items():
+            for match in definition.finditer(text):
+                definitions[name].append((where, _int_literal(match.group(1))))
+            for match in assertion.finditer(text):
+                definitions[name].append((where, _int_literal(match.group(1))))
         for match in OFFSET_OF_PGD.finditer(text):
             referenced.setdefault(match.group(1), set()).add(where)
     for name, rel, expected, _obj in PINNED_CONSTANTS:
         found = definitions[name]
         if not found:
             findings.append(
-                f"{name}: no `const {name}: usize = 0x..;` anywhere in the tree "
-                f"(last seen in {rel}); this gate can no longer watch it"
+                f"{name}: neither `const {name}: .. = <literal>;` nor `assert!({name} == ..)` "
+                f"anywhere in the tree (last seen in {rel}); this gate can no longer watch it"
             )
         for where, value in found:
             if value != expected:
@@ -440,6 +843,7 @@ def source_findings(read_text=None):
                     f"{name}: {where} says {value:#x}, this gate verified {expected:#x} against "
                     "both images -- re-measure before changing it"
                 )
+    findings += reach_findings(definitions, reach_rows=reach_rows, alloc_rows=alloc_rows)
     lo, hi = SAFE_REGIONS["PlayerGameData"][0]
     for field, where in sorted(referenced.items()):
         known = PGD_REFERENCED_FIELDS.get(field)
@@ -457,6 +861,141 @@ def source_findings(read_text=None):
                 f"1.17 moved the fields. Used by {sorted(where)[0]}"
             )
     return findings, len(referenced)
+
+
+def reach_findings(definitions, reach_rows=WRITE_REACH, alloc_rows=ALLOC_WITNESSES):
+    """Assert the repo's highest write into each object stays inside the measured allocation.
+
+    The reach is recomputed from the literals actually in the tree, so raising a bound (a slot
+    count, a virtual-key id ceiling, a field offset) fails HERE rather than at the far end of a
+    `HeapAlloc`. A row whose constants cannot be read is a failure: an unreadable reach is not a
+    small reach.
+    """
+    sizes = {row["obj"]: row["size"] for row in alloc_rows}
+    findings = []
+    for obj, addend, terms, how in reach_rows:
+        size = sizes.get(obj)
+        if size is None:
+            findings.append(
+                f"{obj}: WRITE_REACH claims a reach for an object ALLOC_WITNESSES does not "
+                "measure, so the comparison has nothing to be against"
+            )
+            continue
+        reach, blind = addend, None
+        for coefficient, name in terms:
+            found = definitions.get(name) or []
+            values = {value for _where, value in found}
+            if len(values) != 1:
+                blind = (
+                    f"{name} reads as {sorted(values) or 'nothing'} in the tree, so the reach "
+                    "cannot be computed -- which is a failure, not a pass"
+                )
+                break
+            reach += coefficient * values.pop()
+        if blind:
+            findings.append(f"{obj}: {blind}")
+            continue
+        if reach > size:
+            findings.append(
+                f"{obj}: this repo's writes reach byte {reach:#x} of an allocation the game makes "
+                f"{size:#x} bytes long -- {reach - size:#x} bytes PAST THE END of a live object. "
+                f"Reach: {how}"
+            )
+    return findings
+
+
+def alloc_findings(matcher, capstone, md, rows=ALLOC_WITNESSES):
+    """Re-decode each object's allocation SIZE and its IDENTITY anchor from both images.
+
+    Unmeasurable is a failure, exactly as for the field rows: an allocation whose size instruction
+    no longer decodes tells you nothing about whether a write fits inside it.
+    """
+    findings, measured = [], 0
+    for row in rows:
+        ok = True
+        for build, index, path in (("1.16.2", 0, IMAGE_1162), ("1.17", 1, IMAGE_1170)):
+            image = matcher.image(str(path))
+            start = row["scan"][index]
+            body = image[start - IMAGE_BASE : start - IMAGE_BASE + row["scan_len"]]
+            decoded = list(md.disasm(body, start))
+            at = {insn.address: insn for insn in decoded}
+            here = at.get(row["va"][index])
+            if here is None:
+                ok = False
+                findings.append(
+                    f"{row['obj']} [{build}]: nothing decodes at {row['va'][index]:#x} from "
+                    f"{start:#x} -- the size measurement went blind, which is not a clean result. "
+                    f"Witness: {row['how']}"
+                )
+                continue
+            value = _size_literal(capstone, here, row["form"])
+            if value is None:
+                ok = False
+                findings.append(
+                    f"{row['obj']} [{build}]: {row['va'][index]:#x} decodes as "
+                    f"`{here.mnemonic} {here.op_str}`, not the declared `{row['form']}` carrying "
+                    "an allocation size -- went blind"
+                )
+                continue
+            if value != row["size"]:
+                ok = False
+                findings.append(
+                    f"{row['obj']} [{build}]: the allocation at {row['va'][index]:#x} is "
+                    f"{value:#x} bytes, this gate is frozen at {row['size']:#x}. Every write "
+                    "bound for this object was computed against the frozen number"
+                )
+                continue
+            if not any(_anchors(capstone, insn, row["ident_kind"], row["ident"][index]) for insn in decoded):
+                ok = False
+                findings.append(
+                    f"{row['obj']} [{build}]: no {row['ident_kind']} to {row['ident'][index]:#x} "
+                    f"within {row['scan_len']:#x} bytes of {start:#x}, so the size at "
+                    f"{row['va'][index]:#x} is no longer tied to this class -- a size without an "
+                    "identity is just a number at an address"
+                )
+        if ok:
+            measured += 1
+    return findings, measured
+
+
+def _size_literal(capstone, insn, form):
+    """The allocation size an instruction carries, or `None` if it is not that shape at all."""
+    if len(insn.operands) != 2:
+        return None
+    destination, source = insn.operands
+    if destination.type != capstone.x86.X86_OP_REG:
+        return None
+    if form == ALLOC_IMM:
+        if insn.mnemonic != "mov" or source.type != capstone.x86.X86_OP_IMM:
+            return None
+        return source.imm
+    if form == ALLOC_DISP:
+        # `lea 0x30(%r12),%edx` with r12 held at zero -- MSVC's way of passing a small constant
+        # when a register is already known to be zero. Refuse an indexed form: that would be real
+        # address arithmetic rather than a constant in disguise.
+        if insn.mnemonic != "lea" or source.type != capstone.x86.X86_OP_MEM:
+            return None
+        if source.mem.index != 0:
+            return None
+        return source.mem.disp
+    return None
+
+
+def _anchors(capstone, insn, kind, target):
+    """Whether `insn` ties its window to `target` -- a call to it, or a rip-relative reference."""
+    if kind == IDENT_CALL:
+        return insn.mnemonic == "call" and any(
+            operand.type == capstone.x86.X86_OP_IMM and operand.imm == target
+            for operand in insn.operands
+        )
+    if kind == IDENT_RIP:
+        return any(
+            operand.type == capstone.x86.X86_OP_MEM
+            and insn.reg_name(operand.mem.base) == "rip"
+            and insn.address + insn.size + operand.mem.disp == target
+            for operand in insn.operands
+        )
+    return False
 
 
 def image_findings(matcher, capstone, md, rows=WITNESSES):
@@ -503,18 +1042,29 @@ def images_present():
     return IMAGE_1162.exists() and IMAGE_1170.exists()
 
 
-def run(quiet=False, rows=WITNESSES, read_text=None):
-    findings, referenced = source_findings(read_text=read_text)
+def run(quiet=False, rows=WITNESSES, read_text=None, alloc_rows=ALLOC_WITNESSES, reach_rows=WRITE_REACH):
+    findings, referenced = source_findings(
+        read_text=read_text, reach_rows=reach_rows, alloc_rows=alloc_rows
+    )
     if not quiet:
-        print(f"source: {len(PINNED_CONSTANTS)} constant pins, {referenced} PlayerGameData fields referenced")
+        print(
+            f"source: {len(PINNED_CONSTANTS)} constant pins, {referenced} PlayerGameData fields "
+            f"referenced, {len(reach_rows)} write-reach bounds recomputed from the tree's literals"
+        )
     measured = 0
     if images_present():
         matcher = load_matcher()
         capstone, md = matcher._capstone()
         image, measured = image_findings(matcher, capstone, md, rows=rows)
         findings += image
+        alloc, alloc_measured = alloc_findings(matcher, capstone, md, rows=alloc_rows)
+        findings += alloc
         if not quiet:
             print(f"image:  {measured}/{len(rows)} frozen witness rows re-measured from both images")
+            print(
+                f"object: {alloc_measured}/{len(alloc_rows)} allocation sizes re-decoded from both "
+                "images, each tied to its class by a constructor call or a vtable reference"
+            )
     elif not quiet:
         print(f"image:  SKIPPED -- {IMAGE_1162.name} / {IMAGE_1170.name} absent (gitignored)")
     return findings, measured
@@ -533,6 +1083,82 @@ def _selftest_mutants(matcher):
         mutant[index] = (obj, label, old, bad, witness, how)
         kind = "moved" if old != new else "HELD (frozen negative)"
         cases.append((f"{obj}::{label} [{kind}] expected {bad:#x}", tuple(mutant)))
+    return cases
+
+
+def _selftest_alloc_mutants():
+    """Perturbations of the OBJECT rows. Four kinds, because they fail four different ways.
+
+    A size row that survives a changed size is measuring nothing. One that survives a changed
+    identity is measuring an address rather than a class -- which is exactly the mistake that put
+    a write into a 152-byte object. One that survives its 1.17 witness being left at the 1.16.2
+    address has not looked at 1.17 at all. And one that survives its witness being pointed four
+    bytes into the body is decoding garbage and calling it clean.
+    """
+    cases = []
+    for index, row in enumerate(ALLOC_WITNESSES):
+        def variant(**changes):
+            mutant = list(ALLOC_WITNESSES)
+            copy = dict(row)
+            copy.update(changes)
+            mutant[index] = copy
+            return tuple(mutant)
+
+        name = row["obj"]
+        cases.append((f"{name}: size {row['size']:#x} -> {row['size'] + 8:#x}", variant(size=row["size"] + 8)))
+        cases.append(
+            (
+                f"{name}: identity anchor moved off the class",
+                variant(ident=(row["ident"][0] + 0x10, row["ident"][1] + 0x10)),
+            )
+        )
+        # The 1.17 witness left at its 1.16.2 address. `scan` moves with it: a row that only
+        # relocated the size instruction would still decode the 1.16.2 window and look fine.
+        # Skipped where the two builds genuinely allocate at the SAME address (CS::CSInGamePad
+        # does), because there the mutant is the unmutated row and a green result would be
+        # correct rather than vacuous -- the identity anchor is what carries that row.
+        if row["va"][0] != row["va"][1]:
+            cases.append(
+                (
+                    f"{name}: 1.17 witness left at the 1.16.2 address",
+                    variant(va=(row["va"][0], row["va"][0]), scan=(row["scan"][0], row["scan"][0])),
+                )
+            )
+        cases.append(
+            (
+                f"{name}: 1.17 witness pointed 4 bytes into the body",
+                variant(va=(row["va"][0], row["va"][1] + 4)),
+            )
+        )
+    return cases
+
+
+def _selftest_reach_mutants():
+    """A reach row must go red when the repo's own bound is raised past the allocation.
+
+    The last two cases are not synthetic. They are THE TWO BUGS this table was built after,
+    restated as rows: point the virtual-key stamp at `CS::CSInGamePad` (which is what the code did
+    from 2026-07-23), or point the analog-stick write at `DLUID::VirtualMultiDevice` (which is what
+    `can_move_probe` did until 2026-08-31), and the gate must say so. If either of these ever goes
+    green again, this whole table has stopped meaning anything.
+    """
+    sizes = {row["obj"]: row["size"] for row in ALLOC_WITNESSES}
+    cases = []
+    for index, (obj, addend, terms, how) in enumerate(WRITE_REACH):
+        mutant = list(WRITE_REACH)
+        mutant[index] = (obj, addend + sizes[obj], terms, how)
+        cases.append((f"{obj}: reach raised past the allocation", tuple(mutant)))
+    historical = {
+        "FD4::FD4PadDevice": ("CS::CSInGamePad", "the 2026-07-23 virtual-key stamp"),
+        "DLUID::PadDevice": ("DLUID::VirtualMultiDevice", "the 2026-08-31 analog-stick sweep"),
+    }
+    for index, (obj, addend, terms, how) in enumerate(WRITE_REACH):
+        if obj not in historical:
+            continue
+        wrong, what = historical[obj]
+        mutant = list(WRITE_REACH)
+        mutant[index] = (wrong, addend, terms, how)
+        cases.append((f"{what}, re-aimed at {wrong} ({sizes[wrong]:#x} bytes)", tuple(mutant)))
     return cases
 
 
@@ -556,6 +1182,14 @@ def selftest():
         mutant_findings, _ = run(quiet=True, rows=mutant)
         if not mutant_findings:
             failures.append(f"mutant survived: {name}")
+    for name, mutant in _selftest_alloc_mutants():
+        mutant_findings, _ = run(quiet=True, alloc_rows=mutant)
+        if not mutant_findings:
+            failures.append(f"object mutant survived: {name}")
+    for name, mutant in _selftest_reach_mutants():
+        mutant_findings, _ = run(quiet=True, reach_rows=mutant)
+        if not mutant_findings:
+            failures.append(f"reach mutant survived: {name}")
 
     # A lobotomised matcher must not read as clean.
     real_compare = matcher.compare
@@ -588,9 +1222,12 @@ def selftest():
             print(f"SELFTEST FAILED: {line}")
         return 1
     print(
-        f"selftest ok: {len(WITNESSES)} witness rows re-measure clean, each of "
-        f"{len(_selftest_mutants(matcher))} single-row perturbations goes red, and a blind matcher, "
-        "an empty source read and a changed constant literal are all reported"
+        f"selftest ok: {len(WITNESSES)} field rows and {len(ALLOC_WITNESSES)} allocation rows "
+        f"re-measure clean; each of {len(_selftest_mutants(matcher))} field perturbations, "
+        f"{len(_selftest_alloc_mutants())} object perturbations (size, identity, 1.17 witness left "
+        f"behind, 1.17 witness 4 bytes in) and {len(_selftest_reach_mutants())} raised write "
+        "bounds goes red, and a blind matcher, an empty source read and a changed constant literal "
+        "are all reported"
     )
     return 0
 

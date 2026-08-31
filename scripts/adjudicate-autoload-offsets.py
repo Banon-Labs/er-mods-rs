@@ -228,6 +228,14 @@ OWNERS: dict[str, object] = {
     "VK_ARRAY_88_OFFSET": "FD4::FD4PadDevice",  # 0x88 CLEARED (writer 7/7 aligned; ctor 168/168)
     "PAD_MGR_DEVICES_18_OFFSET": "FD4::FD4PadManager",  # 0x18 CLEARED (builder A 195/195 aligned)
     "PAD_DEVICES_COUNT_40_OFFSET": "FD4::FD4PadManager",  # 0x40 CLEARED (same alignment)
+    # `FD4PadDevice`'s OWN `DLFixedVector<DLUID::device*,4>` -- entries at +0x10, count at +0x38 --
+    # filled by `FD4::FD4PadDevice::FD4PadDevice` (1.16.2 0x142663880) from the input manager's
+    # device factory for types 3..6, with its own `if (4 < count + 1) DLPanic("out of memory")`.
+    # Added 2026-08-31 to replace `FD4PADDEVICE_CONCRETE_OFFSET` (+0x8), which the same constructor
+    # fills from the factory with type 7 = a `DLUID::VirtualMultiDevice` of 0x7f8 bytes -- the wrong
+    # class for the analog-stick fields at +0x89c/+0x8a0, and 172 bytes too short for them.
+    "FD4PADDEVICE_DEVICES_OFFSET": "FD4::FD4PadDevice",
+    "FD4PADDEVICE_DEVICE_COUNT_OFFSET": "FD4::FD4PadDevice",
     # CS::PropertyNewButtonController -- named in full in the constant's own doc comment,
     # including the allocation size and the constructor that writes the field.
     "PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET": "CS::PropertyNewButtonController",
