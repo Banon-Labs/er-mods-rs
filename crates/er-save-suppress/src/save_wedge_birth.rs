@@ -158,6 +158,10 @@ fn note_wedged_dispatch(slot: Option<SlRequestSlot>, lane: usize, call: u64) {
         return;
     }
     let stamp = elapsed_ms();
+    // Freeze the writer counters at the SAME first occurrence. Read against them, the birth stops
+    // being "a wedge exists" and becomes "a wedge exists and N witnessed writes had taken saveState
+    // off 1 by then" -- which at N = 0 is a verdict about the whole writer set.
+    snapshot_writers_at_wedge();
     store_slot_sample(slot, &DISPATCH_FIRST_LATCHED_SLOT);
     DISPATCH_FIRST_LATCHED_MS.store(stamp, Ordering::SeqCst);
     DISPATCH_FIRST_LATCHED_CALL.store(call, Ordering::SeqCst);

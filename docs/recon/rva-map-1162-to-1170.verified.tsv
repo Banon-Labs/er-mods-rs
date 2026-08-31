@@ -234,8 +234,8 @@
 0x1407a9230	0x1407aa0b0	IDENTICAL-LEAF	1.000	8	quickload-1: bracket +0xe80 & unique masked sig	NEITHER-ENTRY	LEAF:0x13/0x13
 0x1407add70	0x1407aebf0	IDENTICAL-LEAF-NOPATCH	1.000	2	quickload-1: bracket +0xe80	NEITHER-ENTRY	LEAF:0x3/0x3
 0x1407b0cf0	0x1407b1b70	IDENTICAL-LEAF	1.000	3	quickload-1: bracket +0xe80 & unique masked sig	NEITHER-ENTRY	LEAF:0xb/0xb
-0x140247a20	0x140247a20	IDENTICAL-LEAF	1.000	5	quickload-3-misc: GET_PHYSIC_TEAR_BY_SLOT_RVA	NEITHER-ENTRY	LEAF:0x10/0x10
-0x1402506d0	0x1402506d0	IDENTICAL-LEAF	1.000	7	quickload-3-misc: GET_EQUIP_MAGIC_ID_RVA	NEITHER-ENTRY	LEAF:0x11/0x11
+0x140247a20	0x140247a20	IDENTICAL-LEAF	1.000	5	quickload-3-misc: GET_PHYSIC_TEAR_BY_SLOT_RVA; re-derived 2026-08-30 during the build-import repair: identity, unique 16B signature (12B fixed), byte-identical over the 0x10 leaf extent, reads [rcx+rax*4+0x3e4] matching this repo's own EQUIP_GAME_DATA_PHYSIC_TEARS = 0x3e4. Absent from functions.tsv, which is why a functions.tsv-only survey calls it an orphan; this curated row is its only pair.	NEITHER-ENTRY	LEAF:0x10/0x10
+0x1402506d0	0x1402506d0	IDENTICAL-LEAF	1.000	7	quickload-3-misc: GET_EQUIP_MAGIC_ID_RVA; re-derived 2026-08-30 during the build-import repair: identity, nearest-anchor delta +0x0, byte-identical over the 0x11 leaf extent, bounds-checks edx<=0xd then reads [rcx+rax*8+0x10]. Absent from functions.tsv, which is why a functions.tsv-only survey calls it an orphan; this curated row is its only pair.	NEITHER-ENTRY	LEAF:0x11/0x11
 0x1404f9940	0x1404fa710	IDENTICAL-LEAF	1.000	13	quickload-3-misc: HAS_SPECIAL_EFFECT_ID_RVA	NEITHER-ENTRY	LEAF:0x24/0x24
 0x140758a10	0x140759860	IDENTICAL-WHOLE	1.000	20	quickload-3-misc: MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA	BOTH-ENTRIES	PDATA:0x5b/0x5b
 0x140758a70	0x1407598c0	IDENTICAL-WHOLE	1.000	20	quickload-3-misc: MENU_VIEWER_PAD_MOUSE_CLICKED_RVA	BOTH-ENTRIES	PDATA:0x5b/0x5b
@@ -281,3 +281,32 @@
 # wording was also corrected: this address has a 6-byte ROOT .pdata record, and 0x8c47c6
 # is the chained continuation that points back at it -- the reverse of what the deleted
 # row said. scripts/check-no-duplicate-ledger-rows.py now fails on a repeat declaration.
+#
+# BUILD-IMPORT ORPHANS, hand-derived 2026-08-30. These three are the addresses
+# er-build-import-runtime calls that rva-map-1162-to-1170.functions.tsv has NO pair for, so
+# no amount of fixing the constant-name scan could select them -- they are the second,
+# independent half of the build-importer defect. Both halves were real and neither alone
+# would have fixed the feature.
+#
+# A functions.tsv-only survey of the same question reported FIVE orphans. The other two,
+# GET_EQUIP_MAGIC_ID (0x2506d0) and GET_PHYSIC_TEAR_BY_SLOT (0x247a20), were already
+# carried in THIS file by the quickload-3-misc batch and were never refused at runtime --
+# their derivations have been merged into those rows rather than duplicated here, because
+# a second row for one source is redundancy and build.rs would silently resolve a conflict
+# by picking the lower destination. Absence from functions.tsv is not absence from the map.
+#
+# All three are byte-identical over their whole leaf extent in both flat images.
+0x140249a50	0x140249a50	IDENTICAL-LEAF	1.000	16	build-import orphan: identity, unique 20B signature (10B fixed); byte-identical over the 0x3d leaf extent; tail-jumps 0x14024fef0 in BOTH images, so the callee did not move either	NEITHER-ENTRY	LEAF:0x3d/0x3d
+0x140672e00	0x140673c50	IDENTICAL-LEAF	1.000	6	build-import orphan: the byte matcher returned UNRESOLVED (9 shape matches, no anchor). Derived instead from region delta +0xe50 (246 of the 247 functions.tsv pairs sourced in 0x671000-0x684000 carry it) and confirmed four ways: destination unclaimed by any other 1.16.2 source; ORDER-PRESERVING bracket 0x672d9f->0x673bef < this < 0x672e40->0x673c90; byte-identical over the 0x11 leaf extent; and it forwards to vtable slot +0x20 in both, which distinguishes it from GET_REINFORCEMENT's +0x18 and so rules out a shape coincidence or a swap. THIS IS THE WEAPON-UPGRADE WRITE	NEITHER-ENTRY	LEAF:0x11/0x11
+0x140672740	0x140673590	IDENTICAL-LEAF	1.000	7	build-import orphan: UNRESOLVED by the byte matcher, derived as for SET_REINFORCEMENT above. Destination unclaimed; order-preserving bracket 0x6726f0->0x673540 < this < 0x672780->0x6735d0; byte-identical over the 0x13 leaf extent; forwards to vtable slot +0x18 in both, distinct from SET_REINFORCEMENT's +0x20	NEITHER-ENTRY	LEAF:0x13/0x13
+#
+# THE saveState WATCHDOG SETTER, hand-derived 2026-08-31. `functions.tsv` has no pair for it and
+# never will: masked-signature identity is derived across `.pdata`, and this function has no
+# `.pdata` record to be derived from -- 14 bytes, no stack, no calls, so MSVC emits no unwind
+# data. It is here rather than in needed.tsv for the reason the header gives: --refresh would
+# delete a hand row there at exit 0.
+# It matters because it is the ONE store to GameMan+0xb80 that writes a REGISTER. Every scan that
+# enumerated `saveState` writers by immediate value missed it, and its only caller is a 210-second
+# deadline in the per-frame MoveMapStep tick that forces the field WITHOUT releasing the SL
+# device -- which is the save-wedge signature exactly. The derivation is in the note column.
+0x14067ac90	0x14067bae0	IDENTICAL-LEAF	1.000	3	hand-derived 2026-08-31: GameMan::SetSaveState(int), the ONLY register store to GameMan+0xb80 in either image and absent from functions.tsv because its 14-byte body has no .pdata record to signature. Four independent confirmations. (1) Region delta: 246 of the 247 functions.tsv pairs sourced in 0x671000-0x684000 carry +0xe50, and so do all 22 saveState stores when the two images' writer sets are paired. (2) ORDER-PRESERVING bracket, both neighbours at the same delta: 0x67abd0->0x67ba20 < this < 0x67aec0->0x67bd10; the destination is claimed by no other 1.16.2 source. (3) Byte check: 1.16.2 `48 8b 05 <rip> 89 88 80 0b 00 00 c3` loads [0x143d69918] and 1.17 loads [0x143d6d988] -- the SAME singleton 1.17's own IsSaveState1 (0x14067ae60) loads, so the destination reads the 1.17 GameMan and writes the same +0xb80 field. The single RIP displacement is the only difference, which is why the verdict is IDENTICAL-LEAF and not BYTE-IDENTICAL. (4) Entry kind checked with classify-1170-entry-kind.py: LEAF in both, inside no other function's .pdata extent -- not the mid-function NEITHER-ENTRY this file has removed rows for twice. Its one caller is FUN_140aff640 (1.17 FUN_140b00490), the per-frame MoveMapStep tick, where it is the 210-second saveState watchdog: acc += dt while !IsSaveStateIdle, COMISS against 210.0f at [0x142b60870], then SetSaveState(0) with the SL device untouched	NEITHER-ENTRY	LEAF:0xe/0xe

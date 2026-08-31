@@ -691,6 +691,7 @@ include!("save_orphan_drain.rs");
 include!("save_state_device.rs");
 include!("save_state_witness.rs");
 include!("save_wedge_birth.rs");
+include!("save_state_writers.rs");
 
 // ============================================================================
 // SAVE-DISPATCH OBSERVERS. Pure observation of the three native save-dispatch lanes and
@@ -1790,6 +1791,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     // when `is_armed()`, so a run that arms suppression first would otherwise have no witness at all
     // -- exactly the configuration in which an abandoned save is hardest to attribute.
     install_save_state_witness();
+    install_save_state_writers();
     SUPPRESSOR_HOOKS
 }
 
@@ -1865,6 +1867,7 @@ pub fn install_observers_only() -> usize {
     // when a save is abandoned. It forwards every call unchanged and writes no game memory; the
     // cost is two device samples per wrapper call, and the stack walk happens only on a finding.
     install_save_state_witness();
+    install_save_state_writers();
     dispatch_observers_installed()
 }
 

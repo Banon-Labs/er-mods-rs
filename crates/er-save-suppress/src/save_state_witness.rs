@@ -88,6 +88,12 @@ pub fn save_state_site_label(site: usize) -> &'static str {
     match site {
         SAVE_STATE_SITE_LOAD_POLL => "load-poll-0x679180",
         SAVE_STATE_SITE_SAVE_LANE => "save-lane-0x679510",
+        // The three writes `save_state_writers.rs` completes the set with. Named here rather than
+        // there so one table answers "which site" for every site, and a new one cannot be added
+        // without a reader noticing the others.
+        SAVE_STATE_SITE_MENUJOB_LOADWAIT => "menujob-loadwait-0x678e00",
+        SAVE_STATE_SITE_SAVE_LANE_ALT => "save-lane-alt-0x6794b0",
+        SAVE_STATE_SITE_SETTER => "setsavestate-0x67ac90",
         _ => "none",
     }
 }
@@ -195,6 +201,10 @@ unsafe fn witness_call(
     let original: UnionFn = unsafe { core::mem::transmute::<usize, UnionFn>(raw) };
     let answer = unsafe { original(a, b, c, d) };
     let after_state = read_save_state();
+    // Feed the whole-set counters in `save_state_writers.rs`. Recorded for EVERY witnessed call,
+    // not only for a finding: a zero there is what says the write came from outside the set, and a
+    // counter that only ticked on findings could never say that.
+    note_writer_call(before_state, after_state);
     // Sampling the DEVICE is the expensive half -- a 0x38-byte read through a resolved global, on a
     // function the game polls every frame -- and the predicate cannot be true unless `saveState`
     // left `SAVE_OWNS`. So read it only then, and hand the predicate `None` otherwise: that is the
