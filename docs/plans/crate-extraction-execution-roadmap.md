@@ -10,12 +10,12 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,406 |
-| excluding `startup_hooks/**` | 43 | 24,324 |
-| `startup_hooks/**` plus `startup_hooks.rs` | 33 | 23,334 |
-| lifecycle S10 split | 5 | 2,241 |
-| own-load S11 split | 5 | 2,905 |
-| save redirect | 3 | 2,501 |
+| all `experiments/**` | 76 | 49,420 |
+| excluding `startup_hooks/**` | 43 | 25,089 |
+| `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
+| lifecycle S10 split | 5 | 2,275 |
+| own-load S11 split | 5 | 3,084 |
+| save redirect | 3 | 2,504 |
 
 The `scripts/check-crate-extraction-roadmap.py` gate checks the paths, line counts, and required caller edges below. A source file add/remove/line-count change must refresh this ledger in the same change (`--refresh` does the mechanical part).
 
@@ -54,6 +54,70 @@ rather than a judgement call:
   have closed a dependency cycle.
 
 Measured effect on the ledger: 48,740 -> 47,658 lines, 77 -> 76 files.
+
+### Ledger accepted, no extraction (2026-08-31): the 1.17 address seams
+
+The ceiling moves 49,406 -> 49,420 on committed state, and the ratchet's own remedy list makes
+extraction the default answer, so the reason it is not the answer here has to be on the record.
+
+**The 49,406 ceiling was never a measurement of any committed tree.** `7a7f25b3` refreshed the row
+and then kept editing, so the commit that wrote 49,406 landed measuring 49,674 -- red by 268 the
+moment it existed. Every red run of this gate since has been reading that, not new growth. Measured
+per commit:
+
+| commit | when | `experiments/**` | ledger | verdict |
+|---|---|---|---|---|
+| `6ce00f3c` | 08-30 11:27 | 49,121 | 49,121 | green, exact |
+| `7a7f25b3` | 08-30 18:30 | 49,674 | 49,406 | red +268 **when written** |
+| `d3bdf136` | 08-31 13:50 | 49,386 | 49,406 | green, 20 under |
+| `41a34009` | 08-31 13:57 | 49,441 | 49,406 | red +35 |
+| `04b16f3a` | 08-31 14:28 | 49,420 | 49,406 | red +14 |
+
+The ratchet worked in between: extraction and in-place shrinkage took the tree from 49,674 down to
+49,386, twenty lines UNDER a ceiling it had been 268 over, without the ceiling being touched. The
+residual +14 is one later correction (`can_move_probe.rs` +55, a heap overrun) net of continued
+shrinkage elsewhere. Against the committed ledger 15 files stand above their rows for +367, and the
+rest of the tree gave back 353.
+
+The new ceiling is the CLEAN COMMITTED measurement at `04b16f3a`, taken in a throwaway worktree. It
+is deliberately not the working-tree number: a refresh run on the dirty tree measured 49,684 while
+several agents had roughly 400 uncommitted lines in flight under `experiments/**`, which would have
+licensed growth on code nobody had committed (`save_swap_profile_table.rs` alone carried 148 such
+lines, `save_picker_menu.rs` 91). See bd `roadmap-ratchet-never-refresh-on-a-dirty-tree-2026-08-31`.
+
+What grew, in every one of the 15, is the seam where a game address is consumed:
+
+* **1.17 RVA gating** -- `continue_load/product_continue.rs` +53,
+  `mod/product_core_own_stepper/fallback_drives.rs` +52, `menu_diag/menu_observation.rs` +47,
+  `trace/native_result_map_hooks.rs` +19, `own_load/loaders/load_drive.rs` +9,
+  `own_stepper/load_steps.rs` +7, `input_trace.rs` +6, and eight more at +55 down to +10. A
+  literal `base + RVA` comparison became
+  `er_game_base::mem::game_data_addr(base, RVA, "NAME")` plus a refusal guard, because a refused
+  lookup returns 0 and so does an unreadable pointer -- without the guard the two agree and the
+  site reports a match at an address nothing lives at. The resolution ALREADY lives in the crate;
+  what cannot move is the comparison, whose other operand is a value this shim's own hook read out
+  of the game. Most of the added lines are the derivation evidence for each mapped address.
+* **the hook-vs-call resolve seam** (`own_load/drive.rs` +12,
+  `trace/menu_trace_hooks.rs`, `profile_rows_system_quit_menu.rs`,
+  `title_resources_stats_text.rs`). `game_rva` -> `game_rva_for_hook` at every detour site, plus
+  `save_flow_verify_rva_for_hook`, because `MhHook::new` resolves what it is handed and must be the
+  ONE resolve that decides where five bytes land; a double resolve was measured landing three live
+  detours on unrelated functions.
+* **spine wiring** (`lifecycle/task_tick.rs` +15): one call to the orphaned-picker-row sweep, in the
+  file this gate's own `REQUIRED_EDGES` requires the tick edges to live in.
+* **calls into already-extracted crates** (`loading_cover/loading_cover_save_slot.rs` +10 ->
+  `er_loading_portrait_core`, `save_picker_menu.rs` +18 -> `er_telemetry_core` counters). The logic
+  moved out already; these are its callers.
+
+The one row with a genuine open question is the `CS::ProfileSummary` snapshot/backout bookkeeping in
+`save_swap_profile_table.rs` and `save_picker_menu.rs` (its committed rows are unchanged here; the
++148 belongs to work still uncommitted at the time of writing). That boundary was adjudicated above
+in the 2026-08-26 entry -- the two callers of the record transport want opposite things from a
+snapshot -- and the growth extends exactly that bookkeeping rather than crossing the boundary. It is
+worth revisiting once the character-name work settles; it was not revisited now.
+
+No file on the list is a new module born in the shim, which is the leak the ratchet exists for: the
+file count is unchanged at 76 and every row already carried an ownership claim.
 
 ## 2. R1 ownership rules
 
@@ -130,19 +194,19 @@ Every row below is a current source file. `Current partition` is the exact prese
 
 | Current file | Lines | Current partition | Next node |
 |---|---:|---|---|
-| `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
+| `can_move_probe.rs` | 522 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 17 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 680 | product continue/load policy | D5 |
+| `continue_load/product_continue.rs` | 733 | product continue/load policy | D5 |
 | `continue_load/slot_resolution.rs` | 817 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 468 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
-| `gpu_readback.rs` | 56 | product GPU-readback facade | R4-R5 |
-| `gpu_readback/boot_progress.rs` | 2,978 | loading-bar, boot-cover, and product adapter families | R4-R5 |
+| `gpu_readback.rs` | 30 | product GPU-readback facade | R4-R5 |
+| `gpu_readback/boot_progress.rs` | 2,673 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
 | `input_block.rs` | 1,390 | product input ownership | `STAY` |
-| `input_trace.rs` | 932 | product diagnostic | D4 |
+| `input_trace.rs` | 938 | product diagnostic | D4 |
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 114 | product install ordering | `STAY` |
 | `lifecycle/save_flow.rs` | 1,535 | System>Quit save-flow implementation | R20 |
@@ -150,34 +214,34 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `lifecycle/title_visual_startup.rs` | 177 | product startup arming/order | R22 |
 | `mem.rs` | 44 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
-| `menu_diag/menu_observation.rs` | 642 | product menu observation | D4 |
-| `mod.rs` | 107 | experiments module root and compatibility exports | `STAY` |
+| `menu_diag/menu_observation.rs` | 689 | product menu observation | D4 |
+| `mod.rs` | 106 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 9 | own-stepper memory family | D5 and R14 |
 | `mod/product_core_own_stepper.rs` | 554 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 599 | product fallback-drive diagnostic | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 651 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 9 | S11 own-load facade | D5 |
-| `own_load/drive.rs` | 1,739 | native-load, world-resource, and save-byte families | D5 |
+| `own_load/drive.rs` | 1,751 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
-| `own_load/loaders/load_drive.rs` | 723 | load-drive implementation family | D5 |
+| `own_load/loaders/load_drive.rs` | 732 | load-drive implementation family | D5 |
 | `own_load/loaders/switch_reload.rs` | 579 | switch-reload adapter family | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
 | `own_stepper/bootstrap_drive.rs` | 968 | product bootstrap-drive policy | D5 |
-| `own_stepper/load_steps.rs` | 824 | product load-step policy | D5 |
+| `own_stepper/load_steps.rs` | 831 | product load-step policy | D5 |
 | `present_overlay.rs` | 1,048 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,149 | save source/path policy and redirect adapters | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,128 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 107 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 345 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 932 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 942 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 72 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 1,055 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,207 | title-flow and product modal families | R22 |
-| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,515 | Scaleform resource, title, and product families | R22 and R24 |
+| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,559 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 810 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/build_url_clipboard.rs` | 7 | product re-export facade: moved to `er_quit_menu_core::build_url_clipboard` | R18 |
@@ -186,15 +250,15 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/generate_build_link_row.rs` | 8 | product re-export facade: moved to `er_quit_menu_core::generate_build_link_row` | R18 |
 | `startup_hooks/quit_menu/mod.rs` | 78 | quit-menu module facade | R10-R20 |
 | `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,991 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
-| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 2,118 | mixed profile-row title, quit, and sampler families | R11 |
+| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 2,133 | mixed profile-row title, quit, and sampler families | R11 |
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 75 | product facade: implementation in `er_quit_menu_core::save_dest_commit_runtime`; this side supplies the save-redirect native source dir and the `er-save-suppress` save-job observer | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 686 | System>Quit confirmation-box family | R18-R20 |
-| `startup_hooks/quit_menu/save_picker_menu.rs` | 2,941 | native picker, destination, and row-builder families | R17-R19 |
+| `startup_hooks/quit_menu/save_picker_menu.rs` | 2,959 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,543 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,248 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,492 | System>Quit dialog implementation and picker adapter; the row TEXT layer moved to `er_quit_menu_core::row_text` | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 683 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
-| `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,484 | ownership, telemetry, quit, and portrait families | R19 |
+| `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,494 | ownership, telemetry, quit, and portrait families | R19 |
 | `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,169 | product repro guard and quit/title families | R2 and R19 |
 | `startup_hooks/quit_menu/system_quit_row_identity.rs` | 77 | product facade: capture/telemetry half in `er_quit_menu_core::row_identity`; this side reads the two `er_title_flow` dialog offsets and resets the build-url editor | R18 |
 | `startup_hooks/save_picker/mod.rs` | 22 | save-picker module facade | R17 |
@@ -203,9 +267,9 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/save_picker/save_picker_surface.rs` | 122 | picker surface routing adapter | R17-R18 |
 | `title.rs` | 5 | title facade | R22 |
 | `trace.rs` | 10 | trace facade | R6A-R6D and D4 |
-| `trace/menu_constructor_capture.rs` | 1,388 | menu constructor capture family | R6B and D4 |
+| `trace/menu_constructor_capture.rs` | 1,398 | menu constructor capture family | R6B and D4 |
 | `trace/menu_trace_hooks.rs` | 2,036 | title reload and menu trace families | R6C, R21, and D4 |
-| `trace/native_result_map_hooks.rs` | 746 | native result-map hook family | R6A and D4 |
+| `trace/native_result_map_hooks.rs` | 765 | native result-map hook family | R6A and D4 |
 
 ## Appendix B -- R32 save-redirect ownership rebaseline
 
