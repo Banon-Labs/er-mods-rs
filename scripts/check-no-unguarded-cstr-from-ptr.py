@@ -26,12 +26,12 @@ any FFI callback argument is not a waiver; it is the same bug with a note attach
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-IGNORED_DIRECTORIES = {".git", ".worktrees", ".claude", "target", "third_party"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import REPO_ROOT, rust_source_files  # noqa: E402
+
 # The whole family that walks memory looking for a terminator. A length-carrying read
 # (`slice::from_raw_parts`) is deliberately NOT here: it cannot run off the end of a mapping
 # looking for a byte that may not be there, which is the specific failure this gate is about.
@@ -45,32 +45,6 @@ BANNED_CALLS = (
 )
 JUSTIFICATION_MARKER = "Foreign pointer:"
 REPLACEMENT = "er_game_base::mem::safe_read_cstr"
-
-
-def rust_source_files() -> list[Path]:
-    """Every `.rs` under the repo except the ignored directories.
-
-    The walk PRUNES `IGNORED_DIRECTORIES` as it descends instead of enumerating their contents
-    and discarding them afterwards, which is what `rglob` forced. Identical by construction: a
-    path under an ignored directory carries that directory in its relative `.parts`, so the
-    post-filter below already rejected it. Measured 2026-08-31: `rglob` traversed all 1,118,634
-    entries in the tree -- `.worktrees`, `.claude` and `target` are 99.4% of them -- to produce
-    the 571 files this gate reads.
-    """
-    paths: list[Path] = []
-    for directory, subdirectories, filenames in os.walk(REPO_ROOT):
-        subdirectories[:] = [
-            name for name in subdirectories if name not in IGNORED_DIRECTORIES
-        ]
-        base = Path(directory)
-        for name in filenames:
-            if not name.endswith(".rs"):
-                continue
-            path = base / name
-            if any(part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
-                continue
-            paths.append(path)
-    return sorted(paths)
 
 
 def banned_call_in(line: str) -> str | None:

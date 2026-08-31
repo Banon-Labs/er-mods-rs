@@ -37,17 +37,18 @@ Exit status is 1 on any failure, so this can gate.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import NOT_REPO_SOURCE, REPO_ROOT, rust_source_files  # noqa: E402
 
-# Directories that hold no product/harness Rust source: build output, agent worktree COPIES of
-# this same repo (scanning them double-counts and reports paths that do not exist upstream), and
-# vendored trees.
-SKIP_DIRS = {".git", ".claude", ".worktrees", "target", "third_party", "save-files", "docs"}
+# The shared "not this repo's source" set (.git/.worktrees/.claude/target/third_party), plus two
+# this gate alone excludes: neither holds product or harness Rust, so neither can contain a log
+# opener this gate speaks for.
+EXTRA_SKIP_DIRS = frozenset({"save-files", "docs"})
+SKIP_DIRS = NOT_REPO_SOURCE | EXTRA_SKIP_DIRS
 
 # `.append(` whose argument does NOT start with `&`. That one character separates an OpenOptions
 # builder (`.append(true)`, `.append(flag)`) from `Vec::append(&mut other)`.
@@ -70,25 +71,11 @@ EXEMPT: dict[str, str] = {
 def rust_files(root: Path) -> list[Path]:
     """Every Rust source under `root`, minus build output and repo copies.
 
-    The walk PRUNES `SKIP_DIRS` as it descends instead of enumerating their contents and
-    discarding them afterwards, which is what `rglob` forced. Identical by construction: a path
-    under a skipped directory carries that directory in its relative `.parts`, so the filter
-    below already rejected it. Measured 2026-08-31: `rglob` traversed all 1,118,634 entries under
-    the repo root -- `.worktrees`, `.claude` and `target` are 99.4% of them -- for 571 files, and
-    this gate ran the walk TWICE (once to check, once to count for the success line).
+    See `scripts/repo_source_scan.py` for the shared enumeration and why it prunes rather than
+    post-filters. Callers pass the prebuilt list on to `check()` so the tree is walked once: this
+    gate used to walk it twice, the second time only to print a file count in the success line.
     """
-    files: list[Path] = []
-    for directory, subdirectories, filenames in os.walk(root):
-        subdirectories[:] = [name for name in subdirectories if name not in SKIP_DIRS]
-        base = Path(directory)
-        for name in filenames:
-            if not name.endswith(".rs"):
-                continue
-            path = base / name
-            if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
-                continue
-            files.append(path)
-    return sorted(files)
+    return rust_source_files(root, EXTRA_SKIP_DIRS)
 
 
 def append_openers(text: str) -> list[tuple[int, str]]:

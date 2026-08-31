@@ -78,37 +78,22 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import NOT_REPO_SOURCE, REPO_ROOT as ROOT, iter_rust_sources  # noqa: E402
+
 BASE = 0x140000000
 COMPARED = 0xFF
 IGNORED = 0x00
 
-# Directories that are not this repository's source, even though they sit under its root.
-# `.claude/worktrees` holds other agents' checkouts -- each one a full copy of the tree, with its
-# own build.rs files. Counting those would report every spec a dozen times over and make the
-# coverage comparison meaningless.
-SKIP_DIRS = {".git", "target", "node_modules", ".worktrees", ".claude", "vendor", "third_party"}
-
-
-def _walk_rust_sources(root: Path, skip: set[str]):
-    """Every `.rs` under `root`, pruning `skip` during the descent.
-
-    Yields the same paths a post-filtered `root.rglob("*.rs")` kept, because a path under a
-    skipped directory carries that directory in its relative `.parts` and was already discarded.
-    Pruning only avoids READING the 1,111,981 entries (99.4% of the tree) that live under
-    `.worktrees`, `.claude` and `target`.
-    """
-    for directory, subdirectories, filenames in os.walk(root):
-        subdirectories[:] = [name for name in subdirectories if name not in skip]
-        base = Path(directory)
-        for name in filenames:
-            if name.endswith(".rs"):
-                yield base / name
+# The shared "not this repo's source" set (.git/.worktrees/.claude/target/third_party), plus two
+# this gate alone excludes: a vendored or npm-installed tree can carry a `PrologueSpec`-shaped
+# literal that this repo never declared, and a phantom spec makes the coverage comparison lie.
+EXTRA_SKIP_DIRS = frozenset({"node_modules", "vendor"})
+SKIP_DIRS = NOT_REPO_SOURCE | EXTRA_SKIP_DIRS
 
 
 def _load(name: str, filename: str):
@@ -133,15 +118,11 @@ def repo_spec_files() -> dict[Path, int]:
     sweep's glob cannot reach, so it must not share the sweep's glob.
     """
     found: dict[Path, int] = {}
-    # The walk PRUNES `SKIP_DIRS` as it descends instead of enumerating their contents and
-    # discarding them afterwards, which is what `rglob` forced. That does not weaken the "full
-    # walk, not the sweep's glob" property above -- every path the old form kept is still
-    # reached; a path under a skipped directory carried that directory in its relative `.parts`
-    # and was already discarded. Measured 2026-08-31: `rglob` traversed all 1,118,634 entries
-    # under the repo root (`.worktrees`, `.claude`, `target` = 99.4%) to reach 571 files.
-    for path in _walk_rust_sources(ROOT, SKIP_DIRS):
-        if any(part in SKIP_DIRS for part in path.relative_to(ROOT).parts):
-            continue
+    # `iter_rust_sources` is the shared full walk (scripts/repo_source_scan.py). It prunes the
+    # non-source directories during the descent rather than reading and discarding them, which
+    # does NOT weaken the "full walk, not the sweep's glob" property above: every path the old
+    # post-filtered form kept is still reached.
+    for path in iter_rust_sources(ROOT, EXTRA_SKIP_DIRS):
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

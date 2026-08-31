@@ -49,15 +49,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-IGNORED_DIRECTORIES = {".git", ".worktrees", ".claude", "target", "third_party", "vendor"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import NOT_REPO_SOURCE, REPO_ROOT, rust_source_files  # noqa: E402
+
+# The shared "not this repo's source" set (.git/.worktrees/.claude/target/third_party), plus a
+# `vendor` this gate alone excludes: a vendored crate's byte tables are not hand-typed machine
+# code this repo wrote, which is the only thing this gate is entitled to reject.
+EXTRA_IGNORED_DIRECTORIES = frozenset({"vendor"})
+IGNORED_DIRECTORIES = NOT_REPO_SOURCE | EXTRA_IGNORED_DIRECTORIES
 
 # Three is the shortest sequence that is unambiguously machine code rather than a small tuple of
 # flags: the smallest thing this repo writes at a game function is a three-byte `xor eax,eax; ret`
@@ -148,25 +153,8 @@ def scan_text(relative: Path, text: str) -> list[Finding]:
 
 
 def rust_files(root: Path) -> list[Path]:
-    """Every `.rs` under `root` outside `IGNORED_DIRECTORIES`.
-
-    The walk PRUNES `IGNORED_DIRECTORIES` as it descends instead of enumerating their contents
-    and discarding them afterwards, which is what `rglob` forced. Identical by construction: a
-    path under an ignored directory carries that directory in its relative `.parts`, so
-    `is_scanned` already rejected it. Measured 2026-08-31: `rglob` traversed all 1,118,634
-    entries under the repo root -- `.worktrees`, `.claude` and `target` are 99.4% of them -- to
-    reach the 513 files this gate scans.
-    """
-    files: list[Path] = []
-    for directory, subdirectories, filenames in os.walk(root):
-        subdirectories[:] = [
-            name for name in subdirectories if name not in IGNORED_DIRECTORIES
-        ]
-        base = Path(directory)
-        for name in filenames:
-            if name.endswith(".rs"):
-                files.append(base / name)
-    return sorted(files)
+    """Every `.rs` under `root` outside `IGNORED_DIRECTORIES`. See `scripts/repo_source_scan.py`."""
+    return rust_source_files(root, EXTRA_IGNORED_DIRECTORIES)
 
 
 def scan(root: Path) -> list[Finding]:
