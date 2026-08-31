@@ -369,6 +369,17 @@ HEADER = """\
 # the one PlayerGameData move this migration found actually lives. It is evidence, ranked; the
 # owner is what makes it measurable.
 #
+# THE TOP OF THAT RANKING, and where it stops. The only row that is BOTH written through AND
+# MOVED-SOMEWHERE is `VK_ARRAY_88_OFFSET` = 0x88 (er-input-harness/src/pad_inject.rs), the key
+# array the pad builders rebuild at `CSInGamePad + 0x88`. Its owner is named in the prose, but
+# `CS::CSInGamePad` yields only 2 usable paired method bodies (38 of 40 do not store its vtable
+# into `this`), so the class route cannot witness it -- and the one function that writes the
+# field, WRITER_RVA 0x26634a0, has NO `.pdata` entry in 1.16.2 and lands MID-FUNCTION inside a
+# different 1.17 function, so that region genuinely changed. Settling 0x88 needs that writer
+# re-paired first, which is RVA work, not offset work. Recorded here rather than guessed.
+# The two padMaps offsets beside it ARE settled: builder 0x140240e70 is byte-identical between
+# the builds (195/195 aligned at the same address) and holds 0x18 and 0x48 on the manager.
+#
 # NOT WIRED INTO scripts/check.sh. Two other agents held that file when this landed, so the gate
 # runs only when invoked. Adding it is one line there, in column 1, like every other step:
 #     python3 "$repo_root/scripts/attribute-field-offset-owners.py" --selftest
