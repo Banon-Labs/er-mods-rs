@@ -684,7 +684,21 @@ def audit(rows, old, new, old_cm, new_cm):
 #   unverified. `MENU_PUMP_KICK_PTR_RVA` and `STEAM_INTERFACE_GUARD_RVA` also hold code pointers,
 #   but none of their targets appears in the 128,602-row function ledger, so FNPTR cannot reach
 #   them either.
+#
+# AN ENTRY IS A CONSTANT NAME, OR AN ADDRESS WHERE THERE IS NO NAME. Four rows in the data map are
+# addresses the workspace writes as BARE HEX LITERALS handed to `game_rva`, with no constant
+# anywhere, so the map keys them `<file>:<line>` -- a string that changes every time somebody edits
+# a line above them. Pinning one of those by "name" would pin a line number into a gate and fail on
+# the next unrelated edit to the menu tracer. `pin_of` therefore uses the constant when the row has
+# one and the source address when it does not; an address is a strictly more stable pin, and the
+# set still only shrinks.
 UNANCHORED = {
+    # `crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1248` -- the lazy
+    # `CSEblFileManager` slot. ACCESSOR-WEAK: exactly one surviving reference and it agrees. The
+    # data map carries it on a bracket (0x3d5b078 and 0x3d5b0f4, both +0x4060, 105 anchors in
+    # +-0x400) plus a shape count of 10 sites each side -- neither of which is an anchor THIS file
+    # computes, which is the whole point of listing it here.
+    "0x3d5b088",
     "DLUID_SINGLETON_RVA",
     "FAKE_LOADING_SCREEN_SINGLETON_RVA",
     "FD4_IO_POOL_RVA",
@@ -705,6 +719,15 @@ UNANCHORED = {
     "TITLE_STEP_IDX10_SLOT_RVA",
     "TITLE_STEP_IDX6_SLOT_RVA",
 }
+
+
+def pin_of(src, const):
+    """How a row is named in `UNANCHORED`: its constant, or its address when it has no constant.
+
+    `LEDGER_CONSTANT`'s test, deliberately -- `select-needed-1170-rows.py` decides the same way
+    which rows in these files are attributable to a name at all.
+    """
+    return const if re.match(r"[A-Z][A-Z0-9_]*\b", const or "") else f"0x{src:x}"
 
 
 def run_anchors(rows, old, new, old_cm, new_cm, quiet=False):
@@ -930,7 +953,11 @@ def anchor_selftest(old_cm, new_cm):
         print(f"FAIL: {tally['DISAGREE']} DISAGREE, {tally['MISSING']} MISSING on the tracked map")
         return 1
 
-    pinned = {const for code, _, _, const, _, _ in results if code in ("NO-ANCHOR", "ACCESSOR-WEAK")}
+    pinned = {
+        pin_of(src, const)
+        for code, src, _, const, _, _ in results
+        if code in ("NO-ANCHOR", "ACCESSOR-WEAK")
+    }
     print(f"  positive control: {len(verified)} rows verified, {len(pinned)} unanchored")
 
     # THE MUTANTS RUN BEFORE THE PIN CHECK, deliberately. Both catch a widened matcher, but only
@@ -1107,7 +1134,9 @@ def main():
             print(f"\n  {dict(tally)}")
             print(f"  {verified}/{len(rows)} rows verified by an anchor that is not byte equality")
             unanchored = {
-                const for code, _, _, const, _, _ in results if code in ("NO-ANCHOR", "ACCESSOR-WEAK")
+                pin_of(src, const)
+                for code, src, _, const, _, _ in results
+                if code in ("NO-ANCHOR", "ACCESSOR-WEAK")
             }
             for const in sorted(unanchored - UNANCHORED):
                 print(f"  NEW UNANCHORED ROW: {const} -- it had evidence before and does not now")

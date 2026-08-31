@@ -607,6 +607,79 @@ def non_address_ledger_rows(ledgers, sources) -> list[str]:
     return failures
 
 
+# Ledgers whose FIRST column is a 1.16.2 address, for the "does this address hold a row anywhere"
+# question. Wider than `NAMED_LEDGERS`, which is about the constant column: `verified.tsv` has no
+# name column to attribute a row to, but it certainly answers for the address in its first one, and
+# asking about names there was a schema fact rather than a scope decision.
+ADDRESS_LEDGERS = (
+    "docs/recon/rva-map-1162-to-1170.needed.tsv",
+    "docs/recon/rva-map-1162-to-1170.needed-verified.tsv",
+    "docs/recon/rva-map-1162-to-1170.data.tsv",
+    "docs/recon/rva-map-1162-to-1170.verified.tsv",
+)
+
+
+def ledger_addresses(repo: Path) -> set[int]:
+    """Every 1.16.2 address that holds a row in any ledger, VA and RVA spellings both normalised."""
+    out: set[int] = set()
+    for relative in ADDRESS_LEDGERS:
+        path = repo / relative
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            try:
+                value = int(line.split("\t")[0], 16)
+            except ValueError:
+                continue
+            out.add(value - BASE if value >= BASE else value)
+    return out
+
+
+def unmapped_bare_addresses(sources: dict[str, str], mapped: set[int]) -> list[str]:
+    """Bare hex literals handed to the address resolver that hold no ledger row, as failure text.
+
+    THE OUTCOME GATE FOR THE HARVEST HOLE, and it is deliberately about the RESULT rather than the
+    mechanism. Until 2026-08-31 the data map's `--refresh` harvested `const *RVA*: usize = 0x..`
+    and nothing else, so an address written as a bare literal at its use site entered NEITHER the
+    body of a ledger NOR its UNUSED list. That third state is worse than either: an absent row
+    reads afterwards exactly like an address nobody has gotten to yet, so nothing ever looks at it
+    again. Four addresses sat in it -- the `CSEblFileManager`/resource-repository globals the menu
+    tracer reads through `game_rva` -- and on 1.17 all four were refused at runtime while the
+    CAPSTATE-SUBSYS line reported -1/0 rather than saying it had gone dark.
+
+    Admission is `rva_usage.bare_resolver_addresses`: the ARGUMENT POSITION of a resolver call,
+    never the value and never the spelling. `#[cfg(test)]` scopes are skipped for the same reason
+    `declared_rvas` skips them -- a test may name an address precisely to assert nothing uses it.
+    """
+    failures = []
+    for path, text in sorted(sources.items()):
+        blanked = rva_role.blank_rust(text)
+        tests = rva_usage.test_module_spans(blanked)
+        starts, cursor = [0], blanked.find("\n")
+        while cursor >= 0:
+            starts.append(cursor + 1)
+            cursor = blanked.find("\n", cursor + 1)
+        for line_no, value in rva_usage.bare_resolver_addresses(text):
+            offset = starts[line_no - 1] if line_no - 1 < len(starts) else 0
+            if rva_usage.in_any_span(offset, tests):
+                continue
+            rva = value - BASE if value >= BASE else value
+            if rva in mapped:
+                continue
+            failures.append(
+                f"0x{rva:x} is handed to the address resolver at {path}:{line_no} as a BARE HEX "
+                "LITERAL and holds no row in any ledger, so it is neither translated for 1.17 nor "
+                "listed as untranslated. Run "
+                "`python3 scripts/map-data-rvas-1162-to-1170.py --refresh` (a data address) or "
+                "`python3 scripts/select-needed-1170-rows.py --refresh` (a .text address); if the "
+                "refresh withholds it, the address will appear in that file's UNUSED list, which "
+                "is the reported state this gate asks for."
+            )
+    return failures
+
+
 def observed_rvas(path: Path) -> list[int]:
     """Addresses the running game asked for and was refused; see record-1170-refusals.py."""
     out: list[int] = []
@@ -1014,6 +1087,57 @@ def main() -> int:
             failures.append(
                 "the frozen negative's own source no longer declares SET_REINFORCEMENT, so blind 2 "
                 "is asserting about a constant that is not there and would pass on anything."
+            )
+
+        # ------------------------------------------------------------------------------------
+        # THE HARVEST HOLE: an address with no NAME at all, and its three blinds
+        # ------------------------------------------------------------------------------------
+        # Everything above starts from an identifier. A bare `game_rva(0x485cbec)` has none, so
+        # until 2026-08-31 it entered no ledger and no ledger's UNUSED list either -- the third
+        # state, which reads afterwards like an address nobody has gotten to yet. The matcher's
+        # own fixture controls first (two positives including the one-hop forwarding closure, a
+        # frozen negative of Win32 flags and window bounds, prose, and a blinding of the resolver
+        # matcher), then the live outcome over `crates/`.
+        failures += rva_usage.control_failures()
+        mapped = ledger_addresses(args.repo)
+        if len(mapped) < 300:
+            failures.append(
+                f"only {len(mapped)} address(es) were read out of {len(ADDRESS_LEDGERS)} ledgers, "
+                "so 'every bare literal holds a row' is close to trivially false rather than "
+                "measured. The first columns have moved or the parse broke."
+            )
+        failures += unmapped_bare_addresses(sources, mapped)
+
+        # BLIND 3: PLANT ONE. A literal spelled exactly like the four this closed, in a source the
+        # gate is handed, against a ledger set that does not contain it. It must go RED -- if it
+        # does not, the clean result over the real tree above means only that the reader found
+        # nothing, which is what it did before this change.
+        planted_literal = {"crates/planted/lib.rs": rva_usage.CONTROL_FORWARDED}
+        if not unmapped_bare_addresses(planted_literal, set()):
+            failures.append(
+                "a planted `g(0x0485cbec)` read CLEAN against an empty ledger set. The gate cannot "
+                "see the exact shape it exists to catch, so its silence over crates/ proves "
+                "nothing. This is the harvest hole, open again."
+            )
+        # ...and it must be the MISSING ROW that reds it, not the literal's mere existence: the
+        # same source against a ledger set that DOES carry both addresses must read clean.
+        if unmapped_bare_addresses(planted_literal, {0x485CBEC, 0x3D5B0F8}):
+            failures.append(
+                "a bare literal that already holds a ledger row was still reported. The gate is "
+                "not asking about the row at all, so it will fire on every address in the tree "
+                "the moment one is added."
+            )
+        # BLIND 4, THE FROZEN NEGATIVE. Hex literals that are genuinely not addresses, in a source
+        # that also contains a forwarding closure. `0x1000` is the number that matters: it is
+        # MEM_COMMIT, it is where `.text` begins, and it is `FIRST_SECTION_RVA`, which reached
+        # DETOUR_SAFE_1162_TO_1170 on entirely genuine evidence about a meaningless row. A matcher
+        # that widened until it admitted whatever it was handed would report it here.
+        negative_literal = {"crates/frozen/negative.rs": rva_usage.CONTROL_NOT_AN_ADDRESS}
+        if unmapped_bare_addresses(negative_literal, set()):
+            failures.append(
+                "a Win32 flag / RVA window bound / struct offset was reported as an unmapped game "
+                "address. Admitting 0x1000 is precisely how a PE section boundary got a detour "
+                "licence; this gate would now demand ledger rows for hundreds of them."
             )
 
         for line in failures:
