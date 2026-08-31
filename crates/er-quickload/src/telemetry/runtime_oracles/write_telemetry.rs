@@ -1027,12 +1027,30 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     let swallow_after = er_save_suppress::swallow_slot_after();
     let swallow_before = er_save_suppress::swallow_slot_before();
     body.push_str(&format!(
-        "  \"oracle_save_suppress_release_unavailable\": {},\n  \"oracle_save_swallow_release_left_dirty\": {},\n  \"oracle_save_swallow_iodev_mismatch\": {},\n  \"oracle_save_iodev_slot_read_failures\": {},\n  \"oracle_save_dispatch_last_decline_reason\": \"{}\",\n  \"oracle_save_decline_iodev_save_content\": {},\n  \"oracle_save_decline_iodev_load_content\": {},\n  \"oracle_save_decline_iodev_job\": {},\n  \"oracle_save_decline_iodev_file_cap\": {},\n  \"oracle_save_swallow_before_iodev_save_content\": {},\n  \"oracle_save_swallow_before_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_save_content\": {},\n  \"oracle_save_swallow_after_iodev_load_content\": {},\n  \"oracle_save_swallow_after_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_file_cap\": {},\n  \"oracle_save_flow_request_retractions\": {},\n  \"oracle_save_flow_retract_declined\": {},\n",
+        "  \"oracle_save_suppress_release_unavailable\": {},\n  \"oracle_save_swallow_release_left_dirty\": {},\n  \"oracle_save_swallow_iodev_mismatch\": {},\n  \"oracle_save_iodev_slot_read_failures\": {},\n  \"oracle_save_dispatch_last_decline_reason\": \"{}\",\n  \"oracle_save_dispatch_last_decline_save_state\": {},\n  \"oracle_save_decline_iodev_save_content\": {},\n  \"oracle_save_decline_iodev_load_content\": {},\n  \"oracle_save_decline_iodev_job\": {},\n  \"oracle_save_decline_iodev_file_cap\": {},\n  \"oracle_save_swallow_before_iodev_save_content\": {},\n  \"oracle_save_swallow_before_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_save_content\": {},\n  \"oracle_save_swallow_after_iodev_load_content\": {},\n  \"oracle_save_swallow_after_iodev_job\": {},\n  \"oracle_save_swallow_after_iodev_file_cap\": {},\n  \"oracle_save_flow_request_retractions\": {},\n  \"oracle_save_flow_retract_declined\": {},\n",
         er_save_suppress::release_unavailable(),
         er_save_suppress::swallow_release_left_dirty(),
         er_save_suppress::swallow_iodev_mismatch(),
         er_save_suppress::slot_read_failures(),
         er_save_suppress::decline_bail_reason_label(),
+        // A POSITIVE CONTROL WHOSE EXPECTED VALUE IS 0, NOT A DISAMBIGUATOR. Do not read a 0 here
+        // as a finding: the call graph already forces it. `FUN_14067b940` has exactly ONE caller,
+        // `FUN_140afb880`, and that caller gates the WHOLE dispatch on
+        // `cVar6 = FUN_14067a080(); if (cVar6 == 0) return;` -- and `FUN_14067a080` is literally
+        // `MOV RAX,[0x143d69918]; CMP dword [RAX+0xb80],0; SETZ AL; RET`, i.e. `saveState == 0`.
+        // So every game-originated decline is PROVEN idle one call earlier, and this field can only
+        // ever report 0 for one. What it therefore measures is the INSTRUMENT: 0 says the sampler
+        // ran and agrees with the call graph, `u32::MAX` says it never sampled at all.
+        //
+        // The one value that would be a finding is a NON-ZERO one, and it would not implicate the
+        // game -- it would isolate a dispatch this DLL made itself, outside the native gate.
+        // (`er-save-loader`'s three direct calls are the only such call sites in the workspace, and
+        // each is already behind its own `save_state() != 0` early return; a non-zero reading here
+        // would mean one of them raced the native tick between that check and the call.)
+        //
+        // It is kept because a control that can only read one value still fails loudly when the
+        // instrument breaks, and because the reason string above IS trustworthy only while it holds.
+        er_save_suppress::decline_save_state(),
         slot_hex(decline_slot.map(|slot| slot.save_content)),
         slot_hex(decline_slot.map(|slot| slot.load_content)),
         slot_hex(decline_slot.map(|slot| slot.job)),
@@ -1045,6 +1063,48 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         slot_hex(swallow_after.map(|slot| slot.file_cap)),
         SAVE_FLOW_REQUEST_RETRACTIONS.load(Ordering::SeqCst),
         SAVE_FLOW_RETRACT_DECLINED.load(Ordering::SeqCst),
+    ));
+    // THE BIRTH OF THE WEDGE, as opposed to its plateau. Everything above is last-writer-wins: on
+    // 2026-08-31 the published decline sample was taken on entry 8,638 of 8,638, four minutes after
+    // the state it describes formed, and byte-identical to the 8,637 before it because nothing in
+    // that loop can change the device. These four are FIRST-writer-wins over
+    // `iodev+0x10 != 0 && saveState == 0`, so they timestamp the moment instead.
+    //
+    //   oracle_save_dispatch_first_latched_save_content  the `SLSaveContent` still on the device.
+    //                                                    Compare it against the accept records in
+    //                                                    er-quickload-continue-trace.log: an exact
+    //                                                    match NAMES the submit that wedged.
+    //   oracle_save_dispatch_first_latched_job           `iodev+0x20`. Non-zero = the submit
+    //                                                    reached `FUN_140e6fb50` and has a real
+    //                                                    job; zero = it never enqueued, which is
+    //                                                    the `FUN_140e6ec70` latch-without-accept
+    //                                                    shape (a save that owns the device and was
+    //                                                    never accepted, so `saveState` was never
+    //                                                    written at all).
+    //   oracle_save_dispatch_first_latched_ms            host log epoch, the SAME `[+<n>ms]` the
+    //                                                    debug log prefixes every line with, so the
+    //                                                    event lands between two named lines.
+    //                                                    `18446744073709551615` = never seen, or no
+    //                                                    clock sink -- the save_content field says
+    //                                                    which.
+    //   oracle_save_dispatch_first_latched_call          which dispatch entry it was, 1-based. Says
+    //                                                    how early the wedge formed with no log.
+    //
+    // `oracle_save_dispatch_latched_declines` is the plateau: read against
+    // `oracle_save_dispatch_declines`, near-equality means the wedge stood for the whole run, and
+    // ZERO with declines recorded RULES THE WEDGE OUT as their cause instead of leaving it open.
+    //
+    // Read `oracle_save_dispatch_observers_installed` first, as always: at 0 every field here can
+    // only read "never seen", and that is the absence of an observer, not the absence of a wedge.
+    let first_latched = er_save_suppress::dispatch_first_latched_slot();
+    body.push_str(&format!(
+        "  \"oracle_save_dispatch_latched_declines\": {},\n  \"oracle_save_dispatch_first_latched_save_content\": {},\n  \"oracle_save_dispatch_first_latched_job\": {},\n  \"oracle_save_dispatch_first_latched_ms\": {},\n  \"oracle_save_dispatch_first_latched_call\": {},\n  \"oracle_save_dispatch_first_latched_lane\": {},\n",
+        er_save_suppress::dispatch_latched_declines(),
+        slot_hex(first_latched.map(|slot| slot.save_content)),
+        slot_hex(first_latched.map(|slot| slot.job)),
+        er_save_suppress::dispatch_first_latched_ms(),
+        er_save_suppress::dispatch_first_latched_call(),
+        er_save_suppress::dispatch_first_latched_lane(),
     ));
     // THE LOAD CONSUMER -- the other owner of the shared `iodev+0x20` job, and the reason a
     // save can be refused by something that is not a save.
@@ -1080,6 +1140,76 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::load_consumer_last_outcome_label(),
         slot_hex(consumer_after.map(|slot| slot.load_content)),
         slot_hex(consumer_after.map(|slot| slot.job)),
+    ));
+    // THE FORGOTTEN SAVE REQUEST -- the state in which the game has lost track of a save it
+    // submitted, and therefore the state in which SAVING IS DEAD for the rest of the process.
+    //
+    // `iodev+0x10`/`+0x20` are freed by `FUN_140e6f200` alone, and on the save side only the
+    // poll `FUN_140e6e430` reaches it -- from `DoSaveStuff`, gated on `GameMan::IsSaveState1()`,
+    // or from the "saving..." MenuJob. Every submit path sets `saveState = 1` at its commit
+    // tail, so `+0x10 != 0` with `saveState == 0` means nothing will ever poll the device
+    // again and every later submit fails `iodev+0x10 == 0 && iodev+0x20 == 0`. Measured
+    // 2026-08-31 after one System->Quit->Load Character reload: 6,177 refusals in 6,186
+    // dispatches, four minutes, byte-identical operands.
+    //
+    //   oracle_save_orphan_detections > 0       the process ENTERED that state at least once.
+    //   oracle_save_orphan_released             times the game's own poll brought it back.
+    //                                           THIS is the "saving survived the reload"
+    //                                           oracle -- detections > 0 with released == 0
+    //                                           is a run that lost the user's save system.
+    //   oracle_save_orphan_still_latched        the native guard kept a job it does not
+    //                                           consider finished. Transient is normal (the
+    //                                           dispatcher retries next frame); persistent
+    //                                           means the job never goes terminal.
+    //   oracle_save_orphan_shared_device_skips  a latched save the drain refused to touch
+    //                                           because the load side owned the device too.
+    //   oracle_save_orphan_poll_unavailable     the poll address never resolved for this
+    //                                           build: unrecoverable, and loud.
+    let orphan_after = er_save_suppress::save_orphan_slot_after();
+    body.push_str(&format!(
+        "  \"oracle_save_orphan_detections\": {},\n  \"oracle_save_orphan_drains\": {},\n  \"oracle_save_orphan_released\": {},\n  \"oracle_save_orphan_still_latched\": {},\n  \"oracle_save_orphan_shared_device_skips\": {},\n  \"oracle_save_orphan_poll_unavailable\": {},\n  \"oracle_save_orphan_last_status\": {},\n  \"oracle_save_orphan_last_outcome\": \"{}\",\n  \"oracle_save_orphan_after_iodev_save_content\": {},\n  \"oracle_save_orphan_after_iodev_job\": {},\n",
+        er_save_suppress::save_orphan_detections(),
+        er_save_suppress::save_orphan_drains(),
+        er_save_suppress::save_orphan_released(),
+        er_save_suppress::save_orphan_still_latched(),
+        er_save_suppress::save_orphan_shared_device_skips(),
+        er_save_suppress::save_orphan_poll_unavailable(),
+        er_save_suppress::save_orphan_last_status(),
+        er_save_suppress::save_orphan_last_outcome_label(),
+        slot_hex(orphan_after.map(|slot| slot.save_content)),
+        slot_hex(orphan_after.map(|slot| slot.job)),
+    ));
+    // SAVE-STATE WITNESS oracles -- the CAUSE side of the orphan above. The drain repairs the state;
+    // these say who created it, which the field values alone cannot, because three different native
+    // writes produce the identical signature.
+    //
+    //   oracle_save_state_abandoning_writes > 0   a save was stranded in this run. THE finding.
+    //   oracle_save_state_first_site              which wrapper did it first (the two send a reader
+    //                                             to different functions, so they are named apart).
+    //   oracle_save_state_first_caller_rva        the game RVA that called it. 0 = unattributed.
+    //   oracle_save_state_first_after             saveState right after: 0 completes the orphan on
+    //                                             the spot, 3 needs a second writer to finish it.
+    //   oracle_save_state_*_calls                 forwarding counts. BOTH zero means the witness
+    //                                             never installed, which is not "nothing happened".
+    //   oracle_save_state_owner_restores          repairs performed: the LOAD poll's `saveState = 0`
+    //                                             put back to 1 so the game's own pump finishes the
+    //                                             save. Equal to `abandoning_writes` at that site
+    //                                             means every wedge was intercepted.
+    //   oracle_save_state_owner_restore_failures  wedges the repair could NOT write (GameMan
+    //                                             unaddressable). Non-zero means saving died anyway.
+    let witness_slot = er_save_suppress::save_state_first_slot();
+    body.push_str(&format!(
+        "  \"oracle_save_state_load_poll_calls\": {},\n  \"oracle_save_state_save_lane_calls\": {},\n  \"oracle_save_state_abandoning_writes\": {},\n  \"oracle_save_state_first_site\": \"{}\",\n  \"oracle_save_state_first_caller_rva\": \"0x{:x}\",\n  \"oracle_save_state_first_after\": {},\n  \"oracle_save_state_first_iodev_save_content\": {},\n  \"oracle_save_state_first_iodev_job\": {},\n  \"oracle_save_state_owner_restores\": {},\n  \"oracle_save_state_owner_restore_failures\": {},\n",
+        er_save_suppress::save_state_load_poll_calls(),
+        er_save_suppress::save_state_save_lane_calls(),
+        er_save_suppress::save_state_abandoning_writes(),
+        er_save_suppress::save_state_first_site_label(),
+        er_save_suppress::save_state_first_caller_rva(),
+        er_save_suppress::save_state_first_after(),
+        slot_hex(witness_slot.map(|slot| slot.save_content)),
+        slot_hex(witness_slot.map(|slot| slot.job)),
+        er_save_suppress::save_state_owner_restores(),
+        er_save_suppress::save_state_owner_restore_failures(),
     ));
     // SAVE-FLOW CONFIRM oracles. There is ONE confirm box in the flow -- "Are you sure you want to
     // overwrite this file?" -- so there is one set of counters. The three-box spelling

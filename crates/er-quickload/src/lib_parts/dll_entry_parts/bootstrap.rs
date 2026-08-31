@@ -499,6 +499,15 @@ fn spawn_save_observers_only() {
         .name("er-quickload-save-observers".to_owned())
         .spawn(|| {
             er_save_suppress::set_log_sink(crate::telemetry::append_autoload_debug);
+            // The save-state witness reports WHO abandoned a save, and the caller's RVA is the half
+            // of that no decompile can supply. The stack walk knows which module is the game, so it
+            // lives here rather than in the Tier-A crate; without this the witness still counts and
+            // logs, but its line reads "caller unknown".
+            er_save_suppress::set_caller_rva_sink(crate::crashlog::trace_first_game_caller_rva);
+            // THE SAME EPOCH THE LOG LINES USE. `oracle_save_dispatch_first_latched_ms` exists to be
+            // read against the accept record that latched the device, and those records live in this
+            // log; a stamp from a clock of the crate's own would be correct and unalignable.
+            er_save_suppress::set_clock_sink(save_suppress_elapsed_ms);
             let mut attempts = 0_u64;
             loop {
                 match er_game_base::mem::game_module_base() {
@@ -529,6 +538,19 @@ fn spawn_save_observers_only() {
 /// Throttle for the (in practice never-taken) module-base wait log in
 /// `spawn_save_suppress_install`.
 const SAVE_SUPPRESS_WAIT_LOG_INTERVAL: u64 = 4096;
+
+/// `er_save_suppress`'s clock sink: the process-log epoch, narrowed to `u64`.
+///
+/// A free function rather than a closure because [`er_save_suppress::ClockSinkFn`] is a plain `fn`
+/// pointer. The clamp is unreachable in any real run (`u64::MAX` ms is ~584 million years); it stops
+/// one short of [`er_save_suppress::ELAPSED_MS_UNAVAILABLE`] so an absurd clock reports an absurd
+/// TIME rather than impersonating the "no clock wired" sentinel, and it clamps rather than truncates
+/// so it can never wrap into a plausible one.
+fn save_suppress_elapsed_ms() -> u64 {
+    u64::try_from(crate::telemetry::process_log_elapsed_ms())
+        .unwrap_or(er_save_suppress::ELAPSED_MS_UNAVAILABLE)
+        .min(er_save_suppress::ELAPSED_MS_UNAVAILABLE - 1)
+}
 
 /// The game's task manager, or `None` if it never turns up.
 ///

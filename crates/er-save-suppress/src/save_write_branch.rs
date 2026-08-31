@@ -215,7 +215,7 @@ unsafe extern "system" fn save_write_in_place_hook(
 fn install_write_branch_observers() -> usize {
     let mut bound = 0_usize;
 
-    if let Some(address) = verify(
+    if let Some(address) = verify_for_hook(
         SAVE_WRITE_FULL_REBUILD_RVA,
         SAVE_WRITE_FULL_REBUILD_SIG,
         SAVE_WRITE_FULL_REBUILD_SIG_MASK,
@@ -237,7 +237,7 @@ fn install_write_branch_observers() -> usize {
         }
     }
 
-    if let Some(address) = verify(
+    if let Some(address) = verify_for_hook(
         SAVE_WRITE_IN_PLACE_RVA,
         SAVE_WRITE_IN_PLACE_SIG,
         SAVE_WRITE_IN_PLACE_SIG_MASK,
