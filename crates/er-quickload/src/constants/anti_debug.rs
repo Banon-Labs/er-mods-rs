@@ -440,7 +440,6 @@ pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
-pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_CALLS;
 /// PAB detour -> system_quit_menu_window_run_post call count. Confirms the deterministic-winner wiring
 /// (2026-07-15 install-race fix) is live at runtime: >0 means PAB is driving run_post on MenuWindowJob::Run
 /// passes, so the hide + slot-activation-gate latches get written regardless of the MinHook race.
@@ -591,10 +590,7 @@ pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
 /// SYSTEX profile texture normally targets `MENU_DummyProfileFace_01`; rewrite slot0 to the
 /// visibly placed `MENU_FL_40135_Profile` surface and expose it as a distinct oracle.
 pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Profile";
-pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES;
-pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+// The four counters that were meant to record that rewrite -- _BIND_REWRITES, _BIND_LAST_OWNER,
+// _BIND_LAST_PAIR, _BIND_LAST_SYMBOL_PTR -- were removed 2026-08-31. The rewrite above was never
+// implemented, so none of them had a write site and the five oracles they fed reported absence
+// forever. The SYMBOL constant is kept: title_resources_stats_text.rs genuinely uses it.

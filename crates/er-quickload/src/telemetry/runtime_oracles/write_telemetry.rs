@@ -192,7 +192,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         }
     };
     body.push_str(&format!(
-        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_forced_continue_handoff_ms\": {},\n  \"oracle_tfc_forced_continue_handoff_ms\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n  \"oracle_own_load_wbr_update_calls\": {},\n  \"oracle_own_load_wbr_max_phase\": {},\n  \"oracle_own_load_wbr_any_gate_set\": {},\n  \"oracle_own_m28_dispatch_fired\": {},\n  \"oracle_own_load_install_job_fired\": {},\n  \"oracle_own_load_pump_fired\": {},\n  \"oracle_own_load_pump_state\": {},\n  \"oracle_own_load_pump_subcode\": {},\n  \"oracle_own_load_pump_done\": {},\n",
+        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_forced_continue_handoff_ms\": {},\n  \"oracle_tfc_forced_continue_handoff_ms\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n  \"oracle_own_load_wbr_update_calls\": {},\n  \"oracle_own_load_wbr_max_phase\": {},\n  \"oracle_own_load_wbr_any_gate_set\": {},\n  \"oracle_own_load_install_job_fired\": {},\n  \"oracle_own_load_pump_fired\": {},\n  \"oracle_own_load_pump_state\": {},\n  \"oracle_own_load_pump_subcode\": {},\n  \"oracle_own_load_pump_done\": {},\n",
         crate::experiments::OWN_LOAD_STREAM_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_STREAM_RECUR_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst),
@@ -252,7 +252,6 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             true
         ),
         crate::experiments::OWN_LOAD_WBR_ANY_GATE_SET.load(Ordering::SeqCst),
-        crate::experiments::OWN_LOAD_M28_DISPATCH_FIRED.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_INSTALL_JOB_FIRED.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_PUMP_FIRED.load(Ordering::SeqCst),
         fmt_stream(
@@ -291,10 +290,21 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     let title_owner_state_bits = TITLE_OWNER_SCAN_LAST_STATE_BITS.load(Ordering::SeqCst);
     let (return_title_global_flag, csmenuman, csmenuman_menu_data, csmenuman_menu_data_flag_5d) =
         if let Ok(base) = game_module_base() {
-            let global_flag =
-                unsafe { safe_read_u8(er_game_base::mem::game_data_addr(base, RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA, "RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA")) };
-            let menu_man = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, GLOBAL_CSMENUMAN_RVA, "GLOBAL_CSMENUMAN_RVA")) }
-                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let global_flag = unsafe {
+                safe_read_u8(er_game_base::mem::game_data_addr(
+                    base,
+                    RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA,
+                    "RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA",
+                ))
+            };
+            let menu_man = unsafe {
+                safe_read_usize(er_game_base::mem::game_data_addr(
+                    base,
+                    GLOBAL_CSMENUMAN_RVA,
+                    "GLOBAL_CSMENUMAN_RVA",
+                ))
+            }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let menu_data = if menu_man != TITLE_OWNER_SCAN_START_ADDRESS && menu_man != 0 {
                 unsafe { safe_read_usize(menu_man + CSMENUMAN_MENU_DATA_08_OFFSET) }
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
@@ -512,8 +522,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // `oracle_save_picker_surface` states which picker this session runs (0 in-game, 1 OS dialog)
     // regardless of whether one ever opened, so a report never has to guess the mode.
+    //
+    // READ `_row_records_restored` AGAINST `_open_count`. The picker renders by writing its
+    // browse-row labels INTO the live `CS::ProfileSummary`, so every session that opens must also
+    // restore. Fewer restores than opens means the game's records are still holding UI strings --
+    // the 2026-08-29 defect, which was diagnosed by the ABSENCE of restore lines in the log and is
+    // a number here precisely so absence never has to be inferred again. `_restore_unwritable`
+    // counts restores that had to skip the write because the summary allocation moved.
     body.push_str(&format!(
-        "  \"oracle_save_picker_surface\": {},\n  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
+        "  \"oracle_save_picker_surface\": {},\n  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n  \"oracle_save_picker_row_records_restored\": {},\n  \"oracle_save_picker_row_records_restore_unwritable\": {},\n  \"oracle_save_picker_row_records_restore_deferred\": {},\n",
         SAVE_PICKER_SURFACE.load(Ordering::SeqCst),
         SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
         SAVE_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
@@ -522,7 +539,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_PICK_REJECT_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_RESUBMIT_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_CANCEL_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst)
+        SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORED.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORE_UNWRITABLE
+            .load(Ordering::SeqCst),
+        er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORE_DEFERRED
+            .load(Ordering::SeqCst)
     ));
     // OS file-dialog surface. Only meaningful while `oracle_save_picker_surface` is 1, and that is
     // the point: with the default key they are all 0, which IS the non-regression proof for the
@@ -822,11 +844,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // slot. Measured 2026-08-26: latched 0 at +1061ms with every source invalid, user picked 1 at
     // +1084597ms, retarget refused, slot 0's character rendered. `target_from_pick` says which kind
     // of source the CURRENT latch came from (1 = the user's pick, and then nothing may replace it).
+    //
+    // `target_source` is that same question at full resolution -- 0 = uncommitted, 1 = ac0, 2 = the
+    // b78 load-REQUEST register, 3 = the user's pick -- and it is the value the yield rule actually
+    // compares. The boolean cannot distinguish a latch taken off a STALE ac0 from one the user
+    // clicked, which is how bd er-effects-rs-fmy6 stayed open: across save FILES the window latched
+    // slot 0 off an obsolete ac0 and then refused the b78 that named the real slot 1. A window that
+    // ends a load at 1 has never seen anything better than ac0 about the face it showed.
     body.push_str(&format!(
-        "  \"oracle_portrait_window_target_slot\": {},\n  \"oracle_portrait_window_retargets_suppressed\": {},\n  \"oracle_portrait_window_target_from_pick\": {},\n  \"oracle_portrait_window_target_pick_promotions\": {},\n",
+        "  \"oracle_portrait_window_target_slot\": {},\n  \"oracle_portrait_window_retargets_suppressed\": {},\n  \"oracle_portrait_window_target_from_pick\": {},\n  \"oracle_portrait_window_target_source\": {},\n  \"oracle_portrait_window_target_pick_promotions\": {},\n",
         PORTRAIT_WINDOW_TARGET_SLOT.load(Ordering::SeqCst),
         PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.load(Ordering::SeqCst),
         PORTRAIT_WINDOW_TARGET_FROM_PICK.load(Ordering::SeqCst),
+        PORTRAIT_WINDOW_TARGET_SOURCE.load(Ordering::SeqCst),
         PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS.load(Ordering::SeqCst)
     ));
     // Missing-save picker menu-open hold (bd er-effects-rs-ns4n follow-up): count > 0 proves the native
@@ -1178,6 +1208,22 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::save_orphan_last_outcome_label(),
         slot_hex(orphan_after.map(|slot| slot.save_content)),
         slot_hex(orphan_after.map(|slot| slot.job)),
+    ));
+    // THE LOAD LANE'S HALF OF THE SAME DEVICE. The orphan above kills SAVING through the save
+    // builders' `iodev+0x10 == 0 && iodev+0x20 == 0`; `+0x20` is SHARED, so it kills LOADING
+    // through the load builders' `iodev+0x18 == 0 && iodev+0x20 == 0` at the same instant. The
+    // switch reload's SUBMIT gate is the load lane's point of use and now reads that
+    // precondition instead of `GameMan+0xb80` alone.
+    //
+    //   oracle_load_gate_refusals > 0   a load submit was about to be offered a device that
+    //                                   would have refused it -- the state that armed an
+    //                                   unsatisfiable DRAIN on 2026-08-31.
+    //   oracle_load_gate_repairs        times the game's own poll opened it again. refusals > 0
+    //                                   with repairs == 0 is a load nothing could unblock.
+    body.push_str(&format!(
+        "  \"oracle_load_gate_refusals\": {},\n  \"oracle_load_gate_repairs\": {},\n",
+        er_save_suppress::load_gate_refusals(),
+        er_save_suppress::load_gate_repairs(),
     ));
     // SAVE-STATE WITNESS oracles -- the CAUSE side of the orphan above. The drain repairs the state;
     // these say who created it, which the field values alone cannot, because three different native

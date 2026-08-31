@@ -138,13 +138,46 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     // playtime at PROFILE_SUMMARY_PLAYTIME_OFFSET, which this panel no longer shows (user
     // 2026-08-07: line 2 is RL + WL); that offset is still live for the save-slot writer.
     let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
-    let mut name = String::new();
-    let mut level = 0i32;
-    if valid(summary) {
-        let rec = profile_summary_record_address(summary, slot_u);
-        let (units, len) = unsafe { read_utf16_name_units(rec) };
-        name = String::from_utf16_lossy(&units[..len]);
-        level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
+    if !valid(summary) {
+        return None;
+    }
+    let rec = profile_summary_record_address(summary, slot_u);
+    let (units, len) = unsafe { read_utf16_name_units(rec) };
+    let name = String::from_utf16_lossy(&units[..len]);
+    let level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
+    let map = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(0);
+    // THE RECORD MUST BE A CHARACTER BEFORE ANY OF IT IS RENDERED (2026-08-30).
+    //
+    // These bytes are GAME-OWNED and this mod writes them. The in-game save picker stages its
+    // browse rows straight into the live records -- `save_picker_write_row_records` memsets each
+    // 0x2a0-byte record to zero and copies the row LABEL into the name field -- so a record can
+    // hold `[..] EldenRing` or `[ new ]` with every other field zero. The user watched exactly
+    // those two strings render as character names beside `RL 0` on three loading screens, because
+    // the picker's restore was gated behind a sticky `committed` flag and never ran (fixed in
+    // `save_swap_profile_table.rs`; this gate is the independent second half, and it holds
+    // whatever else ever writes these records).
+    //
+    // TWO THINGS THE FAILURE PROVED, WORTH NOT RE-DERIVING:
+    //  * the ATTRIBUTE lines were byte-identical across each garbage/live pair (`HP 522 FP 78
+    //    Stamina 97`, `VIG 15 MND 10 END 11 STR 14`) because they come from the decoded `.sl2`
+    //    slot cache below, not from this record. "Wrong stats" was ONLY the name plus `RL 0`.
+    //  * the `pgd_validated` filter below worked exactly as designed: it refused the live PGD
+    //    *because* this record was garbage (no name/level match), which is why the panel fell back
+    //    to the correct cached attributes instead of the level-9 default template.
+    //
+    // So refuse the whole read and draw NOTHING, as the portrait already refuses to publish a head
+    // it cannot attribute. The counter is what keeps that blank distinguishable from the feature
+    // being switched off.
+    let verdict = crate::portrait_identity::profile_record_character_verdict(&name, level, map);
+    if !verdict.is_character() {
+        let n = STATS_RECORD_NOT_A_CHARACTER.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: DECLINED slot {slot_u} -- its live ProfileSummary record is not a character ({}) name={name:?} level={level} map=0x{map:08x} #{n}; drawing nothing rather than a wrong panel",
+                verdict.tag()
+            ));
+        }
+        return None;
     }
     // Live PlayerGameData ONLY if it provably holds the LOADING slot's character. Before the save
     // deserializes, PGD is the game's default level-9 template (name empty, stats
@@ -239,6 +272,9 @@ static STATS_TEXT_SCREEN_CACHE: std::sync::Mutex<Option<StatsTextScreenCache>> =
     std::sync::Mutex::new(None);
 pub use er_telemetry_core::counters::STATS_TEXT_SCREEN_VERSION;
 
+/// Cumulative count of stats reads refused because the slot's record is not a character
+/// (telemetry oracle `oracle_stats_record_not_a_character`; never reset).
+pub use er_telemetry_core::counters::STATS_RECORD_NOT_A_CHARACTER;
 /// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
 pub use er_telemetry_core::counters::STATS_TEXT_BUILT;
 /// `(name, level, live)` of the last logged build -- gates the debug log so repeat builds of the same
@@ -546,7 +582,7 @@ pub fn install_tip_suppression_hook() {
     // Second detour in the same apply batch: the advance enabled-predicate. A failure here degrades to
     // tips-blank-but-keyguide-visible, so log and continue rather than abort the batch.
     let mut advance_target = 0usize;
-    if let Ok(target2) = game_rva(KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA as u32) {
+    if let Ok(target2) = game_rva_for_hook(KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA as u32) {
         match unsafe {
             MhHook::new(
                 target2 as *mut c_void,

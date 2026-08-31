@@ -114,9 +114,23 @@ unsafe fn run_native_load_consumer(origin: &str) {
     let after = er_save_suppress::sample_sl_request_slot();
     let outcome = er_save_suppress::note_load_consumer(before, after, origin, true);
     if outcome == er_save_suppress::LOAD_CONSUMER_RELEASED {
+        // SAY ONLY WHAT WAS MEASURED. This line used to end "saves stay buildable across this
+        // load", and that was a claim about the FUTURE made from one instant's sample. It was
+        // false on 2026-08-31: it printed at +221113ms, and 20 seconds later the same device
+        // held `+0x10 save_content=0x9ad1d280 +0x20 job=0x18e319ea0`, which refused 6,177 of
+        // 6,186 save dispatches for the remaining four minutes of the session. The release
+        // below was real and the load side was genuinely clear; a SAVE was orphaned onto the
+        // same device afterwards, which this call neither caused nor could have foreseen. A
+        // diagnostic that asserts a property it cannot observe costs more than one that says
+        // nothing, so this now reports the instant and prints the save-side operand -- the one
+        // field that decides whether a save can still be built -- rather than a verdict.
         append_autoload_debug(format_args!(
             "own-load: native load consumer 0x67b100 ran before the feed (ret={consumed}) and \
-             RELEASED the shared iodev job -- saves stay buildable across this load"
+             RELEASED this load's iodev job. Device AT THIS INSTANT: {}. This says nothing \
+             about later saves: the save side is orphaned by a separate mechanism, and \
+             `oracle_save_orphan_detections` / `oracle_save_dispatch_declines` are what report \
+             it",
+            er_save_suppress::describe_slot(after)
         ));
     }
 }
@@ -170,7 +184,7 @@ pub(crate) fn install_own_load_hook() -> bool {
             return false;
         }
     }
-    let Ok(read_addr) = game_rva(READ_67B100_RVA as u32) else {
+    let Ok(read_addr) = game_rva_for_hook(READ_67B100_RVA as u32) else {
         append_autoload_debug(format_args!("own-load: failed to resolve 0x67b100 rva"));
         return false;
     };
@@ -239,9 +253,6 @@ pub(crate) use er_telemetry_core::counters::OWN_LOAD_WBR_UPDATE_CALLS;
 /// stall == the FD4 file-load never completed for any block (the IO/CSFile gap).
 pub(crate) static OWN_LOAD_WBR_ANY_GATE_SET: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-/// Count of successful OWN-LOAD m28 `AddDefaultFileLoadProcess` dispatch calls (one per cap, one-shot
-/// per cap pointer). 0 == the lever never fired. Exposed as telemetry `oracle_own_m28_dispatch_fired`.
-pub(crate) use er_telemetry_core::counters::OWN_LOAD_M28_DISPATCH_FIRED;
 /// One-shot guard: FD4FileCap pointers we already dispatched `AddDefaultFileLoadProcess` for.
 /// `AppendFileLoadProcessor` does NOT early-out on an already-present processor, so a double-call
 /// would append a second processor -- this set makes each cap fire exactly once. Const-constructible
@@ -370,7 +381,13 @@ pub(crate) fn install_wbr_update_hook() -> bool {
             return false;
         }
     }
-    let Ok(update_addr) = game_rva(WORLDBLOCKRES_UPDATE_RVA as u32) else {
+    // UNRESOLVED, so `MhHook::new` owns the single 1.16.2 -> 1.17 resolve. This was `game_rva`,
+    // which resolves too -- and on 2026-08-30 18:42 the pair was MEASURED landing the detour on a
+    // different function: `game_rva` 0x140614870 -> 0x1406156c0, then `MhHook::new` 0x1406156c0 ->
+    // 0x140616510, because 0x1406156c0 is both this row's 1.17 destination and another row's
+    // 1.16.2 source. Nothing errored and this feature still logged 0x1406156c0, the address it
+    // MEANT. `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    let Ok(update_addr) = game_rva_for_hook(WORLDBLOCKRES_UPDATE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "wbr-update: failed to resolve 0x{WORLDBLOCKRES_UPDATE_RVA:x} rva"
         ));
@@ -466,7 +483,7 @@ pub(crate) fn install_common_finalize_hook() -> bool {
             return false;
         }
     }
-    let Ok(addr) = game_rva(COMMON_FINALIZE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(COMMON_FINALIZE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "common-finalize: failed to resolve 0x{COMMON_FINALIZE_RVA:x} rva"
         ));
@@ -628,7 +645,7 @@ pub(crate) fn install_request_move_map_fix_hook() -> bool {
             return false;
         }
     }
-    let Ok(addr) = game_rva(REQUEST_MOVE_MAP_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(REQUEST_MOVE_MAP_RVA as u32) else {
         append_autoload_debug(format_args!(
             "request-move-map-fix: failed to resolve 0x{REQUEST_MOVE_MAP_RVA:x} rva"
         ));
@@ -914,7 +931,7 @@ pub(crate) fn install_worldreswait_gate_hook() -> bool {
             return false;
         }
     }
-    let Ok(addr) = game_rva(WORLDRESWAIT_GATE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(WORLDRESWAIT_GATE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "worldreswait-gate: failed to resolve 0x{WORLDRESWAIT_GATE_RVA:x} rva"
         ));

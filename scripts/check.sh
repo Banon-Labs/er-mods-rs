@@ -77,8 +77,10 @@ _check_note_failure() {
 	#
 	# Measured 2026-08-31, since which steps those are had drifted. check-no-timeouts.py was 28-31s
 	# and is now ~2s: 97% of it was `rglob`-ing 1,117,583 filesystem entries to find the 1112 files
-	# `git ls-files` lists in 0.011s. check-oracle-writers.py at ~22s is genuine work over
-	# crates/**/*.rs, not a whole-tree scan, and is left alone.
+	# `git ls-files` lists in 0.011s. check-oracle-writers.py WAS ~22s of genuine work over
+	# crates/**/*.rs, not a whole-tree scan, and was left alone; on 2026-08-31 it was transposed
+	# to one pass per FILE instead of one pass per (name, file) -- 2,645 names x ~900 files --
+	# and now runs in under a second with a byte-identical offender set, off the cap entirely.
 	#
 	# THE ONE STILL OVER THE CAP is test-cupcake-policies.py. It was 34.5s, of which ~13s was it
 	# shelling out to test-cupcake-delivered-shape.py that lines 421/422 below ALREADY run; that
@@ -242,16 +244,28 @@ bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
 # so the gate is never trusted on its own say-so (er-effects-rs-56fx).
 python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
 python3 "$repo_root/scripts/check-oracle-writers.py"
+# ...and the SUPERSET the gate above is blind to by construction. It fires only on
+# `writes == 0 and reads > 0`; its own selftest pins the exclusion ("unread counters are out of
+# scope"), so a counter that is declared, written nowhere and never `.load()`ed was invisible to it.
+# That is where most of the debt was: 85 such counters on 2026-08-31, against the 4 the sibling
+# knew about. An unread one is not harmless -- it gets `.load()`ed later by someone who assumes a
+# declared counter is a live counter, and the permanent 0 then reads as "the feature ran and did
+# nothing". Selftest first, and it carries a frozen negative: a counter written only through an
+# identifier a macro CONSTRUCTS makes the census REFUSE rather than call the counter dead.
+python3 "$repo_root/scripts/check-counter-writers.py" --selftest
+python3 "$repo_root/scripts/check-counter-writers.py"
 # The counter gate above asks whether an oracle has a writer. This one asks where its READS point.
 # `standalone_tick` reached four game singletons through `safe_read_usize(base + rva)` with the RVA
 # hidden behind a closure parameter, so no name-keyed gate could see it -- and on 1.17 all four
 # fields went CONSTANT for a whole 4,350-record run rather than going quiet. Selftest first; its
 # blinds revert the ledger rows to their 1.16.2 values and confirm the gate turns red.
-# UNWIRED 2026-08-31, and it is the wiring that is missing, not the gate. The gate itself is
-# derived against crates/er-input-harness/src/pad_inject.rs and crates/er-title-flow/*, all of which
-# are mid-edit in somebody's working tree. Re-arm both lines in the commit that lands those files.
-# python3 "$repo_root/scripts/check-oracle-singleton-globals.py" --selftest
-# python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
+# RE-ARMED 2026-08-31. The files it is derived against have landed (da529e95 / 04b16f3a), its
+# ratchet docs/recon/ungated-module-base-arithmetic.txt regenerated to zero rows, and both halves
+# are green -- so the reason for unwiring it is gone. It shares its vocabulary with
+# check-stale-rva-calls.py through scripts/module_base_arith.py: that gate owns `base + NAMED_CONST`
+# in any context, this one owns every other right-hand side plus `base.wrapping_add(CONST)`.
+python3 "$repo_root/scripts/check-oracle-singleton-globals.py" --selftest
+python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # The workspace uses `../fromsoftware-rs` PATH dependencies, and CI clones that sibling at ONE
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
 # types upstream does not have. Everything below compiles against the developer's copy, so it
@@ -838,6 +852,30 @@ python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
 # gitignored de-Arxan'd images.
 python3 "$repo_root/scripts/check-singleton-field-offsets.py" --selftest
 python3 "$repo_root/scripts/check-singleton-field-offsets.py"
+
+# THE PER-FIELD HALF, which the census above deliberately cannot do (2026-08-31: WIRED. It had
+# been written and left uninvoked, so it caught nothing at all).
+#
+# A displacement census answers "which offsets does the image read off this object", which cannot
+# say WHICH FIELD lives at one and cannot see a move when both the old and new offset are read
+# somewhere. This gate instead ALIGNS ONE FUNCTION'S TWO BODIES: when the instruction sequences
+# agree except for memory displacements, instruction k is the SAME access to the SAME field in
+# both builds, so a displacement difference IS that field moving, by exactly that much. Each row
+# names the witness function pair that produced its number; a row that cannot be re-measured is a
+# FAILURE, not a pass. It also pins the repo constants those rows verify, and the allocation SIZE
+# and class-identity of every object this repo WRITES into -- a wrong offset misinforms, a wrong
+# object corrupts the heap.
+#
+# It carries the one failure a drift check structurally cannot reach: an offset that was never
+# right in EITHER build. `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was 0x40 against a field at 0x48,
+# so `oracle_system_step_label` read a pointer's low half and emitted `"?"` with a legal-looking
+# i32 on every run since it was written, with nothing to drift.
+#
+# The plain run is seconds. `--selftest` re-aligns every frozen row once per perturbation and takes
+# minutes, so it is NOT here; scripts/audit-selftest-vacuity.py exercises it, and
+# scripts/prove-gate-positive-controls.py plants the real defect in the real tree.
+# SKIPs its image half -- saying so -- without the two gitignored de-Arxan'd images.
+python3 "$repo_root/scripts/check-object-field-offsets-1170.py"
 
 # ...and the attribution half of the same question. An offset whose OWNING OBJECT nobody has
 # named cannot be measured by the gate above -- there is no object to measure it against -- so

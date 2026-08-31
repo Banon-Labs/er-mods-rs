@@ -51,6 +51,8 @@ pub(crate) use er_telemetry_core::counters::SQ_REPRO_ER_HWND;
 /// The VK currently "held" by the WM key driver (0 = none), so we post one clean KEYDOWN on press and
 /// one KEYUP on release instead of spamming per frame.
 pub(crate) use er_telemetry_core::counters::SQ_REPRO_HELD_VK;
+pub(crate) use er_telemetry_core::counters::XINPUT_BLOCK_INSTALL_CLAIMED;
+pub(crate) use er_telemetry_core::counters::XINPUT_BLOCK_INSTALL_RETRIES;
 /// Original `XInputGetCapabilities` (minhook trampoline). 0 until the hook installs. The game uses
 /// this to ENUMERATE which pad slots exist; with no controller it returns DEVICE_NOT_CONNECTED and
 /// the game then never polls `XInputGetState(0)`. The harness forces slot 0 connected here too.
@@ -912,7 +914,12 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
 /// Install the XInput gamepad block once. Hooks `XInputGetState` (and ordinal-100
 /// `XInputGetStateEx`, used by Steam Input) in whichever xinput runtime DLL is loaded.
 /// minhook-based, mirroring `create_continue_trace_hook`.
+/// Serialised by a CLAIM-WITH-ROLLBACK; `XINPUT_BLOCK_INSTALL_CLAIMED` carries why both halves are
+/// load-bearing and why this lifts `mh_install_hook_once`'s idiom instead of calling it.
 unsafe fn install_xinput_block() {
+    if XINPUT_BLOCK_INSTALL_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
+        return; // another thread is installing right now; a second MhHook::new would duplicate it
+    }
     const XINPUT_DLLS: [&[u8]; 5] = [
         b"xinput1_4.dll\0",
         b"xinput1_3.dll\0",
@@ -1010,8 +1017,11 @@ unsafe fn install_xinput_block() {
         )),
     }
     if !hooked_any {
+        // Nothing landed, so the claim must not stand: release it for the next frame's retry.
+        XINPUT_BLOCK_INSTALL_CLAIMED.store(0, Ordering::SeqCst);
+        let n = XINPUT_BLOCK_INSTALL_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
         append_autoload_debug(format_args!(
-            "xinput-block: no xinput DLL with XInputGetState found yet (will retry next frame)"
+            "xinput-block: no xinput DLL with XInputGetState found yet (retry #{n}; claim released)"
         ));
     }
 }

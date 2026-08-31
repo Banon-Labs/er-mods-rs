@@ -162,6 +162,14 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // drains is the frame stage 6 -> 7 advances; fires the forced save request once the
     // RAM gates are green and watches the bypassed commit to completion.
     unsafe { save_flow_tick() };
+    // ORPHANED PICKER ROWS. The in-game save picker renders by writing its browse-row labels INTO
+    // the live `CS::ProfileSummary`, destroying the game's own records; every exit is supposed to
+    // put them back. When one did not (the sticky-`committed` defect, 2026-08-29), the labels sat
+    // in a game-owned structure for the rest of the process and the user's next three loading
+    // screens rendered `[..] EldenRing` and `[ new ]` as character names. Placed AFTER
+    // `save_flow_tick` so an abort that returns the flow to IDLE this frame is swept the same
+    // frame. Self-gating and a single atomic read when nothing is staged.
+    unsafe { save_picker_sweep_orphaned_row_records() };
     // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
     // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
     // every frame so the injected key is fresh for the game's keyboard poll, and only
@@ -292,6 +300,13 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // Now-loading helper observer: attach only after the native title accept byte fired.
     // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed
     // install avoids touching the loading helper until the title path has already advanced.
+    //
+    // THE `== 0` IS A TRI-STATE READ, NOT A BOOLEAN. `NOW_LOADING_HELPER_HOOKS_INSTALLED` stays 0
+    // only while at least one of the five observers is still worth retrying; it latches 1 (some
+    // observer live) or 2 (all five terminal, none live) as soon as every one of them has reached a
+    // terminal state. That is what ends this poll: the old flag was set only when all five
+    // installed, so one refused address kept this line re-entering the installer every tick for the
+    // life of the process. Do not "simplify" it back into a boolean.
     if product_autoload_enabled()
         && TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst)
         && NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) == 0

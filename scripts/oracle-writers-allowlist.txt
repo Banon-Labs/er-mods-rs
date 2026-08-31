@@ -23,20 +23,8 @@
 #   MSGBOX_TOTAL_BUILDS                     a DISTINCT dead static from the live
 #                                           oracle_msgbox_total_builds in er-effects-rs-mtq: same
 #                                           name, different counter, no writer.
-#   PROFILE_BOUND_GX_RGB_MAX / _ALPHA_MAX   sentinel-initialised (0xffff), so they emit a
-#                                           plausible-looking value forever rather than 0.
 
 MSGBOX_TOTAL_BUILDS
-OWN_LOAD_M28_DISPATCH_FIRED
-PROFILE_BOUND_GX_ALPHA_MAX
-PROFILE_BOUND_GX_RGB_MAX
-PROFILE_PERFRAME_SPARED_DRAWS
-PROFILE_READBACK_DEFERRED_NONBLACK
-PROFILE_READBACK_DEFERRED_SOME
 RAWINPUT_BLOCKED_UNFOCUSED_EVENTS
 SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS
 SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT
-TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER
-TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR
-TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR
-TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES

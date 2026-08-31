@@ -292,7 +292,7 @@ pub fn profile_lookat_phase_diag_tick() {
             })
             .collect();
         append_autoload_debug(format_args!(
-            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} nowload={} loadbuilds={} render_drives={} hook_hits={} gx[samples={} nonempty={}] gxpool[free_min={} free_last={} N(maskpop)={}] rt[samples={} nonblack={} changed={}] readback[some={} checker={} defer_some={} defer_nonblack={}] modeldraws={} spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
+            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} nowload={} loadbuilds={} render_drives={} hook_hits={} gx[samples={} nonempty={}] gxpool[free_min={} free_last={} N(maskpop)={}] rt[samples={} nonblack={} changed={}] readback[some={} checker={}] modeldraws={} spared[ptr=0x{:x} model_ok={} hits={}] stage0[{}] phase_ticks[{}]",
             PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst),
             LOOKAT_DRAW_PHASE_NAMES[PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst)],
             PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) as u8,
@@ -315,12 +315,9 @@ pub fn profile_lookat_phase_diag_tick() {
             PROFILE_LOOKAT_RT_CHANGED.load(Ordering::SeqCst),
             PROFILE_READBACK_SOME.load(Ordering::SeqCst),
             PROFILE_READBACK_CHECKER.load(Ordering::SeqCst),
-            PROFILE_READBACK_DEFERRED_SOME.load(Ordering::SeqCst),
-            PROFILE_READBACK_DEFERRED_NONBLACK.load(Ordering::SeqCst),
             PROFILE_PERFRAME_MODEL_DRAWS.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
-            PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
             PROFILE_PERFRAME_HOOK_HITS.load(Ordering::SeqCst),
             stages.join(" "),
             ticks.join(" ")
@@ -408,12 +405,10 @@ pub fn profile_lookat_phase_diag_tick() {
             }
         }
         append_autoload_debug(format_args!(
-            "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} copies={} rt[rgb_max={} alpha_max={}] boundtex[rgb_max={} alpha_max={}]",
+            "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} copies={} rt[rgb_max={} alpha_max={}]",
             PROFILE_RT_SRV_COPIES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_RGB_MAX.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_ALPHA_MAX.load(Ordering::SeqCst),
-            PROFILE_BOUND_GX_RGB_MAX.load(Ordering::SeqCst),
-            PROFILE_BOUND_GX_ALPHA_MAX.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
             "lookat-pump-blocks: draws={} r_bad={} vt_bad={} off_bad={} off_resource_bad={} multi={}",
@@ -425,14 +420,13 @@ pub fn profile_lookat_phase_diag_tick() {
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
-            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
+            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} hits={}] rt[samples={} nonblack={} changed={}]",
             game_module_base()
                 .map(|b| unsafe { now_loading_active(b) } as u8)
                 .unwrap_or(0),
             PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
-            PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
             PROFILE_PERFRAME_HOOK_HITS.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_SAMPLES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_NONBLACK.load(Ordering::SeqCst),
@@ -572,7 +566,12 @@ pub fn install_per_frame_push_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(PROFILE_PER_FRAME_PUSH_RVA as u32) else {
+    // UNRESOLVED, so `MhHook::new` owns the single 1.16.2 -> 1.17 resolve. This was `game_rva`,
+    // which resolves too, and the pair was MEASURED wrong on 2026-08-30 18:42: 0x140bba6e0 ->
+    // 0x140bbbd90 here, then 0x140bbbd90 -> 0x140bbd440 inside `MhHook::new` -- a
+    // `CSMenuFaceModelRend` method, detoured while this log line reported 0x140bbbd90.
+    // `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    let Ok(target) = game_rva_for_hook(PROFILE_PER_FRAME_PUSH_RVA as u32) else {
         return;
     };
     match unsafe { MhHook::new(target as *mut c_void, per_frame_push_hook as *mut c_void) } {
