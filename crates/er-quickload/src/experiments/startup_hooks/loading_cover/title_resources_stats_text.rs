@@ -44,7 +44,28 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
         TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32,
         "Scaleform resource-ctor",
     );
-    let mut ok = true;
+    // PER-HOOK OUTCOMES, NOT ONE SHARED FLAG (bd er-effects-rs-55y6, 2026-08-31).
+    //
+    // These three observers are INDEPENDENT: AcquireMenuResource drives the loading bar's
+    // ACQUIRING ASSETS phase, the Scaleform file-open counter drives OPENING / BUILDING MENU UI,
+    // and the resource-ctor observer drives neither. Until now they shared one `ok` that all three
+    // failure arms cleared, in front of an `if !ok { return; }` that stood between the queue and
+    // `MH_ApplyQueued` -- so ONE refused address left the others created, queued, and never
+    // enabled. That is the exact shape that froze the visible bar at `LOADING SAVE 7/11` and left
+    // the cover over live gameplay when the five loading-screen observers shared a flag
+    // (`er-loading-portrait-core/src/dlstring_lookat_math.rs`, since rewritten to per-hook latches).
+    //
+    // It was worse here than there. The file-open hook goes through the UNION, which the comment
+    // below says is DELIBERATELY OUTSIDE this batch -- and its failure still cleared the flag that
+    // gated the batch's apply, so a hook that was never in the batch could kill it.
+    //
+    // Each hook now carries its own answer, the apply runs whenever ANY hook queued, and each
+    // `*_INSTALLED` latch is set only for the hook that actually queued -- the old code set both
+    // MinHook latches on `MH_OK` regardless of which one got there, which would have reported a
+    // refused observer as installed and blocked its retry.
+    // `scripts/check-hook-batch-abort.py` is the gate that keeps the shape out.
+    let mut acquire_queued = false;
+    let mut resource_ctor_queued = false;
     if let Some(addr) = addr
         && TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) == 0
     {
@@ -57,14 +78,18 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             Ok(hook) => {
                 TITLE_MENU_RESOURCE_ACQUIRE_ORIG
                     .store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
+                match unsafe { hook.queue_enable() } {
+                    Ok(()) => acquire_queued = true,
+                    Err(status) => append_autoload_debug(format_args!(
+                        "title-resource-observer: AcquireMenuResource queue_enable failed: {status:?}; the other observers are unaffected"
+                    )),
+                }
                 crate::mh::leak_installed_hook(hook);
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: AcquireMenuResource MhHook::new failed: {status:?}"
+                    "title-resource-observer: AcquireMenuResource MhHook::new failed: {status:?}; the other observers are unaffected"
                 ));
-                ok = false;
             }
         }
     }
@@ -90,10 +115,11 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
         } {
             Ok(()) => TITLE_SCALEFORM_FILE_OPEN_INSTALLED.store(1, Ordering::SeqCst),
             Err(status) => {
+                // Not `ok = false` any more: this hook is not in the MinHook batch at all (see
+                // the paragraph above), so its failure has no business skipping the batch's apply.
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: Scaleform file-open union register failed: {status:?}"
+                    "title-resource-observer: Scaleform file-open union register failed: {status:?}; the other observers are unaffected"
                 ));
-                ok = false;
             }
         }
     }
@@ -109,29 +135,44 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             Ok(hook) => {
                 TITLE_SCALEFORM_RESOURCE_CTOR_ORIG
                     .store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
+                match unsafe { hook.queue_enable() } {
+                    Ok(()) => resource_ctor_queued = true,
+                    Err(status) => append_autoload_debug(format_args!(
+                        "title-resource-observer: Scaleform resource-ctor queue_enable failed: {status:?}; the other observers are unaffected"
+                    )),
+                }
                 crate::mh::leak_installed_hook(hook);
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: Scaleform resource-ctor MhHook::new failed: {status:?}"
+                    "title-resource-observer: Scaleform resource-ctor MhHook::new failed: {status:?}; the other observers are unaffected"
                 ));
-                ok = false;
             }
         }
     }
-    if !ok {
+    // Nothing reached MinHook's pending set, so there is nothing to apply. This is NOT the old
+    // aggregate abort: it fires only when EVERY batched hook is out, never because one is.
+    if !(acquire_queued || resource_ctor_queued) {
         return;
     }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
-            TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
+            // Only the hooks that actually queued. Setting both unconditionally reported a refused
+            // observer as installed and, because these latches also guard re-entry, permanently
+            // blocked the retry that a later pass would have made.
+            if acquire_queued {
+                TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
+            }
             // file-open is NOT set here: the union already enabled and flagged it above.
-            TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+            if resource_ctor_queued {
+                TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+            }
             // `{:x?}` on the Options, not `{:x}` on a usize: a refused row now reports `None`
-            // instead of being absent from a line that claims all three were hooked.
+            // instead of being absent from a line that claims all three were hooked. The
+            // `queued=` pair says which of the two BATCHED observers actually went live, so the
+            // line can no longer read as "all three hooked" when one was refused.
             append_autoload_debug(format_args!(
-                "title-resource-observer: AcquireMenuResource {addr:x?}, Scaleform file-open {file_open_addr:x?}, resource-ctor {resource_ctor_addr:x?} (None = refused for this build); observe-only"
+                "title-resource-observer: AcquireMenuResource {addr:x?}, Scaleform file-open {file_open_addr:x?}, resource-ctor {resource_ctor_addr:x?} (None = refused for this build); queued=acquire:{acquire_queued} resource_ctor:{resource_ctor_queued}; observe-only"
             ));
         }
         status => append_autoload_debug(format_args!(
@@ -275,7 +316,8 @@ pub(crate) fn install_title_flow_context_record_regulation_fix_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA as u32)
+    else {
         append_autoload_debug(format_args!(
             "title-flow-context-record-fix: failed to resolve record rva 0x{TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA:x}"
         ));
@@ -328,7 +370,7 @@ pub(crate) fn install_title_scaleform_bind_observer_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_SCALEFORM_BIND_OBSERVER_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_SCALEFORM_BIND_OBSERVER_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-b: failed to resolve Scaleform bind observer rva 0x{TITLE_SCALEFORM_BIND_OBSERVER_RVA:x}"
         ));
@@ -603,7 +645,9 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
 }
 
 pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
-    if TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.load(Ordering::SeqCst) != 0 {
+    // ONE CLAIM, not a check-then-act read of the success latch -- two install threads own this
+    // (see `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED` for the measured race).
+    if TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
     match unsafe { MH_Initialize() } {
@@ -615,7 +659,7 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve named-child bind rva 0x{TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA:x}"
         ));

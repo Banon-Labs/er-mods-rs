@@ -60,6 +60,47 @@ pub fn game_rva(rva: u32) -> Result<usize, String> {
     resolve_rva(rva, "game_rva", core::panic::Location::caller())
 }
 
+/// `game_module_base() + rva`, deliberately NOT resolved for the running build.
+///
+/// # The one caller shape this is for
+///
+/// An address about to be handed to a hook API that resolves it ITSELF -- `er_hook::MhHook::new`,
+/// `register_union_hook`, `register_shared_hook`, or a local helper that forwards into one. Those
+/// own the single 1.16.2 -> 1.17 resolve, and [`game_rva`] would perform a second one.
+///
+/// # Why a second resolve is not merely redundant
+///
+/// It is usually a no-op: the address is a 1.17 destination, `already_translated_in` recognises it
+/// and hands it straight back. That is exactly why this survived so long unnoticed. But an address
+/// can be BOTH a 1.17 destination of one row and the 1.16.2 SOURCE of a different row -- which is
+/// what happens whenever a region's shift equals the local spacing between two functions, so
+/// `B - A == C - B`. On such an address translation wins over the shortcut (it must; see
+/// `already_translated_in`), and the second resolve silently returns C.
+///
+/// MEASURED on the 2026-08-30 18:42 boot, three detours installed on unrelated functions:
+///
+/// | intended                  | resolve 1     | resolve 2 (the detour that was installed) |
+/// |---------------------------|---------------|-------------------------------------------|
+/// | `WorldBlockRes::Update`   | `0x1406156c0` | `0x140616510`                             |
+/// | `native_submit_7ac890`    | `0x1407ad710` | `0x1407ae590` (hot Scaleform, 16 callers) |
+/// | profile per-frame push    | `0x140bbbd90` | `0x140bbd440` (`CSMenuFaceModelRend`)     |
+///
+/// No error, no refusal, no log line -- and each feature then logged the address it MEANT, which
+/// is why nobody noticed. `scripts/check-double-resolved-hook-targets.py` is the gate that keeps
+/// the shape out.
+///
+/// # What the `Result` means here, and what moved
+///
+/// It is the module-base lookup and NOTHING else, so a call site that already had an `else` branch
+/// for a failed [`game_rva`] keeps it unchanged. What moves is WHERE an unmappable address is
+/// refused: no longer here, but inside the hook API, which logs `HOOK REFUSED` naming the address
+/// and the build. That is the better place for it anyway -- it is the layer that knows whether the
+/// row is merely callable or actually audited as a detour target, which are different questions
+/// with different tables.
+pub fn game_rva_for_hook(rva: u32) -> Result<usize, String> {
+    Ok(game_module_base()? + rva as usize)
+}
+
 /// [`game_rva`], but the caller names the address so a refusal is attributable by NAME as well
 /// as by source line.
 ///

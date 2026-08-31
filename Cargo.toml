@@ -48,11 +48,22 @@ members = [
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-scaleform-hooks",
+  # The boot/loading cover's optional screenshot background: disk discovery (configured path,
+  # pre-decoded cache, newest local Steam screenshot), the WIC decode, and the aspect-cover fill +
+  # bar vignette. Extracted from er-quickload's boot_progress.rs, which had passed the hard Rust
+  # file-size limit; it left first because it reads no game memory, writes no counter and installs
+  # no hook, so nothing about it needed to live in the DLL crate.
+  "crates/er-boot-background",
   "crates/er-loading-bar-core",
   "crates/er-d3d12-compositor",
   "crates/er-loading-bar",
   "crates/er-loading-portrait-core",
   "crates/er-loading-portrait",
+  # The loading cover's one-way release fade at the D3D12 level: its command objects, its root
+  # signature / PSO / texture slot, and the single alpha-blended full-screen frame it composites.
+  # Holds no product decision -- when to fade, at what alpha and what the frame looks like all stay
+  # in er-quickload, which feeds the pixels through a rasterize callback.
+  "crates/er-cover-fade",
   # Save-picker crate extraction (docs/plans/save-picker-crate-extraction.md).
   # (A) the DLL-drawn boot picker + the shared row model + the OS-native dialog surface;
   # (B) the customized System>Quit menu, which depends on (A) one way. The product links

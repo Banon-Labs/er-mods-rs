@@ -1,0 +1,29 @@
+[package]
+name = "er-cover-fade"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_cover_fade"
+
+[target.'cfg(windows)'.dependencies]
+# RGBA8_BPP: the tight-buffer pixel stride the host rasterizes the fade frame into.
+er-loading-bar-core = { path = "../er-loading-bar-core" }
+# The shared D3D12 draw plumbing this fade is built on: the overlay root signature / PSO builders,
+# the texture+upload+SRV slot creator, SRV handle math, the execute/fence-wait submit, the resource
+# transition recorder, and MAX_RT_DIM. Same primitives the portrait overlay draws with.
+er-loading-portrait-core = { path = "../er-loading-portrait-core" }
+# The BOOT_VIEW_* command-object handles and draw-state counter. They are telemetry-owned so the
+# oracle emission can read them; this crate is the writer.
+er-telemetry-core = { path = "../er-telemetry-core" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common",
+] }
+
+[lints]
+workspace = true

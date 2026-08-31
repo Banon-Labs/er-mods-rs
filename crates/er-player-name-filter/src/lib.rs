@@ -56,7 +56,12 @@ const DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS: usize = 512;
 /// including third-party overlays that read the field straight out of game memory rather than
 /// calling a game function (ERGG does exactly that), and it costs those overlays nothing and
 /// needs no knowledge of them.
-const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x002610c0;
+///
+/// Declared once in `er-game-base::rva`, where the full three-storage layout is written down: the
+/// build importer CALLS the same function to adopt a build's name, so the address is now shared
+/// and `check-rva-alias-drift.py` requires one declaration for it.
+const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize =
+    er_game_base::rva::PLAYER_GAME_DATA_COPY_CHR_NAME_RVA;
 /// `PlayerGameData::isMainPlayer`. The local player's own name is never rewritten: it is their
 /// save's name and the name they send to everyone else.
 const PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET: usize = 0x8f0;

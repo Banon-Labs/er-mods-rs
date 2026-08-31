@@ -12,42 +12,16 @@ use super::*;
 
 // The shared import block for the remaining modules below (it used to live at the
 // top of resource_readback.rs before that file moved to er-loading-portrait-core).
-use std::mem::ManuallyDrop;
-
-use windows::Win32::Foundation::GENERIC_READ;
-use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12_FENCE_FLAG_NONE, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_STATE_COPY_DEST,
-    D3D12_RESOURCE_STATE_PRESENT, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
-    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-    ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
-    ID3D12GraphicsCommandList, ID3D12PipelineState, ID3D12Resource, ID3D12RootSignature,
-};
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-    D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-    D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_VIEWPORT,
-};
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
+//
+// It used to be much longer. The release fade was the only thing here that BUILT D3D12 objects --
+// command allocator/list/queue/fence, descriptor heaps, PSOs, copy footprints, viewports -- and it
+// moved to `er-cover-fade`, taking every one of those imports with it. What is left is what the
+// modules below still touch directly: the swapchain they composite onto and the backbuffer they get
+// from it. The shared draw plumbing glob went the same way, for the same reason: the only caller of
+// `gpu_draw_shared` under this module was the fade.
+use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
-use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICBitmapSource, IWICImagingFactory,
-    WICConvertBitmapSource, WICDecodeMetadataCacheOnDemand,
-};
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-};
-use windows::core::{IUnknown, Interface, PCWSTR};
-
-// The shared D3D12 draw plumbing (HLSL compile, root-signature/PSO builders, the texture+upload+SRV
-// slot creator, SRV handle math, the execute/fence-wait submit) moved to
-// `er_loading_portrait_core::gpu_draw_shared` with the loading-cover crate extraction. Private glob
-// on purpose, exactly as the local module's was: nothing here is `pub(crate)`, so a `pub(crate) use`
-// would re-export nothing and rustc would report it as an unused import. Children still reach these
-// through their own `use super::*`.
-use er_loading_portrait_core::gpu_draw_shared::*;
+use windows::core::Interface;
 
 mod boot_progress;
 pub(crate) use boot_progress::*;

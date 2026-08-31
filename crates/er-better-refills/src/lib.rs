@@ -6,6 +6,14 @@
 //! state is enabled, calls the game's own refill routine immediately. That preserves the game's
 //! item eligibility, stack/capacity, storage removal, and unlimited-consumables gates.
 
+// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
+// warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-better-refills`
+// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
+// target is unaffected: this allow does not exist there.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 #[cfg(windows)]
 mod crashlog;
 
@@ -40,18 +48,26 @@ const BONFIRE_FIRST_LVUP_RVA: usize = 0x59c1e0;
 /// `CS::EquipGameData::GetEquipInventoryData(equipGameData)` -> main `EquipInventoryData*`.
 /// Declared once in `er-game-base`; a second crate now needs the same address.
 use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
-/// `GetMainPlayerStorageBoxInventory()` -> storage-box `EquipInventoryData*`.
-const GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA: usize = 0x786810;
-/// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId)`.
-use er_game_base::rva::GET_ITEM_INVENTORY_IDX_RVA;
-/// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId)`.
-use er_game_base::rva::GET_QUANTITY_BY_ITEM_ID_RVA;
-/// `EquipInventoryData::ChangeAmountInBox(storageInventory, int *itemId, int requestedAmount)`.
-const CHANGE_AMOUNT_IN_BOX_RVA: usize = 0x24e3d0;
-/// `TransferItemBetweenInventoryDatas(itemIdx, source, destination, quantity, isWithdraw)`.
-const TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA: usize = 0x24db90;
-/// `CS::EquipGameData::UpdateTrophyStats(equipGameData, int *itemId)`.
-const UPDATE_TROPHY_STATS_RVA: usize = 0x24a1a0;
+// THE STORAGE-BOX TRANSFER SET, moved to `er-game-base::rva` on 2026-08-31:
+//
+//   GetMainPlayerStorageBoxInventory()                                    -> box inventory
+//   EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId)
+//   EquipInventoryData::GetQuantityByItemId(inventory, int *itemId)
+//   EquipInventoryData::ChangeAmountInBox(box, int *itemId, int requested)
+//   TransferItemBetweenInventoryDatas(itemIdx, src, dst, qty, reassignQuickSlot)
+//   CS::EquipGameData::UpdateTrophyStats(equipGameData, int *itemId)
+//
+// This crate deposits INTO the box on first grace; `er-build-import-runtime` now pulls back OUT
+// of it and deposits pot-group members to free capacity for an imported build. Two crates, one
+// set of addresses, and a second literal copy of each is exactly the alias drift
+// `check-rva-alias-drift.py` refuses. The 1.16.2 values stay pinned by this crate's own
+// `rvas_match_er_1162_static_re` test, which is now the check that the shared declaration did not
+// move under it.
+use er_game_base::rva::{
+    CHANGE_AMOUNT_IN_BOX_RVA, GET_ITEM_INVENTORY_IDX_RVA,
+    GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, GET_QUANTITY_BY_ITEM_ID_RVA,
+    TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA, UPDATE_TROPHY_STATS_RVA,
+};
 
 /// `GameDataMan -> PlayerGameData` is shared in `er-game-base`; within `PlayerGameData`,
 /// `equipGameData` is by-value at +0x2b0 and the native `ItemReplenishStateTracker*` used by

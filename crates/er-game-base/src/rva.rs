@@ -30,6 +30,17 @@ pub const SAVE_DISPATCH_COMBINED_RVA: usize = 0x67b940;
 pub const STEP_MOVEMAP_LOADLIST_INIT_RVA: usize = 0xaec570;
 /// SaveLoad IO device request teardown/release function.
 pub const SL_RELEASE_REQUEST_RVA: usize = 0xe6f200;
+/// `FUN_140679180` -- the LOAD-side pump of the SaveLoad IO device. Polls `FUN_140e6e080` and writes
+/// `GameMan.saveState` 3 (answer 0) or 0 (any answer but 0 or 1). `CS::MoveMapStep::DoSaveStuff`
+/// calls it ONLY under `IsSaveState2()`, because `FUN_140e6e080` answers 4 without releasing
+/// anything while `iodev+0x18 == 0` -- which is every frame a SAVE owns the device.
+/// Aliased as B80_POLL_RVA (er-title-flow) / SAVE_STATE_LOAD_POLL_RVA (er-save-suppress); both
+/// derive from here (2026-08-31).
+pub const SL_LOAD_POLL_WRAPPER_RVA: usize = 0x679180;
+/// `FUN_140679510` -- the SAVE-side pump of the same device. Polls `FUN_140e6e430` and writes
+/// `GameMan.saveState = 0` for any answer but 1. `DoSaveStuff` calls it ONLY under `IsSaveState1()`.
+/// Aliased as B80_LANE1_DRIVER_RVA (er-title-flow) / SAVE_STATE_SAVE_LANE_RVA (er-save-suppress).
+pub const SL_SAVE_LANE_WRAPPER_RVA: usize = 0x679510;
 /// `EzChildStepBase` child-step reset/teardown function.
 pub const EZ_CHILDSTEP_RESET_RVA: usize = 0xeb54c0;
 /// Scaleform LoaderImpl file-open wrapper.
@@ -176,6 +187,69 @@ pub const SOLO_PARAM_REPOSITORY_GLOBAL_RVA: usize = 0x3d8_1ee8;
 /// Returns the index the equip path needs; negative means the item is not held.
 pub const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;
 
+// ---- the storage box, and moving items in and out of it ----
+//
+// These four shipped as private constants inside `er-better-refills`, whose deposit-back path
+// has been calling them in production since the first-grace feature landed. The build importer
+// now needs the same four for the opposite direction, so they move here rather than becoming a
+// second literal copy each -- the drift `scripts/check-rva-alias-drift.py` exists to stop.
+//
+// THE STORAGE BOX IS A SECOND `EquipInventoryData`, NOT A DIFFERENT KIND OF THING. Every
+// inventory function above takes an `EquipInventoryData*` and does not care which one, so
+// `GetQuantityByItemId` / `GetItemInventoryIdx` answer about storage exactly as they answer about
+// the carried inventory. The one difference that matters is a construction flag:
+// `EquipInventoryData::EquipInventoryData(this, size, keySize, limitedPots, unlimitedConsumables)`
+// (0x14024bbf0) has two callers, and the `EquipGameData` ctor at 0x140245485 passes
+// `unlimitedConsumables = 0` while the `PlayerGameData` ctor at 0x14025d879 passes `1`. That flag
+// makes `UpdatePotsStates` early-return and routes `GetMaxAmountForItem` to
+// `GetMaxItemCountForUnlimitedConsumables`, so the box has NO pot-group cap -- which is the whole
+// reason depositing a displaced pot raises the ceiling for the one being imported.
+
+/// `GetMainPlayerStorageBoxInventory() -> EquipInventoryData*` -- `PlayerGameData + 0x8d0`.
+///
+/// TWO WAYS TO DIE, and neither is recoverable, so both are the caller's job to rule out first:
+/// a null `GLOBAL_CSMenuMan` takes the `DLPanic("...FD4Singleton.h", 0xb4, ...)` path, and a
+/// non-null `GLOBAL_GameDataMan` with a null `mainPlayerGameData` reads through the null pointer
+/// at `+0x8d0`. Check both before calling.
+pub const GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA: usize = 0x786810;
+/// `EquipInventoryData::ChangeAmountInBox(box, int *itemId, int requested) -> int accepted`.
+///
+/// A PURE QUERY DESPITE THE NAME: its whole body is `if (requested < 1) return 0;`, then the
+/// `CanDepositItemToStorageBox` eligibility gate (only when `unlimitedConsumables`), then a
+/// delegation to [`GET_ADD_OR_REMOVE_AMOUNT_RVA`]. It moves nothing. Ask it how many the box will
+/// take, then move exactly that many with [`TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA`].
+pub const CHANGE_AMOUNT_IN_BOX_RVA: usize = 0x24e3d0;
+/// `TransferItemBetweenInventoryDatas(u32 srcIdx, EquipInventoryData *src,
+/// EquipInventoryData *dst, i32 quantity, bool reassignQuickSlot) -> bool`.
+///
+/// It takes an INDEX, not an item id, and the index is only valid until the next transfer: the
+/// call ends in `AdjustQuantityBy` and then `RemoveItem` once the stack empties, which reindexes
+/// the source. Re-resolve [`GET_ITEM_INVENTORY_IDX_RVA`] immediately before every call.
+///
+/// `reassignQuickSlot` IS DIRECTIONAL AND WILL CORRUPT A SAVE IF IT IS SET THE WRONG WAY. When
+/// set, the tail writes the DESTINATION index into the main player's quick-slot table
+/// (`EquipItemData::SetQuickSlotItem` on `GLOBAL_GameDataMan->mainPlayerGameData`). Passing
+/// `true` while DEPOSITING therefore points the player's quickbar at a storage-box index -- a
+/// dangling reference that persists into the save. Pass `false` when depositing, `true` when
+/// retrieving.
+pub const TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA: usize = 0x24db90;
+/// `CS::EquipGameData::UpdateTrophyStats(equipGameData, int *itemId)`.
+///
+/// What the engine's own acquisition path calls after an item lands, so achievement state matches
+/// what the inventory now holds. A transfer that skips it leaves the two disagreeing.
+pub const UPDATE_TROPHY_STATS_RVA: usize = 0x24a1a0;
+/// `CS::EquipInventoryDat::GetAddOrRemoveAmount(inventory, uint *itemId, int delta) -> int`.
+///
+/// HOW MANY OF `itemId` THIS INVENTORY WOULD ACTUALLY ACCEPT (or, for a negative `delta`, give
+/// up). A pure query: it reads the entry, asks `HasSpaceForItem` / `GetMaxAmountForItem` /
+/// `GetMaxQuantityForItemEntry`, and returns the clamped number without touching anything.
+///
+/// This is the ONLY cheap way to see a pot-group cap coming. Both acquisition paths --
+/// `InsertItem` (0x14024cfd0) and `UpdateQuantity` (0x14024d760) -- clamp with a silent
+/// `if (max < amount) amount = max;`, so an add of five that delivers three returns no error and
+/// sets no result code. Asking first is what turns that into a number a caller can report.
+pub const GET_ADD_OR_REMOVE_AMOUNT_RVA: usize = 0x24c630;
+
 // ---- the equipped loadout: read by the importer, the exporter and the HUD badge ----
 //
 // These moved here when the Generate Build Link row arrived and gave every one of them a THIRD
@@ -212,6 +286,31 @@ pub const GET_EQUIPPED_GREATRUNE_RVA: usize = 0x247900;
 /// callee writes through, not a scalar. Treating it as a scalar getter stores through whatever the
 /// caller passed, which took the game down once.
 pub const GET_PHYSIC_TEAR_BY_SLOT_RVA: usize = 0x247a20;
+
+/// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)` -- the SOLE
+/// writer of a character's name, and therefore the only sanctioned way to change one.
+///
+/// A character name is stored THREE times inside `PlayerGameData`, and only this function keeps
+/// them in step (1.16.2 `0x1402610c0`, decompiled 2026-08-30):
+///
+///   * `+0x9c`, the raw `wchar_t[17]`. This is the one that is SERIALIZED: the save body is a
+///     verbatim image of the PGD from `+0x08`, so the raw name lands at slot-body `+0x94`
+///     (`er_profile_summary_core::SAVE_PGD_CHARACTER_NAME_OFFSET`).
+///   * `+0x8e8`, a ref-counted `CSWordCheckedStringInternal` holding the raw AND word-checked
+///     spellings. `FUN_14025f8e0` reads THIS one, and `FUN_14025f8e0` is what
+///     `CS::ProfileSummary`'s per-slot update (`0x140262270`) and `CS::GetPlayerChrName` -- the
+///     overhead nameplate -- both call. A raw `memcpy` into `+0x9c` would leave the save-slot
+///     list and every other player still reading the OLD name out of here.
+///   * `+0x8f8`, a second such string, refreshed with the word-check flag set when
+///     `isMainPlayer`, and copied from `+0x8e8` otherwise.
+///
+/// TWO PROPERTIES OF THE INPUT ARE LOAD-BEARING. The function begins with a bare `wcslen` on the
+/// argument, so an UNTERMINATED buffer is an out-of-bounds read before anything is validated; and
+/// it then copies only `if (len < 0x11)`, so a name of 17 units or more is SILENTLY IGNORED --
+/// the call returns having changed no name at all, while still refreshing the two string objects
+/// from the unchanged `+0x9c`. Clamp to 16 units and terminate; never rely on a length check
+/// inside the callee to report anything.
+pub const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x2610c0;
 
 /// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*) -> uint`.
 ///

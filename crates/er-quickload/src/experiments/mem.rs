@@ -12,8 +12,8 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 // unchanged. patch_3byte_stub / apply_xor_ret_stub stay below: they depend on the
 // windows crate + product constants + append_autoload_debug.
 pub(crate) use er_game_base::mem::{
-    game_module_base, game_rva, is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8,
-    safe_read_u16, safe_read_usize, vtable_in_game_image,
+    game_module_base, game_rva, game_rva_for_hook, is_heap_aligned_ptr, safe_read_f32,
+    safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize, vtable_in_game_image,
 };
 
 // PlayerGameData character-name layout/readers now live beside the shared fault-safe RAM readers.

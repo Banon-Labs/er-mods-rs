@@ -2754,6 +2754,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-boot-background"
+version = "0.1.0"
+dependencies = [
+ "er-loading-bar-core",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-boot-profiler"
 version = "0.1.0"
 dependencies = [
@@ -2765,6 +2773,7 @@ dependencies = [
 name = "er-build-export"
 version = "0.1.0"
 dependencies = [
+ "er-build-import-core",
  "serde",
  "serde_json",
 ]
@@ -2828,6 +2837,16 @@ dependencies = [
  "er-hook",
  "er-hotkey-config",
  "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-cover-fade"
+version = "0.1.0"
+dependencies = [
+ "er-loading-bar-core",
+ "er-loading-portrait-core",
+ "er-telemetry-core",
  "windows 0.62.2",
 ]
 
@@ -3078,9 +3097,11 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
  "eldenring",
+ "er-boot-background",
  "er-boot-profiler",
  "er-build-import-core",
  "er-build-import-runtime",
+ "er-cover-fade",
  "er-d3d12-compositor",
  "er-game-base",
  "er-gfx",

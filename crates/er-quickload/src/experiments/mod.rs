@@ -24,7 +24,6 @@ use er_save_loader::GameManTelemetry;
 use fromsoftware_shared::FromStatic;
 use windows::{
     Win32::{
-        Foundation::RECT,
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Threading::GetCurrentProcessId,

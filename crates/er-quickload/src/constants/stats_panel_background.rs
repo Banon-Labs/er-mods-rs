@@ -140,8 +140,28 @@ pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize 
 pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// The hook is LIVE. Set only after `MH_ApplyQueued` succeeds, so the oracle that reports it stays
+/// honest about a failed install; use [`TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED`] to decide
+/// whether to attempt one.
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
     AtomicUsize::new(0);
+/// SOMEONE HAS ALREADY ATTEMPTED THE INSTALL -- claimed with a `swap`, before any work.
+///
+/// The install has two independent owners (`install_title_visual_startup_hooks` calls it from the
+/// `START_PROFILE_STATS_TEXT` thread AND from the `START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND`
+/// thread; two different `Once` gates cannot dedupe each other), and the `_INSTALLED` latch above
+/// is set only on success, so a check-then-act read of it let both threads through. Measured
+/// 2026-08-30: `MhHook::new` at +558 ms and again at +606 ms, the second returning
+/// `MH_ERROR_ALREADY_CREATED` and logging a `HOOK REGISTRY COLLISION` for an address that had no
+/// competing owner at all. Nothing was lost -- both registrations name the same detour, and the
+/// winner's hook fired (`named-child bind hid PressStart` at +17 323 ms) -- but the collision line
+/// is the DLL's signal for a genuinely contested address, and a duplicate that looks identical to
+/// one costs the next reader an investigation.
+///
+/// A claim is the right shape rather than a retry latch because both failures reachable here are
+/// permanent: `MH_ERROR_ALREADY_CREATED` (the registration is held for the life of the process) and
+/// a refused/unmapped address. Neither can succeed on a second attempt.
+pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_BIND_HITS;
 pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_LAST_PROXY;
 pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_FACE_LAST_VALUE;
