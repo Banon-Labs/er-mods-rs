@@ -816,6 +816,38 @@ def _provenance():
         expect("dll-provenance", "sens/source-hash-constant", rc, out, True)
 
 
+@control("expression-constants",
+         baseline=["python3", "scripts/check-expression-constants.py"])
+def _expression_constants():
+    """Is a constant's VALUE actually visible to the gates that judge values?
+
+    This gate was unwired on 2026-08-31 (red at HEAD over SELECTOR_CTX_OFFSET_F8) and re-armed
+    on 2026-08-31 once that constant settled. Re-arming a gate is only worth anything if the
+    gate would notice something, and the specific way THIS one can go quiet is not a matcher
+    that stops matching -- it is a declaration that falls out of the census, which reads
+    exactly like a declaration that was checked and passed.
+
+    So the sensitivity arm plants a declaration whose value is an opaque CALL: it is in the
+    address population by name, it cannot be folded, and it is in no exception list. The gate
+    must NAME it. The specificity arm plants the same constant at a foldable value, where
+    staying green is the whole point -- a gate that went red on every new `*_RVA` would be red
+    on most working trees in this repo.
+    """
+    g = ["python3", "scripts/check-expression-constants.py"]
+    probe = "crates/er-game-base/src/_pc_probe_expr.rs"
+
+    unfoldable = "pub const PC_PROBE_EXPR_RVA: usize = some_extern_crate::TABLE.lookup();\n"
+    with new_file(probe, unfoldable):
+        rc, out = run(g)
+        expect("expression-constants", "sens/unfoldable-unlisted", rc, out, True,
+               ["PC_PROBE_EXPR_RVA", "_pc_probe_expr.rs"])
+
+    foldable = "pub const PC_PROBE_EXPR_RVA: usize = 0x2658c60;\n"
+    with new_file(probe, foldable):
+        rc, out = run(g)
+        expect("expression-constants", "spec/foldable-literal", rc, out, False)
+
+
 @control("object-field-offsets",
          baseline=["python3", "scripts/check-object-field-offsets-1170.py"])
 def _object_field_offsets():

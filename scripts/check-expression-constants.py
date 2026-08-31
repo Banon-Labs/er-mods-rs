@@ -208,6 +208,35 @@ pub const PLANTED_CONTROL_RVA: usize = 0x142658c60 - 0x140000000;
 """
 
 
+def _sweep_orphaned_mutants(where: "Path") -> None:
+    """Delete `_expr_mutant_<pid>.rs` files whose planting process is gone.
+
+    The mutants below are planted into a REAL crate under try/finally, which covers an
+    exception but NOT a kill: SIGTERM is not catchable by default, so `timeout 28 python3
+    scripts/check-expression-constants.py --selftest` -- this gate's selftest is 9.5s and the
+    vacuity auditor runs it twice, so a 30s-capped agent shell hits that -- leaves the mutant
+    behind. Measured 2026-08-31: one orphan wedged BOTH halves of this gate red for every agent
+    in the shared tree, reporting `PLANTED_MUTANT_RVA ... has no value`, which reads as a real
+    finding about somebody's uncommitted work rather than as this tool's own litter.
+
+    The PID is in the filename precisely so a concurrent selftest's live mutant is not swept:
+    only a file whose owner no longer exists is removed.
+    """
+    for stale in where.glob("_expr_mutant_*.rs"):
+        try:
+            pid = int(stale.stem.rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            pass  # alive but not ours to signal -- leave it
+
+
 def selftest(repo: Path) -> int:
     failures: list[str] = []
     constants = const_fold.Constants.scan(repo)
@@ -323,6 +352,10 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--list", action="store_true", help="print every constant with no value")
     args = ap.parse_args()
+    # Before EITHER half reads the tree. The live gate never enters selftest(), and an orphan
+    # makes it red too -- naming a constant that is this tool's own litter as a finding about
+    # somebody's crate.
+    _sweep_orphaned_mutants(ROOT / "crates" / "er-game-base" / "src")
     if args.selftest:
         return selftest(args.repo)
     problems = report(args.repo)
