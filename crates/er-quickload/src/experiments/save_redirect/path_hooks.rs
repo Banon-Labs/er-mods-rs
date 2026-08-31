@@ -732,32 +732,11 @@ fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
 fn picker_status_for_save_source_rejection(
     err: er_save_redirect::SaveSourceRejection,
 ) -> er_save_picker_core::PickerStatusMessage {
-    match err {
-        er_save_redirect::SaveSourceRejection::MissingOrNotFile => {
-            er_save_picker_core::PickerStatusMessage::new(
-                "SAVE NOT FOUND",
-                "The selected path is missing or is not a file.",
-            )
-        }
-        er_save_redirect::SaveSourceRejection::WrongSize { len, expected } => {
-            er_save_picker_core::PickerStatusMessage::new(
-                "WRONG SAVE SIZE",
-                format!("Expected {expected} bytes, but this file is {len} bytes."),
-            )
-        }
-        er_save_redirect::SaveSourceRejection::NotBnd4 => {
-            er_save_picker_core::PickerStatusMessage::new(
-                "NOT AN ELDEN RING SAVE",
-                "The file is not a readable BND4 save container.",
-            )
-        }
-        er_save_redirect::SaveSourceRejection::Unreadable => {
-            er_save_picker_core::PickerStatusMessage::new(
-                "SAVE UNREADABLE",
-                "The save exists, but could not be read.",
-            )
-        }
-    }
+    // Wording lives on the rejection itself; both picker surfaces had their own copy of this
+    // match, and two copies of a user-facing explanation is two chances to describe the same
+    // failure differently.
+    let (title, message) = err.picker_status();
+    er_save_picker_core::PickerStatusMessage::new(title, message)
 }
 
 /// Read-only is NEVER a reason to refuse a save, at any surface. Loading is a pure READ and succeeds
