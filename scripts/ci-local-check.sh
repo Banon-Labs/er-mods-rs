@@ -48,6 +48,13 @@ python3 scripts/check-rva-alias-drift.py --selftest
 python3 scripts/check-rva-alias-drift.py
 cupcake validate --log-level error
 python3 scripts/test-cupcake-policies.py
+# The delivered-shape gate, which test-cupcake-policies.py used to shell out to and no longer
+# does (see the comment at the top of that file). This script does not run scripts/check.sh, so
+# without these two lines it would have no delivered-shape coverage at all. --selftest and the
+# live run are different runs: the first proves the gate rejects a fictional fixture, the second
+# checks the real contract.
+python3 scripts/test-cupcake-delivered-shape.py --selftest
+python3 scripts/test-cupcake-delivered-shape.py
 cargo fmt --all -- --check
 cargo test -p er-soulsformats -p er-param-inspect
 

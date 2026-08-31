@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -252,22 +254,56 @@ def tracked_relative_paths() -> set[Path] | None:
     return {Path(name) for name in names if name}
 
 
+def candidate_relative_paths(tracked: set[Path] | None) -> Iterator[Path]:
+    """Repo-relative paths to filter, taken from the cheapest source that is complete.
+
+    When git answered, the tracked set IS the answer: every path this gate can possibly scan is a
+    tracked one (the untracked-scratch filter below used to discard the rest anyway), so walking the
+    filesystem to rediscover them is pure waste. Measured 2026-08-31 at loadavg ~9 on 16 cores:
+    `REPO_ROOT.rglob("*")` enumerates 1,117,583 entries and `source_files()` took 69.2s, against
+    2.1s for the scan it feeds -- 97% of this gate's wall clock spent walking `.worktrees`, `.claude`
+    and `target` to find 1112 files that `git ls-files` lists in 0.011s. That is the same defect
+    `audit-fromsoft-candidates.py` was found to have on the same day.
+
+    When git is UNAVAILABLE, fall back to the filesystem walk so the gate fails OPEN and still scans
+    everything -- it must never silently narrow itself just because git is missing. That walk PRUNES
+    the ignored directories as it descends rather than filtering their contents afterwards, which is
+    what `rglob` forced. Pruning cannot change the result: an entry under an ignored directory has
+    that directory in `relative.parts` and was already discarded. It is purely the difference between
+    reading `target/` and `.worktrees/` and then throwing them away, and never reading them at all.
+    """
+    if tracked is not None:
+        return iter(tracked)
+    return walk_untracked_fallback()
+
+
+def walk_untracked_fallback() -> Iterator[Path]:
+    for directory, subdirectories, filenames in os.walk(REPO_ROOT):
+        subdirectories[:] = [name for name in subdirectories if name not in IGNORED_DIRECTORIES]
+        base = Path(directory)
+        for name in filenames:
+            yield (base / name).relative_to(REPO_ROOT)
+
+
 def source_files() -> list[Path]:
     tracked = tracked_relative_paths()
     paths: list[Path] = []
-    for path in REPO_ROOT.rglob("*"):
-        if not path.is_file():
+    for relative in candidate_relative_paths(tracked):
+        # Suffix first: it is a pure string test, so on the git-less fallback path it rejects the
+        # overwhelming majority of entries before they cost a stat() syscall.
+        if relative.suffix not in SOURCE_SUFFIXES:
             continue
-        relative = path.relative_to(REPO_ROOT)
         if relative in IGNORED_FILES:
             continue
         if any(part in IGNORED_DIRECTORIES for part in relative.parts):
             continue
-        # Skip untracked scratch: not part of the committed tree, so it must not gate a tracked commit.
-        if tracked is not None and relative not in tracked:
+        path = REPO_ROOT / relative
+        # `git ls-files` reports the INDEX, so a tracked path can be absent from the working tree
+        # (deleted but not yet committed); a broken symlink reaches here from either source. Both
+        # were excluded by the old walk's `is_file()` and are excluded by this one.
+        if not path.is_file():
             continue
-        if path.suffix in SOURCE_SUFFIXES:
-            paths.append(path)
+        paths.append(path)
     return sorted(paths)
 
 

@@ -36,13 +36,21 @@ DEFAULT_BASH_TIMEOUT_MS = 30000
 # 0.113s / 0.013s / 0.010s / 0.008s. Ten seconds is ~90x the slowest, and matches the value
 # check-no-timeouts.py already uses for its own fast `git ls-files` call.
 OPA_TEST_TIMEOUT_SECONDS = 10.0
-# test-cupcake-delivered-shape.py makes ~35 SEQUENTIAL `cupcake eval` calls (each spawns the
-# real binary), so unlike the opa suites it is genuinely slow: measured 11.5s / 12.9s / 12.2s
-# for the full run and 0.66s for --selftest, on the same loaded box. This one gets the full
-# 30s cap on purpose -- the headroom is only ~2.3x, and tightening it further would convert a
-# real failure into a flaky timeout. The two invocations are separate subprocess calls, so the
-# cap covers one run each, not their sum.
-DELIVERED_SHAPE_TIMEOUT_SECONDS = 30.0
+# WHY THIS FILE NO LONGER SHELLS OUT TO test-cupcake-delivered-shape.py (2026-08-31).
+# It used to, and its docstring said why: "adding a line to check.sh was out of scope" for the
+# agent who wrote it. check.sh has carried those two lines at 421/422 since, so the gate ran
+# TWICE per suite -- ~13.5s of the two runs (0.66s --selftest + 11.5-12.9s live, measured at
+# loadavg ~9) duplicated for nothing. That duplication is also what pushed THIS script to 34.5s,
+# past the 30s per-command cap, where a foreground call is SIGKILLed and reads as a hang.
+# Removing it here leaves it a first-class enumerated step in check.sh, which times it, attributes
+# its failure to it by name, and classifies a kill as INCONCLUSIVE rather than burying it in an
+# AssertionError raised by an unrelated runner.
+#
+# COVERAGE, checked rather than assumed: `.github/workflows/check.yml` and
+# `scripts/ci-local-check.sh` invoke THIS script but not check.sh, so simply deleting the call
+# would have silently dropped delivered-shape coverage from CI. Both now invoke the gate
+# directly, in both its forms -- `--selftest` (proves it rejects a fictional fixture) and live
+# (the real contract) are not the same run and neither substitutes for the other.
 
 # Assembled rather than written whole, so this FILE is not itself denied by the
 # guard it tests when an agent edits it through a Bash command.
@@ -182,39 +190,35 @@ def run_orphaned_rego_suites() -> None:
             )
 
 
-def run_delivered_shape_gate() -> None:
-    """The suite that checks the policies against the input the ENGINE DELIVERS.
-
-    THIS runner calls `cupcake eval` directly, which is not how a command reaches
-    the guards -- scripts/cupcake-hook.sh rewrites unquoted newlines to `; `
-    first, and that rewrite is the only reason a multi-line command is guarded at
-    all. So this file cannot see production for any multi-line shape, and the
-    `known-open-shell-read-heredoc-...` case below is pinned to the verdict of
-    the DIRECT path rather than the real one. The delivered-shape gate closes
-    that blind spot end to end; it is invoked from here because check.sh calls
-    this script and adding a line to check.sh was out of scope.
-    """
-    gate = REPO_ROOT / "scripts" / "test-cupcake-delivered-shape.py"
-    for args in (["--selftest"], []):
-        result = subprocess.run(
-            ["python3", str(gate), *args],
-            cwd=REPO_ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=DELIVERED_SHAPE_TIMEOUT_SECONDS,
-        )
-        if result.returncode != 0:
-            raise AssertionError(
-                f"test-cupcake-delivered-shape.py {' '.join(args)} failed:\n"
-                f"{result.stdout}\n{result.stderr}"
-            )
-        print(result.stdout.strip())
+# THIS GATE DOES NOT RELIABLY FIT IN A 30-SECOND FOREGROUND SHELL. RUN IT IN THE BACKGROUND.
+#
+# Not a caveat -- a measurement. The work is 176 `cupcake eval` spawns costing ~237 CPU-seconds in
+# total, and `cupcake eval` takes ONE event on stdin per process (checked against `--help`: there is
+# no batch or server mode), so that CPU cost is a floor, not an inefficiency. Wall clock is therefore
+# just that floor divided by however many cores the rest of the box leaves free, and on a machine six
+# agents share that is not a quantity this script controls. Three runs of THIS code, same day, same
+# tree: 20.4s at 1071% CPU, 23.4s at 1071%, 35.0s at 731%.
+#
+# An agent that runs this in a capped foreground shell gets SIGKILLed at 30 seconds, which is
+# indistinguishable from a hang -- and the conclusion an agent then draws ("the gate is broken", or
+# worse, "the policies are broken") is wrong in the dangerous direction. check.sh classifies such a
+# kill as INCONCLUSIVE rather than a pass for exactly this reason.
+#
+# So the requirement announces ITSELF, on stdout, flushed, before any work starts: an agent that is
+# about to be killed has already been told why. Being killed after reading this line is a correctly
+# reported environment limit; being killed without it is a mystery each agent has to re-solve.
+FOREGROUND_CAP_NOTICE = (
+    "test-cupcake-policies: ~20-35s (176 `cupcake eval` spawns, ~237 CPU-seconds).\n"
+    "test-cupcake-policies: THIS CAN EXCEED A 30s FOREGROUND CAP. Run it in the background;\n"
+    "test-cupcake-policies: a kill at 30s is the cap, NOT a hang and NOT a policy failure."
+)
 
 
 def main() -> int:
+    # Flushed, and first: buffered output does not survive SIGKILL, and this notice is worth
+    # nothing if the cap eats it.
+    print(FOREGROUND_CAP_NOTICE, flush=True)
     run_orphaned_rego_suites()
-    run_delivered_shape_gate()
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
@@ -1661,7 +1665,18 @@ def main() -> int:
         )
     else:
         print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
-    max_workers = min(8, max(1, len(cases)))
+    # 12, MEASURED, not guessed. 176 cases x ~1.3 CPU-seconds of `cupcake eval` each; the pool width
+    # is the only lever, since each case must spawn the real binary. Wall clock over the whole case
+    # list, taken 2026-08-31 on 16 cores under a DELIBERATELY hostile loadavg of ~100 (six agents
+    # plus this probe), so these are worst-case rather than best-case numbers:
+    #     8 workers 26.5s | 12 workers 20.4s | 16 workers 21.8s | 24 workers 21.6s
+    # Scaling flattens past 12 and then reverses, so 12 is the floor of the curve, not the edge of
+    # it -- there is nothing to be won by going wider and contention to lose. This does NOT risk the
+    # per-case timeout=30 below: a single case costs ~1.3s, so even the 100-loadavg run left it more
+    # than an order of magnitude of margin. Widening the pool is safe here precisely because it does
+    # not change what any one case does; that is why the far slower delivered-shape gate is NOT
+    # folded in as a 177th unit of work but left as its own step in the callers.
+    max_workers = min(12, max(1, len(cases)))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(run_case, case): case for case in cases}
         for future in as_completed(futures):
