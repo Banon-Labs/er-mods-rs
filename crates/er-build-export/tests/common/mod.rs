@@ -7,7 +7,7 @@
 //! a bug in `lzutf8::compress` has to be a bug in `rotemdan/lzutf8.js` too to slip past them.
 
 use er_build_export::model::{
-    BuildExportDoc, Flasks, Items, Protectors, Slot, SlotList, SpellList,
+    Ammo, BuildExportDoc, Flasks, Items, Protectors, Slot, SlotList, SpellList,
 };
 
 // `mod common;` is compiled separately into EVERY integration-test binary, and each of them
@@ -94,10 +94,28 @@ pub fn representative_build() -> BuildExportDoc {
         legs: SlotList::new(vec![Slot::carried("Sorcerer Leggings", 0).equipped_at(1)]),
     };
 
+    // Ammunition and the assignable surfaces, so the SITE's own decoder is what proves they
+    // survive rather than this repository's opinion of the format. Two arrows and two bolts with
+    // distinguishable names, because the interleave (`Arrow1, Bolt1, Arrow2, Bolt2`) is the part
+    // that can be wrong while the document still looks right.
+    let mut ammo = Ammo::default();
+    for (key, name) in [
+        ("arrow1", "Bone Arrow"),
+        ("bolt1", "Bolt"),
+        ("arrow2", "Great Arrow"),
+        ("bolt2", "Ballista Bolt"),
+    ] {
+        assert!(ammo.set(key, name), "{key} is a planner ammo position");
+    }
+
     doc.items = Items {
+        ammo,
+        // A quickbar position, a pouch position, and a carried tool on neither -- three states,
+        // because a fixture that equips everything cannot show an unequipped row surviving.
         tools: SlotList::new(vec![
-            Slot::carried("Fingerprint Nostrum", 0),
+            Slot::carried("Fingerprint Nostrum", 0).equipped_without_set(0),
             Slot::carried("Bewitching Branch", 1),
+            Slot::carried("Blessing of Marika", 2).equipped_without_set(10),
         ]),
         crystal_tears: vec![
             Some("Magic-Shrouding Cracked Tear".to_string()),

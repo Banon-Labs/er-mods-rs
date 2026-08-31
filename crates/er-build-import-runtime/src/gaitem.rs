@@ -44,7 +44,7 @@ use er_game_base::rva::{
 /// `~GaitemLookupResult` (0x140672730) is a single `RET`, so a record is plain data and may be
 /// dropped. That is worth stating, because the sibling `GaItemHandle` this crate mints in
 /// `grant` DOES hold one and leaks the `CSGaitemImp` table if it is not destructed.
-const GAITEM_LOOKUP_RESULT_CTOR: usize = 0x6726c0;
+const GAITEM_LOOKUP_RESULT_CTOR_RVA: usize = 0x6726c0;
 
 type LookupCtorFn = unsafe extern "system" fn(*mut GaitemLookupResult, *mut u32);
 type GaitemHandleBySlotFn = unsafe extern "system" fn(usize, *mut u32, i32) -> *mut u32;
@@ -104,7 +104,7 @@ impl GaitemLookupResult {
         // the answer this function already has a shape for.
         let ctor = crate::native::resolve(
             module_base,
-            GAITEM_LOOKUP_RESULT_CTOR,
+            GAITEM_LOOKUP_RESULT_CTOR_RVA,
             "GaitemLookupResult constructor",
         )?;
         // Safety: resolved for the running build immediately above.
@@ -161,7 +161,7 @@ impl GaitemLookupResult {
 /// Reached through the engine rather than by walking `CSGemSlotTable` here: the function checks
 /// `canGemBeChanged` and the instance pointer first, so an armament that takes no gem answers zero
 /// instead of reading a slot table that is not there.
-const GET_GEM_HANDLE_FROM_WEAPON: usize = 0x673e30;
+const GET_GEM_HANDLE_FROM_WEAPON_RVA: usize = 0x673e30;
 
 type GemHandleFromWeaponFn =
     unsafe extern "system" fn(*mut GaitemLookupResult, *mut u32) -> *mut u32;
@@ -180,7 +180,7 @@ impl GaitemLookupResult {
         // answer for an armament that carries none.
         let from_weapon = crate::native::resolve(
             module_base,
-            GET_GEM_HANDLE_FROM_WEAPON,
+            GET_GEM_HANDLE_FROM_WEAPON_RVA,
             "GaitemLookupResult::GetGemGaitemHandleFromWeapon",
         )?;
         // Safety: resolved for the running build immediately above.

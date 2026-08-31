@@ -14,10 +14,28 @@
 //! Spells are the exception, and not by omission: the planner gives memorised spells no
 //! `equipIndex` at all, only `order`. Their list position IS the memorisation order, which is
 //! exactly how the importer reads them back.
+//!
+//! # Four shapes, not one, and three of them are not slot lists
+//!
+//! The document does not spell every category the same way, and each difference is a way to write
+//! a valid-looking document that describes a different character:
+//!
+//! | category | where it goes | how the position is spelled |
+//! |---|---|---|
+//! | armaments, armour, talismans | `inventory` / `protectors.<part>` / `talismans` | `equipIndex` **and** `equipSet` |
+//! | spells | `spells.slots` | `order` alone; there is no equip position |
+//! | quickbar and pouch | `items.tools.slots` -- ONE list for both | `equipIndex`, `0..10` quickbar and `10..16` pouch, and **no** `equipSet` |
+//! | ammunition | `items.ammo` | not a list at all: the KEY is the position and the value is a bare name |
+//!
+//! The last two rows are the ones that were missing entirely until 2026-08-31. `items.tools` was
+//! never assigned, which is one omission costing TWO categories, and `items.ammo` was never
+//! assigned either -- so a generated link carried the physick (the one thing under `items` that
+//! *was* written) and nothing else, which is exactly what the player reported.
 
 use er_build_export::BuildExportDoc;
-use er_build_export::model::{Slot, SlotList, Stats};
-use er_build_import_core::equip::PROTECTOR_PARTS;
+use er_build_export::model::{CRYSTAL_TEAR_SLOTS, Slot, SlotList, Stats};
+use er_build_import_core::equip::{POUCH_SLOTS, PROTECTOR_PARTS, QUICKBAR_SLOTS};
+use er_build_import_core::model::AMMO_POSITION_KEYS;
 use er_build_import_core::plan::{MAX_SOMBER_LEVEL, regular_level_for_somber};
 
 use crate::read_character::{CharacterRead, ReadSlot};
@@ -182,8 +200,60 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         .map(|(order, item)| Slot::carried(&item.name, order as i64))
         .collect();
 
-    // Physick: always two entries, `null` for an empty half, which is the shape `makeDefault` has.
-    doc.items.crystal_tears = read.crystal_tears.clone();
+    // AMMUNITION IS NOT A SLOT LIST, and its key IS its equip position. The keys and the ORDER
+    // both come out of the shared table so this cannot interleave differently from the read: the
+    // engine runs `Arrow1, Bolt1, Arrow2, Bolt2` while the planner's UI groups the two kinds, and
+    // a bolt written under an arrow key is a valid document describing a different character.
+    //
+    // `set` REFUSES a key that is not one of the four, and a refusal is reported rather than
+    // dropped -- there is no read-back on this side, and an unknown key would ride all the way to
+    // the website and simply never be looked at.
+    for (key, name) in AMMO_POSITION_KEYS.iter().zip(read.ammo.iter()) {
+        let Some(name) = name else { continue };
+        if !doc.items.ammo.set(key, name) {
+            crate::log_line(&format!(
+                "[build-export] {name:?} was read into ammunition position {key:?}, which is not \
+                 one of the planner's four -- DROPPED rather than written under a key it does \
+                 not read"
+            ));
+        }
+    }
+
+    // THE QUICKBAR AND THE POUCH ARE ONE PLANNER LIST, and this is the write whose absence was
+    // the defect: `items.tools` was never assigned at all, so both categories left the game
+    // empty while the physick -- the only other thing under `items` that WAS assigned -- came
+    // through, which is precisely what the player saw.
+    //
+    // There is no `items.quickbar` and no `items.pouch` anywhere in the document. The planner
+    // folds `items.tools.slots` into a 16-long array by `equipIndex` and slices it at 10, so the
+    // pouch positions are simply the quickbar positions plus `QUICKBAR_SLOTS`.
+    //
+    // `order` is a running index over what is actually written, not the equip position: the
+    // planner's `getAt` finds a row BY `order`, so the values have to be distinct, and holes for
+    // the unassigned positions would leave several rows sharing whatever `getAt` returned.
+    let quickbar = read.quickbar.iter().take(QUICKBAR_SLOTS).enumerate();
+    let pouch = read
+        .pouch
+        .iter()
+        .take(POUCH_SLOTS)
+        .enumerate()
+        .map(|(index, name)| (index + QUICKBAR_SLOTS, name));
+    let mut tools = Vec::new();
+    for (position, name) in quickbar.chain(pouch) {
+        let Some(name) = name else { continue };
+        let order = tools.len() as i64;
+        // `equipped_without_set`, not `equipped_at`: a tool row carries no `equipSet`.
+        tools.push(Slot::carried(name, order).equipped_without_set(position as u32));
+    }
+    doc.items.tools = SlotList::new(tools);
+
+    // Physick: always two entries, `null` for an empty half, which is the shape `makeDefault` has
+    // -- so the read's answer is fitted to that length rather than written through. A read that
+    // came back short would otherwise ship `crystalTears: []`, which is a length no document the
+    // planner writes has ever had.
+    doc.items.crystal_tears = (0..CRYSTAL_TEAR_SLOTS)
+        .map(|index| read.crystal_tears.get(index).cloned().flatten())
+        .collect();
     doc.items.flasks.crimson = read.flask_crimson;
     doc.items.flasks.cerulean = read.flask_cerulean;
     doc.items.flasks.total = read.flask_crimson + read.flask_cerulean;
