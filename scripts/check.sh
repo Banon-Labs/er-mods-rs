@@ -771,6 +771,25 @@ python3 "$repo_root/scripts/check-no-chained-continuation-rows.py"
 # mutations of the gate's own rules are caught by it.
 python3 "$repo_root/scripts/check-no-duplicate-ledger-rows.py" --selftest
 python3 "$repo_root/scripts/check-no-duplicate-ledger-rows.py"
+# THE SECTION-KIND GATE (wired 2026-08-31). The gate above asks whether a ledger says the same
+# thing twice; this one asks whether it is talking about code at all. A ledger feeding
+# `detourable_pairs` licenses a five-byte MinHook patch, which is only meaningful in EXECUTABLE
+# memory; `data.tsv` carries GLOBALS, which is only meaningful outside it. Neither claim had ever
+# been checked against the image's own section table.
+#
+# MEASURED 2026-08-31 on `docs/recon/rva-1170-detour-audited.tsv`, and it is why that file was
+# deleted rather than refreshed: 87 of its 444 rows named non-executable destinations while
+# carrying prologue verdicts like `6B relocatable`, and all 85 of the rows promoted on its
+# "unwindless leaf" clause were among them -- `.pdata` declares no enclosing function for a `.data`
+# global for the same reason it declares none for a leaf, so the clause could not tell them apart.
+# Four were 24 bytes of zeros in both images. The four LIVE ledgers are clean: 1047 rows, every
+# code row in `.text` and every data row outside it, so this arrives green by separation and not
+# by vacuity.
+#
+# Only --selftest runs here: R1/R2 read the gitignored de-Arxan'd 1.17 image, and the selftest
+# builds a synthetic PE so it runs in a checkout that has no game files. Run the bare command where
+# the image exists.
+python3 "$repo_root/scripts/check-ledger-section-kind.py" --selftest
 # THE DOUBLE-RESOLVE GATE. A row's 1.17 DESTINATION can also be some other row's 1.16.2 SOURCE,
 # and then translating an address twice does not fail -- it SUCCEEDS, returning a third, unrelated
 # function. The table is keyed by the 1.16.2 side and an address carries no label saying which side
