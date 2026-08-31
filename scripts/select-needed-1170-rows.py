@@ -117,6 +117,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # workspace, all 35 of which match the name filter -- `INTERVAL` contains `RVA` -- and stay out of
 # the ledgers only because they happen to be written in decimal.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
+    import const_fold
     import rva_role
     import rva_symbols
     import rva_usage
@@ -144,8 +145,21 @@ BASE = 0x140000000
 BARE_RVA_FIELD = re.compile(r"\brva\s*:\s*(0x[0-9a-fA-F_]+)")
 
 RVA_TYPE = r"(?:usize|u32|u64)"
+# THE WHOLE INITIALISER, NOT ITS FIRST LITERAL. `scripts/const_fold.py` evaluates it.
+#
+# The form this replaced captured `(0x[0-9a-fA-F_]+)` -- the first hex literal in the initialiser --
+# which is the right answer only when the initialiser IS one literal. For
+# `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000` it captured the MINUEND, so
+# the harvest recorded the absolute VA 0x142658c60. Nothing in an RVA-keyed map is 1.1 GB past the
+# end of the image, so the address matched nothing, landed in `missing`, and was neither checked nor
+# reported as unchecked. `map-data-rvas-1162-to-1170.py` had already fixed this shape for the DATA
+# map on 2026-08-30; the FUNCTION map had not.
+#
+# Measured over the whole workspace, folding changes the harvest by: ONE value (0x142658c60 ->
+# 0x2658c60, the constant above, and the only new address the fold reaches) and 62 names that are
+# re-exports of addresses already carried under another name. Nothing is dropped.
 CONST = re.compile(
-    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*(0x[0-9a-fA-F_]+)"
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*([^;]+);"
 )
 # `pub const FOO_RVA: usize = SomeEnum::Variant as usize;` -- the value lives on the enum, not at
 # the declaration, so a `= 0x...` scan cannot see it. 37 constants are written this way and the
@@ -160,7 +174,7 @@ CONST = re.compile(
 # non-addresses, ten of them exactly `0x1000`, which is where `.text` begins and therefore pairs
 # cleanly against the function map while meaning nothing (the same trap `BOUND` documents).
 ANY_CONST = re.compile(
-    r"const\s+([A-Z][A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*(0x[0-9a-fA-F_]+)"
+    r"const\s+([A-Z][A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*([^;]+);"
 )
 ALIAS = re.compile(
     r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*(\w+)::(\w+)\s+as\s+" + RVA_TYPE
@@ -198,6 +212,42 @@ BUILD_RS = "crates/er-game-base/build.rs"
 HAND_BANNER = "# HAND-CARRIED"
 
 
+# WHAT THE FOLD TURNED AWAY, so that nothing it declines is merely absent. Populated by every
+# `declared_rvas()` call and printed by `main()`; `--selftest` asserts it is non-empty, because an
+# empty exclusion report is what "the folder is not running" looks like.
+excluded: list[tuple[str, str, str]] = []
+
+
+def _address_value(constants, name: str, initialiser: str, rel: str) -> int | None:
+    """The address a declaration holds, or None with a line appended to `excluded`.
+
+    ADMISSION IS `hex_rooted`, AND THAT IS A SPELLING TEST. Saying so plainly is the point: the
+    rule it replaces was the same test applied by ACCIDENT. Selection here is by name -- `RVA` as a
+    SUBSTRING -- and "INTERVAL" contains "RVA", so all 35 `*INTERVAL*` constants in this workspace
+    pass the name filter and stayed out of the ledgers only because they are written in decimal and
+    the old regex demanded `0x`. Fold the initialiser and that accident evaporates:
+    `SAVE_SUPPRESS_WAIT_LOG_INTERVAL = 4096` becomes 0x1000, which is where `.text` begins, so it
+    pairs cleanly against the function map and means nothing -- the precise shape that got
+    `FIRST_SECTION_RVA` a `DETOUR_SAFE_1162_TO_1170` licence.
+
+    `const_fold` therefore reports which literals an expression actually READ, all the way down
+    through named constants and enum variants, and a declaration is admitted only if every one of
+    them was hexadecimal and there was at least one. `usize::MIN` reads none and is refused, which
+    is right: 0 is not an address. Everything refused is appended to `excluded` and printed, so the
+    35 counters are now VISIBLY not addresses instead of invisibly absent.
+    """
+    folded = constants.fold(initialiser, scope=rel)
+    if folded.value is None:
+        excluded.append((name, rel, f"UNFOLDABLE: {folded.reason}"))
+        return None
+    if not folded.hex_rooted:
+        excluded.append(
+            (name, rel, f"not hex-rooted (= {folded.value}); {folded.other_literals} decimal literal(s)")
+        )
+        return None
+    return folded.value
+
+
 def declared_rvas(repo: Path) -> dict[str, int]:
     """Every game address declared under crates/, by name.
 
@@ -219,6 +269,8 @@ def declared_rvas(repo: Path) -> dict[str, int]:
     # Collected across the whole workspace first: the declaration and the call site are routinely
     # in different crates (`er-build-import-runtime` calls ten addresses `er-game-base` declares).
     used = rva_usage.workspace_usage(repo)
+    constants = const_fold.Constants.scan(repo)
+    excluded.clear()
     for path in sorted(repo.glob("crates/**/*.rs")):
         text = path.read_text(encoding="utf-8", errors="replace")
         # Declarations inside `#[cfg(test)]` are skipped: a test may name an address precisely to
@@ -228,19 +280,23 @@ def declared_rvas(repo: Path) -> dict[str, int]:
         # the test's own doc comment warns about. See `rva_usage.test_module_spans`.
         tests = rva_usage.test_module_spans(text)
         for match in CONST.finditer(text):
-            name, value = match.group(1), match.group(2)
+            name, initialiser = match.group(1), match.group(2)
             if BOUND.search(name) or rva_usage.in_any_span(match.start(), tests):
                 continue
-            out.setdefault(name, int(value.replace("_", ""), 16))
+            admitted = _address_value(constants, name, initialiser, path.relative_to(repo).as_posix())
+            if admitted is not None:
+                out.setdefault(name, admitted)
         # The name says nothing, so the USE has to. `BOUND` still applies: a range endpoint that
         # someone passes to a resolver is a bug in the caller, not an address to translate.
         for match in ANY_CONST.finditer(text):
-            name, value = match.group(1), match.group(2)
+            name, initialiser = match.group(1), match.group(2)
             if name not in used or BOUND.search(name):
                 continue
             if rva_usage.in_any_span(match.start(), tests):
                 continue
-            out.setdefault(name, int(value.replace("_", ""), 16))
+            admitted = _address_value(constants, name, initialiser, path.relative_to(repo).as_posix())
+            if admitted is not None:
+                out.setdefault(name, admitted)
         for name, enum_name, variant in ALIAS.findall(text):
             if not BOUND.search(name):
                 aliases.setdefault(name, (enum_name, variant))

@@ -876,6 +876,9 @@ def find_displacement(args) -> int:
 # --------------------------------------------------------------------------------------------
 # part 1: inventory of *_OFFSET constants
 # --------------------------------------------------------------------------------------------
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import const_fold  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
+
 CONST_RE = re.compile(
     r"(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+([A-Z0-9_]*OFFSET[A-Z0-9_]*)\s*:"
     r"\s*([A-Za-z0-9_:<>, ]+?)\s*=\s*([^;]+);",
@@ -1203,10 +1206,28 @@ def classify(name: str, crate: str, rel_path: str = "") -> tuple[bool, str]:
 
 
 def inventory() -> list[dict]:
+    """Every `*_OFFSET` constant, with a NUMBER or a printed reason there is none.
+
+    THE THIRD PASS, AND WHY THERE HAS TO BE ONE. Until 2026-08-31 an initialiser this could not
+    read was filed as `kind="expr"` with `resolved=None` and nothing else happened to it. 41 of the
+    813 live game-struct-field offsets sat in that state, and every downstream census -- the drift
+    join, the unattributed ratchet -- then skipped them for want of a number. They were excluded
+    from the population WITHOUT appearing in the unattributed list either, so a reader counting
+    rows saw a total that silently omitted them: not checked, and not reported as unchecked.
+
+    Almost all of them are chains: `FACE_BODY_FIELD_HAIR_MODEL_OFFSET = FACE_BODY_FIELD_FACE_MODEL_
+    OFFSET + size_of::<u32>()`, ten deep in one file, rooted in an `offset_of!` this DOES resolve.
+    So the passes run in order -- literals, then `offset_of!` against the modelled layouts, then
+    `scripts/const_fold.py` over everything else with the first two passes' answers SEEDED into it.
+    Seeding is the only way a number reaches the folder: it has no fallback and no guess, and what
+    it still cannot evaluate keeps `resolved=None` and gains an `unresolved` reason that
+    `--inventory` prints and `scripts/check-expression-constants.py` fails on.
+    """
     structs = collect_structs()
     pins = collect_pins()
     layouts: dict[str, dict[str, int] | None] = {}
     rows: list[dict] = []
+    constants = const_fold.Constants.scan(ROOT)
     for path in sorted((ROOT / "crates").rglob("*.rs")):
         text = path.read_text(encoding="utf-8", errors="replace")
         rel = path.relative_to(ROOT).as_posix()
@@ -1215,43 +1236,30 @@ def inventory() -> list[dict]:
             name, ty, value = match.group(1), match.group(2), " ".join(match.group(3).split())
             included, why = classify(name, crate, rel)
             offset_of_type = None
+            # SHAPE ONLY. Computing the VALUE here is what this loop used to do and is exactly the
+            # defect: it took the FIRST `offset_of!` in the initialiser, added any `size_of::<X>()`
+            # it could find (as a `+`, whatever the source's actual operator), and dropped every
+            # other term -- then labelled the result `offset_of(resolved)`, the most confident kind
+            # this inventory has. `GAME_MAN_FLAG_B73_PROBE_OFFSET = GAME_MAN_ARM_FLAG_B72_OFFSET +
+            # offset_of!(GameManAutoloadFlagCluster, probe_b73)` came out as 0x1 instead of 0xb73,
+            # because 0xb72 is not spelled as an `offset_of!` or a `size_of`. Values now come from
+            # pass 3, which evaluates the WHOLE expression or refuses out loud.
             if LITERAL_RE.match(value):
                 kind, resolved = "literal", int(value.replace("_", ""), 0)
             elif OFFSET_OF_RE.search(value):
                 kind, resolved = "offset_of", None
-                # `offset_of!(T, f)` is resolvable exactly when T's repr(C) layout is modelled;
-                # a single `+ size_of::<X>()` tail is handled too, because several constants are
-                # written that way to derive the field after a named one.
                 inner = re.findall(
                     r"core::mem::offset_of!\s*\(\s*([A-Za-z0-9_:]+)\s*,\s*([A-Za-z0-9_]+)\s*\)",
                     value,
                 )
                 if inner:
-                    type_name = inner[0][0].split("::")[-1]
-                    offset_of_type = type_name
-                    if type_name not in layouts:
-                        layouts[type_name] = struct_layout(type_name, structs)
-                    layout = layouts[type_name]
-                    if layout is not None and inner[0][1] in layout:
-                        resolved = layout[inner[0][1]]
-                        for size_type in re.findall(
-                            r"core::mem::size_of::<\s*([A-Za-z0-9_:]+)\s*>\(\)", value
-                        ):
-                            got = size_align(size_type.split("::")[-1], structs)
-                            if got is None:
-                                resolved = None
-                                break
-                            resolved += got[0]
-                        if resolved is not None:
-                            kind = "offset_of(resolved)"
+                    offset_of_type = inner[0][0].split("::")[-1]
+                    for type_spelling, _field in inner:
+                        type_name = type_spelling.split("::")[-1]
+                        if type_name not in layouts:
+                            layouts[type_name] = struct_layout(type_name, structs)
             else:
                 kind, resolved = "expr", None
-            if resolved is None and name in pins:
-                kind, resolved = f"{kind}(pinned)", pins[name]
-            if resolved is None:
-                hinted = name_hint(name)
-                if hinted is not None:
-                    kind, resolved = f"{kind}(name-hint)", hinted
             rows.append(
                 {
                     "file": rel,
@@ -1260,8 +1268,11 @@ def inventory() -> list[dict]:
                     "name": name,
                     "type": ty,
                     "value": value[:120],
+                    "initialiser": value,
                     "kind": kind,
                     "resolved": resolved,
+                    "folded": None,
+                    "unresolved": "",
                     "name_hint": name_hint(name),
                     "included": included,
                     "class": why,
@@ -1269,6 +1280,72 @@ def inventory() -> list[dict]:
                     "autoload": crate in AUTOLOAD_CRATES,
                 }
             )
+    # PASS 3. Fold the expressions, with the first two passes seeded as FACTS -- and only the
+    # facts. A `literal` is what the source says; a `struct_layout` entry is a modelled `repr(C)`
+    # layout. A `name-hint` is neither: it reads the hex out of the constant's own name, which this
+    # file's own comment calls a comment. Seeding those would let a guess become the root of a
+    # chain, so they are held back and the fold either derives the value or leaves the guess alone.
+    for row in rows:
+        if row["kind"] == "literal":
+            constants.overrides.setdefault(row["name"], row["resolved"])
+    for type_name, layout in layouts.items():
+        got = size_align(type_name, structs)
+        if got is not None:
+            constants.type_sizes.setdefault(type_name, got[0])
+        for field_name, field_offset in (layout or {}).items():
+            constants.offsets.setdefault((type_name, field_name), field_offset)
+    # Repeat sweeps because a chain can reference a constant declared later in the file, and one
+    # pass in file order is not a fixpoint. It stops as soon as a sweep adds nothing.
+    while True:
+        gained = 0
+        for row in rows:
+            if row["kind"] == "literal" or row.get("folded") is not None:
+                continue
+            folded = constants.fold(row["initialiser"], scope=row["file"])
+            if folded.value is None:
+                if row["resolved"] is None:
+                    row["unresolved"] = folded.reason
+                continue
+            row["folded"] = folded.value
+            # THE FOLD WINS, and a disagreement is a finding rather than a tie to break. Both
+            # earlier passes read only PART of an expression: the name-hint reads the name, and the
+            # `offset_of!` pass reads the macro and any `+ size_of::<X>()` tail while silently
+            # dropping every named term. That is how `GAME_MAN_FLAG_B73_PROBE_OFFSET =
+            # GAME_MAN_ARM_FLAG_B72_OFFSET + offset_of!(cluster, probe_b73)` was filed as 0x1
+            # instead of 0xb73, under the label `offset_of(resolved)`. Whole-expression evaluation
+            # is the only one of the three that read the whole thing.
+            if row["resolved"] is not None and row["resolved"] != folded.value:
+                row["hint_conflict"] = (
+                    f"{row['kind']} says {row['resolved']:#x}, "
+                    f"the whole expression folds to {folded.value:#x}"
+                )
+            row["kind"] = f"{row['kind'].split('(')[0]}(folded)"
+            row["resolved"] = folded.value
+            row["unresolved"] = ""
+            constants.overrides[row["name"]] = folded.value
+            gained += 1
+        if not gained:
+            break
+    # PASS 4, LAST RESORT AND LABELLED AS SUCH. A `const _: () = assert!(NAME == 0x..)` pin is the
+    # compiler's own answer for this build, so it outranks a hint; the hint reads hex out of the
+    # constant's NAME, which is a comment. Both run only on rows the evaluator could not do, and a
+    # pin that CONTRADICTS a fold is reported rather than merged, because one of the two is wrong.
+    for row in rows:
+        if row["name"] in pins:
+            if row["folded"] is not None and row["folded"] != pins[row["name"]]:
+                row["hint_conflict"] = (
+                    f"a `const _: () = assert!` pin says {pins[row['name']]:#x}, "
+                    f"the expression folds to {row['folded']:#x}"
+                )
+            if row["resolved"] is None:
+                row["kind"], row["resolved"] = f"{row['kind']}(pinned)", pins[row["name"]]
+                row["unresolved"] = ""
+                continue
+        if row["resolved"] is None:
+            hinted = name_hint(row["name"])
+            if hinted is not None:
+                row["kind"], row["resolved"] = f"{row['kind']}(name-hint)", hinted
+                row["unresolved"] = ""
     return rows
 
 
@@ -1293,6 +1370,21 @@ def print_inventory(args) -> int:
     print(f"\n  on the autoload path: {on_path} of {len(included)}")
     kinds = collections.Counter(r["kind"] for r in included)
     print(f"  by shape: {dict(kinds)}")
+    # THE VISIBLE BUCKET. Silent exclusion is the whole defect: a constant with no number is not
+    # "outside the census", it is an UNCHECKED game-struct field offset, and it says so here.
+    stuck = [r for r in included if r["resolved"] is None]
+    print()
+    print(f"  no value could be established for {len(stuck)} of {len(included)}; "
+          f"scripts/check-expression-constants.py fails on any that is not a listed exception:")
+    for row in sorted(stuck, key=lambda r: (r["file"], r["line"])):
+        print(f"    {row['file']}:{row['line']}  {row['name']}")
+        print(f"        {row['unresolved'] or 'offset_of! on a type whose layout is not modelled'}")
+    conflicts = [r for r in rows if r.get("hint_conflict")]
+    if conflicts:
+        print()
+        print(f"  {len(conflicts)} constant(s) where a partial read disagrees with the expression:")
+        for row in conflicts:
+            print(f"    {row['file']}:{row['line']}  {row['name']}: {row['hint_conflict']}")
     print(f"\nwrote {args.out_dir}/offset-inventory.json")
     return 0
 

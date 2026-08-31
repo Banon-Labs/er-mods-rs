@@ -92,7 +92,7 @@
 #     python3 "$repo_root/scripts/attribute-field-offset-owners.py" --selftest
 #     python3 "$repo_root/scripts/attribute-field-offset-owners.py"
 #
-# Currently 409 site(s) in 22 crate(s):
+# Currently 413 site(s) in 22 crate(s):
 #    119  er-quickload
 #    112  er-title-flow
 #     41  er-loading-portrait-core
@@ -102,8 +102,8 @@
 #     13  er-telemetry-core
 #     12  er-input-harness
 #     11  er-game-base
+#      9  er-save-suppress
 #      7  er-crash-logging-core
-#      5  er-save-suppress
 #      4  er-invasion-path
 #      3  er-build-import-runtime
 #      3  er-quit-menu-core
@@ -130,9 +130,9 @@ BLOCKRES_PHASE_35_OFFSET	crates/er-title-flow/src/constants_return_title.rs	0x35
 BLOCKRES_PRIMARY_FILECAP_40_OFFSET	crates/er-title-flow/src/constants_return_title.rs	0x40
 BLOCKRES_SECOND_FILECAP_48_OFFSET	crates/er-title-flow/src/constants_return_title.rs	0x48
 BLOCK_AREAOBJ_AREA_C_OFFSET	crates/er-quickload/src/constants/gaitem_restore.rs	0xc
-BLOCK_AREA_C_OFFSET	crates/er-quickload/src/constants/gaitem_restore.rs	
+BLOCK_AREA_C_OFFSET	crates/er-quickload/src/constants/gaitem_restore.rs	0xc
 BLOCK_ENTRY_AREAOBJ_8_OFFSET	crates/er-quickload/src/constants/gaitem_restore.rs	0x8
-BLOCK_INNER_8_OFFSET	crates/er-quickload/src/constants/gaitem_restore.rs	
+BLOCK_INNER_8_OFFSET	crates/er-quickload/src/constants/gaitem_restore.rs	0x8
 BLOCK_LOADSTATE_ASSET_GATE_2F_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x2f
 BLOCK_LOADSTATE_FLAG_2D_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x2d
 BLOCK_LOADSTATE_GAVEUP_06_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x6
@@ -187,23 +187,23 @@ EQUIP_PARAM_GEM_ICON_ID_OFFSET	crates/er-armament-icons/src/lib.rs	0x4
 EQUIP_PARAM_GEM_SWORD_ARTS_ID_OFFSET	crates/er-armament-icons/src/lib.rs	0x18
 ERSC_NEXT_OBJECT_OFFSET	crates/er-invasion-warp/build.rs	0x58
 EVENT_WORD0_OFFSET	crates/er-quickload/src/experiments/trace/native_result_map_hooks.rs	0x0
-EVENT_WORD1_OFFSET	crates/er-quickload/src/experiments/trace/native_result_map_hooks.rs	
+EVENT_WORD1_OFFSET	crates/er-quickload/src/experiments/trace/native_result_map_hooks.rs	0x8
 EZ_CHILDSTEP_WRAPPER_STEPPER_08_OFFSET	crates/er-quickload/src/constants/render_handoff.rs	0x8
 EZ_CHILD_STEP_STEPPER_OFFSET	crates/er-title-flow/src/constants_return_title.rs	0x8
-FACE_BODY_FIELD_ABDOMEN_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_APPARENT_AGE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_ARMS_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_BEARD_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_CHEST_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_EYEBROW_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_FACE_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_FACIAL_AESTHETIC_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_FORM_EMPHASIS_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_HAIR_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_LEGS_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_SKIN_COLOR_B_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
-FACE_BODY_FIELD_SKIN_COLOR_R_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	
+FACE_BODY_FIELD_ABDOMEN_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xae
+FACE_BODY_FIELD_APPARENT_AGE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0x2c
+FACE_BODY_FIELD_ARMS_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xaf
+FACE_BODY_FIELD_BEARD_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0x1c
+FACE_BODY_FIELD_CHEST_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xad
+FACE_BODY_FIELD_EYEBROW_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0x18
+FACE_BODY_FIELD_FACE_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xc
+FACE_BODY_FIELD_FACIAL_AESTHETIC_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0x2d
+FACE_BODY_FIELD_FORM_EMPHASIS_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0x2e
+FACE_BODY_FIELD_HAIR_MODEL_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0x10
+FACE_BODY_FIELD_LEGS_SIZE_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xb0
+FACE_BODY_FIELD_SKIN_COLOR_B_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xb5
+FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xb4
+FACE_BODY_FIELD_SKIN_COLOR_R_OFFSET	crates/er-quickload/src/constants/player_correctness.rs	0xb3
 FD4FILECAP_NAME_CAPACITY_OFFSET	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs	0x30
 FD4FILECAP_NAME_SIZE_OFFSET	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs	0x28
 FD4FILECAP_NAME_WSTRING_OFFSET	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs	0x18
@@ -256,8 +256,8 @@ GX_CMD_QUEUE_BUCKET_BEGIN_OFFSET	crates/er-title-flow/src/constants_autoload_sta
 GX_CMD_QUEUE_BUCKET_END_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x34
 GX_CMD_QUEUE_CAP_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x34
 GX_CMD_QUEUE_COUNT_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x30
-GX_CMD_QUEUE_WRAPPER_BAND_END_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	
-GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	
+GX_CMD_QUEUE_WRAPPER_BAND_END_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x100
+GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	-0x560
 GX_DRAW_CONTEXT_POOL_FLOOR_OFFSET	crates/er-loading-portrait-core/src/portrait_lookat.rs	0xf8
 GX_DRAW_CONTEXT_POOL_TOP_OFFSET	crates/er-loading-portrait-core/src/portrait_lookat.rs	0x100
 GX_DRAW_CONTEXT_POOL_USED_MASK_OFFSET	crates/er-loading-portrait-core/src/portrait_lookat.rs	0x110
@@ -371,7 +371,7 @@ NODE_RIGHT_OFFSET	crates/er-invasion-warp-core/src/live_read.rs	0x10
 NOW_LOADING_FLAG_ED_OFFSET	crates/er-input-harness/src/game_mem.rs	0xed
 NPC_INVADE_TARGET_ENTRY_POINT_OFFSET	crates/er-invasion-warp-core/src/seamless_invade_probe.rs	0xaf0
 OFFSCREEN_SCENE_FACADE_OFFSET	crates/er-loading-portrait-core/src/resource_readback.rs	0x48
-OPTIONSETTING_COMPOSITE_SUBDIALOG_JOB_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	
+OPTIONSETTING_COMPOSITE_SUBDIALOG_JOB_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x1820
 OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x1200
 OPTIONSETTING_DISPLAY_INFO_VISIBLE_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0xd6
 OPTIONSETTING_TAB_INDEX_D4_OFFSET	crates/er-input-harness/src/game_mem.rs	0xd4
@@ -400,13 +400,13 @@ POSEHOLDER_MODEL_BONE_DATA_OFFSET	crates/er-loading-portrait-core/src/portrait_l
 POSEHOLDER_SKELETON_OFFSET	crates/er-loading-portrait-core/src/portrait_lookat.rs	0x0
 PROFILE_GX_GPU_WRAPPER_RESOURCE_FALLBACK_OFFSET	crates/er-loading-portrait-core/src/portrait_semaphores.rs	0x10
 PROFILE_GX_GPU_WRAPPER_RESOURCE_PRIMARY_OFFSET	crates/er-loading-portrait-core/src/portrait_semaphores.rs	0x18
-PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET	crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_picker_menu.rs	
+PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET	crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_picker_menu.rs	0xbe0
 PROFILE_LOAD_DIALOG_STORED_LIST_OFFSET	crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_picker_menu.rs	0x1260
 PROFILE_LOOKAT_IMPORTER_OFFSET	crates/er-loading-portrait-core/src/portrait_lookat.rs	0x20
 PROFILE_LOOKAT_POSEHOLDER_OFFSET	crates/er-loading-portrait-core/src/portrait_lookat.rs	0x48
 PROFILE_RENDERER_FACEDATA_CMP_OFFSET	crates/er-loading-portrait-core/src/portrait_lookat.rs	0x218
 PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET	crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_picker_menu.rs	0x0
-PROFILE_SLOT_ACTIVE_ARRAY_OFFSET	crates/er-quickload/src/telemetry/save_policy_logs.rs	
+PROFILE_SLOT_ACTIVE_ARRAY_OFFSET	crates/er-quickload/src/telemetry/save_policy_logs.rs	0x8
 PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET	crates/er-quit-menu-core/src/quit_dialog_layout.rs	0x1268
 PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x1268
 PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET	crates/er-quit-menu-core/src/quit_dialog_layout.rs	0x1af0
@@ -441,16 +441,16 @@ SCENE_PROXY_MENU_WINDOW_20_OFFSET	crates/er-quickload/src/constants/stats_panel_
 SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x130
 SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x128
 SELECTBOT_PUMP_RAN_FLAG_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x6b0
-SELECTOR_STEP_Q10_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q18_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q20_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q28_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q30_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q38_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q50_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q58_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_Q60_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
-SELECTOR_STEP_TASK_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	
+SELECTOR_STEP_Q10_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x10
+SELECTOR_STEP_Q18_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x18
+SELECTOR_STEP_Q20_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x20
+SELECTOR_STEP_Q28_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x28
+SELECTOR_STEP_Q30_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x30
+SELECTOR_STEP_Q38_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x38
+SELECTOR_STEP_Q50_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x50
+SELECTOR_STEP_Q58_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x58
+SELECTOR_STEP_Q60_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x60
+SELECTOR_STEP_TASK_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x70
 SEQUENCE_CHILDREN_BASE_18_OFFSET	crates/er-title-flow/src/constants_own_load_pump.rs	0x18
 SEQUENCE_COUNT_60_OFFSET	crates/er-title-flow/src/constants_own_load_pump.rs	0x60
 SERVER_STATUS_RECORD_STATE_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x0
@@ -464,7 +464,7 @@ SESSION_PROTOCOL_STATE_OFFSET	crates/er-invasion-warp-core/src/warp.rs	0x10
 SESSION_STATE_OFFSET	crates/er-invasion-warp/src/local_invasion_filter.rs	0x110
 SESSION_WAIT_INIT_REMAIN_OFFSET	crates/er-invasion-warp-core/src/join_progress.rs	0x1b0
 SHOULD_USE_RAPID_REENTRY_OFFSET	crates/er-invasion-warp-core/src/seamless_invade_probe.rs	0xafc
-SLOT_MANAGER_CONTAINER_OFFSET	crates/er-loading-portrait-core/src/layout.rs	
+SLOT_MANAGER_CONTAINER_OFFSET	crates/er-loading-portrait-core/src/layout.rs	0x78
 SL_IODEV_DEFERRED_OPCODE_OFFSET	crates/er-save-suppress/src/lib.rs	0x30
 SL_IODEV_FILE_CAP_OFFSET	crates/er-save-suppress/src/lib.rs	0x28
 SL_IODEV_JOB_OFFSET	crates/er-save-suppress/src/lib.rs	0x20
@@ -477,6 +477,10 @@ SPLASH_SKIP_JE_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0xbd
 STATE_FLAGS_20_OFFSET	crates/er-quickload/src/experiments/trace/menu_constructor_capture.rs	0x20
 STD_STRING_CAPACITY_OFFSET	crates/er-invasion-warp/src/local_invasion_filter.rs	0x18
 STD_STRING_SIZE_OFFSET	crates/er-invasion-warp/src/local_invasion_filter.rs	0x10
+SUBMIT_LANE_CHAR_CALL_OFFSET	crates/er-save-suppress/src/save_submit_latch.rs	0x127
+SUBMIT_LANE_COMBINED_CALL_OFFSET	crates/er-save-suppress/src/save_submit_latch.rs	0x1ee
+SUBMIT_LANE_ENTRY0B_CALL_OFFSET	crates/er-save-suppress/src/save_submit_latch.rs	0x84
+SUBMIT_LANE_SYSTEM_CALL_OFFSET	crates/er-save-suppress/src/save_submit_latch.rs	0x154
 SWORD_ARTS_PARAM_ICON_ID_OFFSET	crates/er-armament-icons/src/lib.rs	0x1a
 SYNTH_MMS_DESER_SLOT_12C_OFFSET	crates/er-title-flow/src/constants_own_load_pump.rs	0x12c
 SYNTH_MMS_SKIP_APPLY_12A_OFFSET	crates/er-title-flow/src/constants_own_load_pump.rs	0x12a
@@ -496,7 +500,7 @@ TITLESTEP_INGAMESTEP_2E8_RE_OFFSET	crates/er-quickload/src/constants/render_hand
 TITLETOP_DIALOG_A40_OFFSET	crates/er-input-harness/src/title_scan.rs	0xa40
 TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET	crates/er-quickload/src/constants/anti_debug.rs	0x10
 TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET	crates/er-loading-portrait-core/src/layout.rs	0x10
-TITLE_NATIVE_JOB_DELTA_OFFSET_END	crates/er-title-flow/src/constants_moved.rs	
+TITLE_NATIVE_JOB_DELTA_OFFSET_END	crates/er-title-flow/src/constants_moved.rs	0xc
 TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET	crates/er-quickload/src/constants/anti_debug.rs	0x370
 TITLE_OWNER_INSTANCE_TABLE_OFFSET	crates/er-input-harness/src/title_scan.rs	0x10
 TITLE_OWNER_STATE_OFFSET	crates/er-input-harness/src/title_scan.rs	0x48
