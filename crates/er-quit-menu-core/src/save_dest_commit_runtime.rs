@@ -849,9 +849,11 @@ mod save_dest_commit_tests {
     use super::*;
     use std::{
         fs,
-        path::{Path, PathBuf},
+        path::Path,
         sync::atomic::{AtomicUsize, Ordering},
     };
+
+    use crate::save_dest_identity::save_dest_test_dir;
 
     use er_telemetry_core::counters::{
         SAVE_DEST_LIVE_BAK_MUTATED, SAVE_DEST_LIVE_FILE_MUTATED, SAVE_DEST_LIVE_STAT_UNREADABLE,
@@ -973,24 +975,6 @@ mod save_dest_commit_tests {
         .expect("normalizes");
         assert!(accepted.contains(&same_file_other_case));
         assert!(!accepted.contains(&different_folder));
-    }
-
-    /// Scratch directory for one test, keyed by PROCESS as well as by name.
-    ///
-    /// The pid matters: this suite wipes the directory on entry, `%TEMP%` is shared by every
-    /// process in the wine prefix, and two test binaries running at once (two checkouts, or the
-    /// gate run twice over) then delete each other's files mid-test. Measured that way -- a
-    /// `rename` onto a target whose parent had just been removed came back
-    /// `File not found (os error 2)` and the atomic-write and restore tests failed with nothing
-    /// wrong in the code they cover.
-    fn save_dest_test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "er-save-dest-{name}-p{pid}",
-            pid = std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("test dir");
-        dir
     }
 
     /// The seed and the restore both replace a whole ~29 MB save container. A truncate-then-write
