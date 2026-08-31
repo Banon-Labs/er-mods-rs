@@ -305,12 +305,14 @@ python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
 # failure this whole sweep was called to undo. Leave it red until the launchers land; the suite
 # accumulates failures rather than aborting, so a truthful red here costs a line in the summary
 # and nothing else.
-# UNWIRED 2026-08-31: scripts/er-artifact-redirect-audit.py and its .baseline.txt are STAGED by
-# another agent, and the launcher redirects the live run counts as gaps are uncommitted too, so at
-# THIS commit the selftest loses 4 reader cases and the live run reports 185 gaps. Re-arm both lines
-# in the commit that lands the audit script, its baseline and the launcher changes together.
-# python3 "$repo_root/scripts/er-artifact-redirect-audit.py" --selftest
-# python3 "$repo_root/scripts/er-artifact-redirect-audit.py"
+# RE-ARMED 2026-08-31, both lines, on the condition the note below asked for: the audit script, its
+# baseline AND the launcher changes are now all committed -- the launchers landed in 236b00ce and
+# the script and baseline land with this re-arm. Measured against a detached worktree pinned to the
+# committed tree, not against a working tree holding the producers: `--selftest` PASS with all its
+# reader cases present, and the live run reports 29 launchers / 19 knobs / 1 stated single-slot and
+# no NEW gaps -- against the 185 gaps and 4 lost selftest cases the previous note recorded.
+python3 "$repo_root/scripts/er-artifact-redirect-audit.py" --selftest
+python3 "$repo_root/scripts/er-artifact-redirect-audit.py"
 python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
 python3 "$repo_root/scripts/test-runtime-probe-contract.py"
 python3 "$repo_root/scripts/test-er-readiness-watch.py"
