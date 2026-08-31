@@ -44,6 +44,21 @@ env:
   # without re-verifying: `acb2a19` DELETES `rva_ww_270.rs` and rewrites
   # `rva_ww.rs`/`rva_jp.rs` as 1.17-only, dropping 1.16.2 support entirely.
   FROMSOFTWARE_RS_REV: 1027d24920c0d71fcc17666194d331af0666fc3a
+  # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON. This step used to clone
+  # vswarte/fromsoftware-rs unconditionally, and from 2026-08-30 18:31 that made
+  # this whole workflow dead: `1027d24` and its parent `4284a05` (the ones that
+  # add the Elden Ring 2.7.0.0 / patch 1.17 RVA bundle) exist ONLY on the fork.
+  # Verified against both remotes -- upstream advertises 325 refs and neither sha
+  # is reachable from any of them. So `git checkout` died with `fatal: unable to
+  # read tree`, at step 2 of ~15, and every Rust check below it reported NOTHING:
+  # not pass, not fail. That blind window is exactly when two commits reached
+  # origin that do not compile (15b32ab0, 11af0c60).
+  #
+  # Point this back at https://github.com/vswarte/fromsoftware-rs.git the moment
+  # FROMSOFTWARE_RS_REV names a commit that is merged upstream. It is a clone URL
+  # for a read-only checkout and nothing else; the rev pin above still decides
+  # which game builds the DLLs survive, and it is unchanged.
+  FROMSOFTWARE_RS_REMOTE: https://github.com/chozandrias76/fromsoftware-rs.git
   # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
   # cache of the built binary -- bumping the rev invalidates the cache.
   CUPCAKE_REV: 27b94b8
@@ -60,7 +75,7 @@ jobs:
 
       - name: Check out fromsoftware-rs as sibling
         run: |
-          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git clone "$FROMSOFTWARE_RS_REMOTE" "$GITHUB_WORKSPACE/../fromsoftware-rs"
           git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
 
       - name: Check out MinHook vendor source
@@ -114,6 +129,33 @@ jobs:
         run: cargo install --git https://github.com/eqtylab/cupcake.git --rev "$CUPCAKE_REV" cupcake-cli --locked
 
       - uses: Swatinem/rust-cache@v2
+
+      # DOES THE COMMITTED STATE COMPILE? Deliberately the FIRST Rust step: it is the most basic
+      # claim any gate below makes, and on 2026-08-31 it was false on the shared branch for hours
+      # while a dozen agents built on top of it.
+      #
+      # --workspace IS THE LOAD-BEARING FLAG. The workspace sets
+      # `default-members = ["crates/er-quickload"]`, so a bare `cargo xwin check`/`build` -- the
+      # form scripts/ci-local-check.sh ends with -- selects that one package and exits 0 in a
+      # fraction of a second having compiled nothing else, which reads exactly like a successful
+      # incremental build. Both commits that broke the branch landed a CONSUMER without its
+      # PRODUCER in crates outside er-quickload's dependency closure at that commit
+      # (er-save-suppress; er-quickload's own reference to two crates not yet in the tree), so the
+      # bare form had nothing to say about either.
+      #
+      # --all-targets so `#[cfg(test)]` modules, benches and examples compile too -- a lib-only
+      # check reports OK over a test module naming a helper the commit does not carry. Measured on
+      # a cold cache the same day: 100 s with it, 105 s without, so it costs nothing.
+      #
+      # --keep-going so one broken crate does not hide the state of the rest: without it the run
+      # stops at the first failure and the report understates the damage.
+      #
+      # NO WORKTREE HERE, unlike scripts/check-committed-compiles.sh, which does the same job
+      # locally. That script exists because a developer's working tree still holds the uncommitted
+      # producer and therefore disagrees with the commit; actions/checkout has put the pushed
+      # commit's tree on this runner and nothing else, so the distinction cannot arise.
+      - name: Does the committed state compile (whole workspace, windows target)
+        run: cargo xwin check --workspace --all-targets --keep-going --target x86_64-pc-windows-msvc
 
       - name: Lint - no lossy UTF-8
         run: python3 scripts/check-no-lossy-utf8.py

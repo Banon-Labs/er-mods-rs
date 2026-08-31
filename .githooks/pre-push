@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
+# FORWARDER, NOT A SECOND COPY. This repo carries two hook directories -- `.githooks/` and
+# `scripts/hooks/` -- and clones exist configured for either. They held byte-identical pre-push
+# scripts, which is a copy waiting to diverge: an edit to one leaves the other silently stale, and
+# which of them runs is a local git-config value nobody looks at. `scripts/hooks/` is canonical
+# because it also carries the pre-commit hook, and scripts/install-git-hooks.sh points there.
 set -euo pipefail
-
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
-
-bash scripts/git-pre-push-block-main.sh "$@"
-
-printf 'pre-push: running scripts/ci-local-check.sh\n' >&2
-exec bash scripts/ci-local-check.sh
+exec bash scripts/hooks/pre-push "$@"

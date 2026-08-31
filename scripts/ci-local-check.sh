@@ -35,6 +35,14 @@ EOF
   exit 2
 fi
 
+# IS THIS GATE EVEN INSTALLED? First, because everything below it is reached only through the
+# pre-push hook, and on 2026-08-31 that hook had not run for over a day: `core.hooksPath` still
+# named the pre-rename directory /home/banon/projects/er-effects-rs/.githooks, git resolved its
+# hooks directory to nothing, and no hook ran at all -- silently, because a hook that cannot be
+# found looks exactly like a hook that passed. Selftest first, so the gate is never trusted on its
+# own say-so.
+bash scripts/check-git-hooks-installed.sh --selftest
+bash scripts/check-git-hooks-installed.sh
 python3 scripts/check-no-lossy-utf8.py
 python3 scripts/check-no-timeouts.py
 python3 scripts/test-no-timeouts.py
@@ -58,6 +66,17 @@ python3 scripts/test-cupcake-delivered-shape.py
 cargo fmt --all -- --check
 cargo test -p er-soulsformats -p er-param-inspect
 
+# THIS LINE CHECKS ONE PACKAGE, NOT THE WORKSPACE, AND THAT IS DELIBERATE HERE -- but do not
+# mistake it for a workspace gate. `default-members = ["crates/er-quickload"]` in the root
+# Cargo.toml means the bare form below selects the product crate and its dependency closure and
+# nothing else; er-save-suppress, er-quit-menu, er-invasion-warp and ~30 other members are
+# outside it. Two commits reached origin on 2026-08-31 that this line had nothing to say about.
+#
+# The workspace-wide question is answered by scripts/check-committed-compiles.sh, which the
+# pre-push hook runs just before this script and which asks it of the COMMITTED state rather than
+# the working tree -- the distinction that made both of those commits invisible to every other
+# gate. It keeps its own build cache, so duplicating a `--workspace` check against the working
+# tree here would buy nothing and would grow the main target directory by several GB.
 if command -v cargo-xwin >/dev/null 2>&1; then
   cargo xwin check --target x86_64-pc-windows-msvc
 else

@@ -1,10 +1,34 @@
 #!/usr/bin/env bash
+# Runs at the one moment the damage can still be stopped: after the commits exist, before they
+# reach origin.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-bash scripts/git-pre-push-block-main.sh "$@"
+# GIT FEEDS THE REFS BEING PUSHED ON STDIN, AND IT CAN ONLY BE READ ONCE. Both consumers below
+# need it: the main-push guard reads it to see which refs are involved (and must still see an
+# EMPTY stream as a valid case -- that is one of its own tests), and the compile gate reads it to
+# learn which commits are actually being pushed. So capture it here and replay a copy to each.
+# Before this, `git-pre-push-block-main.sh` drained stdin and anything after it got nothing.
+pushed=$(cat)
+
+printf '%s' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
+
+# DOES THE STATE BEING PUSHED COMPILE? Not "does my working tree compile" -- see the header of
+# scripts/check-committed-compiles.sh for why those are different questions, and how two commits
+# reached origin on 2026-08-31 that answered yes to the second and no to the first.
+#
+# Field 2 of each stdin line is the LOCAL sha being pushed; an all-zero sha means the ref is being
+# DELETED, which has nothing to compile. The TIP of each pushed ref is checked, not every commit
+# in the range: both historical failures were pushed tips, and checking intermediates would
+# multiply the cost for a case that has not happened here.
+mapfile -t pushed_shas < <(printf '%s\n' "$pushed" | awk 'NF >= 2 && $2 !~ /^0+$/ { print $2 }' | sort -u)
+if [[ ${#pushed_shas[@]} -gt 0 ]]; then
+	printf 'pre-push: running scripts/check-committed-compiles.sh on %d pushed tip(s)\n' \
+		"${#pushed_shas[@]}" >&2
+	bash scripts/check-committed-compiles.sh "${pushed_shas[@]}"
+fi
 
 printf 'pre-push: running scripts/ci-local-check.sh\n' >&2
 exec bash scripts/ci-local-check.sh
