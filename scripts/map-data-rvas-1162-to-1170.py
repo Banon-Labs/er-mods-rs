@@ -751,8 +751,11 @@ REFSITE_RESCUED = {
     # +0x1250 -- the same delta as the referencing function itself.
     0x3B37C98: (0x3B3BCA8, "MENU_PUMP_KICK_PTR_RVA", "bracket"),
     0x3B39848: (0x3B3D858, "PROFILE_OFFSCREEN_SIZE_TABLE_RVA", "bracket"),
-    # The stored thunk sits 0xb0 past its referencing function in BOTH images.
-    0x3B48FF0: (0x3B4D050, "STEAM_INTERFACE_GUARD_RVA", "bracket"),
+    # The stored thunk sits 0xb0 past its referencing function in BOTH images. Renamed from
+    # STEAM_INTERFACE_GUARD_RVA 2026-08-31: it is an indirect-CALL slot in the SteamID64 accessor
+    # (`MOV RAX,[0x143b48ff0]; CALL RAX` at 0x140e8d52a, its ONLY reference), not a Steam interface
+    # object, and not read by the save-dir builder at all.
+    0x3B48FF0: (0x3B4D050, "STEAM_ID_ACCESSOR_CALL_SLOT_RVA", "bracket"),
     0x3D61DC0: (0x3D65E20, "NAV_COST_TABLE_RVA", "bracket"),
     # Slots 6 and 10 of the `TitleStep` step table, which `own_stepper_patch_once` writes our
     # handler into. Each has exactly one reference -- the store that fills it -- so the vote alone

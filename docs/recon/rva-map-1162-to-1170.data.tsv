@@ -77,7 +77,7 @@
 0x3b37c98	0x3b3bca8	MENU_PUMP_KICK_PTR_RVA	1/1 bracket
 0x3b39470	0x3b3d480	PROFILE_ANIM_NULL_HANDLE_RVA	4/4
 0x3b39848	0x3b3d858	PROFILE_OFFSCREEN_SIZE_TABLE_RVA	1/1 bracket
-0x3b48ff0	0x3b4d050	STEAM_INTERFACE_GUARD_RVA	1/1 bracket
+0x3b48ff0	0x3b4d050	STEAM_ID_ACCESSOR_CALL_SLOT_RVA	1/1 bracket
 0x3d5b078	0x3d5f0d8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1245	12/12
 0x3d5b088	0x3d5f0e8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1248	0/0 bracket+shape
 0x3d5b0f8	0x3d5f158	CSFILE_SINGLETON_RVA	1246/1249

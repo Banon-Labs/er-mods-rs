@@ -61,8 +61,9 @@ what the answer is compared against.
   PTR      those pointers REACH -- required to be the same literal, occurring exactly once in each
            image, at the source's pointee and the candidate's, with no slot disagreeing and the
            identical test failing at every +-0x8/+-0x10 neighbour. Added 2026-08-31, and it moved
-           two of the four thinnest rows in the ledger out of UNANCHORED: `STEAM_INTERFACE_GUARD`
-           (9 slots, "Resolution-WindowScreenWidth" and eight more) and
+           two of the four thinnest rows in the ledger out of UNANCHORED:
+           `STEAM_ID_ACCESSOR_CALL_SLOT` (9 slots, "Resolution-WindowScreenWidth" and eight more,
+           though see `string_ptr_identity` on WHOSE slots those are) and
            `PROFILE_OFFSCREEN_SIZE_TABLE` (3, "SYSTEX_Menu_Profile01"). Both had been carried by a
            bracket plus a single agreeing reference; neither is a vtable, neither has
            unique-enough accessors, and their pointers are data rather than code, so all four
@@ -576,9 +577,10 @@ def string_ptr_identity(old, new, src, dst):
     accessors are not unique enough to vote, and its pointers are data rather than code so the
     function map cannot pair them.
 
-    That was not a small gap. `STEAM_INTERFACE_GUARD_RVA` and `PROFILE_OFFSCREEN_SIZE_TABLE_RVA`
-    are two of the four thinnest addresses in the ledger -- carried by a bracket alone, with a
-    single agreeing reference each -- and both hold `wchar_t*` slots reaching strings that occur
+    That was not a small gap. `STEAM_ID_ACCESSOR_CALL_SLOT_RVA` and
+    `PROFILE_OFFSCREEN_SIZE_TABLE_RVA` are two of the four thinnest addresses in the ledger --
+    carried by a bracket alone, with a single agreeing reference each -- and both sit in front of
+    `wchar_t*` slots reaching strings that occur
     EXACTLY ONCE per image: "Resolution-WindowScreenWidth" and "Resolution-WindowScreenHeight" for
     the first, "SYSTEX_Menu_Profile01" for the second, each at the source's pointee in 1.16.2 and
     at the candidate's pointee in 1.17. A name that occurs once per image is the same class of
@@ -596,11 +598,14 @@ def string_ptr_identity(old, new, src, dst):
       * and the identical test must FAIL at every +-0x8/+-0x10 neighbour, so the verdict identifies
         an address rather than a neighbourhood.
 
-    THE WINDOW IS TWELVE QWORDS AND THE OBJECT MAY BE SHORTER, which is worth saying plainly:
-    `STEAM_INTERFACE_GUARD_RVA` is a single pointer slot the mod dereferences, and the eight
-    further slots this reads belong to whatever follows it. That does not weaken the claim,
-    because the claim being made is about the POSITION -- the 96 bytes at the candidate hold
-    pointers to the same nine unique strings, in the same order, as the 96 bytes at the source --
+    THE WINDOW IS TWELVE QWORDS AND THE OBJECT MAY BE SHORTER, which is worth saying plainly, and
+    on this row it is not a hypothetical: `STEAM_ID_ACCESSOR_CALL_SLOT_RVA` (renamed 2026-08-31
+    from `STEAM_INTERFACE_GUARD_RVA`) is ONE qword, an indirect-call slot with exactly one
+    reference in the image. The nine slots that carry it here are a graphics-settings key table --
+    "Resolution-WindowScreenWidth" through "EffectsQuality" -- that begins at +0x10, after a
+    `0x8000000a00000000` filler at +0x8, and belongs to a different object entirely. That does not
+    weaken the claim, because the claim being made is about the POSITION -- the 96 bytes at the
+    candidate hold pointers to the same nine unique strings, in the same order, as at the source --
     and the neighbour test above is what stops that from degenerating into "somewhere around here".
     """
     agreed, mismatch, shown = _string_ptr_scan(old, new, src, dst)
@@ -725,12 +730,147 @@ def fnptr_identity(old, new, src, dst, pairs, text_span):
 
 
 # =============================================================================================
+# ANCHOR: the sites that DISPATCH through a table's code-pointer slots
+# =============================================================================================
+
+# Slots read out of a candidate table, and agreeing dispatch sites required. The window is the
+# same twelve qwords the two anchors above read, for the same reason. Two is the same bar the
+# accessor and code-pointer anchors use: one site is a coincidence away from a wrong table.
+CALLSITE_SLOTS = 12
+MIN_CALLSITE_SITES = 2
+
+
+def callsite_identity(old, new, src, dst, votes, old_span, new_span):
+    """Verdict from the call sites that dispatch through the table's slots, or `None`.
+
+    WHY `.pdata` ABSENCE IS NOT FUNCTION ABSENCE, and why that left a hole here. `fnptr_identity`
+    above pairs a table's code pointers through the FUNCTION ledger, which is built from `.pdata`.
+    `.pdata` declares only functions with unwind data: it is blind to leaves, and measurably so --
+    it covers 235,848 entries against the 367,183 functions Ghidra's own analysis finds in 1.16.2
+    (366,673 in 1.17). `MENU_PUMP_KICK_PTR_RVA` falls straight into that gap. Its two slots hold
+    `0x1409b3ff0` and `0x1409b3fe0`, each a five-byte `E9 rel32` thunk into Arxan rubble, neither
+    in either image's `.pdata` and therefore neither in the 128,602-row ledger -- so FNPTR looked
+    at the one row it was most needed for and returned `None`.
+
+    Ghidra sees both. `getFunctionByAddress` answers `thunk_FUN_1458f4ac8` at `0x1409b3ff0` and
+    `thunk_FUN_1405b2d8e` at `0x1409b3fe0` in 1.16.2, and a five-byte thunk at `0x1409b5240` and
+    `0x1409b5230` in 1.17; each has exactly ONE caller, and the callers are `FUN_1409b24e0` and
+    `FUN_1409b3730` -- a pair the function ledger already carries, both 2043 bytes, 28 callees,
+    4 callers. The two dispatch sites sit at the SAME body-relative offsets in each, `+0xdb` and
+    `+0x780`.
+
+    But the thunk itself cannot be the evidence, and that is worth saying rather than glossing:
+    `getXrefsTo` returns exactly two references to each of the four, the table slot and the
+    computed call THROUGH that slot. A thunk reachable only from the table has no identity apart
+    from the table, so pairing it by its own content or its own callers would be reading the
+    answer out of the question. Following its `jmp` does not help either -- the Arxan gadget chain
+    behind it is regenerated per build (1.16.2 spills `r14` where 1.17 spills `rcx`, and ends on
+    `xchg` where 1.17 ends on `push/pop`), so there is no byte or mnemonic comparison to make.
+
+    So this anchor reads the SITES instead, one per slot, with the accessor machinery:
+      * a slot counts only when BOTH images hold a first-`.text` address in it, which is what
+        makes it a code-pointer table rather than a neighbouring global that moved the same way.
+        Bracketing is not an anchor in this file and this must not become one by accident, and the
+        gate is what stops it becoming one: WITHOUT it the same two-site rule fires on 54 of the
+        116 rows, with it on 8. The 46 it drops are brackets wearing this anchor's clothes --
+        `DLUID_SINGLETON_RVA` would have been "corroborated" by the site reading its `+0x8`, which
+        is `FD4_PAD_MANAGER_RVA`, a different global that happens to have moved the same distance;
+      * that slot's rip-relative reference must have a displacement-blanked 24-byte window
+        occurring exactly ONCE in each image -- the accessor test, unchanged -- and its 1.17
+        displacement must land exactly on `dst + offset`;
+      * two such slots are required, and ONE disagreeing slot returns DISAGREE;
+      * and the whole test must fail at every +-0x8/+-0x10 neighbour.
+
+    What that buys over `ACCESSOR-WEAK` is the second instruction. `MENU_PUMP_KICK_PTR_RVA` has a
+    single reference to its base, which is why the accessor anchor calls it a guess; the reference
+    to `+0x8` is a DIFFERENT instruction, 0x6a5 bytes away in the same function, identified by its
+    own unique window, and it lands eight bytes further along. Two independently identified
+    instructions dispatching through `dst+0` and `dst+8` is a positional claim about the table
+    that no single reference can make.
+
+    Of the 8 rows it has an opinion about, 7 are vtables the RTTI anchor reaches first, and on all
+    7 it AGREES -- so the one row it actually promotes arrives with the rule already exercised
+    against seven independently-decided answers. Measured against the controls the STRING-PTR
+    precedent set: `dst+-0x8` returns DISAGREE, `dst+-0x10` and `+-0x18` return `None`, dst reverted
+    to the 1.16.2 address returns `None`, another row's address returns `None`, and the frozen
+    negative returns `None`.
+    """
+    agreed, mismatch = _callsite_scan(old, new, src, dst, votes, old_span, new_span)
+    if mismatch:
+        return "DISAGREE", mismatch
+    if len(agreed) < MIN_CALLSITE_SITES:
+        return None
+    for step in (-0x10, -0x8, 0x8, 0x10):
+        near = dst + step
+        if near < 0 or near + CALLSITE_SLOTS * 8 > len(new):
+            continue
+        near_agreed, near_mismatch = _callsite_scan(old, new, src, near, votes, old_span, new_span)
+        if len(near_agreed) >= MIN_CALLSITE_SITES and not near_mismatch:
+            return (
+                "DISAGREE",
+                f"the same test also passes at 0x{near:x}, so it does not select an address",
+            )
+    where = ", ".join(f"+0x{offset:x}" for offset, _, _ in agreed)
+    unledgered = sum(1 for _, here, _ in agreed if here not in function_pairs())
+    return (
+        "CALLSITE",
+        f"{len(agreed)} dispatch site(s) reach the code-pointer slots at {where}, each identified "
+        f"by a window unique in both images ({unledgered} of the slots hold a pointee absent from "
+        "the function ledger, which is why FNPTR cannot); the same test fails at every "
+        "+-0x8/+-0x10 neighbour",
+    )
+
+
+def _callsite_scan(old, new, src, dst, votes, old_span, new_span):
+    """`(agreeing [(offset, 1.16.2 pointee, 1.17 pointee)], first mismatch text or None)`.
+
+    Split out so the selectivity check above can re-run the identical scan at a neighbour without
+    recursing through the rules that consume its result -- the same shape `_string_ptr_scan` has.
+    """
+    old_low, old_size = old_span
+    new_low, new_size = new_span
+    agreed = []
+    for slot in range(CALLSITE_SLOTS):
+        offset = slot * 8
+        if src + offset + 8 > len(old) or dst + offset + 8 > len(new):
+            break
+        here = struct.unpack_from("<Q", old, src + offset)[0] - BASE
+        there = struct.unpack_from("<Q", new, dst + offset)[0] - BASE
+        if not (old_low <= here < old_low + old_size and new_low <= there < new_low + new_size):
+            continue
+        target, agreeing, _total = votes.get(src + offset, (None, 0, 0))
+        if target is None or agreeing < 1:
+            continue
+        if target != dst + offset:
+            return agreed, (
+                f"the site reading +0x{offset:x} lands on 0x{target:x}, not 0x{dst + offset:x}"
+            )
+        agreed.append((offset, here, there))
+    return agreed, None
+
+# =============================================================================================
 # The audit
 # =============================================================================================
 
 VERIFIED_CODES = (
     "PROVEN", "ORDINAL", "ACCESSORS", "LITERAL", "LITERAL-ORDINAL", "FNPTR", "STRING-PTR",
+    "CALLSITE",
 )
+
+
+def vote_sources(rows):
+    """Every address the anchors below need an accessor vote for.
+
+    A row's own address, plus the twelve qwords `callsite_identity` reads out of it. Named rather
+    than inlined because `anchor_selftest` PRIMES the vote cache in one pass and the two lists must
+    be the same list: `accessor_votes` only reuses its cache when every requested source is already
+    in it, so a priming call that asks for less than the audit does pays the ten-second whole-image
+    scan twice and looks, from the outside, exactly like a cache that is working.
+    """
+    wanted = set()
+    for src, _dst, _const, _note in rows:
+        wanted.update(src + slot * 8 for slot in range(CALLSITE_SLOTS))
+    return sorted(wanted)
 
 
 def audit(rows, old, new, old_cm, new_cm):
@@ -745,9 +885,10 @@ def audit(rows, old, new, old_cm, new_cm):
     new_key = by_key(new_cm)
     old_names = collections.Counter(old_cm.values())
     new_names = collections.Counter(new_cm.values())
-    votes = accessor_votes(old, new, [src for src, _, _, _ in rows])
+    votes = accessor_votes(old, new, vote_sources(rows))
     pairs = function_pairs()
     span = first_text(old)
+    new_span = first_text(new)
     results = []
     for src, dst, const, note in rows:
         code, detail = judge(src, dst, old_cm, new_cm, old_ord, new_key, old_names, new_names)
@@ -771,6 +912,7 @@ def audit(rows, old, new, old_cm, new_cm):
             literal_identity(old, new, src, dst)
             or fnptr_identity(old, new, src, dst, pairs, span)
             or string_ptr_identity(old, new, src, dst)
+            or callsite_identity(old, new, src, dst, votes, span, new_span)
         )
         if verdict is not None:
             results.append((verdict[0], src, dst, const, note, verdict[1]))
@@ -785,7 +927,7 @@ def audit(rows, old, new, old_cm, new_cm):
     return results
 
 
-# The 19 rows this file's anchors do NOT reach, pinned by name so the set can only shrink.
+# The 17 rows this file's anchors do NOT reach, pinned by name so the set can only shrink.
 #
 # It is a list rather than a count so a row LEAVING it (someone found evidence) and a row ENTERING
 # it (someone lost evidence) are different diffs. The data map still carries every one of them on
@@ -794,16 +936,27 @@ def audit(rows, old, new, old_cm, new_cm):
 #
 # Two shapes, and the distinction is the reason the set is not one bucket:
 #
-#   NO-ANCHOR (11) -- zeroed `.data` at rest in BOTH images, reached only from code 1.17 edited
+#   NO-ANCHOR (10) -- zeroed `.data` at rest in BOTH images, reached only from code 1.17 edited
 #   around, so no window is unique on both sides. There is nothing to read and nothing to vote
 #   with. `FIRST_SECTION_RVA` is what pretending otherwise looks like.
 #
-#   ACCESSOR-WEAK (8) -- exactly ONE reference site survives the uniqueness test, and it agrees
+#   ACCESSOR-WEAK (7) -- exactly ONE reference site survives the uniqueness test, and it agrees
 #   with the map. That is corroboration, not proof: one reference inside a function that happens to
 #   have been edited is how a confident wrong address is produced, so it is counted with the
-#   unverified. `MENU_PUMP_KICK_PTR_RVA` and `STEAM_INTERFACE_GUARD_RVA` also hold code pointers,
-#   but none of their targets appears in the 128,602-row function ledger, so FNPTR cannot reach
-#   them either.
+#   unverified.
+#
+# `NAV_COST_TABLE_RVA` is the one to read before trying to shrink this set again, because it is
+# where every anchor above genuinely runs out rather than merely not applying. It is 0x400 bytes of
+# ZEROS in both images with no non-zero qword within +-0x200, so there is no content, no pointer
+# and no neighbour to read. Its three reference sites survive uniqueness in 1.16.2 and match
+# NOTHING in 1.17, and the reason is visible in the bytes: at 0x2ec3a2 the 24-byte window differs
+# from its 1.17 counterpart at 0x2ec3b2 in exactly two places, both rip-relative displacements of
+# OTHER instructions in the window. Masking every operand in the window rather than only the one
+# being read -- the treatment `map-rvas-1162-to-1170.py` gives a function signature -- was measured
+# on it: it rescues ONE of the three sites and leaves the other two at nine-plus matches and zero
+# matches respectively, so the row still falls short of two and the change would have loosened the
+# anchor that carries 58 rows for nothing. So NAV_COST is unanchorable HERE by every method tried,
+# not merely by the one; it is carried by the data map on a bracket and that is all it has.
 #
 # AN ENTRY IS A CONSTANT NAME, OR AN ADDRESS WHERE THERE IS NO NAME. Four rows in the data map are
 # addresses the workspace writes as BARE HEX LITERALS handed to `game_rva`, with no constant
@@ -824,7 +977,6 @@ UNANCHORED = {
     "FD4_IO_POOL_RVA",
     "INNER_TITLE_STATE_TABLE_RVA",
     "IO_DEVICE_SINGLETON_RVA",
-    "MENU_PUMP_KICK_PTR_RVA",
     "MOVIE_SKIP_FLAG_RVA",
     "NAV_COST_TABLE_RVA",
     "PROFILE_MODEL_REND_TABLE_RVA",
@@ -1057,7 +1209,11 @@ def anchor_selftest(old_cm, new_cm):
     # `accessor_votes` cost ten seconds and are only paid when a requested source is missing from
     # the cache -- so asking for the frozen negative later, on its own, paid for them a SECOND
     # time and took this selftest from 13s to 25s, which is the vacuity auditor's whole budget.
-    accessor_votes(old, new, [src for src, _, _, _ in rows] + [FROZEN_NEGATIVE])
+    accessor_votes(
+        old,
+        new,
+        vote_sources(rows + [(FROZEN_NEGATIVE, FROZEN_NEGATIVE, FROZEN_NEGATIVE_NAME, "")]),
+    )
     tally, results = run_anchors(rows, old, new, old_cm, new_cm, quiet=True)
     verified = [row for row in results if row[0] in VERIFIED_CODES]
     print(

@@ -536,17 +536,18 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
             *((wbase + U16STRING_CAP_OFFSET) as *mut usize) = U16STRING_SSO_CAP;
         }
-        // Guard: the builder derefs the Steam interface (*0x143b48ff0) for the account id; skip the
-        // call (logging the cause) if it is null cold -- that would be hypothesis-2 (Steam not live).
-        let steam_iface = unsafe {
+        // Guard: two frames down the builder CALLS through the qword at 0x143b48ff0 (0x140e8d550
+        // -> 0x140e8d510 -> `MOV RAX,[0x143b48ff0]; CALL RAX`), so a null there is `CALL 0`. Skip
+        // the call and log the cause -- that would be hypothesis-2 (Steam not live).
+        let steam_id_call_slot = unsafe {
             safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
-                STEAM_INTERFACE_GUARD_RVA,
-                "STEAM_INTERFACE_GUARD_RVA",
+                STEAM_ID_ACCESSOR_CALL_SLOT_RVA,
+                "STEAM_ID_ACCESSOR_CALL_SLOT_RVA",
             ))
         }
         .unwrap_or(null);
-        if steam_iface != null && allocator != null {
+        if steam_id_call_slot != null && allocator != null {
             let builder: unsafe extern "system" fn(usize) = unsafe {
                 std::mem::transmute(
                     match crate::experiments::gated_game_fn(
@@ -569,7 +570,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         };
         let built_text = decode_u16(dir_data, dir_size);
         append_autoload_debug(format_args!(
-            "cold-char-mount: SAVE-DIR BUILD steam_iface=0x{steam_iface:x} allocator=0x{allocator:x} cap={dir_cap} size={dir_size} data=0x{dir_data:x} text=\"{built_text}\" (size>0 & real path = builder works cold = hypothesis-1 handler-never-ran; size=0 = Steam not live cold = hypothesis-2)"
+            "cold-char-mount: SAVE-DIR BUILD steam_id_call_slot=0x{steam_id_call_slot:x} allocator=0x{allocator:x} cap={dir_cap} size={dir_size} data=0x{dir_data:x} text=\"{built_text}\" (size>0 & real path = builder works cold = hypothesis-1 handler-never-ran; size=0 = Steam not live cold = hypothesis-2)"
         ));
         // Install on the LIVE path-DB slot-0 directory. The setter COPIES our buffer into the slot
         // entry's std::u16string at entry+0xb0 (via 0x14240dce0), so our stack wrapper can be dropped.
