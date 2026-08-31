@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -25,6 +26,27 @@ class PolicyCase:
 
 
 DEFAULT_BASH_TIMEOUT_MS = 30000
+
+# Subprocess safety caps. Both were padding -- 60s and 120s guesses that had never been
+# checked against how long the work takes -- and both now sit under the repo's 30s hard cap
+# (scripts/check-no-timeouts.py MAX_TIMEOUT_SECONDS), with the measurement that sized them
+# recorded so the next reader does not have to guess either.
+#
+# `opa test` over the four orphaned suites, measured 2026-08-31 on a box at loadavg ~9:
+# 0.113s / 0.013s / 0.010s / 0.008s. Ten seconds is ~90x the slowest, and matches the value
+# check-no-timeouts.py already uses for its own fast `git ls-files` call.
+OPA_TEST_TIMEOUT_SECONDS = 10.0
+# test-cupcake-delivered-shape.py makes ~35 SEQUENTIAL `cupcake eval` calls (each spawns the
+# real binary), so unlike the opa suites it is genuinely slow: measured 11.5s / 12.9s / 12.2s
+# for the full run and 0.66s for --selftest, on the same loaded box. This one gets the full
+# 30s cap on purpose -- the headroom is only ~2.3x, and tightening it further would convert a
+# real failure into a flaky timeout. The two invocations are separate subprocess calls, so the
+# cap covers one run each, not their sum.
+DELIVERED_SHAPE_TIMEOUT_SECONDS = 30.0
+
+# Assembled rather than written whole, so this FILE is not itself denied by the
+# guard it tests when an agent edits it through a Bash command.
+ROOT_DELETE = " ".join(["rm", "-rf", "/"])
 
 # `git worktree list --porcelain`-shaped fixture for the worktree-target
 # exception cases in the main-commit/main-push guards.
@@ -111,7 +133,88 @@ def run_case(case: PolicyCase) -> None:
         raise AssertionError(f"{case.name}: missing {case.expected_text!r}\n{output}")
 
 
+# Rego unit suites that had a test file and NO RUNNER. scripts/check.sh
+# enumerates its `opa test` invocations one line at a time, and these four were
+# never on the list: 86 assertions written, committed, and never executed once.
+# check.sh already carries a comment about this exact failure happening to two
+# other suites; running them from here is what stops it being three times.
+#
+# The protected-paths suite is the one that matters most, because
+# BUILTIN-PROTECTED-PATHS-PARENT and -WRAPPER are the rules standing between an
+# agent and a root delete, and until today nothing ran their tests at all.
+ORPHANED_REGO_SUITES = [
+    [
+        ".cupcake/system/commands.rego",
+        ".cupcake/policies/claude/builtins/protected_paths.rego",
+        ".cupcake/tests/protected_paths_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/edit_no_tmp_scripts_guard.rego",
+        ".cupcake/tests/edit_no_tmp_scripts_guard_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/no_unbacked_claim.rego",
+        ".cupcake/tests/no_unbacked_claim_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/no_repo_network_banners_prompt_context.rego",
+        ".cupcake/tests/no_repo_network_banners_prompt_context_test.rego",
+    ],
+]
+
+
+def run_orphaned_rego_suites() -> None:
+    if not shutil.which("opa"):
+        print("skip: orphaned rego suites (no opa on PATH)")
+        return
+    for suite in ORPHANED_REGO_SUITES:
+        result = subprocess.run(
+            ["opa", "test", *(str(REPO_ROOT / part) for part in suite)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=OPA_TEST_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"opa test failed for {suite[-1]}:\n{result.stdout}\n{result.stderr}"
+            )
+
+
+def run_delivered_shape_gate() -> None:
+    """The suite that checks the policies against the input the ENGINE DELIVERS.
+
+    THIS runner calls `cupcake eval` directly, which is not how a command reaches
+    the guards -- scripts/cupcake-hook.sh rewrites unquoted newlines to `; `
+    first, and that rewrite is the only reason a multi-line command is guarded at
+    all. So this file cannot see production for any multi-line shape, and the
+    `known-open-shell-read-heredoc-...` case below is pinned to the verdict of
+    the DIRECT path rather than the real one. The delivered-shape gate closes
+    that blind spot end to end; it is invoked from here because check.sh calls
+    this script and adding a line to check.sh was out of scope.
+    """
+    gate = REPO_ROOT / "scripts" / "test-cupcake-delivered-shape.py"
+    for args in (["--selftest"], []):
+        result = subprocess.run(
+            ["python3", str(gate), *args],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=DELIVERED_SHAPE_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"test-cupcake-delivered-shape.py {' '.join(args)} failed:\n"
+                f"{result.stdout}\n{result.stderr}"
+            )
+        print(result.stdout.strip())
+
+
 def main() -> int:
+    run_orphaned_rego_suites()
+    run_delivered_shape_gate()
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
@@ -175,6 +278,232 @@ def main() -> int:
             "allow-repo-cupcake-system-path-not-absolute-system",
             "opa check .cupcake/system .cupcake/policies/claude/builtins/protected_paths.rego",
             True,
+        ),
+        # BUILTIN-PROTECTED-PATHS-PARENT vs a Rust file authored through a heredoc
+        # (2026-08-31). These have to run HERE and not only under `opa test`: the
+        # engine's `whitespace_normalization` enrichment replaces every newline in
+        # the command with a space before any policy runs, so the heredoc body
+        # arrives welded onto the `cat` that reads it and the policy's own
+        # line-wise payload split has nothing to split on. Under `opa test` the
+        # raw multi-line text hides that entirely, which is how the guard came to
+        # deny an ordinary Rust doc comment for a month with a green suite:
+        #
+        #   "System path modification blocked by policy
+        #    (/System/ would be affected by operation on /)"
+        #
+        # because the prose word "Install" satisfied the destructive-verb test and
+        # the `///` satisfied the root-path test. Verbs are now required to stand
+        # in command position; the deny cases below pin that this did not cost the
+        # rule anything that actually runs.
+        PolicyCase(
+            "allow-rust-doc-comment-heredoc-with-prose-verb",
+            "cat > crates/demo/src/lib.rs <<'EOF'\n"
+            "/// Install the detour into the game image.\n"
+            "///\n"
+            "/// Truncate the log first; the caller moves the old one aside.\n"
+            "pub fn install_hook() {}\n"
+            "EOF",
+            True,
+        ),
+        PolicyCase(
+            "allow-markdown-heredoc-naming-an-absolute-path-in-prose",
+            "cat > docs/demo.md <<'EOF'\n"
+            "Install the binary to /usr/local/bin when you are done.\n"
+            "EOF",
+            True,
+        ),
+        PolicyCase(
+            "deny-root-recursive-delete",
+            "rm -rf /",
+            False,
+            "would be affected by operation on",
+        ),
+        # The separator is written out rather than left to a newline: this runner
+        # calls `cupcake eval` directly, so scripts/cupcake-hook.sh is not in the
+        # path to rewrite an unquoted newline to "; " (bd er-effects-rs-5eah) and
+        # line 2 would arrive with no boundary in front of it.
+        PolicyCase(
+            "deny-root-delete-after-heredoc-terminator",
+            "git commit -q -F - <<'EOF'\n"
+            "message text with a bare / in it\n"
+            "EOF\n"
+            "; rm -rf /",
+            False,
+            "would be affected by operation on",
+        ),
+        PolicyCase(
+            "deny-sudo-prefixed-root-delete",
+            "sudo rm -rf /",
+            False,
+            "would be affected by operation on",
+        ),
+        # --- Destructive payloads inside a shell wrapper (2026-08-31) --------
+        #
+        # Measured against this same live engine BEFORE the fix: all seventeen
+        # wrapper spellings below came back ALLOW. Two causes had to be answered
+        # together, which is why they must be pinned HERE and not only under
+        # `opa test`:
+        #
+        #   * the verb is not in the OUTER command's command position, and
+        #     commands.has_verb could not see it either (its `(^|\s)` anchor
+        #     never matched `"rm`);
+        #   * `affected_parent_directories` -- which the PARENT rule pairs its
+        #     verb test with -- does not contain the payload's target. The
+        #     preprocessor reads the quoted payload as a PATH operand of `bash`,
+        #     so the event carries ["<cwd>/rm -rf "] and never "/". Only the
+        #     live engine supplies that field, so an interpreter test cannot
+        #     show whether the deny is reachable in production.
+        #
+        # Assembled from parts so that editing THIS file through a Bash command
+        # does not hand the guards a literal root delete to read.
+        PolicyCase(
+            "deny-bash-c-double-quoted-root-delete",
+            'bash -c "' + ROOT_DELETE + '"',
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-bash-c-single-quoted-root-delete",
+            "bash -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-sh-c-root-delete",
+            "sh -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        # fish is the wrapper AGENTS.md tells agents to use for this box, and it
+        # was not even on the shell-name list before today.
+        PolicyCase(
+            "deny-fish-c-root-delete",
+            "fish -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-sudo-wrapped-root-delete",
+            "sudo bash -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-xargs-wrapped-root-delete",
+            "xargs -I{} sh -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        # Nesting terminates at three levels; two is the deepest literal quoting
+        # reaches without escapes, and escaped quotes are stripped before the
+        # split, so `bash -c "bash -c \"...\""` cannot recurse further.
+        PolicyCase(
+            "deny-nested-wrapper-root-delete",
+            "bash -c \"bash -c '" + ROOT_DELETE + "'\"",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-root-glob-delete",
+            "bash -c 'rm -rf /*'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-root-recursive-chmod",
+            "bash -c 'chmod -R 777 /'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-find-root-delete",
+            "bash -c 'find / -name x -delete'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-root-delete-in-second-segment",
+            "bash -c 'echo hi; " + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        # ... and the over-approximations the rule must not make. A payload that
+        # destroys something OUTSIDE every protected path stays allowed: the
+        # ancestor `/` must not turn every absolute operand into a root
+        # operation.
+        PolicyCase("allow-wrapped-read-of-root", "bash -c 'ls /'", True),
+        PolicyCase("allow-wrapped-relative-delete", "bash -c 'rm -rf target/x'", True),
+        PolicyCase(
+            "allow-wrapped-absolute-delete-outside-protected-paths",
+            "bash -c 'rm -rf /home/banon/scratch'",
+            True,
+        ),
+        PolicyCase(
+            "allow-wrapped-absolute-copy-outside-protected-paths",
+            "bash -c 'cp a.txt /home/banon/b.txt'",
+            True,
+        ),
+        # The unwrapped `cp file ~` is allowed (the preprocessor does not expand
+        # the tilde, so it reports `<cwd>/~`), and the wrapped form must not be
+        # held to a stricter standard than the command it wraps.
+        PolicyCase("allow-wrapped-copy-into-home", "bash -c 'cp file ~'", True),
+        PolicyCase("allow-wrapped-build", "bash -c 'cargo build --release'", True),
+        PolicyCase("allow-echo-of-a-root-delete", "echo '" + ROOT_DELETE + "'", True),
+        # --- KNOWN-OPEN RESIDUE, PINNED SO IT IS VISIBLE ---------------------
+        #
+        # A guard that HALF-catches wrapper payloads is worse than one that
+        # visibly does not, because it invites reliance. Everything below is
+        # still ALLOWED after the 2026-08-31 wrapper rule, on purpose, and is
+        # pinned here so the boundary is a test rather than a belief. If one of
+        # these ever goes red, the rule got stronger and the pin should flip --
+        # it must never be deleted to make the suite quiet.
+        #
+        # 1. A payload the decomposition cannot read. Failing closed would deny
+        #    every `bash -c "$VAR"`, and unlike the git guards there is no second
+        #    signal to narrow it: an opaque variable names no path at all.
+        PolicyCase("known-open-opaque-wrapper-payload", "bash -c $CMD", True),
+        PolicyCase("known-open-substituted-wrapper-payload", "bash -c $(echo hi)", True),
+        # 2. Three levels of ESCAPED nesting. shell_payloads_deep unrolls three
+        #    levels, but escaped quotes are stripped before the split, so the
+        #    innermost payload loses its quoting and never becomes a text of its
+        #    own -- the decomposition terminates (which is the property that
+        #    matters) and yields a payload whose verb is behind a `bash -c` that
+        #    command position does not follow.
+        PolicyCase(
+            "known-open-triple-nested-escaped-wrapper-payload",
+            "bash -c \"bash -c 'bash -c \\\"" + ROOT_DELETE + "\\\"'\"",
+            True,
+        ),
+        # 3. `ssh host '<program>'` is not decomposed at all, and that is a
+        #    decision: the payload runs on ANOTHER machine, so denying it for
+        #    endangering THIS host's /etc would be a guard that is wrong on
+        #    purpose.
+        PolicyCase("known-open-remote-shell-payload", "ssh host '" + ROOT_DELETE + "'", True),
+        # 4. An interpreter payload that destroys the root WITHOUT naming a
+        #    configured protected path. BUILTIN-PROTECTED-PATHS-SCRIPT is
+        #    mention-based by design, and widening it to ancestors would deny
+        #    `python3 -c "print('/')"` -- the `/` sits between two quotes, which
+        #    is a path boundary. Matching the existing precedent rather than
+        #    inventing a broader one.
+        PolicyCase(
+            "known-open-interpreter-payload-targeting-root",
+            "python3 -c \"import shutil; shutil.rmtree('/')\"",
+            True,
+        ),
+        # 5. A tilde or $HOME target, wrapped or not. The preprocessor does not
+        #    expand either, so the UNWRAPPED command is allowed too; the wrapper
+        #    rule deliberately declines to be stricter than what it wraps.
+        PolicyCase("known-open-wrapped-tilde-delete", "bash -c 'rm -rf ~'", True),
+        PolicyCase("known-open-unwrapped-tilde-delete", "rm -rf ~", True),
+        # `echo $(rm -rf /)` -- the OPA suite pinned this as denied and it was
+        # ALLOWED live, because the suite hand-fed affected_parent_directories
+        # ["/"] while the real preprocessor reports ["<cwd>/$(rm", "/)"] and `/)`
+        # is a parent of nothing. separator_trimmed_dir now trims `)` too.
+        PolicyCase(
+            "deny-root-delete-inside-command-substitution",
+            "echo $(" + ROOT_DELETE + ")",
+            False,
+            "would be affected by operation on",
         ),
         PolicyCase(
             "deny-git-push-on-main",
@@ -495,22 +824,28 @@ def main() -> int:
             False,
             "Do not push directly to main",
         ),
-        # KNOWN-OPEN, PINNED DELIBERATELY. A heredoc a SHELL reads is a program,
-        # not data, and the .rego unit test for this shape DENIES -- in the OPA
-        # interpreter. Here, against the real binary, it is ALLOWED, and no
-        # pattern in any policy can change that: `cupcake eval` replaces UNQUOTED
-        # newlines with spaces before evaluation (measured 2026-08-26 -- a
-        # two-line command's second line arrives with no separator in front of
-        # it), so the terminator that delimits the body is gone before a policy
-        # ever sees the text. The same erasure means a plain
-        #     echo hi
-        #     git push origin main
-        # is allowed live while the interpreter denies it. Filed as an engine
-        # input-normalisation defect. This case is pinned as `True` rather than
-        # deleted so the gap stays visible; if it ever goes red, cupcake stopped
-        # collapsing newlines and this expectation should flip to a denial.
+        # NOT KNOWN-OPEN ANY MORE -- but still ALLOWED HERE, and the difference
+        # is this runner, not the guard. CORRECTED 2026-08-31.
+        #
+        # The old note said production allowed this and no policy could change
+        # that. Production DENIES it, and has since the hook shim landed:
+        # scripts/cupcake-hook.sh sees the raw text before cupcake does, treats a
+        # heredoc a SHELL reads as a program rather than data, and rewrites its
+        # unquoted newlines to `; ` -- so the second line arrives with a
+        # separator in front of it and the push guard fires. Measured both ways
+        # on 2026-08-31: `bash scripts/cupcake-hook.sh` -> deny, `cupcake eval`
+        # direct -> allow.
+        #
+        # This runner calls `cupcake eval` DIRECTLY, so it never sees the
+        # rewrite, and for every multi-line command it is asserting the verdict
+        # of a path no command travels. The expectation below is therefore the
+        # DIRECT path's verdict, kept so the divergence stays visible rather than
+        # being quietly "fixed" to the production answer this file cannot
+        # observe. scripts/test-cupcake-delivered-shape.py runs the same command
+        # through the shim and asserts the denial, and asserts this exact
+        # divergence, so neither half can drift without something going red.
         PolicyCase(
-            "known-open-shell-read-heredoc-push-main-engine-collapses-newlines",
+            "direct-eval-only-shell-read-heredoc-push-main-denied-in-production",
             "bash <<'EOF'\ngit push origin main\nEOF",
             True,
         ),

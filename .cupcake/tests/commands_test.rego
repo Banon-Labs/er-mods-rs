@@ -57,6 +57,45 @@ test_nested_wrapper_payload_two_levels if {
 	push_main in commands.executed_texts(concat("", ["bash -c 'bash -c \"", push_main, "\"'"]))
 }
 
+# --- shells that were NOT on the list (2026-08-31) -----------------------------
+#
+# `(ba|z|k|da|a)?sh` covered eight names and missed three. fish is the one that
+# mattered: this repo's own AGENTS.md instructs agents to wrap commands for fish,
+# so `fish -c '<guarded command>'` was a bypass the instructions recommend.
+# Measured before the fix -- all three decomposed to the EMPTY set, which every
+# caller reads as "no payload here", i.e. an allow.
+
+test_fish_payload if {
+	push_main in commands.executed_texts(concat("", ["fish -c '", push_main, "'"]))
+}
+
+test_csh_payload if {
+	push_main in commands.executed_texts(concat("", ["csh -c '", push_main, "'"]))
+}
+
+test_tcsh_payload if {
+	push_main in commands.executed_texts(concat("", ["tcsh -c '", push_main, "'"]))
+}
+
+# ... and the alternation must still consume the token WHOLE from its boundary,
+# so a longer word merely ENDING in a shell name is not a wrapper. Without this
+# the widening would be a licence to read any `*sh`-suffixed program's quoted
+# argument as shell.
+test_longer_word_ending_in_a_shell_name_is_not_a_wrapper if {
+	not push_main in commands.executed_texts(concat("", ["mycsh -c '", push_main, "'"]))
+}
+
+test_longer_word_ending_in_fish_is_not_a_wrapper if {
+	not push_main in commands.executed_texts(concat("", ["wifish -c '", push_main, "'"]))
+}
+
+# `ssh host '<program>'` is deliberately NOT a payload: it runs on another
+# machine, so reading it here would have the protected-path rules reason about
+# THIS host's filesystem from a program that cannot reach it.
+test_ssh_remote_argument_is_not_a_local_payload if {
+	not push_main in commands.executed_texts(concat("", ["ssh host '", push_main, "'"]))
+}
+
 # --- a quoted OPERAND is not a payload ----------------------------------------
 
 # `python3 -c` takes a Python program, not shell, so its argument must not be
@@ -208,4 +247,93 @@ test_unquoted_view_drops_quoted_spans if {
 
 test_unquoted_view_keeps_wrapper_payloads if {
 	push_main in commands.executed_unquoted_texts(concat("", ["bash -c '", push_main, "'"]))
+}
+
+# --- COMMAND POSITION ---------------------------------------------------------
+#
+# has_command_verb answers "is this word the program a shell would run", which is
+# what a destructive-verb test actually means. Assembled from parts, like
+# push_main above, so editing this file through a Bash command does not hand the
+# guards a literal root delete to read.
+
+root_delete := concat(" ", ["rm", "-rf", "/"])
+
+test_command_verb_at_start_of_text if {
+	commands.has_command_verb(root_delete, "rm")
+}
+
+test_command_verb_after_semicolon if {
+	commands.has_command_verb(concat("", ["echo hi; ", root_delete]), "rm")
+}
+
+test_command_verb_after_and_and if {
+	commands.has_command_verb(concat("", ["echo hi && ", root_delete]), "rm")
+}
+
+test_command_verb_after_pipe if {
+	commands.has_command_verb(concat("", ["echo hi | ", root_delete]), "rm")
+}
+
+test_command_verb_after_newline if {
+	commands.has_command_verb(concat("", ["echo hi\n", root_delete]), "rm")
+}
+
+test_command_verb_inside_command_substitution if {
+	commands.has_command_verb(concat("", ["echo $(", root_delete, ")"]), "rm")
+}
+
+# Wrappers must be followed, or tightening would lose real invocations.
+
+test_command_verb_behind_sudo if {
+	commands.has_command_verb(concat(" ", ["sudo", root_delete]), "rm")
+}
+
+test_command_verb_behind_sudo_with_options if {
+	commands.has_command_verb(concat(" ", ["sudo", "-u", "root", root_delete]), "rm")
+}
+
+test_command_verb_behind_env_assignment if {
+	commands.has_command_verb(concat(" ", ["env", "FOO=1", root_delete]), "rm")
+}
+
+test_command_verb_behind_bare_assignment if {
+	commands.has_command_verb(concat(" ", ["TMPDIR=/x", root_delete]), "rm")
+}
+
+test_command_verb_behind_nohup if {
+	commands.has_command_verb(concat(" ", ["nohup", root_delete]), "rm")
+}
+
+test_command_verb_behind_xargs_with_flag if {
+	commands.has_command_verb(concat(" ", ["xargs", "-0", root_delete]), "rm")
+}
+
+test_command_verb_after_then if {
+	commands.has_command_verb(concat("", ["if true; then ", root_delete, "; fi"]), "rm")
+}
+
+# The whole point: prose is not a program. Written in LOWER CASE deliberately --
+# callers fold case before testing verbs, and a capitalised "Install" would make
+# these pass on the case mismatch instead of on command position, which is not
+# the property under test.
+
+test_prose_word_in_rust_doc_comment_is_not_a_command_verb if {
+	not commands.has_command_verb("cat > src/lib.rs <<'EOF' /// install the detour EOF", "install")
+}
+
+test_prose_word_in_line_comment_is_not_a_command_verb if {
+	not commands.has_command_verb("cat > src/lib.rs <<'EOF' // install the thing EOF", "install")
+}
+
+test_prose_word_mid_sentence_is_not_a_command_verb if {
+	not commands.has_command_verb("echo the installer will install things", "install")
+}
+
+test_word_as_an_operand_is_not_a_command_verb if {
+	not commands.has_command_verb("git commit -m install notes", "install")
+}
+
+# has_verb, by contrast, matches all of those -- which is exactly the difference.
+test_has_verb_still_matches_prose_so_the_two_are_not_interchangeable if {
+	commands.has_verb("echo the installer will install things", "install")
 }
