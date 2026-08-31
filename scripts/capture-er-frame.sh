@@ -110,10 +110,36 @@ cd "$GAME_DIR"
 # exec -> this shell BECOMES the foreground me3 CLI, which owns the compat-tool/wine tree and holds
 # the game until you quit. RenderDoc capture is enabled via the implicit Vulkan layer's enable var;
 # VKD3D_CONFIG=force_host_cached stabilises capture.
+#
+# EVERY per-run artifact is redirected into ARTIFACT_DIR. Anything left in GAME_DIR is SINGLE-SLOT:
+# the DLL rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone and a
+# harness that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two
+# launches destroyed a 5.4 MB continue trace nobody had read. Add a line here for any future log
+# rather than copying it out at teardown -- a copy after the run cannot recover a file this run
+# clobbered at launch, and a crashed run never reaches the copy at all. `ER_QUICKLOAD_
+# AUTOLOAD_DEBUG_PATH` also relocates the portrait-capture-slot*.bin dumps, which the DLL writes
+# beside it (er-loading-portrait-core `dump_portrait_rgba`).
 exec env \
   ENABLE_VULKAN_RENDERDOC_CAPTURE=1 \
   RENDERDOC_CAPFILE="$RENDERDOC_CAPFILE" \
   VKD3D_CONFIG="${VKD3D_CONFIG:-force_host_cached}" \
   ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
   ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+  ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+  ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+  ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+  ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
   "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-quickload-capture.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1

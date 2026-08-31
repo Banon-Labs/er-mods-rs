@@ -4,6 +4,19 @@
 This package intentionally excludes the actual DLL and all save files. It contains
 only docs/examples/launcher glue so it is safe to share without bundling binaries
 or user/game save data.
+
+er-artifact-redirect: single-slot -- the generated `run-er-quickload-release.sh` sets no `ER_QUICKLOAD_*`, so an end user's logs land beside eldenring.exe under one predictable set of names they can attach to a bug report, instead of a tree of timestamped run directories.
+
+That exemption is stated here rather than left silent because the previous shape of this audit
+could not tell "deliberately single-slot" from "compliant": this generator produces no `me3 launch`
+command of its own (the launch lives inside the heredoc string it writes), so it appeared in no
+report at all -- which reads exactly like a clean tree.
+
+WHAT IT COSTS THE USER, SAID PLAINLY. `er_game_base::log::begin_fresh_run` keeps ONE previous
+generation as `<name>.prev`, so a user's second launch after a crash overwrites the crash they were
+trying to report. Whether the shipped launcher should mint a per-run directory (and where -- next
+to the game, or under the user's data dir) is a PRODUCT decision about what an end user should
+find, not a bug in this generator, and it is deliberately not made here.
 """
 
 from __future__ import annotations

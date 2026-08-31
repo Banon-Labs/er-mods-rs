@@ -28,12 +28,14 @@ const LOG_FILE_NAME: &str = "er-diag-harness.log";
 static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// The trace log's absolute path: beside `eldenring.exe`, falling back to the CWD only when the
-/// module path cannot be resolved at all.
+/// The trace log's absolute path: the launcher's redirect if it set one, else beside
+/// `eldenring.exe`, falling back to the CWD only when the module path cannot be resolved at all.
+///
+/// The redirect is what lets a run's evidence outlive the NEXT run: the game-directory copy is
+/// single-slot, so two launches lose the run before last. Resolution lives in
+/// `er_game_base::log` so every per-run artifact answers "where does this go" the same way.
 fn log_path() -> PathBuf {
-    er_game_base::log::game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(LOG_FILE_NAME)
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_DIAG_HARNESS_PATH", LOG_FILE_NAME)
 }
 
 fn open_log_file() -> Option<Mutex<File>> {

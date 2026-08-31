@@ -47,9 +47,16 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
-for d in "$HARNESS_DLL" "$TELEM_DLL" "$BADGE_DLL"; do
-	[[ -f "$d" ]] || fail "DLL not built: $d (cargo xwin build --release --target x86_64-pc-windows-msvc)"
-done
+# FRESHNESS, NOT EXISTENCE. This loop asserted only that three files exist, and the profile
+# below points me3 straight at target/.../release -- so the badge oracle could be scored against
+# a badge DLL from last week and report "0 DRAWN" for code that has since been fixed. The
+# report.txt footer records mtime + sha AFTER the fact, which is provenance for the archive, not
+# a gate: nothing consulted it before launching. This is the gate.
+# shellcheck source=scripts/er-dll-freshness.sh
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/er-dll-freshness.sh"
+require_fresh_dlls "$HARNESS_DLL" "$TELEM_DLL" "$BADGE_DLL" ||
+	fail "refusing to launch against DLLs that are not this source tree (see above)"
 if python3 "$REPO_ROOT/scripts/detect-proc.py" 'eldenring\.exe|start_protected_game\.exe' >/dev/null 2>&1; then
 	fail "An Elden Ring process is already running. Tear it down before launching (never a blanket kill)."
 fi
@@ -134,9 +141,14 @@ export ER_ARMAMENT_ICONS_TARGET="${TARGET:-}"
 # NO save redirect: pure APPDATA vanilla save (whatever character is last-active).
 [[ -f "$GAME_DIR/er-quickload.toml" ]] && mv -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
 # Sweep stale logs/markers so a prior run cannot pollute this one.
-rm -f "$GAME_DIR"/er-armament-icons.log "$GAME_DIR"/er-input-harness.log \
-	"$GAME_DIR"/er-input-harness-phases.jsonl "$GAME_DIR"/er-telemetry-timeseries.jsonl \
-	"$GAME_DIR"/er-harness-probe-hold-id.txt "$GAME_DIR"/er-harness-os-input.txt \
+# THE THREE REDIRECTED LOGS ARE NO LONGER SWEPT FROM GAME_DIR. er-input-harness.log,
+# er-input-harness-phases.jsonl and er-telemetry-timeseries.jsonl are written into ARTIFACT_DIR now,
+# so a copy left in the game directory belongs to ANOTHER session -- and deleting the live file takes
+# its `.prev` with it, because `begin_fresh_run` drops a stale `.prev` when the live file is absent.
+# That is two runs' evidence, neither of them this one's. er-armament-icons.log joined them on
+# 2026-08-31 (ER_QUICKLOAD_ARMAMENT_ICONS_PATH), so nothing this run writes is left in GAME_DIR and
+# only the marker/control .txt files below are cleared.
+rm -f "$GAME_DIR"/er-harness-probe-hold-id.txt "$GAME_DIR"/er-harness-os-input.txt \
 	"$GAME_DIR"/er-harness-native-quit.txt "$GAME_DIR"/er-harness-force-drive.txt \
 	"$GAME_DIR"/er-armament-icons-force-icon.txt "$GAME_DIR"/er-armament-icons-target.txt 2>/dev/null
 # Write fresh diagnostic markers (AFTER the sweep) when set.
@@ -211,9 +223,53 @@ echo "======================================================================"
 if [[ "$ME3_NATIVE" == 1 ]]; then
 	# Same invocation shape as the known-good ~/Elden/launch.sh (offline comes from the
 	# profile's start_online=false; me3 runs from the game dir).
-	(cd "$GAME_DIR" && "$ME3" --steam-dir "$ME3_STEAM_DIR" launch -p "$PROFILE" -g eldenring -e "$GAME_DIR/eldenring.exe") >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+	# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+	# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last,
+	# and several sessions launch concurrently here. A copy after the run cannot fix that -- by then
+	# this run has clobbered the previous one's file -- and a crashed run never reaches the copy.
+	(cd "$GAME_DIR" && env \
+		ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+		ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+		ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+		ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+		ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+		ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+		ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+		ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+		ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+		ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+		ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+		ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+		ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+		ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+		ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+		ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+		ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+		ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+		ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+		"$ME3" --steam-dir "$ME3_STEAM_DIR" launch -p "$PROFILE" -g eldenring -e "$GAME_DIR/eldenring.exe") >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 else
-	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+	env \
+		ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+		ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+		ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+		ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+		ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+		ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+		ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+		ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+		ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+		ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+		ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+		ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+		ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+		ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+		ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+		ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+		ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+		ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+		ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+		"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 fi
 
 # --- delegate the timed watch + teardown to the Python watcher (no shell sleep;

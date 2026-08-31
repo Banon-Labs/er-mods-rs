@@ -36,6 +36,15 @@
 //! proves the SL submit is the only *known* write path, and the census is what would
 //! catch an unknown one.
 
+// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
+// warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-save-disable`
+// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
+// target is unaffected: this allow does not exist there.
+// scripts/check-save-disable-warnings.py still holds the windows build to zero warnings.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 #[cfg(windows)]
 mod hooks;
 mod telemetry;
@@ -43,11 +52,10 @@ mod witness;
 
 use std::{
     fmt,
-    path::PathBuf,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use er_game_base::log::{append_line, game_directory_path};
+use er_game_base::log::{append_line, redirected_artifact_path};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -91,10 +99,19 @@ pub(crate) fn hooks_installed() -> usize {
     HOOKS_INSTALLED.load(Ordering::SeqCst)
 }
 
+/// Append one census line, into THIS run's directory when the launcher named one.
+///
+/// The game-directory copy of this log is SINGLE-SLOT: `er_game_base::log::begin_fresh_run`
+/// keeps exactly one previous generation, so two launches lose the run before last, and
+/// several sessions launch concurrently in this repo. Worse, `run-save-census-probe.sh` used
+/// to `rm -f` the live file before launching, and the rotation removes a stale `.prev`
+/// unconditionally when the live file is absent -- so that swept away TWO runs' census
+/// evidence at once, neither of them the deleting run's. The redirect is what lets a launcher
+/// hand each run its own directory; the game-directory fallback stays because the env has to
+/// survive `launch.sh` -> me3 -> Proton and a log written nowhere reads as "the DLL never
+/// loaded", which is the exact false negative this census exists to rule out.
 pub(crate) fn log_message(args: fmt::Arguments<'_>) {
-    let path = game_directory_path()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(LOG_FILE_NAME);
+    let path = redirected_artifact_path("ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH", LOG_FILE_NAME);
     let seq = LOG_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
     append_line(&path, format_args!("[{seq:06}] {args}"));
 }

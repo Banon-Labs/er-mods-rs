@@ -169,7 +169,6 @@ static ORIG_CAP_DIALOG_FACTORY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNS
 static ORIG_MENU_WINDOW_JOB_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MENU_WINDOW_JOB_IDLE_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static ORIG_TITLE_NATIVE_READY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 
 struct HookSpec {
     name: &'static str,
@@ -210,16 +209,31 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+/// This run's trace path: the launcher's redirect, else `LOG_PATH` beside `eldenring.exe`.
+///
+/// THE BIGGEST PRODUCER IN THE REPO, AND UNTIL NOW THE LEAST MOVABLE. This trace runs at roughly
+/// 655 MB/hour, and it used to resolve as a bare CWD-relative name that no launcher could move, so
+/// every launch rotated the previous run's trace to `.prev` and the launch after that destroyed it
+/// outright. The redirect (and the game-directory fallback behind it) lives in
+/// `er_game_base::log`, shared with every other per-run artifact so there is ONE convention for
+/// where a run's evidence goes rather than one per crate.
+///
+/// This is an output PATH, not a runtime gate: nothing this DLL does changes with it, and the
+/// crate reads no environment itself — `.auto/reload_trace_policy.rego` still holds.
+fn log_path() -> std::path::PathBuf {
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_RELOAD_TRACE_PATH", LOG_PATH)
+}
+
 /// Cached appending handle onto a log this process freshened on its first write. The one-shot
 /// truncation lives in `er_game_base::log`, so the handle can be held for the whole run.
 fn open_log_file() -> Option<Mutex<File>> {
-    er_game_base::log::open_fresh_run_append(std::path::Path::new(LOG_PATH)).map(Mutex::new)
+    er_game_base::log::open_fresh_run_append(&log_path()).map(Mutex::new)
 }
 
 /// Start this run's trace clean at attach. Rotates the previous run's file to `.log.prev`
 /// rather than destroying it (this used to be a bare `File::create`).
 fn reset_log_file() {
-    er_game_base::log::begin_fresh_run(std::path::Path::new(LOG_PATH));
+    er_game_base::log::begin_fresh_run(&log_path());
 }
 
 fn log_line(args: fmt::Arguments<'_>) {
@@ -663,11 +677,6 @@ define_trace_hook!(
     ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
     "menu_window_job_idle_ctor_7acf80"
 );
-define_trace_hook!(
-    hook_title_native_ready,
-    ORIG_TITLE_NATIVE_READY,
-    "title_native_ready_733150"
-);
 
 static HOOKS: &[HookSpec] = &[
     HookSpec {
@@ -886,12 +895,32 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_menu_window_job_idle_ctor,
         original: &ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
     },
-    HookSpec {
-        name: "title_native_ready_733150",
-        rva: 0x733150,
-        detour: hook_title_native_ready,
-        original: &ORIG_TITLE_NATIVE_READY,
-    },
+    // title_native_ready_733150 REMOVED 2026-08-30. The address is real and unchanged (1.16.2
+    // `bool FUN_140733150(SceneObjProxy*)` -> `(scaleformValue.dataType & 0x8f) != 0`, "is this
+    // proxy bound to a real GFx display object"; BYTE-IDENTICAL at 1.17 0x733fa0). It was dropped
+    // because observing it HERE was duplicative and, co-loaded, actively misleading:
+    //
+    //   DUPLICATIVE. `er-quickload` detours the same prologue for the same purpose as
+    //   `cap_title_native_ready_733150` (its `experiments/trace/menu_trace_hooks.rs`, via
+    //   `er_title_flow::TITLE_NATIVE_READY_PREDICATE_RVA`), gated by `trace_continue_enabled()` =
+    //   `product_autoload_enabled()` -- i.e. ON in a default product run. Every profile that
+    //   carries this DLL also carries the product (`~/Elden/group-1170.me3`,
+    //   `main-all-dlls.me3`, `main-all-dlls-no-mushroom.me3`, `invasion-path-test.me3`), so the
+    //   observation was never actually lost by removing it here.
+    //
+    //   MISLEADING. `er-armament-icons` CALLS this predicate -- it does not detour it -- from
+    //   `hud_badge.rs` and four sites in its `lib.rs`, on the TilePopulate path (its own counters
+    //   heartbeat every 512 fires). `trace_hook` writes TWO unthrottled lines per call, each
+    //   embedding a `snapshot()` that reads GameMan, under the log file's mutex. In the profiles
+    //   above that meant every inventory tile emitting a pair of log lines labelled
+    //   `title_native_ready_733150` -- attributing another DLL's icon queries to the native title
+    //   flow, in a DLL whose entire product is a truthful trace.
+    //
+    // This is the ONE prologue this crate shared with a shell it had no union relationship to, and
+    // `scripts/check-shared-hook-rvas.py` is what surfaced it. Restoring the row is legitimate for
+    // a standalone title-flow investigation (`~/Elden/sweep-er-reload-trace.me3`, no product, no
+    // armament-icons); if you do, expect the gate to ask for a conflict-table entry naming
+    // er-armament-icons, and read that entry's reasoning before writing one.
     HookSpec {
         name: "finalize_advancer_afa6d0",
         rva: 0xafa6d0,

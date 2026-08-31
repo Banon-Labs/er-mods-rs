@@ -77,7 +77,12 @@ rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-sy
 	"$GAME_DIR"/er-quickload-prove-movement.txt "$GAME_DIR"/er-quickload-stay-active.txt \
 	"$GAME_DIR"/er-quickload-probe-foreground.txt "$GAME_DIR"/er-quickload-switch-slot.txt 2>/dev/null
 # Clean slate for logs/telemetry so this run is not polluted by a prior one.
-rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-quickload-telemetry.json 2>/dev/null
+# THE GAME_DIR LOG SWEEP IS GONE ON PURPOSE. It used to read
+#   rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log \
+#         "$GAME_DIR"/er-quickload-telemetry.json
+# and it destroyed TWO generations of somebody ELSE's run: `begin_fresh_run` removes `<name>.prev`
+# unconditionally when the live file is absent. Every log this run writes now lands in a fresh
+# per-run ARTIFACT_DIR, so the clean slate is free and takes nobody else's evidence with it.
 
 # shellcheck disable=SC2317
 cleanup() {
@@ -96,7 +101,32 @@ echo "==   Game -> angrE). The oracle_* timeseries records the NATIVE load =="
 echo "==   observe window ${OBSERVE_SECONDS}s  cap=${CAP_SECONDS}s  artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 
-"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last --
+# and several sessions launch concurrently here, which makes that normal rather than a race. A copy
+# after the run cannot fix it (this run clobbered the previous one's file at LAUNCH) and never runs
+# at all when the game crashes, which is exactly the run whose evidence matters.
+env \
+	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+	ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+	ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+	ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+	ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+	ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+	ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+	ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+	ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+	ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+	ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 
 python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--game-dir "$GAME_DIR" \
@@ -106,6 +136,9 @@ python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	--observe-only --observe-seconds "$OBSERVE_SECONDS"
 RC=$?
 
-[[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"
+# FALLBACK ONLY -- the trace is redirected into ARTIFACT_DIR at launch. This copy covers the case
+# where the env did not survive me3 -> Proton and the DLL fell back to the game directory.
+[[ -f "$ARTIFACT_DIR/er-reload-trace.log" ]] ||
+	{ [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"; }
 echo "== vanilla-continue capture done rc=$RC ; timeseries -> $ARTIFACT_DIR/telemetry-timeseries.jsonl =="
 exit "$RC"

@@ -52,6 +52,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import artifact_env  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 GAME_DIR = Path(
     os.environ.get(
@@ -90,7 +93,10 @@ PORTRAIT_KEYS = [
     "oracle_boot_view_native_exposure_frames",
     # er-effects-rs-wmw defect #1: frames where the game's own loading screen reached the
     # screen with our cover absent -- the vanilla flash-through, per-frame.
-    "oracle_native_ls_exposure_frames", "oracle_native_ls_covered_frames",
+    # `_owned_frames` is the verdict number: `_frames` also counts loading screens the product
+    # never covers (fast travel, death, area transition), which is not a defect.
+    "oracle_native_ls_exposure_frames", "oracle_native_ls_exposure_owned_frames",
+    "oracle_native_ls_exposure_owned_first_ms", "oracle_native_ls_covered_frames",
     "oracle_native_ls_exposure_max_run", "oracle_native_ls_exposure_by_gate",
     "oracle_native_ls_exposure_last_gate", "oracle_native_ls_exposure_last_stop_reason",
     "oracle_native_ls_exposure_first_ms", "oracle_native_ls_exposure_last_ms",
@@ -167,15 +173,27 @@ class GameDirWatch:
     IN_CREATE = 0x00000100
     IN_NONBLOCK = 0o4000
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, *directories: Path) -> None:
+        """Watch EVERY directory the DLL might write into, not just the game directory.
+
+        Since 2026-08-31 the artifacts are redirected into this run's own directory, so an inotify
+        watch on the game directory alone would sit quiet through a perfectly healthy run and the
+        readiness primitive would time out on a game that was writing the whole time. The game
+        directory stays watched because the redirect has to survive `launch.sh` -> me3 -> Proton,
+        and when it does not the DLL falls back there.
+        """
         self._libc = ctypes.CDLL("libc.so.6", use_errno=True)
         self.fd = self._libc.inotify_init1(self.IN_NONBLOCK)
         if self.fd < 0:
             raise OSError("inotify_init1 failed")
-        if self._libc.inotify_add_watch(
-            self.fd, str(directory).encode(), self.IN_MODIFY | self.IN_CREATE
-        ) < 0:
-            raise OSError(f"inotify_add_watch failed on {directory}")
+        watched = 0
+        for directory in directories:
+            if self._libc.inotify_add_watch(
+                self.fd, str(directory).encode(), self.IN_MODIFY | self.IN_CREATE
+            ) >= 0:
+                watched += 1
+        if watched == 0:
+            raise OSError(f"inotify_add_watch failed on all of {directories}")
 
     def wait(self, budget_s: float) -> bool:
         ready, _, _ = select.select([self.fd], [], [], budget_s)
@@ -285,6 +303,27 @@ def capture(out: Path) -> None:
         log("screenshot helper timed out (non-fatal)")
 
 
+
+def redirect_artifacts(art: Path) -> dict[str, str]:
+    """Send this run's DLL artifacts into `art`, and point OUR OWN readers at the same place.
+
+    A game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames `<name>`
+    to `<name>.prev` and truncates on the first write of each process, so two launches lose the run
+    before last -- and several sessions launch concurrently here, which makes that normal rather
+    than a race. Redirecting at LAUNCH is the only fix that works: a copy at teardown can preserve
+    only this run's own output (the previous one was clobbered before the copy existed) and never
+    runs at all when the game crashes, which is the run whose evidence matters most.
+
+    THE READERS MOVE WITH THE WRITER. `TELEMETRY` and `DEBUG_LOG` are rebound here rather than left
+    on the game directory, because a reader on the old path finds nothing for a redirected run and
+    reports it as SILENT -- a false negative indistinguishable from a broken feature.
+    """
+    global TELEMETRY, DEBUG_LOG
+    env = artifact_env(art)
+    TELEMETRY = Path(env["ER_QUICKLOAD_TELEMETRY_PATH"])
+    DEBUG_LOG = Path(env["ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH"])
+    return {**os.environ, **env}
+
 def rotate_outputs(art: Path) -> None:
     """Previous-run telemetry reads as satisfied preconditions; move it aside BEFORE launch."""
     for src in (TELEMETRY, DEBUG_LOG):
@@ -333,11 +372,12 @@ def main() -> int:
         # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         cwd=str(LAUNCHER.parent),
+        env=redirect_artifacts(art),
         stdout=open(art / "launcher.log", "w"),
         stderr=subprocess.STDOUT,
     )
     log(f"launched {LAUNCHER} pid={proc.pid} (product profile, game-dir toml untouched)")
-    watch = GameDirWatch(GAME_DIR)
+    watch = GameDirWatch(art, GAME_DIR)
 
     def teardown(reason: str) -> None:
         (art / "teardown.txt").write_text(
@@ -486,10 +526,15 @@ def main() -> int:
             sw["published_slot"] = final.get("oracle_ls_portrait_slot")
             # NATIVE FLASH-THROUGH (er-effects-rs-wmw defect #1). Independent of the portrait
             # verdict: a window can publish a perfect head and still have shown vanilla for a
-            # frame. exposure_delta > 0 means the defect reproduced in THIS switch.
+            # frame. owned_exposure_delta > 0 means the defect reproduced in THIS switch;
+            # native_exposure_delta also counts screens the cover does not own, so it is context
+            # rather than a verdict (see cover_owns_current_loading_screen).
             sw["native_exposure_delta"] = (final.get("oracle_native_ls_exposure_frames") or 0) - (
                 base_s.get("oracle_native_ls_exposure_frames") or 0
             )
+            sw["owned_exposure_delta"] = (
+                final.get("oracle_native_ls_exposure_owned_frames") or 0
+            ) - (base_s.get("oracle_native_ls_exposure_owned_frames") or 0)
             sw["native_covered_delta"] = (final.get("oracle_native_ls_covered_frames") or 0) - (
                 base_s.get("oracle_native_ls_covered_frames") or 0
             )
