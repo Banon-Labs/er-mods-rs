@@ -162,6 +162,12 @@ fn note_wedged_dispatch(slot: Option<SlRequestSlot>, lane: usize, call: u64) {
     // being "a wedge exists" and becomes "a wedge exists and N witnessed writes had taken saveState
     // off 1 by then" -- which at N = 0 is a verdict about the whole writer set.
     snapshot_writers_at_wedge();
+    // ...and attribute the CONTENT the device is holding to the submit that put it there. Same
+    // first-wins sample, no extra read: `save_submit_latch.rs` answers "which submit latched this,
+    // and did its lane accept", which is the one question a writer counter cannot ask.
+    if let Some(sample) = slot {
+        snapshot_latch_at_wedge(sample.save_content);
+    }
     store_slot_sample(slot, &DISPATCH_FIRST_LATCHED_SLOT);
     DISPATCH_FIRST_LATCHED_MS.store(stamp, Ordering::SeqCst);
     DISPATCH_FIRST_LATCHED_CALL.store(call, Ordering::SeqCst);

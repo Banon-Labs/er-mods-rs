@@ -1211,6 +1211,115 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::save_state_owner_restores(),
         er_save_suppress::save_state_owner_restore_failures(),
     ));
+    // THE REST OF THE WRITER SET (`save_state_writers.rs`), and the counter that makes a NEGATIVE
+    // mean something. The two oracles above watch two wrappers; these watch the other three stores
+    // that can take `saveState` off 1, which completes the set the image byte-scan found on BOTH
+    // builds (22 stores each, pairing exactly at +0xE50).
+    //
+    //   oracle_save_state_writer_sites_installed  how many of the three chained. ZERO means nothing
+    //                                             below was watching, and every other field here
+    //                                             reads zero for that reason rather than a measured
+    //                                             one. Read it FIRST.
+    //   oracle_save_state_menujob_loadwait_calls  FUN_140678e00, the MenuJob load-save-data wait
+    //                                             step -- the writer whose caller is exactly the
+    //                                             pipeline the 2026-08-31 wedge window contains.
+    //   oracle_save_state_save_lane_alt_calls     FUN_1406794b0. Its caller FUN_14082a0f0 picks
+    //                                             between it and FUN_140679510 on a float, so a
+    //                                             save-side write could always land where the
+    //                                             original witness was not looking.
+    //   oracle_save_state_setter_calls            GameMan::SetSaveState. NON-ZERO MEANS THE
+    //                                             MoveMapStep 210-SECOND WATCHDOG FIRED: it is the
+    //                                             only caller in the image, and it forces the field
+    //                                             without touching the SL device.
+    //   oracle_save_state_setter_first_arg        what it was asked to write (4294967295 = never
+    //                                             called). The watchdog always passes 0.
+    //   oracle_save_state_setter_first_ms         host log epoch, or 18446744073709551615 for never
+    //                                             called / no clock sink.
+    //   oracle_save_state_writer_state_exits      witnessed calls across which saveState LEFT 1,
+    //                                             device irrelevant. Healthy completions count too,
+    //                                             which is what makes a zero say something.
+    //   oracle_save_state_writer_exits_at_wedge   that count frozen at the wedge's birth
+    //                                             (18446744073709551615 = no wedge this run).
+    //                                             ZERO, WITH SITES INSTALLED, IS THE DECISIVE
+    //                                             NEGATIVE: the write came through none of the six
+    //                                             stores this crate watches.
+    //   oracle_save_state_wedge_writer_verdict    that reading in one sentence, so a probe and the
+    //                                             log cannot disagree about what the pair means.
+    body.push_str(&format!(
+        "  \"oracle_save_state_writer_sites_installed\": {},\n  \"oracle_save_state_menujob_loadwait_calls\": {},\n  \"oracle_save_state_save_lane_alt_calls\": {},\n  \"oracle_save_state_setter_calls\": {},\n  \"oracle_save_state_setter_first_arg\": {},\n  \"oracle_save_state_setter_first_ms\": {},\n  \"oracle_save_state_writer_calls\": {},\n  \"oracle_save_state_writer_state_exits\": {},\n  \"oracle_save_state_writer_calls_at_wedge\": {},\n  \"oracle_save_state_writer_exits_at_wedge\": {},\n  \"oracle_save_state_wedge_writer_verdict\": \"{}\",\n",
+        er_save_suppress::save_state_writer_sites_installed(),
+        er_save_suppress::save_state_menujob_loadwait_calls(),
+        er_save_suppress::save_state_save_lane_alt_calls(),
+        er_save_suppress::save_state_setter_calls(),
+        er_save_suppress::save_state_setter_first_arg(),
+        er_save_suppress::save_state_setter_first_ms(),
+        er_save_suppress::save_state_writer_calls(),
+        er_save_suppress::save_state_writer_state_exits(),
+        er_save_suppress::save_state_writer_calls_at_wedge(),
+        er_save_suppress::save_state_writer_exits_at_wedge(),
+        er_save_suppress::wedge_writer_verdict(),
+    ));
+    // WHICH SUBMIT LATCHED THE DEVICE, AND DID ITS LANE ACCEPT (`save_submit_latch.rs`). The block
+    // above watches every store to `saveState`; this one watches the SL device's `+0x10`/`+0x20`
+    // and the submit builders that write them, because the 2026-08-31 wedge formed with the writer
+    // set complete and SILENT. The shape that produces exactly that is a submit that latched the
+    // device and whose lane never accepted -- `saveState` was never written to 1, so no writer was
+    // ever needed to bring it back down.
+    //
+    //   oracle_save_submit_sites_installed        how many of FUN_140e6ef60 / FUN_140e6ec70 /
+    //                                             FUN_140e6fb50 chained. ZERO means nothing here
+    //                                             was watching and every field below reads zero for
+    //                                             that reason. Read it FIRST. The enqueue refuses
+    //                                             to chain while suppression is ARMED (it binds its
+    //                                             own bare detour there), so 2 is expected then.
+    //   oracle_save_submit_*_calls                forwarding counts per site.
+    //   oracle_save_submit_latches                observed iodev+0x10 transitions 0 -> pointer.
+    //   oracle_save_submit_latches_without_accept THE COUNT THAT MATTERS: latches whose builder
+    //                                             then returned 0 with the content still resident.
+    //   oracle_save_submit_latches_self_released  builders that latched and undid it via
+    //                                             FUN_140e6f200 before returning, so a zero above
+    //                                             means "none stranded", not "none ever failed".
+    //   oracle_save_submit_wedge_latch_match      whether the content wedged on the device IS the
+    //                                             one an observed latch installed. Only
+    //                                             `same-content-attributed` licenses reading the
+    //                                             site/return fields as its attribution.
+    //   oracle_save_submit_wedge_latch_site       which submit put it there.
+    //   oracle_save_submit_wedge_builder_return   what that builder returned (RAX; the game reads
+    //                                             AL). 18446744073709551615 = never observed.
+    //   oracle_save_submit_wedge_lane_return      what the LANE that called it returned.
+    //   oracle_save_submit_wedge_lane_state       GameMan.saveState after that lane returned. 1 is
+    //                                             the accept; 0 with a latched device is the wedge.
+    //                                             4294967295 = unsampled.
+    //   oracle_save_submit_wedge_lane_accepted    the pair above as one answer; `null` when the
+    //                                             lane was one of the two `observe_dispatch` does
+    //                                             not wrap, which is unmeasured rather than "no".
+    //   oracle_save_submit_verdict                the whole block in one sentence.
+    body.push_str(&format!(
+        "  \"oracle_save_submit_sites_installed\": {},\n  \"oracle_save_submit_combined_calls\": {},\n  \"oracle_save_submit_char_calls\": {},\n  \"oracle_save_submit_enqueue_calls\": {},\n  \"oracle_save_submit_latches\": {},\n  \"oracle_save_submit_latches_without_accept\": {},\n  \"oracle_save_submit_latches_self_released\": {},\n  \"oracle_save_submit_last_latch_content\": {},\n  \"oracle_save_submit_last_latch_site\": \"{}\",\n  \"oracle_save_submit_wedge_latch_match\": \"{}\",\n  \"oracle_save_submit_wedge_latch_content\": {},\n  \"oracle_save_submit_wedge_latch_site\": \"{}\",\n  \"oracle_save_submit_wedge_latch_ms\": {},\n  \"oracle_save_submit_wedge_builder_return\": {},\n  \"oracle_save_submit_wedge_lane_return\": {},\n  \"oracle_save_submit_wedge_lane_state\": {},\n  \"oracle_save_submit_wedge_lane_accepted\": {},\n  \"oracle_save_submit_verdict\": \"{}\",\n",
+        er_save_suppress::submit_sites_installed(),
+        er_save_suppress::submit_combined_calls(),
+        er_save_suppress::submit_char_calls(),
+        er_save_suppress::submit_enqueue_calls(),
+        er_save_suppress::submit_latches(),
+        er_save_suppress::submit_latches_without_accept(),
+        er_save_suppress::submit_latches_self_released(),
+        slot_hex(er_save_suppress::latch_content()),
+        er_save_suppress::submit_site_label(er_save_suppress::latch_site()),
+        er_save_suppress::latch_match_label(er_save_suppress::wedge_latch_match()),
+        slot_hex(er_save_suppress::wedge_latch_content()),
+        er_save_suppress::submit_site_label(er_save_suppress::wedge_latch_site()),
+        er_save_suppress::wedge_latch_ms(),
+        er_save_suppress::wedge_latch_builder_return(),
+        er_save_suppress::wedge_latch_lane_return(),
+        er_save_suppress::wedge_latch_lane_state(),
+        match er_save_suppress::wedge_lane_accepted() {
+            Some(accepted) => accepted.to_string(),
+            // Not `false`: the two lanes `observe_dispatch` does not wrap leave this unmeasured,
+            // and reporting that as a refusal would manufacture the finding.
+            None => "null".to_owned(),
+        },
+        er_save_suppress::submit_latch_verdict(),
+    ));
     // SAVE-FLOW CONFIRM oracles. There is ONE confirm box in the flow -- "Are you sure you want to
     // overwrite this file?" -- so there is one set of counters. The three-box spelling
     // (`oracle_save_flow_box1/2/3_*`) is GONE with the two up-front confirms it described; a probe

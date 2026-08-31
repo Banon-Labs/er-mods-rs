@@ -692,6 +692,7 @@ include!("save_state_device.rs");
 include!("save_state_witness.rs");
 include!("save_wedge_birth.rs");
 include!("save_state_writers.rs");
+include!("save_submit_latch.rs");
 
 // ============================================================================
 // SAVE-DISPATCH OBSERVERS. Pure observation of the three native save-dispatch lanes and
@@ -1792,6 +1793,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     // -- exactly the configuration in which an abandoned save is hardest to attribute.
     install_save_state_witness();
     install_save_state_writers();
+    install_save_submit_latch();
     SUPPRESSOR_HOOKS
 }
 
@@ -1868,6 +1870,9 @@ pub fn install_observers_only() -> usize {
     // cost is two device samples per wrapper call, and the stack walk happens only on a finding.
     install_save_state_witness();
     install_save_state_writers();
+    // The vantage point the writer witnesses cannot reach: which SUBMIT latched the device, and
+    // whether its lane accepted. Observer-only and non-fatal, like the two above.
+    install_save_submit_latch();
     dispatch_observers_installed()
 }
 
@@ -2302,7 +2307,15 @@ unsafe fn observe_dispatch(
         return 0;
     }
     let original: UnionFn = unsafe { core::mem::transmute(orig) };
+    // Taken on the way IN, because a latch is closed by the lane call that produced it: if
+    // `SUBMIT_LATCHES` moves across this call, the submit the builder observers just recorded is
+    // THIS lane's, and its return plus the `saveState` it leaves behind are the accept. See
+    // `save_submit_latch.rs`; no extra hook and no extra read on the frames where nothing latched.
+    let latches_before = submit_latches();
     let ret = unsafe { original(a, b, c, d) };
+    if submit_latches() != latches_before {
+        note_lane_closed_latch(lane, ret);
+    }
     let calls = DISPATCH_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
     DISPATCH_LAST_LANE.store(lane, Ordering::SeqCst);
     if ret & 0xff != 0 {
