@@ -716,12 +716,12 @@ pub(crate) fn install(base: usize) {
         Ok(route) => log_message(format_args!(
             "gfx-equip: file-open observer @0x{:x} registered via {route:?} \
              (shared prologue with er_quickload.dll)",
-            base + FILE_OPEN_RVA
+            er_game_base::mem::game_data_addr(base, FILE_OPEN_RVA, "FILE_OPEN_RVA")
         )),
         Err(status) => log_message(format_args!(
             "gfx-equip: file-open observer @0x{:x} register FAILED: {status:?} -- \
              FileOpener::OpenFile stays unarmed (async tag-dict swap off; no crash)",
-            base + FILE_OPEN_RVA
+            er_game_base::mem::game_data_addr(base, FILE_OPEN_RVA, "FILE_OPEN_RVA")
         )),
     }
 }

@@ -258,7 +258,11 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         append_autoload_debug(format_args!(
             "native-fullread: SUBMIT slot={slot} b78={b78} (0x{:x} write) set_save_slot 0x{:x} ac0={ac0} submit 0x{:x} ret={sret} b80={b80} -> DRAIN",
             base,
-            base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA"
+            ),
             er_game_base::mem::game_data_addr(
                 base,
                 B80_FULL_LOAD_INITIATOR_RVA,

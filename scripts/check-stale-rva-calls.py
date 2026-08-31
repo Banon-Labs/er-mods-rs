@@ -53,6 +53,34 @@ WHAT THIS GATE COULD NOT SEE UNTIL 2026-08-30, and what it recorded instead:
                        (0x9a5f20 -> 0x9a70c0) and six raw global reads. Both spellings now match,
                        keyed on the LAST path segment so a rewritten `use` does not churn the
                        baseline.
+  IT LOOKED IN ONLY    ...and this is the one that mattered most, because it was invisible from
+  THREE CONTEXTS.      BOTH sides. The three patterns above are `transmute(base + C)`,
+                       `safe_read_*(base + C)` and `== base + C`. Anywhere else a named constant
+                       was added to a module base -- inside a `format_args!`, as a bare `let`, as
+                       an argument, as a row of an install table -- this gate matched nothing.
+                       `check-oracle-singleton-globals.py` did not cover the gap either: it sees
+                       every OTHER right-hand side, and on an uppercase one it `continue`s,
+                       DELEGATING the site here. The pair was described as a partition of the
+                       class for a fortnight. MEASURED 2026-08-31 instead of asserted: 37 sites
+                       reached that delegation and this gate reported `0 known ungated site(s)`,
+                       so every one of them was reported by NEITHER.
+
+                       Twenty-two were `format_args!` log lines naming a 1.16.2 address on the
+                       one branch whose entire subject is that addresses moved --
+                       `title_scaleform_msgbox.rs:361` printed `base + POLICY_TOS_TITLE_CTOR_RVA`
+                       directly above a correctly resolved `game_data_addr` call inside the SAME
+                       `format_args!`, so the line named an address the code never touched. That
+                       is not a crash; it is a diagnostic that confidently sends the next reader
+                       to the wrong function, which during a migration is most of the cost.
+
+                       So the ADDITION is now matched wherever it appears. The three contexts
+                       above stay as they were -- unconditional, because a transmuted call, a
+                       read and a comparison are hazards whatever else the file says -- and the
+                       fourth, general pattern carries the exclusions those three did not need:
+                       is `base` actually the game module base (decided from its BINDING), and
+                       does the sum reach an API that resolves it? Both questions are answered by
+                       `scripts/module_base_arith.py`, which this gate and its sibling now share
+                       so the two can no longer disagree about which sites either owns.
 
 Both were found the same way the earlier two were: by reading the source directly instead of
 trusting this gate's silence. It reported `1 known ungated site(s), none new` throughout.
@@ -80,6 +108,25 @@ except ImportError as missing:  # a shared reader that cannot load must stop the
         "scripts/rva_symbols.py could not be imported, so comments and string bodies cannot be "
         "blanked before matching. Without it this gate reads PROSE as findings -- two of its three "
         "baseline rows once were exactly that. Fix the import rather than restoring a local copy."
+    ) from missing
+try:  # the SHARED vocabulary this gate and check-oracle-singleton-globals.py must not diverge on
+    from module_base_arith import (
+        BASE_NAMES,
+        MODULE_SPAN_LIMIT,
+        PE_HEADER_LIMIT,
+        SOURCE_EXEMPT,
+        binders,
+        is_module_base,
+        is_resolver_fed,
+    )
+except ImportError as missing:
+    raise ImportError(
+        "scripts/module_base_arith.py could not be imported. It holds the three decisions this "
+        "gate needs the moment it stops looking at named constants in only three syntactic "
+        "contexts: is this identifier the GAME module base, does the sum reach an API that "
+        "resolves it, and which VALUES are PE-header fields or image extents. Its sibling "
+        "check-oracle-singleton-globals.py imports the same answers, which is the point -- two "
+        "copies is how 37 sites ended up owned by neither gate."
     ) from missing
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -207,11 +254,91 @@ LEGACY_PRE_WIDENING_READ = re.compile(
     r"(?:safe_read_(?:usize|u64|u32|u16|u8|i32)|read_bytes)\(\s*"
     + LEGACY_BASE + r"\s*\+\s*" + LEGACY_SCREAMING_SNAKE + r"\s*[,)]"
 )
+# Before 2026-08-31 the three patterns above were the WHOLE gate, so a named constant added to a
+# module base in any FOURTH context was invisible here -- and `check-oracle-singleton-globals.py`
+# had already delegated it away on seeing an uppercase right-hand side. Frozen as a literal for the
+# same reason as the three above.
+LEGACY_THREE_CONTEXTS_ONLY = re.compile(
+    r"transmute(?:::<[^>]*>)?\(\s*" + BASE_EXPR + r"\s*\+\s*" + CONSTANT + r"\s*\)"
+    r"|(?:safe_read_(?:usize|u64|u32|u16|u8|i32)|read_bytes)\(\s*"
+    + BASE_EXPR + r"\s*\+\s*" + CONSTANT + r"\s*[,)]"
+    r"|(?:[!=]=\s*" + BASE_EXPR + r"\s*\+\s*" + CONSTANT + r")"
+    r"|(?:" + BASE_EXPR + r"\s*\+\s*" + CONSTANT + r"\s*[!=])"
+)
+# THE FOURTH CONTEXT IS "ANY". Same arithmetic, no syntactic frame required.
+#
+# The base-name alternation is the SHARED one, so `mod_base`/`img_base`/`exe_base` are covered here
+# exactly as they are in the sibling; the `(?<![\w.:])` guard is what keeps `self.base + FOO` and
+# `ersc_module_base` out. Unlike the three patterns above, a hit here is only a finding after two
+# further questions -- is `base` the game module base, and does the sum reach a resolver -- because
+# without a `transmute`/`safe_read`/`==` around it the surrounding code is the only evidence of
+# what the value is FOR.
+ANY_CONTEXT = re.compile(r"(?<![\w.:])\$?" + BASE_NAMES + r"\s*\+\s*" + CONSTANT)
+
+# REAL FILES THAT MUST STAY UNREPORTED. Every one is `base + <uppercase thing>` that the general
+# pattern matches and that is NOT a stale game address, each for a different reason -- so between
+# them they exercise every exclusion the fourth context depends on. If one starts being reported,
+# the matcher has become over-broad; that is a false positive, not a newly discovered defect.
+FROZEN_NEGATIVE_FILES = (
+    (
+        "crates/er-crash-logging-core/src/hang.rs",
+        "`base` is a heap CS::LoadingScreenData pointer -- nothing to translate, no version to be "
+        "wrong about",
+    ),
+    (
+        "crates/er-invasion-warp/src/local_invasion_filter.rs",
+        "`base` is ersc.dll's, from `ersc_module_base()` -- and note that string CONTAINS "
+        "`module_base(`, so a substring match reports it",
+    ),
+    (
+        "crates/er-save-loader/src/profile_summary.rs",
+        "`base` is a byte offset into a save record: SUMMARY_TABLE_OFFSET + slot * stride",
+    ),
+    (
+        "crates/er-armament-icons/src/crash_trace.rs",
+        "`a < base + MODULE_SPAN` is an image-extent range test, excluded by VALUE",
+    ),
+    (
+        "crates/er-refill-all/src/runtime.rs",
+        "two rows of an install table the `for` destructures into `register_shared_hook`, which "
+        "takes its target UNRESOLVED and resolves it exactly once itself",
+    ),
+    (
+        "crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs",
+        "three sums that ARE the argument to `resolve_game_address`",
+    ),
+)
+
+# REVERT A CONVERSION IN A REAL FILE AND THE GATE MUST GO RED. `--selftest` performs each mutation
+# in memory, never on disk.
+#
+# `expected` is the constant the reverted site must be reported under. Both targets are files with a
+# dozen or more OTHER `game_data_addr(base, ..)` calls, which is not incidental -- see the note at
+# the blind loop about the self-destroying mutant.
+MUTATION_BLINDS = (
+    (
+        "crates/er-title-flow/src/title_load_step_hooks.rs",
+        '        er_game_base::mem::game_data_addr(base, LOADLIST_INIT_RVA, "LOADLIST_INIT_RVA"),\n',
+        "        base + LOADLIST_INIT_RVA,\n",
+        "LOADLIST_INIT_RVA",
+    ),
+    (
+        "crates/er-title-flow/src/product_autoload_gates.rs",
+        "            er_game_base::mem::game_data_addr(\n"
+        "                base,\n"
+        "                TITLE_TOP_DIALOG_UPDATE_RVA,\n"
+        '                "TITLE_TOP_DIALOG_UPDATE_RVA"\n'
+        "            )\n",
+        "            base + TITLE_TOP_DIALOG_UPDATE_RVA\n",
+        "TITLE_TOP_DIALOG_UPDATE_RVA",
+    ),
+)
 
 
 # `.text` begins at RVA 0x1000 in both 1.16.2 and 1.17. Everything below that is the DOS stub and
 # the PE headers, whose layout is fixed by the PE specification and is therefore the one thing in
-# the image that CANNOT move between game builds.
+# the image that CANNOT move between game builds. `PE_HEADER_LIMIT` and `MODULE_SPAN_LIMIT` are
+# imported from `module_base_arith` so this gate and its sibling draw the boundary in one place.
 #
 # This matters because dropping the name filter admitted a class the name filter had been hiding
 # by accident: `safe_read_u32(base + PE_DOS_LFANEW_OFFSET)`, seven sites across five crates, all
@@ -222,7 +349,6 @@ LEGACY_PRE_WIDENING_READ = re.compile(
 # So the exclusion is by VALUE, not by name -- the same lesson as the widening itself. A constant
 # whose value cannot be resolved is KEPT, because "I could not read it" must not be spelled the
 # same way as "I read it and it is safe".
-PE_HEADER_LIMIT = 0x1000
 DECLARATION = re.compile(
     r"const\s+([A-Z][A-Z0-9_]*)\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+|\d+)\s*;"
 )
@@ -265,29 +391,103 @@ def constant_values():
 
 
 def is_finding(constant, values):
-    """Is `base + constant` a stale-address hazard? Unresolvable means YES."""
+    """Is `base + constant` a stale-address hazard? Unresolvable means YES.
+
+    BOTH ENDS OF THE IMAGE SPAN ARE EXCLUDED, and both because of what the value IS.
+
+      * below `.text` (`< 0x1000`) is a PE-header field -- `PE_DOS_LFANEW_OFFSET`, seven sites
+        across five crates reading `0x3c` to find the NT header;
+      * exactly `0x1000` is the start of `.text` ITSELF, which the tree writes only as a module
+        FLOOR: `let module_lo = module_base + MODULE_MIN_OFFSET;` in `own_stepper/load_steps.rs`
+        and `vtable >= base + MODULE_MIN_OFFSET` in `mem.rs`. It is the boundary, not a point
+        inside it, and no function or global in this game sits on the first byte of the section;
+      * at or above `0x0800_0000` is an EXTENT: `a < base + MODULE_SPAN` in
+        `er-armament-icons/src/crash_trace.rs`, `base + MODULE_CODE_SPAN` (0x1000_0000) in
+        `er-boot-profiler`. A range test, not an address.
+
+    An UNRESOLVABLE constant is kept, because "I could not read it" must never be spelled the same
+    way as "I read it and it is safe".
+    """
     value = values.get(constant)
-    return value is None or value >= PE_HEADER_LIMIT
+    return value is None or PE_HEADER_LIMIT < value < MODULE_SPAN_LIMIT
+
+
+def findings_in(text, relative, values):
+    """{(relative, constant)} for ONE already-comment-stripped file.
+
+    Split out of `sites()` on 2026-08-31 so `--selftest` can drive the real decision path over a
+    snippet and over a REAL file it has mutated, rather than over a re-implementation of it. A
+    control that exercises a copy of the matcher proves things about the copy.
+    """
+    found = set()
+    # The three ORIGINAL contexts, unconditionally. A transmuted call, a raw read and a
+    # comparison are hazards whatever else the file says, so they are deliberately NOT put
+    # through the binding/resolver questions below -- those can only ever remove a finding, and
+    # this gate's whole history is of removing the wrong ones.
+    for pattern in (CALL_SITE, READ_SITE, COMPARE_SITE):
+        for match in pattern.findall(text):
+            # COMPARE_SITE has two alternatives and so two groups; exactly one participates.
+            constant = (
+                next((group for group in match if group), "")
+                if isinstance(match, tuple)
+                else match
+            )
+            if constant and is_finding(constant, values):
+                found.add((relative, constant))
+    if relative.replace(os.sep, "/") in SOURCE_EXEMPT:
+        # `mem.rs` / `game_build.rs` / `build_id.rs` ARE the resolver and the PE-header reader
+        # it is built on. `game_data_addr` cannot resolve its way to its own implementation.
+        # The three contexts above still apply to them; only the general pattern is skipped,
+        # because it is the one that would report the resolver's own `base + rva`.
+        return found
+    # THE FOURTH CONTEXT: the same addition anywhere else. Two questions the three patterns
+    # above never had to ask, both answered from the file rather than from the identifier.
+    bound = None
+    for match in ANY_CONTEXT.finditer(text):
+        constant = match.group(1)
+        if not constant or not is_finding(constant, values):
+            continue
+        if (relative, constant) in found:
+            continue
+        base_name = match.group(0).split("+")[0].strip().lstrip("$")
+        if bound is None:
+            bound = binders(text)
+        if not is_module_base(text, bound, base_name, match.start()):
+            # A heap pointer, another module's base, or an offset into a parsed file that
+            # happens to be called `base`. `er-crash-logging-core/src/hang.rs`,
+            # `er-invasion-warp/src/local_invasion_filter.rs` (ersc.dll) and
+            # `er-save-loader/src/profile_summary.rs` (a save-record offset) are the three
+            # frozen negatives that make this question load-bearing.
+            continue
+        if is_resolver_fed(text, match.start(), None):
+            # `register_shared_hook(base + FILE_OPEN_RVA, ..)` and friends take the address
+            # UNRESOLVED and resolve it exactly once themselves; resolving first is the
+            # double-translate bug `check-double-resolved-hook-targets.py` exists for.
+            #
+            # `None`, NOT the expression text, and that is a deliberate difference from the
+            # sibling. Passing the expression enables a fourth branch -- "the IDENTICAL
+            # expression is a resolver's argument somewhere else in this file" -- which exists
+            # for `map_seams.rs`, where `let stale = base + seam.rva` names the stale address
+            # inside a refusal message that is about that address. That reasoning does not
+            # transfer to a named constant: `startup_modals_menu_cover.rs` resolves
+            # `base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA` properly at two call sites
+            # and then prints the RAW sum at a third, and the branch would clear the third
+            # BECAUSE the first two are correct -- which is the precise shape of the seam this
+            # widening exists to close. The other three branches all ask about THIS site.
+            continue
+        found.add((relative, constant))
+    return found
 
 
 def sites(values=None):
-    """{(crate-relative path, constant)} for every ungated direct call or read in the tree."""
+    """{(crate-relative path, constant)} for every ungated call, read, comparison or bare use."""
     if values is None:
         values = constant_values()
     found = set()
     for path in rust_sources():
         relative = os.path.relpath(path, ROOT)
         text = code_only(open(path, encoding="utf-8", errors="replace").read())
-        for pattern in (CALL_SITE, READ_SITE, COMPARE_SITE):
-            for match in pattern.findall(text):
-                # COMPARE_SITE has two alternatives and so two groups; exactly one participates.
-                constant = (
-                    next((group for group in match if group), "")
-                    if isinstance(match, tuple)
-                    else match
-                )
-                if constant and is_finding(constant, values):
-                    found.add((relative, constant))
+        found |= findings_in(text, relative, values)
     return found
 
 
@@ -498,6 +698,146 @@ def selftest():
     assert is_finding("CSDLC_SINGLETON_RVA", values), "a real .data RVA is a finding"
     assert is_finding("AMBIGUOUS", values), "a constant declared twice with different values is kept"
     assert is_finding("NEVER_DECLARED", values), "a constant that could not be resolved is kept"
+    # ...and BOTH ends of the image span are excluded, for the same reason and in the same way.
+    extents = {"MODULE_MIN_OFFSET": 0x1000, "MODULE_SPAN": 0x0800_0000, "MODULE_CODE_SPAN": 0x1000_0000}
+    for name, why in (
+        ("MODULE_MIN_OFFSET", "the first byte of .text is the module FLOOR, not an address in it"),
+        ("MODULE_SPAN", "an image extent: `a < base + MODULE_SPAN` is a range test"),
+        ("MODULE_CODE_SPAN", "the same, one bit wider"),
+    ):
+        assert not is_finding(name, extents), why
+
+    # ============================================================================================
+    # THE FOURTH CONTEXT (2026-08-31). Everything below is about the widening that closed the seam.
+    # ============================================================================================
+    #
+    # Each positive control is a `base + NAMED_CONSTANT` in a context the gate did NOT look at
+    # before, and each is asserted INVISIBLE to `LEGACY_THREE_CONTEXTS_ONLY`. That second assertion
+    # is what makes them controls rather than decoration: a snippet both patterns catch would have
+    # passed on the broken gate and proved nothing about the fix.
+    def flagged(snippet):
+        return {constant for _, constant in findings_in(code_only(snippet), "snippet.rs", {})}
+
+    resolved_base = "let base = er_game_base::mem::game_module_base().unwrap_or(0);\n"
+    fourth_context = {
+        # A LOG LINE. Twenty-two of these stood in the tree, printing a 1.16.2 address beside
+        # correctly resolved siblings -- including one in the SAME `format_args!`.
+        "LOG_LINE_RVA": 'append_autoload_debug(format_args!("hook @0x{:x}", base + LOG_LINE_RVA));',
+        # A BARE `let` whose binding never reaches a resolver.
+        "BARE_LET_RVA": "let address = base + BARE_LET_RVA;\nremember(address);",
+        # A STRUCT LITERAL field.
+        "STRUCT_FIELD_RVA": "let seam = Seam { name: \"x\", target: base + STRUCT_FIELD_RVA };",
+        # A FUNCTION ARGUMENT to something that does NOT resolve.
+        "PLAIN_ARG_RVA": "note_address(base + PLAIN_ARG_RVA, \"observed\");",
+    }
+    for constant, snippet in fourth_context.items():
+        text = resolved_base + snippet
+        assert constant in flagged(text), f"must flag `base + {constant}` in a fourth context"
+        assert not LEGACY_THREE_CONTEXTS_ONLY.findall(code_only(text)), (
+            f"control for {constant} is worthless unless the OLD three-context gate misses it"
+        )
+
+    # NEGATIVE CONTROLS for the two questions the fourth context has to ask, and that the three
+    # original contexts never needed. Each of these is CORRECT code that a widening without them
+    # would report -- and a gate that reports correct code gets its findings deleted wholesale.
+    not_the_game_base = (
+        "let base = ersc_module_base().unwrap_or(0);\n"
+        "if !prologue_matches(base + ersc::SHOW_RVA, ersc::SHOW_PROLOGUE) { return; }"
+    )
+    assert not flagged(not_the_game_base), "another module's base (ersc.dll) is not a game address"
+    heap_pointer = (
+        "let base = loading_screen_data();\n"
+        "let flag = base + LOADING_SCREEN_FLAG_OFFSET;"
+    )
+    assert not flagged(heap_pointer), "a heap pointer called `base` has no version to be wrong about"
+    resolver_argument = (
+        resolved_base
+        + 'let Some(slot) = resolve_game_address(base + GLOBAL_TEX_REPOSITORY_RVA, "TEX") else {};'
+    )
+    assert not flagged(resolver_argument), "an address handed to a resolver is already resolved"
+    behind_a_cast = (
+        resolved_base
+        + 'create_and_apply_single_hook("A", (base + ASSERT_WRAPPER_RVA) as *mut c_void, h, &O);'
+    )
+    assert not flagged(behind_a_cast), (
+        "a cast parenthesis is punctuation; the call that RECEIVES the sum is one level out"
+    )
+    let_then_hook = resolved_base + (
+        "let target = base + TILE_POPULATE_RVA;\n"
+        "let hook = unsafe { MhHook::new(target as *mut c_void, tile_populate_hook) };"
+    )
+    assert not flagged(let_then_hook), "a `let` handed to MhHook::new, which resolves it"
+    install_table = resolved_base + (
+        "for (name, target, handler, slot) in [\n"
+        '    ("Dtor", base + DEPOSITORY_DIALOG_DTOR_RVA, dtor_union, &ORIG_DTOR),\n'
+        '    ("Ctor", base + DEPOSITORY_DIALOG_CTOR_RVA, ctor_union, &ORIG_CTOR),\n'
+        "] {\n"
+        "    match unsafe { register_shared_hook(target, handler, slot) } { _ => () }\n"
+        "}"
+    )
+    assert not flagged(install_table), (
+        "a row of an install table the `for` destructures into a registrar that resolves it"
+    )
+    bound_table = resolved_base + (
+        "let targets = [\n"
+        '    ("Replenish", base + SET_ITEM_REPLENISH_STATE_RVA, replenish_hook, &ORIG_REPLENISH),\n'
+        "];\n"
+        "for (name, target, detour, orig_slot) in targets {\n"
+        "    let hook = unsafe { MhHook::new(target as *mut c_void, detour) };\n"
+        "}"
+    )
+    assert not flagged(bound_table), "the same table, bound to a local before it is iterated"
+
+    # FROZEN NEGATIVES, run against the REAL files. A snippet proves the rule; a file proves the
+    # rule survives contact with the tree. If one of these starts being reported the matcher has
+    # become over-broad -- that is a false positive, not a newly discovered defect.
+    for relative, why in FROZEN_NEGATIVE_FILES:
+        path = os.path.join(ROOT, relative)
+        if not os.path.exists(path):
+            raise AssertionError(f"FROZEN NEGATIVE: {relative} is gone; the control cannot run")
+        text = code_only(open(path, encoding="utf-8", errors="replace").read())
+        found = findings_in(text, relative, constant_values())
+        assert not found, f"FROZEN NEGATIVE: {relative} ({why}) is now reported: {sorted(found)}"
+
+    # MUTATION BLINDS, run against the REAL files. Undoing a conversion must produce exactly that
+    # finding, and the shipped text must produce none. Both directions, because a matcher that
+    # fires on everything passes the first half.
+    #
+    # THE SELF-DESTROYING MUTANT, and why these two targets were chosen. `is_module_base` accepts a
+    # parameter-or-unbound `base` only when the FILE corroborates it -- `game_data_addr(base, ..)`
+    # somewhere in the same file. So reverting a file's ONLY conversion removes the file's own
+    # corroborator along with the finding, the gate answers "no findings", and that reads as a blind
+    # gate when it is a correct one. A mutant must break exactly ONE decision. Both files below keep
+    # eleven or more other `game_data_addr(base, ..)` calls after the mutation.
+    declared = constant_values()
+    for relative, fixed, reverted, expected in MUTATION_BLINDS:
+        path = os.path.join(ROOT, relative)
+        if not os.path.exists(path):
+            raise AssertionError(f"BLIND: {relative} is gone; the mutation cannot be performed")
+        raw = open(path, encoding="utf-8", errors="replace").read()
+        assert fixed in raw, (
+            f"BLIND: {relative} no longer contains the converted form, so reverting it proves "
+            "nothing. Re-derive the blind against the current text."
+        )
+        assert not findings_in(code_only(raw), relative, declared), (
+            f"BLIND: {relative} is not clean as shipped"
+        )
+        mutated = raw.replace(fixed, reverted)
+        corroborators_left = len(re.findall(r"game_data_addr\(\s*\n?\s*base\s*,", mutated))
+        assert corroborators_left >= 3, (
+            f"BLIND: reverting {relative} leaves only {corroborators_left} corroborating "
+            "`game_data_addr(base, ..)` calls, so the mutation breaks the RECOGNISER as well as "
+            "the finding. That is a self-destroying mutant: pick a file with more conversions."
+        )
+        mutant = findings_in(code_only(mutated), relative, declared)
+        assert (relative, expected) in mutant, (
+            f"BLIND: reverting {relative} to `base + {expected}` produced {sorted(mutant)} -- the "
+            "gate cannot see the defect the widening exists for"
+        )
+        assert not LEGACY_THREE_CONTEXTS_ONLY.findall(code_only(reverted)), (
+            f"BLIND: {relative}'s reverted form is visible to the OLD three-context gate, so it "
+            "does not test the widening at all"
+        )
 
     # EMPTINESS -- OF THE WALK, NOT OF THE FINDINGS. Every INPUT this gate reasons from is asserted
     # non-empty, with an order of magnitude, before anything is concluded from it: a scan that

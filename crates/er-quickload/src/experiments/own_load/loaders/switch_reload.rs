@@ -80,7 +80,7 @@ pub(crate) unsafe fn own_load_reset_gaitem_singleton(base: usize) -> Option<(u32
     SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER.store(slack_after as usize, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "gaitem-reset: pristine-restore gaitem=0x{gaitem:x} released={released} free-queue head/end 0x{head0:x}/0x{end0:x} -> 0x{head1:x}/0x{end1:x} slack {slack_before}->{slack_after} (0=full); native RemoveCSGaitemIns 0x{:x} per occupied slot",
-        base + CSGAITEM_REMOVE_INS_RVA
+        er_game_base::mem::game_data_addr(base, CSGAITEM_REMOVE_INS_RVA, "CSGAITEM_REMOVE_INS_RVA")
     ));
     Some((released, slack_before, slack_after))
 }
@@ -235,9 +235,16 @@ pub(crate) fn reset_switch_reload_latches() {
 }
 
 /// SUBMIT the native full-save-read for `picked` so the FD4 IO worker pool loads it resident, exactly
-/// as the boot native-fullread SUBMIT phase (slot_resolution.rs). Mirrors its calls/RVAs. Sets
-/// GameMan+0xb80=2 (the deserialize arm); the DRAIN tick then advances it to RESIDENT(3).
-unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
+/// as the boot native-fullread SUBMIT phase (slot_resolution.rs). Mirrors its calls/RVAs. On ACCEPT it
+/// sets GameMan+0xb80=2 (the deserialize arm) and the DRAIN tick then advances it to RESIDENT(3).
+///
+/// RETURNS THE INITIATOR'S ANSWER, and the caller must act on it: `0x67b1a0` is
+/// `if (b80 == 0) { r = builder(dev, 10, flag); if (r) b80 = 2; return r; } return 0;`, so a zero
+/// means NO REQUEST EXISTS and `b80` stays 0 forever -- a DRAIN armed on it waits for
+/// `b80 == RESIDENT(3)` that nothing can produce. The device is sampled immediately before and
+/// after the call because `iodev+0x18`/`+0x20` are the only operands that can refuse it (see
+/// `er_save_suppress::open_the_device_for_a_load`), so the line is a verdict, not a symptom.
+unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32, gate: &str) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // Mark the slot occupied so the native save-load gate accepts it (idempotent, no other effect).
     let gdm = game_data_man_ptr_or_null();
@@ -254,7 +261,7 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
                     "PROFILE_MARK_SLOT_USED_RVA",
                 ) {
                     Some(address) => address,
-                    None => return,
+                    None => return false,
                 },
             )
         };
@@ -269,7 +276,7 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
                 "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
             ) {
                 Some(address) => address,
-                None => return,
+                None => return false,
             },
         )
     };
@@ -281,47 +288,47 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32) {
                 "B80_FULL_LOAD_INITIATOR_RVA",
             ) {
                 Some(address) => address,
-                None => return,
+                None => return false,
             },
         )
     };
     // NOT `submit(picked)`: the argument is a flag the game always passes as 0, and the slot was
     // already set by `set_save_slot` above. Passing the slot here is what refused every non-zero
     // slot and soft-locked System->Quit->Load Character. See `B80_FULL_LOAD_SUBMIT_FLAG`.
+    let device_before = er_save_suppress::sample_sl_request_slot();
     let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
+    let device_after = er_save_suppress::sample_sl_request_slot();
     let b80 = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
     append_autoload_debug(format_args!(
-        "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} ret={sret} b80={b80} -> DRAIN (replicating boot native-fullread residency before feed+continue_confirm)",
+        "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} {}",
         er_game_base::mem::game_data_addr(
             base,
             B80_FULL_LOAD_INITIATOR_RVA,
             "B80_FULL_LOAD_INITIATOR_RVA"
-        )
+        ),
+        er_save_suppress::describe_load_submit(sret, b80, gate, device_before, device_after)
     ));
+    sret != 0
 }
 
-/// One DRAIN tick: pump the b80 IO lane + poll (exact boot native-fullread calls) and return the
-/// current GameMan+0xb80 so the caller can detect RESIDENT(3).
+/// One DRAIN tick of the load WE submitted: pump the b80 poll and return GameMan+0xb80 so the caller
+/// can detect RESIDENT(3). Pumps ONLY the lane we own -- `er_save_suppress::load_poll_may_run` carries
+/// why, and why the 0x679510 call that stood here could only tick somebody else's request.
 unsafe fn own_load_fd4io_drain_tick(_base: usize, gm: usize) -> i32 {
-    let lane: unsafe extern "system" fn() -> i32 = unsafe {
-        std::mem::transmute(
-            match crate::experiments::gated_game_fn(B80_LANE1_DRIVER_RVA, "B80_LANE1_DRIVER_RVA") {
-                Some(address) => address,
-                None => return 0,
-            },
-        )
-    };
-    let _ = unsafe { lane() };
+    let b80 = || unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
+    if !er_save_suppress::load_poll_may_run_now() {
+        return b80();
+    }
     let poll: unsafe extern "system" fn(u8, u8) -> i32 = unsafe {
         std::mem::transmute(
             match crate::experiments::gated_game_fn(B80_POLL_RVA, "B80_POLL_RVA") {
                 Some(address) => address,
-                None => return 0,
+                None => return b80(),
             },
         )
     };
     let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
-    unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
+    b80()
 }
 
 /// MENU-FREE clean-title reload of the PICKED slot for a genuine System->Quit->Load-Profile switch.
@@ -410,6 +417,25 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     {
         let phase = SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst);
         if phase == SWITCH_RELOAD_FD4IO_IDLE {
+            // THE LOAD BUILDER'S REAL PRECONDITION, not the mutex alone: `sl_device_is_free_now`
+            // reads `GameMan+0xb80` and nothing else, and the state that hung the third
+            // same-character load is `saveState == 0` WITH the device latched by a forgotten save.
+            // `open_the_device_for_a_load` reads both operands and asks the GAME's own poll to
+            // release a drainable orphan; it carries the full derivation. Nothing here writes a
+            // device field or advances a native step.
+            let gate = er_save_suppress::open_the_device_for_a_load("switch reload load submit");
+            let waited = SWITCH_RELOAD_FD4IO_DRAIN_WAITS.load(Ordering::SeqCst);
+            let expired = waited >= SWITCH_RELOAD_FD4IO_DRAIN_MAX;
+            if !gate.admits() && !expired {
+                let w = SWITCH_RELOAD_FD4IO_DRAIN_WAITS.fetch_add(1, Ordering::SeqCst) + 1;
+                if w == 1 || w.is_multiple_of(120) {
+                    append_autoload_debug(format_args!(
+                        "reload-fd4io: SUBMIT held at the gate ({w}/{SWITCH_RELOAD_FD4IO_DRAIN_MAX}) -- {}",
+                        gate.describe()
+                    ));
+                }
+                return false;
+            }
             if SWITCH_RELOAD_FD4IO_PHASE
                 .compare_exchange(
                     SWITCH_RELOAD_FD4IO_IDLE,
@@ -420,9 +446,37 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 .is_ok()
             {
                 SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(0, Ordering::SeqCst);
-                unsafe { own_load_fd4io_submit(base, gm, picked) };
+                let accepted = unsafe {
+                    own_load_fd4io_submit(
+                        base,
+                        gm,
+                        picked,
+                        er_save_suppress::load_gate_outcome_label(gate.outcome),
+                    )
+                };
+                if !accepted {
+                    // Un-arm the drain nobody can satisfy. With budget left, retry from IDLE and
+                    // spend one tick -- the repair needs re-running because the game's poll answers
+                    // "still in flight" until the SL worker finishes (177ms, measured). With the
+                    // budget gone, take the DRAIN timeout's own fail-soft. b78 + set_save_slot were
+                    // written by the attempt above, so the finalize warp target is armed either way.
+                    let next = if expired {
+                        append_autoload_debug(format_args!(
+                            "reload-fd4io: SUBMIT refused after the full {waited}-frame gate budget -- COMMIT without FD4-IO residency (the DRAIN timeout's fail-soft, reached without the empty wait); {}",
+                            gate.describe()
+                        ));
+                        SWITCH_RELOAD_FD4IO_COMMIT
+                    } else {
+                        SWITCH_RELOAD_FD4IO_IDLE
+                    };
+                    SWITCH_RELOAD_FD4IO_PHASE.store(next, Ordering::SeqCst);
+                    SWITCH_RELOAD_FD4IO_DRAIN_WAITS.store(waited + 1, Ordering::SeqCst);
+                }
             }
-            return false;
+            if SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst) != SWITCH_RELOAD_FD4IO_COMMIT {
+                return false;
+            }
+            // fail-soft only: fall through to the COMMIT claim below.
         }
         if phase == SWITCH_RELOAD_FD4IO_DRAIN {
             let b80 = unsafe { own_load_fd4io_drain_tick(base, gm) };

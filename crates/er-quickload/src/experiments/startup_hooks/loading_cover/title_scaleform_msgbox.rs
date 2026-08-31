@@ -358,13 +358,21 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     write_policy_oracle_snapshot("tos_title_ctor");
     append_autoload_debug(format_args!(
         "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x} stack0=0x{stack_arg0:x} backing_flag_ptr=0x{backing_flag_ptr:x}) stored_backing_flag_ptr=0x{stored_backing_flag_ptr:x} backing_flag_value={backing_flag_value} requested_flag_value={requested_flag_value} text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",
-        base + POLICY_TOS_TITLE_CTOR_RVA as usize,
+        er_game_base::mem::game_data_addr(
+            base,
+            POLICY_TOS_TITLE_CTOR_RVA as usize,
+            "POLICY_TOS_TITLE_CTOR_RVA"
+        ),
         er_game_base::mem::game_data_addr(
             base,
             POLICY_TOS_TITLE_VTABLE_RVA,
             "POLICY_TOS_TITLE_VTABLE_RVA"
         ),
-        base + POLICY_TOS_TITLE_TEXT_PATH_RVA
+        er_game_base::mem::game_data_addr(
+            base,
+            POLICY_TOS_TITLE_TEXT_PATH_RVA,
+            "POLICY_TOS_TITLE_TEXT_PATH_RVA"
+        )
     ));
     ret
 }
@@ -436,7 +444,7 @@ pub(crate) fn install_policy_tos_title_hook() {
     let mut refused: Vec<&str> = Vec::new();
     let mut failed: Vec<&str> = Vec::new();
     for (label, rva, detour, orig) in plan {
-        let Ok(addr) = game_rva(rva) else {
+        let Ok(addr) = game_rva_for_hook(rva) else {
             append_autoload_debug(format_args!(
                 "policy-oracle: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the running build; the other rows are unaffected"
             ));
@@ -556,7 +564,7 @@ pub(crate) fn install_server_status_hook() {
             return;
         }
     }
-    let Ok(formatter_addr) = game_rva(SERVER_STATUS_FORMATTER_RVA) else {
+    let Ok(formatter_addr) = game_rva_for_hook(SERVER_STATUS_FORMATTER_RVA) else {
         append_autoload_debug(format_args!(
             "server-status-oracle: failed to resolve formatter rva"
         ));
@@ -633,29 +641,30 @@ pub(crate) unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<Strin
     Some(String::from_utf16_lossy(&buf))
 }
 
-/// Diagnostic: dump the MessageBoxDialog builder Spec (`r8`) to NAME the modal's message. The text id
-/// is NOT in rdx/r9 (a pointer pair 0x40 apart) and is NOT fetched via GetGR_System_Message at build
-/// time, so read it straight from the Spec. Tries the reported MenuString offset (+0x8e0) plus a scan
-/// of early offsets for any embedded/pointed-to DLW string. Read-only; logs each decoded string.
-pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize) {
+/// Diagnostic: dump a builder argument to NAME the modal. Pass BOTH `r8` and `r9`: the wrapper
+/// `FUN_1407b03f0` (1.16.2) / `FUN_1407b1270` (1.17) calls `builder(dialog, sfObj, param_3, text)`,
+/// so `r8` is `param_3` and the MESSAGE is `r9` -- dumping only `r8` is why run
+/// br-20260831-160354-2513 logged a suppressed build with no `spec #0:` line. Tries the reported
+/// MenuString offset (+0x8e0) plus a scan of early offsets. Read-only; logs each decoded string.
+pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize, reg: &str) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if c <= null {
         return;
     }
     if let Some(text) = unsafe { read_dlw_string(safe_read_usize(c + 0x8e0).unwrap_or(null), 80) } {
-        append_autoload_debug(format_args!("spec #{n}: text@*(r8+0x8e0)=\"{text}\""));
+        append_autoload_debug(format_args!("spec #{n}: text@*({reg}+0x8e0)=\"{text}\""));
     }
     let mut off = 0usize;
     while off < 0x120 {
         // Inline DLW string at r8+off.
         if let Some(text) = unsafe { read_dlw_string(c + off, 80) } {
-            append_autoload_debug(format_args!("spec #{n}: inline[r8+0x{off:x}]=\"{text}\""));
+            append_autoload_debug(format_args!("spec #{n}: inl[{reg}+0x{off:x}]=\"{text}\""));
         }
         // Pointer-to-DLW-string at r8+off.
         if let Some(ptr) = unsafe { safe_read_usize(c + off) }
             && let Some(text) = unsafe { read_dlw_string(ptr, 80) }
         {
-            append_autoload_debug(format_args!("spec #{n}: *[r8+0x{off:x}]=\"{text}\""));
+            append_autoload_debug(format_args!("spec #{n}: *[{reg}+0x{off:x}]=\"{text}\""));
         }
         off += 8;
     }
@@ -703,7 +712,16 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             append_autoload_debug(format_args!(
                 "save-flow-box: expected build for {} produced dialog=0x{ret:x} vt=0x{vt:x} vt[2]=0x{update_slot:x} (want vt[2]=0x{:x}) -- NOT captured",
                 save_flow_box_label(expected_box),
-                base.wrapping_add(MSGBOX_DIALOG_UPDATE_RVA)
+                // The SAME address `save_flow_box_identity` compared against, resolved for the
+                // running build. `base.wrapping_add(MSGBOX_DIALOG_UPDATE_RVA)` printed the 1.16.2
+                // slot while the check used the 1.17 one, so the line reporting a mismatch named
+                // a value that was not the one it wanted -- and `.wrapping_add` kept it out of
+                // reach of every gate that looks for `base + CONST`.
+                er_game_base::mem::game_data_addr(
+                    base,
+                    MSGBOX_DIALOG_UPDATE_RVA,
+                    "MSGBOX_DIALOG_UPDATE_RVA"
+                )
             ));
         }
         return ret;
@@ -743,7 +761,8 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 "msgbox-skip #{n}: suppressed MessageBoxDialog build scope={scope} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
-            unsafe { dump_msgbox_spec(c, n) };
+            unsafe { dump_msgbox_spec(c, n, "r8") };
+            unsafe { dump_msgbox_spec(d, n, "r9") };
         }
         // SEAMLESS post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
         // building it would then sit on MenuJobResult(Continue) forever (ERSC's post-PAB MessageBox
@@ -802,8 +821,8 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 "msgbox-builder #{n}: dialog=0x{ret:x} vt=0x{vt:x} vt_rva=0x{vt_rva:x} captured={is_msgbox} in_world={in_world} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
-            // NAME the modal: read its message text straight from the Spec (r8=c).
-            unsafe { dump_msgbox_spec(c, n) };
+            unsafe { dump_msgbox_spec(c, n, "r8") };
+            unsafe { dump_msgbox_spec(d, n, "r9") };
         }
     }
     ret

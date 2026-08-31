@@ -161,7 +161,11 @@ pub unsafe fn install_title_anim_speed_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "title-anim-speed-hook: INSTALLED on STEP_MenuJobWait 0x{:x} -- one-shot FadeIn->Loop skip armed (zero-input, save-safe)",
-            base + TITLE_MENU_JOB_WAIT_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_MENU_JOB_WAIT_RVA,
+                "TITLE_MENU_JOB_WAIT_RVA"
+            ),
         )),
         status => append_autoload_debug(format_args!(
             "title-anim-speed-hook: MH_ApplyQueued failed: {status:?}"
@@ -280,7 +284,11 @@ pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "movemapstep-step-movemap-gate-hook: INSTALLED on 0x{:x} -- after-original +0x4b8/+0x4c reload hold armed",
-        base + MOVEMAPSTEP_STEP_MOVEMAP_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            MOVEMAPSTEP_STEP_MOVEMAP_RVA,
+            "MOVEMAPSTEP_STEP_MOVEMAP_RVA"
+        ),
     ));
     std::mem::forget(hooks);
 }
@@ -390,7 +398,11 @@ pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "ingamestep-step-movemap-update-defer-hook: INSTALLED on 0x{:x} -- defers d8=2/teardown while MoveMapStep finalize in [1..8] on a committed reload (default, no marker)",
-        base + INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+            "INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA"
+        ),
     ));
     std::mem::forget(hooks);
 }
@@ -518,7 +530,7 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "child-done-query-override-hook: INSTALLED on 0x{:x} -- holds MoveMapStep child (mms+0x108) done->not-done while finalize<9 on a committed reload (prevents premature teardown)",
-        base + CHILD_DONE_QUERY_RVA,
+        er_game_base::mem::game_data_addr(base, CHILD_DONE_QUERY_RVA, "CHILD_DONE_QUERY_RVA"),
     ));
     std::mem::forget(hooks);
 }
@@ -605,7 +617,7 @@ pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "loadlist-init-capture-hook: INSTALLED on 0x{:x} -- logs worldloadlistlistVirtualPath (InGameStep+0x108) per epoch to disambiguate the mms18 stall (empty-loadlist root vs downstream)",
-        base + LOADLIST_INIT_RVA,
+        er_game_base::mem::game_data_addr(base, LOADLIST_INIT_RVA, "LOADLIST_INIT_RVA"),
     ));
     std::mem::forget(hooks);
 }
@@ -762,7 +774,7 @@ pub unsafe fn install_title_setstate_trace_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "title-setstate-trace-hook: INSTALLED on SetState(owner,int) 0x{:x} -- read-only native state-transition timeline armed",
-            base + TITLE_SET_STATE_RVA,
+            er_game_base::mem::game_data_addr(base, TITLE_SET_STATE_RVA, "TITLE_SET_STATE_RVA"),
         )),
         status => append_autoload_debug(format_args!(
             "title-setstate-trace-hook: MH_ApplyQueued failed: {status:?}"

@@ -567,7 +567,8 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
         }
         const SELECTOR_CTX_OFFSET_F8: usize =
             core::mem::offset_of!(SelectorBuilderOwnerLayout, selector_ctx);
-        const SELECTOR_STEP_VTABLE_RVA: usize = ProfileLoadMenuRva::SelectorStepVtable as usize;
+        const MENUJOB_LOAD_CONTEXT_VTABLE_RVA: usize =
+            ProfileLoadMenuRva::MenuJobLoadContextVtable as usize;
         let step = unsafe { safe_read_usize(ret) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let step_vt = if step != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { safe_read_usize(step) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
@@ -579,8 +580,8 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
             step_vt
                 == er_game_base::mem::game_data_addr(
                     base,
-                    SELECTOR_STEP_VTABLE_RVA,
-                    "SELECTOR_STEP_VTABLE_RVA",
+                    MENUJOB_LOAD_CONTEXT_VTABLE_RVA,
+                    "MENUJOB_LOAD_CONTEXT_VTABLE_RVA",
                 )
         }) {
             OWN_STEPPER_SELECTOR_STEP.store(step, Ordering::SeqCst);

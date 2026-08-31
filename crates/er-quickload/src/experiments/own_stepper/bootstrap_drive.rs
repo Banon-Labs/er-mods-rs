@@ -244,7 +244,11 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             };
             append_autoload_debug(format_args!(
                 "cold-char-mount: ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) -> [profile+8+{want_slot}]={abyte} (so 0x67b200 slot-check 0x140261cd0 passes)",
-                base + PROFILE_SLOT_ACTIVATE_RVA
+                er_game_base::mem::game_data_addr(
+                    base,
+                    PROFILE_SLOT_ACTIVATE_RVA,
+                    "PROFILE_SLOT_ACTIVATE_RVA"
+                )
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -856,7 +860,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // (harmless). See bd b80-load-builder-hangs-inline-async-needed + the off-thread crash.
             append_autoload_debug(format_args!(
                 "cold-char-mount: PROPER-LOAD disabled (load builder uncallable cold: inline hangs, off-thread crashes) -- finalize 0x{:x}(owner=0x{owner:x}) done, no load call",
-                base + NODE_FINALIZER_RVA
+                er_game_base::mem::game_data_addr(base, NODE_FINALIZER_RVA, "NODE_FINALIZER_RVA")
             ));
         }
         // (select-node pump REMOVED with the PIVOT: it was for the low-level select-node hypothesis

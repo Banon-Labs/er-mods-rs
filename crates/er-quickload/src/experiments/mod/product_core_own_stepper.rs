@@ -361,8 +361,7 @@ pub(crate) const U64_MAX_AS_U128: u128 = u64::MAX as u128;
 
 pub(crate) const PROFILE_SLOT_ACTIVATE_RVA: usize =
     ProfileLoadMenuRva::ProfileSlotActivate as usize;
-pub(crate) const PROFILE_LOAD_SELECTOR_TICK_RVA: usize =
-    ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
+pub(crate) const PROFILE_LOAD_JOB_RUN_RVA: usize = ProfileLoadMenuRva::LoadJobRun as usize;
 
 /// One-shot guard for the autonomous open-menu (`maybe_auto_open_menu`).
 pub(crate) use er_telemetry_core::counters::TFC_AUTO_MENU_OPENED;

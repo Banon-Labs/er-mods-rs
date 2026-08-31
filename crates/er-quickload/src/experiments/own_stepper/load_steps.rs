@@ -584,7 +584,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         // menu_deser/mount. The cold helper remains for the older non-selector diagnostic paths.
         let native_selector_path = live_dialog_enabled() || product_autoload_enabled();
         if native_selector_path {
-            const SELECTOR_TICK_RVA: usize = PROFILE_LOAD_SELECTOR_TICK_RVA;
+            const LOAD_JOB_RUN_RVA: usize = PROFILE_LOAD_JOB_RUN_RVA;
             #[repr(C)]
             struct SelectorTickResultLayout {
                 qwords: [usize; 4],
@@ -597,8 +597,8 @@ pub(crate) unsafe fn own_stepper_stage2(
                 let tick: unsafe extern "system" fn(usize, usize, usize, usize) -> usize = unsafe {
                     std::mem::transmute(
                         match crate::experiments::gated_game_fn(
-                            SELECTOR_TICK_RVA,
-                            "SELECTOR_TICK_RVA",
+                            LOAD_JOB_RUN_RVA,
+                            "LOAD_JOB_RUN_RVA",
                         ) {
                             Some(address) => address,
                             None => return,

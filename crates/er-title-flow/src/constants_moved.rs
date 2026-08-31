@@ -530,9 +530,48 @@ pub const SLOT_MANAGER_DATA_OFFSET: usize =
 
 pub const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 
-/// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
-/// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
-pub const SESSION_SINGLETON_RVA: usize = TitleSessionRva::MoveMapSession as usize;
+/// `g_GxDrawContext` -- the GXSR rendering system's draw-context singleton (absolute
+/// 0x1447ef360; RVA = 0x1447ef360 - 0x140000000 = 0x47ef360).
+///
+/// CORRECTED 2026-08-30. This was declared as `SESSION_SINGLETON_RVA` /
+/// `TitleSessionRva::MoveMapSession` and documented as a "session manager singleton;
+/// NULL at the title, built by the move-map/load path". Both halves were wrong. The
+/// 1.16.2 dump names the global itself `g_GxDrawContext`, typed `GxDrawContext *`.
+///
+/// EVIDENCE. Of the global's 1242 xrefs exactly TWO are WRITES, and both are the
+/// ctor/dtor pair in the render region -- nothing in the move-map/load region (0x140a)
+/// writes it at all, which a "built by the move-map/load path" singleton would require:
+///   * `0x1419e6340` allocates 0x1010 bytes (== `sizeof(GxDrawContext)`, corroborated
+///     by the struct's own size) from `GLOBAL_RenderingSystemAllocator`, runs
+///     `GXSR::GxDrawContext::GxDrawContext`, stores the result here, then calls
+///     `GXSR::GxDrawContext::Initilize` (entry `0x1419e7cf0`).
+///   * `0x1419e63a0` deallocates it and writes NULL back.
+///
+/// The 1240 readers are the graphics stack: `GXRayTracingSystem`, `GXLightBase`,
+/// `GXSimpleDrawContextImplBase`, `FD4HkDrawSceneContext`, `render`, `SetupSubsystems`,
+/// `enter_/leave_gxrendermanager_critical_section`, `CSMovieGxTexture`, `~StageRend`.
+///
+/// IT IS NOT NULL AT THE TITLE, so it is worthless as a readiness or progress gate --
+/// testing `!= null` here tests a constant. `CS::CSMovieGxTexture::CSMovieGxTexture`
+/// dereferences it with NO null check (`FUN_1419e7990(g_GxDrawContext)`) and the title
+/// background movie is exactly such a texture; `CS::OptionSettingDialog`'s constructor
+/// reads it too, and that dialog opens from the title screen.
+///
+/// The GENUINE title/boot session singleton is a DIFFERENT address --
+/// `TitleSessionRva::SaveSafeBeginLogoSession` (0x4588e98), 38 xrefs, read by
+/// `STEP_BeginLogo` / `STEP_InitProfile` / `STEP_LoadList` / `STEP_PlayGame` /
+/// `STEP_Finish`. `title_tick_cover.rs`'s `PRODUCT_CORE_BLOCKER_SESSION` readiness gate
+/// uses that one, correctly. Do not let the two converge again: this file previously
+/// spelled a render pointer `SESSION_SINGLETON_RVA` while a real session singleton was
+/// spelled `SESSION_SINGLETON_144588E98_RVA`, so two different log lines both printed
+/// `session=0x...` for two unrelated objects.
+///
+/// Deliberately NOT spelled `GX_DRAW_CONTEXT_RVA`: `er-loading-portrait-core` declares
+/// that name for this same address, and the 1.16.2->1.17 data ledger emits one row per
+/// declaring name, so an exact name match would produce the byte-identical duplicate row
+/// that `check-no-duplicate-ledger-rows.py` R4 forbids. The two declarations remain
+/// parked as `todo:centralize-global-rva` in `scripts/rva-alias-allowlist.txt`.
+pub const GX_DRAW_CONTEXT_SINGLETON_RVA: usize = TitleSessionRva::GxDrawContextSingleton as usize;
 
 /// Alias of the `CSMenuMan` singleton. Derived from `er-game-base`'s table so the value has
 /// exactly one definition (2026-08-01 RVA dedupe); the name is kept for its call sites.
@@ -614,6 +653,13 @@ pub const TFC_NOT_RELEASE_FLAG_CLEAR: u8 = 0;
 /// Verified by disasm of 0x1409a8eb0 + the live user-Continue capture (selector body 0x9a8f09 ->
 /// 0x9b3070). bd LIVE-continue-chain-via-selector-NOT-confirm-handler.
 pub const TITLE_CONTINUE_SELECTOR_RVA: usize = 0x9a8eb0;
+
+/// The load dispatcher `0x1409b3070` the selector above tail-calls on its LOAD branch -- the proper
+/// `CS::MenuJob::ChainMenuJobs` enqueue. Named here because `fire_tfc_continue` used to print it as
+/// a bare `base + 0x9b3070usize` in the line that reports the dispatch, which on 1.17 named an
+/// address the dispatch did not go to. Nothing CALLS this constant; it exists so the log can
+/// resolve what it claims.
+pub const TITLE_CONTINUE_LOAD_DISPATCHER_RVA: usize = 0x9b3070;
 
 /// CS::TitleTopDialog MenuJobQueue at `dialog+0x10` (ring at +0x18) -- the queue the native Continue
 /// path posts the built LoadGame job into, drained each frame by the menu pump `0x1409aa680` (which
@@ -1135,22 +1181,41 @@ pub const TITLE_TOP_DIALOG_UPDATE_RVA: usize = 0x9aac10;
 /// already valid.
 pub const TITLE_TOP_DIALOG_CLEANUP_RVA: usize = TitleDialogRva::Cleanup as usize;
 
-/// Active-screen array 0x143d6d8d0 (RVA): the per-frame pump 0x1409aa680 iterates it. 10 contiguous
-/// screen* slots (stride 8). The LIVE-dialog scan reads each slot's [scr] vtable to find the live
-/// TitleTopDialog and MenuWindow (the factory's SceneProxy capture + rdx) -- no blind heap scan.
-pub const ACTIVE_SCREEN_ARRAY_RVA: usize = TitleDialogRva::ActiveScreenArray as usize;
+/// Profile model-renderer table 0x143d6d8d0 (RVA): 10 contiguous `CS::CSMenuProfModelRend*`
+/// slots (stride 8), one per profile/save slot. The per-frame pump 0x1409aa680 iterates it.
+///
+/// CORRECTED 2026-08-30 (was `ACTIVE_SCREEN_ARRAY_RVA`, "10 contiguous screen* slots ... the
+/// LIVE-dialog scan reads each slot's [scr] vtable to find the live TitleTopDialog and
+/// MenuWindow"). These are not screens and no TitleTopDialog vtable will ever appear in them.
+/// Evidence, 1.16.2 dump -- 9 xrefs total, all in the title-dialog region:
+///   * `0x1409af3a0` BUILDS the table: it calls the clear below, then loops 10 times doing
+///     `HeapAlloc(0xa30, 0x10, GLOBAL_GfxHeapAllocator)` and
+///     `CS::CSMenuProfModelRend::CSMenuProfModelRend(mem, i)`, storing each into
+///     `DAT_143d6d8d0[i]`.
+///   * `0x1409b2db0` CLEARS it: for all 10 slots it hands the pointer to
+///     `GLOBAL_CSDelayDeleteMan` and writes 0 back. `TitleTopDialog::Cleanup` (0x1409a8890)
+///     calls it, which is why counting non-null slots after cleanup is a real signal.
+///   * `0x1409aa680` PUMPS it: `CS::GameDataMan::GetProfileSummary()`, then per slot feeds
+///     `CS::FaceData::GetFaceDataBuffer(...)` and friends into the renderer -- it is building
+///     each save slot's character portrait, which is what `CSMenuProfModelRend` renders.
+///
+/// `er-loading-portrait-core`'s `TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA` was the
+/// accurate name of the two (and `scripts/read-portrait-chain.py` already documented the slots
+/// as `CSMenuProfModelRend*`). Renamed to agree without an exact collision, for the
+/// duplicate-ledger-row reason noted on `GX_DRAW_CONTEXT_SINGLETON_RVA`.
+pub const PROFILE_MODEL_REND_TABLE_RVA: usize = TitleDialogRva::ProfileModelRendTable as usize;
 
-/// Active-screen array slot count (bounded scan; the native pump iterates the same span).
-pub const ACTIVE_SCREEN_ARRAY_SLOTS: usize =
-    core::mem::size_of::<ActiveScreenArrayLayout>() / core::mem::size_of::<usize>();
+/// Table slot count (bounded scan; the native pump iterates the same span).
+pub const PROFILE_MODEL_REND_TABLE_SLOTS: usize =
+    core::mem::size_of::<ProfileModelRendTableLayout>() / core::mem::size_of::<usize>();
 
-/// Active-screen array slot stride (one screen* per slot).
-pub const ACTIVE_SCREEN_ARRAY_STRIDE: usize = core::mem::size_of::<usize>();
+/// Table slot stride (one `CSMenuProfModelRend*` per slot).
+pub const PROFILE_MODEL_REND_TABLE_STRIDE: usize = core::mem::size_of::<usize>();
 
 /// Scan slot start / step.
-pub const ACTIVE_SCREEN_SLOT_START: usize = usize::MIN;
+pub const PROFILE_MODEL_REND_SLOT_START: usize = usize::MIN;
 
-pub const ACTIVE_SCREEN_SLOT_STEP: usize = true as usize;
+pub const PROFILE_MODEL_REND_SLOT_STEP: usize = true as usize;
 
 /// TitleTopDialog SceneProxy capture slot: [dialog+0xa38] holds the live SceneProxy* the
 /// TitleTopDialog ctor 0x1409a81a0 stored at 0x1409a8213. The LIVE-dialog factory 0x14081ead0
@@ -1646,7 +1711,9 @@ pub enum TitleSessionRva {
     SaveSafeBeginLogoSession = 0x4588e98,
     SessionA = 0x3d687a0,
     SessionB = 0x3d67bd0,
-    MoveMapSession = 0x47ef360,
+    /// `g_GxDrawContext`, the GXSR render draw-context singleton -- NOT a session and
+    /// NOT null at the title. See `GX_DRAW_CONTEXT_SINGLETON_RVA` for the evidence.
+    GxDrawContextSingleton = 0x47ef360,
 }
 
 /// Partial SimpleTitleStep owner layout used by the zero-input title/menu driver.
@@ -1754,12 +1821,41 @@ pub enum OwnStepperPhase {
 pub enum ProfileLoadMenuRva {
     ProfileSlotActivate = 0x262250,
     MenuItemUpdate = 0x007ad1c0,
-    ProfileLoadSelectorTick = 0x826d50,
+    /// `vt[2]` (slot +0x10) of the `CS::MenuJobWithContext<LoadJobContext, lambda>` vtable
+    /// below -- the load job's Run/Execute virtual, NOT a per-frame "selector tick".
+    ///
+    /// CORRECTED 2026-08-30 (was `ProfileLoadSelectorTick`). Evidence, 1.16.2 dump: the
+    /// function at `0x140826d50` has NO callers and only three DATA xrefs (it is reached
+    /// through a vtable); Ghidra types it `MenuJobResult *FUN_140826d50(longlong this,
+    /// MenuJobResult *out, undefined8 *time, ...)` and its body calls
+    /// `MenuJobResult::SetResult(out, Failed, 0)` before dispatching through
+    /// `(**(this + 0x70))(...)`. Taking a `MenuJobResult` out-param and setting the job
+    /// result is the MenuJob Run signature. One of its DATA xrefs is `0x142ac71f0`, which
+    /// is `SelectorStepVtable`'s address + 0x10 -- i.e. this function IS that vtable's
+    /// third slot, and the RTTI on that vtable names the class (see below).
+    ///
+    /// `er-quickload`'s `SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA` was the accurate name of the
+    /// two; this declaration is renamed to agree with it without colliding (an exact name
+    /// match would emit a byte-identical 1.17 ledger row, which
+    /// `check-no-duplicate-ledger-rows.py` R4 forbids).
+    LoadJobRun = 0x826d50,
     MenuDeser = 0x0082c240,
     CsMenuCtor = 0x009060d0,
     MenuMemberFuncJobRun = 0x9aaba0,
     MenuLoadGameFunctorVtable = 0x02ac3ea8,
-    SelectorStepVtable = 0x2ac71e0,
+    /// Vtable of `CS::MenuJobWithContext<LoadJobContext, lambda_1af212c996936ea2325f4f98c4366979>`
+    /// -- a MenuJob vtable, NOT a "selector step" vtable.
+    ///
+    /// CORRECTED 2026-08-30 (was `SelectorStepVtable`). Proven by RTTI rather than
+    /// inference, read out of `eldenring-deobf.bin` (flat image, `VA = 0x140000000 + file
+    /// offset`, shift 0): `vtable[-1]` at `0x142ac71d8` -> complete-object-locator
+    /// `0x1432fc230` (signature 1) -> `COL+0x0c` type-descriptor RVA `0x3ca5d40` ->
+    /// `TD+0x10` mangled name
+    /// `.?AV?$MenuJobWithContext@VLoadJobContext@?A0x7c8d539b@@V<lambda_...>@@@CS@@`.
+    /// Slots: `vt[0]=0x140744d90`, `vt[1]=0x140826100`, `vt[2]=0x140826d50` (== `LoadJobRun`).
+    ///
+    /// `er-quickload`'s `MENUJOB_LOADGAME_VTABLE_DUMP_VA` was the accurate name of the two.
+    MenuJobLoadContextVtable = 0x2ac71e0,
     ProfileLoadDialogVtable = 0x2b229f8,
     /// `CS::ProfileLoadDialog::SelectSaveSlot(this, int slot) -> bool` -- the game's OWN
     /// "park the list cursor on the row that describes slot N". Its constructor
@@ -1867,11 +1963,13 @@ pub enum TitleDialogRva {
     Cleanup = 0x9a8890,
     OpenMenu = 0x9b24e0,
     Vtable = 0x2b26468,
-    ActiveScreenArray = 0x3d6d8d0,
+    /// 10-slot `CS::CSMenuProfModelRend*` table -- profile portrait renderers, NOT screens.
+    /// See `PROFILE_MODEL_REND_TABLE_RVA` for the evidence.
+    ProfileModelRendTable = 0x3d6d8d0,
 }
 
 #[repr(C)]
-pub struct ActiveScreenArrayLayout {
+pub struct ProfileModelRendTableLayout {
     pub slots: [usize; 10],
 }
 

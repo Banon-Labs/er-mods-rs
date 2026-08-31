@@ -126,7 +126,7 @@ pub(crate) fn install_auto_accept_hook() {
             return;
         }
     }
-    let Ok(builder_addr) = game_rva(MSGBOX_BUILDER_RVA) else {
+    let Ok(builder_addr) = game_rva_for_hook(MSGBOX_BUILDER_RVA) else {
         append_autoload_debug(format_args!("auto-accept: failed to resolve builder rva"));
         return;
     };
@@ -278,7 +278,7 @@ pub(crate) fn install_gr_sysmsg_log_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(GR_SYSTEM_MESSAGE_RVA) else {
+    let Ok(addr) = game_rva_for_hook(GR_SYSTEM_MESSAGE_RVA) else {
         append_autoload_debug(format_args!("grsysmsg-log: failed to resolve rva"));
         return;
     };
@@ -407,7 +407,7 @@ pub(crate) fn install_network_check_shortcircuit_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(NETWORK_CHECK_JOB_RUN_RVA) else {
+    let Ok(addr) = game_rva_for_hook(NETWORK_CHECK_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "network-check-shortcircuit: failed to resolve rva"
         ));
@@ -686,7 +686,7 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SHOW_PROGRESS_JOB_RUN_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SHOW_PROGRESS_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "show-progress-shortcircuit: failed to resolve rva"
         ));
@@ -929,7 +929,11 @@ pub(crate) unsafe fn build_profile_select_cover_job(
     TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
-        base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA"
+        ),
     ));
 }
 
@@ -967,7 +971,11 @@ pub(crate) unsafe fn build_black_cover_job(
     TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-b: BUILT non-returned custom black cover {TITLE_CUSTOM_COVER_BLACK_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; will be pumped above native title/PAB jobs",
-        base + TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA,
+            "TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA"
+        ),
     ));
 }
 
@@ -1005,7 +1013,11 @@ pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     masquerade_preserved_job_note(native_job);
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_PAB_INFORMATION_VISUAL_NAME} wrapper 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for PAB cover (out_slot=0x{out_slot:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
-        base + TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
+            "TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA"
+        ),
     ));
     native_ret
 }
@@ -1202,6 +1214,10 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
         .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} after native TitleTopDialog start-login via 0x{:x} dialog=0x{dialog:x} logo=0x{logo:x} hide_calls={calls}",
-        base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            "TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA"
+        ),
     ));
 }

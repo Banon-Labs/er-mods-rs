@@ -403,22 +403,22 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
     };
     let ret = unsafe { cleanup(dialog) };
     let mut remaining_slots = TITLE_OWNER_SCAN_START_ADDRESS;
-    let mut idx = ACTIVE_SCREEN_SLOT_START;
-    while idx < ACTIVE_SCREEN_ARRAY_SLOTS {
+    let mut idx = PROFILE_MODEL_REND_SLOT_START;
+    while idx < PROFILE_MODEL_REND_TABLE_SLOTS {
         let slot = er_game_base::mem::game_data_addr_offset(
             module_base,
-            ACTIVE_SCREEN_ARRAY_RVA,
-            "ACTIVE_SCREEN_ARRAY_RVA",
-            idx * ACTIVE_SCREEN_ARRAY_STRIDE,
+            PROFILE_MODEL_REND_TABLE_RVA,
+            "PROFILE_MODEL_REND_TABLE_RVA",
+            idx * PROFILE_MODEL_REND_TABLE_STRIDE,
         );
         let ptr = unsafe { safe_read_usize(slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         if ptr != TITLE_OWNER_SCAN_START_ADDRESS {
-            remaining_slots += ACTIVE_SCREEN_SLOT_STEP;
+            remaining_slots += PROFILE_MODEL_REND_SLOT_STEP;
         }
-        idx += ACTIVE_SCREEN_SLOT_STEP;
+        idx += PROFILE_MODEL_REND_SLOT_STEP;
     }
     append_autoload_debug(format_args!(
-        "title-dialog-cleanup: called 0x{:x} frame={frame} owner=0x{owner_addr:x} dialog=0x{dialog:x} ret=0x{ret:x} remaining_active_slots={remaining_slots}",
+        "title-dialog-cleanup: called 0x{:x} frame={frame} owner=0x{owner_addr:x} dialog=0x{dialog:x} ret=0x{ret:x} remaining_profile_rend_slots={remaining_slots}",
         er_game_base::mem::game_data_addr(
             module_base,
             TITLE_TOP_DIALOG_CLEANUP_RVA,
@@ -939,7 +939,11 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         out_job[1],
         out_job[2],
         out_job[3],
-        base + 0x9b3070usize
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CONTINUE_LOAD_DISPATCHER_RVA,
+            "TITLE_CONTINUE_LOAD_DISPATCHER_RVA"
+        )
     ));
     // INSTALL the built job as currentTopMenuJob (CSPopupMenu+0xB0) via CS::MenuJob::Assign, so the
     // NATIVE per-frame menu pump runs its Run IN CONTEXT -- the fix for the self-pump menu-jumping (our
@@ -1035,7 +1039,11 @@ pub unsafe fn install_title_update_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "title-update-hook: INSTALLED on TitleTopDialog::update 0x{:x} -- in-context Continue build armed",
-            base + TITLE_TOP_DIALOG_UPDATE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_UPDATE_RVA,
+                "TITLE_TOP_DIALOG_UPDATE_RVA"
+            )
         )),
         status => append_autoload_debug(format_args!(
             "title-update-hook: MH_ApplyQueued failed: {status:?}"
@@ -1126,7 +1134,11 @@ pub unsafe fn install_pab_advance_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "pab-advance-hook: INSTALLED on PAB node-update 0x{:x} -- readiness press-any-button advance armed (zero-input)",
-            base + PAB_NODE_UPDATE_RVA as usize
+            er_game_base::mem::game_data_addr(
+                base,
+                PAB_NODE_UPDATE_RVA as usize,
+                "PAB_NODE_UPDATE_RVA"
+            )
         )),
         status => append_autoload_debug(format_args!(
             "pab-advance-hook: MH_ApplyQueued failed: {status:?}"

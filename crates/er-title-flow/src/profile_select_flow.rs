@@ -41,13 +41,23 @@ unsafe fn product_profile_select_load_flow(owner: usize, base: usize, slot: i32,
     // the ProfileLoadDialog is open, capture table[slot]'s rendered portrait, and HOLD the commit
     // until captured or the tick cap. Fail-open at the cap.
     if PORTRAIT_RENDER_WINDOW_DONE.load(Ordering::SeqCst) == 0 {
-        let refresh: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(match title_fn(PROFILE_RENDERER_REFRESH_RVA, "PROFILE_RENDERER_REFRESH_RVA") { Some(address) => address, None => return }) };
+        let refresh: unsafe extern "system" fn() = unsafe {
+            std::mem::transmute(
+                match title_fn(PROFILE_RENDERER_REFRESH_RVA, "PROFILE_RENDERER_REFRESH_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { refresh() };
         if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
                 "profile-select-flow: kicked profile refresh 0x{:x} with ProfileLoadDialog=0x{dialog:x} open (slot={slot}) -- saveSlotsStates[slot] now set, portrait can render",
-                er_game_base::mem::game_data_addr(base, PROFILE_RENDERER_REFRESH_RVA, "PROFILE_RENDERER_REFRESH_RVA")
+                er_game_base::mem::game_data_addr(
+                    base,
+                    PROFILE_RENDERER_REFRESH_RVA,
+                    "PROFILE_RENDERER_REFRESH_RVA"
+                )
             ));
         }
         maybe_capture_portrait_gxtexture(base, slot);
@@ -83,7 +93,13 @@ pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuA
         return None;
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    if dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
+    if dialog_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         return None;
     }
     let registry =
@@ -95,7 +111,13 @@ pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuA
     let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
     let node = member_node?;
     let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);
-    if node_vt != er_game_base::mem::game_data_addr(base, MEMBERFUNCJOB_VTABLE_RVA, "MEMBERFUNCJOB_VTABLE_RVA") {
+    if node_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            MEMBERFUNCJOB_VTABLE_RVA,
+            "MEMBERFUNCJOB_VTABLE_RVA",
+        )
+    {
         return None;
     }
     const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
@@ -110,7 +132,8 @@ pub unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuA
     if member_fn == null {
         return None;
     }
-    let factory_abs = er_game_base::mem::game_data_addr(base, LIVE_DIALOG_FACTORY_RVA, "LIVE_DIALOG_FACTORY_RVA");
+    let factory_abs =
+        er_game_base::mem::game_data_addr(base, LIVE_DIALOG_FACTORY_RVA, "LIVE_DIALOG_FACTORY_RVA");
     let mut target = member_fn;
     let mut hop = HOP_START;
     while hop < JMP_HOPS && target != null {
@@ -148,7 +171,13 @@ pub unsafe fn title_live_dialog_fire_ready(
         return None;
     }
     let title_dialog_vt = unsafe { safe_read_usize(title_dialog) }.unwrap_or(null);
-    if title_dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
+    if title_dialog_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         return None;
     }
     let menu_opened_latch = unsafe {
@@ -161,7 +190,13 @@ pub unsafe fn title_live_dialog_fire_ready(
     }
     let registry_vt =
         unsafe { safe_read_usize(title_dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
-    if registry_vt != er_game_base::mem::game_data_addr(base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") {
+    if registry_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCENE_OBJ_PROXY_VTABLE_RVA,
+            "SCENE_OBJ_PROXY_VTABLE_RVA",
+        )
+    {
         return None;
     }
     let capture_slot = title_dialog + DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
@@ -170,7 +205,13 @@ pub unsafe fn title_live_dialog_fire_ready(
         return None;
     }
     let capture_vt = unsafe { safe_read_usize(capture) }.unwrap_or(null);
-    if capture_vt != er_game_base::mem::game_data_addr(base, TITLE_FLOW_CONTEXT_VTABLE_RVA, "TITLE_FLOW_CONTEXT_VTABLE_RVA") {
+    if capture_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_FLOW_CONTEXT_VTABLE_RVA,
+            "TITLE_FLOW_CONTEXT_VTABLE_RVA",
+        )
+    {
         return None;
     }
     let menu_window = LATCHED_MENU_WINDOW.load(Ordering::SeqCst);
@@ -201,16 +242,18 @@ pub fn is_startup_msgbox_vtable(vt: usize, base: usize) -> bool {
     // matching while the SaveRetryDialog half kept working. `vt != 0` is required because a refused
     // RVA resolves to 0, which would otherwise make a null vtable read as a startup message box.
     vt != 0
-        && (vt == er_game_base::mem::game_data_addr(
-            base,
-            MSGBOX_DIALOG_VTABLE_RVA,
-            "MSGBOX_DIALOG_VTABLE_RVA",
-        ) || vt
+        && (vt
             == er_game_base::mem::game_data_addr(
                 base,
-                SAVE_RETRY_DIALOG_VTABLE_RVA,
-                "SAVE_RETRY_DIALOG_VTABLE_RVA",
-            ))
+                MSGBOX_DIALOG_VTABLE_RVA,
+                "MSGBOX_DIALOG_VTABLE_RVA",
+            )
+            || vt
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    SAVE_RETRY_DIALOG_VTABLE_RVA,
+                    "SAVE_RETRY_DIALOG_VTABLE_RVA",
+                ))
 }
 pub fn startup_modal_blocking_state() -> StartupModalBlockingState {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -264,8 +307,8 @@ pub unsafe fn profile_dialog_row_slot(dialog: usize, row: i32) -> Option<i32> {
         return None;
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    let row_list_fn = unsafe { safe_read_usize(dialog_vt + DIALOG_ROW_LIST_VTSLOT_90_OFFSET) }
-        .unwrap_or(null);
+    let row_list_fn =
+        unsafe { safe_read_usize(dialog_vt + DIALOG_ROW_LIST_VTSLOT_90_OFFSET) }.unwrap_or(null);
     if row_list_fn == null || row_list_fn <= PAB_MIN_HEAP_PTR {
         return None;
     }
@@ -317,7 +360,11 @@ pub unsafe fn profile_dialog_select_save_slot(base: usize, dialog: usize, slot: 
     // `game_data_addr` answers 0 for a refusal, so `0 != 0` was FALSE and an unreadable dialog
     // paired with a refused RVA fell straight through this "fail closed" guard into the native call
     // below.
-    let expected_vt = er_game_base::mem::game_data_addr(base, PROFILE_LOAD_DIALOG_VTABLE_RVA, "PROFILE_LOAD_DIALOG_VTABLE_RVA");
+    let expected_vt = er_game_base::mem::game_data_addr(
+        base,
+        PROFILE_LOAD_DIALOG_VTABLE_RVA,
+        "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+    );
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
     if expected_vt == null || dialog_vt != expected_vt {
         return false;
@@ -355,7 +402,11 @@ pub unsafe fn profile_load_dialog_ready(
 ) -> Option<ProfileLoadDialogReady> {
     const PROFILE_LOAD_ACTIVATE_RVA: usize = 0x009a4670;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let pld_vt = er_game_base::mem::game_data_addr(base, PROFILE_LOAD_DIALOG_VTABLE_RVA, "PROFILE_LOAD_DIALOG_VTABLE_RVA");
+    let pld_vt = er_game_base::mem::game_data_addr(
+        base,
+        PROFILE_LOAD_DIALOG_VTABLE_RVA,
+        "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+    );
     let dvt = if dialog != null {
         unsafe { safe_read_usize(dialog) }.unwrap_or(null)
     } else {
@@ -371,11 +422,21 @@ pub unsafe fn profile_load_dialog_ready(
     }
     let lav =
         unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }.unwrap_or(null);
-    if lav != er_game_base::mem::game_data_addr(base, PROFILE_LOAD_ACTIVATE_RVA, "PROFILE_LOAD_ACTIVATE_RVA") {
+    if lav
+        != er_game_base::mem::game_data_addr(
+            base,
+            PROFILE_LOAD_ACTIVATE_RVA,
+            "PROFILE_LOAD_ACTIVATE_RVA",
+        )
+    {
         if log_pending {
             append_autoload_debug(format_args!(
                 "profile-load-ready: load_activate slot not ready lav=0x{lav:x} want=0x{:x} dvt=0x{dvt:x}",
-                er_game_base::mem::game_data_addr(base, PROFILE_LOAD_ACTIVATE_RVA, "PROFILE_LOAD_ACTIVATE_RVA")
+                er_game_base::mem::game_data_addr(
+                    base,
+                    PROFILE_LOAD_ACTIVATE_RVA,
+                    "PROFILE_LOAD_ACTIVATE_RVA"
+                )
             ));
         }
         return None;
@@ -483,35 +544,62 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
         timeline_event("T0", tick, format_args!("state10 observe-baseline"));
     }
     if let Some(o) = owner
-        && OBSERVE_MENU_OPEN_EMITTED.load(Ordering::SeqCst) == OBSERVE_MARKER_NOT_EMITTED {
-            let dialog =
-                unsafe { safe_read_usize(o + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
-            let dialog_vt = if dialog != null {
-                unsafe { safe_read_usize(dialog) }.unwrap_or(null)
-            } else {
-                null
+        && OBSERVE_MENU_OPEN_EMITTED.load(Ordering::SeqCst) == OBSERVE_MARKER_NOT_EMITTED
+    {
+        let dialog =
+            unsafe { safe_read_usize(o + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+        let dialog_vt = if dialog != null {
+            unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+        } else {
+            null
+        };
+        if dialog_vt
+            == er_game_base::mem::game_data_addr(
+                module_base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
+        {
+            let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+            let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 = unsafe {
+                std::mem::transmute(
+                    match title_fn(
+                        TITLE_TOP_DIALOG_IS_IN_STATE_RVA,
+                        "TITLE_TOP_DIALOG_IS_IN_STATE_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
             };
-            if dialog_vt == er_game_base::mem::game_data_addr(module_base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
-                let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-                let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-                    unsafe { std::mem::transmute(match title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA") { Some(address) => address, None => return }) };
-                let textfadeout =
-                    unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(module_base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) }
-                        != OWN_STEPPER_FALSE;
-                if textfadeout
-                    && OBSERVE_MENU_OPEN_EMITTED.swap(OBSERVE_MARKER_EMITTED, Ordering::SeqCst)
-                        == OBSERVE_MARKER_NOT_EMITTED
-                {
-                    timeline_event(
-                        "T_menu_open",
-                        tick,
-                        format_args!("dialog=0x{dialog:x} observe-baseline"),
-                    );
-                }
+            let textfadeout = unsafe {
+                is_in_state(
+                    sm,
+                    er_game_base::mem::game_data_addr(
+                        module_base,
+                        TITLE_STATE_DESC_TEXTFADEOUT_RVA,
+                        "TITLE_STATE_DESC_TEXTFADEOUT_RVA",
+                    ),
+                )
+            } != OWN_STEPPER_FALSE;
+            if textfadeout
+                && OBSERVE_MENU_OPEN_EMITTED.swap(OBSERVE_MARKER_EMITTED, Ordering::SeqCst)
+                    == OBSERVE_MARKER_NOT_EMITTED
+            {
+                timeline_event(
+                    "T_menu_open",
+                    tick,
+                    format_args!("dialog=0x{dialog:x} observe-baseline"),
+                );
             }
         }
+    }
     let csfeman = read_global_ptr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA");
-    let session = read_global_ptr(module_base, SESSION_SINGLETON_RVA, "SESSION_SINGLETON_RVA");
+    let gx_draw_ctx = read_global_ptr(
+        module_base,
+        GX_DRAW_CONTEXT_SINGLETON_RVA,
+        "GX_DRAW_CONTEXT_SINGLETON_RVA",
+    );
     let gm = game_man_ptr_or_null();
     let read_gm = |off: usize| {
         if gm != null {
@@ -573,11 +661,21 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     } else {
         TITLE_STATE_OWNER_GONE
     };
-    let driver = unsafe { *((er_game_base::mem::game_data_addr(module_base, STREAMING_DRIVER_SINGLETON_RVA, "STREAMING_DRIVER_SINGLETON_RVA")) as *const usize) };
+    let driver = unsafe {
+        *((er_game_base::mem::game_data_addr(
+            module_base,
+            STREAMING_DRIVER_SINGLETON_RVA,
+            "STREAMING_DRIVER_SINGLETON_RVA",
+        )) as *const usize)
+    };
     // Change-detection: only log when the signature changes (full granularity, no
     // per-frame file I/O). Captures every transition incl. the mms_state 3 -> resolve.
     let csf_nz = (csfeman != null) as i64;
-    let sess_nz = (session != null) as i64;
+    // A `sess_nz = (session != null)` term used to sit here. That global is
+    // `g_GxDrawContext` (a render draw context), not a session singleton, and it is
+    // non-null from render-system setup onward -- so the term was a constant 1 and could
+    // never mark the transition it appeared to watch. Dropped rather than left in looking
+    // like a signal. See `GX_DRAW_CONTEXT_SINGLETON_RVA` for why it is never null.
     let ingame_nz = (ingame != null) as i64;
     let driver_nz = (driver != null) as i64;
     let mut sig = state as i64;
@@ -585,7 +683,6 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
         .wrapping_mul(OBSERVE_SIG_MULT)
         .wrapping_add(mms_state as i64);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(csf_nz);
-    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(sess_nz);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(ingame_nz);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(c30 as i64);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(b80 as i64);
@@ -606,7 +703,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
         return;
     }
     append_autoload_debug(format_args!(
-        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} c30=0x{c30:x} ac0={ac0} b80={b80} b78={b78} iodev=0x{iodev:x} io10=0x{iodev10:x} io18=0x{iodev18:x} io20=0x{iodev20:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{resmgr:x} b7c1={b7c1} driver=0x{driver:x} slotmgr=0x{slotmgr:x} tick={tick}"
+        "observe: state={state} csfeman=0x{csfeman:x} gxctx=0x{gx_draw_ctx:x} c30=0x{c30:x} ac0={ac0} b80={b80} b78={b78} iodev=0x{iodev:x} io10=0x{iodev10:x} io18=0x{iodev18:x} io20=0x{iodev20:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{resmgr:x} b7c1={b7c1} driver=0x{driver:x} slotmgr=0x{slotmgr:x} tick={tick}"
     ));
 }
 /// Patch the `GameMan::IsOnlineMode` getter 0x14067a030 to `xor eax,eax; ret` so it always
@@ -646,7 +743,11 @@ pub fn apply_online_disable() {
     );
     append_autoload_debug(format_args!(
         "online-disable: Menu_IsEnableOnlineMode@0x{:x} patched ok={menu_online_off} -> xor eax,eax;ret (notReleaseFlag55 becomes 1 -> no 'Starting in offline mode' popup -> title rows build)",
-        er_game_base::mem::game_data_addr(base, MENU_ONLINE_MODE_DISABLE_RVA, "MENU_ONLINE_MODE_DISABLE_RVA")
+        er_game_base::mem::game_data_addr(
+            base,
+            MENU_ONLINE_MODE_DISABLE_RVA,
+            "MENU_ONLINE_MODE_DISABLE_RVA"
+        )
     ));
     let _ = ONLINE_PREDICATE_DISABLE_RVA;
 }
@@ -697,11 +798,21 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     // mid-scan -> AV, the boot-crash). The autoload needs none of it -- the movie
     // singleton and GameMan are fixed globals.
     let csfeman = read_global_ptr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA");
-    let latch = read_global_u8(module_base, TITLE_ACCEPT_LATCH_RVA, "TITLE_ACCEPT_LATCH_RVA");
+    let latch = read_global_u8(
+        module_base,
+        TITLE_ACCEPT_LATCH_RVA,
+        "TITLE_ACCEPT_LATCH_RVA",
+    );
     let movie = read_global_ptr(module_base, MOVIE_SINGLETON_RVA, "MOVIE_SINGLETON_RVA");
     let skip = read_global_u8(module_base, MOVIE_SKIP_FLAG_RVA, "MOVIE_SKIP_FLAG_RVA");
     let gm = game_man_ptr_or_null();
-    let session = read_global_ptr(module_base, SESSION_SINGLETON_RVA, "SESSION_SINGLETON_RVA");
+    // Diagnostic only. `g_GxDrawContext` is non-null from render-system setup onward, so
+    // this is a constant here -- never treat it as a title/load readiness signal.
+    let gx_draw_ctx = read_global_ptr(
+        module_base,
+        GX_DRAW_CONTEXT_SINGLETON_RVA,
+        "GX_DRAW_CONTEXT_SINGLETON_RVA",
+    );
     let log_now = (tick % ARM_PROBE_TICK_INTERVAL == null as u64)
         || (skip == MOVIE_SKIP_FLAG_SET && csfeman == null);
     // Scan-free native movie dismiss: gated on the movie singleton being present
@@ -710,7 +821,10 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     if do_write && tick >= DISMISS_MIN_TICK && skip == MOVIE_SKIP_FLAG_CLEAR && movie != null {
         let movie_vtable = unsafe { *(movie as *const usize) };
         let hwnd = unsafe { *((movie + MOVIE_HWND_OFFSET) as *const usize) };
-        if movie_vtable == er_game_base::mem::game_data_addr(module_base, MOVIE_VTABLE_RVA, "MOVIE_VTABLE_RVA") && hwnd != null {
+        if movie_vtable
+            == er_game_base::mem::game_data_addr(module_base, MOVIE_VTABLE_RVA, "MOVIE_VTABLE_RVA")
+            && hwnd != null
+        {
             let hwnd_ptr = hwnd as *mut c_void;
             unsafe {
                 let menu = GetSystemMenu(hwnd_ptr, WND_GET_SYSTEM_MENU_KEEP);
@@ -733,7 +847,7 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
             ));
         }
     }
-    // Observability: GameMan load fields + session + csfeman, to see the post-
+    // Observability: GameMan load fields + render draw ctx + csfeman, to see the post-
     // dismiss bootstrap/load trajectory (drives where to arm the load recipe).
     if log_now {
         let (cmd, force, slot, loading) = if gm != null {
@@ -754,7 +868,7 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
             )
         };
         append_autoload_debug(format_args!(
-            "title_accept: skip={skip} movie=0x{movie:x} latch={latch} csfeman=0x{csfeman:x} session=0x{session:x} gm=0x{gm:x} cmd={cmd} force={force} slot={slot} loading={loading} tick={tick}"
+            "title_accept: skip={skip} movie=0x{movie:x} latch={latch} csfeman=0x{csfeman:x} gxctx=0x{gx_draw_ctx:x} gm=0x{gm:x} cmd={cmd} force={force} slot={slot} loading={loading} tick={tick}"
         ));
     }
 }
@@ -776,11 +890,26 @@ pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
     let load_in_progress =
         unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
     let armed = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
-    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(module_base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
+    let csfeman = unsafe {
+        *((er_game_base::mem::game_data_addr(
+            module_base,
+            CSFEMAN_SINGLETON_RVA,
+            "CSFEMAN_SINGLETON_RVA",
+        )) as *const usize)
+    };
     if load_in_progress == TITLE_NATIVE_JOB_TASK_DATA_ZERO {
         // Re-arm each frame: persist the slot against the title's reset, set latch.
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(match title_fn(FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA, "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA") { Some(address) => address, None => return }) };
+        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+            std::mem::transmute(
+                match title_fn(
+                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_save_slot(slot) };
         unsafe {
             write_global_u8(
@@ -817,7 +946,11 @@ pub unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
     let slot_mgr = game_data_man_ptr_or_null();
     let csfeman = read_ptr(CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA");
     let input_mgr = read_ptr(TITLE_INPUT_MANAGER_RVA, "TITLE_INPUT_MANAGER_RVA");
-    let latch = read_global_u8(module_base, SELECTBOT_LOAD_GATE_RVA, "SELECTBOT_LOAD_GATE_RVA");
+    let latch = read_global_u8(
+        module_base,
+        SELECTBOT_LOAD_GATE_RVA,
+        "SELECTBOT_LOAD_GATE_RVA",
+    );
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gm_byte = |off: usize| {
         if game_man != null {
@@ -859,8 +992,16 @@ static TITLE_OWNER_NEEDLE_REFUSAL_LOGGED: std::sync::atomic::AtomicBool =
 
 pub unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     TITLE_OWNER_SCAN_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
-    let target_vtable = er_game_base::mem::game_data_addr(module_base, TITLE_OWNER_VTABLE_RVA, "TITLE_OWNER_VTABLE_RVA");
-    let target_table = er_game_base::mem::game_data_addr(module_base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA");
+    let target_vtable = er_game_base::mem::game_data_addr(
+        module_base,
+        TITLE_OWNER_VTABLE_RVA,
+        "TITLE_OWNER_VTABLE_RVA",
+    );
+    let target_table = er_game_base::mem::game_data_addr(
+        module_base,
+        INNER_TITLE_STATE_TABLE_RVA,
+        "INNER_TITLE_STATE_TABLE_RVA",
+    );
     // A refused RVA resolves to 0. Safe to dereference, INVERTED as a search needle: `vtable == 0`
     // matches every zeroed qword in the address space, and neither cross-check rejects it -- the
     // `+0x10` table needle is built from the same refusal (also 0), and `TITLE_OWNER_MIN_STATE`

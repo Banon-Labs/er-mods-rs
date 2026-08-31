@@ -477,7 +477,11 @@ pub unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAuto
     if prev == 0 {
         append_autoload_debug(format_args!(
             "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} via native SceneObjProxy visibility wrapper 0x{:x} dialog=0x{:x} logo=0x{logo:x}",
-            base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+                "TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA"
+            ),
             ready.title_dialog,
         ));
     }
@@ -615,8 +619,16 @@ pub unsafe fn maybe_refresh_title_profile_cover(base: usize, ready: &ProductCore
         .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-b: initialized profile renderer table via 0x{:x}, refreshed post-SL2 profile portrait render targets via 0x{:x} profile_summary=0x{:x} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
-        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA,
-        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA"
+        ),
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA"
+        ),
         ready.profile_summary,
     ));
 }
@@ -842,8 +854,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // menuData+0x5d is 0 to begin with, the functor never set it. The real root is the incomplete teardown
     // functor, not our clear. See bd ending-request-fix-was-wrong / rt5d-never-set findings.)
     // SWITCH-OUTCOME ORACLE (read-only, user-mandated reliable semaphore). Runs whenever a slot is picked,
-    // OUTSIDE the dormancy gate below, so it observes the post-commit native session too. Literals: CSMenuMan
-    // global +0x3d6b7b0, in-game menu job +0x798; InGameStep = TitleStep(owner)+0x2e8, requestCode +0xd8.
+    // OUTSIDE the dormancy gate below, so it observes the post-commit native session too. CSMenuMan comes
+    // from CS_MENU_MAN_GLOBAL_RVA (1.16.2 +0x3d6b7b0), resolved for the running build like every other read
+    // of it here; literals: in-game menu job +0x798, InGameStep = TitleStep(owner)+0x2e8, requestCode +0xd8.
     // The trace classifies the outcome with no eyeballs: stable_frames (player present + requestCode==2 +
     // menu_job!=0) climbing high = LOADED_STABLE; resetting after a peak = the world DROPPED (bounce/reload);
     // the line STOPPING = FROZE; bc4 stuck at 1 = never-tears-down freeze.
@@ -857,7 +870,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         } else {
             -1
         };
-        let menu_man = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }.filter(|&m| m > 0x10000);
+        let menu_man = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .filter(|&m| m > 0x10000);
         let menu_job = menu_man
             .and_then(|m| unsafe { safe_read_usize(m + 0x798) })
             .unwrap_or(0);
@@ -2156,93 +2176,205 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // save-gate diag DURING the stall (bc4=1): the quit-save orchestrator FUN_140afb970 (RE 1.16.1)
             // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0, AND the
             // menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0). Names the blocker while
-            // bc4 is frozen. Literals: 0x3d856a0 = load-active latch, 0x3d6b7b0 = CSMenuMan global.
-            let dsg_force = unsafe { safe_read_u8(module_base + 0x3d856a0) }.unwrap_or(0xff);
-            let dsg_ss = unsafe { safe_read_i32(gm + 0xb80) }.unwrap_or(-1);
-            let dsg_csm = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }.unwrap_or(0);
-            let dsg_sub = if dsg_csm > 0x10000 {
-                unsafe { safe_read_usize(dsg_csm + 0x80) }.unwrap_or(0)
-            } else {
-                0
+            // bc4 is frozen. Both globals are read through their RVA constants
+            // (ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA = the load-active latch, CS_MENU_MAN_GLOBAL_RVA), so the
+            // 1.16.2 addresses quoted above are RE provenance, not addresses this code reaches for.
+            // AN UNREAD VALUE IS NOT A MEASURED ONE. Every read below is fault-tolerant, and
+            // this block used to fold each failure into an in-band sentinel -- `0xff` for a
+            // byte, `-1` for `disableSaveMenu`, `usize::MAX` for a pointer -- and then compare
+            // the sentinel as if it were the field. `disableSaveMenu = -1` (CSMenuMan null or
+            // unreadable) satisfied `!= 0`, so `pump_fallback` came out TRUE and the line named
+            // "QUIT-SAVE FALLBACK(saveSlot>=10 or disableSaveMenu!=0)" as the definitive blocker
+            // for a value that was never read. The same run printed `menu_gate_ok=false` from
+            // the same unreadable CSMenuMan, and `case7-gate` reported `c2_not_shouldsave` as
+            // PASSING because `dsg_dsm == 0` was false for the same reason. Three conclusions,
+            // one absent pointer, no way for a reader to tell.
+            //
+            // The reads are `Option` now and every derived predicate is `Option`: a missing
+            // input makes the verdict UNREADABLE and names the field, instead of manufacturing
+            // a blocker. `render` prints "unreadable" where a sentinel used to print as data.
+            //
+            // The gate being described (RE 1.16.1): the quit-save orchestrator FUN_140afb970
+            // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0,
+            // AND the menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0).
+            // The 1.16.2 RVAs quoted here are RE provenance; the reads below go through
+            // ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA and CS_MENU_MAN_GLOBAL_RVA, resolved for the
+            // running build. A refusal makes the read `None`, which the Option chain already
+            // reports as `unreadable` -- it can never be mistaken for a measured `Some(0)`.
+            let dsg_force = unsafe {
+                safe_read_u8(er_game_base::mem::game_data_addr(
+                    module_base,
+                    ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA,
+                    "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA",
+                ))
             };
-            let (dsg_m290, dsg_m298) = if dsg_sub > 0x10000 {
-                (
-                    unsafe { safe_read_u8(dsg_sub + 0x290) }.unwrap_or(0xff),
-                    unsafe { safe_read_usize(dsg_sub + 0x298) }.unwrap_or(usize::MAX),
-                )
-            } else {
-                (0xff, usize::MAX)
+            let dsg_ss = unsafe { safe_read_i32(gm + 0xb80) };
+            let dsg_csm = unsafe {
+                safe_read_usize(er_game_base::mem::game_data_addr(
+                    module_base,
+                    CS_MENU_MAN_GLOBAL_RVA,
+                    "CS_MENU_MAN_GLOBAL_RVA",
+                ))
+            }
+            .filter(|csm| *csm > 0x10000);
+            let dsg_sub = dsg_csm
+                .and_then(|csm| unsafe { safe_read_usize(csm + 0x80) })
+                .filter(|sub| *sub > 0x10000);
+            let dsg_m290 = dsg_sub.and_then(|sub| unsafe { safe_read_u8(sub + 0x290) });
+            let dsg_m298 = dsg_sub.and_then(|sub| unsafe { safe_read_usize(sub + 0x298) });
+            // `None` = at least one operand of FUN_14080d660 could not be read. NOT `false`:
+            // "the menu gate is shut" and "we could not see the menu gate" are different facts
+            // and only one of them is a blocker.
+            let dsg_menu_ok = match (dsg_m290, dsg_m298) {
+                (Some(m290), Some(m298)) => Some(m290 == 0 && m298 == 0),
+                _ => None,
             };
-            let dsg_menu_ok = dsg_m290 == 0 && dsg_m298 == 0;
-            // The REAL orchestrator (FUN_140afb970) pump gate is bVar5 (NOT what this diag checked before):
+            // The REAL orchestrator (FUN_140afb970) pump gate is bVar5:
             // bVar5 = ShouldSave() [saveRequested(b72) && !CanShowSaveMenu() && menu_gate && bc4!=3]
             //      || FUN_140679460() [b73 && menu_gate && bc4!=3]  ||  GetRequestedSaveSlotLoad()(b78) != -1.
-            // If bVar5==0 the orchestrator returns without pumping bc4. b78==-1 is likely OUR b78 guard
-            // starving the third term. Read the components so the stall names the exact failing term.
-            let dsg_b72 = unsafe { safe_read_u8(gm + 0xb72) }.unwrap_or(0xff);
-            let dsg_b73 = unsafe { safe_read_u8(gm + 0xb73) }.unwrap_or(0xff);
-            let dsg_b78 = unsafe { safe_read_i32(gm + 0xb78) }.unwrap_or(-99);
+            // If bVar5==0 the orchestrator returns without pumping bc4.
+            let dsg_b72 = unsafe { safe_read_u8(gm + 0xb72) };
+            let dsg_b73 = unsafe { safe_read_u8(gm + 0xb73) };
+            let dsg_b78 = unsafe { safe_read_i32(gm + 0xb78) };
             let bc4_not3 = return_title_job_predicate_bc4 != 3;
-            let dsg_should_save = dsg_b72 != 0 && dsg_menu_ok && bc4_not3;
-            let dsg_679460 = dsg_b73 != 0 && dsg_menu_ok && bc4_not3;
-            let bvar5_est = dsg_should_save || dsg_679460 || dsg_b78 != -1;
+            let dsg_should_save = match (dsg_b72, dsg_menu_ok) {
+                (Some(b72), Some(menu_ok)) => Some(b72 != 0 && menu_ok && bc4_not3),
+                _ => None,
+            };
+            let dsg_679460 = match (dsg_b73, dsg_menu_ok) {
+                (Some(b73), Some(menu_ok)) => Some(b73 != 0 && menu_ok && bc4_not3),
+                _ => None,
+            };
+            // A disjunction can be decided by a readable TRUE even when a term is unreadable,
+            // and only that shape is honest: `Some(true)` needs one true term, `Some(false)`
+            // needs every term readable and false.
+            let bvar5_est = {
+                let terms = [dsg_should_save, dsg_679460, dsg_b78.map(|b78| b78 != -1)];
+                if terms.contains(&Some(true)) {
+                    Some(true)
+                } else if terms.iter().all(|term| *term == Some(false)) {
+                    Some(false)
+                } else {
+                    None
+                }
+            };
             // The REAL bc4 blocker (deeper than bVar5): the quit-save FUN_14067ba30 does the full
-            // bc4-advancing save ONLY if saveSlot < 10 AND disableSaveMenu == 0; otherwise it FALLS BACK
-            // to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and clears
-            // saveRequested). CanShowSaveMenu() == (CSMenuMan->disableSaveMenu != 0). Read both.
+            // bc4-advancing save ONLY if saveSlot < 10 AND disableSaveMenu == 0; otherwise it FALLS
+            // BACK to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and
+            // clears saveRequested). CanShowSaveMenu() == (CSMenuMan->disableSaveMenu != 0).
             let dsg_slot = unsafe {
                 safe_read_i32(gm + core::mem::offset_of!(eldenring::cs::GameMan, save_slot))
-            }
-            .unwrap_or(-99);
-            let dsg_dsm = if dsg_csm > 0x10000 {
-                unsafe { safe_read_u8(dsg_csm + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) }
-                    .map(|v| v as i32)
-                    .unwrap_or(-1)
-            } else {
-                -1
             };
-            let pump_fallback = !(0..=9).contains(&dsg_slot) || dsg_dsm != 0;
-            let dsg_blocker = if pump_fallback {
+            let dsg_dsm = dsg_csm.and_then(|csm| unsafe {
+                safe_read_u8(csm + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET)
+            });
+            let pump_fallback = match (dsg_slot, dsg_dsm) {
+                (Some(slot), Some(dsm)) => Some(!(0..=9).contains(&slot) || dsm != 0),
+                // Same disjunction rule: an out-of-range slot decides it on its own.
+                (Some(slot), None) if !(0..=9).contains(&slot) => Some(true),
+                (None, Some(dsm)) if dsm != 0 => Some(true),
+                _ => None,
+            };
+            /// Render an optional read for the log: the VALUE when it was read, the word
+            /// `unreadable` when it was not. Never a sentinel that can be mistaken for data.
+            fn render<T: core::fmt::Display>(value: Option<T>) -> String {
+                value.map_or_else(|| "unreadable".to_owned(), |value| value.to_string())
+            }
+            let dsg_blocker = if pump_fallback == Some(true) {
                 "QUIT-SAVE FALLBACK(saveSlot>=10 or disableSaveMenu!=0 -> plain save, bc4 NOT advanced)"
-            } else if dsg_force != 0 {
+            } else if dsg_force == Some(0)
+                && dsg_ss == Some(0)
+                && dsg_menu_ok == Some(true)
+                && bvar5_est == Some(true)
+                && pump_fallback == Some(false)
+            {
+                "NONE(every gate READ and passing, but bc4 stuck -- recheck the orchestrator)"
+            } else if dsg_force.is_none()
+                || dsg_ss.is_none()
+                || dsg_menu_ok.is_none()
+                || pump_fallback.is_none()
+                || bvar5_est.is_none()
+            {
+                // The honest answer whenever any operand is missing: this diag has NOT found a
+                // blocker, and must not name one. Which field is absent is in the line itself.
+                "UNREADABLE(one or more gate inputs could not be read -- NO blocker determined)"
+            } else if dsg_force != Some(0) {
                 "FORCE_LATCH(0x143d856a0)"
-            } else if dsg_ss != 0 {
+            } else if dsg_ss != Some(0) {
                 "save_state"
-            } else if !dsg_menu_ok {
+            } else if dsg_menu_ok != Some(true) {
                 "MENU_GATE(ProfileSelect)"
-            } else if !bvar5_est {
-                "bVar5=0(no save cond: b72/b73 off AND b78==-1 -- b78 likely OUR guard starving the pump)"
             } else {
-                "NONE(bVar5 est OK but bc4 stuck -- CanShowSaveMenu()==true killing ShouldSave? recheck)"
+                "bVar5=0(no save cond: b72/b73 off AND b78==-1 -- b78 likely OUR guard starving the pump)"
             };
             append_autoload_debug(format_args!(
-                "save-gate-diag(stall): force=0x{dsg_force:x} save_state={dsg_ss} bc4=0x{return_title_job_predicate_bc4:x} menu_gate_ok={dsg_menu_ok} b72={dsg_b72} b73={dsg_b73} b78={dsg_b78} bVar5_est={bvar5_est} saveSlot={dsg_slot} disableSaveMenu={dsg_dsm} pump_fallback={pump_fallback} -> blocked_by={dsg_blocker}"
+                "save-gate-diag(stall): force={} save_state={} bc4=0x{return_title_job_predicate_bc4:x} menu_gate_ok={} b72={} b73={} b78={} bVar5_est={} saveSlot={} disableSaveMenu={} pump_fallback={} -> blocked_by={dsg_blocker}",
+                render(dsg_force.map(|force| format!("0x{force:x}"))),
+                render(dsg_ss),
+                render(dsg_menu_ok),
+                render(dsg_b72),
+                render(dsg_b73),
+                render(dsg_b78),
+                render(bvar5_est),
+                render(dsg_slot),
+                render(dsg_dsm),
+                render(pump_fallback),
             ));
             // CASE-7 7->8 GATE, computed EXACTLY from the decompiled formulas (FUN_140afa7c0 case 7,
             // bd CORRECTED-load2-substate7-NOT-save-drain-saving-disabled-shouldsave-structurally-false-2026-07-20).
             // Advance needs ALL of: c1 FUN_14067a170[saveState b80==0], c2 !ShouldSave, c3 !FUN_140679460,
             // c4 FUN_140a9ceb0(CSRemo) [historically PASSING]. ShouldSave = b72 && !CanShowSaveMenu()
-            // && menu_gate && bc4!=3, and !CanShowSaveMenu()==(disableSaveMenu==0). Since saving is
-            // DISABLED BY DESIGN (disableSaveMenu!=0), ShouldSave is STRUCTURALLY FALSE => c2 passes and
-            // b72 is irrelevant. This line names whether C1 (saveState) or C3 (b73) is the real blocker,
-            // no game-function calls (zero side-effect risk). All inputs already read above.
+            // && menu_gate && bc4!=3, and !CanShowSaveMenu()==(disableSaveMenu==0).
+            //
+            // `shouldsave` previously read `dsg_dsm == 0`, so an UNREADABLE CSMenuMan made it
+            // false and reported C2 as passing -- a conclusion drawn from a pointer nobody read.
+            // Every condition is now `Option` and an unread input names itself.
             let bc4_not3_c = return_title_job_predicate_bc4 != 3;
-            let c1_savestate0 = dsg_ss == 0;
-            let shouldsave = dsg_b72 != 0 && dsg_dsm == 0 && dsg_menu_ok && bc4_not3_c;
-            let fun679460 = dsg_b73 != 0 && dsg_menu_ok && bc4_not3_c;
-            let c2_not_shouldsave = !shouldsave;
-            let c3_not_679460 = !fun679460;
-            let case7_blocker = if !c1_savestate0 {
+            let c1_savestate0 = dsg_ss.map(|save_state| save_state == 0);
+            let shouldsave = match (dsg_b72, dsg_dsm, dsg_menu_ok) {
+                (Some(b72), Some(dsm), Some(menu_ok)) => {
+                    Some(b72 != 0 && dsm == 0 && menu_ok && bc4_not3_c)
+                }
+                // A conjunction is FALSE as soon as one readable term is false, however many
+                // others are missing -- the mirror of the disjunction rule above.
+                (Some(0), _, _) | (_, _, Some(false)) => Some(false),
+                _ if !bc4_not3_c => Some(false),
+                _ => None,
+            };
+            let fun679460 = match (dsg_b73, dsg_menu_ok) {
+                (Some(b73), Some(menu_ok)) => Some(b73 != 0 && menu_ok && bc4_not3_c),
+                (Some(0), _) | (_, Some(false)) => Some(false),
+                _ if !bc4_not3_c => Some(false),
+                _ => None,
+            };
+            let c2_not_shouldsave = shouldsave.map(|value| !value);
+            let c3_not_679460 = fun679460.map(|value| !value);
+            let case7_blocker = if c1_savestate0 == Some(false) {
                 "C1 saveState(b80)!=0"
-            } else if !c2_not_shouldsave {
+            } else if c2_not_shouldsave == Some(false) {
                 "C2 ShouldSave==true (unexpected: saving-disabled should force it false)"
-            } else if !c3_not_679460 {
+            } else if c3_not_679460 == Some(false) {
                 "C3 FUN_140679460==true (b73 && menu_gate && bc4!=3)"
+            } else if c1_savestate0.is_none()
+                || c2_not_shouldsave.is_none()
+                || c3_not_679460.is_none()
+            {
+                "UNREADABLE(a case-7 condition's input could not be read -- NO verdict)"
             } else {
                 "C1-3 pass -> C4 CSRemo (FUN_140a9ceb0) or advancer not ticking"
             };
             append_autoload_debug(format_args!(
-                "case7-gate(4-bool): c1_savestate0={c1_savestate0} c2_not_shouldsave={c2_not_shouldsave}(shouldsave={shouldsave}) c3_not_679460={c3_not_679460}(f679460={fun679460}) [b80={dsg_ss} b72={dsg_b72} b73={dsg_b73} disableSaveMenu={dsg_dsm} menu_gate_ok={dsg_menu_ok} bc4!=3={bc4_not3_c}] -> case7_blocker={case7_blocker}"
+                "case7-gate(4-bool): c1_savestate0={} c2_not_shouldsave={}(shouldsave={}) c3_not_679460={}(f679460={}) [b80={} b72={} b73={} disableSaveMenu={} menu_gate_ok={} bc4!=3={bc4_not3_c}] -> case7_blocker={case7_blocker}",
+                render(c1_savestate0),
+                render(c2_not_shouldsave),
+                render(shouldsave),
+                render(c3_not_679460),
+                render(fun679460),
+                render(dsg_ss),
+                render(dsg_b72),
+                render(dsg_b73),
+                render(dsg_dsm),
+                render(dsg_menu_ok),
             ));
         }
     }
