@@ -98,13 +98,13 @@ IMAGE_1170 = ROOT / "eldenring-deobf-1.17.bin"
 FUNCTION_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.functions.tsv"
 VERIFIED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.verified.tsv"
 NEEDED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.needed-verified.tsv"
-DEFAULT_OUT = Path(
-    os.environ.get(
-        "ER_STRUCT_DRIFT_OUT",
-        "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
-        "f1b1f237-c4a5-4649-9833-a40666da21bb/scratchpad/struct-drift",
-    )
-)
+# Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
+# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import struct_drift_out  # noqa: E402 -- the path is set up on the line above
+
+DEFAULT_OUT = struct_drift_out.default_out()
 
 # A function bigger than this is skipped: the odds that a 128 KB function is
 # instruction-for-instruction identical across a patch are nil, and decoding it twice costs more
@@ -899,6 +899,13 @@ EXCLUSIONS: list[tuple[str, re.Pattern, str]] = [
         re.compile(
             r"^(CONTEXT_|PEB_|LDR_ENTRY_|UNICODE_STRING_|TEB_|PE_|DOS_|NT_HEADER|SECTION_HEADER"
             r"|IMAGE_|EXCEPTION_RECORD)"
+            # NOTE: the OTHER non-game ABI structures this repo reads -- XINPUT_STATE /
+            # XINPUT_GAMEPAD / XINPUT_CAPABILITIES, DEVMODEW, the PE optional header's data
+            # directory, the MSVC `basic_string` members -- are NOT listed here. They are recorded
+            # once, as `None`, in `scripts/adjudicate-autoload-offsets.py::OWNERS`, which is the
+            # table both this tool's consumers and check-singleton-field-offsets.py already
+            # import. Naming them in two places is a second claim about the same fact, and this
+            # repo has already been bitten by exactly that.
         ),
         "Windows/PE/loader structure, owned by the OS and unaffected by a game patch",
     ),

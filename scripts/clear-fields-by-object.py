@@ -58,7 +58,12 @@ VERDICTS
 USAGE
     --selftest
     --class CS::MoveMapStep [--offsets 0x4b8,0x50] [--routes ab]
-    --classes-from FILE        one `class[:offset,offset]` per line
+    --classes-from FILE        one `class [= offset,offset]` per line. The separator is `=`,
+                               NOT `:` -- a class name is full of colons. A line written with
+                               `:` parses as one long class name, and every row then reports
+                               `NO RTTI / class-not-in-rtti-join`, which reads exactly like
+                               "this class does not exist in the images" (measured 2026-08-31,
+                               18 classes silently reported as absent when all 18 were present).
     --control                  re-derive the one known 1.17 field move as a positive control
 """
 
@@ -76,13 +81,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = 0x140000000
-DEFAULT_OUT = Path(
-    os.environ.get(
-        "ER_STRUCT_DRIFT_OUT",
-        "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
-        "f1b1f237-c4a5-4649-9833-a40666da21bb/scratchpad/struct-drift",
-    )
-)
+# Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
+# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import struct_drift_out  # noqa: E402 -- the path is set up on the line above
+
+DEFAULT_OUT = struct_drift_out.default_out()
 
 
 def _ensure_capstone():

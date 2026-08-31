@@ -41,13 +41,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUT = Path(
-    os.environ.get(
-        "ER_STRUCT_DRIFT_OUT",
-        "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
-        "f1b1f237-c4a5-4649-9833-a40666da21bb/scratchpad/struct-drift",
-    )
-)
+# Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
+# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import struct_drift_out  # noqa: E402 -- the path is set up on the line above
+
+DEFAULT_OUT = struct_drift_out.default_out()
 
 # Owning class per constant, read from the doc comment above it. `None` records a deliberate
 # "this is not a game structure" (a Windows ABI struct cannot move in a game patch) or "no class
@@ -196,6 +196,59 @@ OWNERS: dict[str, object] = {
     "SERVER_CONNECTION_ENABLED_BC9_OFFSET": "CS::GameMan",
     "GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET": "CS::GameMan",
     "GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET": "CS::GameMan",
+    # --- 2026-08-31 unattributed-owner sweep --------------------------------------------------
+    # Each of these was UNATTRIBUTED until its own doc comment was read at the definition site;
+    # every class below is RTTI-paired in both images, and the verdict beside it is what
+    # `scripts/clear-fields-by-object.py` returned for that (class, offset) on the day it was
+    # added. A verdict of STILL-UNKNOWN is recorded AS an attribution and NOT as a clearance --
+    # naming the owner is what makes the offset measurable later; it is not evidence it held.
+    #
+    # CS::CSMenuProfModelRend (vtable 0x142b80128 / 0x142b831d8). portrait_camera.rs states it
+    # outright: "All offsets are BYTE offsets from the renderer (CSMenuProfModelRend) base."
+    "PROFILE_RENDERER_FACEDATA_OBJ_OFFSET": "CS::CSMenuProfModelRend",  # 0x788 CLEARED
+    "PROFILE_CAM_PERSCAM_OFFSET": "CS::CSMenuProfModelRend",  # 0x9d0 CLEARED (ctor 64/64 aligned)
+    "PROFILE_CAM_ASPECT_OFFSET": "CS::CSMenuProfModelRend",  # 0xa24 CLEARED (same ctor)
+    "PROFILE_RENDERER_MARKED_DELETE_OFFSET": "CS::CSMenuProfModelRend",  # 0x756 STILL-UNKNOWN
+    "PROFILE_RENDERER_MODEL_INS_OFFSET": "CS::CSMenuProfModelRend",  # 0x778 STILL-UNKNOWN
+    "PROFILE_ANIM_HANDLE_OFFSET": "CS::CSMenuProfModelRend",  # 0x96c STILL-UNKNOWN
+    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET": "CS::CSMenuProfModelRend",  # 0x9a8
+    # CS::PropertyNewButtonController -- named in full in the constant's own doc comment,
+    # including the allocation size and the constructor that writes the field.
+    "PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET": "CS::PropertyNewButtonController",
+    "PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET": "CS::PropertyNewButtonController",
+    # CS::CSPopupMenu -> currentTopMenuJob at +0xb0. Both spellings of the same field.
+    "CSPOPUP_TOP_JOB_B0_OFFSET": "CS::CSPopupMenu",  # 0xb0 CLEARED
+    "CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET": "CS::CSPopupMenu",  # 0xb0 CLEARED
+    # CS::MenuWindow -- the cached menu id (`field246_0x180`), 0xffff being its unmapped sentinel.
+    "MENU_WINDOW_MENU_ID_OFFSET": "CS::MenuWindow",  # 0x180 CLEARED
+    "TOP_WINDOW_MENU_ID_180_OFFSET": "CS::MenuWindow",  # 0x180 CLEARED
+    "MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET": "CS::MenuWindowJob",  # 0x130 CLEARED
+    "TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET": "CS::TitleTopDialog",  # 0xaa8 CLEARED
+    "OPTIONSETTING_COMPOSITE_OFFSET": "CS::OptionSettingTopDialog",  # 0x1768 CLEARED
+    "OPTIONSETTING_TAB_CONTROL_OFFSET": "CS::OptionSettingTopDialog",  # 0x1870 STILL-UNKNOWN
+    "OPTIONSETTING_TAB_CONTROL_1870_OFFSET": "CS::OptionSettingTopDialog",  # 0x1870 STILL-UNKNOWN
+    "IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET": "CS::InGameStep",  # 0xb8 CLEARED
+    "MSGBOX_FADE_TARGET_2300_OFFSET": "CS::SaveRetryDialog",  # 0x2300 CLEARED, like its 0x1278 pair
+    "MSGBOX_BUILDER_BUTTON_COUNT_OFFSET": "CS::MessageBoxBuilder",  # 0x10f0 CLEARED
+    "MSGBOX_BUILDER_DEFAULT_INDEX_OFFSET": "CS::MessageBoxBuilder",  # 0x28 STILL-UNKNOWN
+    # The world-map pin rows er-invasion-warp injects. `ROW_ID_OFFSET`'s own doc comment names
+    # the class ("Row field +0x08 -- CS::WorldMapPinDataBase's per-row id"), and the surrounding
+    # block states the container ("Offsets into CS::WorldMapViewModel for the pin-row list").
+    "ROW_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x8   CLEARED
+    "ROW_ENTITY_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x50  CLEARED
+    "ROW_LAYER_MASK_OFFSET": "CS::WorldMapPinDataBase",  # 0x60  CLEARED
+    "ROW_PARAM_POINTER_OFFSET": "CS::WorldMapPinDataBase",  # 0x240 STILL-UNKNOWN
+    "ROW_ICON_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x248 STILL-UNKNOWN
+    "PIN_LIST_VFTABLE_OFFSET": "CS::WorldMapViewModel",  # 0x2d8 CLEARED
+    "PIN_LIST_ALLOCATOR_OFFSET": "CS::WorldMapViewModel",  # 0x2e0 STILL-UNKNOWN
+    "PIN_VECTOR_OFFSET": "CS::WorldMapViewModel",  # 0x2e0 STILL-UNKNOWN
+    "PIN_LIST_BEGIN_OFFSET": "CS::WorldMapViewModel",  # 0x2e8 STILL-UNKNOWN
+    "PIN_LIST_END_OFFSET": "CS::WorldMapViewModel",  # 0x2f0 STILL-UNKNOWN
+    "PIN_LIST_CAPACITY_OFFSET": "CS::WorldMapViewModel",  # 0x2f8 STILL-UNKNOWN
+    "AREA_CONVERTERS_OFFSET": "CS::WorldMapViewModel",  # 0xf8  CLEARED
+    "AREA_CONVERTER_COUNT_OFFSET": "CS::WorldMapViewModel",  # 0x280 STILL-UNKNOWN
+    "MOVEMAPLISTSTEP_GATE_B8_OFFSET": "CS::CSMoveMapListStep",  # 0xb8  CLEARED
+    "MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET": "CS::CSMoveMapListStep",  # 0x2c0 STILL-UNKNOWN
     # --- NOT game structures: ABI structs fixed outside FromSoft's object layout --------------
     "U16STRING_ALLOC_OFFSET": None,
     "U16STRING_DATA_OFFSET": None,
@@ -208,6 +261,14 @@ OWNERS: dict[str, object] = {
     "XINPUT_THUMB_LX_OFFSET_IN_GAMEPAD": None,
     "XINPUT_BUTTONS_OFFSET_IN_GAMEPAD": None,
     "CAPS_TYPE_OFFSET": None,
+    "CAPS_SUBTYPE_OFFSET": None,
+    # Added 2026-08-31, each read at its definition site before being recorded here.
+    "DEVMODEW_PELS_WIDTH_OFFSET": None,
+    "DEVMODEW_PELS_HEIGHT_OFFSET": None,
+    "DATA_DIRECTORY_OFFSET_PE32": None,
+    "DATA_DIRECTORY_OFFSET_PE64": None,
+    "OPTIONAL_HEADER_OFFSET": None,
+    "COFF_OPTIONAL_HEADER_SIZE_FIELD": None,
 }
 
 NON_GAME_STRUCT_REASONS = {
@@ -221,6 +282,14 @@ NON_GAME_STRUCT_REASONS = {
     "XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD": "Windows XInput ABI struct",
     "XINPUT_THUMB_LX_OFFSET_IN_GAMEPAD": "Windows XInput ABI struct",
     "XINPUT_BUTTONS_OFFSET_IN_GAMEPAD": "Windows XInput ABI struct",
+    "CAPS_TYPE_OFFSET": "Windows XInput ABI struct (XINPUT_CAPABILITIES.Type)",
+    "CAPS_SUBTYPE_OFFSET": "Windows XInput ABI struct (XINPUT_CAPABILITIES.SubType)",
+    "DEVMODEW_PELS_WIDTH_OFFSET": "Win32 DEVMODEW display ABI struct",
+    "DEVMODEW_PELS_HEIGHT_OFFSET": "Win32 DEVMODEW display ABI struct",
+    "DATA_DIRECTORY_OFFSET_PE32": "PE32 optional header, fixed by the PE/COFF spec",
+    "DATA_DIRECTORY_OFFSET_PE64": "PE32+ optional header, fixed by the PE/COFF spec",
+    "OPTIONAL_HEADER_OFFSET": "PE/COFF header, fixed by the PE/COFF spec",
+    "COFF_OPTIONAL_HEADER_SIZE_FIELD": "PE/COFF header, fixed by the PE/COFF spec",
 }
 
 # An MSVC polymorphic object begins with its 8-byte vfptr, and ROUTE B only accepts a witness

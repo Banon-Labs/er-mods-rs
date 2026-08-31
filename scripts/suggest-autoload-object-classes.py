@@ -27,13 +27,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUT = Path(
-    os.environ.get(
-        "ER_STRUCT_DRIFT_OUT",
-        "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
-        "f1b1f237-c4a5-4649-9833-a40666da21bb/scratchpad/struct-drift",
-    )
-)
+# Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
+# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import struct_drift_out  # noqa: E402 -- the path is set up on the line above
+
+DEFAULT_OUT = struct_drift_out.default_out()
 # A class name shorter than this matches ordinary English in a comment.
 MIN_NAME = 5
 CONTEXT_LINES = 45
