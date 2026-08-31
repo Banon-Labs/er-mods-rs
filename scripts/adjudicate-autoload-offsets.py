@@ -110,7 +110,13 @@ OWNERS: dict[str, object] = {
     "INGAMESTEP_OVERRIDE_TRIGGER_OFFSET": ("CS::InGameStep", "CS::TitleStep"),
     "INGAMESTEP_OVERRIDE_GUARD_OFFSET": ("CS::InGameStep", "CS::TitleStep"),
     "INGAMESTEP_OVERRIDE_TARGET_OFFSET": ("CS::InGameStep", "CS::TitleStep"),
-    "CS_SYSTEM_STEP_CURRENT_STATE_OFFSET": "CS::CSSystemStep",
+    # ADJUDICATED 2026-08-31: 0x48, and it had been 0x40 since introduction -- not drift, an
+    # offset that was never a field. The step-template constructor (1.16.2 0x140dec6d0 /
+    # 1.17 0x140dee4d0, 57/57 aligned) zeroes currentState+requestedState as one qword at
+    # +0x48 in BOTH builds and never touches 0x40, which holds
+    # FD4ComponentAttachSystem_Step::allocator. Frozen in
+    # scripts/check-object-field-offsets-1170.py and pinned there to 0x48.
+    "CS_SYSTEM_STEP_CURRENT_STATE_OFFSET": "CS::CSSystemStep",  # 0x48 CLEARED
     # --- menus --------------------------------------------------------------------------------
     "GRID_CONTROL_VIEW_COL_BASE_OFFSET": "CS::GridControl",
     "GRID_CONTROL_VIEW_ROW_BASE_OFFSET": "CS::GridControl",

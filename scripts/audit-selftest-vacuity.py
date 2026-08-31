@@ -39,6 +39,69 @@ PER_SCRIPT_TIMEOUT = 25
 # --------------------------------------------------------------------------
 # mutation runner (invoked as a subprocess: --run-blind <script> [args...])
 # --------------------------------------------------------------------------
+def run_blind_reads(script: str, argv: list[str]) -> None:
+    """Exec `script` with every FILE READ it performs returning empty content.
+
+    The regex blinding below is blind in turn to a gate that matches with ``in``,
+    ``str.startswith``, ``ast`` or ``tomllib`` -- 27 of the gates in check.sh ran ZERO
+    regex calls under it and were reported NO-MATCHER-RUN, which is not a verdict. This
+    is the second question, and it is matcher-agnostic: if a selftest still passes when
+    every file the gate opens is EMPTY, the selftest is not reading the tree at all, so
+    its green says nothing about the tree.
+
+    Writes are left alone, so a selftest that builds a temp fixture still builds it --
+    it simply reads nothing back, which is the point.
+    """
+    import atexit
+    import builtins
+    import io
+    import runpy
+
+    scripts_dir = str(SCRIPTS)
+    blinded = [0]
+    real_open = builtins.open
+    real_read_text = Path.read_text
+    real_read_bytes = Path.read_bytes
+
+    def from_target(depth: int = 2) -> bool:
+        try:
+            fn = sys._getframe(depth).f_code.co_filename
+        except ValueError:
+            return False
+        return os.path.abspath(fn).startswith(scripts_dir)
+
+    def blind_open(file, mode="r", *a, **kw):
+        if "r" in mode and "+" not in mode and from_target():
+            blinded[0] += 1
+            return io.BytesIO(b"") if "b" in mode else io.StringIO("")
+        return real_open(file, mode, *a, **kw)
+
+    def blind_read_text(self, *a, **kw):
+        if from_target():
+            blinded[0] += 1
+            return ""
+        return real_read_text(self, *a, **kw)
+
+    def blind_read_bytes(self, *a, **kw):
+        if from_target():
+            blinded[0] += 1
+            return b""
+        return real_read_bytes(self, *a, **kw)
+
+    builtins.open = blind_open
+    Path.read_text = blind_read_text
+    Path.read_bytes = blind_read_bytes
+
+    count_file = os.environ.get("VACUITY_COUNT_FILE")
+    if count_file:
+        atexit.register(
+            lambda: real_open(count_file, "w", encoding="utf-8").write(str(blinded[0]))
+        )
+
+    sys.argv = [script] + argv
+    runpy.run_path(script, run_name="__main__")
+
+
 def run_blind(script: str, argv: list[str]) -> None:
     """Exec `script` with every regex IT compiles neutered so it can never match.
 
@@ -113,18 +176,26 @@ def check_sh_invocations() -> "dict[str, list[str]]":
     return out
 
 
-def run(cmd: list[str], timeout: int = PER_SCRIPT_TIMEOUT, env=None) -> "tuple[int, str]":
+def run(cmd: list[str], env=None) -> "tuple[int, str]":
+    # The cap is passed as the module constant rather than through a parameter: no caller ever
+    # overrode it, and a variable is opaque to `check-no-timeouts.py`, which can only verify a
+    # literal or a module constant. A knob nobody turns is not worth a gate it cannot read.
     try:
         p = subprocess.run(
-            cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout, env=env
+            cmd,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=PER_SCRIPT_TIMEOUT,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return 124, "TIMEOUT"
     return p.returncode, (p.stdout + p.stderr)
 
 
-def run_mutated(path: Path, args: list[str]) -> "tuple[int, str, int]":
-    """Return (exit code, output, number of regex calls blinded)."""
+def run_mutated(path: Path, args: list[str], mode: str = "regex") -> "tuple[int, str, int]":
+    """Return (exit code, output, number of calls blinded) for the chosen blinding mode."""
     import tempfile
 
     with tempfile.NamedTemporaryFile("w", suffix=".count", delete=False) as fh:
@@ -134,13 +205,21 @@ def run_mutated(path: Path, args: list[str]) -> "tuple[int, str, int]":
     # Several scripts here `os.execvp` into `uv run --with capstone python3` when the import
     # fails. That replaces the process and throws away the blinding, so provision capstone up
     # front and the re-exec never fires.
-    needs_capstone = "import capstone" in path.read_text(encoding="utf-8", errors="replace")
+    # ANY mention of capstone, not `import capstone`. The narrow needle missed three real cases:
+    # `from capstone import ...` (check-singleton-field-offsets.py), and gates that never import
+    # it themselves but load a matcher module that does and re-execs from in there
+    # (check-object-field-offsets-1170.py, attribute-field-offset-owners.py). Each came back
+    # UNMEASURED -- the verdict that means this tool could not judge the gate at all. The two
+    # errors are not symmetric: a false positive costs one `uv run` startup, a false negative
+    # costs the whole judgement, so the needle is deliberately broad.
+    needs_capstone = "capstone" in path.read_text(encoding="utf-8", errors="replace")
     runner = str(Path(__file__).resolve())
     if needs_capstone:
         prefix = ["uv", "run", "--with", "capstone", "python3"]
     else:
         prefix = [sys.executable]
-    rc, out = run(prefix + [runner, "--run-blind", str(path)] + args, env=env)
+    flag = "--run-blind" if mode == "regex" else "--run-blind-reads"
+    rc, out = run(prefix + [runner, flag, str(path)] + args, env=env)
     # -1 means the runner never got to write a count. That is NOT zero: a script that
     # re-execs itself (several here do, to provision capstone under `uv run`) replaces the
     # process, discarding both the blinding and the atexit hook. Reporting that as "0 regex
@@ -153,7 +232,7 @@ def run_mutated(path: Path, args: list[str]) -> "tuple[int, str, int]":
     return rc, out, n
 
 
-def sweep(only: str | None, out_json: Path | None) -> int:
+def sweep(only: str | None, out_json: Path | None, mode: str = "regex") -> int:
     invocations = check_sh_invocations()
     rows = []
     for name, arglists in sorted(invocations.items()):
@@ -183,7 +262,7 @@ def sweep(only: str | None, out_json: Path | None) -> int:
                 )
                 continue
         base_rc, _ = run([sys.executable, str(path)] + args)
-        blind_rc, blind_out, blinded = run_mutated(path, args)
+        blind_rc, blind_out, blinded = run_mutated(path, args, mode)
         if base_rc != 0:
             verdict = "BASELINE-RED"
             detail = f"baseline exit {base_rc} (pre-existing, not judged)"
@@ -192,10 +271,12 @@ def sweep(only: str | None, out_json: Path | None) -> int:
             detail = "the script re-execs itself; blinding was discarded with the process"
         elif blinded == 0:
             verdict = "NO-MATCHER-RUN"
-            detail = "selftest ran zero regex calls -- it never touches a matcher"
+            detail = ("selftest ran zero regex calls -- it never touches a matcher"
+                      if mode == "regex" else
+                      "selftest read zero files -- it never touches the tree")
         elif blind_rc == 0:
             verdict = "ASSERTED"
-            detail = f"passes with all {blinded} regex calls blinded"
+            detail = f"passes with all {blinded} {'regex call' if mode == 'regex' else 'file read'}(s) blinded"
         else:
             tail = [ln for ln in blind_out.strip().splitlines() if ln.strip()][-1:]
             verdict = "PROVABLE"
@@ -216,21 +297,22 @@ def sweep(only: str | None, out_json: Path | None) -> int:
     return 0
 
 
-def judge_one(path: Path) -> int:
+def judge_one(path: Path, mode: str = "regex") -> int:
     """Judge a single script, including one check.sh never runs."""
     args = ["--selftest"] if "--selftest" in path.read_text(encoding="utf-8", errors="replace") else []
     base_rc, base_out = run([sys.executable, str(path)] + args)
-    blind_rc, blind_out, blinded = run_mutated(path, args)
+    blind_rc, blind_out, blinded = run_mutated(path, args, mode)
     print(f"baseline : exit {base_rc}")
-    print(f"blinded  : {blinded} regex call(s) neutered, exit {blind_rc}")
+    unit = "regex call" if mode == "regex" else "file read"
+    print(f"blinded  : {blinded} {unit}(s) neutered, exit {blind_rc}")
     if base_rc != 0:
         print(f"{path.name}: BASELINE-RED -- not judged")
     elif blinded < 0:
         print(f"{path.name}: UNMEASURED -- it re-execs itself, discarding the blinding")
     elif blinded == 0:
-        print(f"{path.name}: NO-MATCHER-RUN -- the selftest never ran a regex")
+        print(f"{path.name}: NO-MATCHER-RUN -- the selftest never ran a {unit}")
     elif blind_rc == 0:
-        print(f"{path.name}: ASSERTED -- passes with every regex blinded")
+        print(f"{path.name}: ASSERTED -- passes with every {unit} blinded")
     else:
         print(f"{path.name}: PROVABLE -- blinding the matcher turns it red")
     if blind_out.strip():
@@ -336,6 +418,9 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--run-blind":
         run_blind(sys.argv[2], sys.argv[3:])
         return 0
+    if len(sys.argv) > 1 and sys.argv[1] == "--run-blind-reads":
+        run_blind_reads(sys.argv[2], sys.argv[3:])
+        return 0
     ap = argparse.ArgumentParser()
     ap.add_argument("--only")
     ap.add_argument(
@@ -343,13 +428,21 @@ def main() -> int:
         help="judge one script by path, even if check.sh never runs it",
     )
     ap.add_argument("--json", type=Path)
+    ap.add_argument(
+        "--mode",
+        choices=("regex", "reads"),
+        default="regex",
+        help="regex: neuter every pattern the gate compiles. "
+             "reads: make every file the gate opens come back EMPTY -- the question for a "
+             "gate that matches with `in`/ast/tomllib rather than a regex.",
+    )
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
     if a.script:
-        return judge_one(Path(a.script).resolve())
-    return sweep(a.only, a.json)
+        return judge_one(Path(a.script).resolve(), a.mode)
+    return sweep(a.only, a.json, a.mode)
 
 
 if __name__ == "__main__":

@@ -582,12 +582,19 @@ python3 "$repo_root/scripts/check-stale-rva-calls.py"
 # evaluates to a number or is named in the UNRESOLVABLE list with the reason it cannot be. It
 # does not judge the VALUE -- that is the neighbouring gates' job -- only that the value is
 # visible to them.
-# UNWIRED 2026-08-31: red against the COMMITTED tree, green against this working tree. UNRESOLVABLE
-# lists SELECTOR_CTX_OFFSET_F8 as `not modelled`, and against the committed sources it evaluates to
-# 0xf8, so the gate correctly calls the exception stale. Re-arm both lines with the crate change that
-# settles that constant.
-# python3 "$repo_root/scripts/check-expression-constants.py" --selftest
-# python3 "$repo_root/scripts/check-expression-constants.py"
+# RE-ARMED 2026-08-31, both lines. The blocker was SELECTOR_CTX_OFFSET_F8: UNRESOLVABLE listed it as
+# `not modelled` while the COMMITTED sources still evaluated it to 0xf8, so the gate correctly called
+# its own exception stale. That constant has settled. Measured against a detached worktree pinned to
+# HEAD as well as against this working tree -- BOTH lines exit 0 on both (1467 gated declarations at
+# HEAD, 1340 folded, 24 listed with a reason). Checking only the working tree would have proved
+# nothing: red-at-HEAD is precisely what unwired this pair, and it is what still holds four other
+# pairs in this file dark.
+# Non-vacuity re-proved rather than assumed: `audit-selftest-vacuity.py --script
+# scripts/check-expression-constants.py` reports PROVABLE -- neutering all 164 regexes the gate
+# compiles takes its selftest from 0 failures to 18, mutant D among them ("blinding the evaluator
+# left the gate green -- the positive control passes without any folding happening").
+python3 "$repo_root/scripts/check-expression-constants.py" --selftest
+python3 "$repo_root/scripts/check-expression-constants.py"
 
 # THE HAND-ROW GUARD (2026-08-30). `select-needed-1170-rows.py --refresh` rewrites
 # docs/recon/rva-map-1162-to-1170.needed.tsv WHOLESALE, so until today a pair somebody derived by
@@ -609,10 +616,14 @@ python3 "$repo_root/scripts/select-needed-1170-rows.py" --selftest
 # now needs `scripts/rva_symbols.py` to PROVE nothing claims the address; anything short of a proof
 # is preserved. `--selftest-source` is the part that reads only crates/, so this gate needs no
 # capstone and no network; the image calibration still lives behind plain `--selftest`.
-# UNWIRED 2026-08-31: the COMMITTED map-data-rvas-1162-to-1170.py has no --selftest-source; the flag
-# lives in that script's uncommitted edit. Same `unrecognized arguments` shape as the two rows above.
-# Re-arm it in the commit that lands scripts/map-data-rvas-1162-to-1170.py.
-# python3 "$repo_root/scripts/map-data-rvas-1162-to-1170.py" --selftest-source
+# RE-ARMED 2026-08-31. `--selftest-source` landed in f31fd637, so the exit-2 `unrecognized arguments`
+# -- a step that produced no verdict about anything -- is gone. Green against a detached worktree
+# pinned to HEAD (545 sources, 5189 address-capable declarations, 0 failures) as well as against this
+# working tree. Non-vacuity re-proved rather than assumed: `audit-selftest-vacuity.py --script
+# scripts/map-data-rvas-1162-to-1170.py` reports PROVABLE in BOTH modes (regex and reads) -- with its
+# 61 regexes neutered the retirement gate drops 0xb0d400 as `PROVEN unclaimed` while three live
+# autoload sites still reach it, which is the exact silent deletion this guard exists to refuse.
+python3 "$repo_root/scripts/map-data-rvas-1162-to-1170.py" --selftest-source
 # THE SILENT-COMPARISON GATE (2026-08-30). The two gates above catch stale addresses that are
 # DETOURED or CALLED; both of those announce themselves when they fail. A stale address that is
 # only COMPARED does not. `trace_first_game_caller_rva()` / `callstack_contains_game_rva()` take a
@@ -871,10 +882,17 @@ python3 "$repo_root/scripts/check-singleton-field-offsets.py"
 # so `oracle_system_step_label` read a pointer's low half and emitted `"?"` with a legal-looking
 # i32 on every run since it was written, with nothing to drift.
 #
-# The plain run is seconds. `--selftest` re-aligns every frozen row once per perturbation and takes
-# minutes, so it is NOT here; scripts/audit-selftest-vacuity.py exercises it, and
-# scripts/prove-gate-positive-controls.py plants the real defect in the real tree.
+# Selftest first: 93 perturbations, each of which must go red -- every witness row moved by 4 and
+# every HELD row by 8, every allocation size, identity anchor and 1.17 witness address, every write
+# bound raised past its allocation, plus a blind matcher, an empty source read and a changed
+# constant literal. 2s (it was 82s until the tree scan and the function alignments it repeats ~95
+# times over an unchanged tree were memoised; the point of that was not patience but that
+# scripts/audit-selftest-vacuity.py allows 25s per script and its blinded replay costs several
+# times the plain run, so this gate was UNMEASURABLE for vacuity -- an unjudgeable selftest is an
+# unproven one. It now reports PROVABLE).
+# scripts/prove-gate-positive-controls.py additionally plants the real defect in the real tree.
 # SKIPs its image half -- saying so -- without the two gitignored de-Arxan'd images.
+python3 "$repo_root/scripts/check-object-field-offsets-1170.py" --selftest
 python3 "$repo_root/scripts/check-object-field-offsets-1170.py"
 
 # ...and the attribution half of the same question. An offset whose OWNING OBJECT nobody has
@@ -980,6 +998,9 @@ shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/check-committed-compiles.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
+shellcheck "$repo_root/scripts/ci-local-check.sh"
+shellcheck "$repo_root/scripts/test-ci-local-check-config-guard.sh"
+shellcheck "$repo_root/scripts/measure-git-hook-env.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
 shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
 shellcheck "$repo_root/scripts/beads-prime.sh"
@@ -1389,6 +1410,15 @@ bash "$repo_root/scripts/check-committed-compiles.sh"
 # checkout is renamed, and then it is silently wrong.
 bash "$repo_root/scripts/check-git-hooks-installed.sh" --selftest
 bash "$repo_root/scripts/check-git-hooks-installed.sh"
+
+# ...and whether the gate DAMAGES the checkout it is gating. It did, twice on 2026-08-31, from a
+# push made in a linked worktree: git exports GIT_DIR to a linked worktree's hooks (but not to a
+# main checkout's -- scripts/measure-git-hook-env.sh measures both, which is why this looked
+# unreachable for a day), `git -C <fixture>` does not override it, and the fixture commands landed
+# on the SHARED config -- core.bare = true, core.hooksPath gone, a push through the hole. The
+# offending script now scrubs its environment; ci-local-check.sh carries a trap that catches the
+# CLASS, and this proves that trap still fires in both directions.
+bash "$repo_root/scripts/test-ci-local-check-config-guard.sh"
 
 
 # Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one

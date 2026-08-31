@@ -10,8 +10,11 @@ forever, with no fault and no log line.
 
 Two gates already measure that class, and both bottom out in the same place:
 
-  * `scripts/check-object-field-offsets-1170.py` re-measures 21 frozen witness rows for
-    `CS::PlayerGameData` and `CS::PlayerIns` -- the two objects the migration actually took apart.
+  * `scripts/check-object-field-offsets-1170.py` re-measures 31 frozen witness rows across six
+    objects: `CS::PlayerGameData` and `CS::PlayerIns`, the two the migration actually took apart;
+    `FD4::FD4PadDevice` / `FD4::FD4PadManager`, where the question was WHICH OBJECT a write lands
+    in; and `CS::CSSystemStep`, where the question was whether an offset had EVER been a field
+    (`CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` said 0x40 against a field at 0x48, in both builds).
   * `scripts/check-singleton-field-offsets.py` clears any offset whose owner is one of the seven
     singleton-rooted classes it can reach through a global.
 

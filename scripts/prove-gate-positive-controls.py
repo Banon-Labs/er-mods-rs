@@ -647,6 +647,70 @@ def _oracle_writers():
         expect("oracle-writers", "spec/by-reference-trampoline", rc, out, False)
 
 
+@control("counter-writers", fast=False,
+         baseline=["python3", "scripts/check-counter-writers.py"])
+def _counter_writers():
+    """The SUPERSET gate: a counter DECLARED with no write site anywhere, read or not.
+
+    check-oracle-writers only fires on `writes == 0 and reads > 0`, so the unread majority --
+    85 counters on 2026-08-31 -- is invisible to it by design. Both directions are proved here,
+    plus the refusal that keeps the gate from ever deleting a macro-written counter.
+    """
+    g = ["python3", "scripts/check-counter-writers.py"]
+    w = "crates/er-telemetry-core/src/counters.rs"
+
+    # SENSITIVITY 1: a counter declared and written NOWHERE and read NOWHERE -- the whole point of
+    # this gate, and the exact shape its sibling deliberately ignores.
+    with edit_file(w, lambda t: t + "\npub static PC_PROBE_UNWRITTEN: AtomicU64 = AtomicU64::new(0);\n"):
+        rc, out = run(g)
+        expect("counter-writers", "sens/declared-never-written", rc, out, True,
+               ["PC_PROBE_UNWRITTEN"])
+
+    # SENSITIVITY 2: delete a REAL write site. SIMULATED_INPUT_PRESSES_TOTAL feeds the
+    # `simulated_button_presses_total` telemetry field and is written at exactly one place; the
+    # mutant keeps the read so the ONLY thing that changes is that the counter stopped moving --
+    # which is precisely the defect (a live oracle silently pinned to 0) rather than a syntax edit.
+    h = "crates/er-quickload/src/hooks.rs"
+    real_write = "SIMULATED_INPUT_PRESSES_TOTAL.fetch_add(count, Ordering::SeqCst);"
+    lost_write = "let _ = (SIMULATED_INPUT_PRESSES_TOTAL.load(Ordering::SeqCst), count);"
+    with edit_file(h, lambda t: t.replace(real_write, lost_write, 1)):
+        rc, out = run(g)
+        expect("counter-writers", "sens/real-write-site-deleted", rc, out, True,
+               ["SIMULATED_INPUT_PRESSES_TOTAL"])
+
+    # SPECIFICITY 1: declared AND written -- must stay green, or the gate is red on everything.
+    with edit_file(w, lambda t: t + "\npub static PC_PROBE_WRITTEN: AtomicU64 = AtomicU64::new(0);\n"
+                                    "pub fn pc_probe_bump() { PC_PROBE_WRITTEN.fetch_add(1, Ordering::Relaxed); }\n"):
+        rc, out = run(g)
+        expect("counter-writers", "spec/declared-and-written", rc, out, False)
+
+    # SPECIFICITY 2: the by-reference trampoline. A MinHook original is written THROUGH the
+    # reference handed to the installer, never by name; flagging it would punish every hook.
+    with edit_file(w, lambda t: t + "\npub static PC_PROBE_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);\n"
+                                    "pub fn pc_probe_install() { register(addr, detour, &PC_PROBE_TRAMPOLINE); }\n"):
+        rc, out = run(g)
+        expect("counter-writers", "spec/by-reference-trampoline", rc, out, False)
+
+    # SPECIFICITY 3, the FROZEN NEGATIVE this gate exists to respect: a counter written only
+    # through an identifier a macro CONSTRUCTS. The literal name is absent from the write site, so
+    # a name search calls it dead and a deletion follows. The gate must REFUSE (exit 2) and name
+    # the file instead -- red, but for the honest reason, and never a deletion.
+    macro = "crates/er-telemetry-core/src/_pc_probe_macro.rs"
+    with new_file(macro, "macro_rules! pc_probe_bump {\n"
+                         "    ($name:ident) => { $name.fetch_add(1, Ordering::SeqCst) };\n}\n"):
+        rc, out = run(g)
+        expect("counter-writers", "sens/macro-constructed-write-refused", rc, out, True,
+               ["REFUSING", "_pc_probe_macro.rs"])
+
+    # ...and the opposite blind: a benign `$x:ident` macro that performs no atomic write must NOT
+    # make the gate refuse. A gate that refuses on every macro in the tree has no verdict at all.
+    benign = "crates/er-telemetry-core/src/_pc_probe_benign.rs"
+    with new_file(benign, "macro_rules! pc_probe_trace {\n"
+                          "    ($x:ident) => { println!(\"{}\", $x) };\n}\n"):
+        rc, out = run(g)
+        expect("counter-writers", "spec/benign-macro-not-refused", rc, out, False)
+
+
 @control("stale-rva-calls", fast=False,
          baseline=["python3", "scripts/check-stale-rva-calls.py"])
 def _stale_rva():
@@ -707,6 +771,36 @@ def _prologue_masks():
         expect("prologue-masks-1170", "sens/mask-all-ignored", rc, out, True)
 
 
+@control("hook-targets-1170", fast=False,
+         baseline=["python3", "scripts/audit-1170-hook-targets.py", "--selftest"])
+def _hook_targets_1170():
+    """The gate that decides where a detour may be written on the INSTALLED build.
+
+    Its two arms fail in opposite directions and both are planted here. The ENTRY arm going
+    blind admits a hook into the middle of a function; the BRANCH-SCAN arm losing its bound
+    REFUSES correct rows instead -- which is how it failed on 2026-08-31, manufacturing a
+    `jno` out of two bytes of inter-function padding after a 14-byte leaf's `ret`.
+
+    The specificity control is the one that matters for the bound: widening the scan CAP must
+    change no verdict, because after the fix the answer is a property of the function's extent
+    and not of an arbitrary window. Under the unbounded scan it was a property of the window,
+    and how far past the `ret` it happened to read decided the verdict.
+    """
+    f = "scripts/audit-1170-hook-targets.py"
+    g = ["python3", f, "--selftest"]
+    with edit_file(f, lambda t: t.replace("    end = body_end(blob, va)\n", "    end = None\n", 1)):
+        rc, out = run(g)
+        expect("hook-targets-1170", "sens/scan-unbounded", rc, out, True, ["0x14067ac90"])
+    with edit_file(f, lambda t: t.replace("def entry_verdict(", "def entry_verdict_real(", 1).replace(
+            "def entry_verdict_real(",
+            "def entry_verdict(*a, **k):\n    return True, 'mutant'\n\n\ndef entry_verdict_real(", 1)):
+        rc, out = run(g)
+        expect("hook-targets-1170", "sens/entry-always-ok", rc, out, True)
+    with edit_file(f, lambda t: t.replace("BRANCH_SCAN_BYTES = 0x400", "BRANCH_SCAN_BYTES = 0x800", 1)):
+        rc, out = run(g)
+        expect("hook-targets-1170", "spec/wider-scan-cap", rc, out, False)
+
+
 @control("dll-provenance")
 def _provenance():
     p = "scripts/er-dll-provenance.py"
@@ -720,6 +814,55 @@ def _provenance():
             "def source_sha(*a, **k):\n    return 'constant'\n\n\ndef source_sha_real(", 1)):
         rc, out = run(g)
         expect("dll-provenance", "sens/source-hash-constant", rc, out, True)
+
+
+@control("object-field-offsets",
+         baseline=["python3", "scripts/check-object-field-offsets-1170.py"])
+def _object_field_offsets():
+    """The gate that decides whether a declared struct-field offset is a field at all.
+
+    The defect planted first is not synthetic: it is the literal value
+    `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET = 0x40` that shipped from the constant's introduction
+    until 2026-08-31. The field is at 0x48; 0x40 holds a live `DLAllocator*`, so
+    `oracle_system_step_label` read a pointer's low half, failed its `0..=20` range test and
+    printed `"?"` with `oracle_system_step_state = -95247096` on every run. Nothing faulted and
+    nothing drifted -- it was equally wrong on 1.16.2 -- so this is the one shape a
+    1.16.2-vs-1.17 drift comparison structurally cannot see, and the reason to prove THIS gate
+    catches it rather than assume the family does.
+
+    The two specificity arms matter as much. A gate that went red on any second definition would
+    punish the constants this tree duplicates across independently-shipped crates on purpose, and
+    one that went red on the NUMBER 0x40 anywhere would be red on a large fraction of the tree.
+    """
+    g = ["python3", "scripts/check-object-field-offsets-1170.py"]
+    home = "crates/er-game-base/src/rva.rs"
+    real = "pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x48;"
+    dup = "crates/er-game-base/src/_pc_probe_sysstep.rs"
+
+    # SENSITIVITY 1: the historical bug, restored at its real home.
+    with edit_file(home, lambda t: t.replace(real, real.replace("0x48", "0x40"), 1)):
+        rc, out = run(g)
+        expect("object-field-offsets", "sens/offset-never-a-field", rc, out, True,
+               ["CS_SYSTEM_STEP_CURRENT_STATE_OFFSET", "0x48"])
+
+    # SENSITIVITY 2: a drifted COPY in another file. The gate looks for the name everywhere
+    # precisely so a second crate's stale duplicate cannot hide behind a correct original.
+    with new_file(dup, "pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x40;\n"):
+        rc, out = run(g)
+        expect("object-field-offsets", "sens/drifted-duplicate", rc, out, True,
+               ["CS_SYSTEM_STEP_CURRENT_STATE_OFFSET", "_pc_probe_sysstep.rs"])
+
+    # SPECIFICITY 1: the same duplicate, AGREEING. Deliberate duplication across crates is how
+    # this tree ships independent DLLs; it must stay green.
+    with new_file(dup, "pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x48;\n"):
+        rc, out = run(g)
+        expect("object-field-offsets", "spec/agreeing-duplicate", rc, out, False)
+
+    # SPECIFICITY 2: an unrelated offset constant that happens to be 0x40. The gate pins NAMES to
+    # measured fields; it has no opinion about the number.
+    with new_file(dup, "pub const PC_PROBE_UNRELATED_OFFSET: usize = 0x40;\n"):
+        rc, out = run(g)
+        expect("object-field-offsets", "spec/unrelated-constant-same-value", rc, out, False)
 
 
 # ==========================================================================

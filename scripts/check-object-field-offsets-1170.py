@@ -119,14 +119,27 @@ The IMAGE half skips when the two images are absent (they are gitignored game-de
 the SOURCE half always runs, and `--selftest` REQUIRES the images so a green selftest can never
 mean "the image half never ran".
 
-NOT YET WIRED INTO `scripts/check.sh` -- several agents have held that file all day and it is
-edit-forbidden in the brief this was written under. The two lines the next agent should add:
+WIRED INTO `scripts/check.sh` on 2026-08-31, beside its sibling `check-singleton-field-offsets.py`.
+Until then it ran nowhere, which is why the paragraph below could happen at all: a gate that no
+suite invokes catches nothing, however good its rows are. The plain run takes a few seconds; the
+`--selftest` re-aligns every frozen row once per perturbation and takes minutes, so only the plain
+run is in the suite and the selftest is left to `scripts/audit-selftest-vacuity.py` and to
+deliberate operator runs, the same split `check.sh` uses for other slow selftests.
 
-    run python3 "$repo_root/scripts/check-object-field-offsets-1170.py" --selftest
-    run python3 "$repo_root/scripts/check-object-field-offsets-1170.py"
+THE OTHER HALF OF THE QUESTION, ADDED 2026-08-31: WAS IT EVER RIGHT
+--------------------------------------------------------------------
+Every row above this date asks "did 1.17 move this field". `CS::CSSystemStep` asks the question
+that comes first and had been skipped everywhere: is the declared offset a field of that object in
+EITHER build. `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was 0x40 from its introduction; the object's
+constructor writes 0x48 and never 0x40, and 0x40 holds a live `DLAllocator*`. So
+`oracle_system_step_label` read a pointer's low half, missed its `0..=20` range test and printed
+`"?"` with `oracle_system_step_state = -95247096` on every run, on 1.16.2 as well as 1.17 -- a
+legal i32 out of a legal read, with no fault, no log line and no drift for a drift check to see.
 
-The plain run takes a few seconds; the selftest re-aligns every frozen row once per perturbation
-and takes a couple of minutes, so put it wherever the suite keeps its slow selftests.
+That is a second failure mode, not a variant of the first, and the fix for it is the same
+measurement pointed at a different question: the row freezes 0x48 -> 0x48 (HELD) AND the source
+half pins the repo constant to 0x48, so a constant that was never measured now cannot be
+introduced -- pinning it requires producing a witness function whose two bodies agree on it.
 """
 
 from __future__ import annotations
@@ -172,6 +185,17 @@ FD4_PAD_DEVICE_CTOR = dict(
 # FD4::FD4PadManager. `this` is rsi after `mov rsi,rcx`.
 FD4_PAD_BUILDER_A = dict(
     va16=0x140240E70, len16=690, va17=0x140240E70, len17=690, bases=("rsi", "rcx")
+)
+# `FD4::FD4StepTemplateBase<CS::CSSystemStep, FD4::FD4TaskBase>`, the base sub-object at offset 0
+# of `CS::CSSystemStep`. `this` is rsi after `mov rsi,rcx`. Reached as
+# `CSSystemStep::CSSystemStep` (1.16.2 0x140dec7c0) -> 0x140dec620 -> here; the 1.17 pair is the
+# same chain shifted +0x1e00 and is corroborated three ways that share nothing: identical body
+# length (226) and identical instruction count (57/57 aligned), the ledger row
+# 0xdec7c0 -> 0xdee5c0 for the caller, and the singleton store this ctor's grandparent performs
+# landing on the mapped global (`48 89 05` at 0x140dec268 -> 0x143d85680; at 0x140dee068 ->
+# 0x143d89700).
+CS_SYSTEM_STEP_TEMPLATE_CTOR = dict(
+    va16=0x140DEC6D0, len16=226, va17=0x140DEE4D0, len17=226, bases=("rsi", "rcx")
 )
 
 WITNESSES = (
@@ -322,6 +346,61 @@ WITNESSES = (
         FD4_PAD_BUILDER_A,
         "virtual-key builder A; the frozen negative for the padDevices rows -- 0x18 and 0x48 are "
         "adjacent members of the same object and a matcher that confused them would fail here",
+    ),
+    # ---- CS::CSSystemStep (its FD4StepTemplateBase base sub-object) --------------------------
+    # THE ROW THAT EXISTS BECAUSE A CONSTANT WAS NEVER MEASURED AT ALL.
+    #
+    # Every other row here answers "did 1.17 move this field". This one answers the question that
+    # comes first and had been skipped: is the offset a field of this object in EITHER build.
+    # `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` said 0x40 from its introduction until 2026-08-31. The
+    # constructor never writes 0x40; it writes 0x48. 0x40 is
+    # `FD4ComponentAttachSystem_Step::allocator`, a live `DLAllocator*`, so `oracle_system_step_
+    # label` read a pointer's low half, failed the `0..=20` range test and emitted `"?"` with
+    # `oracle_system_step_state = -95247096` (= 0xfa52a508) forever. Nothing faulted: a legal i32
+    # out of a legal read is exactly the silent class this gate exists for, and it was silent on
+    # 1.16.2 too -- so a drift-only check (this gate's usual question) could never have caught it.
+    #
+    # The wrong value came from back-solving the layout off a field NAME. The sibling
+    # `fromsoftware-rs` `FD4StepTemplateBase` has a member spelled `unk48` right after
+    # `requested_state`; "unk48 is at 0x48" puts `current_state` at 0x40. That member is misnamed
+    # (it sits at 0x50) and the Rust struct's own computed layout was right. The measurement below
+    # is what a name cannot be.
+    (
+        "CSSystemStep",
+        "current_state (CS_SYSTEM_STEP_CURRENT_STATE_OFFSET); requested_state is the adjacent +0x4c",
+        0x48,
+        0x48,
+        CS_SYSTEM_STEP_TEMPLATE_CTOR,
+        "the step-template constructor, 57/57 aligned with zero moved offsets; it zeroes "
+        "current_state and requested_state together as one qword (`48 89 5e 48`, byte-identical "
+        "at 0x140dec744 and 0x140dee544)",
+    ),
+    (
+        "CSSystemStep",
+        "step_done_flag (0x50) -- the field `fromsoftware-rs` misnames `unk48`",
+        0x50,
+        0x50,
+        CS_SYSTEM_STEP_TEMPLATE_CTOR,
+        "step-template constructor; brackets current_state from above and is the frozen negative "
+        "for the 0x40-vs-0x48 confusion -- a matcher off by one field would land here",
+    ),
+    (
+        "CSSystemStep",
+        "stepper_fn_table (0x10)",
+        0x10,
+        0x10,
+        CS_SYSTEM_STEP_TEMPLATE_CTOR,
+        "step-template constructor stores the 21-entry StepperFn table here (1.16.2 0x143d85760, "
+        "1.17 0x143d897e0), which is where the state LABELS come from",
+    ),
+    (
+        "CSSystemStep",
+        "debug_state_label (0xa0)",
+        0xA0,
+        0xA0,
+        CS_SYSTEM_STEP_TEMPLATE_CTOR,
+        'step-template constructor stores L"NotExecuting" here; the highest witnessed field, so it '
+        "is what bounds this object's SAFE_REGIONS entry",
     ),
 )
 
@@ -657,6 +736,12 @@ SAFE_REGIONS = {
     # the interior of a bracket while both ends held.
     "FD4PadDevice": ((0x0, 0x89),),
     "FD4PadManager": ((0x0, 0xA9),),
+    # Nothing in the step template moved: the constructor aligns 57/57 and all 13 field offsets it
+    # touches -- 0x0, 0x10, 0x18, 0x48, 0x50, 0x58, 0x60, 0x68, 0x69, 0x70, 0xa0, 0xa8, 0xac -- are
+    # HELD. The region stops just past the highest WITNESSED offset (0xac, a dword), per the rule
+    # the pad objects follow: "no witness moved" is not "no field moved", and `CS::PlayerIns` is
+    # the standing counterexample.
+    "CSSystemStep": ((0x0, 0xB0),),
 }
 
 # --------------------------------------------------------------------------------------------
@@ -672,6 +757,11 @@ PINNED_CONSTANTS = (
     ("VK_ARRAY_88_OFFSET", "crates/er-input-harness/src/pad_inject.rs", 0x88, "FD4PadDevice"),
     ("PAD_MGR_DEVICES_18_OFFSET", "crates/er-input-harness/src/pad_inject.rs", 0x18, "FD4PadManager"),
     ("PAD_DEVICES_COUNT_40_OFFSET", "crates/er-input-harness/src/pad_inject.rs", 0x40, "FD4PadManager"),
+    # The loading-substep oracle's field. Two crates read it (the telemetry emitter and the
+    # loading-bar sub-progression) and both now alias this one definition, so there is exactly one
+    # literal in the tree to watch -- which is the state the 0x40 bug did NOT have: it was written
+    # twice, in two crates, and drifted from nothing because it was born wrong.
+    ("CS_SYSTEM_STEP_CURRENT_STATE_OFFSET", "crates/er-game-base/src/rva.rs", 0x48, "CSSystemStep"),
     # THE FROZEN NEGATIVE THAT IS NOT ABOUT THIS OBJECT AT ALL. These sit numerically inside the
     # band where PlayerGameData moved +4 (0x960..0xa78) and belong to `CS::CSMenuProfModelRend`,
     # whose constructor aligns 64/64 with every one of them HELD. A "+4 everything in that range"
@@ -803,14 +893,26 @@ def _int_literal(text):
     return int(text, 16) if text.lower().startswith("0x") else int(text, 10)
 
 
-def source_findings(read_text=None, reach_rows=WRITE_REACH, alloc_rows=ALLOC_WITNESSES):
-    """Constant pins, the reach arithmetic and the `offset_of!` guard. Never touches the images."""
+_TREE_SCAN = []
+
+
+def _scan_tree(read_text):
+    """One pass over every `.rs` file: pinned-constant definitions and `offset_of!` references.
+
+    The definition is looked for EVERYWHERE rather than only at its recorded home, because these
+    constants are actively being consolidated into `er-game-base::rva` and a gate that goes quiet
+    when a constant moves file is a gate that stops watching exactly when someone edits it.
+
+    Cached for the DEFAULT reader only. `--selftest` runs the source half ~95 times against an
+    unchanged tree, and re-walking it each time was 65 of the 82 seconds the selftest took -- past
+    the 25s `scripts/audit-selftest-vacuity.py` allows per script, so this gate's selftest could
+    not be judged for vacuity at all. That is lost coverage, not a speed preference. A caller that
+    passes its own `read_text` is deliberately feeding a tree that is NOT this one (an empty read,
+    a perturbed literal), so those never read or write the cache.
+    """
+    if read_text is None and _TREE_SCAN:
+        return _TREE_SCAN[0]
     read = read_text or (lambda p: p.read_text(encoding="utf-8", errors="replace"))
-    findings = []
-    # One pass over the tree: constant definitions and `offset_of!` references together. The
-    # definition is looked for EVERYWHERE rather than only at its recorded home, because these
-    # constants are actively being consolidated into `er-game-base::rva` and a gate that goes
-    # quiet when a constant moves file is a gate that stops watching exactly when someone edits it.
     definitions = {name: [] for name, _rel, _expected, _obj in PINNED_CONSTANTS}
     patterns = {
         name: (
@@ -830,6 +932,15 @@ def source_findings(read_text=None, reach_rows=WRITE_REACH, alloc_rows=ALLOC_WIT
                 definitions[name].append((where, _int_literal(match.group(1))))
         for match in OFFSET_OF_PGD.finditer(text):
             referenced.setdefault(match.group(1), set()).add(where)
+    if read_text is None:
+        _TREE_SCAN.append((definitions, referenced))
+    return definitions, referenced
+
+
+def source_findings(read_text=None, reach_rows=WRITE_REACH, alloc_rows=ALLOC_WITNESSES):
+    """Constant pins, the reach arithmetic and the `offset_of!` guard. Never touches the images."""
+    findings = []
+    definitions, referenced = _scan_tree(read_text)
     for name, rel, expected, _obj in PINNED_CONSTANTS:
         found = definitions[name]
         if not found:
@@ -998,11 +1109,35 @@ def _anchors(capstone, insn, kind, target):
     return False
 
 
-def image_findings(matcher, capstone, md, rows=WITNESSES):
-    """Re-measure every frozen row from the two images. Unmeasurable == failure."""
-    findings, measured = [], 0
-    for obj, label, old, new, witness, how in rows:
-        pairs, _ins, _del, _rep = matcher.compare(
+_ALIGNMENTS = {}
+
+
+def _aligned(matcher, capstone, md, witness, label):
+    """`matcher.compare` for one witness, memoised on (implementation, witness).
+
+    An alignment is a pure function of the two frozen images and the witness, and several rows
+    share a witness (four on the step-template constructor alone) while `--selftest` re-runs the
+    whole set once per perturbation -- so the same alignment was being recomputed ~95 times. That
+    is where the selftest's time went, and it mattered beyond patience: the blinded replay in
+    `scripts/audit-selftest-vacuity.py` costs a `sys._getframe` + `abspath` on every one of the
+    900k regex calls underneath, which pushed it past that tool's 25s budget and made this gate
+    UNMEASURABLE for vacuity.
+
+    The key carries the bound `compare` ITSELF, not just the witness. The selftest's final control
+    hands in a matcher whose `compare` returns nothing and requires the result to be reported as a
+    failure; a cache keyed on the witness alone would serve it the real matcher's answer and that
+    control would go quietly green -- the gate's own vacuity, introduced by its speed-up.
+    """
+    key = (
+        matcher.compare,
+        witness["va16"],
+        witness["len16"],
+        witness["va17"],
+        witness["len17"],
+        witness["bases"],
+    )
+    if key not in _ALIGNMENTS:
+        _ALIGNMENTS[key] = matcher.compare(
             capstone,
             md,
             witness["va16"] - IMAGE_BASE,
@@ -1013,6 +1148,14 @@ def image_findings(matcher, capstone, md, rows=WITNESSES):
             label,
             quiet=True,
         )
+    return _ALIGNMENTS[key]
+
+
+def image_findings(matcher, capstone, md, rows=WITNESSES):
+    """Re-measure every frozen row from the two images. Unmeasurable == failure."""
+    findings, measured = [], 0
+    for obj, label, old, new, witness, how in rows:
+        pairs, _ins, _del, _rep = _aligned(matcher, capstone, md, witness, label)
         seen = {o: n for o, n, _a, _b, _t in pairs}
         if old not in seen:
             findings.append(
