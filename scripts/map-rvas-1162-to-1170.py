@@ -6,14 +6,22 @@ in this workspace is a 1.16.2 RVA, and `er-hook`'s build gate now REFUSES to ins
 an unrecognised build rather than corrupt it -- so what used to be one crash per launch is a list
 of addresses to re-point. This turns that list into a table.
 
-WHY NOT `dump-deobf-shift.py` DIRECTLY
---------------------------------------
-That tool maps `dump-exec.bin` <-> `eldenring-deobf.bin`, and its dump side is still the **1.16.1**
-runtime dump: it is cross-version by two patches and its region table describes a shift staircase
-that does not exist here. Only its matcher is reusable, so this script imports `map_va` and
-`build_pattern` from it and supplies two properly-versioned images, with the region assist OFF --
-there is no measured 1.16.2->1.17 region table, and an *estimate* is exactly the kind of
-plausible-but-wrong address that lands mid-function.
+WHY THE MATCHER LIVES HERE
+--------------------------
+`build_masked_pattern` below is this script's own; nothing is imported from elsewhere. An earlier
+version of this note said the matcher came from `scripts/dump-deobf-shift.py`. That tool was
+DELETED on 2026-08-31 and this file never imported it -- the claim was stale on both counts.
+
+It is worth recording WHY that tool is gone, because the trap it fell into is the one this script
+exists to avoid. It mapped `dump-exec.bin` <-> `eldenring-deobf.bin`, and its dump side was still
+the **1.16.1** runtime dump: cross-version by two patches, with a region table describing a shift
+staircase that does not exist between the images anyone still uses. It could not be repaired,
+because a 1.16.2 dump cannot be re-exported -- that program survives only as the already-imported
+Ghidra project `proj1162`, and no 1.16.2 `.gzf` exists on this machine.
+
+The region assist is deliberately absent here for the same reason: there is no measured
+1.16.2->1.17 region table, and an *estimate* is exactly the kind of plausible-but-wrong address
+that lands mid-function.
 
 WHAT A RESULT MEANS
 -------------------
@@ -94,8 +102,8 @@ def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_retu
     * RIP-relative displacements and branch targets -- the code moved, so the delta changed.
     * **Memory displacements on a register base** -- 1.17's dominant change. `GetScadutreeBlessing`
       is byte-identical except `[rcx+0xab5]` -> `[rcx+0xabd]`, because `PlayerGameData` grew 8
-      bytes. The shared matcher in `dump-deobf-shift.py` does not mask these, which is why it
-      cannot re-derive either mapping this repo already knows by hand.
+      bytes. A matcher that does not mask these cannot re-derive either mapping this repo already
+      knows by hand, which is why `build_masked_pattern` masks them.
     * Immediates -- ids and sizes get retuned across patches.
 
     What survives is opcode shape and register allocation, which is what identifies a function.

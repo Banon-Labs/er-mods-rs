@@ -1,4 +1,4 @@
-# scripts/ghidra/rt — in-repo Ghidra query toolkit (clean OSGi bundle)
+# scripts/ghidra/rt -- in-repo Ghidra query toolkit (clean OSGi bundle)
 
 Version-controlled Ghidra `analyzeHeadless` postScripts for querying the persistent ER 1.16.1
 runtime-dump project, run via `scripts/ghidra/query.sh`:
@@ -20,15 +20,18 @@ least one that does not compile under 12.1, so it cannot be used as a `-scriptPa
 `query.sh` adds the passed script's own directory to `-scriptPath`, so pointing it at a script in
 here compiles only this dir's files. If you add a helper, verify it compiles by running any script
 from here (a compile failure in a sibling will surface as "class could not be found" for the one you
-ran). This satisfies the standing rule that everything we run is tracked in the repo — no out-of-tree
+ran). This satisfies the standing rule that everything we run is tracked in the repo -- no out-of-tree
 `.java`.
 
 ## Notable scripts
 
-- `RtDecomp.java <va>...` — decompile the function containing each dump VA.
-- `RtByName.java <name>...` — decompile global functions by exact name.
-- `RtSymAddr.java <name>...` — resolve symbol names to addresses (handles namespaced symbols).
-- `RtSyms.java <kw>...` — list symbols whose name contains any keyword.
-- `RtStep7.java [op addr [count]]` — step-table / xref / pointer-table digging (InGameStep steppers).
-- `DumpExecImage.java <out> [base]` — export the dump's exec image to a flat RVA-aligned file for
-  `scripts/dump-deobf-shift.py` (writes `dump-exec.bin`, which is gitignored — game-derived).
+- `RtDecomp.java <va>...` -- decompile the function containing each dump VA.
+- `RtByName.java <name>...` -- decompile global functions by exact name.
+- `RtSymAddr.java <name>...` -- resolve symbol names to addresses (handles namespaced symbols).
+- `RtSyms.java <kw>...` -- list symbols whose name contains any keyword.
+- `RtStep7.java [op addr [count]]` -- step-table / xref / pointer-table digging (InGameStep steppers).
+- `DumpExecImage.java <out> [base]` -- export the dump's exec image to a flat RVA-aligned file
+  (writes `dump-exec.bin`, which is gitignored -- game-derived). Its only consumer was
+  `scripts/dump-deobf-shift.py`, DELETED 2026-08-31 as unrepairably cross-version; the remaining
+  reader is `scripts/disas-annotate-strings.py --image dump`, which treats that image as
+  semantics-only and is not authoritative for any address.
