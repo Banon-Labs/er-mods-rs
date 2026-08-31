@@ -239,12 +239,27 @@ pub const WORLDMAP_ROW_FILTER: MapSeam = MapSeam {
 
 /// `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` -- `0x140876140`. Produces the
 /// `WorldMapCoordinates{x, z}` a pin renders at.
+///
+/// THE SIGNATURE STOPS AT 10 BYTES ON PURPOSE. The eleventh byte begins the `disp32` of
+/// `mov rax,[rip+disp32]`, and a RIP-relative displacement is the distance between the
+/// instruction and the global it names -- so it re-encodes whenever EITHER end moves, even when
+/// the function is untouched. 1.17 moved both: this function translates cleanly to `0x140877130`
+/// and its body is byte-identical there except that `disp32` (`62 4c 3e 03` -> `d2 7c 3e 03`).
+/// The old 12-byte signature captured the low half of that field, so it matched NOWHERE in 1.17
+/// and `verify_seam` -- which compares exactly, having no mask -- would have refused a correctly
+/// translated address. That is the same failure the generated pins hit, where it was solved with
+/// a `_MASK` that ignores exactly these bytes; a hand-written seam has no mask, so it stops short
+/// of the field instead. This is the `take` idea from `build-support/prologue_build.rs`: name the
+/// instructions in full, keep only the bytes that are stable.
+///
+/// Truncating costs NOTHING here, which is why this is the fix rather than a wider one: the
+/// 10-byte prefix still occurs exactly ONCE in each image (1.16.2 and 1.17 both n=1), measured by
+/// `scripts/verify-prologue-coverage-1170.py --section uniqueness`. A shorter signature is only a
+/// weaker signature when it actually matches more; this one does not.
 pub const CONVERT_MSB_COORDS_TO_MAP_COORDS: MapSeam = MapSeam {
     name: "WorldMapAreaConverter::ConvertMsbCoordsToMapCoords",
     rva: 0x087_6140,
-    prologue: &[
-        0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x68, 0x48, 0x8b, 0x05, 0x62, 0x4c,
-    ],
+    prologue: &[0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x68, 0x48, 0x8b, 0x05],
     arg_count: 3,
 };
 
@@ -428,13 +443,30 @@ pub fn call_target(base: usize, seam: &MapSeam) -> Option<usize> {
 /// these seams as a plain CALL target, it must resolve with `resolve_game_address` itself rather
 /// than loosening this.
 ///
-/// # No double translation
+/// # WHAT IT RETURNS IS THE UNRESOLVED ADDRESS, AND THAT IS THE POINT (corrected 2026-08-30)
 ///
-/// `register_union_hook` resolves again through the same function. That is idempotent for an
-/// address which is already a 1.17 destination (`already_translated_in`), so handing it a
-/// translated address is safe. On 1.16.2 `resolve_detour_address` returns its argument unchanged
-/// (`is_supported_build()` short-circuits), so this whole step is a no-op there and the byte check
-/// runs at exactly the address it always did.
+/// The byte check runs at the RESOLVED address -- it has to, that is where the bytes are -- but
+/// what comes back is `base + seam.rva`, untranslated, because `register_union_hook` resolves
+/// again and must be the ONE resolve that decides where the detour lands.
+///
+/// This doc used to say the opposite: that resolving twice is idempotent for an address which is
+/// already a 1.17 destination, so handing over the translated one is safe. That is true of most
+/// addresses and false of exactly the ones that matter. An address can be BOTH a 1.17 destination
+/// of one row and the 1.16.2 SOURCE of a different row -- which happens whenever a region's shift
+/// equals the local spacing between two functions, so `B - A == C - B`. On such an address
+/// translation WINS over the already-translated shortcut (it must; see `already_translated_in`),
+/// and the second resolve silently returns a third, unrelated function. Three rows in the current
+/// detour table have that shape (`0x6156c0`, `0x7ad710`, `0xbbbd90`), and on 2026-08-30 three live
+/// detours in this workspace were measured landing on the wrong function because of it.
+///
+/// Resolving the same 1.16.2 INPUT twice is harmless and is what happens now: this function
+/// resolves it to read the prologue, `register_union_hook` resolves it to place the detour, and
+/// both get the same answer. Resolving the OUTPUT is the bug.
+/// `scripts/check-double-resolved-hook-targets.py` is the gate that keeps it out.
+///
+/// On 1.16.2 `resolve_detour_address` returns its argument unchanged (`is_supported_build()`
+/// short-circuits), so this whole step is a no-op there and the byte check runs at exactly the
+/// address it always did.
 ///
 /// # Safety
 ///
@@ -468,7 +500,13 @@ pub unsafe fn verify_seam(seam: &MapSeam) -> Result<usize, SeamError> {
             translated_from: (address != stale).then_some(stale),
         });
     }
-    Ok(address)
+    // `stale`, not `address`: see "WHAT IT RETURNS IS THE UNRESOLVED ADDRESS" above. The prologue
+    // was verified at `address`; the caller hands `stale` to `register_union_hook`, which resolves
+    // this same 1.16.2 input to that same `address` and owns the single resolve that places the
+    // detour. Callers log what comes back, so their line now names the address the feature MEANT
+    // and er-hook's own `HOOK TRANSLATED` line names where it went -- which is the pair a reader
+    // needs, rather than one address twice.
+    Ok(stale)
 }
 
 #[cfg(test)]
