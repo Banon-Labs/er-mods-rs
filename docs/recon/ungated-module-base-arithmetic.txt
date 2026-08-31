@@ -14,26 +14,4 @@
 # Fix a row by resolving through er_game_base::mem::game_data_addr (reads and comparisons) or
 # game_rva / game_rva_for_hook (calls and detours -- note they consult DIFFERENT tables), screen
 # the 0 that a refusal returns before comparing it to anything, then re-run --refresh.
-#
-# THE THREE ROWS BELOW ARE LIVE 1.17 DEFECTS WITH A KNOWN FIX, not accepted shapes. They were
-# found by the 2026-08-31 sweep and left unapplied ONLY because another agent held
-# crates/er-title-flow/src/title_tick_cover.rs at the time. Both RVAs are already in
-# docs/recon/rva-map-1162-to-1170.data.tsv, so resolving them makes them WORK rather than refuse:
-#
-#     0x3d6b7b0 -> 0x3d6f820   CS_MENU_MAN_GLOBAL_RVA     (846/847 agreeing reference sites)
-#     0x3d856a0 -> 0x3d89720   TITLE_ACCEPT_LATCH_RVA     (24/24)
-#
-#   line  860  let menu_man = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }
-#   line 2179  let dsg_force = unsafe { safe_read_u8(module_base + 0x3d856a0) }
-#   line 2182  let dsg_csm = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }
-#
-# becomes, with the constants the SAME FILE already imports and resolves correctly elsewhere
-# (title_tick_cover.rs:684, 1456, 1711, 2073 all do this already):
-#
-#   safe_read_usize(er_game_base::mem::game_data_addr(
-#       module_base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA"))
-#   safe_read_u8(er_game_base::mem::game_data_addr(
-#       module_base, TITLE_ACCEPT_LATCH_RVA, "TITLE_ACCEPT_LATCH_RVA"))
-#
-# Delete the rows and re-run --refresh once that lands.
 # Currently 0 site(s) in 0 file(s).

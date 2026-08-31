@@ -102,6 +102,20 @@ same as the address being a manager pointer:
 
     python3 scripts/check-oracle-singleton-globals.py             # enforce
     python3 scripts/check-oracle-singleton-globals.py --selftest  # prove the assertions can fail
+
+WIRING (for whoever lands the current `scripts/check.sh` -- this file must not touch it). The two
+lines already exist there, COMMENTED OUT at 253-254 with a note saying they were disarmed on
+2026-08-31 only because `crates/er-input-harness/src/pad_inject.rs` and `crates/er-title-flow/*`
+were mid-edit in someone's working tree. Those files have landed (f49f5e9b), the blinds are
+re-derived against their current text, and both commands below exit 0 on this tree. Un-comment:
+
+    python3 "$repo_root/scripts/check-oracle-singleton-globals.py" --selftest
+    python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
+
+Leaving them commented is not neutral. This gate and `check-stale-rva-calls.py` are the two halves
+of one defect class, and the sibling is wired; running only the half that keys on a NAMED constant
+is the configuration that let four telemetry pointer oracles report garbage for two whole runs
+while three gates said clean.
 """
 
 from __future__ import annotations
@@ -650,6 +664,27 @@ def offenders_in(text: str, relative: str) -> list[str]:
             # A named constant reached with `+`. That is `check-stale-rva-calls.py`'s ratchet, and
             # duplicating it here would put the same site in two baselines that drift apart. The
             # METHOD forms below are NOT duplicated: no `+`-shaped pattern can see them.
+            #
+            # THE DELEGATION IS NOT AIRTIGHT, AND SAYING SO HERE IS CHEAPER THAN SOMEONE MEASURING
+            # IT AGAIN. The two gates are usually described as a partition -- that one owns
+            # `base + NAMED_CONSTANT`, this one owns every other right-hand side. They are not.
+            # The sibling recognises a named constant only in three SYNTACTIC contexts:
+            # `transmute(base + C)`, `safe_read_*(base + C)`, and `== base + C`. Anywhere else --
+            # inside a `format_args!`, as an element of a hook table, as an argument to a read
+            # wrapper that is not spelled `safe_read_*` -- it matches nothing, and this `continue`
+            # has already handed the site away.
+            #
+            # MEASURED 2026-08-31, not asserted: 29 sites reach this `continue`, and
+            # `check-stale-rva-calls.py` reports 0 findings across the whole tree, so every one of
+            # them is currently reported by NEITHER gate. Most are log lines naming a 1.16.2
+            # address in debug output -- the same shape the sweep converted at
+            # `product_autoload_gates.rs:942` and `title_scaleform_msgbox.rs:707` -- and
+            # `title_scaleform_msgbox.rs:361` writes one directly ABOVE a correctly resolved
+            # `game_data_addr` call in the same `format_args!`. That is misattribution in a log
+            # rather than a wrong read, which is why closing the seam was not folded into this
+            # repair: the fix belongs in the sibling's context patterns, and admitting 29 rows here
+            # would rebuild the contaminated baseline this repo has already been bitten by twice.
+            # Tracked in bd `two-gate-partition-seam-named-const-outside-three-contexts-2026-08-31`.
             continue
         if not plus:
             # A named constant reached by `.wrapping_add`. It is a real address unless its VALUE
@@ -964,11 +999,43 @@ fn upper(base: usize) -> usize {
 # conversion is undone. Mutating the REAL text (in memory, never on disk) is the point: a control
 # written by hand proves the regex matches the control.
 MUTATION_BLINDS = [
+    # RE-DERIVED 2026-08-31 (the second time in one day), because the site this blind used to
+    # revert NO LONGER EXISTS -- and the reason it stopped existing is the whole point of keeping a
+    # blind here rather than dropping the file.
+    #
+    # The morning's sweep converted `CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva)` to a
+    # `game_data_addr` call. That afternoon the deeper defect was found and the entire padMaps
+    # tree-walk was DELETED: every call site of the game's own per-key writer loads `rcx` from
+    # `manager + 0x18 + dev*8`, so the array is a field of `FD4::FD4PadDevice` and the walk was
+    # aimed at the wrong object -- one only 152 bytes long, which ids from 1008 up wrote past the
+    # end of. `stamp_vk_direct` now resolves `padDevices[dev]` instead, and the const array, the
+    # closure and the comparison all went with it. A blind pinned to deleted text does not fail
+    # loudly as a missed defect; it fails as "the converted form is gone", which reads like the
+    # gate's problem rather than the file's, and is what left this gate red and unwired.
+    #
+    # THE MUTATION MUST NOT DESTROY THE FILE'S ONLY CORROBORATOR. `base` reaches every function in
+    # this file as a PARAMETER, so `is_module_base` cannot decide it from a binding; the sole
+    # evidence is the one `game_data_addr(base, ...)` call at `stamp_vk_direct`. Reverting THAT
+    # call to `base + FD4_PAD_MANAGER_RVA` -- the obvious choice -- removes the corroboration in
+    # the same edit, `base` stops being recognised as the module base anywhere in the file, and the
+    # gate reports nothing. Measured: that mutant yields `[]`, and reading it as "the gate is
+    # blind" would be exactly the wrong-reason pass this file's other comments warn about.
+    #
+    # So the blind adds a raw read in `install_one`, where `base` and `rva` are both parameters and
+    # the corroborator upstream stays intact. It exercises the three decisions unique to this file:
+    # a parameter base recognised only by file-level corroboration, a parameter RVA with no local
+    # derivation (so its provenance is compiled-in), and the `is_resolver_fed` exclusion, which must
+    # keep clearing the `let addr = (base + rva)` on the line ABOVE while still reporting this one.
+    # `crate::win32::read_usize` is the file's own fault-safe read primitive, used verbatim this way
+    # at `stamp_vk_direct`, and `usize + usize -> usize` is the type it already takes, so the mutant
+    # compiles.
     (
         "crates/er-input-harness/src/pad_inject.rs",
-        'CS_INGAME_PAD_TYPEID_RVAS\n        .map(|rva| er_game_base::mem::game_data_addr('
-        'base, rva, "CS_INGAME_PAD_TYPEID_RVAS"))',
-        "CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva)",
+        "    let addr = (base + rva) as *mut c_void;\n"
+        "    match unsafe { MhHook::new(addr, detour) } {",
+        "    let addr = (base + rva) as *mut c_void;\n"
+        "    let _stale = unsafe { crate::win32::read_usize(base + rva) };\n"
+        "    match unsafe { MhHook::new(addr, detour) } {",
         "base + rva",
     ),
     (
