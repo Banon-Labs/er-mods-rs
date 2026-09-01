@@ -73,6 +73,12 @@ USAGE
     uv run --with capstone python3 scripts/verify-rva-map-1170.py 0x1407ada40
     uv run --with capstone python3 scripts/verify-rva-map-1170.py --tsv <out> --min-ratio 0.98
 
+    There is one behaviour and no flag that selects it. Leaf extents are ALWAYS derived (see the
+    comment in `main`); `--leaf-extents` is accepted and ignored so an older written-down command
+    still runs. It was an opt-in until 2026-08-30, which meant three correct rows of the ledger
+    `er-game-base/build.rs` reads held their verdict only because somebody remembered to type it,
+    and the next regeneration that forgot would have deleted them at exit 0.
+
 `--tsv` TRUNCATES ITS TARGET. It writes what THIS run verified and nothing else, so pointing it
 at `docs/recon/rva-map-1162-to-1170.verified.tsv` -- the ledger hand-derived pairs are put in
 because nothing regenerates it -- is a rewrite, not an update: 65 of that file's 99 addresses do
@@ -140,6 +146,16 @@ IDENTICAL_PREFIX = "IDENTICAL-PREFIX"
 # matching list and the two drifting apart is how a rescued row would quietly go back to being
 # discarded.
 EXHAUSTIVE_VERDICTS = frozenset(("BYTE-IDENTICAL", IDENTICAL_WHOLE, IDENTICAL_LEAF))
+
+# THE ONE VERDICT THAT TAKES AN ADDRESS AWAY. `er-game-base/build.rs::refuted_sources()` keys on
+# this literal string and subtracts the row from `VERIFIED_1162_TO_1170` -- the CALL map, not just
+# the detour map. Every other unhappy verdict merely fails to ADD a row; this one REMOVES one that
+# was already there, and it does so with no log line.
+#
+# That asymmetry is why it is a named constant rather than a string typed at each use. A missing
+# address costs a feature loudly (`failed to resolve`); a wrongly REFUTED one deletes a working
+# address silently. `refutation_withheld` below is the rule that follows from it.
+REFUTED = "DIVERGES"
 
 # THE VERDICT FOR A BODY THAT GREW SOMEWHERE ELSE. Not a member of EXHAUSTIVE_VERDICTS: those
 # three assert the two instruction streams are EQUAL, and this one asserts they are not.
@@ -373,6 +389,37 @@ def leaf_extent(image, va, starts, limit=0x100):
 
     The extent never includes the padding that follows, which is what keeps two builds with
     different pad runs in phase. Returns `None` when no terminator is reached inside `limit`.
+
+    A TAIL CALL OUT OF THE FUNCTION ENDS IT, WHATEVER FOLLOWS. The `jmp` clause below used to
+    require that the fall-through byte be padding or a declared function start, and in the
+    de-Arxan'd images that test cannot fire at all across large stretches of `.text`: the gaps
+    between functions there hold the deobfuscator's LEFTOVER BYTES rather than `cc`/`90` runs, and
+    a `.pdata`-less region has no declared start to land on either. Measured at the three addresses
+    that sent this back for repair on 2026-08-30 -- the gap before 1.16.2 `0x14090a0a0` is
+    `82 cd ac aa 32 3e 47 4b`, and before 1.17 `0x14090b240` it is `05 00 00 00 00 00 00 00`.
+    Neither is padding, so the sweep walked straight through the gap and kept going:
+
+    * `0x14090a0a0 -> 0x14090b240` (`LOADING_SCREEN_GFX_FADEOUT_RVA`) decoded `LEAF:0x45/0x45` --
+      the 23-byte thunk, 9 bytes of gap, the WHOLE NEXT thunk, 9 more bytes of gap and into a
+      third function -- and then reported `DIVERGES 0.86`, because the two images' gap bytes
+      differ. Ghidra puts both functions at 23 bytes, in both builds.
+    * `0x14090a0c0 -> 0x14090b260` (`KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA`) decoded `LEAF:0x25/0x25`
+      and reported `DIVERGES 0.75`. Ghidra: 23 bytes, both builds.
+
+    That is the WORST available failure. `refuted_sources` in `er-game-base/build.rs` reads
+    `DIVERGES` as positive evidence the pair is WRONG and subtracts the address from the CALL map
+    as well as the detour map, so a sweep artefact would not merely fail to rescue these rows, it
+    would delete them -- and delete a correct address on the strength of comparing one image's
+    dead gap bytes against another's.
+
+    So a direct `jmp` whose target lies OUTSIDE the sweep window ends the body on its own. Such a
+    jump leaves the function by construction; nothing inside can branch back over it (the
+    watermark already refuses the stop if anything did), and the bytes after it are unreachable by
+    fall-through whether they are padding, leftovers or the next function. The narrowness is
+    deliberate and is what separates this from "any `jmp` ends the body": an intra-function jump --
+    around a block, forward to the epilogue -- targets an address inside the window and still has
+    to satisfy the original padding/start test. Indirect jumps have no immediate at all, so
+    `branch_target` returns `None` and a jump table is untouched by this clause.
     """
     from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 
@@ -390,6 +437,12 @@ def leaf_extent(image, va, starts, limit=0x100):
         if insn.mnemonic == "ret" and after > watermark:
             return after
         if insn.mnemonic == "jmp" and after > watermark:
+            # A tail call OUT of the function: the destination is past the window this sweep can
+            # reach, so the jump cannot be intra-function control flow and the body ends here
+            # regardless of what the gap after it holds. See the docstring for the three rows a
+            # padding-only test lost to the de-Arxan'd images' leftover gap bytes.
+            if target is not None and not (rva <= target < rva + limit):
+                return after
             # A tail call at a function boundary: the next byte is padding or another function.
             if after in starts or (after < len(image) and image[after] in FUNCTION_PAD_BYTES):
                 return after
@@ -805,7 +858,7 @@ def compare(
     else:
         # The streams are NOT equal. Today's answer first, so that a gate which declines leaves
         # every existing verdict exactly where it was.
-        verdict = "NEAR" if ratio >= 0.95 else "DIVERGES"
+        verdict = "NEAR" if ratio >= 0.95 else REFUTED
         if bounded and not derived and covered and entry == ENTRY_BOTH:
             admitted, patch_site = patch_site_drift(
                 old_image, new_image, old_va, new_va, left, right, left_at, right_at
@@ -826,6 +879,24 @@ def compare(
                     if held
                 )
             )
+    # A BOUNDARY THIS FILE DECODED MAY NOT REFUTE AN ADDRESS. See [`refutation_withheld`]: the
+    # verdict that removes a row has to rest on evidence stronger than this file's own guess about
+    # where a function ends, and a decoded extent is exactly that guess.
+    if derived and verdict == REFUTED:
+        return refutation_withheld(
+            old_image,
+            new_image,
+            old_va,
+            new_va,
+            old_extents,
+            new_extents,
+            old_derived,
+            new_derived,
+            old_starts,
+            new_starts,
+            extents,
+            ratio,
+        )
     result = {
         "verdict": verdict,
         "ratio": ratio,
@@ -840,6 +911,79 @@ def compare(
         "patch_site": patch_site,
         **entry_column,
     }
+    return result
+
+
+def refutation_withheld(
+    old_image,
+    new_image,
+    old_va,
+    new_va,
+    old_extents,
+    new_extents,
+    old_derived,
+    new_derived,
+    old_starts,
+    new_starts,
+    decoded_note,
+    decoded_ratio,
+):
+    """Re-judge a pair whose [`REFUTED`] verdict rested on a DECODED extent, without that extent.
+
+    THE ASYMMETRY THIS ENCODES. A verdict that fails to ACCEPT a row costs a feature loudly: the
+    address stays unmapped and the DLL logs `failed to resolve`. [`REFUTED`] is the only verdict
+    that goes the other way -- `build.rs::refuted_sources()` subtracts the row from the CALL map as
+    well as the detour map, so a correct address that was already working disappears, with nothing
+    printed. Deleting a right answer is strictly worse than declining to add one, so the evidence
+    required for it has to be correspondingly stronger.
+
+    A DECODED extent is not that evidence. `.pdata` is the image's own statement about where a
+    function ends; `leaf_extent` is this file's CONCLUSION about it, reached by a sweep whose stop
+    rules have been wrong before. MEASURED, and the reason this exists: until 2026-08-30 the sweep
+    ended a body at a `jmp` only when the following byte was `0xCC`/`0x90` padding or a declared
+    `.pdata` start. In these de-Arxan'd images the inter-function gaps hold the deobfuscator's
+    residue instead -- `48 8d 64 24 08 ff 64 24 f8` after 1.16.2 `0x14090a0b7` -- so the sweep ran
+    through the gap into the NEXT function and compared unrelated code. `0x14090a0a0 ->
+    0x14090b240` took extents of 0x45/0x45 instead of 0x17/0x17 and came back `DIVERGES 0.86`; a
+    23-byte thunk that is the same function in both builds would have been SUBTRACTED from the call
+    map on the strength of comparing one image's dead gap bytes against another's.
+
+    The stop rule is fixed. This is the rule that makes the next such bug cost a dropped row rather
+    than a deleted one: the pair is re-judged with the decoded extent withdrawn, which is the
+    answer the file would have given had it never guessed at a boundary. That answer is a prefix
+    comparison, so it can only reach `IDENTICAL`/`IDENTICAL-SHORT`/`NEAR` -- verdicts nothing
+    accepts and nothing subtracts -- unless the UNDECODED comparison refutes the pair on its own
+    terms, in which case the refutation is kept, because then it never rested on the guess.
+
+    Returns the re-judged result, carrying `refutation_withheld` when the withdrawal actually
+    changed the answer, so `main` can say out loud that a refutation was declined. A rule that
+    quietly suppressed one would be its own silent failure.
+    """
+    old_rva, new_rva = old_va - BASE, new_va - BASE
+    bare_old = old_extents
+    if old_extents is not None and old_rva in old_derived:
+        bare_old = {rva: end for rva, end in old_extents.items() if rva != old_rva}
+    bare_new = new_extents
+    if new_extents is not None and new_rva in new_derived:
+        bare_new = {rva: end for rva, end in new_extents.items() if rva != new_rva}
+    result = compare(
+        old_image,
+        new_image,
+        old_va,
+        new_va,
+        bare_old,
+        bare_new,
+        frozenset(),
+        frozenset(),
+        old_starts,
+        new_starts,
+    )
+    if result["verdict"] != REFUTED:
+        result["refutation_withheld"] = (
+            f"a DECODED extent ({decoded_note}) made the bodies {REFUTED} at ratio "
+            f"{decoded_ratio:.2f}; a boundary this file inferred may not delete an address, so the "
+            f"pair was re-judged with that extent withdrawn and came back {result['verdict']}"
+        )
     return result
 
 
@@ -1321,10 +1465,9 @@ def main():
     parser.add_argument(
         "--leaf-extents",
         action="store_true",
-        help="derive an extent for a .pdata-less LEAF function by decoding to its ret, so a "
-        f"complete comparison of a two-instruction getter reports {IDENTICAL_LEAF} instead of "
-        "IDENTICAL-SHORT. Off by default: it changes verdicts, and a verdict table is read by "
-        "er-game-base/build.rs",
+        help="DEPRECATED and ignored: leaf extents are always derived now. Accepted so a "
+        "regeneration command written down while this was an opt-in still runs, and still "
+        "produces the same table it did then",
     )
     parser.add_argument(
         "--selftest",
@@ -1353,14 +1496,38 @@ def main():
     if not pairs:
         sys.exit("nothing to verify")
 
-    old_derived, new_derived = frozenset(), frozenset()
+    # UNCONDITIONAL SINCE 2026-08-30, and it used to be the opt-in `--leaf-extents`.
+    #
+    # WHY THE OPT-IN HAD TO GO. Three rows of the ledger `er-game-base/build.rs` reads --
+    # LOADING_SCREEN_GFX_FADEOUT_RVA, KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA and
+    # PLAYER_GAME_DATA_NAME_GETTER_RVA -- carry IDENTICAL-LEAF, and they carry it ONLY because
+    # somebody remembered to type the flag. Nothing recorded that they had, nothing enforced it,
+    # and `--tsv` TRUNCATES: the next regeneration by anyone who did not know would have written
+    # those three back as IDENTICAL-SHORT, a verdict `build.rs` accepts nowhere, and the three
+    # addresses would have left the CALL map at exit 0 with nothing naming them. A correct address
+    # deleted by a forgotten command-line flag is not a failure mode worth keeping.
+    #
+    # WHY MAKING IT THE DEFAULT IS SAFE RATHER THAN MERELY CONVENIENT. Measured over both candidate
+    # maps on 2026-08-30: 15 rows move, every one of them from IDENTICAL-SHORT or IDENTICAL to
+    # IDENTICAL-LEAF, and none in the other direction -- so the flag was never selecting between
+    # two answers, it was selecting between an answer and a shrug. The cost is 0.3s on a 305-pair
+    # run, because a decode is attempted only for an address no `.pdata` region describes at all.
+    #
+    # AND THERE IS NO OPT-OUT, deliberately. An opt-out is the same footgun with a longer name: the
+    # dangerous mode would still be one word away and would still leave no trace in the table it
+    # wrote. Reproducing the old behaviour for an investigation needs no flag -- call `compare`
+    # with `.pdata`-only extents and empty derived sets, exactly as `selftest` does.
     if args.leaf_extents:
-        old_derived = add_leaf_extents(old_image, old_extents, old_starts, [p[0] for p in pairs])
-        new_derived = add_leaf_extents(new_image, new_extents, new_starts, [p[1] for p in pairs])
         print(
-            f"leaf extents decoded: {len(old_derived)} in 1.16.2, {len(new_derived)} in 1.17 "
-            "(functions the .pdata table does not declare)"
+            "--leaf-extents is deprecated and ignored: leaf extents are always derived now, so "
+            "this run produces the same table the flag used to produce"
         )
+    old_derived = add_leaf_extents(old_image, old_extents, old_starts, [p[0] for p in pairs])
+    new_derived = add_leaf_extents(new_image, new_extents, new_starts, [p[1] for p in pairs])
+    print(
+        f"leaf extents decoded: {len(old_derived)} in 1.16.2, {len(new_derived)} in 1.17 "
+        "(functions the .pdata table does not declare)"
+    )
 
     rows = []
     for old_va, new_va, how in pairs:
@@ -1388,6 +1555,13 @@ def main():
         # outright. A reader should never have to take either on the verdict's own word.
         if result["verdict"] in (PATCH_SITE_IDENTICAL, IDENTICAL_LEAF_NOPATCH):
             print(f"    patch site: {result['patch_site']}")
+        # A refutation this run DECLINED to make. Printed because withholding one silently would
+        # be the same class of failure the withholding exists to prevent -- see
+        # `refutation_withheld`. It is also the loudest signal available that `leaf_extent` has
+        # gone wrong on a new shape, so it is worth a human's attention rather than a suppressed
+        # verdict.
+        if "refutation_withheld" in result:
+            print(f"    refutation withheld: {result['refutation_withheld']}")
 
     # A row that compared its WHOLE body is accepted on that basis alone; the instruction floor is
     # a stand-in for coverage and exhaustive coverage does not need one. IDENTICAL-LEAF-NOPATCH
@@ -2007,18 +2181,33 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
 
     # EQUAL EXTENTS. One variable: the 1.17 end moves by a byte, so the two decodes no longer
     # agree on the body's length and `whole_body` is false. No monkeypatch -- the extent tables
-    # are this function's own inputs. The answer is DIVERGES rather than a softer refusal because
-    # the extra byte is DECODED: the 1.17 stream gains an instruction the 1.16.2 one has not, and
-    # a length disagreement is not a near miss. That is also the measurement of what a wrong
-    # decoded extent costs, since `build.rs::refuted_sources()` subtracts a DIVERGES row from BOTH
-    # maps -- a leaf whose end is derived one byte long does not merely lose its verdict, it
-    # deletes the address.
+    # are this function's own inputs. The 1.17 stream gains an instruction the 1.16.2 one has not,
+    # so the raw comparison lands on DIVERGES: a length disagreement is not a near miss.
+    #
+    # AND THEN IT IS WITHHELD, which is the half this test now also pins. `build.rs::
+    # refuted_sources()` subtracts a DIVERGES row from BOTH maps, so under the old behaviour a
+    # leaf whose end was decoded one byte long did not merely lose its verdict, it DELETED the
+    # address -- and it deleted it on the strength of a boundary this file inferred. That is
+    # exactly what happened to LOADING_SCREEN_GFX_FADEOUT_RVA when the sweep over-ran a
+    # de-Arxan'd gap. `refutation_withheld` now re-judges such a pair with the decoded extent
+    # withdrawn, so a wrong decode costs a DROPPED row (IDENTICAL-SHORT, accepted nowhere,
+    # subtracted from nowhere) instead of a deleted one. The clause is still load-bearing: the
+    # verdict is still lost.
     skewed_new = dict(leaf_new)
     skewed_new[control_new - BASE] += 1
+    skewed = verdict_of(control_old, control_new, (leaf_old, skewed_new))
     per_clause["extents: both decodes agree on the length"] = check(
         "MUTATION extents: a 1-byte disagreement loses the verdict",
-        verdict_of(control_old, control_new, (leaf_old, skewed_new))["verdict"],
-        "DIVERGES",
+        skewed["verdict"],
+        "IDENTICAL-SHORT",
+    ) + check(
+        "MUTATION extents: ...without deleting the address",
+        skewed["verdict"] == REFUTED,
+        False,
+    ) + check(
+        "MUTATION extents: ...and the withheld refutation is reported",
+        "refutation_withheld" in skewed,
+        True,
     ) + check(
         "MUTATION extents: and the unskewed table still carries it",
         verdict_of(control_old, control_new)["verdict"],
@@ -2386,6 +2575,113 @@ def selftest():
         old_image, new_image, 0x140D4CC50, 0x140D4E990, leaf_old, leaf_new, old_derived, new_derived
     )
     check("byte-equal leaf keeps its LEAF verdict", byte_equal["verdict"], IDENTICAL_LEAF)
+
+    # THE DE-ARXAN'D GAP: a `jmp` followed by DEOBFUSCATOR LEFTOVERS must end the body.
+    #
+    # `leaf_extent` used to end a body at a `jmp` only when the byte after it was `0xCC`/`0x90`
+    # padding or a declared `.pdata` start. Between functions in these images that byte is
+    # routinely neither -- the de-Arxan pass leaves its own residue in the gaps -- so the sweep
+    # walked THROUGH the gap into the next function and compared unrelated code. The bodies below
+    # are 23 bytes; the sweep took 0x45 and 0x25 and reported `DIVERGES` at 0.86 and 0.75.
+    #
+    # WHAT IS PINNED, and why it is not simply "the verdict is right today":
+    #   * THE TERMINATOR'S GROUND TRUTH. The byte after each body is asserted to be neither a pad
+    #     byte nor a declared start, so the OLD rule provably cannot fire here and the clause under
+    #     test is the only thing that can end the body. Without this the test would pass on an
+    #     image where the gaps happened to be padded, which is the shape that hid the bug.
+    #   * THE LENGTH, as a FROZEN LITERAL. 0x17 is 23, which is what Ghidra independently reports
+    #     for these functions in BOTH dumps. It is written here rather than recomputed from
+    #     `leaf_extent`, because a number the code under test produced cannot check that code.
+    #   * THE OLD ANSWER, also frozen. 0x45 and 0x25 are what the previous rule returned, measured
+    #     before it was replaced, and they are used below to drive the fail-closed path.
+    #
+    # Ghidra's sizes are the outside check: 1.16.2 and 1.17 both put these two functions at 23
+    # bytes, and the two images' decodes agree with that and with each other.
+    GAP_LEAVES = (
+        # 1.16.2, 1.17, true extent, what the old padding-only rule returned
+        (0x14090A0A0, 0x14090B240, 0x17, 0x45),  # LOADING_SCREEN_GFX_FADEOUT_RVA
+        (0x14090A0C0, 0x14090B260, 0x17, 0x25),  # KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA
+    )
+    for old_va, new_va, extent, _overrun in GAP_LEAVES:
+        gap_old, gap_new = dict(old_extents), dict(new_extents)
+        derived_old = add_leaf_extents(old_image, gap_old, old_starts, [old_va])
+        derived_new = add_leaf_extents(new_image, gap_new, new_starts, [new_va])
+        for label, image, starts, regions, va, ends in (
+            ("1.16.2", old_image, old_starts, old_regions, old_va, gap_old),
+            ("1.17", new_image, new_starts, new_regions, new_va, gap_new),
+        ):
+            rva = va - BASE
+            # The premise a derived extent rests on: the linker described no function here.
+            check(f"{va:#x} is described by no .pdata region in {label}", inside_pdata(regions, rva), False)
+            end = ends.get(rva)
+            check(f"{va:#x} leaf extent in {label}", None if end is None else end - rva, extent)
+            # THE GROUND TRUTH THAT BROKE THE OLD RULE. Neither test it applied can fire here.
+            check(
+                f"{va:#x} is followed by deobfuscator leftovers, not padding, in {label}",
+                end is not None and image[end] in FUNCTION_PAD_BYTES,
+                False,
+            )
+            check(
+                f"{va:#x} is not followed by a declared .pdata start in {label}",
+                end is not None and end in starts,
+                False,
+            )
+        gap = compare(
+            old_image, new_image, old_va, new_va, gap_old, gap_new, derived_old, derived_new,
+            old_starts, new_starts,
+        )
+        check(f"{old_va:#x} gap-leaf verdict", gap["verdict"], IDENTICAL_LEAF)
+        check(f"{old_va:#x} gap-leaf extents", gap["extents"], f"LEAF:{extent:#x}/{extent:#x}")
+        check(f"{old_va:#x} gap-leaf extents agree on length", gap["extent_delta"], 0)
+        # ...and it is not quietly the fail-closed path dressed as a pass.
+        check(f"{old_va:#x} gap-leaf withheld nothing", "refutation_withheld" in gap, False)
+
+    # THE CONTROL FOR THE SAME LANDMINE, and it is a control for a DIFFERENT reason.
+    # PLAYER_GAME_DATA_NAME_GETTER_RVA was in the same rescued set of three, but its body ends on a
+    # real `0xCC` pad byte, so the OLD rule got it right and the sweep was never the problem there.
+    # It was lost to the OPT-IN alone: no derived extent, no IDENTICAL-LEAF, IDENTICAL-SHORT, gone.
+    # Pinned so the two failure modes stay told apart -- fixing the sweep would not have saved it,
+    # and making derivation unconditional is what does.
+    pad_old, pad_new = 0x14025F8E0, 0x14025F8F0
+    padded_old, padded_new = dict(old_extents), dict(new_extents)
+    pad_derived_old = add_leaf_extents(old_image, padded_old, old_starts, [pad_old])
+    pad_derived_new = add_leaf_extents(new_image, padded_new, new_starts, [pad_new])
+    pad_end = padded_old[pad_old - BASE]
+    check("padded leaf extent", pad_end - (pad_old - BASE), 0xC)
+    check("padded leaf really is followed by padding", old_image[pad_end] in FUNCTION_PAD_BYTES, True)
+    padded = compare(
+        old_image, new_image, pad_old, pad_new, padded_old, padded_new,
+        pad_derived_old, pad_derived_new, old_starts, new_starts,
+    )
+    check("padded leaf verdict", padded["verdict"], IDENTICAL_LEAF)
+    check("padded leaf extents", padded["extents"], "LEAF:0xc/0xc")
+
+    # A DECODED BOUNDARY MAY NOT DELETE AN ADDRESS. `refutation_withheld`, driven with the exact
+    # extents the OLD sweep produced, so the failure being guarded against is reproduced rather
+    # than imagined: 0x45 bytes on both sides of the fadeout pair, which is the 23-byte thunk plus
+    # 9 bytes of gap plus the whole of the NEXT thunk plus 9 more bytes of gap.
+    #
+    # THE SECOND HALF IS THE POINT. The same over-long extents, presented as though `.pdata` had
+    # DECLARED them, must still come back REFUTED -- because then the refutation rests on the
+    # image's own statement about where the function ends, not on this file's guess. If both halves
+    # answered the same way the rule would be doing nothing, and this test would be measuring the
+    # image instead of the code.
+    overrun_old, overrun_new, _extent, overrun = GAP_LEAVES[0]
+    o_rva, n_rva = overrun_old - BASE, overrun_new - BASE
+    bad_old = {o_rva: o_rva + overrun}
+    bad_new = {n_rva: n_rva + overrun}
+    withheld = compare(
+        old_image, new_image, overrun_old, overrun_new, bad_old, bad_new,
+        frozenset((o_rva,)), frozenset((n_rva,)), old_starts, new_starts,
+    )
+    check("an over-run DECODED extent does not refute", withheld["verdict"] == REFUTED, False)
+    check("...it falls back to the undecoded answer", withheld["verdict"], "IDENTICAL-SHORT")
+    check("...and says so out loud", "refutation_withheld" in withheld, True)
+    declared = compare(
+        old_image, new_image, overrun_old, overrun_new, bad_old, bad_new,
+        frozenset(), frozenset(), old_starts, new_starts,
+    )
+    check("the same extents DECLARED by .pdata still refute", declared["verdict"], REFUTED)
 
     # THE THUNK, the boundary artifact rules 1-3 cannot reach (`decode` rule 4).
     # `UPDATE_TROPHY_STATS_RVA` is a 5-byte `jmp` at the SAME address in both images with the SAME

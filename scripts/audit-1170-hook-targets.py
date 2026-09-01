@@ -44,6 +44,7 @@ except ImportError:  # provisioned ephemerally; there is no system pip here
     os.execvp("uv", ["uv", "run", "--with", "capstone", "python3", *sys.argv])
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent  # noqa: E402 - repo-local; see the sys.path line above
 import rva_admission  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -271,18 +272,13 @@ def pdata_entry_starts(blob):
     return pdata_functions(blob)[0]
 
 
-def _inside_declared_function(rva, spans):
-    """The `(begin, end)` of a declared function that STRICTLY contains `rva`, or None."""
-    lo, hi = 0, len(spans)
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if spans[mid][0] <= rva:
-            lo = mid + 1
-        else:
-            hi = mid
-    if lo and spans[lo - 1][0] < rva < spans[lo - 1][1]:
-        return spans[lo - 1]
-    return None
+# The extent rules live in `scripts/function_extent.py` -- ONE implementation for the whole repo,
+# because a second one is the next divergence bug. They were written here and moved out when four
+# more tools needed the same answer; these names stay so this file's own call sites and docstrings
+# keep reading the way the incident reports that produced them do.
+_inside_declared_function = function_extent.inside_declared_function
+declared_functions = function_extent.declared_functions
+verify_rules = function_extent.verify_rules
 
 
 def entry_verdict(hit, pdata_starts=None, va=None, pdata_spans=None):
@@ -483,56 +479,11 @@ def trampoline_walk(blob, va):
     return True, relocated, patched_above, ""
 
 
-_VERIFY = None
-
-
-def verify_rules():
-    """`scripts/verify-rva-map-1170.py`, imported for its FUNCTION EXTENT rules.
-
-    IMPORTED, NOT RE-DERIVED, and the direction is worth stating because that file already
-    imports THIS one for `trampoline_walk` (its `minhook_port`). Both imports are LAZY -- inside
-    a function, on first use -- so neither module executes the other at import time and the cycle
-    never closes. A local copy of `function_regions`/`leaf_extent` would be the third
-    implementation of a rule whose own docstrings record two earlier wrong ones (first-`ret`
-    truncation, and a padding-only tail-`jmp` test that walked straight through the de-Arxan'd
-    images' leftover gap bytes).
-
-    The sibling's name has hyphens in it, so it is loaded by path rather than by `import`.
-    """
-    global _VERIFY
-    if _VERIFY is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify-rva-map-1170.py")
-        spec = importlib.util.spec_from_file_location("_verify_rva_map_1170", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot load {path}, which holds the function-extent rules")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        _VERIFY = module
-    return _VERIFY
-
-
-_REGIONS = {}
-
-
-def declared_functions(blob):
-    """`({begin: end}, {begin}, [(begin, end)])` for `blob`: chunk runs merged, once per image.
-
-    Cached because `patch_safe` asks per ADDRESS while the parse walks the whole `.pdata` table
-    and the sorted span list is 175k entries. `promote()` re-parsing `.pdata` per candidate row is
-    what turned a 409-row run into minutes. The blob itself is kept in the cache value so its `id`
-    cannot be recycled under the key while the entry is alive.
-    """
-    cached = _REGIONS.get(id(blob))
-    if cached is None or cached[0] is not blob:
-        extents, starts = verify_rules().function_regions(blob)
-        cached = (blob, extents, starts, sorted(extents.items()))
-        _REGIONS[id(blob)] = cached
-    return cached[1], cached[2], cached[3]
-
-
 def body_end(blob, va):
     """The RVA one past the last byte of the function at `va`, or None if it cannot be told.
+
+    `scripts/function_extent.body_end`, with this file's own scan cap. Kept as a named local so
+    the reason it exists stays next to the code that needed it.
 
     WITHOUT THIS THE BRANCH SCAN READS THE NEXT FUNCTION, AND NOT EVEN IN PHASE. `patch_safe`
     used to decode a flat `BRANCH_SCAN_BYTES` from the entry, which for a 14-byte leaf is 0x3f2
@@ -551,28 +502,11 @@ def body_end(blob, va):
     instead of `83`, so it desynchronised into a harmless `sub` and that side stayed green. Which
     image a correct row failed on was decided by one leftover byte.
 
-    Three sources, most authoritative first:
-
-      1. `.pdata` declares a function STARTING here -- the linker's own answer, chunk runs merged
-         by `function_regions` so a split function's extent is the whole run and not its first
-         couple of dozen bytes.
-      2. `.pdata` declares one CONTAINING it. Then the row is mid-function and `entry_verdict`
-         already says so; the enclosing extent is still the right bound for reading its bytes.
-      3. Neither: an unwindless leaf, whose end is DECODED by `verify-rva-map-1170.py::leaf_extent`
-         -- the watermark rule that refuses to stop at a `ret` some earlier branch reaches past.
-
     Measured over the 425 rows both detour ledgers admit: 359 declared, 0 enclosed, 66 decoded
     leaves, 0 unknown -- in BOTH images. The None arm is a fallback nothing in the current tables
     takes.
     """
-    extents, starts, spans = declared_functions(blob)
-    rva = va - BASE
-    if rva in extents:
-        return extents[rva]
-    enclosing = _inside_declared_function(rva, spans)
-    if enclosing is not None:
-        return enclosing[1]
-    return verify_rules().leaf_extent(blob, va, starts, limit=BRANCH_SCAN_BYTES)
+    return function_extent.body_end(blob, va, limit=BRANCH_SCAN_BYTES)
 
 
 def patch_safe(blob, va):
@@ -621,105 +555,34 @@ def patch_safe(blob, va):
     return True, f"{relocated}B relocatable"
 
 
-def wider_rows():
-    """Every pair the build knows, from all three sources, as (va_1162, va_1170).
-
-    The 27 byte-verified rows are already detour-safe. These are the rest: the whole-image
-    signature pairs and the code-reference carries, which are known to be the right ADDRESS
-    and not known to be a safe place to write five bytes. Auditing them is how a row earns
-    the second claim.
-    """
-    out, seen = [], set()
-    for name in ("rva-map-1162-to-1170.needed.tsv", "rva-map-1162-to-1170.data.tsv"):
-        path = os.path.join(ROOT, "docs", "recon", name)
-        if not os.path.exists(path):
-            continue
-        for line in open(path, encoding="utf-8"):
-            if line.startswith("#") or not line.strip():
-                continue
-            f = line.split("\t")
-            if len(f) < 2:
-                continue
-            try:
-                a, b = int(f[0], 16), int(f[1], 16)
-            except ValueError:
-                continue
-            a = a if a >= BASE else a + BASE
-            b = b if b >= BASE else b + BASE
-            if a in seen:
-                continue
-            seen.add(a)
-            out.append((a, b))
-    return out
-
-
-def promote(pairs):
-    """Audit `pairs` and write the ones that pass to the tracked detour-safe list."""
-    blob = open(IMAGE_1170, "rb").read()
-    hits = xref_targets(blob, {b for _a, b in pairs})
-    # BOTH halves of the .pdata answer, and hoisted out of the loop.
-    #
-    # Passing only `starts` is what made this file call 85 UNWINDLESS LEAVES "mid-function
-    # (nothing references it and .pdata declares no entry)" -- the exact conflation
-    # `entry_verdict`'s own docstring warns about, and the reason its third argument exists.
-    # A leaf has no entry AND no enclosing function; a mid-function landing has no entry and IS
-    # inside one, and only the second is fatal. `audit()` has always passed both; `promote()`
-    # did not, so the artefact it writes disagreed with the gate that reads the same function.
-    # (It also re-parsed the whole `.pdata` table once per candidate row, which is why a 409-row
-    # run took minutes.)
-    starts, spans = pdata_functions(blob)
-    passed, failed = [], []
-    previous = None
-    for a, b in sorted(pairs, key=lambda p: p[1]):
-        entry_ok, entry_why = entry_verdict(hits[b], starts, b, spans)
-        patch_ok, patch_why = patch_safe(blob, b)
-        overlap = previous is not None and b - previous < OVERLAP_BYTES
-        previous = b
-        if entry_ok and patch_ok and not overlap:
-            passed.append((a, b, entry_why, patch_why))
-        else:
-            reason = []
-            if not entry_ok:
-                reason.append(f"mid-function ({entry_why})")
-            if not patch_ok:
-                reason.append(f"patch-unsafe ({patch_why})")
-            if overlap:
-                reason.append("overlaps the previous target")
-            failed.append((a, b, "; ".join(reason)))
-    head = [
-        "# 1.16.2 VA\t1.17 VA\tentry evidence\tprologue",
-        "# Generated by scripts/audit-1170-hook-targets.py --promote.",
-        "#",
-        "# Rows from the signature and code-reference maps that ALSO pass the detour checks:",
-        "# the 1.17 destination is a real function ENTRY -- by the image's own forward references,",
-        "# by .pdata declaring a function start there, or by .pdata declaring no function that",
-        "# CONTAINS it (an unwindless leaf) -- and its first five bytes relocate. Those two facts",
-        "# are what a MinHook detour needs and what a signature match does not supply.",
-        "#",
-        "# THIS FILE IS NOT WIRED INTO THE BUILD, and must not be. er-game-base/build.rs reads it",
-        "# as AUDITED_DETOURS and then writes `let _ = AUDITED_DETOURS;`, because entry-and-prologue",
-        "# is not SEMANTIC identity: HUD_WEAPON_SLOT_UPDATE (0x8d2110) passes every check here and",
-        "# is paired with a 1.17 function sharing 18% of its instruction shape. Feeding these rows",
-        "# to the detour table put the 2026-08-29 crash straight back. The detour licence comes from",
-        "# the byte comparison in rva-map-1162-to-1170.needed-verified.tsv; this is a reading aid",
-        "# for the rows that remain refused.",
-        "#",
-        "# It also audits addresses carried from rva-map-1162-to-1170.data.tsv, which are GLOBALS.",
-        "# A detour verdict on a global is meaningless -- nothing hooks a datum -- so read a row",
-        "# here as `the entry/prologue checks say this much`, never as `this may carry a hook`.",
-        "#",
-        "# This exists because allowing un-audited rows to carry detours cost a boot: on",
-        "# 2026-08-29 er-armament-icons installed five of them and the game died at the first",
-        "# overlay draw, having lived when the same hooks were refused as unmapped.",
-    ]
-    body = [f"0x{a:x}\t0x{b:x}\t{ew}\t{pw}" for a, b, ew, pw in passed]
-    tail = ["#", "# NOT promoted:"] + [f"# 0x{a:x} -> 0x{b:x}\t{why}" for a, b, why in failed]
-    out = os.path.join(ROOT, "docs", "recon", "rva-1170-detour-audited.tsv")
-    with open(out, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(head + body + tail) + "\n")
-    print(f"audited {len(pairs)} candidate(s): {len(passed)} promoted, {len(failed)} withheld")
-    print(f"wrote {os.path.relpath(out, ROOT)}")
-    return 0
+# `--promote` AND ITS TWO HELPERS WERE DELETED ON 2026-08-31, WITH THE FILE THEY WROTE.
+#
+# `wider_rows()` fed this audit `docs/recon/rva-map-1162-to-1170.needed.tsv` AND
+# `docs/recon/rva-map-1162-to-1170.data.tsv` -- the GLOBALS table -- and `promote()` wrote the
+# survivors to `docs/recon/rva-1170-detour-audited.tsv` with prologue verdicts like `6B
+# relocatable` beside them. That was not a caveat about the output; it was a category error in
+# the input, and it produced the most extreme instance of the decode-past-the-end class this
+# repo has found:
+#
+#   * Of the 85 rows promoted on the UNWINDLESS-LEAF clause, all 85 named NON-EXECUTABLE memory.
+#     The clause could never have fired on a real leaf and could never have missed a global,
+#     because `.pdata` declares no enclosing function for a `.data` address for exactly the same
+#     reason it declares none for an unwindless leaf. Handed the globals table, `entry_verdict`
+#     reads every global as a leaf, by construction.
+#   * 87 of the 444 rows named non-executable destinations (`.data` 61, `.rdata` 26).
+#   * The four "leaf functions" it would have newly promoted are 24 bytes of `00` in both images
+#     -- the `.data` virtual tail past its raw size. `00 00` decodes as `add byte ptr [rax], al`;
+#     three of those is the `6B`.
+#   * The single `loopne` refusal was right by accident: `0x142aa5a35`'s `0xe0` is the low byte
+#     of a stored pointer (`0x140745be0`) in an `.rdata` vtable. Its NEIGHBOUR in the same table
+#     stores `0x140735100`, low byte `0x00`, and was promoted. Adjacent slots of one vtable,
+#     opposite detour verdicts, decided by the low byte of the address stored there.
+#
+# The lesson is now enforcement in two places rather than prose here: `function_extent.body_end`
+# refuses a VA outside an executable section before it will resolve any extent, and
+# `scripts/check-ledger-section-kind.py` holds every ledger to the section kind its consumer
+# assumes. The tombstone rule (R3) that guarded against `--promote` regenerating the file was
+# deleted with this command, because a rule guarding against nothing is worse than no rule.
 
 
 def audit(image_path, pairs, column, label):
@@ -1048,11 +911,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument(
-        "--promote",
-        action="store_true",
-        help="audit the signature/reference-mapped rows and record those safe to detour",
-    )
-    parser.add_argument(
         "--calibrate",
         action="store_true",
         help="run the same checks on the 1.16.2 source addresses, which are known-good",
@@ -1060,8 +918,6 @@ def main():
     args = parser.parse_args()
     if args.selftest:
         return selftest()
-    if args.promote:
-        return promote(wider_rows())
     if args.calibrate:
         return 1 if audit(IMAGE_1162, rows(), 0, "1.16.2") else 0
     return 1 if audit(IMAGE_1170, rows(), 1, "1.17") else 0

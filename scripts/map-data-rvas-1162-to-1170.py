@@ -47,6 +47,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import function_extent  # noqa: E402  (needs the sys.path line above)
 # THE ONE PLACE IN THIS FILE THAT DELETES.
 #
 # `refresh()` rewrites the data map WHOLESALE. A row it does not reproduce is either a STRAY, which
@@ -335,7 +337,14 @@ def call_index(md, image: Image, func: int, rel_at: int, target: int) -> int | N
 
 def call_target_of(md, image: Image, func: int, index: int) -> int | None:
     """Where instruction `index` of `func` branches to, as an RVA."""
-    window = image.data[func : func + 0x800]
+    # `index` was counted in the OTHER image. A 1.17 function shorter than its 1.16.2
+    # counterpart supplies that index out of its NEIGHBOUR, and this returns a branch target
+    # that was never assembled. Bound by the extent and refuse when it runs out, rather than
+    # decoding a byte budget into whatever follows. Found by check-decode-extent-bounds.py.
+    end = function_extent.body_slice_end(image.data, BASE + func, 0x800)
+    if end is None:
+        return None
+    window = image.data[func:end]
     for n, insn in enumerate(md.disasm(window, BASE + func)):
         if n == index:
             if insn.mnemonic not in ("call", "jmp"):
@@ -455,13 +464,20 @@ def displacement_of(md, image: Image, func: int, index: int, at_offset: int | No
     # end is harmless because only an instruction that STARTS exactly at `at_offset` is consumed.
     limit = max(0x400, (at_offset + 0x20) if at_offset is not None else 0)
     window = image.data[func : func + limit]
+    # The sentence above is true of the `at_offset` arm ONLY: that arm consumes an instruction
+    # that STARTS exactly at a known offset, so a wide window cannot invent one. The `n == index`
+    # fallback below CAN match an instruction past the function end, where the decoder has
+    # resynchronised on padding. Bound that arm by the extent; refuse it when the extent is
+    # unknown rather than falling back to the byte budget. Found by check-decode-extent-bounds.py.
+    body_end = function_extent.body_slice_end(image.data, BASE + func)
     by_index = None
     for n, insn in enumerate(md.disasm(window, BASE + func)):
         pos = insn.address - BASE - func
         if at_offset is not None and pos == at_offset and insn.disp_size == 4:
             return insn.address - BASE + insn.size + insn.disp
         if n == index and insn.disp_size == 4:
-            by_index = insn.address - BASE + insn.size + insn.disp
+            if body_end is not None and (func + pos) < body_end:
+                by_index = insn.address - BASE + insn.size + insn.disp
     return by_index
 
 
