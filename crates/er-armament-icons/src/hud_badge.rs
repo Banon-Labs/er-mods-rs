@@ -74,8 +74,12 @@
 //! GetWeaponGaitemHandleBySlot    -> gaitem handle for a ChrAsmSlot
 //! GetGaitemInsByHandle           -> GaitemLookupResult
 //! GetSwordArtsParamForWeapon     -> SwordArtsParamLookupResult   (via the real equipped GEM)
-//! row + 0x1A                     -> SwordArtsParam.iconId
+//! resolve_gem_icon_id(paramId)   -> EquipParamGem.iconId, or no badge
 //! ```
+//!
+//! `SwordArtsParam.iconId` (row + 0x1A) is NOT part of this chain: it is a different icon
+//! family (21xxx bare skill glyphs) from the item atlas the badge draws into, and is never
+//! substituted for a missing gem icon. See the resolver below.
 //!
 //! `GetSwordArtsParamIdForWeapon` resolves through `GetGemGaitemHandleFromWeapon` ->
 //! `GetGaitemInsGem`, i.e. the ACTUAL equipped gem, so unlike the menu path's `arts_id * 100`
@@ -130,9 +134,6 @@ const HUD_WEAPON_SLOT_UPDATE_RVA: usize = 0x8d2110;
 /// the update hook -- `Arts`, the four `ItemPanel2` items -- fails both tests and never draws.
 const HUD_SLOT_LEFT_WEP_OFFSET: usize = 0x2040;
 const HUD_SLOT_RIGHT_WEP_OFFSET: usize = 0x2848;
-
-/// `SwordArtsParam.iconId`.
-const SWORD_ARTS_PARAM_ICON_ID_OFFSET: usize = 0x1a;
 
 /// The nested badge path. The binder force-hides a child literally named `ArtsIcon`, so the
 /// injected clip lives one level down inside the classless `ItemIcon` container -- out of reach
@@ -438,11 +439,12 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
         return Some(gem_icon);
     }
 
-    // Fallback for ashes with no icon-bearing gem row. Kept because it is the game's own HUD
-    // skill-icon source (`UpdatePlayerComponents` reads this exact offset), so where it is
-    // non-zero it is authoritative.
-    let icon = unsafe { *((result.row + SWORD_ARTS_PARAM_ICON_ID_OFFSET) as *const u16) } as u32;
-    (icon != 0).then_some(icon)
+    // No fallback. `SwordArtsParam.iconId` is a DIFFERENT icon family (21xxx bare skill
+    // glyphs) from the item atlas `ICON_INFO_BUILDER_RVA`/`ICON_SETTER_RVA` draw into -- same
+    // rule the menu badge already follows (`lib.rs:736-740`). 95 of 277 `SwordArtsParam` rows
+    // have no icon-bearing gem, and none of the 95 has a recoverable item icon, so "no badge"
+    // is the correct output for them, not someone else's glyph.
+    None
 }
 
 /// Bind our badge child under `parent_clip` and remember it for `component`.
@@ -672,7 +674,11 @@ unsafe extern "system" fn hud_weapon_update_hook(
         return ret;
     };
 
-    match unsafe { arts_icon_for_slot(base, slot) } {
+    // Carried out of the match for the heartbeat below: `SAMPLE_LOGS` (24) burns out early in a
+    // run, so the per-draw log at `d <= SAMPLE_LOGS` can miss the one weapon that exercises the
+    // no-gem-icon path entirely. The heartbeat is unconditional, so mirroring this call's
+    // outcome into it is the one place that cannot exhaust.
+    let this_icon_id = match unsafe { arts_icon_for_slot(base, slot) } {
         Some(icon_id) => {
             let build_icon_info: IconInfoBuilderFn = unsafe {
                 std::mem::transmute(
@@ -700,6 +706,7 @@ unsafe extern "system" fn hud_weapon_update_hook(
                     "hud-badge: draw #{d} slot={slot} icon_id={icon_id} component=0x{component:x}"
                 ));
             }
+            Some(icon_id)
         }
         None => {
             // Hide on EVERY non-draw path. The badge clip is part of the movie and the HUD slot
@@ -707,13 +714,14 @@ unsafe extern "system" fn hud_weapon_update_hook(
             // empty rows kept a stale plate in the menus (run 20260727-233703).
             unsafe { set_visible(storage.as_mut_ptr(), false) };
             HUD_HIDDEN.fetch_add(1, Ordering::SeqCst);
+            None
         }
-    }
+    };
 
     if n.is_multiple_of(512) {
         log_message(format_args!(
             "hud-badge heartbeat: ctors={} bound={} updates={} drawn={} hidden={} \
-             no_proxy={} other_slot={}",
+             no_proxy={} other_slot={} slot={slot} icon_id={this_icon_id:?}",
             CTOR_FIRES.load(Ordering::SeqCst),
             BINDER_BOUND.load(Ordering::SeqCst),
             UPDATE_FIRES.load(Ordering::SeqCst),
