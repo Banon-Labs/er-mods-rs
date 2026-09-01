@@ -86,6 +86,20 @@ const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
 /// Ghidra's 1.16.2 `GameMan` type agrees independently: `FD4FilePathBase` at `0xdd0`, spanning to
 /// `0xe08`. The whole GameMan constructor aligns 1296/1296 against 1.17 with zero moved offsets,
 /// and the `lea` that anchors this region is at the same `0xdd0` in both images.
+///
+/// WHAT READS IT, in the decompiler's own words -- a third witness, independent of both the type
+/// and the constructor, and the reason this is logged in DECIMAL. Both save gates spell the test
+/// as a string length, not as a handle:
+///
+/// ```text
+///   FUN_140679180: if ((GLOBAL_GameMan->field479_0xdd0).string.length != 0) { saveState = 3; return 0; }
+///   FUN_14067b100: if (saveState != 3) return 0;
+///                  if ((GLOBAL_GameMan->field479_0xdd0).string.length != 0) { saveState = 0; return 1; }
+/// ```
+///
+/// So the gate is "a file path is set", and the value it compares against is `0`. That is why
+/// this read must stay an `Option` rather than `unwrap_or(0)`: a failed read rendered as `0` is
+/// indistinguishable from an empty path, i.e. from the gate being open.
 const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
 // LOAD-SUBMIT gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
 // combined_load_67b940 -> submit 0x14067dc00 bails (0x14067e12f) unless these GameMan[0x143d69918]
@@ -452,7 +466,10 @@ fn snapshot() -> String {
     let b80 = unsafe { read_i32(gm + GAME_MAN_LOAD_PHASE_B80_OFFSET) };
     let ac0 = unsafe { read_i32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET) };
     let c30 = unsafe { read_i32(gm + GAME_MAN_CURRENT_MAP_C30_OFFSET) };
-    let df0 = unsafe { read_usize(gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) }.unwrap_or(0);
+    // A COUNT OF CHARACTERS, kept as `Option` and printed in decimal. `.unwrap_or(0)` was wrong
+    // twice over: 0 is the value the two gates below TEST FOR, so an unreadable read printed as
+    // "the path is empty" -- the reading that makes both gates look open.
+    let path_len = unsafe { read_usize(gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) };
     let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
 
     // Load-submit gate fields (see the *_SUBMIT_GATE_* consts): diff load1 vs load2 to find the gate
@@ -475,11 +492,12 @@ fn snapshot() -> String {
     .unwrap_or(0);
 
     format!(
-        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry={} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
+        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} path_len_df0={} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry={} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
         fmt_i32(b78),
         fmt_i32(b80),
         fmt_i32(ac0),
         fmt_c30(c30),
+        fmt_len(path_len),
         fmt_mounted(mounted),
         fmt_u8(g_cb1),
         fmt_u8(g_cb2),
@@ -497,6 +515,18 @@ fn fmt_c30(value: Option<i32>) -> String {
 }
 
 fn fmt_u8(value: Option<u8>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
+}
+
+/// A `DLString` LENGTH, printed in decimal so no reader chases it as an address.
+///
+/// It was `df0=0x{:x}` for this line's whole life, under a constant named
+/// `GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET`, so the log said "pointer" in both the key and the
+/// formatting. A hex-rendered small integer beside `gm=0x...` and `pgd=0x...` is a number that
+/// looks like an address and is not one, and this repo has already lost runs to exactly that:
+/// an oracle reported `-95247096` -- the low half of a live `DLAllocator*` -- as a state enum
+/// for an unknown number of runs, because a wrong-but-readable value faults nothing.
+fn fmt_len(value: Option<usize>) -> String {
     value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
 }
 
