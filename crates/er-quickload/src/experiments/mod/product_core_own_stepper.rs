@@ -513,7 +513,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         }
     };
     let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
-    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let b80 = read_gm(GAME_MAN_SAVE_STATE_B80_OFFSET);
     let pass_through = |force_log: bool| {
         if force_log || n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
             append_autoload_debug(format_args!(

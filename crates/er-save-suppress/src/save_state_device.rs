@@ -92,6 +92,15 @@ fn save_state_ptr() -> Option<*mut u32> {
     /// (1.16.2 0x140675ea0, 1.17 0x140676cf0) aligns 1296/1296 instructions with 142 field
     /// offsets and zero moved, and writes `mov %r14d,0xb80(%rsi)` at 0x14067616f (1.17
     /// 0x140676fbf). Frozen in `scripts/check-object-field-offsets-1170.py`.
+    ///
+    /// A THIRD witness settles the NAME, which three other crates had backwards until 2026-08-31
+    /// (`LOAD_IN_PROGRESS` / `LOAD_PHASE` / `LOAD_FSM`): the game spells it itself, in
+    /// `IsSaveState1` (0x14067a010) and `IsSaveState2` (0x140679ff0), each a leaf that loads the
+    /// GameMan singleton and does `cmp dword ptr [rax+0xb80],N`. That matters HERE more than
+    /// anywhere else in the tree -- the wedge diagnosis this file exists for turns on the SAVE
+    /// lane owning this one slot, and a field named after the load lane makes the ownership story
+    /// re-derive backwards. A complete scan of all 37 accesses across the 288 GameMan-referencing
+    /// functions confirms both lanes stamp it: save/preview 1, load 2, resident 3.
     const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 
     let base = er_game_base::mem::game_module_base().ok()?;

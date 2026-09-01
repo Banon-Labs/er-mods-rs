@@ -282,8 +282,8 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
     if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
-    let load_in_progress =
-        unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+    let save_state =
+        unsafe { *((game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) as *const u8) };
     if NATIVE_AUTOLOAD_ARMED.load(Ordering::SeqCst) {
         // Observe the load cascade after arming.
         if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
@@ -305,14 +305,14 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
                 )) as *const usize)
             };
             append_autoload_debug(format_args!(
-                "native_autoload: observe slot={slot_now} b80={load_in_progress} load14={load14} latch={latch} b72={b72} csfeman=0x{csfeman:x} tick={tick}"
+                "native_autoload: observe slot={slot_now} b80={save_state} load14={load14} latch={latch} b72={b72} csfeman=0x{csfeman:x} tick={tick}"
             ));
         }
         return;
     }
-    if load_in_progress != TITLE_NATIVE_JOB_TASK_DATA_ZERO {
+    if save_state != TITLE_NATIVE_JOB_TASK_DATA_ZERO {
         append_autoload_debug(format_args!(
-            "native_autoload: load already in progress (b80={load_in_progress}) before arm; skipping tick={tick}"
+            "native_autoload: SL device busy (saveState b80={save_state}) before arm; skipping tick={tick}"
         ));
         return;
     }
@@ -349,7 +349,7 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
         )) as *const usize)
     };
     append_autoload_debug(format_args!(
-        "native_autoload: armed slot={slot_after} b72=1 latch_left={latch_before} b80={load_in_progress} csfeman=0x{csfeman:x} tick={tick}"
+        "native_autoload: armed slot={slot_after} b72=1 latch_left={latch_before} b80={save_state} csfeman=0x{csfeman:x} tick={tick}"
     ));
 }
 pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u64) {

@@ -613,7 +613,12 @@ WITNESSES = (
         0xB80,
         GAME_MAN_CTOR,
         "GameMan constructor, 1296/1296 aligned with 142 offsets and zero moved; the store is "
-        "`mov %r14d,0xb80(%rsi)` at 0x14067616f (1.17 0x140676fbf)",
+        "`mov %r14d,0xb80(%rsi)` at 0x14067616f (1.17 0x140676fbf). Second, independent witness "
+        "for the NAME (2026-08-31): `IsSaveState1` (0x14067a010) and `IsSaveState2` "
+        "(0x140679ff0) are two-instruction leaves that `cmp dword ptr [rax+0xb80],N` off the "
+        "GameMan singleton, so the field's spelling is in the image. Three constants called this "
+        "LOAD_IN_PROGRESS / LOAD_PHASE / LOAD_FSM until then; a complete scan of the 37 accesses "
+        "shows the SAVE lane stamps 1 and the LOAD lane stamps 2, so it is neither lane's flag",
     ),
     (
         "GameMan",
@@ -719,20 +724,47 @@ WITNESSES = (
     ),
     (
         "GameMan",
-        "0xbc8 again, as the dword covering GAME_MAN_SUBMIT_GATE_BCA_OFFSET (0xbca)",
+        "eventWorldType (0xbca), covered by the dword store at 0xbc8",
         0xBC8,
         0xBC8,
         GAME_MAN_CTOR,
         "`movl $1,0xbc8(%rsi)` at 0x14067621a (1.17 0x14067706a) spans 0xbc8..0xbcc, so it covers "
-        "0xbca as well as the two bools the row above separates",
+        "0xbca as well as the two bools the row above separates. The ctor cannot NAME it, and the "
+        "constant was GAME_MAN_SUBMIT_GATE_BCA_OFFSET until 2026-08-31 -- named after one "
+        "consumer, the submit path 0x14067dc00. The separators are its own accessors: "
+        "`EventWorldType` (0x140679820) = `movzx eax,0xbca(%rax)` and `SetWorldEventType` "
+        "(0x14067aeb0) = `mov %cl,0xbca(%rax)`, both byte-width off the GameMan singleton; "
+        "`IsMyWorld` (0x140679f90) tests it against 0. fromsoftware-rs types it `EventWorldType`",
     ),
     (
         "GameMan",
-        "current_map (GAME_MAN_CURRENT_MAP_C30_OFFSET)",
+        "loadingScreenTextState (0xbf5), covered by the word store at 0xbf4",
+        0xBF4,
+        0xBF4,
+        GAME_MAN_CTOR,
+        "`mov $0x100,0xbf4(%rsi)` at 0x140676242 (1.17 0x140677092) is a TWO-byte store, so it "
+        "covers 0xbf5 and nothing wider does -- little-endian, it initialises disableMapEnterAnim "
+        "(0xbf4) to 0 and loadingScreenTextState (0xbf5) to 1. Added 2026-08-31 with the rename "
+        "of GAME_MAN_LOADING_MODE_BF5_OFFSET, whose name claimed the field was the loading MODE. "
+        "The setter `FUN_14067a860` is a one-line `GameMan->loadingScreenTextState = arg`; the "
+        "reader `FUN_14067a320` normalises mode 2 to 0 when it is false before writing "
+        "CSMenuMan->loadingScreenData+0x8",
+    ),
+    (
+        "GameMan",
+        "stayInMultipleAreaBlockId (GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET, "
+        "GAME_MAN_SAVED_MAP_C30_OFFSET)",
         0xC30,
         0xC30,
         GAME_MAN_CTOR,
-        "`movl $-1,0xc30(%rsi)` at 0x14067628d (1.17 0x1406770dd)",
+        "`movl $-1,0xc30(%rsi)` at 0x14067628d (1.17 0x1406770dd) -- a BlockId initialised to the "
+        "no-map sentinel. The 2026-08-31 audit renamed the er-reload-trace constant off "
+        "\"current_map\": the map-move target is moveMapStepBlockId at +0x14, which "
+        "`SetMoveMapStepBlockId` (0x14067abd0) writes FROM this field via the getter "
+        "`FUN_140679560`. Four writers: the slot deserializer `FUN_14067bd70` (slot body+0x04, "
+        "the read `er_save_loader::bnd4::slot_saved_map` performs), the serializer "
+        "`FUN_14067dc00`, and the stay-in-multiplay update/reset pair `FUN_14067afa0` / "
+        "`FUN_14067aac0`",
     ),
     (
         "GameMan",
@@ -1224,15 +1256,18 @@ PINNED_CONSTANTS = (
     ("GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0xB73, "CS::GameMan"),
     ("GAME_MAN_REQUESTED_SLOT_B78_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB78, "CS::GameMan"),
     ("GAME_MAN_ENDING_FLAG_B7D_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0xB7D, "CS::GameMan"),
-    ("GAME_MAN_LOAD_PHASE_B80_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB80, "CS::GameMan"),
-    ("GAME_MAN_LOAD_FSM_B80_OFFSET", "crates/er-input-harness/src/game_mem.rs", 0xB80, "CS::GameMan"),
+    ("GAME_MAN_SAVE_STATE_B80_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB80, "CS::GameMan"),
+    ("GAME_MAN_SAVE_STATE_B80_OFFSET", "crates/er-input-harness/src/game_mem.rs", 0xB80, "CS::GameMan"),
     ("GAME_MAN_DLDATETIME_B98_OFFSET", "crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs", 0xB98, "CS::GameMan"),
     ("GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET", "crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs", 0xBA0, "CS::GameMan"),
     ("GAME_MAN_QUIT_PHASE_OFFSET", "crates/er-save-suppress/build.rs", 0xBC4, "CS::GameMan"),
     ("GAME_MAN_QUIT_PHASE_BC4_OFFSET", "crates/er-save-suppress/src/lib.rs", 0xBC4, "CS::GameMan"),
     ("GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET", "crates/er-title-flow/src/constants_return_title.rs", 0xBC9, "CS::GameMan"),
-    ("GAME_MAN_SUBMIT_GATE_BCA_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xBCA, "CS::GameMan"),
-    ("GAME_MAN_CURRENT_MAP_C30_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xC30, "CS::GameMan"),
+    ("GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xBCA, "CS::GameMan"),
+    # Pinned 2026-08-31 with the rename off GAME_MAN_LOADING_MODE_BF5_OFFSET: the ctor's
+    # two-byte `mov $0x100,0xbf4(%rsi)` is the covering witness row above.
+    ("GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0xBF5, "CS::GameMan"),
+    ("GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xC30, "CS::GameMan"),
     ("GAME_MAN_SUBMIT_GATE_CB1_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xCB1, "CS::GameMan"),
     ("GAME_MAN_SUBMIT_GATE_CB2_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xCB2, "CS::GameMan"),
     ("GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xDF0, "CS::GameMan"),

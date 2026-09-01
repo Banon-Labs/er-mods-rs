@@ -1517,7 +1517,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .and_then(|m| unsafe { safe_read_u8(m + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) })
             .map(|b| b as i32)
             .unwrap_or(-1);
-        let gm_bf5 = unsafe { safe_read_u8(gm + GAME_MAN_LOADING_MODE_BF5_OFFSET) }
+        let gm_bf5 = unsafe { safe_read_u8(gm + GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
         let delay_delete = unsafe {
@@ -1671,7 +1671,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             },
             Ordering::SeqCst,
         );
-        // b80 (load_in_progress) IS GameMan.save_state. Publish for the loading bar, and DRAIN the
+        // b80 IS `GameMan::saveState`. Publish for the loading bar, and DRAIN the
         // FD4-IO reload's stuck residency: the reload SUBMIT/DRAIN leaves b80=3 (the resident IO buffer
         // is never consumed by the feed), and the finalize case-7 gate (FUN_14067a170 == saveState==0)
         // waits on it forever. Force b80->0 ONLY at the exact stuck signature -- AUTOLOAD_HANDOFF,
@@ -1679,7 +1679,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // genuinely resident+live) -- so a healthy load (b80 already draining) is never touched.
         // Marker-gated (er-quickload-reload-drainb80.txt) for A/B against the stuck baseline.
         let b80_now = if gm != null {
-            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1)
         } else {
             -1
         };
@@ -1772,7 +1772,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         {
             if b80_now == FULLREAD_B80_RESIDENT {
                 unsafe {
-                    *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32) =
+                    *((gm + GAME_MAN_SAVE_STATE_B80_OFFSET) as *mut i32) =
                         GAME_MAN_SAVE_STATE_IDLE;
                 }
             }

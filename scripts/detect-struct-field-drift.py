@@ -2482,7 +2482,7 @@ def selftest(args) -> int:
     if not ok:
         failures.append("inventory parse")
     spot = {
-        "GAME_MAN_CURRENT_MAP_C30_OFFSET": True,
+        "GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET": True,
         "CONTEXT_RIP_OFFSET": False,
         "SAVE_PGD_LEVEL_OFFSET": False,
         "PEB_LDR_OFFSET": False,

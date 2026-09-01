@@ -1052,7 +1052,7 @@ pub(crate) unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     .unwrap_or(NULL);
     let (save_state, bc4) = if gm >= HEAP_LO {
         (
-            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1),
             unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
                 .unwrap_or(-1),
         )
@@ -2037,8 +2037,8 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     {
         let gm = game_man_ptr_or_null();
         if gm != 0 && gm != TITLE_OWNER_SCAN_START_ADDRESS {
-            let ss_ptr = (gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32;
-            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }
+            let ss_ptr = (gm + GAME_MAN_SAVE_STATE_B80_OFFSET) as *mut i32;
+            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }
                 && (ss == GAME_MAN_SAVE_STATE_READING || ss == FULLREAD_B80_RESIDENT)
             {
                 unsafe { *ss_ptr = GAME_MAN_SAVE_STATE_IDLE };

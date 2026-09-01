@@ -593,7 +593,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     let gm = game_man_ptr_or_null();
     let (b80, bc4) = if gm >= HEAP_LO {
         (
-            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1),
             unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
                 .unwrap_or(-1),
         )

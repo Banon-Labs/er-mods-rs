@@ -217,7 +217,7 @@ pub(crate) fn game_man_ptr_or_null() -> usize {
     GameMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }
 pub(crate) use er_title_flow::FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET;
-pub(crate) use er_title_flow::GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_SAVE_STATE_B80_OFFSET;
 /// Read-only autoload-arm precondition probe. The native save-mgr update
 /// 0x14067f5d0 arms autoload (sets GameMan+0xb72=1 -> load) only when its gates
 /// pass; the one runtime unknown is whether the slot-record container

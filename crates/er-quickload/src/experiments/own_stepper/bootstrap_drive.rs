@@ -460,7 +460,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let qd10_after = unsafe { safe_read_usize(q10_after) }.unwrap_or(null);
         append_autoload_debug(format_args!(
             "cold-char-mount: FULL-INIT slot={want_slot} b78={b78} worker=0x{worker:x} submit_ret={sret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} | q8 0x{q8_before:x}->0x{q8_after:x} [q8] 0x{qd8_before:x}->0x{qd8_after:x} q10 0x{q10_before:x}->0x{q10_after:x} [q10] 0x{qd10_before:x}->0x{qd10_after:x} (any change=ENQUEUED; none=DISCARDED) -> POLL",
-            read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+            read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET)
         ));
         // (2.4) SAVE-DIR READ-ONLY VERIFY (bd b80-cold-EXACT-dir-field-slot3-0x142410c60). The worker
         // (SLLoadSession::_Func02 0x142410cd0) -> name-builder FUN_14240d5b0 -> slot-3 0x142410c60
@@ -688,7 +688,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         };
         let path_len =
             unsafe { *((gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) as *const usize) };
-        let b80_at_init = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80_at_init = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         append_autoload_debug(format_args!(
             "cold-char-mount: OWNER-FSM owner=0x{owner_fsm:x} o18=0x{io18:x} o20=0x{io20:x} container=[o20]=0x{container:x} h10=[o20+0x10]=0x{h10:x} h10_deep=[h10+0x10]=0x{h10_deep:x} fsm_index=0x{fsm_index:x} path_len[gm+0xdf0]={path_len} b80={b80_at_init} (idx 0x14=idle->b80=3; 0x19=container-null; path_len!=0=save path set=warm fast-path)"
         ));
@@ -713,7 +713,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             )
         };
         let _ = unsafe { lane() };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
         if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
             let (io10, io18, io20) = iodev_summary();
@@ -737,7 +737,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             let (io10, io18, io20) = iodev_summary();
             append_autoload_debug(format_args!(
                 "cold-char-mount: preview read RESIDENT (b80->0 after {w} lane ticks) -> LoadSaveData 0x67b200 ret={lret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> POLL",
-                read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+                read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET)
             ));
             MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
             MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);
@@ -780,7 +780,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             )
         };
         let _ = unsafe { poll(POLL_ARG, POLL_ARG) };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
         // WARM WORKER-KICK (bd b80-WARM-kick-0x14067b4e0-worker-0x140e6ec80). The cold submit
         // 0x67b1a0 only request_transitions state 0xa, so the owner-FSM node parks at idx 0x16 (an

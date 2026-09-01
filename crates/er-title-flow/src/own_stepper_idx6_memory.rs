@@ -32,7 +32,7 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
             TITLE_STATE_OWNER_GONE
         }
     };
-    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let b80 = read_gm(GAME_MAN_SAVE_STATE_B80_OFFSET);
     let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
     let n = OWN_STEPPER_IDX6_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
     let pass6 = || {

@@ -61,9 +61,20 @@ const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
 )]
 const GAME_MAN_FIELD_B73_OFFSET: usize = 0xb73;
 const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
-const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
+/// `CS::GameMan::saveState` -- the one-slot arbiter over the SL device, stamped by BOTH the save
+/// lane (1) and the load lane (2), not a "load phase". Renamed 2026-08-31 from
+/// `GAME_MAN_LOAD_PHASE_B80_OFFSET`; the witnesses and the full value table are on the
+/// declaration in `er_title_flow::GAME_MAN_SAVE_STATE_B80_OFFSET`.
+const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
-const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
+/// `CS::GameMan::stayInMultipleAreaBlockId` -- NOT "the current map", which is what this constant
+/// claimed until 2026-08-31. The map-move target is `moveMapStepBlockId` at **+0x14**, and
+/// `SetMoveMapStepBlockId` (`0x14067abd0`) writes it FROM this field via the getter
+/// `FUN_140679560`. So +0xc30 is the source of the next map move: seeded from slot body+0x04 by
+/// the deserializer `FUN_14067bd70` on load, and maintained by the stay-in-multiplay path
+/// (`FUN_14067afa0`, `FUN_14067aac0`) during play. See
+/// `er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET` for the complete access set.
+const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// `GameMan + 0xdf0` -- the LENGTH of the `DLString<wchar_t>` inside the `FD4FilePathBase` that
 /// starts at `GameMan + 0xdd0`. It is NOT a "resident device" pointer; the old name was invented
 /// from the value's shape and nothing ever measured it.
@@ -108,7 +119,16 @@ const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
 // forcing state. cb1/cb2/bca/b5e are byte flags; the global at rva 0x3d68078 must be non-null.
 const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
 const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
-const GAME_MAN_SUBMIT_GATE_BCA_OFFSET: usize = 0xbca;
+/// `CS::GameMan::eventWorldType`, a byte. Renamed 2026-08-31 from
+/// `GAME_MAN_SUBMIT_GATE_BCA_OFFSET`: the submit path DOES read it (`FUN_14067dc00` branches on
+/// `GLOBAL_GameMan->eventWorldType != 0`), but naming a field after one consumer buried the fact
+/// that it is a named field with its own accessor pair -- `EventWorldType` (`0x140679820`,
+/// `movzx eax, byte ptr [rax+0xbca]`) and `SetWorldEventType` (`0x14067aeb0`,
+/// `mov byte ptr [rax+0xbca], cl`) -- and grouped it with cb1/cb2/b5e, which genuinely have no
+/// name in either the Ghidra type or `fromsoftware-rs`. `IsMyWorld` (`0x140679f90`) is the third
+/// reader and tests it against 0. `fromsoftware-rs` declares it as the enum
+/// `pub event_world_type: EventWorldType`.
+const GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET: usize = 0xbca;
 const GAME_MAN_SUBMIT_GATE_B5E_OFFSET: usize = 0xb5e;
 const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
@@ -463,9 +483,9 @@ fn snapshot() -> String {
     };
 
     let b78 = unsafe { read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) };
-    let b80 = unsafe { read_i32(gm + GAME_MAN_LOAD_PHASE_B80_OFFSET) };
+    let b80 = unsafe { read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) };
     let ac0 = unsafe { read_i32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET) };
-    let c30 = unsafe { read_i32(gm + GAME_MAN_CURRENT_MAP_C30_OFFSET) };
+    let c30 = unsafe { read_i32(gm + GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET) };
     // A COUNT OF CHARACTERS, kept as `Option` and printed in decimal. `.unwrap_or(0)` was wrong
     // twice over: 0 is the value the two gates below TEST FOR, so an unreadable read printed as
     // "the path is empty" -- the reading that makes both gates look open.
@@ -476,7 +496,7 @@ fn snapshot() -> String {
     // that keeps load2's combined_load submit bailing so the world load never completes.
     let g_cb1 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB1_OFFSET) };
     let g_cb2 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB2_OFFSET) };
-    let g_bca = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_BCA_OFFSET) };
+    let g_bca = unsafe { read_u8(gm + GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET) };
     let g_b5e = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_B5E_OFFSET) };
     // RESOLVED: `SAVE_DATA_SUBSYSTEM_GATE_RVA` moved +0x4070 on 1.17 (0x3d68078 -> 0x3d6c0e8).
     // Read raw, this trace line prints the contents of an unrelated global as the submit gate --

@@ -80,9 +80,13 @@ nobody can audit.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 
 REPO = Path(__file__).resolve().parent.parent
 EXCLUDED_DIRS = (".git", "target", "node_modules", ".worktrees", ".claude")
@@ -187,7 +191,13 @@ NAME_TELL = re.compile(
 def rust_files():
     for p in sorted(REPO.rglob("*.rs")):
         rel = p.relative_to(REPO).as_posix()
-        if any(part in EXCLUDED_DIRS for part in p.parts):
+        # RELATIVE parts, not absolute ones. `REPO` is this script's own checkout, and a
+        # `git worktree` checkout lives at `<repo>/.worktrees/<name>` -- so every absolute path
+        # under it contains `.worktrees` and the old test excluded the ENTIRE corpus. The audit
+        # then found zero constants and `--selftest` failed with "kinds table names constants
+        # that no longer exist", listing all 200-odd of them: a gate that is vacuous in exactly
+        # the place a closure gets verified, reporting it as a mass deletion.
+        if any(part in EXCLUDED_DIRS for part in Path(rel).parts):
             continue
         yield rel, p
 
@@ -243,25 +253,164 @@ def _capstone():
     return capstone, md
 
 
-def covering_accesses(capstone, md, blob, va, length, bases, bytes_wanted):
-    """Every access whose `[disp, disp + operand_size)` interval contains each wanted byte."""
+# Registers that are never `this` and never a useful alias root. `rip` is position-independent
+# addressing, `rsp`/`rbp` are the frame -- a displacement off either is a local, not a field.
+NON_OBJECT_BASES = ("rip", "rsp", "rbp", "esp", "ebp")
+
+
+def _reg_roots(capstone):
+    """`{sub-register name: 64-bit root name}` for the general-purpose file.
+
+    Writing `ebx` destroys `rbx`, so alias tracking that compares register NAMES has to fold
+    `ebx`/`bx`/`bl` onto `rbx` before it can decide whether an alias survived an instruction. The
+    families are spelled out here rather than guessed from the name, but every member is CHECKED
+    against capstone's own `X86_REG_*` table -- a typo would otherwise create a register that
+    simply never matches, which fails silently in the safe-looking direction (aliases that are
+    never invalidated).
+    """
+    known = {n[len("X86_REG_") :].lower() for n in dir(capstone.x86) if n.startswith("X86_REG_")}
+    families = {}
+    for r in ("ax", "bx", "cx", "dx"):
+        families["r" + r] = ("r" + r, "e" + r, r, r[0] + "l", r[0] + "h")
+    for r in ("si", "di", "bp", "sp"):
+        families["r" + r] = ("r" + r, "e" + r, r, r + "l")
+    for n in range(8, 16):
+        families[f"r{n}"] = (f"r{n}", f"r{n}d", f"r{n}w", f"r{n}b")
+    roots = {}
+    for root, members in families.items():
+        for m in members:
+            if m not in known:
+                raise SystemExit(
+                    f"_reg_roots: {m!r} is not in capstone's X86_REG_ table -- the family table "
+                    "is wrong, and a register that never matches would leave aliases alive"
+                )
+            roots[m] = root
+    return roots
+
+
+def covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted):
+    """Every access whose `[disp, disp + operand_size)` interval contains each wanted byte.
+
+    THE BLIND SPOT THIS FOLLOWS A `lea` TO CLOSE
+    --------------------------------------------
+    A `this`-relative displacement census sees only what is written through `this`. Where the
+    compiler hands a whole embedded sub-object to a register in one `lea` and writes the interior
+    through THAT register, every interior field is invisible:
+
+        lea   rbx, [rsi+0xb98]     ; the DLDateTime at GameMan+0xb98
+        mov   qword [rbx], r14     ; -> 0xb98   -- visible, disp is off `this`
+        and   qword [rbx+8], r12   ; -> 0xba0   -- INVISIBLE, disp is off rbx
+
+    0xba0 was named `LOAD_HANDLE` from the shape of whatever value sat there, and 0xdf0 was named
+    a "resident device" pointer the same way, because neither ever appeared in a displacement set
+    for anything to contradict. Struct-in-struct layouts are everywhere in this codebase, so the
+    silence is systematic rather than incidental.
+
+    So `alias` maps a 64-bit register root to `(root base, displacement from it)`, established by
+    a `lea` off a tracked base (or off another alias, which chains), and destroyed the moment
+    anything else writes that register. An access through an alias is reported at its EFFECTIVE
+    displacement, with the `lea` that established it printed alongside so the attribution can be
+    audited rather than taken on trust.
+
+    `end` is an absolute file offset from `function_extent`, not a byte budget: past the
+    function's last byte this decode would be reading the de-Arxan'd images' leftover bytes and
+    inventing accesses out of them.
+    """
+    roots = _reg_roots(capstone)
     rva = va - IMAGE_BASE
     hits = {b: [] for b in bytes_wanted}
-    for insn in md.disasm(blob[rva : rva + length], va):
+    # {root register: (root base name, displacement from it, text of the establishing lea)}
+    alias = {}
+
+    for insn in md.disasm(blob[rva:end], va):
+        is_lea = insn.mnemonic == "lea"
+        text = f"{insn.mnemonic} {insn.op_str}"
+
+        # (a) RECORD, before anything this instruction writes can invalidate the map.
+        #     `mov rbx,[rbx+8]` both reads through an alias and destroys it, which is why
+        #     recording has to happen before invalidation.
+        #
+        #     A `lea` is recorded too, but TAGGED `address-of`. It is not a read or a write of
+        #     that memory, so it must not be read as one -- but it is still a witness that a
+        #     field is there, and usually the STRONGEST one available for an embedded object:
+        #     `lea rcx,[rbx+0x2b0]` is the PlayerGameData constructor taking the address of the
+        #     `equipment` sub-object to construct it in place, which is exactly what the gate's
+        #     `equipment` row at 0x2b0 rests on. Dropping `lea` entirely (the first version of
+        #     this change) silently took the only covering access away from PGD 0x2b0 and 0x960
+        #     and reported a COVERAGE DROP as if it were a correction.
+        #
+        #     A `lea`'s operand size is meaningless -- capstone reports the addressed type, not a
+        #     transfer width -- so an address-of witness covers exactly its own byte.
         for op in insn.operands:
             if op.type != capstone.x86.X86_OP_MEM or op.mem.base == 0:
                 continue
             name = insn.reg_name(op.mem.base)
-            if name in ("rip", "rsp", "rbp", "esp", "ebp"):
+            root = roots.get(name, name)
+            chain = None
+            if (not bases or root in bases or name in bases) and name not in NON_OBJECT_BASES:
+                disp = op.mem.disp
+            elif root in alias:
+                base_name, base_disp, lea_text = alias[root]
+                disp = base_disp + op.mem.disp
+                chain = (base_name, base_disp, op.mem.disp, lea_text)
+            else:
                 continue
-            if bases and name not in bases:
-                continue
+            width = 1 if is_lea else op.size
             for b in bytes_wanted:
-                if op.mem.disp <= b < op.mem.disp + op.size:
-                    hits[b].append(
-                        (insn.address, f"{insn.mnemonic} {insn.op_str}", op.mem.disp, op.size)
-                    )
+                if disp <= b < disp + width:
+                    hits[b].append((insn.address, text, disp, width, chain, is_lea))
+
+        # (b/c) INVALIDATE every register this instruction writes, then re-establish the alias a
+        #       `lea` creates. The directive's order is (b) then (c); doing it the other way round
+        #       is the same rule -- a `lea`'s destination is written, so (c) would otherwise undo
+        #       (b) on the very instruction that establishes the alias.
+        try:
+            _read, written = insn.regs_access()
+        except capstone.CsError:  # pragma: no cover - detail is on, but do not decide on a guess
+            alias.clear()
+            continue
+        for reg in written:
+            root = roots.get(insn.reg_name(reg))
+            if root is not None:
+                alias.pop(root, None)
+
+        if not is_lea or len(insn.operands) != 2:
+            continue
+        dest, memop = insn.operands
+        if dest.type != capstone.x86.X86_OP_REG or memop.type != capstone.x86.X86_OP_MEM:
+            continue
+        dest_root = roots.get(insn.reg_name(dest.reg))
+        # An INDEXED lea (`lea rbx,[rsi+rax*4]`) has no single constant displacement from the
+        # base, so it establishes nothing rather than a wrong something.
+        if dest_root is None or memop.mem.base == 0 or memop.mem.index != 0:
+            continue
+        base_name = insn.reg_name(memop.mem.base)
+        base_root = roots.get(base_name, base_name)
+        if (not bases or base_root in bases or base_name in bases) and (
+            base_name not in NON_OBJECT_BASES
+        ):
+            alias[dest_root] = (base_name, memop.mem.disp, text)
+        elif base_root in alias:
+            parent_base, parent_disp, _parent_text = alias[base_root]
+            alias[dest_root] = (parent_base, parent_disp + memop.mem.disp, text)
+
     return hits
+
+
+def cover_one(capstone, md, blob, va, length, bases, bytes_wanted):
+    """`covering_accesses` over ONE function, bounded by its extent rather than by `length`.
+
+    `length` is only a CAP on top of the extent. `body_slice_end` returning None is a refusal, not
+    an invitation to substitute the byte count -- an unknown extent is exactly the case where a
+    forward decode invents instructions.
+    """
+    end = function_extent.body_slice_end(blob, va, cap=length)
+    if end is None:
+        raise SystemExit(
+            f"{va:#x}: function_extent cannot resolve the extent, so there is no trustworthy "
+            "window to decode. Refusing rather than falling back to the byte count."
+        )
+    return covering_accesses(capstone, md, blob, va, end, bases, bytes_wanted), end
 
 
 def run_cover(spec, bases, bytes_wanted):
@@ -272,14 +421,22 @@ def run_cover(spec, bases, bytes_wanted):
         ("1.17  ", IMAGE_1170, va17, len17),
     ):
         blob = path.read_bytes()
-        hits = covering_accesses(capstone, md, blob, va, length, bases, bytes_wanted)
-        print(f"--- {label}  {va:#x} +{length}")
+        hits, end = cover_one(capstone, md, blob, va, length, bases, bytes_wanted)
+        print(f"--- {label}  {va:#x} +{end - (va - IMAGE_BASE)}")
         for b in bytes_wanted:
             if not hits[b]:
                 print(f"    {b:#x}: NO COVERING ACCESS")
                 continue
-            for addr, text, disp, size in hits[b]:
-                print(f"    {b:#x}: {addr:#x}  {text}   [disp={disp:#x} size={size}]")
+            for addr, text, disp, size, chain, is_addr_of in hits[b]:
+                what = "address-of" if is_addr_of else f"size={size}"
+                if chain is None:
+                    print(f"    {b:#x}: {addr:#x}  {text}   [disp={disp:#x} {what}]")
+                else:
+                    base_name, base_disp, own_disp, lea_text = chain
+                    print(
+                        f"    {b:#x}: {addr:#x}  {text}   [via {lea_text}  "
+                        f"disp={base_disp:#x}+{own_disp:#x}={disp:#x} {what}]"
+                    )
     return 0
 
 
@@ -318,6 +475,86 @@ def collect():
                 why = "measured by scripts/check-object-field-offsets-1170.py::PINNED_CONSTANTS"
             rows.append((bucket, kind, rel, i + 1, name, value, why))
     return rows, overrides
+
+
+# The known-answer test for `lea`-following, kept as a pair of REAL offsets in the GameMan
+# constructor rather than a synthetic byte string, because the class this closes is about what a
+# real compiler does with a real embedded sub-object.
+#
+#   0xba0  the upper half of the DLDateTime at 0xb98, written `and %r12,0x8(%rbx)` after
+#          `lea 0xb98(%rsi),%rbx`. It was called a LOAD_HANDLE until it was measured.
+#   0xdf0  the LENGTH of the DLString inside the FD4FilePathBase at 0xdd0, three `lea`s deep
+#          (rsi -> 0xdd0 -> 0xdd8 -> 0xde0), so it also proves the alias CHAINS. It was called a
+#          "resident device" pointer until it was measured.
+#
+# Both must be INVISIBLE to a `this`-relative reading and VISIBLE once the `lea` is followed; the
+# first half is what makes this a regression test rather than a tautology.
+LEA_KNOWN_ANSWER = (0xBA0, 0xDF0)
+
+
+def selftest_lea_following(out=sys.stdout):
+    """Prove the alias walk finds the two fields a `this`-relative census cannot see.
+
+    The constructor's VA and extent come from `check-object-field-offsets-1170.py::GAME_MAN_CTOR`,
+    imported rather than retyped: two copies of an address are two things to keep in step, and
+    this file already imports that module for `PINNED_CONSTANTS`.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_offsets_gate_ctors", GATE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_offsets_gate_ctors"] = module
+    spec.loader.exec_module(module)
+    ctor = module.GAME_MAN_CTOR
+
+    missing = [p.name for p in (IMAGE_1162, IMAGE_1170) if not p.exists()]
+    if missing:
+        print(f"skip: lea-following known-answer test needs {', '.join(missing)}", file=out)
+        return 0
+
+    capstone, md = _capstone()
+    failures = []
+    for label, path, va, length in (
+        ("1.16.2", IMAGE_1162, ctor["va16"], ctor["len16"]),
+        ("1.17", IMAGE_1170, ctor["va17"], ctor["len17"]),
+    ):
+        blob = path.read_bytes()
+        end = function_extent.body_slice_end(blob, va, cap=length)
+        if end is None:
+            failures.append(f"{label}: no resolvable extent for the GameMan ctor at {va:#x}")
+            continue
+        bases = tuple(ctor["bases"])
+        followed = covering_accesses(capstone, md, blob, va, end, bases, LEA_KNOWN_ANSWER)
+        for want in LEA_KNOWN_ANSWER:
+            direct = [h for h in followed[want] if h[4] is None]
+            if direct:
+                failures.append(
+                    f"{label}: {want:#x} is reported as a DIRECT `this`-relative access "
+                    f"({direct[0][1]}) -- the test no longer proves the blind spot exists"
+                )
+            if not followed[want]:
+                failures.append(
+                    f"{label}: {want:#x} has NO covering access even with `lea`-following"
+                )
+        if not any(
+            h[1].startswith("and qword ptr [rbx + 8]") and not h[5] for h in followed[0xBA0]
+        ):
+            failures.append(
+                f"{label}: 0xba0 is covered, but not by the expected "
+                "`and qword ptr [rbx + 8], r12` off `lea rbx,[rsi+0xb98]`"
+            )
+
+    if failures:
+        print("FAIL: lea-following known-answer test:", file=out)
+        for f in failures:
+            print(f"    {f}", file=out)
+        return 1
+    print(
+        f"ok: lea-following exposes {', '.join(hex(b) for b in LEA_KNOWN_ANSWER)} in both images, "
+        "neither of which any `this`-relative access covers",
+        file=out,
+    )
+    return 0
 
 
 def selftest(rows, overrides):
@@ -365,7 +602,7 @@ def selftest(rows, overrides):
 
     print(f"ok: {len(overrides)} kinds rows all resolve, "
           f"{len(documented)} OS-ABI values match their published layout, shape rule holds")
-    return 0
+    return selftest_lea_following()
 
 
 def main():

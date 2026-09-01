@@ -32,15 +32,26 @@ fn write_frame_pacing_oracles(body: &mut String) {
 }
 
 fn write_engine_loop_oracles(body: &mut String, base: usize) {
-    const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
+    const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
     const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
         core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
             + core::mem::size_of::<fromsoftware_shared::F32Vector4>()
             + core::mem::size_of::<fromsoftware_shared::F32Vector4>();
     const READ_FAIL_SENTINEL: i32 = -1;
     const NULL_PTR: usize = 0;
-    // GameMan save-mgr signals: b80 (load-in-progress lane -- the golden-capture mash-stop signal,
+    // GameMan save-mgr signals: b80 (`GameMan::saveState` -- the golden-capture mash-stop signal,
     // nonzero once continue is confirmed and the deserialize kicks) + c30 (saved map id, oracle item 2).
+    //
+    // THE TWO EMITTED KEYS KEEP THEIR HISTORICAL NAMES ON PURPOSE (audited 2026-08-31). The field
+    // constants were renamed -- b80 is `saveState`, stamped by the SAVE lane as well as the load
+    // lane, and c30 is `stayInMultipleAreaBlockId` -- but `oracle_load_in_progress_b80` and
+    // `oracle_saved_map_c30` are a WIRE FORMAT: they are the field names inside the recorded runs
+    // in `data/oracle/imprints.db` (a SQLite imprint corpus matched by key) and in the archived
+    // `save-files/**/er-effects-telemetry.json` snapshots. Renaming the key here would silently
+    // stop every one of those matching, i.e. it would rewrite recorded evidence to fit a new
+    // label. `oracle_saved_map_c30` is also still literally accurate at the moment its consumers
+    // read it: `scripts/er-readiness-watch.py` and `switch-character-oracle.py` compare it against
+    // the save FILE's body+0x04, which is the dword the deserializer `FUN_14067bd70` writes here.
     let gm = crate::game_man_ptr_or_null();
     let read_i32 = |addr: usize| -> i32 {
         unsafe { crate::experiments::safe_read_usize(addr) }
@@ -50,7 +61,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
         (READ_FAIL_SENTINEL, READ_FAIL_SENTINEL)
     } else {
         (
-            read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET),
+            read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET),
             read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET),
         )
     };

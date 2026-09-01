@@ -204,9 +204,9 @@ pub const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
 pub const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, row_registry);
 
-/// GameMan+0xb80 (== GameMan.save_state == load_in_progress) FSM values. The full-save read walks
+/// GameMan+0xb80 (== GameMan.save_state == save_state) FSM values. The full-save read walks
 /// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
-/// the deserialize consumes the 0x280000 buffer. `load_in_progress_b80_name` (constants::return_title)
+/// the deserialize consumes the 0x280000 buffer. `save_state_b80_name` (constants::return_title)
 /// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
 /// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
 pub const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
@@ -513,15 +513,43 @@ pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
 #[cfg(windows)]
 pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
 
-/// Save-manager load-in-progress flag (GameMan/save-mgr singleton 0x143d69918):
-/// `0x14067b570` sets `[mgr+0xb80]=1` when it begins the load and clears it to 0
-/// when finished. The native autoload (recipe A) arms the load by setting the
-/// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
-/// per-frame update `0x14067f5d0` performs it.
-/// Bound to upstream `GameMan::save_state` (compiler-verified equal to our offset); our research
-/// reads this same dword as the load-in-progress lane (set 1 on load begin, cleared on finish).
+/// `CS::GameMan::saveState` -- the ONE-SLOT ARBITER over the single SL device, off the GameMan
+/// singleton `0x143d69918`. NOT a load flag, in either direction.
+///
+/// CORRECTED 2026-08-31. This was `GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET`, and two more crates
+/// spelled the same field `GAME_MAN_LOAD_PHASE_B80_OFFSET` (er-reload-trace) and
+/// `GAME_MAN_LOAD_FSM_B80_OFFSET` (er-input-harness). Three constants saying "load" is how the
+/// save-wedge diagnosis gets re-derived backwards: the wedge turned on the SAVE lane owning this
+/// slot while a clear-to-0 ran underneath it, which is unreadable if the field is a load flag.
+///
+/// THREE WITNESSES, none of them the name it used to carry:
+///
+///   1. The type. Ghidra's curated 1.16.2 `CS::GameMan` names `+0xb80` `saveState`, `int`;
+///      `fromsoftware-rs` independently declares `pub save_state: u32` at the same slot, which is
+///      what the `offset_of!` below binds to and what the compiler checks.
+///   2. The game's own predicates. `IsSaveState1` (`0x14067a010`) and `IsSaveState2`
+///      (`0x140679ff0`) are two-instruction leaves -- `mov rax,[rip+GameMan] ; cmp dword ptr
+///      [rax+0xb80],N ; sete al ; ret` -- so the field's SPELLING is in the image, not inferred.
+///   3. The constructor. `mov %r14d,0xb80(%rsi)` at `0x14067616f` (1.17 `0x140676fbf`), pinned in
+///      `scripts/check-object-field-offsets-1170.py`, 1296/1296 aligned across both images.
+///
+/// THE VALUE TABLE, from a complete scan of every access in the 288 functions that reference the
+/// GameMan singleton (37 sites, all of them `[reg+0xb80]`):
+///
+/// ```text
+///   0  IDLE -- nothing owns the SL device
+///   1  a SAVE or the preview read owns it: 0x14067b4e0 (preview), 0x14067b570, 0x14067b750,
+///      0x14067b940, 0x14067bc10 all store 1, each after a `cmp [rax+0xb80],0` idle check
+///   2  a LOAD owns it: 0x14067b1a0, 0x14067b200, 0x14067b480
+///   3  the load's payload is RESIDENT: 0x140679180
+///   4  0x14067b0b0        7  0x14067b030 (tested back by 0x140679fd0)
+/// ```
+///
+/// So BOTH lanes stamp it, which is exactly why "load in progress" was wrong and why the correct
+/// name is the game's: the field says WHO owns the device, not WHAT KIND of operation is running.
+/// A reader that only wants "is the device busy" should test `!= 0`, never `== 2`.
 #[cfg(windows)]
-pub const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
+pub const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
 
 /// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
 #[cfg(windows)]
@@ -835,9 +863,21 @@ pub const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
 
 pub const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
 
-/// Gate used by the loading-screen mode setter at deobf `FUN_14067a410`: when this byte is 0,
-/// mode 2 is normalized to mode 0 before calling the `CSMenuMan+0x720` mode writer.
-pub const GAME_MAN_LOADING_MODE_BF5_OFFSET: usize = 0xbf5;
+/// `CS::GameMan::loadingScreenTextState` (+0xbf5), a bool -- NOT the loading mode itself.
+///
+/// RENAMED 2026-08-31 from `GAME_MAN_LOADING_MODE_BF5_OFFSET`, whose own doc comment already
+/// described a GATE while its name claimed to be the MODE. The two accesses in the image are the
+/// whole story, and the cited `FUN_14067a410` does not exist in 1.16.2 (it is an address from the
+/// retired 1.16.1 dump; it lands inside `FUN_14067a3a0`):
+///
+///   * WRITER `FUN_14067a860` -- a one-line setter, `GLOBAL_GameMan->loadingScreenTextState = arg`.
+///   * READER `FUN_14067a320` -- `if (loadingScreenTextState == false && mode == 2) mode = 0;`
+///     then writes `mode` into `CSMenuMan->loadingScreenData.field_0x8`. So the byte decides
+///     whether loading-screen mode 2 SURVIVES; the mode is the caller's argument.
+///
+/// `fromsoftware-rs` names the same slot `simple_loading_screen` and records the EMEVD command
+/// that sets it (`2003[80] ShowTextOnLoadingScreen`), which agrees on the mechanism.
+pub const GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET: usize = 0xbf5;
 
 pub const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
 
@@ -909,7 +949,7 @@ pub static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
 /// -1 = no live MoveMapStep. See MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.
 pub static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
 
-/// Last sampled GameMan load-in-progress FSM (b80, == GameMan.save_state): 0 idle/done, 2 read
+/// Last sampled `GameMan::saveState` (b80): 0 idle/done, 2 read
 /// submitted, 3 resident. Published for the loading bar (a distinct, meaningful load-state the user
 /// asked to see). The finalize case-7 gate (FUN_14067a170 = saveState==0) needs this back at 0.
 pub static SWITCH_ORACLE_B80: AtomicI32 = AtomicI32::new(-1);
@@ -1359,9 +1399,35 @@ pub const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = er_save_loader::SET_SAVE_SL
 /// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc, so it orphaned.)
 pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 
-/// Private saved-map slot inside the GameMan block immediately after
-/// `stay_in_multiplay_area_saved_rotation`; derive it from the adjacent typed
-/// vector layout instead of retaining the raw absolute field offset.
+/// `CS::GameMan::stayInMultipleAreaBlockId` (+0xc30). KEPT UNDER THE PRODUCT NAME "saved map"
+/// after a 2026-08-31 audit, because that is what the value IS in the window every consumer reads
+/// it in -- but the field has THREE writers and only one of them is the save, so read this before
+/// using it anywhere else.
+///
+/// The complete access set (5 sites, from a scan of every function referencing the GameMan
+/// singleton, each one decompiled):
+///
+///   * `FUN_14067bd70`, the slot DESERIALIZER: `param_1->stayInMultipleAreaBlockId =
+///     local_50._4_4_` -- the dword at slot body+0x04, which is exactly what
+///     `er_save_loader::bnd4::slot_saved_map` reads off the file. THIS is the writer the
+///     `oracle_saved_map_c30` contract rests on, and it makes "saved map" literally true at mount.
+///   * `FUN_14067dc00`, the slot SERIALIZER: reads it back out through the getter below.
+///   * `FUN_14067afa0`: writes it when `CS::GameMan::UpdateStayInMultiplayPosition` succeeds.
+///   * `FUN_14067aac0`: resets the `stayInMultiplaySaved{Position,MapId,Rotation}` family and then
+///     stores `MakeBlockId(10,1,0,0)` here -- m10_01_00_00, the "new game default map" this repo
+///     already tracks by that name in `constants/stage2_menu_drive.rs`.
+///   * `FUN_140679560`: a one-line getter. Its consumer is `SetMoveMapStepBlockId`
+///     (`0x14067abd0`), which writes `GameMan::moveMapStepBlockId` at **+0x14**.
+///
+/// TWO CONSEQUENCES. (a) +0xc30 is the SOURCE of the map you load into, not the map you are in --
+/// so it is not "the current map"; er-reload-trace called it that until this audit and no longer
+/// does. (b) During play it is stay-in-multiplay bookkeeping, so a mid-session read is not a
+/// "saved map" at all. Every current consumer reads it inside the load window, where writer 1
+/// owns it.
+///
+/// The offset is derived from the adjacent typed vector layout rather than retained as a raw
+/// literal; the ctor store `movl $-1,0xc30(%rsi)` at `0x14067628d` (1.17 `0x1406770dd`) is pinned
+/// in `scripts/check-object-field-offsets-1170.py`.
 #[cfg(windows)]
 pub const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
     core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)

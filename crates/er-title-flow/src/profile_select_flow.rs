@@ -610,7 +610,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     };
     let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
     let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let b80 = read_gm(GAME_MAN_SAVE_STATE_B80_OFFSET);
     let b78 = read_gm(GAME_MAN_REQUESTED_SLOT_B78_OFFSET);
     // Frame-level save-IO orchestration capture (menu-b80-mount-orchestration-sequence):
     // the iodev request handle pair [iodev+0x18]/[iodev+0x20] + [iodev+0x10] inflight.
@@ -856,7 +856,7 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
                     *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *const i32),
                     *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8),
                     *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32),
-                    *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8),
+                    *((gm + GAME_MAN_SAVE_STATE_B80_OFFSET) as *const u8),
                 )
             }
         } else {
@@ -887,8 +887,8 @@ pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
     if game_man == null {
         return;
     }
-    let load_in_progress =
-        unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+    let save_state =
+        unsafe { *((game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) as *const u8) };
     let armed = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
     let csfeman = unsafe {
         *((er_game_base::mem::game_data_addr(
@@ -897,7 +897,7 @@ pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
             "CSFEMAN_SINGLETON_RVA",
         )) as *const usize)
     };
-    if load_in_progress == TITLE_NATIVE_JOB_TASK_DATA_ZERO {
+    if save_state == TITLE_NATIVE_JOB_TASK_DATA_ZERO {
         // Re-arm each frame: persist the slot against the title's reset, set latch.
         let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
             std::mem::transmute(
@@ -923,7 +923,7 @@ pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
     if tick % ARM_PROBE_TICK_INTERVAL == null as u64 {
         let ac0 = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
         append_autoload_debug(format_args!(
-            "native_arm_loop tick={tick} ac0={ac0} b72={armed} b80={load_in_progress} csfeman=0x{csfeman:x}"
+            "native_arm_loop tick={tick} ac0={ac0} b72={armed} b80={save_state} csfeman=0x{csfeman:x}"
         ));
     }
 }
@@ -976,7 +976,7 @@ pub unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
     };
     append_autoload_debug(format_args!(
         "arm_probe tick={tick} gm=0x{game_man:x} slotmgr=0x{slot_mgr:x} slotmgr+8=0x{slot_data:x} slotmgr+78=0x{slot_container:x} csfeman=0x{csfeman:x} input_mgr=0x{input_mgr:x} latch={latch} b80={} ac0={} b72={} b73={} b75={} b78={} bc4={}",
-        gm_byte(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET),
+        gm_byte(GAME_MAN_SAVE_STATE_B80_OFFSET),
         gm_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET),
         gm_byte(GAME_MAN_ARM_FLAG_B72_OFFSET),
         gm_byte(GAME_MAN_FLAG_B73_PROBE_OFFSET),

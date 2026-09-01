@@ -298,7 +298,7 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32, gate: &str)
     let device_before = er_save_suppress::sample_sl_request_slot();
     let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
     let device_after = er_save_suppress::sample_sl_request_slot();
-    let b80 = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
+    let b80 = unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1);
     append_autoload_debug(format_args!(
         "reload-fd4io: SUBMIT slot={picked} submit 0x{:x} {}",
         er_game_base::mem::game_data_addr(
@@ -315,7 +315,7 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32, gate: &str)
 /// can detect RESIDENT(3). Pumps ONLY the lane we own -- `er_save_suppress::load_poll_may_run` carries
 /// why, and why the 0x679510 call that stood here could only tick somebody else's request.
 unsafe fn own_load_fd4io_drain_tick(_base: usize, gm: usize) -> i32 {
-    let b80 = || unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1);
+    let b80 = || unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1);
     if !er_save_suppress::load_poll_may_run_now() {
         return b80();
     }

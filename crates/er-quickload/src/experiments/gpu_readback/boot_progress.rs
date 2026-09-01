@@ -1996,7 +1996,7 @@ fn boot_view_rasterize(
             | er_loading_bar_core::LoadPhase::EnteringWorld
     );
     let load_suffix = if b80 > 0 {
-        format!(" - SAVE {}", load_in_progress_b80_name(b80))
+        format!(" - SAVE {}", save_state_b80_name(b80))
     } else if !world_phase {
         String::new()
     } else if finalize >= 0 {

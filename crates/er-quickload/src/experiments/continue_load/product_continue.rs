@@ -301,7 +301,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             }
             return;
         }
-        let b80_before = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80_before = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         if b80_before != OWN_STEPPER_B80_IDLE {
             if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
                 append_autoload_debug(format_args!(
@@ -387,7 +387,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         else {
             return;
         };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
@@ -424,7 +424,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_DESER_FIRED_OK;
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };

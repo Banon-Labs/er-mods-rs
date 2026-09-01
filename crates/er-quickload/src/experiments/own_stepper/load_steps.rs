@@ -373,10 +373,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         OWN_STEPPER_SLOT_NONE
     };
     let b80 = if gm != null {
-        ri32(
-            gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET,
-            OWN_STEPPER_B80_IDLE,
-        )
+        ri32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET, OWN_STEPPER_B80_IDLE)
     } else {
         OWN_STEPPER_B80_IDLE
     };
