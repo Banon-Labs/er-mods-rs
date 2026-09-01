@@ -360,8 +360,21 @@ def selftest() -> int:
     check("no row", classify_uniqueness([0x10], None), "NO-ROW")
 
     # The coverage walk must not read other agents' worktrees, and must find the real files.
+    #
+    # Asked RELATIVE TO THE REPO ROOT, not as a substring of the absolute path. This control used
+    # to be `any(".claude" in str(p))`, which is a false positive on every checkout that LIVES
+    # under `.claude/worktrees/<agent>/` -- i.e. on every worktree-isolated agent session, where
+    # each of the repo's own legitimate files has `.claude` in its absolute path. The walk itself
+    # was always right (it prunes NOT_REPO_SOURCE by directory NAME during the descent, and a
+    # worktree root has no child so named); only the assertion about it was reading the wrong
+    # string. A path genuinely inside a nested `.claude`/`.worktrees`/`target` still trips it.
     declared = {p for p in repo_spec_files() if p.name != "prologue_build.rs"}
-    check("no worktree leakage", any(".claude" in str(p) for p in declared), False)
+    leaked = [
+        p
+        for p in declared
+        if set(p.relative_to(ROOT).parts[:-1]) & SKIP_DIRS
+    ]
+    check("no worktree leakage", bool(leaked), False)
     check("finds the five build scripts", len(declared) >= 5, True)
 
     # The sweep's enumerator must reach every file the walk found. This is the assertion the

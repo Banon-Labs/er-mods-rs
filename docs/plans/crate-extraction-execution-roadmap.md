@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,972 |
+| all `experiments/**` | 76 | 50,138 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -137,13 +137,13 @@ somebody's in-flight edit.
 | file | +lines | landed in |
 |---|---:|---|
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,396 | dead-counter census |
-| `startup_hooks/quit_menu/save_picker_menu.rs` | 3,050 | dead-counter census |
+| `startup_hooks/quit_menu/save_picker_menu.rs` | 3,179 | dead-counter census |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,025 | dead-counter census |
 | `own_load/loaders/switch_reload.rs` | 633 | stale-RVA call-site closure |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 829 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,769 | dead-counter census |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,223 | stale-RVA call-site closure |
-| `lifecycle/task_tick.rs` | 431 | dead-counter census |
+| `lifecycle/task_tick.rs` | 438 | dead-counter census |
 | `input_block.rs` | 1,400 | dead-counter census |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,502 | dead-counter census |
 | `trace/menu_trace_hooks.rs` | 2,042 | stale-RVA call-site closure |
@@ -242,7 +242,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 
 | Current file | Lines | Current partition | Next node |
 |---|---:|---|---|
-| `can_move_probe.rs` | 522 | product `STAY`: real-module conversion template | `STAY` |
+| `can_move_probe.rs` | 552 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 17 | product re-export facade | D5 |
 | `continue_load/product_continue.rs` | 733 | product continue/load policy | D5 |
 | `continue_load/slot_resolution.rs` | 819 | product slot-resolution policy | D5 and R14 |
@@ -258,7 +258,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 114 | product install ordering | `STAY` |
 | `lifecycle/save_flow.rs` | 1,535 | System>Quit save-flow implementation | R20 |
-| `lifecycle/task_tick.rs` | 431 | product recurring-task scheduling | `STAY` |
+| `lifecycle/task_tick.rs` | 438 | product recurring-task scheduling | `STAY` |
 | `lifecycle/title_visual_startup.rs` | 177 | product startup arming/order | R22 |
 | `mem.rs` | 44 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
@@ -301,7 +301,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 2,125 | mixed profile-row title, quit, and sampler families | R11 |
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 75 | product facade: implementation in `er_quit_menu_core::save_dest_commit_runtime`; this side supplies the save-redirect native source dir and the `er-save-suppress` save-job observer | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 712 | System>Quit confirmation-box family | R18-R20 |
-| `startup_hooks/quit_menu/save_picker_menu.rs` | 3,050 | native picker, destination, and row-builder families | R17-R19 |
+| `startup_hooks/quit_menu/save_picker_menu.rs` | 3,179 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 1,543 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,396 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,492 | System>Quit dialog implementation and picker adapter; the row TEXT layer moved to `er_quit_menu_core::row_text` | R10 and R18 |
