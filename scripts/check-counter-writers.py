@@ -144,7 +144,13 @@ def repo_sources() -> dict[str, str]:
     """Every `.rs` in the tree except build outputs, plus any generated `.rs` under target/*/build."""
     out: dict[str, str] = {}
     for p in REPO.rglob("*.rs"):
-        if any(part in SKIP_PARTS for part in p.parts):
+        # RELATIVE parts, not absolute ones -- see the same fix in
+        # `scripts/audit-name-derived-offsets.py`. `REPO` is this script's own checkout, and a
+        # `git worktree` lives at `<repo>/.worktrees/<name>`, so every absolute path under one
+        # contains `.worktrees` and this skipped the ENTIRE corpus. Run from a worktree the gate
+        # reported unwritten counters that are written, which is the shape that gets a correct
+        # closure rejected during verification.
+        if any(part in SKIP_PARTS for part in p.relative_to(REPO).parts):
             continue
         try:
             out[str(p.relative_to(REPO))] = p.read_text(encoding="utf-8", errors="replace")

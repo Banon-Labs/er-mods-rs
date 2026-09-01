@@ -654,6 +654,19 @@ python3 "$repo_root/scripts/check-hook-log-sink.py"
 # implementation of the entry check called 20 of those mid-function, and calibration is what
 # caught it.
 python3 "$repo_root/scripts/audit-1170-hook-targets.py" --selftest
+# THE CLASS THAT AUDIT KEEPS BEING BITTEN BY, made un-reintroducible (2026-08-31). A linear decode
+# in the de-Arxan'd images is trustworthy only inside ONE function: past the `ret` the gaps hold
+# the deobfuscator's leftovers, not `cc`/`90` runs, so the decode resynchronises into instructions
+# that were never assembled. Five confirmed instances -- a phantom `jno` conjured out of two
+# padding bytes that failed a correct ledger row (the run above), 12 false DIVERGES, 31 false
+# SHAPE-DIFFs, a trampoline walk counting past its own `ret`, and a field-offset gate whose window
+# had been TUNED to keep a `sar dword ptr [rax], 0x6f` read out of a neighbouring function. This
+# scans every capstone `.disasm`/`.disasm_lite` in scripts/ by AST and requires any span measured
+# FROM THE DECODE START to be justified in scripts/decode-extent-allowlist.tsv. 0.4s, no images
+# needed. Positive control: a planted `blob[off : off + 0x400]` in a new file goes red naming it,
+# and an extent-bounded lookalike stays green.
+python3 "$repo_root/scripts/check-decode-extent-bounds.py" --selftest
+python3 "$repo_root/scripts/check-decode-extent-bounds.py"
 # THE PROLOGUE-MASK COMPARATOR, wired 2026-08-31 -- it had a green selftest and no runner, which is
 # the same decorative green the gates around it exist to refuse. A build-time prologue check that is
 # one byte off byte-checks its own hook OFF on every launch while looking perfectly built
@@ -916,6 +929,20 @@ python3 "$repo_root/scripts/check-singleton-field-offsets.py"
 python3 "$repo_root/scripts/check-object-field-offsets-1170.py" --selftest
 python3 "$repo_root/scripts/check-object-field-offsets-1170.py"
 
+# THE POPULATION the two lines above are measured AGAINST. `audit-name-derived-offsets.py` is a
+# REPORT, not a gate -- it counts every hand-written offset constant in the tree and says how many
+# still have no provenance, and a growing count is normal output, not a failure. Only its
+# `--selftest` is wired here, and it guards the one part of the report that CAN go quietly wrong:
+# `scripts/offset-census-kinds.tsv`, the table that demotes a row out of the counted population.
+#
+# An exclusion nobody re-checks is how a real game-object offset gets reclassified as a Windows
+# structure and stops being counted -- the report shrinks and reads as progress. The selftest
+# refuses a row naming a constant that no longer exists, refuses an OS-ABI row whose constant no
+# longer matches the published layout it cites, and re-asserts the name-shape rule against the
+# eight names that dragged non-offsets into the first census. ~3s.
+# scripts/prove-gate-positive-controls.py --only offset-census-kinds plants both failures for real.
+python3 "$repo_root/scripts/audit-name-derived-offsets.py" --selftest
+
 # ...and the attribution half of the same question. An offset whose OWNING OBJECT nobody has
 # named cannot be measured by the gate above -- there is no object to measure it against -- so
 # the unattributed set is itself a ratchet, in docs/recon/unattributed-field-offsets.txt: rows
@@ -966,10 +993,17 @@ python3 "$repo_root/scripts/check-detour-rva-coverage.py"
 # Proven against the offending commit: run this gate on `git show 7a7f25b3:<that file>` and it
 # names line 595. Declared-atomic hook sets are printed on every run, never hidden.
 python3 "$repo_root/scripts/check-hook-batch-abort.py" --selftest
-# UNWIRED 2026-08-31: two batch-abort sites in the COMMITTED crate sources
-# (dlstring_lookat_math.rs:595, system_quit_ownership_repro.rs:495). Green in this working tree.
-# The --selftest above stays wired and green. Re-arm this line with the crate changes.
-# python3 "$repo_root/scripts/check-hook-batch-abort.py"
+# RE-ARMED 2026-08-31: the two batch-abort sites this note held the line open for have landed.
+# dlstring_lookat_math.rs:595 is gone and system_quit_ownership_repro.rs:495 is now DECLARED
+# ATOMIC with its reason (the dtor detour skips the game's real destructor for any object absent),
+# which the gate prints on every run rather than hiding. Green against a detached worktree pinned
+# to HEAD (39 files call MH_ApplyQueued, 21 queue more than one hook, 1 declared atomic) as well
+# as against this working tree; checking only the working tree would have re-armed it a commit
+# early. Its non-vacuity did not need synthesising: at 475a9963 this gate NAMED both real sites
+# and at a04f84ed it names none, so it has been observed going red on the real defect and green
+# on the real fix. `audit-selftest-vacuity.py --only check-hook-batch-abort` agrees -- PROVABLE,
+# 531 regexes neutered, selftest red on "a reasonless marker exempted anyway".
+python3 "$repo_root/scripts/check-hook-batch-abort.py"
 # THE SAME QUESTION FOR DIRECT CALLS. The detour gate above covers addresses that go through
 # MinHook. This one covers addresses a crate simply CALLS, which is a different and larger set --
 # and the one that broke on 2026-08-30, when the whole build importer went silently inert on 1.17.
