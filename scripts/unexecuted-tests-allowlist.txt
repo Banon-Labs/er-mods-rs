@@ -1,0 +1,43 @@
+# `#[test]` FUNCTIONS THAT NO GATE EXECUTES, CLASSIFIED. Enforced by
+# scripts/check-test-target-coverage.py.
+#
+# THIS LIST MAY ONLY SHRINK, and it is enforced in BOTH directions. An offender that is not
+# listed here fails the gate, so no new unrun test can land quietly. An entry here that is no
+# longer an offender ALSO fails the gate, so wiring a crate up is not finished until its line is
+# deleted. That is what keeps the file an honest running count rather than a graveyard nobody
+# prunes -- the failure mode this whole gate exists to close.
+#
+# THE CEILING FOR THE `no-host-runner` CLASS IS ZERO, and it is not a number to bump. On
+# 2026-08-31 an audit found 251 test functions across 15 crates that had never executed once, in
+# any gate, ever; on 2026-09-01 all 251 were wired into scripts/check.sh and all 251 passed. If
+# you are here because a crate of yours is failing the gate, the fix is a `cargo test -p <crate>`
+# line in scripts/check.sh -- adding a row here instead is how the 251 happened.
+#
+# WHY A FILE AND NOT A DICT IN THE SCRIPT. Both exemption lists used to be Python literals inside
+# check-test-target-coverage.py, where an addition reads as a code change and slides past review
+# in a diff full of them. Here it is the whole diff. Same reason as
+# scripts/oracle-writers-allowlist.txt, scripts/counter-writers-allowlist.txt and
+# scripts/rva-alias-allowlist.txt, which this file deliberately copies.
+#
+# FORMAT:  <key>  <kind>  # <reason>
+#
+#   feature-gated   key = crate name. Tests behind a non-default cargo feature that no runner
+#                   enables. Legitimate when the feature costs more to build in every run than
+#                   the test is worth, AND the test would skip on CI anyway. Clear it by passing
+#                   `--features` on a runner in check.sh, then delete the line.
+#
+#   orphaned-file   key = repo-relative path. A file whose `#[test]`s NO module tree reaches --
+#                   no `mod` declaration, no `include!`. cargo never compiles it, so these are
+#                   not merely unrun, they were never built and nothing anywhere says so. The
+#                   only correct fix is to add the `mod` declaration; an entry here should be
+#                   rare and short-lived. One was live for part of 2026-08-31
+#                   (crates/er-game-base/src/repeat.rs, 8 tests, written and not yet wired) and
+#                   was cleared that way.
+#
+#   no-host-runner  key = crate name. A crate whose tests genuinely cannot execute on a Linux
+#                   host -- not "nobody got round to it". An honest entry here is fine; a silent
+#                   one is what created the 251. There are none, and a windows-only cdylib does
+#                   NOT qualify: its windows-only tests belong in the `cargo xwin test --lib`
+#                   list in scripts/check-rust-build.sh, which runs them under wine.
+
+er-shaderkit    feature-gated   # 2 tests behind the `gpu` feature (wgpu). They ask a real adapter for SPIRV_SHADER_PASSTHROUGH and print `SKIP ... (no GPU)` when there is none, so wiring them into a gate would add a wgpu build to every run in exchange for a test that skips on CI. Run them by hand: `cargo test -p er-shaderkit --features gpu`.

@@ -1470,13 +1470,18 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-refill-all
 # the function itself) and requires a runner on that target. Selftest first, so the gate is
 # never trusted on its own say-so; its non-vacuity proof blinds the windows matcher and
 # requires the selftest to go red.
-# UNWIRED 2026-08-31: both the selftest's live property and the live gate are red against the
-# COMMITTED tree: er-build-import-runtime's lib is windows-only in the working tree but not here,
-# and 53 test functions across 6 crates have no runner. --prove-selftest-catches-regression between
-# them stays wired and green. Re-arm the pair with the crate/runner changes.
-# python3 "$repo_root/scripts/check-test-target-coverage.py" --selftest
+# RE-ARMED 2026-09-01. The pair below was UNWIRED on 2026-08-31 because both were red against
+# the COMMITTED tree while their fixes sat only in a working tree: er-build-import-runtime's
+# windows-only lib, and the `#![cfg_attr(not(windows), allow(dead_code, unused_imports))]` lines
+# that let four windows cdylibs compile for the host at all. Every one of those has since landed,
+# so the commented-out state had become the opposite of what its own comment described -- an
+# unwiring kept for a reason that no longer held, which is how 251 test functions went on being
+# reported and never run. Measured at re-arming: selftest green, live gate green, and the 251
+# tests the live gate named all pass. Do NOT comment these out again to get a red tree green;
+# a gate that is only wired when it is already passing is not a gate.
+python3 "$repo_root/scripts/check-test-target-coverage.py" --selftest
 python3 "$repo_root/scripts/check-test-target-coverage.py" --prove-selftest-catches-regression
-# python3 "$repo_root/scripts/check-test-target-coverage.py"
+python3 "$repo_root/scripts/check-test-target-coverage.py"
 
 # EVERY REMAINING HOST-TESTABLE CRATE, IN TWO BATCHES. Up to this line the crates above were
 # added one at a time, each by somebody who tripped over the fact that theirs had never run --
@@ -1499,16 +1504,28 @@ python3 "$repo_root/scripts/check-test-target-coverage.py" --prove-selftest-catc
 # = "deny"` promotes that to a hard error, so `cargo test -p <crate>` failed outright. Fixed
 # with the same crate-level `#![cfg_attr(not(windows), allow(dead_code, unused_imports))]` that
 # er-save-suppress, er-seamless-bugfixes and er-armament-icons already carry.
-# UNWIRED 2026-08-31: red against the COMMITTED tree only. The crate-level
-# `#![cfg_attr(not(windows), allow(dead_code, unused_imports))]` this comment describes is in
-# er-inventory-sort's WORKING TREE and in no commit, so at this commit the batch stops at 24
-# deny-by-default dead-code errors. Re-arm it in the commit that lands crates/er-inventory-sort/src/lib.rs.
-# cargo test --manifest-path "$repo_root/Cargo.toml" \
-# 	-p er-quickload-data -p er-build-watermark-core -p er-charm-enemies \
-# 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
-# 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
-# 	-p er-better-refills -p er-inventory-sort -p er-loading-bar \
-# 	-p er-loading-portrait -p er-save-disable
+# RE-ARMED 2026-09-01. Unwired on 2026-08-31 for a real reason -- er-inventory-sort's crate-level
+# allow was in a working tree and in no commit, so the batch stopped at 24 deny-by-default
+# dead-code errors -- and then left unwired after that lib.rs landed. All fourteen crate-level
+# allows the comment above describes are committed now; measured 2026-09-01, this line runs
+# 201 tests and every one passes. That is the whole 201: 1 + 8 + 18 + 29 + 44 + 3 + 1 + 12 + 1 +
+# 11 + 10 + 2 + 8 + 53, matching the per-crate host-lib counts the coverage gate had been
+# printing at nobody for a day.
+cargo test --manifest-path "$repo_root/Cargo.toml" \
+	-p er-quickload-data -p er-build-watermark-core -p er-charm-enemies \
+	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
+	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
+	-p er-better-refills -p er-inventory-sort -p er-loading-bar \
+	-p er-loading-portrait -p er-save-disable
+
+# er-build-export -- the crate that WRITES the `?i=` share link, and the only one of the fifteen
+# unreachable crates that was in neither batch. 50 lib tests plus 37 in five integration targets,
+# so it is deliberately NOT `--lib`: `tests/round_trip.rs` is where the interleave that would put
+# a bolt in an arrow slot gets caught, and `--lib` would compile none of it. Two of the five
+# targets reach outside the checkout and skip loudly rather than fail when they cannot --
+# `python3` for the repository decoder, `node` plus an npm `lzutf8@0.6.3` for the reference
+# decoder -- which is why this is one more cargo line and not a row in the portability ledger.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-export
 
 # Batch 2 -- the host-only asset/codec crates and the two that ran ONLY in CI. er-soulsformats
 # and er-param-inspect were named in .github/workflows/check.yml and nowhere else, so a

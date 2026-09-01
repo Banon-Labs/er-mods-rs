@@ -767,6 +767,68 @@ def _counter_writers():
         expect("counter-writers", "spec/benign-macro-not-refused", rc, out, False)
 
 
+@control("test-target-coverage",
+         baseline=["python3", "scripts/check-test-target-coverage.py"])
+def _test_target_coverage():
+    """THE UNEXECUTED-TEST GATE: a crate whose `#[test]`s no `cargo test` line ever selects.
+
+    `default-members = ["crates/er-quickload"]` makes a bare `cargo test` select ONE of 64
+    crates, so a crate is covered only by being NAMED. On 2026-08-31 that left 251 test
+    functions across 15 crates that had never executed once; they were wired up and the gate
+    armed on 2026-09-01. The controls below plant each of the three defects it claims to
+    catch, then two lookalikes it must NOT call defects.
+    """
+    g = ["python3", "scripts/check-test-target-coverage.py"]
+    sh = "scripts/check.sh"
+    allow = "scripts/unexecuted-tests-allowlist.txt"
+    drop = lambda t: t.replace("-p er-save-suppress ", "", 1)  # noqa: E731
+
+    # SENSITIVITY 1: the original defect, exactly. Un-name one crate on the batch line and its
+    # 53 tests stop executing -- while `cargo test` still prints "ok" for everything else, which
+    # is what made this class invisible for as long as it was.
+    with edit_file(sh, drop):
+        rc, out = run(g)
+        expect("test-target-coverage", "sens/crate-dropped-from-check-sh", rc, out, True,
+               ["er-save-suppress", "host lib tests"])
+
+    # SENSITIVITY 2: THE RATCHET. An allowlist entry for a crate that IS covered must fail as
+    # stale. Without this the file is append-only: every fix leaves behind a line claiming debt
+    # that no longer exists, and the list stops being readable as a count of what is unrun.
+    with edit_file(allow, lambda t: t + "er-save-suppress  no-host-runner  # pc probe\n"):
+        rc, out = run(g)
+        expect("test-target-coverage", "sens/stale-allowlist-entry", rc, out, True,
+               ["er-save-suppress", "no longer an offender"])
+
+    # SENSITIVITY 3: a test file NO module tree reaches. cargo never compiles it, so these are
+    # not merely unrun -- they were never built, and a `cargo test` that passes says nothing
+    # about them.
+    orphan = "crates/er-safe-input/src/_pc_probe_orphan.rs"
+    with new_file(orphan, "#[cfg(test)]\nmod tests {\n    #[test]\n    fn pc_probe() {}\n}\n"):
+        rc, out = run(g)
+        expect("test-target-coverage", "sens/orphaned-test-file", rc, out, True,
+               ["_pc_probe_orphan.rs", "NO module tree reaches"])
+
+    # SPECIFICITY 1: the orphan lookalike. The SAME file, reached by a `mod` declaration, is
+    # ordinary new code in a crate that already has a runner. A gate that cannot tell those
+    # apart makes every new file a finding and gets routed around.
+    wired = "crates/er-safe-input/src/_pc_probe_wired.rs"
+    with new_file(wired, "#[cfg(test)]\nmod tests {\n    #[test]\n    fn pc_probe() {}\n}\n"):
+        with edit_file("crates/er-safe-input/src/lib.rs", lambda t: t + "\nmod _pc_probe_wired;\n"):
+            rc, out = run(g)
+            expect("test-target-coverage", "spec/new-tests-in-a-covered-crate", rc, out, False)
+
+    # SPECIFICITY 2: coverage is not check.sh's alone. Drop the crate from check.sh AND name it
+    # in the CI workflow -- one of the three RUNNER_SOURCES -- and it is still covered, so the
+    # gate must go back to GREEN. This is what stops sensitivity 1 from being satisfied by a
+    # gate that merely greps one file, and it is the parity failure that put er-soulsformats and
+    # er-param-inspect in check.yml and nowhere else.
+    with edit_file(sh, drop):
+        with edit_file(".github/workflows/check.yml",
+                       lambda t: t + "\n          cargo test -p er-save-suppress\n"):
+            rc, out = run(g)
+            expect("test-target-coverage", "spec/covered-by-another-runner-source", rc, out, False)
+
+
 @control("stale-rva-calls", fast=False,
          baseline=["python3", "scripts/check-stale-rva-calls.py"])
 def _stale_rva():

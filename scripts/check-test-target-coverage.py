@@ -44,7 +44,24 @@ So this gate classifies every test by the TARGET able to execute it (see
 A third class, found while building this: `#[test]` functions in a file that NO module
 tree reaches -- not declared with `mod`, not `include!`d. cargo never compiles it, so the
 tests are not merely unrun, they are not even built, and nothing anywhere says so.
-`ORPHANED_TEST_FILES` is the acknowledged list; anything else is a failure.
+
+# The allowlist, and why it can only shrink
+
+Every exemption lives in `scripts/unexecuted-tests-allowlist.txt`, in the shape this repo
+already uses for `oracle-writers-allowlist.txt`, `counter-writers-allowlist.txt` and
+`rva-alias-allowlist.txt`. Three kinds -- `feature-gated`, `orphaned-file`, `no-host-runner`
+-- each carrying a reason, which is enforced: an entry with nothing after the `#` is a
+failure, because an unexplained exemption is the thing the file exists to prevent.
+
+It is a RATCHET, not a list, and that is the whole design. An offender not listed fails, so
+nothing new lands quietly. An entry that is no longer an offender ALSO fails, so wiring a
+crate up is not finished until its line is deleted, and the file cannot become an
+append-only graveyard whose length has stopped meaning anything. The ceiling on the
+`no-host-runner` class is ZERO and is not a number to bump: on 2026-08-31 this gate reported
+251 unrun test functions across 15 crates and PASSED, because check.sh had it commented out;
+on 2026-09-01 all 251 were wired into check.sh, all 251 passed, and the gate was re-armed.
+The lesson is not in the 251 -- it is that the count was printed accurately, for a day,
+where nothing read it.
 
 # Non-vacuity
 
@@ -67,9 +84,18 @@ check is trusted:
      as covering `tests/*.rs`, a test behind an unenabled feature, and an orphaned file.
      Plus a false-positive control (a fully covered fixture must be silent) and a negative
      control (a crate with no tests is not a finding).
+  4. The allowlist ratchet, in both directions: an entry excuses the crate it names and
+     SAYS SO, a stale entry fails, an entry of the wrong kind does not excuse, and an entry
+     with no reason or an invented kind is rejected. An allowlist proved only in the
+     excusing direction is not a ratchet, it is an off switch.
 
 `--prove-selftest-catches-regression` blinds the windows matcher and requires the selftest
-itself to fail.
+itself to fail. The stronger, direct proof -- plant each defect in the REAL tree, run the
+REAL gate -- is `scripts/prove-gate-positive-controls.py --only test-target-coverage`:
+three sensitivity controls (a crate un-named on the batch line, a stale allowlist entry, an
+orphaned file) and two specificity controls (new tests in an already-covered crate, and a
+crate covered by a DIFFERENT runner source) which must stay green. It is not wired into
+check.sh because it mutates tracked files while it runs.
 
 The classifier was calibrated by hand on 2026-08-31 against real cargo output; the
 per-crate numbers are in the table below and each is reproducible with
@@ -96,26 +122,93 @@ import test_target_inventory as tti  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Files whose `#[test]` functions no module tree reaches -- not declared with `mod`, not
-# `include!`d. cargo does not compile them, so their tests are not merely unrun, they were
-# never built, and nothing anywhere says so. The list is EMPTY on purpose: it exists so that
-# accepting one becomes a reviewable diff instead of the invisible default. One was live for
-# part of 2026-08-31 (`crates/er-game-base/src/repeat.rs`, 8 tests, written and not yet
-# wired) and was resolved by adding the `mod` declaration, which is the only correct fix.
-ORPHANED_TEST_FILES: dict[str, str] = {}
+# THE EXEMPTION LIST LIVES IN A FILE, NOT HERE (2026-09-01). Both lists below used to be
+# Python dict literals at this spot, which is the wrong place for them twice over: an addition
+# reads as a code change and slides past review in a diff full of them, and nothing enforced
+# the other direction, so an entry stayed after the thing it excused was fixed. They are now
+# scripts/unexecuted-tests-allowlist.txt, in the shape this repo already uses for
+# oracle-writers-allowlist.txt / counter-writers-allowlist.txt / rva-alias-allowlist.txt: an
+# unlisted offender is red, AND a listed non-offender is red, so the list can only shrink.
+ALLOWLIST_NAME = "unexecuted-tests-allowlist.txt"
 
-# Tests behind a non-default cargo feature. No gate in this repo builds a non-default
-# feature, so these do not run -- which is a decision, and therefore must be written down
-# rather than merely noticed. Anything not listed here is a failure.
-FEATURE_GATED_ACKNOWLEDGED: dict[str, str] = {
-    "er-shaderkit": (
-        "2 tests behind the `gpu` feature (wgpu). They ask a real adapter for "
-        "SPIRV_SHADER_PASSTHROUGH and print `SKIP ... (no GPU)` when there is none, so "
-        "wiring them into a gate would add a wgpu build to every run in exchange for a "
-        "test that skips on CI. Run them by hand: "
-        "`cargo test -p er-shaderkit --features gpu`."
-    ),
-}
+# The exemption kinds the file may use. `no-host-runner` is the one with teeth: its ceiling is
+# ZERO and it is not a number to bump, because "this crate's tests cannot run on a host" is the
+# exact sentence the 251 unrun tests would have been filed under if anyone had bothered to file
+# them. A windows-only cdylib does NOT qualify -- its tests belong in the `cargo xwin test
+# --lib` list in check-rust-build.sh, which runs them under wine.
+ALLOWLIST_KINDS = ("feature-gated", "orphaned-file", "no-host-runner")
+
+
+class Allowlist:
+    """Parsed scripts/unexecuted-tests-allowlist.txt: key -> (kind, reason).
+
+    `used` records which keys an evaluation actually excused, so a stale entry -- one whose
+    offender is gone -- can be reported. That report is the ratchet: without it the file is
+    append-only and every fix leaves a line behind claiming debt that no longer exists.
+    """
+
+    def __init__(self, entries: dict[str, tuple[str, str]], errors: list[str]) -> None:
+        self.entries = entries
+        self.errors = errors
+        self.used: set[str] = set()
+
+    def reason(self, key: str, kind: str) -> str | None:
+        """The reason `key` is excused for `kind`, or None if it is not excused."""
+        found = self.entries.get(key)
+        if found is None or found[0] != kind:
+            return None
+        self.used.add(key)
+        return found[1]
+
+    def stale(self) -> list[str]:
+        return [
+            f"{key}: allowlisted as `{kind}` in scripts/{ALLOWLIST_NAME}, but it is no longer "
+            "an offender -- the exemption outlived the thing it excused. Delete that one line; "
+            "the list may only shrink."
+            for key, (kind, _) in sorted(self.entries.items())
+            if key not in self.used
+        ]
+
+
+def load_allowlist(root: Path) -> Allowlist:
+    path = root / "scripts" / ALLOWLIST_NAME
+    entries: dict[str, tuple[str, str]] = {}
+    errors: list[str] = []
+    if not path.is_file():
+        # Absent is empty, not fatal: the synthetic fixtures in --selftest have no scripts/
+        # allowlist and must behave as a tree that excuses nothing.
+        return Allowlist(entries, errors)
+    for num, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        body, _, reason = line.partition("#")
+        fields = body.split()
+        if len(fields) != 2:
+            errors.append(
+                f"scripts/{ALLOWLIST_NAME}:{num}: expected `<key>  <kind>  # <reason>`, got {raw!r}"
+            )
+            continue
+        key, kind = fields
+        if kind not in ALLOWLIST_KINDS:
+            errors.append(
+                f"scripts/{ALLOWLIST_NAME}:{num}: unknown kind {kind!r}; "
+                f"expected one of {', '.join(ALLOWLIST_KINDS)}"
+            )
+            continue
+        reason = reason.strip()
+        if not reason:
+            errors.append(
+                f"scripts/{ALLOWLIST_NAME}:{num}: {key} has no reason after `#`. Every exemption "
+                "carries one -- an unexplained entry is the silent exemption this file exists "
+                "to prevent."
+            )
+            continue
+        if key in entries:
+            errors.append(f"scripts/{ALLOWLIST_NAME}:{num}: duplicate entry for {key}")
+            continue
+        entries[key] = (kind, reason)
+    return Allowlist(entries, errors)
 
 # MEASURED PROPERTIES, not frozen totals. `cargo test -- --list` counts were measured for
 # each of these on 2026-08-31 and are recorded in --verify-against-cargo below, but they are
@@ -237,9 +330,12 @@ def collect_runners(root: Path) -> Runners:
     return runners
 
 
-def evaluate(root: Path, runners: Runners) -> tuple[list[str], list[str], list[dict]]:
+def evaluate(
+    root: Path, runners: Runners, allow: Allowlist | None = None
+) -> tuple[list[str], list[str], list[dict]]:
     """Return (failures, notes, table)."""
-    failures: list[str] = []
+    allow = load_allowlist(root) if allow is None else allow
+    failures: list[str] = list(allow.errors)
     notes: list[str] = []
     table: list[dict] = []
 
@@ -274,8 +370,16 @@ def evaluate(root: Path, runners: Runners) -> tuple[list[str], list[str], list[d
             missing.append(f"{integ.windows_only} windows-only integration tests")
 
         if missing:
-            row["verdict"] = "NEVER RUNS"
-            failures.append(f"{name}: " + "; ".join(missing))
+            excused = allow.reason(name, "no-host-runner")
+            if excused is not None:
+                row["verdict"] = "exempt"
+                notes.append(
+                    f"{name}: no host runner, acknowledged -- {excused} "
+                    f"(unrun: {'; '.join(missing)})"
+                )
+            else:
+                row["verdict"] = "NEVER RUNS"
+                failures.append(f"{name}: " + "; ".join(missing))
         elif lib.total or integ.total:
             row["verdict"] = "runs"
         else:
@@ -283,10 +387,11 @@ def evaluate(root: Path, runners: Runners) -> tuple[list[str], list[str], list[d
 
         gating = (lib.feature_names | integ.feature_names) - runners.features.get(name, set())
         if row["feature_gated"] and gating:
-            if name in FEATURE_GATED_ACKNOWLEDGED:
+            excused = allow.reason(name, "feature-gated")
+            if excused is not None:
                 notes.append(
                     f"{name}: {row['feature_gated']} feature-gated test(s), acknowledged -- "
-                    f"{FEATURE_GATED_ACKNOWLEDGED[name]}"
+                    f"{excused}"
                 )
             else:
                 failures.append(
@@ -302,16 +407,52 @@ def evaluate(root: Path, runners: Runners) -> tuple[list[str], list[str], list[d
             rel = str(orphan.relative_to(root)) if orphan.is_absolute() else str(orphan)
             solo = tti._CrateWalker(tti.crate_default_features(crate.path))
             solo.walk_file(orphan, [])
-            if rel not in ORPHANED_TEST_FILES:
+            excused = allow.reason(rel, "orphaned-file")
+            if excused is None:
                 failures.append(
                     f"{crate.name}: {solo.counts.total} test(s) in {rel}, which NO module "
                     "tree reaches (no `mod` declaration, no `include!`) -- cargo never "
                     "compiles the file, so they are not merely unrun, they are unbuilt"
                 )
             else:
-                notes.append(f"orphaned (acknowledged): {rel} -- {ORPHANED_TEST_FILES[rel]}")
+                notes.append(f"orphaned (acknowledged): {rel} -- {excused}")
+
+    # THE RATCHET'S OTHER DIRECTION. Everything above fails on an offender that is not
+    # allowlisted. This fails on an allowlist entry whose offender is GONE -- without it the
+    # file is append-only, every fix leaves behind a line claiming debt that no longer exists,
+    # and the list stops being readable as a count of what is actually unrun.
+    failures.extend(allow.stale())
 
     return failures, notes, table
+
+
+CLAUSE_COUNT = re.compile(
+    r"(\d+) (?:host lib|host integration|windows-only lib|windows-only integration) tests"
+)
+BARE_COUNT = re.compile(r"(\d+) test\(s\)")
+
+
+def count_unrun_tests(failures: list[str]) -> int:
+    """How many `#[test]` functions the findings cover.
+
+    findall, NOT search. One crate's finding can carry SEVERAL clauses -- "50 host lib tests;
+    37 host integration tests" -- and `re.search` returns the first and drops the rest. That is
+    not hypothetical: the headline this gate printed on 2026-08-31 was "251 test function(s)
+    that never execute" when the true count was 288, because er-build-export's 37 integration
+    tests fell off the end of the gate's own summary. A gate that undercounts the thing it
+    reports teaches its readers the problem is smaller than it is, which is a quieter version of
+    not reporting it at all -- and this one was already being ignored for a living.
+    """
+    total = 0
+    for f in failures:
+        clauses = CLAUSE_COUNT.findall(f)
+        if clauses:
+            total += sum(int(n) for n in clauses)
+            continue
+        bare = BARE_COUNT.search(f)
+        if bare:
+            total += int(bare.group(1))
+    return total
 
 
 def run_check(root: Path) -> int:
@@ -323,17 +464,9 @@ def run_check(root: Path) -> int:
 
     if failures:
         print("\nFAIL: test targets that no gate executes:\n", file=sys.stderr)
-        total = 0
         for f in sorted(failures):
             print(f"  - {f}", file=sys.stderr)
-            m = re.search(r"(\d+) (?:host lib|host integration|windows-only lib|"
-                          r"windows-only integration) tests", f)
-            if m:
-                total += int(m.group(1))
-                continue
-            m = re.search(r"(\d+) test\(s\)", f)
-            if m:
-                total += int(m.group(1))
+        total = count_unrun_tests(failures)
         print(
             f"\n{len(failures)} crate(s); {total} test function(s) that never execute.\n"
             "Wire the crate into scripts/check.sh (host) or the `cargo xwin test --lib`\n"
@@ -591,6 +724,15 @@ def selftest(blind_windows: bool) -> int:
             problems.append(f"removing the host runner did not fire: {failures}")
         if "1 host integration tests" not in joined:
             problems.append(f"integration target not reported: {failures}")
+        # ...and the HEADLINE must count BOTH clauses of that one finding. `plain` loses 2 lib
+        # tests and 1 integration test in the same message; a summariser that reads only the
+        # first clause reports 2. That is the exact bug that made the live gate announce 251
+        # when the number was 288 -- caught here rather than in a message nobody re-derives.
+        if count_unrun_tests(failures) != 3:
+            problems.append(
+                "the headline undercounts a multi-clause finding: "
+                f"{count_unrun_tests(failures)}, expected 3 (2 lib + 1 integration) -- {failures}"
+            )
 
     with tempfile.TemporaryDirectory() as td:
         # (b) keep the HOST runner for nativey but drop the WINDOWS one. The host run
@@ -659,6 +801,49 @@ def selftest(blind_windows: bool) -> int:
         if "NO module tree reaches" not in " ".join(failures):
             problems.append(f"an orphaned test file was not caught: {failures}")
 
+    # ---- 3. THE RATCHET, driven in both directions. An allowlist that only ever excuses is
+    #         not a ratchet, it is an off switch, so each of these is a way it can rot: an
+    #         entry that stops excusing anything, an entry whose kind does not match the
+    #         offence, an entry with no reason, and an entry naming a kind that does not exist.
+    uncovered_sh = "cargo test -p nativey --lib\n"
+    covered_sh = "cargo test -p plain\ncargo test -p nativey --lib\n"
+    win_sh = "cargo xwin test --lib -p nativey --target x86_64-pc-windows-msvc\n"
+
+    def with_allowlist(check_sh: str, text: str) -> tuple[list[str], list[str]]:
+        with tempfile.TemporaryDirectory() as td:
+            root = _write_fixture(Path(td), check_sh, win_sh)
+            (root / "scripts" / ALLOWLIST_NAME).write_text(text, encoding="utf-8")
+            failures, notes, _ = evaluate(root, collect_runners(root))
+            return failures, notes
+
+    # (f) a `no-host-runner` entry excuses the crate it names -- and says so out loud, because a
+    #     silent exemption is indistinguishable from a gate that stopped looking.
+    failures, notes = with_allowlist(uncovered_sh, "plain  no-host-runner  # deliberate\n")
+    if any(f.startswith("plain:") for f in failures):
+        problems.append(f"an allowlisted `no-host-runner` crate was still a failure: {failures}")
+    if not any("plain" in n and "deliberate" in n for n in notes):
+        problems.append(f"an allowlisted crate was excused SILENTLY, with no note: {notes}")
+
+    # (g) THE SHRINK-ONLY HALF. Wire the same crate up and the entry must now FAIL as stale.
+    #     Without this the file is append-only and every fix leaves a line behind.
+    failures, _ = with_allowlist(covered_sh, "plain  no-host-runner  # deliberate\n")
+    if not any("no longer an offender" in f for f in failures):
+        problems.append(f"a stale allowlist entry was not reported: {failures}")
+
+    # (h) the KIND is load-bearing, not decoration: an entry of the wrong kind must not excuse.
+    failures, _ = with_allowlist(uncovered_sh, "plain  feature-gated  # wrong kind\n")
+    if not any(f.startswith("plain:") and "host lib tests" in f for f in failures):
+        problems.append(f"a wrong-kind allowlist entry wrongly excused the crate: {failures}")
+
+    # (i) an entry with no reason, and an entry naming a kind that does not exist, are both
+    #     rejected -- an unexplained exemption is the thing this file exists to prevent.
+    failures, _ = with_allowlist(uncovered_sh, "plain  no-host-runner\n")
+    if not any("has no reason" in f for f in failures):
+        problems.append(f"a reasonless allowlist entry was accepted: {failures}")
+    failures, _ = with_allowlist(uncovered_sh, "plain  invented-kind  # x\n")
+    if not any("unknown kind" in f for f in failures):
+        problems.append(f"an unknown allowlist kind was accepted: {failures}")
+
     if problems:
         print("SELFTEST FAILED:", file=sys.stderr)
         for p in problems:
@@ -666,7 +851,9 @@ def selftest(blind_windows: bool) -> int:
         return 1
     print(
         "selftest ok: the synthetic fixture pins all six gating mechanisms exactly, the\n"
-        "live workspace still exhibits each one, and all six failure paths fire."
+        "live workspace still exhibits each one, all five failure paths fire, and the\n"
+        "allowlist ratchet holds in both directions (excuses what it names, fails on a\n"
+        "stale entry, a wrong kind, a reasonless entry and an unknown kind)."
     )
     return 0
 

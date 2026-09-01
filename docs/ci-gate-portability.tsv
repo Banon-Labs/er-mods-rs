@@ -183,7 +183,9 @@ portable	-	audit-1170-readiness.py --check	source/AST/text analysis only
 portable	-	audit-1170-gate-bypass.py --selftest	source/AST/text analysis only
 portable	-	audit-ungated-image-writes.py --selftest	source/AST/text analysis only
 portable	-	audit-ungated-image-writes.py	source/AST/text analysis only
+portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces in tmp plus a source-only read of the live crates
 portable	-	check-test-target-coverage.py --prove-selftest-catches-regression	source/AST/text analysis only
+portable	-	check-test-target-coverage.py	source/AST/text analysis only
 portable	-	check-me3-shell-coverage.py --selftest	source/AST/text analysis only
 portable	-	check-me3-shell-coverage.py	source/AST/text analysis only
 portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only
