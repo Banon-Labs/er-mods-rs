@@ -79,13 +79,14 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
     // visible flag is what hid the arrow-key theft for as long as it did, so both are emitted
     // side by side with the counter that proves keys are being let through.
     body.push_str(&format!(
-        "  \"effect_selector_visible\": {},\n  \"effect_selector_open\": {},\n  \"effect_keys_ignored_while_closed\": {},\n  \"effect_selector_text\": \"{}\",\n  \"overlay_collapsed\": {},\n  \"overlay_toggle_clicks\": {},\n",
+        "  \"effect_selector_visible\": {},\n  \"effect_selector_open\": {},\n  \"effect_keys_ignored_while_closed\": {},\n  \"effect_selector_text\": \"{}\",\n  \"overlay_collapsed\": {},\n  \"overlay_toggle_clicks\": {},\n  \"overlay_toggle_keys\": {},\n",
         state.effect_selector_visible,
         effects::selector_open(state),
         effects::effect_keys_ignored_while_closed(),
         json_escape(&effects::effect_selector_text()),
         present_overlay::overlay_collapsed(),
-        present_overlay::overlay_toggle_clicks()
+        present_overlay::overlay_toggle_clicks(),
+        present_overlay::overlay_toggle_keys()
     ));
     body.push_str(&crash_telemetry::telemetry_json_fields());
     body.push_str(&format!(

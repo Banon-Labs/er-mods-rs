@@ -38,13 +38,41 @@
 //!   `er-net-effects.toml` to match.
 //! - Deliberate chords and player-chosen bindings stay live whether the bar is open or not:
 //!   [`SelectorKey::ShowHide`] (the only way back to a hidden bar),
+//!   [`SelectorKey::ExpandCollapse`] (the only way OPEN -- see below),
 //!   [`SelectorKey::EffectToggle`], and [`SelectorKey::Other`] -- which is where the hotkeys from
 //!   `.er-net-effects-hotkeys.json` land. Firing an effect while the bar is minimized IS this
 //!   DLL's primary use; the bar ships minimized precisely so it can be played that way. Gating
 //!   those on open would make the DLL useless for the thing it is for.
 //!
-//! None of the three can be taken from the game in the first place: two need Alt, and Elden Ring
-//! binds nothing to Alt+0 or Alt+'.
+//! None of them can be taken from the game in the first place: they need Alt, and Elden Ring binds
+//! nothing to Alt+0, Alt+9 or Alt+'.
+//!
+//! # Why expanding needs a KEY, not just the button
+//!
+//! The `[+]` header is a mouse target at absolute screen coordinates, hit-tested against
+//! `imgui::Io::mouse_pos`, which hudhook fills from `WM_MOUSEMOVE` / `WM_INPUT` on the game's
+//! window. From #317 until 2026-08-31 that click was the ONLY thing that could expand the bar,
+//! and it never once fired.
+//!
+//! WHAT WAS MEASURED, live, run `br-20260831-063324-0a97`, `/proc/<pid>/mem` (no injection):
+//!
+//! - `overlay_toggle_clicks` finished the ~8-hour session at **0** across 1,296,264 rendered
+//!   frames. The button was drawn on every one of them.
+//! - The wndproc path itself WORKS -- `MouseClickedPos[0]` held `(2155, 821)`, so imgui had seen
+//!   real positions and a real left click at some point. This was not a dead hook.
+//! - `MousePos` was nevertheless FROZEN at `(3190, 794)` on a 3840x2160 display across 12s of
+//!   sampling while the game rendered at ~45fps -- far from the button's corner box, which sits
+//!   within `SCREEN_MARGIN` of the top right.
+//!
+//! WHAT IS INFERRED, not proven: that the freeze is Elden Ring holding the mouse for the camera
+//! through DirectInput and leaving the Windows cursor where it lies. It fits (the game polls a
+//! DirectInput device every frame, and the cursor is hidden in play), but a still pointer is also
+//! what a player who is not touching the mouse produces, and that was not separable from a read.
+//!
+//! Either way the conclusion is the same and does not rest on the mechanism: a hit box in a screen
+//! corner is the wrong affordance on a host that may own the pointer, and a feature with exactly
+//! one affordance that scores zero in 1.3M frames needs a second one. The click stays -- it works
+//! wherever the pointer IS free -- and the key is what the player uses.
 
 // Windows-only in practice; kept portable so `cargo test` proves the decision table on the host
 // instead of it being reasoned about in a review.
@@ -82,6 +110,10 @@ pub(crate) enum SelectorKey {
     StackEdit,
     /// Alt+`'` -- apply or remove whatever the cursor highlights.
     EffectToggle,
+    /// Alt+9 -- expand the bar from its `[+]` button, or minimize it back.
+    ///
+    /// The way OPEN, and on this game the only one. See the module note.
+    ExpandCollapse,
     /// Everything else, including whatever the player bound in the effect-trigger hotkey file.
     Other,
 }
@@ -110,6 +142,7 @@ pub(crate) fn key_for_vk_in(
         Some(SelectorAction::StackAdd | SelectorAction::StackRemove) => SelectorKey::StackEdit,
         Some(SelectorAction::EffectToggle) => SelectorKey::EffectToggle,
         Some(SelectorAction::ShowHide) => SelectorKey::ShowHide,
+        Some(SelectorAction::ExpandCollapse) => SelectorKey::ExpandCollapse,
         None => SelectorKey::Other,
     }
 }
@@ -143,6 +176,11 @@ pub(crate) fn should_handle_key(open: bool, key: SelectorKey) -> bool {
     match key {
         // Without it a hidden bar can never be brought back from the keyboard.
         SelectorKey::ShowHide => true,
+        // Gating this on `open` would be circular: open MEANS expanded, so the key that expands
+        // the bar would need the bar already expanded. That is not a hypothetical -- the bar ships
+        // collapsed, and until this key existed the only thing that could expand it was a mouse
+        // click the game does not let the player make.
+        SelectorKey::ExpandCollapse => true,
         // Alt+' is a deliberate chord on the effect the player already chose, and the trigger
         // hotkeys are the player's own bindings. Both are meant to be pressed WHILE PLAYING --
         // which is exactly when the bar is minimized -- so neither waits for the bar.
@@ -169,6 +207,7 @@ mod tests {
     /// about the shipped bindings, so it needs their codes.
     const VK_INSERT: u32 = 0x2d;
     const VK_0: u32 = 0x30;
+    const VK_9: u32 = 0x39;
 
     use super::*;
 
@@ -309,6 +348,7 @@ mod tests {
         assert!(should_consume_key(true, SelectorKey::Arrow));
         for key in [
             SelectorKey::ShowHide,
+            SelectorKey::ExpandCollapse,
             SelectorKey::StackEdit,
             SelectorKey::EffectToggle,
             SelectorKey::Other,
@@ -368,5 +408,36 @@ mod tests {
             assert_eq!(key_for_vk(vk, false), SelectorKey::Other);
             assert_eq!(key_for_vk(vk, true), SelectorKey::Other);
         }
+    }
+
+    #[test]
+    fn the_expand_key_needs_alt() {
+        assert_eq!(key_for_vk(VK_9, true), SelectorKey::ExpandCollapse);
+        assert_eq!(
+            key_for_vk(VK_9, false),
+            SelectorKey::Other,
+            "bare 9 is a game key"
+        );
+    }
+
+    /// THE REGRESSION. The bar ships minimized, and from #317 until 2026-08-31 the only thing that
+    /// could expand it was a left click on a hit box in a screen corner -- which scored
+    /// `overlay_toggle_clicks == 0` across a measured 1,296,264 rendered frames. So the shipped
+    /// default MUST have a key that acts while the bar is closed, or the effect list and the four
+    /// cursor keys behind it are dead.
+    #[test]
+    fn the_shipped_default_can_be_expanded_from_the_keyboard() {
+        let open = SHIPPED_DEFAULT.is_open();
+        assert!(!open, "the shipped default is collapsed, hence not open");
+        let expand = key_for_vk(VK_9, true);
+        assert_eq!(expand, SelectorKey::ExpandCollapse);
+        assert!(
+            should_handle_key(open, expand),
+            "the key that OPENS the bar may not require the bar to be open"
+        );
+        assert!(
+            !should_consume_key(open, expand),
+            "expanding is read, never taken: the game must still see the key"
+        );
     }
 }

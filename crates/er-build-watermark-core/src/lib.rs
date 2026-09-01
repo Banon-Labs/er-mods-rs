@@ -37,7 +37,10 @@ mod overlay;
 pub mod overlay_host;
 
 #[cfg(windows)]
-pub use overlay::{claim_owner, draw_rows, install_if_owner, render_hits, visible_rows};
+pub use overlay::{
+    OverlayClaim, claim_overlay_ownership, claim_owner, draw_rows, install_if_owner, render_hits,
+    visible_rows,
+};
 
 /// Host stub so callers compile on Linux; there is no swapchain to draw on.
 #[cfg(not(windows))]
