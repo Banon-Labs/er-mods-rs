@@ -30,6 +30,16 @@ const METHOD_ENV: &str = "ER_QUICKLOAD_AUTOLOAD_METHOD";
 // The config file is now the only way to name a save source. A per-run override goes in the
 // DLL-adjacent sidecar (see `sidecar_config_path`), which is a FILE, so it can be read back.
 const SAVE_SUPPRESSION_ENABLED_KEY: &str = "save_suppression_enabled";
+
+/// The game-directory autoload REQUEST file, named here only so the log lines that refuse its
+/// `slot=` can tell the reader which file to go and look at.
+const AUTOLOAD_REQUEST_FILE_NAME: &str = "er-quickload-autoload.txt";
+
+/// The existing opt-in for the deprecated staged-save/explicit-source probe path (AGENTS.md
+/// 2026-07-08); `run-me3-product-smoke.sh` and `run-product-continue-direct-probe.sh` already gate
+/// on it. Read here in the SAFE direction only: unset means the deprecated slot channel is closed,
+/// so no release/default behaviour depends on this variable existing.
+const DEPRECATED_STAGED_SAVE_PROBE_ENV: &str = "ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE";
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeConfig {
     pub path: PathBuf,
@@ -42,6 +52,17 @@ pub(crate) struct RuntimeConfig {
     /// Sidecar-only: `true` clears any inherited `save_file`, selecting the active Steam
     /// user's default container. See the `save_file_default` arm in `parse_runtime_config`.
     pub save_file_default: Option<bool>,
+    /// What `save_file_default` actually took away: the `save_file` (and `slot`) the
+    /// game-directory config named before the sidecar cleared them.
+    ///
+    /// KEPT ON PURPOSE, because `save_file: None` is a DERIVED state and reporting it as the
+    /// INPUT state is a lie the log used to tell. Downstream, `enforce_save_override_or_abort`
+    /// tested `configured_save_file().is_none()` and wrote "no save_file configured" -- which is
+    /// false for a user who configured one and had it overridden. That sentence sends the reader
+    /// hunting for a missing setting instead of at the file that overrode it, and the run boots a
+    /// different character than the config names while the log says nothing happened.
+    pub save_file_cleared_by_sidecar: Option<PathBuf>,
+    pub slot_cleared_by_sidecar: Option<i32>,
     pub slot: Option<i32>,
     pub method: Option<String>,
     pub boot_background_image: Option<PathBuf>,
@@ -63,7 +84,7 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     );
     match RUNTIME_CONFIG.get() {
         Some(Ok(config)) => append_autoload_debug(format_args!(
-            "runtime-config: loaded '{}' sidecar={} save_file={} slot={} method={} boot_background_image={} {SAVE_SUPPRESSION_ENABLED_KEY}={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
+            "runtime-config: loaded '{}' sidecar={} save_file={} save_file_default={} slot={} method={} boot_background_image={} {SAVE_SUPPRESSION_ENABLED_KEY}={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
             config.path.display(),
             config
                 .sidecar
@@ -74,6 +95,10 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
                 .save_file
                 .as_ref()
                 .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unset>".to_owned()),
+            config
+                .save_file_default
+                .map(|v| v.to_string())
                 .unwrap_or_else(|| "<unset>".to_owned()),
             config
                 .slot
@@ -125,6 +150,57 @@ pub(crate) fn configured_save_file() -> Option<PathBuf> {
 
 pub(crate) fn configured_explicit_save_file() -> Option<PathBuf> {
     runtime_config().and_then(|config| config.save_file.clone())
+}
+
+/// Why no explicit `save_file` is in force right now, in words, for the log line that announces
+/// the default-save fallback.
+///
+/// "Not configured" and "configured, then deliberately overridden" are different situations with
+/// different fixes, and the old `DEFAULT-USER-SAVE` line asserted the first for both. It also
+/// named `ER_QUICKLOAD_SAVE_FILE`, an environment variable that was REMOVED (see the comment at
+/// the top of this file), so a reader who believed the log went looking for a setting that no
+/// longer exists and a variable that no longer does anything.
+pub(crate) fn configured_save_file_absence_reason() -> String {
+    let Some(config) = runtime_config() else {
+        return format!(
+            "the runtime config did not load ({})",
+            runtime_config_error().unwrap_or_else(|| "no error recorded".to_owned())
+        );
+    };
+    if let Some(cleared) = config.save_file_cleared_by_sidecar.as_ref() {
+        return format!(
+            "save_file = '{}'{} IS configured in '{}', but the per-run sidecar '{}' set \
+             save_file_default = true, which CLEARS it -- this run was ASKED for the active Steam \
+             user's own container, so the configured save is being ignored ON PURPOSE",
+            cleared.display(),
+            config
+                .slot_cleared_by_sidecar
+                .map(|slot| format!(" (slot = {slot})"))
+                .unwrap_or_default(),
+            config.path.display(),
+            config
+                .sidecar
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".to_owned()),
+        );
+    }
+    if config.save_file_default == Some(true) {
+        // The sidecar asked for the default container and there was nothing to clear. Different
+        // from silence: this run ASKED for this, and a reader who sees only "names no save_file"
+        // would go add one to the game config and watch the next run ignore it too.
+        return format!(
+            "the per-run sidecar '{}' set save_file_default = true (and '{}' named no save_file \
+             to clear), so this run asked for the active Steam user's own container",
+            config
+                .sidecar
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".to_owned()),
+            config.path.display()
+        );
+    }
+    format!("'{}' names no save_file", config.path.display())
 }
 
 /// Optional boot background image override from `er-quickload.toml`. This is intentionally TOML-only:
@@ -278,20 +354,132 @@ pub(crate) fn save_suppression_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// THE configured autoload slot -- ONE answer, shared by everything that steers a boot load.
+///
+/// It used to read `runtime_config().slot`, i.e. the TOML alone, while
+/// [`configured_save_load_request`] read the TOML *plus* the game-directory
+/// `er-quickload-autoload.txt` channel. Two readers of "the configured slot" that consult
+/// different files will eventually disagree, and on 2026-08-31 (run br-20260831-014208-b1d6) they
+/// did: the autoload file said `slot=0`, the TOML said nothing, so this function answered `None`
+/// and the LoadGame-builder override never fired, while `OWN_STEPPER_SLOT` -- armed from the
+/// request -- answered `0`. The load followed the container's persisted last-used slot (2) and the
+/// loading screen's hint said 0. Same question, two files, two answers, one wrong face.
+///
+/// Both halves of that are now closed, and the order matters. The disagreement is gone because
+/// there is one reader; the WRONG ANSWER is gone because that reader no longer consults a probe
+/// file (see [`resolve_configured_save_load_request`]). Unifying alone would have been worse than
+/// the bug: it would have made the stale `slot=0` steer the LOAD as well as the portrait.
+///
+/// Cached, because the callers are a per-frame resolver (`native_fullread_slot`) and a native
+/// builder hook: `SaveLoadRequest::from_env` reads a file, and doing that per frame inside a game
+/// hook is not acceptable. The value cannot change during a run -- both channels are read at
+/// startup -- so a `OnceLock` is the honest shape rather than a cache that could go stale.
 pub(crate) fn configured_autoload_slot() -> Option<i32> {
-    runtime_config().and_then(|config| config.slot)
+    // Borrowed, not `configured_save_load_request().slot`: `native_fullread_slot` calls this every
+    // frame and the request owns a `String`, so the clone would be a per-frame allocation.
+    CONFIGURED_SAVE_LOAD_REQUEST
+        .get_or_init(resolve_configured_save_load_request)
+        .slot
 }
 
+static CONFIGURED_SAVE_LOAD_REQUEST: OnceLock<SaveLoadRequest> = OnceLock::new();
+
 pub(crate) fn configured_save_load_request() -> SaveLoadRequest {
+    CONFIGURED_SAVE_LOAD_REQUEST
+        .get_or_init(resolve_configured_save_load_request)
+        .clone()
+}
+
+fn resolve_configured_save_load_request() -> SaveLoadRequest {
     let mut request = SaveLoadRequest::from_env();
-    if let Some(slot) = runtime_config().and_then(|config| config.slot) {
+
+    // THE AUTOLOAD REQUEST FILE IS NOT A PRODUCT SLOT CHANNEL. Its `slot=` is taken away here,
+    // unconditionally, and only handed back to a run that has explicitly opted into the deprecated
+    // probe path. What survives by default is the ONE documented channel: `slot` in the
+    // game-directory `er-quickload.toml`, or in the DLL-adjacent per-run sidecar that overlays it.
+    //
+    // This is not a preference, it is what the repo already says about this file in the two places
+    // that matter most:
+    //   * `arm_product_autoload_from_request` -- the function that arms product autoload -- lists
+    //     it beside env vars: "Do not make it depend on smoke-only env variables,
+    //     `er-quickload-autoload.txt`, or the experimental DirectMenuLoad method";
+    //   * `er_save_loader`'s own field docs justify it as "the only channel that reliably reaches
+    //     the DLL under the Proton probe harness" -- a probe-harness argument, not a user one.
+    // And the evidence agrees: the DLL never WRITES this file (it auto-creates `er-quickload.toml`
+    // with explanatory comments, which is what a user surface looks like), every live writer of it
+    // in this repo is a probe/smoke script, the user-facing helper package
+    // (`scripts/build-user-release-package.py`) deliberately ships `er-quickload.toml.example` and
+    // not this, and the README's `Save-source behavior` section -- the reference AGENTS.md points
+    // at -- documents slot selection exclusively as `er-quickload.toml`.
+    //
+    // Leaving it live by default cost run br-20260831-014208-b1d6: a nine-day-old `slot=0` written
+    // by a probe script that did not clean up armed `OWN_STEPPER_SLOT`, the load correctly used the
+    // container's persisted slot 2, and the loading screen showed slot 0's face for the whole
+    // window. A file no launcher owns must not decide which character a release build loads.
+    //
+    // The other keys this file carries (`own_stepper`, `own_load*`, `cold_char_mount`,
+    // `own_dispatch`, `method`, ...) are untouched. They are opt-in probe levers that do nothing
+    // unless deliberately set; the SLOT is the one that silently steers a default product boot.
+    let file_slot = request.slot.take();
+    let default_container =
+        runtime_config().and_then(|config| config.save_file_default) == Some(true);
+    // Diagnostic override ONLY, and in the safe direction: with no env var the channel is dead, so
+    // release/default behaviour does not depend on it. Setting it re-opens a deprecated probe path
+    // (AGENTS.md 2026-07-08), which is exactly what `run-me3-product-smoke.sh` and
+    // `run-product-continue-direct-probe.sh` already gate their staged-save runs on.
+    let deprecated_probe_optin =
+        std::env::var(DEPRECATED_STAGED_SAVE_PROBE_ENV).is_ok_and(|value| value.trim() == "1");
+    if let Some(slot) = file_slot {
+        if default_container {
+            append_autoload_debug(format_args!(
+                "runtime-config: IGNORING slot={slot} from '{AUTOLOAD_REQUEST_FILE_NAME}' -- save_file_default asks for the active Steam user's own default container, and that means no slot channel survives"
+            ));
+        } else if deprecated_probe_optin {
+            request.slot = Some(slot);
+            append_autoload_debug(format_args!(
+                "runtime-config: honouring slot={slot} from '{AUTOLOAD_REQUEST_FILE_NAME}' because {DEPRECATED_STAGED_SAVE_PROBE_ENV}=1 -- this is a DEPRECATED probe channel (AGENTS.md 2026-07-08), not product behaviour"
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "runtime-config: IGNORING slot={slot} from '{AUTOLOAD_REQUEST_FILE_NAME}' -- that file is a probe channel, not a product config, and a stale copy of it silently chose the loading screen's character in run br-20260831-014208-b1d6. Put 'slot = {slot}' in the game-directory 'er-quickload.toml' to mean it, or set {DEPRECATED_STAGED_SAVE_PROBE_ENV}=1 for a deprecated probe run"
+            ));
+        }
+    }
+
+    // WHICH CHANNEL WON, named. With the file channel closed there is normally only one, but a
+    // deprecated-probe run has two again -- and a run that cannot say where its slot came from is
+    // how this defect stayed invisible for nine days.
+    let from_request_channel = request.slot;
+    let from_config = runtime_config().and_then(|config| config.slot);
+    if let Some(slot) = from_config {
         request.slot = Some(slot);
     }
+    let channel = match (from_config, from_request_channel) {
+        (None, None) => "nothing -- no channel names a slot",
+        (None, Some(_)) => {
+            "the DEPRECATED autoload request file / env -- 'er-quickload.toml' names no slot"
+        }
+        (Some(_), None) => "'er-quickload.toml' (or its per-run sidecar overlay)",
+        (Some(config), Some(file)) if config == file => {
+            "'er-quickload.toml' (the deprecated probe channel agrees)"
+        }
+        _ => "'er-quickload.toml' (it OVERRODE a different slot from the deprecated probe channel)",
+    };
     if std::env::var(METHOD_ENV).is_err()
         && let Some(method) = runtime_config().and_then(|config| config.method.clone())
     {
         request.method = SaveLoadMethod::from_label(method.trim());
     }
+    // Provenance, once, next to the `runtime-config: loaded` line that reports the TOML's own
+    // view. Diagnosing the split brain took a byte-exact comparison against the on-disk container
+    // because nothing in the log said the two readers had ever disagreed.
+    append_autoload_debug(format_args!(
+        "runtime-config: configured autoload slot={} from {channel} -- this is the ONE slot the LoadGame-builder override, the full-read resolver and OWN_STEPPER_SLOT all use",
+        request
+            .slot
+            .map(|slot| slot.to_string())
+            .unwrap_or_else(|| "<unset>".to_owned())
+    ));
     request
 }
 
@@ -456,8 +644,16 @@ fn apply_sidecar_overlay(mut base: RuntimeConfig, dll_path: &std::path::Path) ->
     // Checked before `save_file` so a sidecar carrying both is unambiguous: an explicit
     // request for the default container wins over any inherited or co-listed path.
     if overlay.save_file_default == Some(true) {
-        base.save_file = None;
-        base.slot = None;
+        // Take, not overwrite: what is removed here is the only record that the user asked for
+        // something at all, and the log line downstream cannot tell an override from an absence
+        // without it.
+        base.save_file_cleared_by_sidecar = base.save_file.take();
+        base.slot_cleared_by_sidecar = base.slot.take();
+        // CARRIED, not just acted on. The key's meaning is "no save source and no slot preference
+        // survives", and one of the channels it has to reach -- the game-directory
+        // `er-quickload-autoload.txt` -- is read later, by `configured_save_load_request`. Consumed
+        // here and forgotten, it silently only cleared half of what it promised.
+        base.save_file_default = Some(true);
         overridden.push("save_file_default (cleared save_file + slot)");
     } else if overlay.save_file.is_some() {
         base.save_file = overlay.save_file;

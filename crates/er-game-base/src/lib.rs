@@ -45,6 +45,10 @@ pub mod profile_summary;
 /// relocated operand.
 pub mod prologue;
 pub mod reentry;
+/// Run-length suppression for log lines that repeat verbatim -- see the module docs for the
+/// measurement that motivated it (8,639 identical `combined_load_67b940` ENTER lines carrying
+/// seven distinct facts, 5.43 MB in one 8m39s run).
+pub mod repeat;
 pub mod rva;
 /// Tier A: bounded, wineserver-friendly polling for a game singleton. The unbounded
 /// `loop { yield_now() }` every shell used instead deadlocked a whole boot -- see the module.
