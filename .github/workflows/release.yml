@@ -22,6 +22,19 @@ env:
   # RVA bundle and PANICS on a build that bundle does not list. `1027d24` is the
   # first revision that knows 2.7.0.0 (patch 1.17) while keeping 2.6.2.0.
   FROMSOFTWARE_RS_REV: 1027d24920c0d71fcc17666194d331af0666fc3a
+  # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON -- and the half of "lockstep with
+  # check.yml" that this file was missing until 2026-09-01. `1027d24` and its parent
+  # `4284a05` (the 2.7.0.0 / patch 1.17 RVA bundle) exist ONLY on the fork; upstream
+  # advertises 325 refs and neither sha is reachable from any of them. Cloning
+  # vswarte/ and then checking out this pin dies with `fatal: unable to read tree`
+  # at step 2, before a single Rust check runs -- which is what it did on main at
+  # b9109a30. Copying the REV without the REMOTE is what made that possible.
+  #
+  # Point this back at https://github.com/vswarte/fromsoftware-rs.git the moment
+  # FROMSOFTWARE_RS_REV names a commit that is merged upstream. It is a clone URL
+  # for a read-only checkout and nothing else; the rev pin above still decides
+  # which game builds the DLLs survive, and it is unchanged.
+  FROMSOFTWARE_RS_REMOTE: https://github.com/chozandrias76/fromsoftware-rs.git
   CARGO_XWIN_VERSION: 0.23.0
 
 jobs:
@@ -63,7 +76,7 @@ jobs:
 
       - name: Check out fromsoftware-rs as sibling
         run: |
-          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git clone "$FROMSOFTWARE_RS_REMOTE" "$GITHUB_WORKSPACE/../fromsoftware-rs"
           git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
 
       - name: Check out MinHook vendor source
