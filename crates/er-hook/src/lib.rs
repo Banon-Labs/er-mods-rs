@@ -230,6 +230,10 @@ unsafe fn register_union_hook_resolved(
         }
         orig_slot.store(entry.trampoline, Ordering::Release); // new -> game orig
         entry.handlers.push((handler_addr, orig_slot));
+        // The registry has to see chained handlers too, or the union looks like it owns an address
+        // through exactly one handler no matter how many are on it -- and a later bare `MhHook`
+        // collision would name only the first.
+        registry_note_union_chain(target, handler_addr);
         hook_log(format_args!(
             "HOOK UNION: game addr 0x{target:x} now chains {} handlers (added {})",
             entry.handlers.len(),
@@ -242,14 +246,21 @@ unsafe fn register_union_hook_resolved(
         return Err(MH_STATUS::MH_ERROR_MEMORY_ALLOC);
     }
     let mut trampoline = null_mut();
-    unsafe {
+    let create_status = unsafe {
         MH_CreateHook(
             target as *mut c_void,
             DISPATCHERS[slot] as *mut c_void,
             &mut trampoline,
         )
-    }
-    .ok()?;
+    };
+    // RECORDED AS THE HANDLER, NOT AS THE DISPATCHER. `DISPATCHERS[slot]` is a pool entry whose
+    // offset says nothing to a reader; the handler is the feature. This is also the mirror case of
+    // the empty-owner-set bug: when a BARE detour already holds this prologue, MinHook answers
+    // `MH_ERROR_ALREADY_CREATED` here and, before 2026-08-31, the union simply returned the error
+    // with no registry line at all -- the union losing to a bare hook was as anonymous as a bare
+    // hook losing to the union.
+    registry_record(target, handler_addr, create_status, HookOwner::Union);
+    create_status.ok()?;
     // ARM THE SLOT BEFORE ENABLING THE DETOUR. These two stores used to happen AFTER
     // `MH_EnableHook`, leaving a window in which the dispatcher was live but its head was still 0
     // -- and `union_dispatch` returns 0 for a null head WITHOUT calling the game. On a rarely-hit
@@ -502,7 +513,108 @@ fn mh_status_from_i32(code: i32) -> MH_STATUS {
 /// turns that invisible race into an explicit LOGGED COLLISION at install time, naming the game offset
 /// and both detours -- so a contested address (the root of the menu flakiness) is visible immediately
 /// instead of surfacing as a flaky runtime bug. Idea + design credit: user, 2026-07-16.
-static HOOK_REGISTRY: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+///
+/// # UNION-INSTALLED HOOKS ARE RECORDED HERE TOO (2026-08-31)
+///
+/// Until that date they were not, and the collision line therefore named an EMPTY owner set in
+/// exactly the configuration it exists to explain. Measured in run `br-20260831-160354-2513`: the
+/// union took `0x14067c050` and `0x14067c0e0` at boot (+1172ms/+1288ms) for the menu trace's
+/// `b80_loadsavedata_67b200` / `b80_deserialize_67b290` observers; the system-quit in-world load
+/// guard and RequestLoadSlot guard then bare-`MhHook::new`'d those same two addresses, got
+/// `MH_ERROR_ALREADY_CREATED`, and the registry reported `already hooked by detour(s) []`. The
+/// counterparty was in the same log five thousand lines earlier under a different message, so the
+/// one field a reader needs was blank precisely where they needed it -- and two save-safety guards
+/// were silently absent from a load path with nothing naming what had taken their address.
+///
+/// Rows now carry [`HookOwner`], so a collision says whether the incumbent is a bare detour (a
+/// genuine contest -- one of the two never runs) or the union (chainable -- the newcomer should be
+/// registering through it rather than through MinHook).
+static HOOK_REGISTRY: Mutex<Vec<HookRegistration>> = Mutex::new(Vec::new());
+
+/// One recorded registration: which game address, whose detour, and by which installer.
+struct HookRegistration {
+    target: usize,
+    detour: usize,
+    owner: HookOwner,
+}
+
+/// WHICH INSTALLER CLAIMED AN ADDRESS -- and therefore what a second claim on it means.
+///
+/// The distinction is the whole reason the owner is recorded. Two BARE detours on one address is a
+/// contest MinHook settles by silently dropping one. A bare detour arriving at an address the UNION
+/// already owns is not a contest to be won: it is a call-site bug with a mechanical fix (register
+/// through the union and chain), and naming the incumbent is what tells the two cases apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookOwner {
+    /// A bare [`MhHook`] detour, holding MinHook's single slot for this address by itself.
+    Bare,
+    /// A handler registered through the union. The dispatcher holds the MinHook slot and every
+    /// union handler on the address CHAINS, so more of them is normal rather than a collision.
+    Union,
+}
+
+impl HookOwner {
+    /// How an owner is named in the collision/duplicate lines. `Bare` renders as the plain offset
+    /// the pre-2026-08-31 message used, so the ordinary case reads exactly as it always did.
+    fn label(self, detour: usize, off: &dyn Fn(usize) -> String) -> String {
+        match self {
+            HookOwner::Bare => off(detour),
+            HookOwner::Union => format!("union handler {}", off(detour)),
+        }
+    }
+}
+
+/// What a registration means given what is already recorded at the same address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegistryVerdict {
+    /// Nothing else holds this address and MinHook did not object: no line to print.
+    Fresh,
+    /// Every prior claim is the SAME detour by the SAME installer -- one owner installed twice.
+    Duplicate,
+    /// A DIFFERENT detour already holds this address, or MinHook says one does.
+    Collision,
+}
+
+/// Classify a registration against the address's existing rows.
+///
+/// Split out from [`registry_record`] so the rule is testable on the host: the recording half
+/// needs `dll_base`, which is a Win32 call, while the DECISION -- the part that was wrong -- is
+/// pure. `MH_ERROR_ALREADY_CREATED` forces a collision even with no prior row, because that is
+/// MinHook reporting an owner this registry never saw (a hook installed before the logger existed,
+/// or by a different MinHook instance in another DLL).
+fn registry_verdict(
+    prior: &[(usize, HookOwner)],
+    detour: usize,
+    owner: HookOwner,
+    create_status: MH_STATUS,
+) -> RegistryVerdict {
+    // A DUPLICATE IS NOT A COLLISION, and conflating them costs an investigation. When every
+    // prior registration at this address names the SAME detour from the SAME installer, one owner
+    // registered twice -- its handler is live either way, and the fix is at the caller (an install
+    // that races itself, e.g. two `Once` gates calling one install fn). A collision is two
+    // DIFFERENT detours contesting one address, where the loser's handler genuinely never fires
+    // and the fix is the shared/union registry. Measured 2026-08-30: `title-cover-part-a`'s
+    // named-child binder logged the collision wording against ITSELF at 0x14074b140 and read
+    // exactly like the real `title-cover-part-b` conflict from the run before it.
+    if !prior.is_empty() && prior.iter().all(|(d, o)| *d == detour && *o == owner) {
+        return RegistryVerdict::Duplicate;
+    }
+    if !prior.is_empty() || create_status == MH_STATUS::MH_ERROR_ALREADY_CREATED {
+        return RegistryVerdict::Collision;
+    }
+    RegistryVerdict::Fresh
+}
+
+/// Render the incumbent list for a collision line, naming each owner's INSTALLER as well as its
+/// offset. An empty list here now means genuinely nothing recorded (MinHook knows an owner this
+/// process never registered), rather than "a union hook that was never written down".
+fn render_prior_owners(prior: &[(usize, HookOwner)], off: &dyn Fn(usize) -> String) -> String {
+    prior
+        .iter()
+        .map(|(d, o)| o.label(*d, off))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Our DLL's load base, so detours can be reported as `dll+0xNNN` (identifiable against the map/disasm)
 /// instead of an absolute pointer that shifts every launch.
@@ -535,21 +647,58 @@ fn as_dll_off(p: usize) -> String {
     }
 }
 
-fn registry_record(target: usize, detour: usize, create_status: MH_STATUS) {
+/// Record one registration and log what it means. `owner` says which installer is claiming the
+/// address; see [`HookOwner`] for why a bare-vs-union incumbent is the load-bearing distinction.
+fn registry_record(target: usize, detour: usize, create_status: MH_STATUS, owner: HookOwner) {
     if let Ok(mut reg) = HOOK_REGISTRY.lock() {
-        let prior: Vec<String> = reg
+        let prior: Vec<(usize, HookOwner)> = reg
             .iter()
-            .filter(|(t, _)| *t == target)
-            .map(|(_, d)| as_dll_off(*d))
+            .filter(|row| row.target == target)
+            .map(|row| (row.detour, row.owner))
             .collect();
-        reg.push((target, detour));
-        if !prior.is_empty() || create_status == MH_STATUS::MH_ERROR_ALREADY_CREATED {
-            hook_log(format_args!(
-                "HOOK REGISTRY COLLISION: game addr 0x{target:x} already hooked by detour(s) [{}], NOW ALSO detour {} (MH_CreateHook={create_status:?}) -- only ONE binds, the loser's handler never fires (silent native-Windows race source)",
-                prior.join(", "),
-                as_dll_off(detour)
-            ));
+        let verdict = registry_verdict(&prior, detour, owner, create_status);
+        // A ROW MEANS MINHOOK ACCEPTED A CREATE AT THIS ADDRESS FOR THIS DETOUR -- so a create that
+        // FAILED must not leave one. Before 2026-08-31 every attempt was recorded, so the loser of a
+        // collision became a permanent phantom "owner" and a third registrant was told the address
+        // belongs to a detour that was never bound. Silence about a real owner and confidence about
+        // a fictional one are the same defect from opposite ends.
+        if create_status == MH_STATUS::MH_OK {
+            reg.push(HookRegistration {
+                target,
+                detour,
+                owner,
+            });
         }
+        drop(reg);
+        let off: &dyn Fn(usize) -> String = &as_dll_off;
+        match verdict {
+            RegistryVerdict::Fresh => {}
+            RegistryVerdict::Duplicate => hook_log(format_args!(
+                "HOOK REGISTRY DUPLICATE: game addr 0x{target:x} registered again by the SAME detour {} (MH_CreateHook={create_status:?}) -- one owner installed twice, nothing is lost and the first registration is live; fix the caller, this is NOT a contested address",
+                owner.label(detour, off)
+            )),
+            RegistryVerdict::Collision => hook_log(format_args!(
+                "HOOK REGISTRY COLLISION: game addr 0x{target:x} already hooked by detour(s) [{}], NOW ALSO {} (MH_CreateHook={create_status:?}) -- only ONE binds, the loser's handler never fires (silent native-Windows race source); an incumbent named `union handler` is CHAINABLE, so register through the union instead of MinHook",
+                render_prior_owners(&prior, off),
+                owner.label(detour, off)
+            )),
+        }
+    }
+}
+
+/// Record a union handler that CHAINED onto an address the union already owns.
+///
+/// Deliberately silent: chaining is the union's designed behaviour and
+/// [`register_union_hook_resolved`] already logs `HOOK UNION: ... now chains N handlers` for it.
+/// What this adds is the ROW, so that a later bare `MhHook::new` on the same address can be told
+/// who it is colliding with instead of reporting an empty owner set.
+fn registry_note_union_chain(target: usize, handler: usize) {
+    if let Ok(mut reg) = HOOK_REGISTRY.lock() {
+        reg.push(HookRegistration {
+            target,
+            detour: handler,
+            owner: HookOwner::Union,
+        });
     }
 }
 
@@ -733,7 +882,7 @@ impl MhHook {
     unsafe fn create(addr: *mut c_void, hook_impl: *mut c_void) -> Result<Self, MH_STATUS> {
         let mut trampoline = null_mut();
         let status = unsafe { MH_CreateHook(addr, hook_impl, &mut trampoline) };
-        registry_record(addr as usize, hook_impl as usize, status);
+        registry_record(addr as usize, hook_impl as usize, status, HookOwner::Bare);
         status.ok_context("MH_CreateHook")?;
 
         Ok(Self {
@@ -1250,5 +1399,101 @@ mod tests {
             assert_eq!(addr, TEST_ADDR, "{op:?} touched a different address");
             assert_eq!(len, ONE_CODE_BYTE, "{op:?} covered a different length");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // REGISTRY OWNERSHIP. The recording half needs `dll_base` (a Win32 call), so these drive the
+    // pure decision + rendering halves and inject the offset formatter. What they pin is the
+    // defect from run `br-20260831-160354-2513`: a bare detour colliding with a union-owned
+    // address reported `already hooked by detour(s) []`.
+    // ------------------------------------------------------------------
+
+    /// Stand-in for `as_dll_off` that does not touch `GetModuleHandleExW`.
+    fn fake_off(p: usize) -> String {
+        format!("dll+0x{p:x}")
+    }
+
+    const INCUMBENT_DETOUR: usize = 0xdef60;
+    const NEWCOMER_DETOUR: usize = 0xdf1d0;
+
+    #[test]
+    fn a_union_incumbent_is_named_rather_than_reported_as_an_empty_set() {
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Union)];
+        assert_eq!(
+            registry_verdict(
+                &prior,
+                NEWCOMER_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Collision
+        );
+        let off: &dyn Fn(usize) -> String = &fake_off;
+        assert_eq!(
+            render_prior_owners(&prior, off),
+            "union handler dll+0xdef60",
+            "the incumbent's installer must be named, not just its offset"
+        );
+    }
+
+    #[test]
+    fn a_bare_incumbent_still_renders_as_the_plain_offset() {
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Bare)];
+        let off: &dyn Fn(usize) -> String = &fake_off;
+        assert_eq!(render_prior_owners(&prior, off), "dll+0xdef60");
+    }
+
+    #[test]
+    fn one_owner_installing_twice_is_a_duplicate_not_a_collision() {
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Bare)];
+        assert_eq!(
+            registry_verdict(
+                &prior,
+                INCUMBENT_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Duplicate
+        );
+    }
+
+    #[test]
+    fn the_same_detour_under_a_different_installer_is_a_collision() {
+        // Same function pointer, but one came through the union and one through a bare `MhHook`:
+        // they are contesting the MinHook slot, so calling it a duplicate would say "nothing is
+        // lost" about a case where something is.
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Union)];
+        assert_eq!(
+            registry_verdict(
+                &prior,
+                INCUMBENT_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Collision
+        );
+    }
+
+    #[test]
+    fn an_uncontested_first_registration_logs_nothing() {
+        assert_eq!(
+            registry_verdict(&[], NEWCOMER_DETOUR, HookOwner::Bare, MH_STATUS::MH_OK),
+            RegistryVerdict::Fresh
+        );
+    }
+
+    #[test]
+    fn already_created_with_no_recorded_owner_is_still_a_collision() {
+        // MinHook knows an owner this registry never saw -- another DLL's instance, or a hook
+        // installed before the log sink existed. An empty owner list now means exactly that.
+        assert_eq!(
+            registry_verdict(
+                &[],
+                NEWCOMER_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Collision
+        );
     }
 }

@@ -522,7 +522,7 @@ fn install_software_keyboard_result_hooks() -> bool {
         // first installation. Reuse the already-verified hooks on every later editor open.
         return true;
     }
-    let Some(address) = save_flow_verify_rva(
+    let Some(address) = save_flow_verify_rva_for_hook(
         SOFTWARE_KEYBOARD_RESULT_GATE_RVA,
         SOFTWARE_KEYBOARD_RESULT_GATE_SIG,
         SOFTWARE_KEYBOARD_RESULT_GATE_SIG_MASK,
@@ -539,7 +539,7 @@ fn install_software_keyboard_result_hooks() -> bool {
         &SOFTWARE_KEYBOARD_RESULT_GATE_ORIG,
         "SoftwareKeyboard path cancel gate",
     );
-    let Some(terminal) = save_flow_verify_rva(
+    let Some(terminal) = save_flow_verify_rva_for_hook(
         SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_RVA,
         SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_SIG,
         SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_SIG_MASK,

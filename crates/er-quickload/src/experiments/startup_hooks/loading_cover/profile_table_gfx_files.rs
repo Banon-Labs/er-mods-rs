@@ -25,7 +25,7 @@ pub(crate) fn install_profile_select_table_diag_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(PROFILE_RENDERER_REFRESH_RVA as u32) else {
+    let Ok(target) = game_rva_for_hook(PROFILE_RENDERER_REFRESH_RVA as u32) else {
         return;
     };
     match unsafe {
@@ -77,7 +77,7 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(PROFILE_RENDERER_TEARDOWN_RVA as u32) else {
+    let Ok(target) = game_rva_for_hook(PROFILE_RENDERER_TEARDOWN_RVA as u32) else {
         return;
     };
     match unsafe {

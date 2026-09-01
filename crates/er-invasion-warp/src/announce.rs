@@ -334,7 +334,14 @@ fn verified_fn(rva: usize, prologue: &[u8], what: &str) -> Option<usize> {
             return None;
         }
     }
-    Some(address)
+    // THE UNRESOLVED ADDRESS, deliberately. The prologue was checked at `address`, but
+    // `register_union_hook` resolves what it is given, and it must be the ONE resolve that places
+    // the detour. Handing it `address` would resolve a second time -- normally a no-op, but on an
+    // address that is both a 1.17 destination and some other row's 1.16.2 source it silently
+    // returns a third, unrelated function (measured on three live detours, 2026-08-30). Resolving
+    // the same 1.16.2 input twice is fine; resolving the OUTPUT is the bug.
+    // `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    Some(base + rva)
 }
 
 /// Learn the live view and get out of the way.

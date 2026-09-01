@@ -40,7 +40,7 @@ use std::{
 
 use er_game_base::{
     filecap::dlio_virtual_roots_summary,
-    mem::{game_module_base, game_rva, safe_read_i32, safe_read_usize},
+    mem::{game_module_base, game_rva_for_hook, safe_read_i32, safe_read_usize},
 };
 use er_hook::{MH_Initialize, MH_STATUS, MhHook};
 
@@ -112,7 +112,7 @@ pub(crate) fn install_loadlist_wait_trace() {
             return;
         }
     }
-    let Ok(addr) = game_rva(STEP_LOADLIST_WAIT_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(STEP_LOADLIST_WAIT_RVA as u32) else {
         diag_log!(
             "loadlist-wait-trace: failed to resolve STEP_LoadListWait rva 0x{STEP_LOADLIST_WAIT_RVA:x}"
         );

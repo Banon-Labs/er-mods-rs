@@ -38,7 +38,7 @@ use er_game_base::{
         FD4_FILECAP_STATUS_88_OFFSET, dlio_virtual_roots_summary, fd4_filecap_content_state,
         fd4_filecap_name,
     },
-    mem::{game_module_base, game_rva, safe_read_u8, safe_read_usize},
+    mem::{game_module_base, game_rva_for_hook, safe_read_u8, safe_read_usize},
 };
 use er_hook::{MH_Initialize, MH_STATUS, MhHook};
 
@@ -77,7 +77,7 @@ pub(crate) fn install_msb_parse_trace() {
             return;
         }
     }
-    let Ok(addr) = game_rva(MSB_FILECAP_PARSE_CALLBACK_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MSB_FILECAP_PARSE_CALLBACK_RVA as u32) else {
         diag_log!(
             "msb-parse-trace: failed to resolve parse-callback rva 0x{MSB_FILECAP_PARSE_CALLBACK_RVA:x}"
         );

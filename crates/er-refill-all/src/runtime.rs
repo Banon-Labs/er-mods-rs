@@ -149,22 +149,54 @@ pub(crate) fn install(base: usize) {
     // it is not, so a standalone run behaves identically and no handler is ever dropped. Both
     // targets take integer arguments only, which is exactly what the union's four-`usize` ABI
     // models -- see the module header for why the `MenuWindow::Update` prologue could not be.
+    //
+    // DTOR FIRST, CTOR SECOND, AND THE ORDER IS LOAD-BEARING (2026-08-31).
+    //
+    // `register_shared_hook` ENABLES immediately -- it is not MinHook's deferred queue -- so the
+    // first successful registration in this loop is live the instant it returns. The pair is only
+    // safe as a pair: the ctor latches `LIVE_DEPOSITORY_DIALOG` and the dtor is the sole code that
+    // clears it. Registered ctor-first, a refused dtor address (which is exactly what 1.17 hands
+    // back for an RVA with no verified mapping) left the ctor detour ARMED with no way to unlatch,
+    // and the `Err` arm's `return` did not undo it -- `er_hook` has no unregister. The caller then
+    // registers the `FrameBegin` task REGARDLESS of this function returning early, so `tick()` went
+    // on calling `live_depository_dialog()` every frame and reading through a freed
+    // `DepositoryDialog*` for the rest of the session. Only the vftable sanity read in
+    // `live_depository_dialog` stood between that and acting on a dead object.
+    //
+    // With the dtor first the partial states are both inert: a refused dtor means the ctor is never
+    // registered, so nothing ever latches; a refused ctor leaves the dtor live but harmless,
+    // because its `== a` test can never match the 0 the latch keeps. Same class as
+    // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`, reached through the
+    // immediate-enable registrar instead of through `MH_ApplyQueued`.
     for (name, target, handler, slot) in [
+        (
+            // RAW `base + rva`, NOT `game_data_addr` -- matching the ctor row below.
+            //
+            // `register_shared_hook` takes its target UNRESOLVED, deliberately, and resolves it
+            // exactly once in whichever image will own the detour (`er-hook/src/lib.rs`, the
+            // comment beginning "UNRESOLVED, deliberately"). This row used to hand it
+            // `game_data_addr(base, DEPOSITORY_DIALOG_DTOR_RVA, ..)`, which IS
+            // `resolve_game_address(base + rva).unwrap_or(0)` -- so the address was translated
+            // 1.16.2 -> 1.17 here and then handed to a registrar that translates it AGAIN. The
+            // second translation looks up a 1.17 address in a table keyed by 1.16.2 addresses:
+            // it either refuses (the feature silently never installs) or, where a 1.17 address
+            // happens to collide with a 1.16.2 key, lands on an unrelated function. Its own
+            // sibling one row down always passed raw, so the two rows disagreed about the
+            // contract of the API they both call.
+            //
+            // `scripts/check-double-resolved-hook-targets.py` is the gate for this class and did
+            // NOT catch it: its taint follows `let` bindings, and this target is an element of an
+            // array literal destructured by the `for` pattern, never bound to a local.
+            "DepositoryDialog::dtor",
+            base + DEPOSITORY_DIALOG_DTOR_RVA,
+            depository_dtor_union as er_hook::UnionFn,
+            &ORIG_DEPOSITORY_DTOR,
+        ),
         (
             "DepositoryDialog::ctor",
             base + DEPOSITORY_DIALOG_CTOR_RVA,
             depository_ctor_union as er_hook::UnionFn,
             &ORIG_DEPOSITORY_CTOR,
-        ),
-        (
-            "DepositoryDialog::dtor",
-            er_game_base::mem::game_data_addr(
-                base,
-                DEPOSITORY_DIALOG_DTOR_RVA,
-                "DEPOSITORY_DIALOG_DTOR_RVA",
-            ),
-            depository_dtor_union as er_hook::UnionFn,
-            &ORIG_DEPOSITORY_DTOR,
         ),
     ] {
         match unsafe { register_shared_hook(target, handler, slot) } {

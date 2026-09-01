@@ -116,6 +116,32 @@ pub(crate) fn save_flow_verify_rva(
     Some(address)
 }
 
+/// [`save_flow_verify_rva`] for an address about to be DETOURED: same verification, but what comes
+/// back is the UNRESOLVED `base + rva`.
+///
+/// # Why the two cannot be one function
+///
+/// Most callers of [`save_flow_verify_rva`] are building a RECIPE of function pointers to CALL, and
+/// a call needs the resolved address. A detour does not: `er_hook::MhHook::new` and
+/// `register_union_hook` resolve what they are given, and they must be the ONE resolve that decides
+/// where the five bytes land.
+///
+/// Resolving the same 1.16.2 input twice is harmless -- that is what happens here, once to read the
+/// prologue and once inside the hook API, both reaching the same address. Resolving the OUTPUT is
+/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 SOURCE of another
+/// (the shift equalling the local function spacing, `B - A == C - B`), and then the second resolve
+/// silently returns a third, unrelated function. Three live detours were measured landing that way
+/// on 2026-08-30. `scripts/check-double-resolved-hook-targets.py` gates the shape.
+pub(crate) fn save_flow_verify_rva_for_hook(
+    rva: u32,
+    expected: &[u8],
+    mask: &[u8],
+    name: &str,
+) -> Option<usize> {
+    save_flow_verify_rva(rva, expected, mask, name)?;
+    er_game_base::mem::game_rva_for_hook(rva).ok()
+}
+
 /// The verified recipe, or `None` on a build whose bytes drifted. On the first failure the
 /// `oracle_save_flow_recipe_unavailable` semaphore latches and Save Game degrades to the WP1
 /// immediate commit, so the row is never a dead button.
@@ -624,7 +650,7 @@ pub(crate) fn install_menu_job_emit_result_hook() {
     if MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst) != MENU_JOB_EMIT_RESULT_NOT_INSTALLED {
         return;
     }
-    let Some(addr) = save_flow_verify_rva(
+    let Some(addr) = save_flow_verify_rva_for_hook(
         MENU_JOB_EMIT_RESULT_RVA,
         MENU_JOB_EMIT_RESULT_SIG,
         MENU_JOB_EMIT_RESULT_SIG_MASK,
