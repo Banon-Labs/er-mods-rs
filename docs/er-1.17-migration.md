@@ -17,22 +17,33 @@ blocked on. Update it as items close rather than starting a second list somewher
 | `docs/recon/rva-map-1162-to-1170.tsv` | 32 of the 51 refused addresses carried forward with evidence; the other 19 are named, not guessed. |
 | 27 translated detour targets | Three independent passes agree: signature re-occurrence, normalised instruction comparison, and `scripts/audit-1170-hook-targets.py`, which finds every one is a real function entry carrying the SAME reference profile it had in 1.16.2 (same call count, same kind). The control is decisive -- 24 of the 27 STALE addresses have zero references in the 1.17 image. |
 
+Two of those rows carry counts from a specific run rather than from a file, so they date:
+the 51 refused detours and the 15 Win32 detours were counted out of one 2026-08-28 launch log.
+The 51/32/19 split is still reproducible offline -- `docs/recon/rva-map-1162-to-1170.tsv` holds
+exactly 51 rows of which 19 are `UNRESOLVED` (re-counted 2026-08-31) -- but the ledgers have grown
+far past it since (`needed.tsv` 412 rows, `needed-verified.tsv` 411, `verified.tsv` 102), so do not
+read 51 as the size of the detour set today. `me3 0.11.0` is confirmed current on PATH.
+
 ## What is still stale
+
+This table is re-measured, not remembered. Every row carries the command that produced its
+number, so the next agent can find out it has moved instead of trusting a date. Audited
+2026-08-31; six rows were false and are corrected below.
 
 | # | Item | State | Blocked on |
 | --- | --- | --- | --- |
-| 1 | Ghidra dump / MCP (`ermaporch1162`, :8765) | 1.16.2 only -- every name, signature and struct it returns is the previous build | a 1.17 runtime dump, imported as `ermaporch1170` |
-| 2 | 19 unresolved addresses in the RVA map | shape-matched but ambiguous, and deliberately left blank | #1, or hand RE per address |
+| 1 | ~~Ghidra dump / MCP is 1.16.2 only~~ **RESOLVED 2026-08-30** | A 1.17 dump is imported as `ermaporch1170` and served on **:8767**, alongside 1.16.2 on :8765. Verified 2026-08-31: `getContext` returns `pc_eldenring_runtime.1.17.0.exe`, 366,673 functions, against 367,183 on :8765. It carries **zero curated symbols** -- `searchFunctionsByName` (the parameter is `query`, not `searchTerm`) totals 1.16.2 vs 1.17: Scadutree 5/0, CSFeManImp 3/0, MoveMap 23/0, FreeList 6/0, TitleTopDialog 1/0. Everything is `FUN_<addr>` | nothing for STRUCTURE. **Names, types and RTTI are still 1.16.2-only** and must be carried across by pairing -- that is the residue, and it is a different problem from "there is no dump" |
+| 2 | 19 unresolved addresses in the RVA map | Still 19, of 51 rows in `docs/recon/rva-map-1162-to-1170.tsv` (re-counted 2026-08-31). Shape-matched but ambiguous, deliberately left blank | hand RE per address. No longer blocked on #1: :8767 gives the call graph these need |
 | 3 | ~~1 mapping refused on evidence: `MOVEMAPSTEP_STEP_MOVEMAP_RVA`~~ **RESOLVED 2026-08-31** | `PATCH-SITE-IDENTICAL`, in both `VERIFIED_1162_TO_1170` and `DETOUR_SAFE_1162_TO_1170`. The two inserted instructions are `mov rcx,rbx; call CS::MoveMapStep::_UpdateHorseType` at index 873 of 975, 0x1055 bytes past a prologue that is `48 8b c4 55 56 57 41 54` in both builds -- see "Function lengths" below | nothing; pinned in `PATCH_SITE_ACKNOWLEDGED` (`er-game-base/build.rs`) so the next insertion fails the build |
-| 4 | Struct layouts | two confirmed drifts: `PlayerGameData` +8 (`+0xab5` -> `+0xabd`), the Wwise settings object +0x38. The rest is unaudited | #1 |
-| 5 | `fromsoftware-rs` bindings (path dependency) | field offsets are 1.16.2-shaped | #4 |
-| 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | mostly fine: a swept comparison of all 36 specs against the 1.17 image found exactly ONE that breaks, `er-save-suppress::QUIT_PHASE_SETTLE_SIG`, now respelled. `Image::EldenRing1170` exists for a spec that must be 1.17 (3 use it); the rest are register-only prologues whose encoding is version-invariant | 5 specs whose 1.16.2 RVA is in no map, so they could not be checked at all |
-| 7 | `dump-exec.bin` + `scripts/dump-deobf-shift.py` | dump side is **1.16.1**: cross-version by two patches, and its matcher cannot see struct-offset drift | regenerate, or retire it in favour of `map-rvas-1162-to-1170.py` |
+| 4 | Struct layouts | two confirmed drifts: `PlayerGameData` +8 (`+0xab5` -> `+0xabd`, corroborated in `er-ersc-sigshim/src/fixups.rs`), the Wwise settings object +0x38. The rest is unaudited | hand RE. :8767 does NOT close this: it has structure, not types -- a field name or a struct layout still only exists on :8765, for the previous build |
+| 5 | `fromsoftware-rs` bindings (path dependency) | field offsets are 1.16.2-shaped. The RVA half IS done: `rva_ww_270.rs` exists with 96 fields and **zero** of them are `0` (checked 2026-08-31 -- see the zero-field trap below), and `scripts/check-game-version-supported.py` passes: `installed game 2.7.0.0 is in the RVA bundle's supported set ['2.6.2.0', '2.6.2.1', '2.7.0.0']` | #4 |
+| 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | mostly fine: the sweep that found exactly ONE breakage, `er-save-suppress::QUIT_PHASE_SETTLE_SIG` (now respelled), covered **36 specs in `er-quickload/build.rs`** -- NOT the whole set. Re-counted 2026-08-31: **84 `PrologueSpec` sites** across five `build.rs` files (er-quickload 36, er-save-suppress 22, er-invasion-warp 12, er-seamless-bugfixes 8, er-player-name-filter 6). `Image::EldenRing1170` is used by 4 specs (3 in er-quickload, 1 in er-save-suppress); the rest are register-only prologues whose encoding is version-invariant | re-running the sweep over all 84, plus 5 specs whose 1.16.2 RVA is in no map |
+| 7 | `dump-exec.bin` + `scripts/dump-deobf-shift.py` | **RETIRED. Do not run it.** Its dump side is 1.16.1, so it maps 1.16.1-dump onto a 1.16.2 image whose real shift is zero, and it invents a nonzero one. Re-verified 2026-08-31 against `.pdata`: `0x142413860` IS a function start in `eldenring-deobf.bin`, and the `+0x10` answer `0x142413870` is 16 bytes into its prologue; `0x142410830`, which the tool flagged as a "+0x10 estimate", is also already a function start. Both of its published answers land mid-instruction | nothing. Use `map-rvas-1162-to-1170.py`, or read :8767 directly |
 | 8 | `regulation.bin`, `data/effects.json`, `effect-master-catalog.json` | 1.17 shipped new params; row ids unverified | re-validate with `tools/er-param-inspect` |
-| 9 | Save containers / `ProfileSummary` reader | RVA-stale; whether the format itself changed is unknown | #1 plus a save-format diff |
-| 10 | 160 game addresses CALLED without resolving (`transmute(base + SOME_RVA)`) | ungated, ratcheted by `scripts/check-stale-rva-calls.py` so the set cannot grow | converting each to `er_game_base::mem::game_rva`, crate by crate (er-effects-rs-4wjr) |
-| 11 | 4 byte-patch stub sites (online-disable, menu-online-mode, signin-force, userindex-force) | REFUSE on 1.17 -- each validates one expected opcode byte and all four differ, so nothing is written. Those features are silently inert, not dangerous | re-RE the four functions on 1.17 |
-| 12 | ~2.5k `bd` memories carrying 1.16.2 RVAs | correct for the build they were written against, silently wrong now | nothing -- treat every RVA memory as 1.16.2-scoped and re-verify before use |
+| 9 | Save containers / `ProfileSummary` reader | RVA-stale; whether the format itself changed is unknown | a save-format diff. Not blocked on #1 any more |
+| 10 | ~~160 game addresses CALLED without resolving~~ **RESOLVED** | `python3 scripts/check-stale-rva-calls.py --list` prints `0 TOTAL across 0 crates` (run 2026-08-31), and `scripts/audit-1170-readiness.py` agrees per-cdylib: **ungated EXEC 0, WRITE 0** across all 27. The number 160 in this row was a snapshot that outlived the work; the sections below already said 0 while this row said 160 | nothing. The remaining bucket is 136 ungated read/compare sites, which are fault-safe by construction |
+| 11 | ~~4 byte-patch stub sites all REFUSE~~ **3 of 4 now apply** | Byte-verified 2026-08-31 against `eldenring-deobf-1.17.bin`. `patch_3byte_stub`/`apply_xor_ret_stub` resolve through `resolve_game_address` BEFORE the opcode check, so a mapped site reaches its 1.17 destination: `menu-online-mode` `0xe56310 -> 0xe58110` (byte `0x40` = expected), `signin-force` `0x24129b0 -> 0x24151c0` (`0x40`), `userindex-force` `0x240f490 -> 0x2411ca0` (`0x4c`) -- all three match and are written. Only `online-disable` `0x67a030` has no row in `needed.tsv` and still refuses. Reading this row as "all four are inert" sends you to re-RE three functions that already work | re-RE `ONLINE_DISABLE_RVA` (`0x67a030`) on 1.17, and nothing else |
+| 12 | ~2.7k `bd` memories carrying 1.16.2 RVAs | 2704 memories total (`bd memories`, 2026-08-31). Correct for the build they were written against, silently wrong now. Worse than 1.16.2-scoped in places: several predate even that and carry **1.16.1-dump** addresses stated as fact | nothing -- treat every RVA memory as scoped to a build it does not name, and re-verify before use |
 
 ## How to carry an address forward
 
@@ -169,16 +180,24 @@ say so.
 
 ## The order to do the rest in
 
-1. Capture a 1.17 runtime dump and stand up `ermaporch1170` (#1). Items 2, 4, 5 and 9 all reduce to
-   lookups once it exists, and 19 blanks become answerable.
-2. Verify and re-point addresses feature by feature (#3), cheapest first: each one that lands turns
+1. ~~Capture a 1.17 runtime dump and stand up `ermaporch1170`~~ **DONE 2026-08-30, serving on :8767.**
+   It did NOT reduce items 2, 4, 5 and 9 to lookups the way this step predicted, and the reason is
+   worth keeping: the dump has structure and no semantics. It answers "is this a function, what
+   calls it, how long is it" and cannot answer "what is this field" -- so the 19 blanks became
+   answerable and the struct work did not.
+2. Verify and re-point addresses feature by feature, cheapest first: each one that lands turns
    a `HOOK REFUSED` line back into a working feature, and the gate keeps the rest safe meanwhile.
 3. Flip `eldenring-deobf.bin` to the 1.17 image and regenerate the prologue windows (#6) in one
    commit, once enough addresses are re-pointed that the gates are meaningful again.
 4. Re-validate the param/save data (#8, #9), which is the only part that can change what a player
    sees without any address being involved.
 
-## The wedge: er-quickload kills the game's main thread (open, 2026-08-29)
+## The wedge: er-quickload kills the game's main thread (CLOSED 2026-08-29; kept for method)
+
+**This section is history, not a work item.** It is marked here because it opened with `(open, 2026-08-29)`
+for two days after the bug was fixed, and an open header is an instruction. The cause was a stale 1.16.2
+address executing on 1.17; the fix was the address gate; the proof is two sections down -- er_quickload
+boots with zero fault lines and 792 refusals. Read the rest for the measurement technique, not for a lead.
 
 The crash classes are closed -- the full eighteen-DLL profile loads with zero panics and three
 detour refusals -- and what is left is not a crash. With `er_quickload.dll` loaded, ELDEN RING
@@ -251,10 +270,16 @@ The PE stack scan at the abort (module base `0x6ffff9cd0000`) names the shape:
 | `0x392fd8` | 1 | none |
 
 Alternating repeated frames, plus `virtual_setup_exception` failing, is **recursion into stack
-overflow** -- not a wild pointer. An import thunk in the loop with `core::fmt` beside it points at
-a log write re-entering a hooked Win32 file call: the DLL logs every `CreateFileW` through
-save-override, and writing that log opens a file. Confirm by disassembling `er_quickload.dll` at
-rva `0x2326` to see which import it is, then read that hook's re-entrancy guard.
+overflow** -- not a wild pointer. That much held.
+
+**The explanation offered next to it did not, and the follow-up it prescribed was deleted rather
+than left standing.** It read: an import thunk with `core::fmt` beside it means a log write
+re-entering a hooked Win32 file call, so disassemble `er_quickload.dll` at rva `0x2326` and read
+that hook's re-entrancy guard. The re-entrancy hypothesis was implemented and falsified by its own
+oracle in the very next section -- the descent reproduced with `oracle_veh_reentrant_refusals = 0`,
+and gdb counted 218 independent top-level raises. The recursion is in Wine's exception dispatch,
+and the thing that STARTED it was a stale address executing. Anyone who followed the deleted
+instruction would have spent the day reading a guard that was already correct.
 
 ### How to reproduce the capture
 
@@ -362,8 +387,10 @@ machinery, which points at er-title-flow and er-scaleform-hooks first.
 ### Function lengths as a cheap map audit
 
 Comparing `.pdata` extents for every pair in `rva-map-1162-to-1170.needed-verified.tsv`: exactly
-one of 218 changed size, `0x140af7cf0 -> 0x140af9000` (`MOVEMAPSTEP_STEP_MOVEMAP_RVA`),
-`0x120b -> 0x1213`.
+one changed size, `0x140af7cf0 -> 0x140af9000` (`MOVEMAPSTEP_STEP_MOVEMAP_RVA`), `0x120b ->
+0x1213`. That was 1 of 218 when it was first run; re-counted 2026-08-31 it is **1 of 411**, plus
+0 of 102 in `verified.tsv` -- the ledgers nearly doubled and the answer did not move. Both extents
+were re-read straight out of the two images' `.pdata` on 2026-08-31 and match.
 
 **The conclusion originally drawn here was wrong, and the way it was wrong is the point.** It said
 the 8 bytes were "elsewhere in the tail" and `IDENTICAL` was the right verdict. They are two
@@ -388,42 +415,50 @@ before any read in the callee and in the first thing the callee calls), and the 
 `+0x270`, `+0x4b8`, `+0x4c`, `+0x50` -- are untouched by the insertion, and the gate read it sits
 two instructions in front of is unchanged.
 
-## How much of the migration is actually left (2026-08-29)
+## How much of the migration is actually left
 
-`367` `const *_RVA` declarations exist under `crates/`. `182` are mapped for 1.17. The other `185`
-break down like this -- and the shape of the split is the point, because only one bucket is the
-"the mapper could not find it" problem everyone assumes:
+**Re-measured 2026-08-31 with the repo's own instrument, and the answer moved by two orders of
+magnitude.** Run it rather than reading a number:
 
-| count | why it is unmapped |
-|---|---|
-| 141 | **not in `.text` at all** -- vtable, global or other `.data`/`.rdata` address. The gate is keyed on `.pdata` function starts, so these were never candidates. This is the silent-wrong-answer class. |
-| 29 | a real function start, but the masked-signature mapper found no unique pair |
-| 11 | **mid-function, and the containing function IS already mapped** -- mechanically fixable |
-| 4 | mid-function, containing function also unmapped |
+    python3 scripts/audit-1170-coverage-inventory.py --report
 
-`er-title-flow` (38) and `er-loading-portrait-core` (30) hold the most unmapped constants after
-er-quickload (58) -- the same two crates that sit in the shells that die.
+    488 unique GAME addresses; 484 resolvable, 4 UNMAPPED
 
-### The eleven mechanical ones
+Four. Not 185. This section previously carried a 2026-08-29 snapshot -- `367` constants, `182`
+mapped, `185` unmapped, split `141` data / `29` no-unique-pair / `11` mid-function-fixable / `4`
+mid-function-unmapped -- and every subsection under it was written against that split. The work it
+describes was then done and the prose was not. It is deleted rather than dated, because a work
+list that is 97% finished reads as a work list.
+
+Two footnotes the inventory prints that are worth not rediscovering:
+
+* 6 of the resolvable addresses translate for a CALL and are refused for a DETOUR. Mapping cannot
+  fix those; they need entry/verdict evidence.
+* 4 of the addresses are **not `eldenring.exe` addresses at all** -- `0x22d30`, `0x243e0`,
+  `0x24460`, `0xabc20` belong to `ersc.dll`. No ELDEN RING patch moves them and none of them is
+  migration work. Three of the four are `SHOW_RVA`, `INVADE_ACTION_RVA` and `CANCEL_ACTION_RVA`,
+  which the "eleven mechanical ones" table below flagged with "check what module they are relative
+  to before touching them". That question is answered: `ersc.dll`.
+
+### The eleven mechanical ones -- eight of them are done
 
 A mid-function address cannot be mapped, but the function that contains it can, and the offset
 within it survives the move. So the fix is to declare the FUNCTION as the `*_RVA` constant (which
-puts it in front of `scripts/select-needed-1170-rows.py`) and add the offset at the use site:
+puts it in front of `scripts/select-needed-1170-rows.py`) and add the offset at the use site.
+That technique is the durable part of this section. The work list is not: re-read against the
+tree 2026-08-31, only two of the eleven are still in the shape described.
 
-| constant | 1.16.2 | containing fn -> 1.17 | offset |
-|---|---|---|---|
-| `TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA` | `0x744e02` | `0x744dd0` -> `0x745c20` | `+0x32` |
-| `TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA` | `0x7acbf0` | `0x7acb00` -> `0x7ad980` | `+0xf0` |
-| `TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA` | `0x7ad530` | `0x7ad1c0` -> `0x7ae040` | `+0x370` |
-| `GX_COMMAND_QUEUE_RVA` | `0x8012a8` | `0x8012a0` -> `0x802120` | `+0x8` |
-| `SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA` | `0x958a20` | `0x958910` -> `0x959ab0` | `+0x110` |
-| `SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA` | `0x958b37` | `0x958910` -> `0x959ab0` | `+0x227` |
-| `FREELIST_SHUTDOWN_ASSERT_RVA` | `0xc57670` | `0xc57666` -> `0xc58d36` | `+0xa` |
-| `GX_CMD_QUEUE_WRAPPER_RVA_MIN` | `0x1aea900` | `0x1aea880` -> `0x1aec680` | `+0x80` |
-
-(`SHOW_RVA`, `INVADE_ACTION_RVA` and `CANCEL_ACTION_RVA` also land in this bucket but their
-"containing function" maps to itself, which means they are not `eldenring.exe` RVAs at all -- check
-what module they are relative to before touching them.)
+| constant | state on 2026-08-31 |
+|---|---|
+| `TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA` | **gone** -- no declaration anywhere under `crates/` |
+| `TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA` | **gone** |
+| `SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA` | **gone** |
+| `SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA` | **gone** |
+| `TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA` | **converted** -- now derives from `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA` |
+| `FREELIST_SHUTDOWN_ASSERT_RVA` | **converted** -- `FREELIST_SHUTDOWN_ASSERT_FN_RVA + FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET` |
+| `SHOW_RVA` / `INVADE_ACTION_RVA` / `CANCEL_ACTION_RVA` | **answered** -- they are `ersc.dll` RVAs (`0x2_2d30`, `0x2_43e0`, `0x2_4460`), not `eldenring.exe`, and no ELDEN RING patch moves them |
+| `GX_COMMAND_QUEUE_RVA` | **still a bare mid-function literal**, `0x8012a8` in `er-loading-portrait-core/src/resource_readback.rs`. Containing fn `0x8012a0 -> 0x802120`, offset `+0x8` |
+| `GX_CMD_QUEUE_WRAPPER_RVA_MIN` | **still a bare mid-function literal**, `0x1aea900` in `er-title-flow/src/constants_autoload_state.rs`. Containing fn `0x1aea880 -> 0x1aec680`, offset `+0x80` |
 
 ### Worked example: `SPLASH_SKIP_RVA`, done
 
@@ -503,11 +538,17 @@ NOT thereby "working on 1.17", and the tool never infers one from the other. Row
 
 ## The silent class: data addresses, and how a vtable proves its own identity (2026-08-29)
 
-141 of the unmapped constants are not in `.text` at all -- vtables, globals, tables. The function
-gate cannot see them, and a stale one does not crash: the reads are fault-safe, so it yields a
-wrong answer and the feature behind it quietly stops working. `TITLE_OWNER_VTABLE_RVA` is
-`CS::TitleStep` in 1.16.2 and not a vtable at all in 1.17, and its three scans had been finding no
-owner, forever, without a log line.
+Data addresses -- vtables, globals, tables -- are not in `.text`, so the function gate cannot see
+them, and a stale one does not crash: the reads are fault-safe, so it yields a wrong answer and the
+feature behind it quietly stops working. `TITLE_OWNER_VTABLE_RVA` is `CS::TitleStep` in 1.16.2 and
+not a vtable at all in 1.17, and its three scans had been finding no owner, forever, without a log
+line. (Re-verified 2026-08-31 by reading RTTI out of both flat images: `0x2b63bb0` resolves to
+`.?AVTitleStep@CS@@` in 1.16.2 and to nothing in 1.17; `0x2b66c60` resolves to it in 1.17 and to
+nothing in 1.16.2.)
+
+This section opened with "141 of the unmapped constants" until 2026-08-31. That count belonged to
+the deleted snapshot above; `audit-1170-coverage-inventory.py --report` now reports 4 unmapped
+addresses in total. The mechanism below is what still matters, not the size of the pile.
 
 `scripts/map-data-rvas-1162-to-1170.py` already carries data addresses by VOTING: every
 rip-relative reference in 1.16.2 `.text` is mapped onto its 1.17 function and the same instruction
@@ -523,11 +564,20 @@ mangled name sits at the source in 1.16.2 and the destination in 1.17 **and at n
 position** -- that last condition is what stops a region which happens not to have moved from
 passing by accident. Rescued rows carry an `rtti` suffix in the votes column.
 
-    76 -> 81 usable rows, 5 carried by RTTI:
-      FUNCTOR_VTABLE_RVA                          0x2ac3ea8 -> 0x2ac6f28
+The rescue worked and kept working. `data.tsv` now carries 111 rows, of which **6** are
+`1/1 rtti` (re-counted 2026-08-31 -- this passage used to say "76 -> 81 usable rows, 5 carried by
+RTTI" and then list four, which is how a count and its evidence drift apart):
+
+      SAVE_RETRY_DIALOG_VTABLE_RVA                0x2aaabf8 -> 0x2aadc78
+      FUNCTOR_VTABLE_RVA                          0x2ac3ea8 -> 0x2ac6f28   std::_Func_impl<lambda_e1e7fa74...>
+      MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA       0x2ac3ea8 -> 0x2ac6f28   (same vtable, second name)
       DEPOSITORY_DIALOG_VFTABLE_RVA               0x2aebba0 -> 0x2aeec20   CS::DepositoryDialog
-      SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA  0x2b12b48 -> 0x2b15bc8
+      SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA  0x2b12b48 -> 0x2b15bc8   std::_Func_impl<lambda_6698ebbb...>
       MEMBERFUNCJOB_VTABLE_RVA                    0x2b265d0 -> 0x2b29650   CS::MenuMemberFuncJob<TitleTopDialog>
+
+Every one of those six pairs was re-read out of the two flat images on 2026-08-31 and holds,
+including the condition that makes the method sound: the mangled name is present at the source in
+1.16.2 and at the destination in 1.17, and at NEITHER crossed position.
 
 ### Two methods, no shared assumption, same answer
 
@@ -555,8 +605,14 @@ Asking only the data map said 167 sites needed a new row. Against the union it i
 57-site difference were free wins: the address was already known and the code was still building it
 by hand. `scripts/gate-stale-rva-data.py` now reads all three.
 
-    151 + 57 = 208 data/compare sites routed through `game_data_addr`
-    110 sites across 61 constants still need a map row earned first
+    151 + 57 = 208 data/compare sites routed through `game_data_addr`   (2026-08-29)
+
+That second line used to read "110 sites across 61 constants still need a map row earned first".
+Re-measured 2026-08-31: `audit-1170-readiness.py` reports **136** ungated read/compare sites and
+`audit-1170-coverage-inventory.py` reports **4** unmapped addresses repo-wide. Ungated is not the
+same claim as unmapped -- an ungated site is one that builds `base + RVA` by hand and never asks
+the map, whether or not the map knows the answer -- and it is the ungated 136 that is now the
+work, not a hunt for missing rows.
 
 Note that several of those constants are `.text` addresses used as DATA -- `MENU_ITEM_ACCEPT_NATIVE_RVA`
 (`0x7ad810`) is compared against, not called. `map-data-rvas-1162-to-1170.py` skips `.text` by
