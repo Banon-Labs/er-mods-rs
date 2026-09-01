@@ -89,6 +89,29 @@ def main() -> int:
         # A line that merely mentions the words must not be harvested as an address.
         if REFUSED.findall("HOOK REFUSED (MhHook::new 0x1411d0fa0): game FileVersion 2.7.0.0\n"):
             failures.append("a HOOK REFUSED line was harvested; only ADDRESS REFUSED carries the address")
+
+        # THE BOUNDED WORDINGS (2026-08-30). `er_game_base::game_build` no longer writes one line
+        # per refusal: after 12 of an address it writes a went-quiet marker, then restates at each
+        # power of ten. That is safe for THIS script only because it de-duplicates into a set AND
+        # because every one of those lines keeps the same prefix. The second half is a contract
+        # between two files that nothing else checks, so it is checked here -- from the consuming
+        # side -- as well as by `every_refusal_line_stays_harvestable_by_the_refusal_recorder` in
+        # game_build.rs. A run whose first 12 lines are lost to log rotation still yields the
+        # address, which is the whole reason the later lines repeat it.
+        bounded = (
+            ("[+9ms] ADDRESS REFUSED (CS_MSB_POINT_CTOR_RVA): 0x140cf9300 -- refusal 13 of this "
+             "address; further refusals of it are counted, not written\n", "0x140cf9300"),
+            ("[+9ms] ADDRESS REFUSED (CS_MSB_POINT_CTOR_RVA): 0x140cf9300 -- refusal 100 of this "
+             "address. Restated so the log carries the MAGNITUDE of a dead path\n", "0x140cf9300"),
+            ("[+9ms] ADDRESS REFUSED FOR DETOUR (register_union_hook): 0x140b0f000 -- refusal 13 "
+             "of this address; further refusals of it are counted, not written\n", "0x140b0f000"),
+        )
+        for line, expected in bounded:
+            if REFUSED.findall(line) != [expected]:
+                failures.append(
+                    f"a BOUNDED refusal line was not harvested, so an address whose early lines "
+                    f"rotated out of the log would never reach the work list: {line.strip()}"
+                )
         for line in failures:
             print(f"SELFTEST FAIL: {line}")
         print(f"selftest: {len(failures)} failure(s)")
@@ -103,6 +126,27 @@ def main() -> int:
         return 0
 
     target = repo / OUTPUT
+    # SAY SO WHEN A RUN WOULD DELETE WORK. Without `--merge` this file is OVERWRITTEN by whatever
+    # the logs currently in the game directory happen to hold, and those logs are one session --
+    # often a short one, sometimes one where a fix means almost nothing is refused any more.
+    # Measured 2026-08-30: a plain run against a live directory rewrote a 136-address list down to
+    # the single address that session refused, silently, exiting 0. The write still happens (that
+    # is the documented contract and `--merge` is how to keep the rest), but it no longer happens
+    # quietly.
+    existing = 0
+    if target.is_file():
+        existing = sum(
+            1
+            for line in target.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        )
+    if not args.merge and existing > len(found):
+        print(
+            f"WARNING: this run harvested {len(found)} address(es) from the current logs, but "
+            f"{OUTPUT} already lists {existing}. Without --merge the {existing - len(found)} "
+            f"not seen in THIS session are about to be dropped. Re-run with --merge to keep them.",
+            file=sys.stderr,
+        )
     if args.merge and target.is_file():
         for line in target.read_text(encoding="utf-8").splitlines():
             if line.startswith("#") or not line.strip():

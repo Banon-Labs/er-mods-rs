@@ -27,8 +27,8 @@ The live ledgers were clean when this gate was written, and that is the point of
 and 116 `data.tsv` rows are 100% `.data`/`.rdata`. A gate that arrives green on 1047 rows and
 would have been red on 87 is a gate that separates, not one that fires on everything.
 
-THREE RULES
------------
+TWO RULES
+--------
   R1  CODE LEDGER    a row naming a FUNCTION -- callable, and for two of the three ledgers
                      hookable -- must name a destination in an EXECUTABLE section. Applied to
                      EVERY pair row, not only the rows `build.rs` currently admits as detourable:
@@ -36,12 +36,16 @@ THREE RULES
                      of sync with build.rs.
   R2  DATA LEDGER    a row in the globals ledger must name a NON-EXECUTABLE destination. A code
                      address filed as a global is how a `read` becomes a call to the wrong thing.
-  R3  RETIRED        `docs/recon/rva-1170-detour-audited.tsv` must not exist. This is a TOMBSTONE
-                     and it is deliberately narrow: `scripts/audit-1170-hook-targets.py --promote`
-                     still writes that path, so one command resurrects the file, and R1 cannot see
-                     it because a file `build.rs` does not declare is not a ledger this gate
-                     enumerates. DELETE R3 WHEN `--promote` GOES; it is enforcement standing in
-                     for a removal that has to land in a file this change did not own.
+
+THERE WAS A THIRD RULE, AND ITS REMOVAL IS THE POINT
+-----------------------------------------------------
+R3 was a TOMBSTONE: `docs/recon/rva-1170-detour-audited.tsv` must not exist. It was enforcement
+standing in for a removal that this gate's own change did not own -- `audit-1170-hook-targets.py
+--promote` still wrote that path, so one command resurrected the file, and R1 could not see it
+because a file `build.rs` does not declare is not a ledger this gate enumerates. `--promote` and
+its two helpers were deleted on 2026-08-31, so R3 was deleted with them. A rule that guards
+against a command nobody can run is not spare coverage; it is a line that reads as coverage while
+matching nothing, which is the exact failure mode the rest of this file exists to refuse.
 
 HOW THE LEDGERS ARE FOUND
 -------------------------
@@ -54,9 +58,9 @@ class wearing a green tick.
 THE IMAGE IS GITIGNORED
 -----------------------
 `eldenring-deobf-1.17.bin` is game-derived and not committed, so R1/R2 can only run where it
-exists. When it does not, they are SKIPPED OUT LOUD and the exit code says so is not a pass: R3
-still runs (it needs no image), and the summary names what was not checked. `--selftest` builds
-its own synthetic image and therefore runs everywhere, which is what `check.sh` wires.
+exists. When it does not, they are SKIPPED OUT LOUD, in a line that refuses the words OK and
+PASS, and the summary names what was not checked. `--selftest` builds its own synthetic image and
+therefore runs everywhere, which is what `check.sh` wires.
 
 USAGE
     python3 scripts/check-ledger-section-kind.py             # the gate
@@ -95,9 +99,6 @@ LEDGER_KIND = {
 # `const NAME: &str = "../../docs/recon/whatever.tsv";` in build.rs.
 LEDGER_CONST = re.compile(r'const\s+([A-Z0-9_]+)\s*:\s*&str\s*=\s*"([^"]*\.tsv)"')
 
-# R3. The path, and the tool that can still write it.
-RETIRED = os.path.join(REPO, "docs", "recon", "rva-1170-detour-audited.tsv")
-RETIRED_WRITER = "scripts/audit-1170-hook-targets.py --promote"
 
 
 class Refuse(Exception):
@@ -208,19 +209,10 @@ def destinations(path: str) -> list[tuple[int, int, int]]:
     return rows
 
 
-def check(image_path: str, build_rs: str = BUILD_RS, retired: str = RETIRED, show_rows=False):
+def check(image_path: str, build_rs: str = BUILD_RS, show_rows=False):
     """`(findings, notes)`. An empty `findings` is a green gate; `notes` are printed either way."""
     findings: list[str] = []
     notes: list[str] = []
-
-    # R3 first, because it needs nothing and a resurrected ledger is the loudest thing here.
-    if os.path.exists(retired):
-        findings.append(
-            f"R3 RETIRED  {os.path.relpath(retired, REPO)} exists again.\n"
-            f"    It was deleted 2026-08-31: 89 of its 448 promotions rested on an 'unwindless\n"
-            f"    leaf' clause and all 89 named non-executable memory. `{RETIRED_WRITER}` still\n"
-            f"    writes this path; delete the file, or remove --promote and this rule with it."
-        )
 
     ledgers, unknown = ledger_paths(build_rs)
     if unknown:
@@ -320,7 +312,6 @@ def selftest() -> int:
         build_rs = os.path.join(crate, "build.rs")
         code_path = os.path.join(recon, "rva-map-1162-to-1170.verified.tsv")
         data_path = os.path.join(recon, "rva-map-1162-to-1170.data.tsv")
-        retired = os.path.join(recon, "rva-1170-detour-audited.tsv")
 
         def write_build_rs(extra=""):
             with open(build_rs, "w", encoding="utf-8") as handle:
@@ -342,39 +333,32 @@ def selftest() -> int:
         # Specificity: the shapes the live tree actually has must stay green.
         write(code_path, [good_code])
         write(data_path, [good_data])
-        findings, _ = check(image, build_rs, retired)
+        findings, _ = check(image, build_rs)
         expect("spec/correct-kinds-green", len(findings), 0)
 
         # R1: a hook-licensing row pointing into non-executable memory.
         write(code_path, [good_code, "0x140001040\t0x140002040\tIDENTICAL-WHOLE\t1.0\t9\tY\tB\tP\n"])
-        findings, _ = check(image, build_rs, retired)
+        findings, _ = check(image, build_rs)
         expect("sens/R1-code-row-in-.data", len(findings), 1)
         expect("sens/R1-names-the-address", "0x140002040" in (findings[0] if findings else ""), True)
         write(code_path, [good_code])
 
         # R1 again: a destination in NO section at all is not executable either.
         write(code_path, [good_code, "0x140001040\t0x140099000\tIDENTICAL-WHOLE\t1.0\t9\tY\tB\tP\n"])
-        findings, _ = check(image, build_rs, retired)
+        findings, _ = check(image, build_rs)
         expect("sens/R1-outside-every-section", len(findings), 1)
         write(code_path, [good_code])
 
         # R2: a global that is actually a code address.
         write(data_path, [good_data, "0x3b15010\t0x1200\tCARRIED\tagree\n"])
-        findings, _ = check(image, build_rs, retired)
+        findings, _ = check(image, build_rs)
         expect("sens/R2-data-row-in-.text", len(findings), 1)
         write(data_path, [good_data])
-
-        # R3: the retired ledger returns.
-        with open(retired, "w", encoding="utf-8") as handle:
-            handle.write("# regenerated by --promote\n0x140001000\t0x140002000\tleaf\t6B\n")
-        findings, _ = check(image, build_rs, retired)
-        expect("sens/R3-retired-ledger-returns", len(findings), 1)
-        os.remove(retired)
 
         # An unclassified ledger stops the run rather than being skipped.
         write_build_rs('const NEW_MAP: &str = "../../docs/recon/rva-1170-brand-new.tsv";\n')
         try:
-            check(image, build_rs, retired)
+            check(image, build_rs)
             expect("sens/unclassified-ledger-refuses", "returned", "raised Refuse")
         except Refuse as exc:
             expect("sens/unclassified-ledger-refuses", "NEW_MAP" in str(exc), True)
@@ -382,7 +366,7 @@ def selftest() -> int:
 
         # A missing image must SKIP, not silently pass R1/R2 with a green tick.
         write(code_path, [good_code, "0x140001040\t0x140002040\tIDENTICAL-WHOLE\t1.0\t9\tY\tB\tP\n"])
-        findings, notes = check(os.path.join(tmp, "absent.bin"), build_rs, retired)
+        findings, notes = check(os.path.join(tmp, "absent.bin"), build_rs)
         expect("spec/absent-image-skips-loudly", (len(findings), len(notes)), (0, 1))
         expect(
             "spec/absent-image-says-what-it-skipped",
