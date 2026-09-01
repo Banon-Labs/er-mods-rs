@@ -1435,11 +1435,26 @@ python3 "$repo_root/scripts/audit-1170-readiness.py" --check
 # Positive control: injecting a raw `*((base + SOME_RVA) as *mut u8) = 0x90` write goes RED naming
 # the crate and both classes it trips (CACHED_ADDR 0->1, UNGATED_ARITH 2->3).
 python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --selftest
-# UNWIRED 2026-08-31: 2 new ungated game-address paths (er-game-base/src/mem.rs 1->2,
-# er-seamless-bugfixes/src/lib.rs 0->1). Red in this WORKING TREE too, so it is not a closure
-# artifact -- it is the ratchet reporting real drift. The --selftest above stays wired and green.
-# Re-arm this line when the two sites are routed through the version gate or recorded in the baseline.
-# python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --baseline "$repo_root/scripts/audit-1170-gate-bypass.baseline.json"
+# RE-ARMED 2026-09-01, after the one key that still drifted was adjudicated and MEASURED.
+#
+# The comment that stood here from 2026-08-31 to 2026-09-01 named two keys -- er-game-base/mem.rs
+# 1->2 and er-seamless-bugfixes/lib.rs 0->1 -- and by the time anyone read it neither drifted any
+# more; both are in the baseline at their current counts. That is the failure mode of writing an
+# adjudication into a comment beside a disabled line: the prose rots while the line stays off, and
+# the next reader cannot tell whether the gate is off for a live reason or a dead one. The
+# justification now lives in `_reasons` INSIDE the baseline, keyed by the entry it justifies, and
+# `--write-baseline` carries it forward so regenerating the counts cannot silently drop it.
+#
+# The only key that was still red: er-quickload|VTABLE_WRITE|.../experiments/can_move_probe.rs
+# 0 -> 4, the move probe's analog-stick writes at `+0x89c`/`+0x8a0`. Adjudicated IN BOUNDS by
+# static RE, not by inspection: the object is `DLUID::PadDevice` = HeapAlloc(0xa68) = 2664 bytes,
+# and the 1704-bytes-smaller `FD4::FD4PadDevice` (0x3c0 = 960) that made this look like a heap
+# overrun is a DIFFERENT class that merely holds the PadDevices in its +0x10 vector. The decisive
+# fact is that the game's own device poll -- the very function this repo detours -- STORES both
+# floats on that same `this`, so the offsets are in-bounds by construction. Full derivation in the
+# baseline's `_reasons`, and frozen against future drift by six new rows in
+# check-object-field-offsets-1170.py (the poll pairs 616/616 with 72 offsets and zero moved).
+python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --baseline "$repo_root/scripts/audit-1170-gate-bypass.baseline.json"
 # THE FOUR WRITE CLASSES THE RATCHET ABOVE CANNOT SEE (wired 2026-08-31). That one counts ungated
 # addresses per cdylib; this one names the SHAPES that reach a write without any `base + SOMETHING`
 # text to count -- a store into a vtable/function-pointer slot, a `game_data_addr(..) + offset` that

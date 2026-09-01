@@ -102,13 +102,39 @@ pub(crate) use er_telemetry_core::counters::ORIG_PAD_POLL;
 /// `this`.
 ///
 /// This is the sweep's proof of class, and it costs nothing to obtain because the game hands it
-/// over every frame. The hooked function is a vtable slot of `DLUID::PadDevice`
-/// (`0x1430c9f08` -> `0x1430cd048`, its only vtable reference in either image) and writes
-/// `+0x89c`/`+0x8a0` on its own `this`, so whatever object reaches this hook is by construction the
-/// class those two floats belong to and is `HeapAlloc(0xa68)` = 2664 bytes -- room to spare for a
-/// write ending at `0x8a4`. `inject_all_pad_devices` then writes ONLY into objects carrying this
-/// same vtable, which is what makes its writes provably in-bounds without resolving a data address
-/// the 1.17 map does not carry.
+/// over every frame. The hooked function is a vtable slot of `DLUID::PadDevice` (`0x1430c9f08` ->
+/// `0x1430cd048`, its only vtable reference in either image) and writes `+0x89c`/`+0x8a0` on its
+/// own `this`, so whatever object reaches this hook is by construction the class those two floats
+/// belong to and is `HeapAlloc(0xa68)` = 2664 bytes -- room to spare for a write ending at
+/// `0x8a4`. `inject_all_pad_devices` then writes ONLY into objects carrying this same vtable,
+/// which is what makes its writes provably in-bounds without resolving a data address the 1.17 map
+/// does not carry.
+///
+/// RE-ESTABLISHED FROM THE IMAGES 2026-09-01, because at a glance this reads like a 1244-byte
+/// heap overrun and is not one. There are TWO classes here whose names both end in "PadDevice",
+/// and only the smaller one is 0x3c0:
+///
+/// ```text
+/// FD4::FD4PadDevice          HeapAlloc(0x3c0) = 960    vftable 0x143295998, ctor 0x142663880
+///   +0x08 -> DLUID::VirtualMultiDevice   HeapAlloc(0x7f8)     (device factory type 7)
+///   +0x10 -> DLUID::PadDevice[0..0x38]   HeapAlloc(0xa68)     (device factory types 3..6)
+/// ```
+///
+/// `+0x89c`/`+0x8a0` belong to the INNER one. Named from RTTI rather than from a symbol guess:
+/// the vtable's complete-object-locator (1.16.2 `0x1433dba10`, 1.17 `0x1433decd0`) has
+/// `offset == 0` -- so `this` is the allocation base, not a secondary-base sub-object -- and its
+/// type descriptor spells `.?AV?$PadDevice@VDLMultiThreadingPolicy@DLKR@@@DLUID@@` in both builds.
+/// The constructor agrees: `mov qword ptr [r14], rax` with `r14 = rcx` and `rax` = that vtable.
+/// All four sizes above come out of ONE function, `DLUserInputManagerImpl`'s device factory
+/// (1.16.2 `0x141f28a80` -> 1.17 `0x141f2a880`), where `mov ecx, 0xa68` sits immediately before
+/// each of the two `DLUID::PadDevice::PadDevice` call sites.
+///
+/// The decisive fact is not the arithmetic, though: the game's OWN poll stores to `+0x89c` and
+/// `+0x8a0` on this same `this`, in all three of its source branches (DirectInput, XInput,
+/// ScePad). An offset the engine writes on an object is in-bounds by construction. Frozen against
+/// drift in `scripts/check-object-field-offsets-1170.py` -- the poll's two bodies align 616/616
+/// with 72 field offsets and ZERO moved, the highest of them `0xa60`, eight bytes below the
+/// allocation's end.
 static POLLED_DEVICE_VTABLE: AtomicUsize = AtomicUsize::new(0);
 
 unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usize) -> usize {
@@ -440,9 +466,13 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // seizing the user's focus is forbidden. Movement is delivered ONLY while ER is ALREADY the foreground
     // window -- the pad-poll/`inject_all_pad_devices` stick and the foreground-only keyboard-W driver below
     // both no-op or auto-release when ER is not focused, so the probe can never steal the user's focus.
-    // Also write full-forward to EVERY registered pad device's CONCRETE pointer -- covers the case where
-    // the poll hook's `this` is the FD4PadDevice (so `this+0x8a0` is 8 bytes off the real stick) or the
-    // player reads a device the poll hook did not fire for this frame.
+    // Also write full-forward to EVERY registered pad device that carries the polled vtable -- the
+    // case this covers is the player reading a device the poll hook did not fire for this frame.
+    // (It does NOT cover "the poll hook's `this` might be the FD4PadDevice, so `this+0x8a0` is 8
+    // bytes off the real stick", which this comment used to claim: that hypothesis is disproven.
+    // The pointer to the hooked poll occurs exactly ONCE in each image, at `+0x128` of
+    // `DLUID::PadDevice`'s vtable, and that vtable's RTTI locator has `offset == 0` -- so `this`
+    // is always a `DLUID::PadDevice` at its allocation base and never an `FD4::FD4PadDevice`.)
     if is_on {
         unsafe { inject_all_pad_devices() };
     }

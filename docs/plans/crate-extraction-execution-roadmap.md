@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 50,108 |
+| all `experiments/**` | 76 | 50,138 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -242,7 +242,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 
 | Current file | Lines | Current partition | Next node |
 |---|---:|---|---|
-| `can_move_probe.rs` | 522 | product `STAY`: real-module conversion template | `STAY` |
+| `can_move_probe.rs` | 552 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 17 | product re-export facade | D5 |
 | `continue_load/product_continue.rs` | 733 | product continue/load policy | D5 |
 | `continue_load/slot_resolution.rs` | 819 | product slot-resolution policy | D5 and R14 |

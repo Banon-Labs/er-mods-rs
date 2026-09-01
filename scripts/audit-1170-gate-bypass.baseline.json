@@ -68,6 +68,7 @@
  "er-quickload|UPSTREAM_STATIC|crates/er-quickload/src/telemetry/runtime_oracles/game_man_snapshot.rs": 2,
  "er-quickload|UPSTREAM_STATIC|crates/er-quickload/src/telemetry/runtime_oracles/write_oracle.rs": 1,
  "er-quickload|VTABLE_WRITE|crates/er-quickload/src/crashlog/veh_exit_hooks.rs": 3,
+ "er-quickload|VTABLE_WRITE|crates/er-quickload/src/experiments/can_move_probe.rs": 4,
  "er-quickload|VTABLE_WRITE|crates/er-quickload/src/experiments/own_stepper/load_steps.rs": 2,
  "er-quickload|VTABLE_WRITE|crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs": 3,
  "er-quickload|VTABLE_WRITE|crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_picker_path_editor.rs": 1,
@@ -85,5 +86,8 @@
  "er-title-flow|UNGATED_ARITH|crates/er-title-flow/src/product_autoload_gates.rs": 2,
  "er-title-flow|UNGATED_ARITH|crates/er-title-flow/src/title_load_step_hooks.rs": 6,
  "er-title-flow|UPSTREAM_STATIC|crates/er-title-flow/src/title_tick_cover.rs": 3,
- "mushroom-man-runtime|UPSTREAM_STATIC|crates/mushroom-man-runtime/src/lib.rs": 2
+ "mushroom-man-runtime|UPSTREAM_STATIC|crates/mushroom-man-runtime/src/lib.rs": 2,
+ "_reasons": {
+  "er-quickload|VTABLE_WRITE|crates/er-quickload/src/experiments/can_move_probe.rs": "IN BOUNDS, MEASURED 2026-09-01, and neither write reaches a game IMAGE address at all -- both store into a live HEAP object, which is why VTABLE_WRITE's `*(x as *mut T) = ..` shape matches them. Lines 130/131 write `this + 0x89c` / `this + 0x8a0` where `this` is the DETOUR'S OWN first argument, a pointer the engine passed in; there is no `base + rva` to gate. Lines 212/213 write the same two offsets on a device reached from `crate::game_rva(FD4_PAD_MANAGER_RVA)` -- the gate IS on that path -- and only after `*(device) == POLLED_DEVICE_VTABLE`, the vtable latched from the object the engine itself polled, so the class is confirmed at runtime rather than assumed. The object is `DLUID::PadDevice<DLKR::DLMultiThreadingPolicy>` (RTTI `.?AV?$PadDevice@VDLMultiThreadingPolicy@DLKR@@@DLUID@@`, vtable 0x1430c9f08 -> 0x1430cd048 with complete-object-locator offset 0, so `this` is the allocation base), which the DLUserInputManagerImpl device factory allocates as HeapAlloc(0xa68) = 2664 bytes in BOTH builds. A write ending at 0x8a4 is 452 bytes inside it. It is NOT `FD4::FD4PadDevice` (HeapAlloc(0x3c0) = 960), which is a different class that HOLDS these at its +0x10 vector; confusing the two is what makes this look like the `stamp_vk_direct` overrun. The game's own poll (0x141f6bad0 -> 0x141f6d8d0, the only pointer to it in either image, at vtable+0x128) STORES both floats on this same `this`, so the offsets are in-bounds by construction. Frozen in scripts/check-object-field-offsets-1170.py: 4 field rows on the poll pairing (616/616 aligned, 72 offsets, zero moved), the FD4PadDevice 0x10/0x38 walk, the 0xa68 ALLOC_WITNESS and the PAD_STICK_LY WRITE_REACH bound."
+ }
 }

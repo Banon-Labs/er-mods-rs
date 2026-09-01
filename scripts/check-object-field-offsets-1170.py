@@ -217,6 +217,21 @@ FD4_PAD_DEVICE_CTOR = dict(
 FD4_PAD_BUILDER_A = dict(
     va16=0x140240E70, len16=690, va17=0x140240E70, len17=690, bases=("rsi", "rcx")
 )
+# `DLUID::PadDevice<DLKR::DLMultiThreadingPolicy>::Poll` -- a DIFFERENT class from
+# `FD4::FD4PadDevice` above, and the whole reason these two sit next to each other here. `this` is
+# rdi after `mov rdi,rcx`; rcx is admitted for the first three instructions before the move.
+#
+# This is the function `crates/er-quickload/src/experiments/can_move_probe.rs` detours, and the
+# object it writes `+0x89c`/`+0x8a0` into is this function's own `this`. The class is established
+# from the image, not from a name: the pointer to this function occurs EXACTLY ONCE in each flat
+# image (1.16.2 0x1430ca030, 1.17 0x1430cd170), both at `+0x128` of the vtable at 0x1430c9f08 ->
+# 0x1430cd048, whose RTTI complete-object-locator has `offset == 0` and whose type descriptor
+# spells `.?AV?$PadDevice@VDLMultiThreadingPolicy@DLKR@@@DLUID@@` in BOTH builds. `offset == 0` is
+# what makes `this` the allocation base rather than a secondary-base sub-object, and the
+# constructor agrees: `mov qword ptr [r14], rax` with rax = that vtable, r14 = rcx.
+PAD_DEVICE_POLL = dict(
+    va16=0x141F6BAD0, len16=2911, va17=0x141F6D8D0, len17=2911, bases=("rdi", "rcx")
+)
 # `FD4::FD4StepTemplateBase<CS::CSSystemStep, FD4::FD4TaskBase>`, the base sub-object at offset 0
 # of `CS::CSSystemStep`. `this` is rsi after `mov rsi,rcx`. Reached as
 # `CSSystemStep::CSSystemStep` (1.16.2 0x140dec7c0) -> 0x140dec620 -> here; the 1.17 pair is the
@@ -418,6 +433,88 @@ WITNESSES = (
         FD4_PAD_BUILDER_A,
         "virtual-key builder A; the frozen negative for the padDevices rows -- 0x18 and 0x48 are "
         "adjacent members of the same object and a matcher that confused them would fail here",
+    ),
+    # The two members of `FD4::FD4PadDevice` that `inject_all_pad_devices` walks to REACH the
+    # analog-stick write below. Pinning the field without pinning the pointer chain that reaches it
+    # would leave half the address unmeasured -- the same argument the FD4PadManager rows above
+    # make, one indirection further down.
+    (
+        "FD4PadDevice",
+        "devices vector entries (FD4PADDEVICE_DEVICES_OFFSET)",
+        0x10,
+        0x10,
+        FD4_PAD_DEVICE_CTOR,
+        "FD4PadDevice constructor, 168/168 aligned with zero moved offsets; `lea r14,[rbx+0x10]` "
+        "is the DLFixedVector<DLUID::device*,4> element base it fills from device types 3..6",
+    ),
+    (
+        "FD4PadDevice",
+        "devices vector count (FD4PADDEVICE_DEVICE_COUNT_OFFSET)",
+        0x38,
+        0x38,
+        FD4_PAD_DEVICE_CTOR,
+        "FD4PadDevice constructor, `mov qword ptr [rcx+0x38],rdi` with rdi = 0; it is the counter "
+        "the ctor's own `if (4 < count + 1) DLPanic(\"out of memory.\")` bounds, which is where "
+        "the capacity 4 comes from",
+    ),
+    # ---- DLUID::PadDevice<DLKR::DLMultiThreadingPolicy> --------------------------------------
+    # THE ROWS THAT SETTLE A "THIS LOOKS LIKE AN OUT-OF-BOUNDS WRITE" REPORT.
+    #
+    # `can_move_probe` writes two floats at `+0x89c`/`+0x8a0`, and read beside the FD4PadDevice
+    # rows above -- `HeapAlloc(0x3c0)` = 960 bytes -- that reads as 1244 bytes past the end of a
+    # live allocation, i.e. exactly the `stamp_vk_direct` defect again. It is not. They are two
+    # different classes that both end in "PadDevice", and the FD4 one HOLDS the DLUID ones:
+    #
+    #     FD4::FD4PadDevice                 HeapAlloc(0x3c0),  vftable 0x143295998
+    #       +0x08  -> DLUID::VirtualMultiDevice   HeapAlloc(0x7f8)   (factory type 7)
+    #       +0x10  -> DLUID::PadDevice[0..count]  HeapAlloc(0xa68)   (factory types 3..6)
+    #
+    # The four sizes come from ONE factory (`DLUserInputManagerImpl` device factory, 1.16.2
+    # 0x141f28a80 -> 1.17 0x141f2a880) and are frozen in ALLOC_WITNESSES below; a write ending at
+    # 0x8a4 fits in only the 0xa68 one. The rows here are the other half: that `0x89c` and `0x8a0`
+    # are fields of THAT class in BOTH builds, and that the game itself stores to them.
+    #
+    # "The game itself stores to them" is the decisive form of the argument. An offset the engine's
+    # own code writes on this same `this` is in-bounds by construction -- no allocation arithmetic
+    # required to believe it, and no way for the repo to be writing into padding or off the end.
+    (
+        "DLUID::PadDevice",
+        "left_stick_x (PAD_STICK_LX_OFFSET)",
+        0x89C,
+        0x89C,
+        PAD_DEVICE_POLL,
+        "the device poll itself, 616/616 aligned with 72 field offsets and ZERO moved. It STORES "
+        "to 0x89c on its own `this` from all three input sources -- DirectInput "
+        "(`(axis - centre) / range`), XInput (`GetState` thumb LX) and ScePad -- so this is the "
+        "engine's own left-stick X, not a byte the repo picked",
+    ),
+    (
+        "DLUID::PadDevice",
+        "left_stick_y (PAD_STICK_LY_OFFSET) -- the forward stick the move probe writes",
+        0x8A0,
+        0x8A0,
+        PAD_DEVICE_POLL,
+        "the device poll; it stores 0x8a0 in the same three branches as 0x89c, one dword above it",
+    ),
+    (
+        "DLUID::PadDevice",
+        "held immediately below the stick block (0x894, the XInput user index)",
+        0x894,
+        0x894,
+        PAD_DEVICE_POLL,
+        "the device poll; `cmp dword [this+0x894],0` is the branch that chooses DirectInput over "
+        "XInput. Brackets the stick pair from below",
+    ),
+    (
+        "DLUID::PadDevice",
+        "highest offset the poll touches (0xa60)",
+        0xA60,
+        0xA60,
+        PAD_DEVICE_POLL,
+        "the device poll; 0xa60 is the top of its witnessed set and sits 8 bytes below the 0xa68 "
+        "the factory allocates, which is the independent corroboration that the object reaching "
+        "this hook is the 0xa68 class and not one of the three smaller ones the same factory hands "
+        "out (0x8f0 KeyboardDevice, 0x810, 0x7f8 VirtualMultiDevice)",
     ),
     # ---- CS::CSSystemStep (its FD4StepTemplateBase base sub-object) --------------------------
     # THE ROW THAT EXISTS BECAUSE A CONSTANT WAS NEVER MEASURED AT ALL.
@@ -1145,6 +1242,13 @@ SAFE_REGIONS = {
     # the interior of a bracket while both ends held.
     "FD4PadDevice": ((0x0, 0x89),),
     "FD4PadManager": ((0x0, 0xA9),),
+    # Nothing in `DLUID::PadDevice` moved either: its poll aligns 616/616 with all 72 of the
+    # offsets it touches HELD, its constructor stamps the same vtable at [this+0] in both builds,
+    # and the factory still calls `HeapAlloc(0xa68)` for it. The region stops just past 0xa60, the
+    # highest WITNESSED offset (a byte), for the same reason as the pad rows above -- "no witness
+    # moved" is not "no field moved", and the eight bytes from 0xa61 to the end of the allocation
+    # have no witness either way.
+    "DLUID::PadDevice": ((0x0, 0xA61),),
     # Nothing in the step template moved: the constructor aligns 57/57 and all 13 field offsets it
     # touches -- 0x0, 0x10, 0x18, 0x48, 0x50, 0x58, 0x60, 0x68, 0x69, 0x70, 0xa0, 0xa8, 0xac -- are
     # HELD. The region stops just past the highest WITNESSED offset (0xac, a dword), per the rule
@@ -1212,6 +1316,17 @@ PINNED_CONSTANTS = (
     # to nothing else in that four-class family, which is what the sweep's vtable test enforces.
     ("PAD_STICK_LY_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x8A0, "DLUID::PadDevice"),
     ("PAD_STICK_LX_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x89C, "DLUID::PadDevice"),
+    # The pointer walk that REACHES those two floats: FD4PadManager -> padDevices[i] ->
+    # FD4PadDevice -> devices[slot] -> DLUID::PadDevice. `er-input-harness` spells the manager's
+    # two offsets under different names (pinned above), and this gate looks a name up tree-wide, so
+    # the can_move_probe copies were unwatched until 2026-09-01 despite being the base half of a
+    # write. The capacity is here for the same reason `VK_ID_MAX` is: it is a BOUND, and the loop
+    # that clamps to it is what keeps the walk inside the game's own DLFixedVector<_,4>.
+    ("PAD_MGR_DEVICES_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x18, "FD4PadManager"),
+    ("PAD_MGR_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x40, "FD4PadManager"),
+    ("FD4PADDEVICE_DEVICES_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x10, "FD4PadDevice"),
+    ("FD4PADDEVICE_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x38, "FD4PadDevice"),
+    ("FD4PADDEVICE_DEVICES_CAPACITY", "crates/er-quickload/src/experiments/can_move_probe.rs", 4, "FD4PadDevice"),
     # ---- THE NAME-PROVENANCE SWEEP (2026-08-31) ---------------------------------------------
     # Constants whose only stated provenance was a NAME. The sweep measured all of them and all of
     # them were right, so nothing here is a correction -- these rows exist so that the NEXT edit

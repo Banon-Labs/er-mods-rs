@@ -66,10 +66,13 @@ from __future__ import annotations
 import argparse
 import bisect
 import collections
+import contextlib
+import io
 import json
 import os
 import re
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # ONE DIALECT, NOT FOUR. This file used to carry its own comment/string blanker. It was the fourth
@@ -1451,6 +1454,57 @@ def selftest() -> int:
                 f"with the shared reader on {blanked} of the first 400"
             )
 
+    # THE RATCHET ITSELF, which none of the controls above touch. `_reasons` was added on
+    # 2026-09-01 so an adjudicated key can carry its justification in the baseline; a metadata key
+    # that the arithmetic accidentally read as a count would make `check_baseline` throw, and a
+    # skip rule written too wide would make the ratchet ignore real keys. Both directions are
+    # asserted here against a temporary baseline, so neither can rot silently.
+    probe = Finding(
+        cls="VTABLE_WRITE",
+        crate="control-ratchet",
+        path="crates/control-ratchet/src/lib.rs",
+        line=1,
+        severity="CORRUPTION",
+        feeds="write",
+        text="*(x as *mut u8) = 0;",
+        detail="",
+    )
+    key = ratchet_key(probe)
+    with tempfile.TemporaryDirectory() as tmp:
+        at = os.path.join(tmp, "baseline.json")
+        with open(at, "w", encoding="utf-8") as fh:
+            json.dump({key: 1, "_reasons": {key: "the control's own reason"}}, fh)
+        # Both calls are silenced: the second one is SUPPOSED to print the ratchet's failure
+        # banner, and a passing selftest that prints "GATE-BYPASS RATCHET: new ungated ..." trains
+        # the reader to scroll past the real one.
+        with contextlib.redirect_stdout(io.StringIO()):
+            allowed = check_baseline([probe], at)
+            refused = check_baseline([probe, probe], at)
+        if allowed != 0:
+            failures.append(
+                "RATCHET CONTROL: a baseline carrying `_reasons` refused a count it allows, so "
+                "metadata is being read as an entry to compare against"
+            )
+        elif refused == 0:
+            failures.append(
+                "RATCHET CONTROL: the baseline accepted 2 findings where it records 1, so the "
+                "skip rule is swallowing real keys, not just metadata"
+            )
+        else:
+            print("  ok   ratchet control      -> `_reasons` ignored, a real rise still fails")
+        # And the regeneration must not drop the adjudication it was standing on.
+        with contextlib.redirect_stdout(io.StringIO()):
+            write_baseline([probe], at)
+        with open(at, encoding="utf-8") as fh:
+            rewritten = json.load(fh)
+        if "_reasons" not in rewritten:
+            failures.append(
+                "RATCHET CONTROL: `--write-baseline` dropped `_reasons`, so every adjudication is "
+                "lost the next time the baseline is regenerated"
+            )
+        else:
+            print("  ok   ratchet control      -> --write-baseline carries `_reasons` forward")
+
     if failures:
         print("\nSELFTEST FAILED:")
         for f in failures:
@@ -1501,9 +1555,44 @@ def ratchet_counts(findings) -> dict:
     return dict(sorted(counts.items()))
 
 
+# WHERE THE "WHY" GOES. The failure message below tells you to "record why in the baseline", and
+# until 2026-09-01 the baseline was a bare `{key: count}` map with nowhere to write it -- so every
+# adjudication ended up as prose in `scripts/check.sh`, detached from the number it justifies, and
+# the check.sh comment went stale within a day of being written (it named two keys that no longer
+# drift while the one that does went unmentioned). A key whose count is raised on purpose now
+# carries its reason IN THE FILE, under `_reasons`.
+#
+# Metadata keys are `_`-prefixed and skipped by the ratchet arithmetic; a bare `_` cannot collide
+# with a real key, which is always `crate|CLASS|path`. `--write-baseline` carries them forward from
+# whatever it is about to overwrite, because a regeneration that silently drops the adjudications
+# is how this ends up back in check.sh.
+METADATA_PREFIX = "_"
+
+
+def _counts_only(baseline: dict) -> dict:
+    return {k: v for k, v in baseline.items() if not k.startswith(METADATA_PREFIX)}
+
+
+def write_baseline(findings, path: str) -> int:
+    carried = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            carried = {k: v for k, v in json.load(fh).items() if k.startswith(METADATA_PREFIX)}
+    payload = dict(ratchet_counts(findings))
+    payload.update(carried)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=1)
+        fh.write("\n")
+    print(
+        f"baseline written: {len(findings)} finding(s) -> {path}"
+        + (f" ({len(carried)} metadata key(s) carried forward)" if carried else "")
+    )
+    return 0
+
+
 def check_baseline(findings, path: str) -> int:
     with open(path, encoding="utf-8") as fh:
-        baseline = json.load(fh)
+        baseline = _counts_only(json.load(fh))
     now = ratchet_counts(findings)
     regressions = []
     for key, count in now.items():
@@ -1542,11 +1631,7 @@ def main() -> int:
     if args.crate:
         findings = [f for f in findings if f.crate == args.crate]
     if args.write_baseline:
-        with open(args.write_baseline, "w", encoding="utf-8") as fh:
-            json.dump(ratchet_counts(findings), fh, indent=1)
-            fh.write("\n")
-        print(f"baseline written: {len(findings)} finding(s) -> {args.write_baseline}")
-        return 0
+        return write_baseline(findings, args.write_baseline)
     if args.baseline:
         return check_baseline(findings, args.baseline)
     if args.json:

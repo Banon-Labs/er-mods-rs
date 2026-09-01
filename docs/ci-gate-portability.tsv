@@ -184,6 +184,7 @@ blocked	game-install	check-starting-classes.py	exits 2 on purpose: the starting-
 portable	-	audit-1170-readiness.py --selftest	source/AST/text analysis only
 portable	-	audit-1170-readiness.py --check	source/AST/text analysis only
 portable	-	audit-1170-gate-bypass.py --selftest	source/AST/text analysis only
+portable	-	audit-1170-gate-bypass.py --baseline	source/AST/text analysis only, compared against the committed baseline JSON beside it
 portable	-	audit-ungated-image-writes.py --selftest	source/AST/text analysis only
 portable	-	audit-ungated-image-writes.py	source/AST/text analysis only
 portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces in tmp plus a source-only read of the live crates
