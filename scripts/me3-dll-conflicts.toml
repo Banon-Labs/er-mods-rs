@@ -413,6 +413,31 @@ the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_sha
 product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
+"er-npc-possess" = """Co-loadable with every other shell here, because it installs NO DETOUR AT ALL. \
+It claims no prologue, resolves no game address, patches no param row (which is what breaks \
+Seamless invasions), runs no D3D12/Present or overlay hook, and writes no game memory. Its whole \
+game-side footprint is one recurring `FrameBegin` task that calls `GetAsyncKeyState` and \
+`XInputGetState` and writes a log line.
+
+THE ONE THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
+DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \
+er-enemynpc-effects -- through the hook union, recorded in the [[shared]] rows above. A fourth \
+claimant is exactly the shape of the collision this table exists for, so this DLL deliberately \
+does not become one: it needs to OBSERVE a keypress, not SUPPRESS it, and polling from the game's \
+own frame task answers that without touching the prologue. `er-refill-all` reads its hotkey the \
+same way for the same reason.
+
+WHAT WOULD CHANGE THAT. A later layer of this mod may need to take an input away from the game \
+rather than merely see it -- driving a possessed character means the player's stick must stop \
+steering the Tarnished. That is a `GetDeviceState` claim, and when it lands it must go through \
+`er_hook::register_shared_hook` (never a bare `MhHook`, which is a second MinHook instance on a \
+prologue three DLLs already share) and gain a [[shared]] row here. Until then the honest entry is \
+this one.
+
+HOTKEY DEFAULTS ARE NOT SHARED WITH ANOTHER SHELL. Keyboard F9 and pad LS+RS; er-refill-all ships \
+Select+Start with no keyboard default, er-enemynpc-effects ships ctrl+alt+c. All three are \
+re-bindable in their own TOML while the game runs, which is the whole reason er-hotkey-config \
+exists."""
 "er-net-effects" = """Keyboard-selected network SpEffects. Its DirectInput keyboard and mouse \
 `GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
 above); nothing else it installs is claimed by another shell."""

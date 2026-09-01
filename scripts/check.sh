@@ -1549,7 +1549,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
 	-p er-better-refills -p er-inventory-sort -p er-loading-bar \
-	-p er-loading-portrait -p er-save-disable
+	-p er-loading-portrait -p er-save-disable -p er-npc-possess
+# er-npc-possess joined this batch when the crate landed. Its whole point is that everything
+# above the possession seam -- the TOML reader, the schema, the not-live `[target]` staging, the
+# hotkey edge latches and the possession state machine -- is decidable without the game, so it
+# would be exactly the kind of crate that reports nothing if it were not named here. The
+# er-refill-all pad-chord tests moved INTO er-hotkey-config at the same time (the module was
+# promoted so both DLLs share one edge detector), so that crate's count grew rather than a new
+# line appearing for them.
 
 # er-build-export -- the crate that WRITES the `?i=` share link, and the only one of the fifteen
 # unreachable crates that was in neither batch. 50 lib tests plus 37 in five integration targets,
@@ -1628,12 +1635,8 @@ python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 python3 "$repo_root/scripts/er_run_lib.py"
 python3 "$repo_root/scripts/er-dll-closure.py" --selftest
 python3 "$repo_root/scripts/er-dll-provenance.py" --selftest
-# ...and the launch-time half of it, shared by five launch scripts as `require_fresh_dlls`. Its
-# selftest was written and left unwired, which is the same decorative green the gates above exist
-# to refuse. Positive-controlled 2026-08-31 rather than taken on trust: disabling the refusal, and
-# silently skipping an artifact name the workspace does not build, each turn it red; so does making
-# er-dll-provenance's `verify` always agree or its source hash a constant.
-bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
+# (The launch-time half of that pair, `er-dll-freshness.sh --selftest`, would sit here with its
+# siblings but CANNOT: it needs a linked DLL to exist. It runs after check-rust-build.sh below.)
 python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
@@ -1651,6 +1654,20 @@ python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
 bash "$repo_root/scripts/check-rust-build.sh"
+
+# THE LAUNCH-TIME FRESHNESS GATE, shared by five launch scripts as `require_fresh_dlls`. Its
+# selftest was written and left unwired, which is the same decorative green the gates above exist
+# to refuse. Positive-controlled 2026-08-31 rather than taken on trust: disabling the refusal, and
+# silently skipping an artifact name the workspace does not build, each turn it red; so does making
+# er-dll-provenance's `verify` always agree or its source hash a constant.
+#
+# IT LIVES HERE, below the link, and not with the other launch-pipeline selftests ~20 lines above,
+# because it needs a real linked DLL: the provenance record it exercises fingerprints the artifact's
+# CODE SECTION, so it parses a PE header and a placeholder file raises instead of standing in.
+# Measured 2026-09-01 in a fresh agent worktree with an empty target/ -- it went red with "no built
+# DLL at .../er_crash_logging.dll" while the change under test was fine, which is a gate teaching
+# people to read past it. Above the link this step is a property of the CHECKOUT, not of the code.
+bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
 
 # DOES THE COMMITTED STATE COMPILE -- not "does my working tree compile", which is the only
 # question every gate above this one, this file included, is able to ask. A pathspec commit is

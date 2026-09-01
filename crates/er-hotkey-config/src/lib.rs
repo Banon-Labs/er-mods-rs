@@ -19,6 +19,10 @@
 //! * [`binding`] -- [`binding::Binding`], which turns "the file changed" into one of exactly three
 //!   outcomes: the key moved (reset your edge detector), the key did not move (do NOT reset it), or
 //!   the value was junk and the last working key is still in force.
+//! * [`pad`] -- the controller half of the same vocabulary: [`pad::PadChord`], a BITMASK over
+//!   `XINPUT_GAMEPAD.wButtons` (a pad has no modifiers and no scancodes, so it is a different
+//!   type rather than a field bolted onto [`keys::Chord`]), and [`pad::PadEdge`], whose rebind
+//!   rule is the pad's version of the phantom-press fix in [`binding`].
 //! * [`live`] -- [`live::AtomicChord`], a binding the detour that actually reads the keyboard can
 //!   load without touching a lock the reload path also wants.
 //! * [`persist`] -- the other direction: writing ONE setting back into a file the player also
@@ -34,6 +38,7 @@
 pub mod binding;
 pub mod keys;
 pub mod live;
+pub mod pad;
 pub mod persist;
 pub mod reload;
 
@@ -43,5 +48,6 @@ pub use keys::{
     parse_scancode, parse_scancode_chord, parse_virtual_key, scancode_name, vk_name,
 };
 pub use live::AtomicChord;
+pub use pad::{PadChord, PadEdge, PadParseError, pad_chord_name, parse_pad_chord};
 pub use persist::{set_scalar, write_atomic};
 pub use reload::{FileChange, HotFile};

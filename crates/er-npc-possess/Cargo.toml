@@ -1,0 +1,35 @@
+[package]
+name = "er-npc-possess"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_npc_possess"
+crate-type = ["cdylib"]
+
+# Stack layer 1 of the "become an NPC" mod: the config file, the hotkeys, and the seam the
+# possession engine plugs into. It installs NO detour -- the input is polled from a FrameBegin
+# game task (`GetAsyncKeyState` + `XInputGetState`), the same hook-free path `er-refill-all`
+# uses -- so it claims no prologue and needs no hook-union row.
+#
+# Tier A only (zero external deps, host-buildable): the config parser, the reload decision, the
+# possession state machine and the engine seam are all `cargo test`-able on Linux.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+# Key names, the reload decision, and the pad-chord type. Host-buildable, so the config and
+# binding logic stay covered by `cargo test`.
+er-hotkey-config = { path = "../er-hotkey-config" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[lints]
+workspace = true

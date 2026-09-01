@@ -25,12 +25,10 @@ use std::{
 use er_hotkey_config::{
     Binding, BindingUpdate, FileChange, HotFile, chord_name,
     keys::{Chord, parse_chord},
-};
-
-use crate::{
-    log::refill_log,
     pad::{PadChord, pad_chord_name, parse_pad_chord},
 };
+
+use crate::log::refill_log;
 
 const CONFIG_FILE_NAME: &str = "er-refill-all.toml";
 

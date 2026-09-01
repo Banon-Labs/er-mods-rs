@@ -3047,6 +3047,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-npc-possess"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hotkey-config",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-objectkit"
 version = "0.1.0"
 dependencies = [
