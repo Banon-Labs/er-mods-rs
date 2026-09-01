@@ -321,7 +321,7 @@ fn fetch_inner(share_id: &str) {
     };
     log_line(&format!("[build-import] fetch ok, {} bytes", body.len()));
 
-    let doc = match model::parse(&body) {
+    let mut doc = match model::parse(&body) {
         Ok(doc) => doc,
         Err(err) => return set_error(format!("parse: {err}")),
     };
@@ -392,6 +392,25 @@ fn fetch_inner(share_id: &str) {
             "[build-import] level: {attrs} - {CLASS_INVARIANT} = {level}, matches the payload"
         )),
     }
+    // AND THE CLAIM IS OVERWRITTEN, not merely reported (2026-09-01). The sentence above --
+    // "importing the attributes, which are what actually get applied" -- was not true of the
+    // LEVEL: `character::apply_stats` fills `stats[STAT_LEVEL]` from `want("rl")`, i.e. from
+    // exactly the number this block had just found untrustworthy, and then read-back-checks
+    // `PGD_LEVEL` against it. So a planner link claiming `rl: 150` beside attributes summing to
+    // 226 stamped a character with `level == 150` and a stat block implying 147.
+    //
+    // That is not cosmetic. `er_save_loader::stats` locates a save slot's serialized
+    // `PlayerGameData` by the identity `level == sum(attrs) - 79`, so a character minted with a
+    // contradictory level was one the mod's OWN save reader could no longer find: on the live
+    // default container it decoded 9 of 10 slots, and the Load Character row for the missing one
+    // rendered a name with an empty attribute line and no `WL` (user-reported 2026-09-01). The
+    // reader now has a structural fallback, but the importer must not be the thing producing
+    // such characters in the first place.
+    //
+    // Normalising here rather than in `apply_stats` keeps ONE derivation: everything downstream
+    // -- the applier, the read-back check, the report -- reads a `doc` whose `rl` and attributes
+    // agree, and no second copy of `- 79` can drift from this one.
+    doc.stats.insert("rl".to_owned(), level);
 
     match DOC.lock() {
         Ok(mut slot) => {

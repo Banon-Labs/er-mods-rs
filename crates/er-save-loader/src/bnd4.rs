@@ -492,7 +492,13 @@ fn slot_pgd_score(body: &[u8], offset: usize) -> usize {
 /// nothing but a real attribute block satisfies -- is now a candidate source too. It is ADDITIVE
 /// and ordered after the window: a body the window already resolved keeps the exact offset it had,
 /// because an equal score does not displace the incumbent.
-fn slot_player_game_data_offset(body: &[u8]) -> Option<usize> {
+///
+/// `pub(crate)` since 2026-09-01 because the dependency also runs the other way: when the Rune
+/// Level identity REFUSES a real character (a stored level that disagrees with its own attribute
+/// sum -- measured, see `stats::slot_stats_from_body`), `stats` falls back to this locator. Only
+/// [`crate::stats::located_stat_block_offset`] is called from here, so the two directions cannot
+/// recurse.
+pub(crate) fn slot_player_game_data_offset(body: &[u8]) -> Option<usize> {
     let mut best = None;
     let mut best_score = 0usize;
     let consider = |offset: usize, best: &mut Option<usize>, best_score: &mut usize| {
@@ -530,6 +536,21 @@ fn slot_player_game_data_offset(body: &[u8]) -> Option<usize> {
         consider(offset, &mut best, &mut best_score);
     }
     best
+}
+
+/// The offset of a slot body's eight-attribute stat block, in the vocabulary
+/// `crate::stats` uses (the first attribute word, i.e. runtime `PlayerGameData + 0x3c`).
+///
+/// THE TWO MODULES ANCHOR THE SAME STRUCT EIGHT BYTES APART, which is why this exists
+/// rather than a caller adding an offset. `bnd4` addresses the SL2.bt `PlayerGameData`,
+/// whose struct is `CS::PlayerGameData + 0x8` (stat base `+0x34`, level `+0x60`, name
+/// `+0x94`); `stats` addresses the runtime base (`+0x3c`, `+0x68`, `+0x9c`). Handing a
+/// `slot_player_game_data_offset` result straight to a `stats`-relative reader is off by
+/// eight and lands mid-field. The conversion therefore lives here, beside the constant it
+/// depends on -- and it is the exact inverse of the `checked_sub(SAVE_PGD_STAT_BASE_OFFSET)`
+/// that turns a `stats` stat base into a candidate for the locator above.
+pub(crate) fn slot_stat_block_offset(body: &[u8]) -> Option<usize> {
+    slot_player_game_data_offset(body)?.checked_add(SAVE_PGD_STAT_BASE_OFFSET)
 }
 
 fn slot_add_offset(offset: &mut usize, len: usize) -> Option<()> {

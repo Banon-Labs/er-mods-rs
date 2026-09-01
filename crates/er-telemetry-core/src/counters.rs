@@ -532,6 +532,15 @@ pub static PROFILE_STATS_PUSH_STALE_LAST_VT: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_ROW_POPULATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_SLOT_STATS_CACHE_STATE: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_SLOT_STATS_DECODED: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit N = save slot N) of slots the per-slot cache NAMED but could not decode STATS for.
+///
+/// This is the semaphore for a Load Character row that renders its header and nothing else. The
+/// two caches already disagreed in the log (`9/10 slots decoded, 10/10 names decoded`, run
+/// `br-20260901-161521-9f7d`) and no oracle carried the disagreement, so a row with a name, no
+/// attribute line and no `WL` reached the user as a visual observation. Non-zero is BAD and names
+/// exactly which rows are affected; the count alone could not, because `decoded < named` does not
+/// say which slot lost its stats.
+pub static PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_BIND_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);

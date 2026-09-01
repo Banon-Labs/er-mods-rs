@@ -379,6 +379,9 @@ pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_STATS_CACHE_STATE;
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_INVALIDATIONS;
 /// Count of per-slot cache refills from picker-held bytes (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS;
+/// Bitmask of save slots the per-slot cache named but could not decode stats for (oracle): the
+/// exact rows that will render a header with an empty attribute line and no `WL`. Non-zero is bad.
+pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK;
 /// Count of save slots that decoded to a real character in the per-slot stats cache (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_STATS_DECODED;
 pub(crate) use er_telemetry_core::counters::TITLE_PRESS_START_BIND_HITS;

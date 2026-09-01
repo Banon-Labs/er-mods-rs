@@ -138,6 +138,17 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_profile_player_name_slot_decoded",
         PROFILE_SLOT_NAMES_DECODED.load(Ordering::SeqCst),
     );
+    // Bit N set == save slot N has a NAME but no decoded stat block, i.e. its Load Character row
+    // renders the merged header with an empty attribute line and no `WL`. Non-zero is a DEFECT,
+    // not a state: it is the semaphore for the 2026-09-01 report ("the row for the slot we
+    // currently have loaded shows none of the stats"), which reached the user as a visual
+    // observation because `decoded`/`named` were published as two independent counts and nothing
+    // compared them.
+    push_json_usize(
+        body,
+        "oracle_stats_text_slot_named_without_stats_mask",
+        PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK.load(Ordering::SeqCst),
+    );
     // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
     push_json_usize(
         body,

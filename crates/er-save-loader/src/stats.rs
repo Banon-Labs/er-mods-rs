@@ -8,9 +8,15 @@
 //! **The `PlayerGameData` is not at a fixed offset in the slot body** — the
 //! variable-length data that precedes it (event flags, inventory, ...) shifts it
 //! per slot (offsets from 0xe0b6..0xe8a4 observed across real saves). We locate it
-//! by the exact Elden Ring identity **`RuneLevel == (sum of the 8 attributes) −
-//! 79`**, which holds for every class and level. All offsets below are relative to
-//! the located `PlayerGameData` and were verified against real saves 2026-07-04.
+//! by the Elden Ring identity **`RuneLevel == (sum of the 8 attributes) − 79`**,
+//! which holds for every class and every level the GAME assigned. All offsets below
+//! are relative to the located `PlayerGameData` and were verified against real saves
+//! 2026-07-04.
+//!
+//! That identity is a LOCATOR, not a licence to exist: a stored `level` word can
+//! disagree with its own attribute sum (a build importer or save editor that writes
+//! one side without the other), and such a character must still decode. See
+//! [`slot_stats_from_body`] for the measured case and the structural fallback.
 
 use crate::bnd4;
 
@@ -94,35 +100,37 @@ fn rd_i32(b: &[u8], off: usize) -> Option<i32> {
     Some(i32::from_le_bytes(b.get(off..off + 4)?.try_into().ok()?))
 }
 
-/// Read the eight attributes at a candidate stat-block base and validate them
-/// against the Rune Level invariant. `stat_base` is the offset of the first
-/// attribute (`PlayerGameData + 0x3c`).
-fn stat_block_at(body: &[u8], stat_base: usize) -> Option<SlotStats> {
+/// Read the eight attributes, level and stored vitals at a KNOWN stat-block base,
+/// with range checks only -- no Rune Level identity. `stat_base` is the offset of
+/// the first attribute (`PlayerGameData + 0x3c`).
+///
+/// Split out of [`stat_block_at`] so the identity can stay the SCAN's filter without
+/// also being the only way a located block may be read. See
+/// [`slot_stats_from_body`] for the character this distinction exists for.
+fn read_stat_block(body: &[u8], stat_base: usize) -> Option<SlotStats> {
     let mut attributes = [0i32; STAT_COUNT];
-    let mut sum = 0i32;
     for (i, slot) in attributes.iter_mut().enumerate() {
         let v = rd_i32(body, stat_base + i * 4)?;
         if !(MIN_ATTR..=MAX_ATTR).contains(&v) {
             return None;
         }
-        sum += v;
         *slot = v;
     }
     let level = rd_i32(body, stat_base + LEVEL_FROM_STAT_BASE)?;
-    if level != sum - RUNE_LEVEL_BASE || !(MIN_ATTR..=MAX_RUNE_LEVEL).contains(&level) {
+    if !(MIN_ATTR..=MAX_RUNE_LEVEL).contains(&level) {
         return None;
     }
-    // Vitals are best-effort reads of STORED values: acceptance stays exactly the
-    // rune-level invariant above, and a missing/implausible vital decodes as 0
-    // ("unknown") rather than rejecting the located block or inventing a formula.
+    // Vitals are best-effort reads of STORED values: a missing/implausible vital
+    // decodes as 0 ("unknown") rather than rejecting the located block or inventing
+    // a formula.
     let pgd = stat_base.checked_sub(PGD_STAT_BASE);
     let vital = |off: usize| {
         pgd.and_then(|p| rd_i32(body, p + off))
             .filter(|v| *v > 0)
             .unwrap_or(0)
     };
-    // Same best-effort posture as the vitals: acceptance is the rune-level invariant alone, and an
-    // out-of-range byte decodes as "unknown" rather than rejecting an otherwise-valid block.
+    // Same best-effort posture as the vitals: an out-of-range byte decodes as "unknown"
+    // rather than rejecting an otherwise-valid block.
     let matchmaking_weapon_level = pgd
         .and_then(|p| body.get(p + PGD_MATCHMAKING_WEAPON_LEVEL).copied())
         .filter(|v| *v <= MAX_WEAPON_LEVEL);
@@ -134,6 +142,16 @@ fn stat_block_at(body: &[u8], stat_base: usize) -> Option<SlotStats> {
         max_stamina: vital(PGD_MAX_STAMINA),
         matchmaking_weapon_level,
     })
+}
+
+/// [`read_stat_block`] plus the Rune Level identity, which is what makes a blind
+/// byte-scan of a 2.6 MB body safe: nothing but a real attribute block satisfies it.
+fn stat_block_at(body: &[u8], stat_base: usize) -> Option<SlotStats> {
+    let stats = read_stat_block(body, stat_base)?;
+    if stats.level != stats.attributes.iter().sum::<i32>() - RUNE_LEVEL_BASE {
+        return None;
+    }
+    Some(stats)
 }
 
 fn located_stat_block(body: &[u8]) -> Option<(usize, SlotStats)> {
@@ -151,12 +169,43 @@ fn located_stat_block(body: &[u8]) -> Option<(usize, SlotStats)> {
 }
 
 /// Locate the `PlayerGameData` stat block in a slot body and return the level +
-/// eight attributes. Scans for the first offset satisfying the Rune Level
-/// invariant. Returns `None` for an empty slot (no character) or a body that does
-/// not match.
+/// eight attributes. Returns `None` only for a slot with no locatable character.
+///
+/// # THE IDENTITY IS A LOCATOR, NOT A LICENCE TO EXIST (2026-09-01)
+///
+/// The Rune Level identity used to be the only way in, which meant a character it
+/// does not hold had no attributes, no vitals and no `WL` -- anywhere. On the live
+/// default container that was slot 1, `Dark Moon Bean`: `level` word 150 beside
+/// attributes `[60, 10, 44, 21, 50, 9, 25, 7]` summing to 226, which implies RL 147.
+/// Delta +3, so `stat_block_at` refused the real `PlayerGameData` and the scan of the
+/// whole 0x280000-byte body found nothing else. The container decoded 9/10 slots while
+/// naming 10/10 (the name has always had a structural fallback through
+/// `bnd4::active_character_slots`), and the Load Character row for that one character
+/// rendered its merged header with an EMPTY attribute line and no `WL` -- the
+/// user-reported defect, measured in run `br-20260901-161521-9f7d` at +80815ms.
+///
+/// A stored level can disagree with the attribute sum: `er-build-import-runtime` writes
+/// the level slot from a planner payload's CLAIMED `rl` while writing the attributes
+/// from the payload's stat block (`character.rs::apply_stats`), and planner links with
+/// exactly that inconsistency are known (`lib.rs` records `rl: 150` beside attributes
+/// summing to 228). A save editor does the same thing by hand.
+///
+/// So the identity stays the SCAN's filter -- it is what makes a blind byte-walk over
+/// megabytes trustworthy -- and a body it rejects falls back to the STRUCTURAL locator
+/// `bnd4::slot_player_game_data_offset` (FACE-anchored + `slot_pgd_core_plausible`:
+/// real name, level `1..=713`, sane health/flasks/gender, eight attributes `1..=99`).
+/// That locator is not a new risk: it is the same one `active_character_slots` already
+/// uses, and it is proven to resolve this exact slot -- it is where slot 1's name came
+/// from in the failing run. There is no recursion: it only ever calls
+/// [`located_stat_block_offset`], never this function. It is reached through
+/// `bnd4::slot_stat_block_offset` rather than directly, because the two modules anchor
+/// the same struct eight bytes apart and that conversion belongs beside the constant.
 #[must_use]
 pub fn slot_stats_from_body(body: &[u8]) -> Option<SlotStats> {
-    located_stat_block(body).map(|(_, stats)| stats)
+    if let Some((_, stats)) = located_stat_block(body) {
+        return Some(stats);
+    }
+    read_stat_block(body, bnd4::slot_stat_block_offset(body)?)
 }
 
 /// Offset of the located eight-attribute stat block within a slot body.
@@ -209,11 +258,18 @@ fn slot_name_at_pgd(body: &[u8], pgd: usize) -> Option<String> {
 /// `PlayerGameData` that yields its stats. This does not depend on the
 /// ProfileSummary active-slot bitmap, which can be absent/stale for alternate
 /// containers while the per-slot body still contains a real character.
+///
+/// Falls back to the structural locator for the same reason [`slot_stats_from_body`]
+/// does, so name and stats agree about which slots hold a character instead of the
+/// name silently working (through the caller's `active_character_slots` patch-up)
+/// while the stats do not.
 #[must_use]
 pub fn slot_name_from_body(body: &[u8]) -> Option<String> {
-    let (stat_base, _) = located_stat_block(body)?;
-    let pgd = stat_base.checked_sub(PGD_STAT_BASE)?;
-    slot_name_at_pgd(body, pgd)
+    let stat_base = match located_stat_block(body) {
+        Some((stat_base, _)) => stat_base,
+        None => bnd4::slot_stat_block_offset(body)?,
+    };
+    slot_name_at_pgd(body, stat_base.checked_sub(PGD_STAT_BASE)?)
 }
 
 /// Convenience: parse a whole `.sl2`, returning each slot's stats (`None` for
@@ -227,6 +283,28 @@ pub fn all_slot_stats(sl2: &[u8]) -> [Option<SlotStats>; 10] {
         }
     }
     out
+}
+
+/// Slots that decoded a NAME but no stat block, as a bitmask (bit N = slot N).
+///
+/// THE SEMAPHORE FOR A ROW WITH A HEADER AND NOTHING UNDER IT. The two caches the
+/// ProfileSelect rows read are filled by two locators, so they can disagree per slot --
+/// and when they do, that slot's Load Character row renders its merged header with an
+/// empty attribute line and no `WL`. That reached the user as a visual observation on
+/// 2026-09-01 while the log already carried the aggregate (`9/10 slots decoded, 10/10
+/// names decoded`) and no oracle carried the disagreement. A count cannot name the
+/// affected row; this can. Non-zero is a DEFECT, not a state.
+#[must_use]
+pub fn named_without_stats_mask(
+    names: &[Option<String>; 10],
+    stats: &[Option<SlotStats>; 10],
+) -> u32 {
+    names
+        .iter()
+        .zip(stats.iter())
+        .enumerate()
+        .filter(|(_, (name, stats))| name.is_some() && stats.is_none())
+        .fold(0u32, |mask, (slot, _)| mask | (1u32 << slot))
 }
 
 /// Convenience: parse a whole `.sl2`, returning each slot's name (`None` for
@@ -360,6 +438,126 @@ mod tests {
             (396, 95, 94),
             "slot 9 MaxFP must be 95 (current fp is 78 -- catches an off-by-4)"
         );
+    }
+
+    /// SL2.bt `PlayerGameData` field offsets, i.e. `bnd4`'s anchor -- runtime base + 8.
+    /// Spelled out here because the fixture has to satisfy `bnd4::slot_pgd_core_plausible`,
+    /// which reads in that vocabulary.
+    const SAVE_PGD_HEALTH: usize = 0x08;
+    const SAVE_PGD_MAX_HEALTH: usize = 0x0c;
+    const SAVE_PGD_BASE_MAX_HEALTH: usize = 0x10;
+    const SAVE_PGD_STAT_BASE: usize = 0x34;
+    const SAVE_PGD_LEVEL: usize = 0x60;
+    const SAVE_PGD_NAME: usize = 0x94;
+    const SAVE_PGD_GENDER: usize = 0xb6;
+    const SAVE_PGD_MAX_CRIMSON: usize = 0xf9;
+    const SAVE_PGD_MAX_CERULEAN: usize = 0xfa;
+    /// Inside `bnd4`'s `0xa000..=0xa600` PGD->FACE window.
+    const FACE_DELTA: usize = 0xa300;
+
+    /// A slot body holding ONE structurally valid character at a known offset, whose
+    /// `level` word and attribute sum are whatever the caller says. No game bytes: every
+    /// field is written here.
+    fn synthetic_slot_body(name: &str, level: u32, attributes: [u32; STAT_COUNT]) -> Vec<u8> {
+        // 8 so the runtime-relative base (`pgd - 8`) is still inside the buffer.
+        const PGD: usize = 0x40;
+        let mut body = vec![0u8; PGD + FACE_DELTA + 0x100];
+        let put_u32 = |body: &mut Vec<u8>, at: usize, value: u32| {
+            body[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        };
+        put_u32(&mut body, PGD + SAVE_PGD_HEALTH, 1900);
+        put_u32(&mut body, PGD + SAVE_PGD_MAX_HEALTH, 1900);
+        put_u32(&mut body, PGD + SAVE_PGD_BASE_MAX_HEALTH, 1900);
+        for (index, value) in attributes.iter().enumerate() {
+            put_u32(&mut body, PGD + SAVE_PGD_STAT_BASE + index * 4, *value);
+        }
+        put_u32(&mut body, PGD + SAVE_PGD_LEVEL, level);
+        for (index, unit) in name.encode_utf16().enumerate() {
+            let at = PGD + SAVE_PGD_NAME + index * 2;
+            body[at..at + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        body[PGD + SAVE_PGD_GENDER] = 1;
+        body[PGD + SAVE_PGD_MAX_CRIMSON] = 8;
+        body[PGD + SAVE_PGD_MAX_CERULEAN] = 6;
+        let face = PGD + FACE_DELTA;
+        body[face..face + 4].copy_from_slice(b"FACE");
+        body
+    }
+
+    /// THE REPORTED DEFECT (2026-09-01), as a unit test.
+    ///
+    /// The live default container's slot 1, `Dark Moon Bean`: `level` 150 beside attributes
+    /// summing to 226, which implies RL 147. The Rune Level identity refuses that block, so
+    /// the identity-only locator decoded the slot as EMPTY -- and the Load Character row for
+    /// the one character the user was playing rendered its merged header with no attribute
+    /// line and no `WL`. Both the numbers and the shape are the measured ones.
+    #[test]
+    fn a_character_whose_level_disagrees_with_its_attribute_sum_still_decodes() {
+        const ATTRIBUTES: [u32; STAT_COUNT] = [60, 10, 44, 21, 50, 9, 25, 7];
+        const STORED_LEVEL: u32 = 150;
+        assert_ne!(
+            STORED_LEVEL as i32,
+            ATTRIBUTES.iter().sum::<u32>() as i32 - RUNE_LEVEL_BASE,
+            "the fixture only tests anything while it VIOLATES the identity"
+        );
+        let body = synthetic_slot_body("Dark Moon Bean", STORED_LEVEL, ATTRIBUTES);
+        assert_eq!(
+            located_stat_block(&body).map(|(_, stats)| stats.level),
+            None,
+            "the identity scan must still refuse it -- that is what makes the scan safe"
+        );
+        let stats = slot_stats_from_body(&body)
+            .expect("a structurally valid character must decode even when the identity refuses it");
+        assert_eq!(
+            stats.level, STORED_LEVEL as i32,
+            "the STORED level, not a derived one"
+        );
+        assert_eq!(stats.attributes, ATTRIBUTES.map(|value| value as i32));
+        assert_eq!(
+            slot_name_from_body(&body).as_deref(),
+            Some("Dark Moon Bean"),
+            "name and stats must agree about whether this slot holds a character"
+        );
+    }
+
+    /// The fallback must not invent a character out of a body that has none: an empty slot
+    /// stays empty, or every ProfileSelect row gains a phantom.
+    #[test]
+    fn the_structural_fallback_does_not_invent_a_character() {
+        assert_eq!(slot_stats_from_body(&vec![0u8; 0x40000]), None);
+        assert_eq!(slot_name_from_body(&vec![0u8; 0x40000]), None);
+    }
+
+    #[test]
+    fn the_named_without_stats_mask_names_exactly_the_headerless_rows() {
+        let empty: [Option<SlotStats>; 10] = [None; 10];
+        let no_names: [Option<String>; 10] = core::array::from_fn(|_| None);
+        assert_eq!(
+            named_without_stats_mask(&no_names, &empty),
+            0,
+            "an empty container is not a defect"
+        );
+
+        let stats = SlotStats {
+            level: 9,
+            attributes: [15, 10, 11, 14, 13, 9, 9, 7],
+            max_hp: 870,
+            max_fp: 121,
+            max_stamina: 115,
+            matchmaking_weapon_level: Some(0),
+        };
+        let mut names: [Option<String>; 10] = core::array::from_fn(|_| None);
+        let mut decoded: [Option<SlotStats>; 10] = [None; 10];
+        // Slot 0 decoded both; slot 1 named only (the reported defect); slot 2 neither.
+        names[0] = Some("Ordinary Bean".to_owned());
+        decoded[0] = Some(stats);
+        names[1] = Some("Dark Moon Bean".to_owned());
+        assert_eq!(named_without_stats_mask(&names, &decoded), 1 << 1);
+
+        // A stat block with no name is the other direction and is NOT this defect.
+        names[1] = None;
+        decoded[1] = Some(stats);
+        assert_eq!(named_without_stats_mask(&names, &decoded), 0);
     }
 
     #[test]

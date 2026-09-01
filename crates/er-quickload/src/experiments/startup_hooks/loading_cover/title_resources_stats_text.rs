@@ -1337,6 +1337,14 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     let place_names = er_save_loader::profile_summary::slot_place_name_ids(sl2);
     let decoded = all.iter().flatten().count();
     let named = names.iter().flatten().count();
+    // Rows that will render a header with no attribute line under it (see
+    // `er_save_loader::stats::named_without_stats_mask`). Taken here, before `names` moves into
+    // the cache below, so the report can still name the character.
+    let named_without_stats = er_save_loader::stats::named_without_stats_mask(&names, &all);
+    let headerless: Vec<String> = (0..PROFILE_SLOT_COUNT as usize)
+        .filter(|slot| named_without_stats & (1u32 << slot) != 0)
+        .map(|slot| format!("{slot}:{:?}", names[slot].as_deref().unwrap_or("")))
+        .collect();
     match PROFILE_SLOT_STATS_CACHE.lock() {
         Ok(mut guard) => *guard = Some(all),
         Err(poison) => *poison.into_inner() = Some(all),
@@ -1352,11 +1360,18 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     }
     PROFILE_SLOT_STATS_DECODED.store(decoded, Ordering::SeqCst);
     PROFILE_SLOT_NAMES_DECODED.store(named, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK
+        .store(named_without_stats as usize, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "stats-text: per-slot cache loaded from {source} ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
         sl2.len()
     ));
+    if named_without_stats != 0 {
+        append_autoload_debug(format_args!(
+            "stats-text: NAMED BUT NOT DECODED mask=0x{named_without_stats:03x} {headerless:?} -- each of those Load Character rows will show its header with NO attribute line and NO WL"
+        ));
+    }
     decoded
 }
 
@@ -1385,6 +1400,7 @@ pub(crate) fn invalidate_profile_slot_caches(reason: &str) {
     }
     PROFILE_SLOT_STATS_DECODED.store(0, Ordering::SeqCst);
     PROFILE_SLOT_NAMES_DECODED.store(0, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK.store(0, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(0, Ordering::SeqCst);
     if had {
         let n = PROFILE_SLOT_CACHE_INVALIDATIONS.fetch_add(1, Ordering::SeqCst) + 1;

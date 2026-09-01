@@ -210,6 +210,12 @@ pub unsafe fn apply_stats(module_base: usize, pgd: usize, doc: &BuildDoc) -> Opt
     let before = unsafe { *((pgd + PGD_LEVEL) as *const i32) };
 
     let want = |key: &str| doc.stats.get(key).copied().unwrap_or_default() as i32;
+    // `rl` IS THE DERIVED LEVEL, not the payload's claim. `fetch_inner` overwrites
+    // `doc.stats["rl"]` with `sum(attributes) - 79` before handing the doc over, precisely so
+    // this line cannot stamp a level that contradicts the attributes two lines below it. Before
+    // that (2026-09-01) a planner claiming `rl: 150` beside attributes summing to 226 produced a
+    // character with `level == 150` and a stat block implying 147 -- which `er_save_loader::stats`
+    // then could not locate at all, blanking that character's whole Load Character row.
     stats[STAT_LEVEL] = want("rl");
     stats[STAT_VIGOR] = want("vig");
     stats[STAT_ENDURANCE] = want("vit"); // the planner calls Endurance "vit"
