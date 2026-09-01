@@ -2,7 +2,7 @@
 //!
 //! Hand-parsed rather than pulled through a TOML crate: a handful of scalar settings do not
 //! justify a dependency in a DLL cross-compiled into the game process. Same shape as
-//! `er-charm-enemies`, for the same reason.
+//! `er-enemynpc-effects`, for the same reason.
 //!
 //! # Why it reloads
 //!

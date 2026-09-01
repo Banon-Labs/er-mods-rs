@@ -1,14 +1,14 @@
 [package]
-name = "er-charm-enemies"
+name = "er-enemynpc-effects"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "er_charm_enemies"
+name = "er_enemynpc_effects"
 crate-type = ["cdylib"]
 
-# Standalone "charm every loaded enemy" toggle. It owns no product state: a DirectInput
+# Standalone "apply one SpEffect to every loaded enemy" toggle. It owns no product state: a DirectInput
 # keyboard hook for the hotkey, a FrameBegin game task for the sweep, and nothing else.
 #
 # Tier A only (zero external deps, host-buildable): the fresh-per-process log writer. Kept out of

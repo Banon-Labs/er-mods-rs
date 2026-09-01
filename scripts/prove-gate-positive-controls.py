@@ -833,7 +833,7 @@ def _test_target_coverage():
          baseline=["python3", "scripts/check-stale-rva-calls.py"])
 def _stale_rva():
     g = ["python3", "scripts/check-stale-rva-calls.py"]
-    p = "crates/er-charm-enemies/src/_pc_probe_stale.rs"
+    p = "crates/er-enemynpc-effects/src/_pc_probe_stale.rs"
     bad = ('pub const PC_PROBE_TARGET_RVA: usize = 0x00b0d400;\n'
            'pub unsafe fn pc_probe(base: usize) -> u64 {\n'
            '    let f: extern "C" fn() -> u64 = unsafe { core::mem::transmute(base + PC_PROBE_TARGET_RVA) };\n'

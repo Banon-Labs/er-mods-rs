@@ -2829,18 +2829,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-charm-enemies"
-version = "0.1.0"
-dependencies = [
- "eldenring",
- "er-game-base",
- "er-hook",
- "er-hotkey-config",
- "fromsoftware-shared",
- "windows 0.62.2",
-]
-
-[[package]]
 name = "er-cover-fade"
 version = "0.1.0"
 dependencies = [
@@ -2888,6 +2876,18 @@ version = "0.1.0"
 dependencies = [
  "er-game-base",
  "er-hook",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-enemynpc-effects"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "er-hotkey-config",
+ "fromsoftware-shared",
  "windows 0.62.2",
 ]
 

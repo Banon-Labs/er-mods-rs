@@ -63,7 +63,7 @@ mod tests {
     }
 
     /// The historical default still parses to the same scancode it always did, so an existing
-    /// `er-charm-enemies.toml` keeps working across the move to the shared table.
+    /// `er-enemynpc-effects.toml` keeps working across the move to the shared table.
     #[test]
     fn the_default_hotkey_still_parses_to_ctrl_alt_c() {
         let parsed = parse_scancode_chord("ctrl+alt+c").expect("ctrl+alt+c parses");

@@ -1,11 +1,13 @@
-//! Standalone "charm every loaded enemy" toggle DLL.
+//! Standalone "apply one SpEffect to every loaded enemy" toggle DLL.
 //!
-//! Press the configured hotkey in-game and every enemy currently loaded is put under the Charming
-//! Branch SpEffect; while the toggle is on, any enemy that is not under it -- one that just
+//! Press the configured hotkey in-game and every enemy currently loaded is put under the
+//! configured `effect_id` (Charming Branch by default, but any SpEffectParam row works -- the
+//! shipped config uses `[Incantation] Darkness`); while the toggle is on, any enemy that is not
+//! under it -- one that just
 //! spawned, or one whose 180 seconds ran out -- is put back under it on the next frame. Press it
 //! again and the effect is stripped back off.
 //!
-//! Ships as its own `er_charm_enemies.dll`, listed as its own ME3 `[[natives]]` entry. It shares
+//! Ships as its own `er_enemynpc_effects.dll`, listed as its own ME3 `[[natives]]` entry. It shares
 //! no state with the product DLL and hooks nothing but DirectInput's keyboard read.
 
 #[cfg(windows)]
@@ -134,7 +136,7 @@ fn consume_hotkey_presses() {
     }
 }
 
-/// Re-read `er-charm-enemies.toml` and adopt anything that moved.
+/// Re-read `er-enemynpc-effects.toml` and adopt anything that moved.
 ///
 /// The reload itself is throttled inside `er_hotkey_config::HotFile`, so calling this every frame
 /// costs one integer comparison in the steady state. A moved hotkey goes to [`hotkey::rebind`],
@@ -233,7 +235,7 @@ fn tick() {
 #[cfg(windows)]
 fn spawn_game_task() {
     let _ = std::thread::Builder::new()
-        .name("er-charm-enemies-task".to_owned())
+        .name("er-enemynpc-effects-task".to_owned())
         .spawn(move || {
             charm_log(format_args!("game task thread waiting for CSTaskImp"));
             let Some(task) = wait_for_task_instance() else {
@@ -264,7 +266,7 @@ fn install() {
     // and say so in the log.
     ENABLED.store(config.enabled, Ordering::SeqCst);
     charm_log(format_args!(
-        "er-charm-enemies attach: enabled={} (restored from the config) hotkey={:?} ({}) \
+        "er-enemynpc-effects attach: enabled={} (restored from the config) hotkey={:?} ({}) \
          effect_id={} remove_on_disable={} config={} \
          -- edits to that file take effect while the game runs, no restart",
         config.enabled,
@@ -292,11 +294,11 @@ pub unsafe extern "system" fn DllMain(
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
         // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
-        er_game_base::panic_report::report_panics_to("er-charm-enemies", crate::charm_log);
+        er_game_base::panic_report::report_panics_to("er-enemynpc-effects", crate::charm_log);
         er_hook::set_hook_logger(crate::charm_log);
         START.call_once(|| {
             let _ = std::thread::Builder::new()
-                .name("er-charm-enemies-install".to_owned())
+                .name("er-enemynpc-effects-install".to_owned())
                 .spawn(install);
         });
     }
@@ -305,6 +307,6 @@ pub unsafe extern "system" fn DllMain(
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_charm_enemies_host_stub() -> i32 {
+pub extern "C" fn er_enemynpc_effects_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }

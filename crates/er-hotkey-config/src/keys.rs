@@ -8,7 +8,7 @@
 //! SCANCODE (`DIK_F7 == 0x41`). The two numbering schemes agree nowhere, and a DLL that suppresses
 //! a key from the game's buffer while ALSO polling it needs both numbers for the same key.
 //!
-//! Before this crate each DLL kept whichever half it happened to need, so `er-charm-enemies` knew
+//! Before this crate each DLL kept whichever half it happened to need, so `er-enemynpc-effects` knew
 //! `"f7"` as a scancode and `er-invasion-warp-core` knew `"F7"` as a virtual key, with different
 //! spellings for the numeric keypad and no way to ask one table a question in the other's terms.
 //! [`NAMED_KEYS`] carries both codes per row, so a config file has ONE vocabulary regardless of
@@ -139,7 +139,7 @@ pub const NAMED_KEYS: &[NamedKey] = &[
     key("/", &["/", "slash"], 0xbf, Some(0x35)),
     key("`", &["`", "grave", "backtick"], 0xc0, Some(0x29)),
     // Numeric keypad. `kp_*` is this crate's canonical spelling; `numpad*` is what
-    // `er-charm-enemies` and `er-net-effects` config files already say, so both resolve.
+    // `er-enemynpc-effects` and `er-net-effects` config files already say, so both resolve.
     key("KP_0", &["kp_0", "numpad0"], 0x60, Some(0x52)),
     key("KP_1", &["kp_1", "numpad1"], 0x61, Some(0x4f)),
     key("KP_2", &["kp_2", "numpad2"], 0x62, Some(0x50)),
@@ -703,7 +703,7 @@ mod tests {
         assert_eq!(parse_virtual_key("Delete"), Ok(VK_DELETE));
         assert_eq!(parse_virtual_key("ins"), Ok(VK_INSERT));
         assert_eq!(parse_virtual_key("DEL"), Ok(VK_DELETE));
-        // er-charm-enemies' default hotkey, in its own spelling.
+        // er-enemynpc-effects' default hotkey, in its own spelling.
         assert_eq!(
             parse_scancode_chord("ctrl+alt+c").map(|c| c.dik),
             Ok(Some(0x2e))
