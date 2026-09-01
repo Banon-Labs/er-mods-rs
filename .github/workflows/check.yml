@@ -66,6 +66,20 @@ env:
   # Windows CRT/SDK that cargo-xwin downloads (defaults such as the bundled
   # xwin manifest version only move when this version moves).
   CARGO_XWIN_VERSION: 0.23.0
+  # ShellCheck release to install, and it is a PIN rather than a preference:
+  # `shellcheck` findings are version-dependent, so an unpinned linter is a gate
+  # whose verdict drifts with whatever the runner image happens to ship. Measured
+  # on run 33468994945: ubuntu-latest's apt ships 0.9.0, the developer tree runs
+  # 0.11.0, and three of the 25 shellcheck steps were red in CI and clean locally
+  # -- scripts/run-product-continue-direct-probe.sh, scripts/check-git-hooks-installed.sh
+  # and scripts/test-er-stale-run-sentinel-e2e.sh. Every finding was SC2317
+  # ("command appears to be unreachable") pointed at the body of a function that is
+  # reached through a `trap`, plus one SC2015 note; 0.9.0's SC2317 does not model
+  # trap-invoked reachability, later releases do. So the disagreement was the
+  # linter's, not the scripts', and the fix is to run the same linter in both
+  # places rather than to sprinkle `# shellcheck disable=` at an old version's
+  # false positives. Bump this when the developer tree bumps.
+  SHELLCHECK_VERSION: v0.11.0
 
 jobs:
   check:
@@ -98,14 +112,51 @@ jobs:
         run: |
           # Runner apt lists are usually fresh enough to install without an
           # `apt-get update` (~20-60 s); fall back to updating only on a miss.
-          # shellcheck is here because scripts/check.sh runs 25 shellcheck steps. It ships in the
-          # ubuntu runner image today, but if it ever stops shipping those 25 steps would report
-          # SKIPPED rather than pass -- visible, but 25 gates lost to an image change nobody
-          # announced. Installing it explicitly makes that not a question.
-          sudo apt-get install -y --no-install-recommends clang lld llvm wine shellcheck \
-            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine shellcheck; }
+          #
+          # THE THREE `lib*-dev` PACKAGES ARE THE er-shader-viewer GATE. check.sh ends with
+          # `cargo check -p er-shader-viewer`, a host-native Bevy 0.19 GUI, and on 2026-09-01
+          # that step was the one red gate in the first run that executed the whole suite: it
+          # died in wayland-sys's build script with "Package wayland-client was not found in
+          # the pkg-config search path".
+          #
+          # The set is MEASURED, not guessed from that one error. Two independent probes agree:
+          # `cargo tree -p er-shader-viewer -e normal,build --invert pkg-config` shows the
+          # `pkg-config` crate is a build-dependency of exactly three crates in the entire tree
+          # -- wayland-sys (via winit/smithay), alsa-sys (via bevy_audio/rodio/cpal) and
+          # libudev-sys (via bevy_gilrs) -- and a `cargo check --keep-going` with pkg-config
+          # blinded (PKG_CONFIG_LIBDIR pointed at an empty directory) fails in those same three
+          # build scripts and no others, probing `wayland-client`, `alsa` and `libudev`.
+          #
+          # Bevy's own docs/linux_dependencies.md additionally lists libx11-dev and
+          # libxkbcommon-dev; both are deliberately NOT here. This gate is a `cargo check`, so
+          # nothing is ever dlopen'd, and x11-dl / xkbcommon-dl / ash resolve their libraries at
+          # RUN time -- the blinded probe proves they need nothing at build time. Adding them
+          # would be padding for a gate that never opens a window.
+          #
+          # shellcheck is NOT installed from apt: see SHELLCHECK_VERSION above. apt ships 0.9.0,
+          # whose SC2317 false-positives on trap handlers made three gates red here and clean on
+          # the developer tree, so the pinned upstream release is fetched in the step below.
+          sudo apt-get install -y --no-install-recommends clang lld llvm wine \
+              libwayland-dev libasound2-dev libudev-dev \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
+              libwayland-dev libasound2-dev libudev-dev; }
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
+
+      # PINNED shellcheck, replacing the apt one. scripts/check.sh runs 25 shellcheck steps and
+      # its `shellcheck()` wrapper SKIPS them when the tool is absent, so a runner image that
+      # stopped shipping it would quietly cost 25 gates -- and one that ships a DIFFERENT version
+      # costs correctness instead, which is worse because it is invisible. Both failure modes are
+      # closed by fetching one known build. Upstream ships a static binary, so this is a curl and
+      # a move, the same shape as the OPA step below; measured at a couple of seconds.
+      - name: Install shellcheck (pinned)
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C /tmp
+          sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          # Fail loudly here rather than let 25 gates silently lint under the wrong version.
+          shellcheck --version
+          shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION#v}"
 
       # Prebuilt release binary; replaces a ~1 min `cargo install cargo-xwin`.
       - name: Install cargo-xwin

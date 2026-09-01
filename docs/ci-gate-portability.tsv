@@ -17,6 +17,18 @@
 #   git clone --depth 1 --branch $(git rev-parse --abbrev-ref HEAD) file://$PWD /tmp/ci-sim
 #   python3 scripts/ci-gate-portability.py --run --root /tmp/ci-sim --out /tmp/wt.json
 #
+# WHAT THAT MEASUREMENT CANNOT SEE: it relocates the REPO ROOT and nothing else. $HOME, $PATH and
+# the installed toolchain are still the developer's, so a gate that reaches OUTSIDE the checkout
+# is measured against a machine no runner resembles and comes back `portable` when it is not.
+# One row was wrong for exactly this reason and only the first full CI run found it:
+# test-windows-proof-render-smoke-verdict.py shelled out to run-windows-proof-render-smoke.sh,
+# whose preflight require_file's $HOME/Elden/launch.sh -- the user's real ME3 launcher -- even
+# under --dry-run, so it exited 2 on the runner and passed in every clone-based simulation. The
+# fix was to make the test hermetic (it now points PRODUCT_LAUNCHER at a fixture), not to demote
+# the row, because the gate itself never needed the launcher. When adding a row, read the step
+# for $HOME, absolute paths outside the repo, and network or device access; the simulation will
+# not fail them for you.
+#
 # `scripts/ci-gate-portability.py --check` requires every check.sh step that RUNS a repo script to
 # have a row here, and every row to still name a step. That is what stops this classification
 # drifting behind the suite the way .github/workflows/check.yml's hand-written step list did.
@@ -80,7 +92,7 @@ portable	-	test-marker-file-gates.py	source/AST/text analysis only
 portable	-	check-reload-trace-policy.py --audit	source/AST/text analysis only
 portable	-	check-windows-proof-render.py	source/AST/text analysis only
 portable	-	test-windows-proof-render.py	source/AST/text analysis only
-portable	-	test-windows-proof-render-smoke-verdict.py	source/AST/text analysis only
+portable	-	test-windows-proof-render-smoke-verdict.py	verdict logic in-process; one case runs the smoke script --dry-run against a fixture launcher
 portable	-	test-cupcake-policies.py	176 cupcake eval spawns, 20-35s; needs the cupcake binary the fail-fast guard above checks for
 portable	-	check-cupcake-wasm-builtins.py --selftest	source/AST/text analysis only
 portable	-	check-cupcake-wasm-builtins.py	source/AST/text analysis only
