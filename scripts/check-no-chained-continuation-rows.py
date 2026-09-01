@@ -136,6 +136,27 @@ def main():
     parser.add_argument("--rows", action="store_true", help="list every flagged row")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
+    # The two de-Arxan'd images are gitignored (game-derived bytes are never committed), so a fresh
+    # checkout and CI simply do not have them. SKIP at exit 0 -- loudly, naming the file -- the way
+    # `classify-1170-entry-kind.py`, `verify-data-rvas-by-rtti.py` and
+    # `check-singleton-field-offsets.py` already do. Without this the missing image surfaced as a
+    # raw FileNotFoundError traceback at a nonzero exit, which is indistinguishable from the gate
+    # having RUN and found a chained-continuation row -- a gate that cannot run must not read like
+    # a gate that failed, and must not read like one that passed either.
+    #
+    # The guard sits ABOVE the `--selftest` branch on purpose: both paths construct `Unwind` from
+    # these images, and the selftest's three cases are pinned to real addresses in them, so there is
+    # nothing it can prove without the bytes.
+    missing = [path for path in (OLD_IMAGE, NEW_IMAGE) if not os.path.isfile(path)]
+    if missing:
+        for path in missing:
+            print(f"skipped: missing image {path}")
+        print(
+            "  NOT A PASS: no row was checked for chained-continuation records. The two de-Arxan'd "
+            "images are gitignored; run this on a machine that has them "
+            "(scripts/dearxan-deobfuscate.rs regenerates them)."
+        )
+        return 0
     old, new = Unwind(OLD_IMAGE), Unwind(NEW_IMAGE)
     if args.selftest:
         return 1 if selftest(old, new) else 0

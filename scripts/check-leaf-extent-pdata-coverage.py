@@ -100,6 +100,25 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="print per-map counts")
     args = parser.parse_args()
 
+    # RE-EXEC UNDER uv IF capstone IS ABSENT (2026-08-31), the same bootstrap
+    # `verify-thunk-rva-1170.py` and `verify-hook-address.py` already carry. There is no system
+    # pip here, so `verifier()` -- which loads `verify-rva-map-1170.py`, which imports capstone --
+    # died with a bare ImportError at exit 1. That is indistinguishable from a real finding, which
+    # is why this gate could not be wired into check.sh. uv provisions capstone from its cache in
+    # milliseconds. Doing it HERE rather than making check.sh spell `uv run --with capstone` keeps
+    # the step recognisable to check.sh's own `python3 ...` step-pattern accounting, which does not
+    # match a `uv` command and would silently drop this gate from the summary table and the total.
+    try:
+        import capstone  # noqa: F401
+    except ImportError:
+        try:
+            os.execvp("uv", ["uv", "run", "--with", "capstone", "python3", *sys.argv])
+        except OSError:
+            # No capstone AND no uv: say so and skip rather than traceback. A checkout that cannot
+            # decode instructions cannot answer this question either way.
+            print("skipped: capstone unavailable and `uv` is not on PATH")
+            return 0
+
     module = verifier()
     for image_path in (module.OLD_IMAGE, module.NEW_IMAGE):
         if not os.path.exists(image_path):

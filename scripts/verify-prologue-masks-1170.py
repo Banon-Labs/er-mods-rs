@@ -74,12 +74,15 @@ def _bootstrap_capstone() -> None:
     if os.environ.get("_ER_PROLOGUE_MASK_BOOTSTRAPPED"):
         print("capstone unavailable even under uv; install it or run with uv", file=sys.stderr)
         raise SystemExit(2)
-    environment = dict(os.environ, _ER_PROLOGUE_MASK_BOOTSTRAPPED="1")
-    raise SystemExit(
-        subprocess.call(
-            ["uv", "run", "--with", "capstone", "python3", str(Path(__file__).resolve()), *sys.argv[1:]],
-            env=environment,
-        )
+    # `os.execvp`, not a subprocess: this is a re-exec of THIS script under uv, so there is no
+    # parent left to supervise a child and nothing for a timeout to bound. Spawning it as a
+    # subprocess would also have needed a <=30s cap that the real verification run can exceed,
+    # which would have capped the work rather than the bootstrap. Same pattern the other
+    # capstone-using tools use to self-bootstrap.
+    os.environ["_ER_PROLOGUE_MASK_BOOTSTRAPPED"] = "1"
+    os.execvp(
+        "uv",
+        ["uv", "run", "--with", "capstone", "python3", str(Path(__file__).resolve()), *sys.argv[1:]],
     )
 
 
