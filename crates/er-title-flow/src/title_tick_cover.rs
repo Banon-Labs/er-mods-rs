@@ -2208,7 +2208,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA",
                 ))
             };
-            let dsg_ss = unsafe { safe_read_i32(gm + 0xb80) };
+            let dsg_ss = unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) };
             let dsg_csm = unsafe {
                 safe_read_usize(er_game_base::mem::game_data_addr(
                     module_base,
