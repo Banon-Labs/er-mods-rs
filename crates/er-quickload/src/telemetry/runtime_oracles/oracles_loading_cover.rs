@@ -149,6 +149,25 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_stats_text_slot_named_without_stats_mask",
         PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK.load(Ordering::SeqCst),
     );
+    // Bit N set == live `CS::ProfileSummary` slot N was marked OCCUPIED while holding something
+    // that is not a character, sampled at a moment when no save picker owned the rows. That is the
+    // RAM signature of `er-effects-rs-fmy6`: the in-game picker renders by writing its browse-row
+    // labels INTO these game-owned records, and a restore that does not run leaves `[..] EldenRing`
+    // / `[ new ]` where a character name belongs -- which the user then reads off a loading screen.
+    // Non-zero is a DEFECT, not a state, and it is STICKY (`fetch_or`) because the per-frame sweep
+    // heals an orphaned stomp within a frame: a clearable counter would read 0 in the very run that
+    // proved the bug. Read it WITH `..._scans`, which distinguishes "checked and clean" from
+    // "never checked".
+    push_json_usize(
+        body,
+        "oracle_profile_summary_orphaned_record_mask",
+        er_telemetry_core::counters::PROFILE_SUMMARY_ORPHANED_RECORD_MASK.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_profile_summary_orphaned_record_scans",
+        er_telemetry_core::counters::PROFILE_SUMMARY_ORPHANED_RECORD_SCANS.load(Ordering::SeqCst),
+    );
     // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
     push_json_usize(
         body,

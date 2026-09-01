@@ -151,6 +151,81 @@ pub fn name_looks_like_picker_row_label(name: &str) -> bool {
     trimmed.starts_with('[') || trimmed.ends_with('/') || trimmed.ends_with('\\')
 }
 
+/// One live `CS::ProfileSummary` slot, as the scan reads it: the game's own occupancy byte
+/// (`summary+0x8+slot`) and the three record fields [`profile_record_character_verdict`] judges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveRecordSample<'a> {
+    /// `saveSlotsStates[slot] != 0` -- the game's answer to "does this slot produce a row".
+    pub occupied: bool,
+    /// The record's name field (`record+0x00`, UTF-16, decoded by the caller).
+    pub name: &'a str,
+    /// The record's Rune Level (`record+0x24`).
+    pub level: i32,
+    /// The record's packed saved map / `BlockId` (`record+0x30`).
+    pub map: i32,
+}
+
+/// What one sweep of the live record table found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LiveRecordScan {
+    /// Bit N = slot N is marked OCCUPIED while holding something that is not a character.
+    pub orphaned_mask: u32,
+    /// How many slots held a real character. ZERO IS NOT A CLEAN TABLE -- it is an unread one, or
+    /// one whose every character record has been overwritten. The caller decides which, because
+    /// only the caller knows whether the table was ever seen populated; see the note on
+    /// [`LiveRecordScan::orphaned_mask`]'s consumer.
+    pub characters: usize,
+}
+
+/// Sweep the live record table: which slots are marked OCCUPIED while holding something that is not
+/// a character -- the durable RAM signature of `er-effects-rs-fmy6`.
+///
+/// THE DEFECT THIS NAMES. The in-game save picker renders its browse rows by writing them INTO
+/// these records: `save_picker_write_row_records` zeroes each `0x2a0`-byte record, copies the row
+/// LABEL into the name field, and sets the occupancy byte. Every exit is supposed to put the game's
+/// own records back. When one did not (the sticky-`committed` defect, 2026-08-29), the labels sat
+/// in a game-owned structure for the rest of the process, and the user's next loading screens
+/// rendered `[..] EldenRing` and `[ new ]` as character names beside `RL 0`. That reached the user
+/// as a VISUAL observation while both halves of the evidence were already in telemetry and nothing
+/// compared them -- which is the failure this function exists to make impossible to repeat.
+///
+/// OCCUPANCY IS THE LOAD-BEARING TERM, and it is what keeps the mask a defect rather than a state.
+/// A save with three characters leaves seven records zeroed, and a zeroed record is not a
+/// character; without the occupancy term this would read `0b1111111000` on a perfectly healthy
+/// boot. The game produces no row for an unoccupied slot (`FUN_140875590` appends only where
+/// `ProfileSummary::saveSlotsStates[slot]` is set), so an unoccupied slot's bytes describe nothing
+/// on screen and cannot be the defect.
+///
+/// `characters` IS REPORTED, NOT ACTED ON, AND THAT SEPARATION IS DELIBERATE. The allocation exists
+/// well before `CS::ProfileSummary::Deserialize` fills it, so an unread table's bytes must not be
+/// judged. The obvious rule -- "answer 0 unless this sample holds a character" -- is WRONG, and
+/// wrong in the exact case that matters: a picker staging four browse rows marks slots 4..9
+/// unoccupied and zeroes all ten records, so during the defect NO slot holds a character and that
+/// rule would blind the oracle precisely when it fires. Whether the table has ever been read is
+/// process-lifetime state; the caller latches it from `characters` and gates on the latch.
+///
+/// Slots past `u32::BITS` cannot be represented and are ignored; the table is ten.
+#[must_use]
+pub fn scan_live_records<'a>(
+    records: impl IntoIterator<Item = LiveRecordSample<'a>>,
+) -> LiveRecordScan {
+    let mut scan = LiveRecordScan::default();
+    for (index, sample) in records.into_iter().enumerate() {
+        if index >= u32::BITS as usize {
+            break;
+        }
+        let is_character =
+            profile_record_character_verdict(sample.name, sample.level, sample.map).is_character();
+        if is_character {
+            scan.characters += 1;
+        }
+        if sample.occupied && !is_character {
+            scan.orphaned_mask |= 1u32 << index;
+        }
+    }
+    scan
+}
+
 /// What the published loading-screen portrait was compared against the character that loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishedIdentity {

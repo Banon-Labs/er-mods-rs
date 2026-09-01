@@ -787,3 +787,132 @@ fn a_file_row_label_is_rejected_by_level_not_by_shape() {
         RecordCharacterVerdict::NoLevel
     );
 }
+
+// === The live-record scan: which occupied slots are not characters =============================
+
+fn character(name: &'static str, level: i32) -> LiveRecordSample<'static> {
+    LiveRecordSample {
+        occupied: true,
+        name,
+        level,
+        map: 0x0c01_0000,
+    }
+}
+
+fn empty_slot() -> LiveRecordSample<'static> {
+    LiveRecordSample {
+        occupied: false,
+        name: "",
+        level: 0,
+        map: 0,
+    }
+}
+
+fn staged_row(name: &'static str) -> LiveRecordSample<'static> {
+    LiveRecordSample {
+        occupied: true,
+        name,
+        level: 0,
+        map: 0,
+    }
+}
+
+/// THE CONTROL. A healthy three-character save: three occupied character records and seven zeroed,
+/// unoccupied slots. This is the shape of every ordinary boot, and it must read ZERO -- an oracle
+/// that is non-zero in the normal case teaches the reader to ignore it.
+#[test]
+fn a_healthy_save_container_reports_no_orphaned_records() {
+    let table = [
+        character("Maddened Bean", 139),
+        character("angrE", 90),
+        character("Tarnished", 1),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+    ];
+    let scan = scan_live_records(table);
+    assert_eq!(scan.orphaned_mask, 0);
+    assert_eq!(
+        scan.characters, 3,
+        "the table is readable and holds three characters"
+    );
+}
+
+/// THE REPORTED DEFECT, EXACTLY AS THE PICKER LEAVES IT. `save_picker_write_row_records` zeroes all
+/// ten records, writes a label into the first `visible` of them and marks those occupied, and marks
+/// every slot BEYOND the listing unoccupied. So during the defect not one slot holds a character.
+///
+/// THIS IS THE CASE THAT KILLED THE OBVIOUS GATE. A rule of "answer 0 unless this sample holds a
+/// character" -- written to stop an unread table being judged -- would return 0 here, i.e. blind
+/// the oracle in precisely the state it exists to report. `characters == 0` is reported instead,
+/// and the caller gates on a LATCH of having once seen a populated table.
+#[test]
+fn staged_browse_rows_left_behind_set_exactly_their_own_bits() {
+    let table = [
+        staged_row("[..] EldenRing"),
+        staged_row("[ new ]"),
+        staged_row("ER0000.sl2"),
+        staged_row("saves/"),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+        empty_slot(),
+    ];
+    let scan = scan_live_records(table);
+    assert_eq!(
+        scan.orphaned_mask, 0b1111,
+        "the four staged rows, and only those"
+    );
+    assert_eq!(
+        scan.characters, 0,
+        "a fully staged table holds no character at all -- which is why the caller cannot use this \
+         count alone to decide whether the table is worth judging"
+    );
+}
+
+/// A LABEL IN AN UNOCCUPIED SLOT IS NOT ON SCREEN. The native list builder appends a row only where
+/// `saveSlotsStates[slot]` is set, so an unoccupied slot's bytes describe nothing the user can see.
+/// Pinned because dropping the occupancy term is the obvious "simplification" and it would make the
+/// mask non-zero on every healthy boot with fewer than ten characters.
+#[test]
+fn an_unoccupied_slot_never_contributes_a_bit() {
+    let table = [
+        character("Maddened Bean", 139),
+        LiveRecordSample {
+            occupied: false,
+            name: "[..] EldenRing",
+            level: 0,
+            map: 0,
+        },
+    ];
+    assert_eq!(scan_live_records(table).orphaned_mask, 0);
+}
+
+/// The assembled-save case must NOT fire. `save-files/100-Lilbro` holds bodies copied between
+/// files, so a record can describe whoever used to hold the slot -- a real character, wrong
+/// identity. That is a legitimate save the user plays, and this scan is deliberately blind to it:
+/// it answers "are these bytes a character", never "are they the RIGHT character".
+#[test]
+fn a_record_naming_the_wrong_character_is_still_a_character() {
+    let table = [
+        character("Dark Moon Bean", 7),
+        character("Maddened Bean", 139),
+    ];
+    assert_eq!(scan_live_records(table).orphaned_mask, 0);
+}
+
+/// A genuinely empty save container: ten unoccupied zeroed slots. No bits, and no characters --
+/// indistinguishable, here, from a table that has not been deserialized yet. Both are states the
+/// caller's latch declines to judge, and neither has a character row to get wrong.
+#[test]
+fn an_empty_container_yields_neither_bits_nor_characters() {
+    let scan = scan_live_records([empty_slot(); 10]);
+    assert_eq!(scan.orphaned_mask, 0);
+    assert_eq!(scan.characters, 0);
+}

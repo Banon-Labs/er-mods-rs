@@ -170,6 +170,13 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // `save_flow_tick` so an abort that returns the flow to IDLE this frame is swept the same
     // frame. Self-gating and a single atomic read when nothing is staged.
     unsafe { save_picker_sweep_orphaned_row_records() };
+    // ...and then ASK THE RECORDS, rather than trusting that the sweep above did its job. The
+    // restore counter says we ran; only the records themselves say they are the game's. Three
+    // separate defects have left picker labels in them and each was found by the user watching a
+    // loading screen name a character `[ new ]`, so this publishes the state as a RAM oracle
+    // (`oracle_profile_summary_orphaned_record_mask`). AFTER the sweep, deliberately: sampling
+    // before it would set a bit on every ordinary picker close.
+    unsafe { save_picker_scan_orphaned_records() };
     // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
     // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
     // every frame so the injected key is fresh for the game's keyboard poll, and only

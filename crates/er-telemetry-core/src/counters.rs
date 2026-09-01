@@ -541,6 +541,35 @@ pub static PROFILE_SLOT_STATS_DECODED: AtomicUsize = AtomicUsize::new(0);
 /// exactly which rows are affected; the count alone could not, because `decoded < named` does not
 /// say which slot lost its stats.
 pub static PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit N = save slot N) of live `CS::ProfileSummary` slots found marked OCCUPIED while
+/// holding something that is not a character, at a moment when no save picker owned the rows.
+///
+/// This is the RAM signature of `er-effects-rs-fmy6`. The in-game picker renders its browse rows by
+/// writing them into these game-owned records, and every exit is supposed to put the real ones
+/// back; when one did not (the sticky-`committed` defect, 2026-08-29) the labels stayed, and the
+/// user's next loading screens showed `[..] EldenRing` and `[ new ]` as character names beside
+/// `RL 0`. That reached the user as something they SAW, while `oracle_stats_text_slot_decoded` and
+/// `oracle_profile_player_name_slot_decoded` were both already published and nothing compared them.
+///
+/// STICKY BY DESIGN (`fetch_or`, never reset): the per-frame sweep heals an orphaned stomp within a
+/// frame, so a counter that could be cleared would read 0 in the very run that proved the defect.
+/// Non-zero is a DEFECT, not a state, and it names exactly which rows were affected.
+pub static PROFILE_SUMMARY_ORPHANED_RECORD_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative samples the orphaned-record scan judged. Read `PROFILE_SUMMARY_ORPHANED_RECORD_MASK`
+/// WITH this: a zero mask means "checked and clean" only when this is non-zero, and "never checked"
+/// otherwise -- the distinction a bare mask of 0 cannot make, and the one that turns a silent
+/// oracle into false assurance.
+pub static PROFILE_SUMMARY_ORPHANED_RECORD_SCANS: AtomicUsize = AtomicUsize::new(0);
+/// 1 once the live record table has been seen holding at least one real character, i.e. the boot
+/// `CS::ProfileSummary::Deserialize` has run and the bytes are worth judging.
+///
+/// A LATCH, NOT A PER-SAMPLE TEST, and that is the whole point. The allocation exists long before
+/// it is filled, so an unread table must not be judged -- but "does THIS sample hold a character"
+/// is the wrong way to ask: a picker staging its browse rows marks the slots past its listing
+/// unoccupied and zeroes all ten records, so during the very defect the mask exists to report, the
+/// table holds no character at all. Latching once and gating on the latch keeps the oracle awake
+/// exactly then.
+pub static PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_BIND_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);

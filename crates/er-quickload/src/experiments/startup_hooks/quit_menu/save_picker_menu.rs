@@ -809,6 +809,135 @@ pub(crate) unsafe fn save_picker_sweep_orphaned_row_records() {
     unsafe { save_picker_restore_staged_row_records("orphaned-row-records-sweep") };
 }
 
+/// Game-task ticks since the DLL attached, for [`save_picker_scan_orphaned_records`]'s throttle.
+static SAVE_PICKER_ORPHAN_SCAN_TICK: AtomicUsize = AtomicUsize::new(0);
+/// Sample the record table every this-many ticks (~0.5s at 60fps), matching
+/// `SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS`. Nothing is lost by the gap: an orphaned stomp is a
+/// state of the records that persists until something writes them, not an event that can be missed.
+const SAVE_PICKER_ORPHAN_SCAN_INTERVAL_TICKS: usize = 30;
+
+/// Publish which live `CS::ProfileSummary` slots are marked OCCUPIED while holding something that
+/// is not a character, at a moment when no picker owns the rows -- the RAM oracle for
+/// `er-effects-rs-fmy6`.
+///
+/// WHY THIS EXISTS RATHER THAN A COUNT OF RESTORES. `SAVE_PICKER_ROW_RECORDS_RESTORED` says we ran
+/// the restore; it cannot say the records are actually the game's. Three separate defects have left
+/// labels in these records (a sticky `committed` flag suppressing the restore, a snapshot latched
+/// from a previous container, and a build site that stages without arming one), and each was found
+/// only after the user watched a loading screen name a character `[ new ]`. The records themselves
+/// are the one place all three converge, so the oracle reads THEM. The rule is
+/// [`er_loading_portrait_core::portrait_identity::scan_live_records`], host-tested there.
+///
+/// CALLED AFTER [`save_picker_sweep_orphaned_row_records`], IN THE SAME TICK, AND THAT ORDER IS THE
+/// WHOLE POINT. The frame a picker closes, its rows are legitimately still staged and the sweep is
+/// what puts them back; sampling first would set a bit on every ordinary close and the oracle would
+/// be non-zero in the healthy case, which is how an oracle earns its own dismissal. Sampling after
+/// the heal means a bit can only set when the heal did not happen.
+///
+/// SAMPLED EVERY [`SAVE_PICKER_ORPHAN_SCAN_INTERVAL_TICKS`] TICKS, NOT EVERY FRAME. Ten occupied
+/// slots cost up to 190 `ReadProcessMemory`-guarded reads (`read_utf16_name_units` costs one per
+/// UTF-16 unit), which at 60fps would be over eleven thousand a second to watch a state that
+/// persists until something writes the records. The defect cannot hide inside a half-second window:
+/// an orphaned stomp survives until a restore or the game's own save path overwrites it.
+///
+/// # Safety
+///
+/// Every game access is a fault-guarded read of the live summary allocation, and nothing is
+/// written; an unreadable pointer or a torn record yields no sample rather than a fault. Game
+/// thread only, for the same reason the sweep is: the records it reads are the ones the save
+/// deserialize rewrites, and sampling them from another thread mixes two characters.
+pub(crate) unsafe fn save_picker_scan_orphaned_records() {
+    use er_game_base::profile_summary::{PROFILE_SUMMARY_LEVEL_OFFSET, PROFILE_SUMMARY_MAP_OFFSET};
+    use er_loading_portrait_core::portrait_identity::{LiveRecordSample, scan_live_records};
+    use er_telemetry_core::counters::{
+        PROFILE_SUMMARY_ORPHANED_RECORD_MASK, PROFILE_SUMMARY_ORPHANED_RECORD_SCANS,
+        PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ,
+    };
+
+    let tick = SAVE_PICKER_ORPHAN_SCAN_TICK.fetch_add(1, Ordering::SeqCst);
+    if !tick.is_multiple_of(SAVE_PICKER_ORPHAN_SCAN_INTERVAL_TICKS) {
+        return;
+    }
+    // While the picker owns the rows the labels are supposed to be there. Same ownership question
+    // the sweep asks, so the two cannot disagree about whether a stomp is orphaned.
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+        || missing_save_selection_pending()
+        || save_picker_resubmit_pending()
+        || system_quit_save_swap_lock().rows_staged
+    {
+        return;
+    }
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary < 0x10000 {
+        return;
+    }
+    // Fields first, samples second: a `LiveRecordSample` borrows its name, so the decoded strings
+    // have to outlive the sample vector rather than be built into it.
+    let mut names: [String; TITLE_PROFILE_SLOT_COUNT] = Default::default();
+    let mut levels = [0i32; TITLE_PROFILE_SLOT_COUNT];
+    let mut maps = [0i32; TITLE_PROFILE_SLOT_COUNT];
+    let mut occupied = [false; TITLE_PROFILE_SLOT_COUNT];
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        // A record whose occupancy byte will not read is not evidence of anything: leave the slot
+        // at its zeroed default, which is an unoccupied empty record and contributes no bit.
+        let Some(flag) =
+            (unsafe { safe_read_u8(summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) })
+        else {
+            continue;
+        };
+        occupied[slot] = flag != 0;
+        // AN UNOCCUPIED SLOT'S RECORD IS NEVER READ FURTHER. It produces no row (the native builder
+        // appends only where `saveSlotsStates[slot]` is set), so it can contribute no bit and no
+        // character to the has-been-deserialized gate -- and skipping it is most of this scan's
+        // cost on a save with three characters in it.
+        if !occupied[slot] {
+            continue;
+        }
+        let record = profile_summary_record_address(summary, slot);
+        let (units, len) = unsafe { read_utf16_name_units(record) };
+        names[slot] = String::from_utf16_lossy(&units[..len]);
+        levels[slot] = unsafe { safe_read_i32(record + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
+        maps[slot] = unsafe { safe_read_i32(record + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(0);
+    }
+    let samples = (0..TITLE_PROFILE_SLOT_COUNT).map(|slot| LiveRecordSample {
+        occupied: occupied[slot],
+        name: names[slot].as_str(),
+        level: levels[slot],
+        map: maps[slot],
+    });
+    let scan = scan_live_records(samples);
+    // HAS THIS TABLE EVER BEEN READ? Process-lifetime state, latched here, because the allocation
+    // exists long before `CS::ProfileSummary::Deserialize` fills it and uninitialised bytes must
+    // not be judged. It cannot be answered from THIS sample: a picker staging its rows leaves zero
+    // characters in the table, so "this sample holds a character" would go dark in exactly the
+    // state the mask exists to report. Once one sample has seen a populated table, every later
+    // sample of the same process is meaningful.
+    if scan.characters > 0 {
+        PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ.store(1, Ordering::SeqCst);
+    } else if PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    PROFILE_SUMMARY_ORPHANED_RECORD_SCANS.fetch_add(1, Ordering::SeqCst);
+    let mask = scan.orphaned_mask;
+    if mask == 0 {
+        return;
+    }
+    let previous = PROFILE_SUMMARY_ORPHANED_RECORD_MASK.fetch_or(mask as usize, Ordering::SeqCst);
+    // Log only the slots this sample ADDS, so a stomp that survives for minutes writes one line
+    // rather than one per frame -- and a later, different stomp still gets its own.
+    let fresh = mask & !(previous as u32);
+    if fresh == 0 {
+        return;
+    }
+    let offenders: Vec<String> = (0..TITLE_PROFILE_SLOT_COUNT)
+        .filter(|slot| fresh & (1u32 << slot) != 0)
+        .map(|slot| format!("{slot}:{:?} level={}", names[slot], levels[slot]))
+        .collect();
+    append_autoload_debug(format_args!(
+        "save-picker: ORPHANED ProfileSummary records -- occupied slots holding non-characters with no picker owning the rows mask=0x{mask:03x} new=0x{fresh:03x} {offenders:?} summary=0x{summary:x}; a loading screen reading these slots will show a row label where a character name belongs"
+    ));
+}
+
 const PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET: usize = 0xa38;
 const GRID_CONTROL_SCROLLBAR_OFFSET: usize = 0x1a8;
 const PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET: usize =
