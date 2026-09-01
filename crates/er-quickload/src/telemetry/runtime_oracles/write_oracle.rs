@@ -61,7 +61,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     };
     // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
     let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
-        let csremo = rd(base + GLOBAL_CSREMO_RVA)
+        let csremo = rd(er_game_base::mem::game_data_addr(base, GLOBAL_CSREMO_RVA, "GLOBAL_CSREMO_RVA"))
             .filter(|v| *v != null)
             .unwrap_or(0);
         let remoman = if csremo != 0 {
@@ -124,7 +124,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     let global_move_map_tasks_disabled = crate::experiments::game_module_base()
         .ok()
         .and_then(|base| unsafe {
-            crate::experiments::safe_read_u8(base + MOVEMAPSTEP_GLOBAL_DISABLE_RVA)
+            crate::experiments::safe_read_u8(er_game_base::mem::game_data_addr(base, MOVEMAPSTEP_GLOBAL_DISABLE_RVA, "MOVEMAPSTEP_GLOBAL_DISABLE_RVA"))
         })
         .map_or(-1, i64::from);
     body.push_str(&format!(

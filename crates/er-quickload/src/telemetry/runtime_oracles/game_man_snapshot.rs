@@ -66,7 +66,7 @@ pub(crate) fn snapshot_game_man_on_change() {
     };
     let base = crate::experiments::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let menu_job = if base != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
             .filter(|mm| *mm != TITLE_OWNER_SCAN_START_ADDRESS)
             .and_then(|mm| unsafe { safe_read_usize(mm + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) })
             .unwrap_or(usize::MAX)
@@ -122,7 +122,7 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
         0
     };
     let title_flow_context =
-        if base != 0 && dialog != 0 && dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        if base != 0 && dialog != 0 && dialog_vt == er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
             unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0)
         } else {
             0
@@ -135,7 +135,7 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
         None
     };
     let regulation_manager = if base != 0 {
-        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0)
+        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, GLOBAL_CS_REGULATION_MANAGER_RVA, "GLOBAL_CS_REGULATION_MANAGER_RVA")) }.unwrap_or(0)
     } else {
         0
     };

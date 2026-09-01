@@ -255,8 +255,14 @@ pub(crate) fn input_trace_record_real_poll(state: *const u8) {
 fn game_input_accept_now() -> bool {
     const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
     if let Ok(base) = game_module_base() {
-        let dluid = unsafe { safe_read_usize(base + RuntimeGlobalRva::DluidInputManager as usize) }
-            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        // Resolved for the running build: DLUID moved 0x485dc18 -> 0x4861d28 on 1.17, and the raw
+        // read succeeded against the old slot -- so the input-accept byte was being taken from
+        // whatever now lives there, at +0x88d into it.
+        let dluid = er_game_base::mem::read_global_ptr(
+            base,
+            RuntimeGlobalRva::DluidInputManager as usize,
+            "RuntimeGlobalRva::DluidInputManager",
+        );
         if dluid != TITLE_OWNER_SCAN_START_ADDRESS
             && let Some(v) = unsafe { safe_read_usize(dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) }
         {
@@ -400,9 +406,15 @@ fn input_trace_semaphores() -> TraceSem {
     };
     let base = game_module_base().unwrap_or(null);
     let menu_man = if base != null {
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
-            .filter(|mm| *mm != null)
-            .unwrap_or(null)
+        unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .filter(|mm| *mm != null)
+        .unwrap_or(null)
     } else {
         null
     };

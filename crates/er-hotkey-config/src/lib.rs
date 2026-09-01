@@ -21,6 +21,9 @@
 //!   the value was junk and the last working key is still in force.
 //! * [`live`] -- [`live::AtomicChord`], a binding the detour that actually reads the keyboard can
 //!   load without touching a lock the reload path also wants.
+//! * [`persist`] -- the other direction: writing ONE setting back into a file the player also
+//!   owns, by rewriting a single line in place and renaming it over the original, so a state a
+//!   hotkey changes in-game survives a relaunch without the DLL eating their comments.
 //!
 //! # What it deliberately does NOT do
 //!
@@ -31,6 +34,7 @@
 pub mod binding;
 pub mod keys;
 pub mod live;
+pub mod persist;
 pub mod reload;
 
 pub use binding::{Binding, BindingUpdate};
@@ -39,4 +43,5 @@ pub use keys::{
     parse_scancode, parse_scancode_chord, parse_virtual_key, scancode_name, vk_name,
 };
 pub use live::AtomicChord;
+pub use persist::{set_scalar, write_atomic};
 pub use reload::{FileChange, HotFile};

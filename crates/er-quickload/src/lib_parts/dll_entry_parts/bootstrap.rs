@@ -110,6 +110,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // Route the shared er-hook union/registry-collision logging to this DLL's autoload debug log --
     // the exact sink the union used before it moved into the er-hook crate. Installed here, before any
     // hook is registered, so no union-chain or collision line is ever missed.
+    // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+    // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+    // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+    er_game_base::panic_report::report_panics_to("er-quickload", crate::telemetry::append_autoload_debug);
     er_hook::set_hook_logger(crate::telemetry::append_autoload_debug);
     // Portrait crate split: wire the er-loading-portrait-core seam to the real product fns
     // BEFORE any hook install or task spawn can execute moved code (the crate's neutral
@@ -465,7 +469,10 @@ fn spawn_save_suppress_install() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
+                        // BOUNDED (2026-08-29): user-space backoff instead of a bare yield, which
+                        // hammered the wineserver hard enough to hang a boot. The enclosing loop
+                        // waits on GetModuleHandleA(NULL) and has never been observed to spin.
+                        er_game_base::wait::back_off(attempts);
                     }
                 }
             }
@@ -492,6 +499,15 @@ fn spawn_save_observers_only() {
         .name("er-quickload-save-observers".to_owned())
         .spawn(|| {
             er_save_suppress::set_log_sink(crate::telemetry::append_autoload_debug);
+            // The save-state witness reports WHO abandoned a save, and the caller's RVA is the half
+            // of that no decompile can supply. The stack walk knows which module is the game, so it
+            // lives here rather than in the Tier-A crate; without this the witness still counts and
+            // logs, but its line reads "caller unknown".
+            er_save_suppress::set_caller_rva_sink(crate::crashlog::trace_first_game_caller_rva);
+            // THE SAME EPOCH THE LOG LINES USE. `oracle_save_dispatch_first_latched_ms` exists to be
+            // read against the accept record that latched the device, and those records live in this
+            // log; a stamp from a clock of the crate's own would be correct and unalignable.
+            er_save_suppress::set_clock_sink(save_suppress_elapsed_ms);
             let mut attempts = 0_u64;
             loop {
                 match er_game_base::mem::game_module_base() {
@@ -503,7 +519,10 @@ fn spawn_save_observers_only() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
+                        // BOUNDED (2026-08-29): user-space backoff instead of a bare yield, which
+                        // hammered the wineserver hard enough to hang a boot. The enclosing loop
+                        // waits on GetModuleHandleA(NULL) and has never been observed to spin.
+                        er_game_base::wait::back_off(attempts);
                     }
                 }
             }
@@ -520,19 +539,38 @@ fn spawn_save_observers_only() {
 /// `spawn_save_suppress_install`.
 const SAVE_SUPPRESS_WAIT_LOG_INTERVAL: u64 = 4096;
 
-pub(crate) fn wait_for_task_instance() -> &'static CSTaskImp {
+/// `er_save_suppress`'s clock sink: the process-log epoch, narrowed to `u64`.
+///
+/// A free function rather than a closure because [`er_save_suppress::ClockSinkFn`] is a plain `fn`
+/// pointer. The clamp is unreachable in any real run (`u64::MAX` ms is ~584 million years); it stops
+/// one short of [`er_save_suppress::ELAPSED_MS_UNAVAILABLE`] so an absurd clock reports an absurd
+/// TIME rather than impersonating the "no clock wired" sentinel, and it clamps rather than truncates
+/// so it can never wrap into a plausible one.
+fn save_suppress_elapsed_ms() -> u64 {
+    u64::try_from(crate::telemetry::process_log_elapsed_ms())
+        .unwrap_or(er_save_suppress::ELAPSED_MS_UNAVAILABLE)
+        .min(er_save_suppress::ELAPSED_MS_UNAVAILABLE - 1)
+}
+
+/// The game's task manager, or `None` if it never turns up.
+///
+/// BOUNDED (2026-08-29). This used to be `loop { yield_now() }`. On 1.17 the singleton did not
+/// appear promptly and two shells running the same loop saturated the wineserver: the game
+/// managed 104 CPU ticks in three minutes while those two threads burned 19,000 each, and around
+/// thirty of our own threads never got scheduled at all. `er_game_base::wait` spins in user space
+/// between attempts and gives up, so a missing singleton costs the product its per-frame task
+/// rather than costing the user their game.
+pub(crate) fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
     let mut wait_attempts = 0_u64;
-    loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(InstanceError::NotFound(_)) | Err(InstanceError::Null(_)) => {
-                wait_attempts = wait_attempts.saturating_add(1);
-                if wait_attempts == 1 || wait_attempts.is_multiple_of(TASK_INSTANCE_WAIT_LOG_INTERVAL) {
-                    let detail = format!("attempts={wait_attempts}");
-                    write_bootstrap_event(BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE, &detail);
-                }
-                std::thread::yield_now()
+    er_game_base::wait::poll_until(|| match unsafe { CSTaskImp::instance() } {
+        Ok(instance) => Some(instance),
+        Err(InstanceError::NotFound(_)) | Err(InstanceError::Null(_)) => {
+            wait_attempts = wait_attempts.saturating_add(1);
+            if wait_attempts == 1 || wait_attempts.is_multiple_of(TASK_INSTANCE_WAIT_LOG_INTERVAL) {
+                let detail = format!("attempts={wait_attempts}");
+                write_bootstrap_event(BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE, &detail);
             }
+            None
         }
-    }
+    })
 }

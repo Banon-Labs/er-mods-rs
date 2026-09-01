@@ -41,12 +41,14 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import NOT_REPO_SOURCE, REPO_ROOT, rust_source_files  # noqa: E402
 
-# Directories that hold no product/harness Rust source: build output, agent worktree COPIES of
-# this same repo (scanning them double-counts and reports paths that do not exist upstream), and
-# vendored trees.
-SKIP_DIRS = {".git", ".claude", ".worktrees", "target", "third_party", "save-files", "docs"}
+# The shared "not this repo's source" set (.git/.worktrees/.claude/target/third_party), plus two
+# this gate alone excludes: neither holds product or harness Rust, so neither can contain a log
+# opener this gate speaks for.
+EXTRA_SKIP_DIRS = frozenset({"save-files", "docs"})
+SKIP_DIRS = NOT_REPO_SOURCE | EXTRA_SKIP_DIRS
 
 # `.append(` whose argument does NOT start with `&`. That one character separates an OpenOptions
 # builder (`.append(true)`, `.append(flag)`) from `Vec::append(&mut other)`.
@@ -67,13 +69,13 @@ EXEMPT: dict[str, str] = {
 
 
 def rust_files(root: Path) -> list[Path]:
-    """Every Rust source under `root`, minus build output and repo copies."""
-    files: list[Path] = []
-    for path in root.rglob("*.rs"):
-        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
-        files.append(path)
-    return sorted(files)
+    """Every Rust source under `root`, minus build output and repo copies.
+
+    See `scripts/repo_source_scan.py` for the shared enumeration and why it prunes rather than
+    post-filters. Callers pass the prebuilt list on to `check()` so the tree is walked once: this
+    gate used to walk it twice, the second time only to print a file count in the success line.
+    """
+    return rust_source_files(root, EXTRA_SKIP_DIRS)
 
 
 def append_openers(text: str) -> list[tuple[int, str]]:
@@ -90,7 +92,7 @@ def defines_helper(text: str) -> bool:
     return all(re.search(rf"fn\s+{name}\b", text) for name in HELPER_FUNCTIONS)
 
 
-def check(root: Path) -> list[str]:
+def check(root: Path, sources: list[Path] | None = None) -> list[str]:
     """Return a list of failures; empty means every log in the tree is fresh per run."""
     failures: list[str] = []
     exempt_hits: dict[str, int] = {name: 0 for name in EXEMPT}
@@ -102,7 +104,7 @@ def check(root: Path) -> list[str]:
                 "cannot be told apart from an oversight"
             )
 
-    for path in rust_files(root):
+    for path in (rust_files(root) if sources is None else sources):
         relative = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
         openers = append_openers(text)
@@ -282,14 +284,19 @@ def main() -> int:
         return selftest()
 
     root = args.root.resolve()
-    failures = check(root)
+    # Walked ONCE. `check()` enumerated the tree and then the success line called
+    # `rust_files(root)` a second time purely to print a count, so a passing run paid for the
+    # whole walk twice. The six selftest call sites still pass only `root` and enumerate
+    # themselves -- their trees are a handful of files.
+    sources = rust_files(root)
+    failures = check(root, sources)
     if failures:
         print("[check-fresh-run-logs] FAIL:", file=sys.stderr)
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         return 1
     print(
-        f"[check-fresh-run-logs] ok -- {len(rust_files(root))} Rust files scanned, every log "
+        f"[check-fresh-run-logs] ok -- {len(sources)} Rust files scanned, every log "
         f"opener routes through the one-shot truncation, {len(EXEMPT)} file(s) exempt with reasons"
     )
     return 0

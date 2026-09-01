@@ -40,9 +40,38 @@ HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.d
 # oracle_tick_ms, so a product load2/load3 run can be tested for single-core contention (bd NEXT-telemetry
 # -capture-per-core-cpu). Shipped alongside the product per the goal (product + semaphore/oracle DLLs).
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
+# EVERY per-run log this probe relies on is redirected into ARTIFACT_DIR, because anything left in
+# GAME_DIR is single-slot and the NEXT launch destroys it. Measured 2026-08-31: this harness already
+# redirected the autoload debug log, but NOT the continue trace -- so the 11:09 run overwrote the
+# 5.4 MB `er-quickload-continue-trace.log` belonging to the 09:07 run, whose evidence nobody had read
+# yet. The DLL honours ER_QUICKLOAD_TRACE_CONTINUE_PATH (save_policy_logs.rs `continue_trace_log_path`)
+# and falls back to GAME_DIR only when it is unset. Add a line here for any future log rather than
+# copying it out afterwards: a copy after teardown cannot recover a file the run itself clobbered.
 LAUNCH_ENV_VARS=(
 	"ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-quickload-autoload-debug.log"
 	"ER_QUICKLOAD_CRASH_LOG_PATH=$ARTIFACT_DIR/er-quickload-crash.log"
+	"ER_QUICKLOAD_TRACE_CONTINUE_PATH=$ARTIFACT_DIR/er-quickload-continue-trace.log"
+	"ER_QUICKLOAD_TELEMETRY_PATH=$ARTIFACT_DIR/er-quickload-telemetry.json"
+	"ER_QUICKLOAD_INPUT_TRACE_PATH=$ARTIFACT_DIR/er-quickload-input-trace.jsonl"
+	"ER_QUICKLOAD_BOOTSTRAP_PATH=$ARTIFACT_DIR/er-quickload-bootstrap.jsonl"
+	"ER_QUICKLOAD_BOOTSTRAP_STATE_PATH=$ARTIFACT_DIR/er-quickload-bootstrap-state.json"
+	"ER_QUICKLOAD_PROFILE_PATH=$ARTIFACT_DIR/er-quickload-profile.jsonl"
+	# The OTHER three DLLs this probe loads. They had no redirect knob at all until 2026-08-31, so
+	# their logs could only ever land in GAME_DIR -- including the reload trace, the largest producer
+	# in the repo at ~655 MB/hour, which every launch rotated to `.prev` and the launch after that
+	# destroyed. Copying them out after the run (further down) never preserved anything but this
+	# run's own output, and a killed run never reached the copy at all.
+	"ER_QUICKLOAD_RELOAD_TRACE_PATH=$ARTIFACT_DIR/er-reload-trace.log"
+	"ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH=$ARTIFACT_DIR/er-input-harness.log"
+	"ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH=$ARTIFACT_DIR/er-input-harness-phases.jsonl"
+	"ER_QUICKLOAD_DIAG_HARNESS_PATH=$ARTIFACT_DIR/er-diag-harness.log"
+	"ER_QUICKLOAD_TIMESERIES_PATH=$ARTIFACT_DIR/er-telemetry-timeseries.jsonl"
+	"ER_QUICKLOAD_CPU_PROFILE_PATH=$ARTIFACT_DIR/er-cpu-profile.txt"
+	"ER_QUICKLOAD_ARMAMENT_ICONS_PATH=$ARTIFACT_DIR/er-armament-icons.log"
+	"ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH=$ARTIFACT_DIR/er-save-disable.log"
+	"ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH=$ARTIFACT_DIR/er-save-disable-telemetry.json"
+	"ER_QUICKLOAD_LOADING_PORTRAIT_PATH=$ARTIFACT_DIR/er-loading-portrait.log"
+	"ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH=$ARTIFACT_DIR/er-loading-portrait-crash-log.txt"
 )
 # RENDERDOC=1: the Windows RenderDoc DLL, loaded as a me3 native to hook ER's D3D12 device.
 RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"
@@ -77,10 +106,17 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
-[[ -f "$PRODUCT_DLL" ]] || fail "product DLL not built: $PRODUCT_DLL"
-[[ -f "$TRACE_DLL" ]] || fail "trace DLL not built: $TRACE_DLL"
-[[ -f "$HARNESS_DLL" ]] || fail "input-harness DLL not built: $HARNESS_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-input-harness)"
-[[ -f "$TELEM_DLL" ]] || fail "telemetry DLL not built: $TELEM_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry)"
+# FRESHNESS, NOT EXISTENCE. These four `[[ -f ]]` checks used to be the only thing between this
+# probe and week-old code: the profile written below points me3 straight at target/.../release,
+# so a DLL that merely EXISTS is what gets loaded. All four are checked, not just the product --
+# this run's whole claim is about how the four interact, and one stale companion invalidates it
+# exactly as thoroughly as a stale product would. Refusing beats running: a launch on the wrong
+# bytes yields evidence indistinguishable from the feature not working.
+# shellcheck source=scripts/er-dll-freshness.sh
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/er-dll-freshness.sh"
+require_fresh_dlls "$PRODUCT_DLL" "$TRACE_DLL" "$HARNESS_DLL" "$TELEM_DLL" ||
+	fail "refusing to launch against DLLs that are not this source tree (see above)"
 [[ "${RENDERDOC:-0}" != "1" || -f "$RDOC_DLL" ]] || fail "RENDERDOC=1 but renderdoc.dll not found at '$RDOC_DLL' (set RENDERDOC_DLL=<path to Windows renderdoc.dll>)."
 
 if [[ -z "${ME3:-}" ]]; then
@@ -120,7 +156,8 @@ cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
 cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
-rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl" # fresh per-run core/fps timeseries
+# (The timeseries is redirected into ARTIFACT_DIR, so this run starts with a fresh file by
+# construction. Deleting the GAME_DIR copy would only destroy ANOTHER run's evidence.)
 # COMPANION: in the deterministic control-file path the product owns movement proof + slot switching;
 # the input-harness DLL should stay passive so the old menu-driven quit flow cannot fight it. Force-drive
 # is only for the legacy menu-nav path or an explicit diagnostic override.
@@ -177,6 +214,12 @@ cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.effective" 
 } >"$GAME_DIR/er-quickload-autoload.txt"
 cp -f "$GAME_DIR/er-quickload-autoload.txt" "$ARTIFACT_DIR/autoload-request.txt"
 LAUNCH_ENV_VARS+=("ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD=1")
+# The DLL now IGNORES `slot=` in er-quickload-autoload.txt by default: a stale copy of that file
+# silently chose the loading screen's character in run br-20260831-014208-b1d6, so it is no longer
+# a product slot channel. This probe genuinely wants it, so it opts in explicitly through the same
+# deprecated-probe gate the other smoke scripts already use (AGENTS.md 2026-07-08). Without this
+# line $BOOT_SLOT above would be read, refused, and logged -- not silently obeyed.
+LAUNCH_ENV_VARS+=("ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1")
 
 # NO env/marker arming: the input-harness DLL is enabled purely by its PRESENCE in the profile above.
 # Sweep any stale legacy sq-repro/probe markers so a prior run cannot pollute this one.
@@ -197,9 +240,15 @@ elif [[ "${PROVE_MOVEMENT:-1}" != "1" ]]; then
 	rm -f "$GAME_DIR/er-quickload-prove-movement.txt" 2>/dev/null
 fi
 
-# --- CLEAN SLATE: recreate every log so no PRIOR run pollutes this one. ---
-rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-input-harness.log \
-	"$GAME_DIR"/er-quickload-telemetry.json 2>/dev/null
+# --- CLEAN SLATE, WITHOUT DELETING SOMEONE ELSE'S RUN. ---
+# This used to be
+#   rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log \
+#         "$GAME_DIR"/er-input-harness.log "$GAME_DIR"/er-quickload-telemetry.json
+# and it was the WORSE of the two evidence destroyers. `begin_fresh_run` removes `<name>.prev`
+# unconditionally when the live file is absent, so clearing the live file here dropped TWO
+# generations -- neither of them this run's, since several sessions launch concurrently here.
+# Every log this probe reads is now redirected into ARTIFACT_DIR, which is fresh per run, so the
+# clean slate is free and nothing in GAME_DIR needs touching.
 
 # SAFETY (bd never-blanket-kill-eldenring-killed-user-game-2026-07-22): capture the eldenring.exe/me3
 # PIDs that already exist BEFORE we launch (a user's live game, another agent's run) so teardown can
@@ -331,9 +380,14 @@ python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	"${CAPTURE_ARGS[@]}"
 RC=$?
 
-# Preserve the harness self-drive evidence log alongside the trace + report.
-[[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"
-[[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"
+# FALLBACK ONLY. Both logs are redirected into ARTIFACT_DIR at launch, so this copy is for the case
+# where the env did not survive launch.sh -> me3 -> Proton and the DLL fell back to GAME_DIR. It is
+# NOT how the evidence is preserved: a copy here can only ever recover THIS run's output, never the
+# previous run's, and a crashed or killed run never reaches it.
+[[ -f "$ARTIFACT_DIR/er-input-harness.log" ]] ||
+	{ [[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"; }
+[[ -f "$ARTIFACT_DIR/er-reload-trace.log" ]] ||
+	{ [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"; }
 # RENDERDOC: the Windows ER wrote .rdc captures to GAME_DIR (/mnt/c, Windows-writable); move them to the
 # WSL artifact dir for offline diff with qrenderdoc.exe / the RenderDoc python API.
 if [[ "${RENDERDOC:-0}" == "1" ]]; then

@@ -26,7 +26,14 @@ In-game controls:
 The selector bar is **open** when all three hold: the bar is shown
 (`overlay_visible_on_start`, or toggled back with Alt+Numpad0), it is
 **expanded** rather than minimized to its `[+]` button, and a character is
-loaded. The bar ships minimized -- click its `[+]` button to expand it.
+loaded. The bar ships minimized: press **Alt+9** to expand it.
+
+The `[+]` header is also a mouse button, and clicking it works whenever the
+pointer is free -- but while the game has the mouse the Windows pointer the
+overlay hit-tests against stops following your hand, so a button in the screen
+corner cannot be reached. Measured on a live session: zero clicks landed on it
+in 1,296,264 drawn frames. Alt+9 is the way in while you play; rebind it with
+`selector_expand_key`.
 
 Keys that move the on-screen cursor need the bar open:
 
@@ -39,6 +46,8 @@ open or not, because firing an effect while you play is what the DLL is for:
 
 - Alt+': toggle the currently selected effect off/on.
 - Alt+Numpad0 (also Alt+0, Alt+Insert): show/hide the selector bar -- the way back to a hidden one.
+- Alt+9: expand the bar to the effect list, or minimize it back to its `[+]` button. Expanding also
+  un-hides a hidden bar, so one key is always enough to see the list.
 - Anything you bind in `.er-net-effects-hotkeys.json`.
 
 Only the four arrow keys are ever **taken** from the game, and only while the bar

@@ -12,14 +12,30 @@ use serde::Deserialize;
 use thiserror::Error;
 
 const SMITHBOX_SOURCE_DIR_ENV: &str = "SMITHBOX_SOURCE_DIR";
-const DEFAULT_SMITHBOX_REPO_CANDIDATES: &[&str] = &[
-    ".deps/Smithbox",
-    "../Smithbox",
-    "../smithbox",
-    // Binary release install on this machine's Windows side (D:\Smithbox).
-    "/mnt/d/Smithbox",
-    "/tmp/pi-github-repos/vawser/Smithbox",
-];
+/// Repo-relative places a Smithbox checkout may sit. Absolute entries are honoured as-is
+/// because `Path::join` lets an absolute component replace the base.
+///
+/// `/mnt/d/Smithbox` used to head this list. That partition is not mounted on this machine,
+/// so the candidate resolved to nothing and reported as "checked, missing" -- indistinguishable
+/// from a genuine absence, which is the worst way for a path to be wrong. Home-relative
+/// candidates are added at runtime by [`smithbox_candidates`] instead of being written here,
+/// so nobody's home directory is baked into a constant.
+const DEFAULT_SMITHBOX_REPO_CANDIDATES: &[&str] = &[".deps/Smithbox", "../Smithbox", "../smithbox"];
+
+/// Home-relative Smithbox locations, resolved for whoever is running.
+const HOME_SMITHBOX_CANDIDATES: &[&str] = &["Smithbox", "tools/Smithbox", "projects/Smithbox"];
+
+/// Every place a Smithbox checkout is looked for, repo-relative first.
+fn smithbox_candidates(repo_root: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = DEFAULT_SMITHBOX_REPO_CANDIDATES
+        .iter()
+        .map(|candidate| repo_root.join(candidate))
+        .collect();
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        out.extend(HOME_SMITHBOX_CANDIDATES.iter().map(|c| home.join(c)));
+    }
+    out
+}
 const ANDRE_FORMATS_PROJECT_PATH: &str = "src/Andre/Andre.Formats/Andre.Formats.csproj";
 const ANDRE_FORMATS_DLL_FILE: &str = "Andre.Formats.dll";
 const ANDRE_SOULSFORMATS_DLL_FILE: &str = "Andre.SoulsFormats.dll";
@@ -151,8 +167,7 @@ impl SoulsFormats {
             );
         }
 
-        for candidate in DEFAULT_SMITHBOX_REPO_CANDIDATES {
-            let path = repo_root.join(candidate);
+        for path in smithbox_candidates(&repo_root) {
             checked_paths.push(path.clone());
             if let Some(layout) = detect_smithbox_layout(&path) {
                 return Ok(Self {
@@ -346,13 +361,22 @@ impl SoulsFormats {
     }
 }
 
+/// The workspace root this crate belongs to.
+///
+/// `CARGO_MANIFEST_DIR` is set in the ENVIRONMENT only under `cargo run`/`cargo test`. Reading
+/// it solely from the environment meant the built binary failed with `path is not valid UTF-8:
+/// "CARGO_MANIFEST_DIR"` -- a message about UTF-8 for a variable that was simply not set, which
+/// sent a reader looking for an encoding problem instead of the real one. The compile-time
+/// `env!` is always available, so the runtime variable is now only an override.
 fn current_repo_root() -> Result<PathBuf, SoulsFormatsError> {
-    env::var_os("CARGO_MANIFEST_DIR")
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
-        .and_then(|path| path.parent().and_then(Path::parent).map(Path::to_path_buf))
-        .ok_or_else(|| SoulsFormatsError::NonUtf8Path {
-            path: PathBuf::from("CARGO_MANIFEST_DIR"),
-        })
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or(SoulsFormatsError::NonUtf8Path { path: manifest_dir })
 }
 
 fn andre_formats_project_path(smithbox_root: &Path) -> PathBuf {
@@ -561,9 +585,35 @@ mod tests {
         assert_eq!(tfm_from_csproj("<TargetFramework></TargetFramework>"), None);
     }
 
+    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    ///
+    /// Both filesystem tests below build a tree under `std::env::temp_dir()` and then delete it,
+    /// and `std::env::temp_dir()` is ONE directory shared by every process on the machine. A name
+    /// keyed only by `tag` is therefore the same directory in two test binaries at once, which is
+    /// the ordinary case in this repo: two agents running `scripts/check.sh` concurrently, the
+    /// gate run twice over, or a second checkout. Each run's cleanup then deletes the other's
+    /// tree while it is still being asserted on.
+    ///
+    /// Measured before the pid was added, with eight concurrent copies of this crate's test
+    /// binary: two of the eight went red on `identical rewrite: BridgeWriteFailed(... No such
+    /// file or directory)` -- `write_if_changed` being blamed for a directory a sibling process
+    /// had removed underneath it. With the pid in the name, eight of eight are green.
+    ///
+    /// The directory is created here and wiped first, so a test never inherits a leftover tree
+    /// from a run of ITS OWN pid that was killed before its cleanup line.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "er-soulsformats-{tag}-p{pid}",
+            pid = std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir must be creatable");
+        dir
+    }
+
     #[test]
     fn detects_source_and_binary_smithbox_layouts() {
-        let base = std::env::temp_dir().join("er-soulsformats-layout-test");
+        let base = scratch_dir("layout-test");
 
         let source_root = base.join("source");
         let project_dir = andre_formats_project_path(&source_root);
@@ -611,8 +661,7 @@ mod tests {
 
     #[test]
     fn write_if_changed_skips_identical_contents() {
-        let dir = std::env::temp_dir().join("er-soulsformats-write-if-changed-test");
-        fs::create_dir_all(&dir).expect("create temp dir");
+        let dir = scratch_dir("write-if-changed-test");
         let path = dir.join("file.txt");
 
         write_if_changed(&path, "first").expect("initial write");

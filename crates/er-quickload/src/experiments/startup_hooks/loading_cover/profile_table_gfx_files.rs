@@ -25,7 +25,7 @@ pub(crate) fn install_profile_select_table_diag_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(PROFILE_RENDERER_REFRESH_RVA as u32) else {
+    let Ok(target) = game_rva_for_hook(PROFILE_RENDERER_REFRESH_RVA as u32) else {
         return;
     };
     match unsafe {
@@ -77,7 +77,7 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(PROFILE_RENDERER_TEARDOWN_RVA as u32) else {
+    let Ok(target) = game_rva_for_hook(PROFILE_RENDERER_TEARDOWN_RVA as u32) else {
         return;
     };
     match unsafe {
@@ -169,16 +169,46 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
     }
     // Both repos non-null == graphics/repos initialized. Bail (retry next tick) if not ready yet; do
     // NOT consume any register attempt, so boot-time nulls never burn a slot.
-    let tpf_repo = unsafe { safe_read_usize(base + GLOBAL_TPF_REPOSITORY_RVA) }.unwrap_or(0);
+    // Resolved, not added. These are 1.16.2 DATA addresses and every `.data` global moved on
+    // 1.17; read raw, the pointer that comes back is whatever now occupies the old slot, and it
+    // went into `CreateTpfResCap` and divided by zero 894ms into boot. `safe_read_usize` cannot
+    // catch that -- the read SUCCEEDS, it is the answer that is wrong.
+    let Some(tpf_repo_slot) = er_game_base::game_build::resolve_game_address(
+        base + GLOBAL_TPF_REPOSITORY_RVA,
+        "GLOBAL_TPF_REPOSITORY_RVA",
+    ) else {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TPF_REPO_NULL, Ordering::SeqCst);
+        return;
+    };
+    let tpf_repo = unsafe { safe_read_usize(tpf_repo_slot) }.unwrap_or(0);
     if tpf_repo == 0 || tpf_repo == null {
         STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TPF_REPO_NULL, Ordering::SeqCst);
         return;
     }
-    let tex_repo = unsafe { safe_read_usize(base + GLOBAL_TEX_REPOSITORY_RVA) }.unwrap_or(0);
+    let Some(tex_repo_slot) = er_game_base::game_build::resolve_game_address(
+        base + GLOBAL_TEX_REPOSITORY_RVA,
+        "GLOBAL_TEX_REPOSITORY_RVA",
+    ) else {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TEX_REPO_NULL, Ordering::SeqCst);
+        return;
+    };
+    let tex_repo = unsafe { safe_read_usize(tex_repo_slot) }.unwrap_or(0);
     if tex_repo == 0 || tex_repo == null {
         STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TEX_REPO_NULL, Ordering::SeqCst);
         return;
     }
+    // MEASURED, 2026-08-29: called raw, this took the game down ~925ms after load. 0xb83680 is
+    // `CreateTpfResCap` on 1.16.2 and a different function on 1.17, which faulted reading
+    // [null+0x25] -- and the crash's own caller frames were 0xb83680 / 0xb836a0, naming the stale
+    // address outright. The translation exists (0xb83680 -> 0xb84d30), so resolving here does not
+    // cost the feature; it is what makes the feature work on this build at all.
+    let Some(create_rescap_address) = er_game_base::game_build::resolve_game_address(
+        base + CREATE_TPF_RESCAP_RVA,
+        "CREATE_TPF_RESCAP_RVA",
+    ) else {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_BASE_UNRESOLVED, Ordering::SeqCst);
+        return;
+    };
     let create_rescap: unsafe extern "system" fn(
         usize,
         *const u16,
@@ -186,7 +216,7 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
         u64,
         u8,
         u32,
-    ) -> usize = unsafe { std::mem::transmute(base + CREATE_TPF_RESCAP_RVA) };
+    ) -> usize = unsafe { std::mem::transmute(create_rescap_address) };
     for (slot, systex_key) in STATS_PANEL_SYSTEX_KEYS
         .iter()
         .enumerate()
@@ -342,10 +372,20 @@ pub(crate) unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> 
         false
     };
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!(
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
-            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+                "SCALEFORM_MEMORY_FILE_VTABLE_RVA"
+            )
         ));
     }
     let stripped = match TITLE_05_000_RUNTIME_STRIPPED.get() {
@@ -486,10 +526,20 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
         false
     };
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!(
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
-            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+                "SCALEFORM_MEMORY_FILE_VTABLE_RVA"
+            )
         ));
     }
     match profile_05_010_editor_hot_gfx() {
@@ -612,7 +662,13 @@ unsafe fn text_input_02_990_swap(
         return fail(format_args!("invalid MemoryFile 0x{file:x}"));
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!("unexpected MemoryFile vtable 0x{vtable:x}"));
     }
     let edited = match derivation.cache.get() {
@@ -716,10 +772,20 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
         false
     };
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return fail(format_args!(
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
-            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+                "SCALEFORM_MEMORY_FILE_VTABLE_RVA"
+            )
         ));
     }
     let edited = match OPTIONS_02_040_QUIT6_RUNTIME_EDITED.get() {

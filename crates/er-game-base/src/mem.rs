@@ -36,9 +36,196 @@ pub fn game_module_base() -> Result<usize, String> {
     Ok(module as usize)
 }
 
-/// `game_module_base() + rva`.
+/// `game_module_base() + rva`, resolved for the RUNNING build.
+///
+/// Every RVA in this workspace is a 1.16.2 RVA. On a build that moved the code, this returns the
+/// translated address when one has been verified and an `Err` when it has not -- so a caller
+/// that ignores the error cannot call into whatever now occupies those bytes. Plain addition on
+/// the supported build, and for anything outside the game image.
+///
+/// # Why `#[track_caller]`
+///
+/// This is the UNNAMED spelling, so its refusals used to be labelled `game_rva` and nothing else
+/// -- which names ~150 call sites at once and therefore names none of them. It has now cost two
+/// hunts. The first was 57 refusals in one boot. The second was a session that logged **339,764**
+/// refusals of `0x140000000` (image base + RVA 0, which is never a meaningful address) with no
+/// way to tell from the log which site was asking; it turned out to be `delay_delete_pending`
+/// resolving RVA 0 just to obtain the module base, four times a second for 25 hours.
+///
+/// The caller's `file:line` goes into the refusal line so that class of hunt cannot recur. It is
+/// a property of the function rather than a discipline expected of ~150 call sites, which is the
+/// only reason it holds.
+#[track_caller]
 pub fn game_rva(rva: u32) -> Result<usize, String> {
+    resolve_rva(rva, "game_rva", core::panic::Location::caller())
+}
+
+/// `game_module_base() + rva`, deliberately NOT resolved for the running build.
+///
+/// # The one caller shape this is for
+///
+/// An address about to be handed to a hook API that resolves it ITSELF -- `er_hook::MhHook::new`,
+/// `register_union_hook`, `register_shared_hook`, or a local helper that forwards into one. Those
+/// own the single 1.16.2 -> 1.17 resolve, and [`game_rva`] would perform a second one.
+///
+/// # Why a second resolve is not merely redundant
+///
+/// It is usually a no-op: the address is a 1.17 destination, `already_translated_in` recognises it
+/// and hands it straight back. That is exactly why this survived so long unnoticed. But an address
+/// can be BOTH a 1.17 destination of one row and the 1.16.2 SOURCE of a different row -- which is
+/// what happens whenever a region's shift equals the local spacing between two functions, so
+/// `B - A == C - B`. On such an address translation wins over the shortcut (it must; see
+/// `already_translated_in`), and the second resolve silently returns C.
+///
+/// MEASURED on the 2026-08-30 18:42 boot, three detours installed on unrelated functions:
+///
+/// | intended                  | resolve 1     | resolve 2 (the detour that was installed) |
+/// |---------------------------|---------------|-------------------------------------------|
+/// | `WorldBlockRes::Update`   | `0x1406156c0` | `0x140616510`                             |
+/// | `native_submit_7ac890`    | `0x1407ad710` | `0x1407ae590` (hot Scaleform, 16 callers) |
+/// | profile per-frame push    | `0x140bbbd90` | `0x140bbd440` (`CSMenuFaceModelRend`)     |
+///
+/// No error, no refusal, no log line -- and each feature then logged the address it MEANT, which
+/// is why nobody noticed. `scripts/check-double-resolved-hook-targets.py` is the gate that keeps
+/// the shape out.
+///
+/// # What the `Result` means here, and what moved
+///
+/// It is the module-base lookup and NOTHING else, so a call site that already had an `else` branch
+/// for a failed [`game_rva`] keeps it unchanged. What moves is WHERE an unmappable address is
+/// refused: no longer here, but inside the hook API, which logs `HOOK REFUSED` naming the address
+/// and the build. That is the better place for it anyway -- it is the layer that knows whether the
+/// row is merely callable or actually audited as a detour target, which are different questions
+/// with different tables.
+pub fn game_rva_for_hook(rva: u32) -> Result<usize, String> {
     Ok(game_module_base()? + rva as usize)
+}
+
+/// [`game_rva`], but the caller names the address so a refusal is attributable by NAME as well
+/// as by source line.
+///
+/// Both halves earn their place: the name says WHICH constant went inert (the thing a reader
+/// wants), and the location says which of the several sites that resolve it was asking (the
+/// thing that makes it fixable). Prefer this form when a name exists.
+#[track_caller]
+pub fn game_rva_named(rva: u32, what: &'static str) -> Result<usize, String> {
+    resolve_rva(rva, what, core::panic::Location::caller())
+}
+
+/// Shared body of [`game_rva`] and [`game_rva_named`]: resolve `rva` for the running build,
+/// labelling any refusal with both the name and the source line that asked for it.
+///
+/// `at` is passed in rather than read here because `#[track_caller]` reports the caller of the
+/// nearest tracked frame; reading it in this untracked helper would report `game_rva` itself and
+/// re-create the exact anonymity this exists to remove.
+fn resolve_rva(rva: u32, what: &str, at: &core::panic::Location<'_>) -> Result<usize, String> {
+    let raw = game_module_base()? + rva as usize;
+    crate::game_build::resolve_game_address_fmt(
+        raw,
+        format_args!("{what} @ {}:{}", at.file(), at.line()),
+    )
+    .ok_or_else(|| {
+        format!(
+            "rva 0x{rva:x} has no verified mapping for the running build: {}",
+            crate::game_build::describe_build()
+        )
+    })
+}
+
+/// `base + rva` for a READ, resolved for the running build -- or `0` when there is no mapping.
+///
+/// # Why zero rather than an error
+///
+/// The call sites this exists for are reads of game globals: `safe_read_usize(crate::mem::game_data_addr(base, FOO_RVA, "FOO_RVA"))`
+/// and friends, which are already fault-tolerant and already have a "this global is not there"
+/// path. Handing them address 0 puts a refusal down that existing path unchanged -- the read
+/// fails, the caller takes the branch it already had for a null global, and nothing new has to
+/// be decided at ~73 separate sites.
+///
+/// # Why reads needed this at all
+///
+/// A stale CALL announces itself: 1.16.2's `0x1405eefb0` is mid-instruction on 1.17 and the
+/// process dies immediately. A stale READ does not. Every `.data` global moved between the
+/// builds -- most by +0x4070, `runtime_heap_allocator` by +0x4080, `multiplay_properties` by
+/// +0x4000 -- so `safe_read_usize` SUCCEEDS and returns whatever now occupies the old slot. Two
+/// measured consequences: a garbage repository pointer reached `CreateTpfResCap`, which divided
+/// by zero 894ms into boot; and the swapchain find read a stale `GX_DRAW_CONTEXT_RVA` root, missed
+/// for 1200 consecutive tries, and left a live process behind a black screen.
+///
+/// NEVER use this for a call target. Zero is a safe address to fail a read at and a fatal one to
+/// jump to; call sites must take the `Option` from [`crate::game_build::resolve_game_address`]
+/// and decide what refusing means for them.
+pub fn game_data_addr(base: usize, rva: usize, what: &'static str) -> usize {
+    crate::game_build::resolve_game_address(base + rva, what).unwrap_or(0)
+}
+
+/// [`game_data_addr`] for an INDEXED global -- a table row, an array element -- returning
+/// `base + rva + byte_offset`, or `0` when the base RVA has no mapping.
+///
+/// # Why the plain form is not enough
+///
+/// [`game_data_addr`] answers `0` for a refusal, and every caller's null check depends on that
+/// `0` surviving. `game_data_addr(base, TABLE_RVA, "TABLE") + slot * 8` destroys it: a refusal on
+/// slot 3 produces the address `24`, which is not zero, so an `if address != 0` guard PASSES and
+/// the caller dereferences page zero. Reads survive that (`safe_read_*` is kernel-validated and
+/// merely fails), but a WRITE faults -- and there is such a write: the loading-portrait teardown
+/// nulls `table[slot]` to spare a renderer from the native delete.
+///
+/// Adding the offset here keeps the refusal a refusal all the way to the caller.
+pub fn game_data_addr_offset(
+    base: usize,
+    rva: usize,
+    what: &'static str,
+    byte_offset: usize,
+) -> usize {
+    match game_data_addr(base, rva, what) {
+        ZERO => ZERO,
+        address => address + byte_offset,
+    }
+}
+
+/// Read a pointer-sized game global by RVA: resolve the address for the running build, then read
+/// it fault-tolerantly. `0` for a refusal, an unmapped address, or a genuinely null global.
+///
+/// # Why this exists as one call
+///
+/// The two halves are useless apart and were repeatedly written apart. Resolving without a safe
+/// read turns a REFUSAL into a crash, because [`game_data_addr`] answers 0 and `*(0 as *const _)`
+/// faults. Safe-reading without resolving is worse and quieter: every `.data` global moved between
+/// 1.16.2 and 1.17, so the read SUCCEEDS and returns whatever now occupies the old slot.
+///
+/// This is a SAFE function on purpose. It dereferences nothing the caller can get wrong: the
+/// address is resolved here and the read is kernel-validated, so there is no precondition to
+/// state and no `unsafe` block for a caller to write around it. Marking it `unsafe` would only
+/// add ceremony at every site and make the safe form look like the risky one.
+pub fn read_global_ptr(base: usize, rva: usize, what: &'static str) -> usize {
+    unsafe { safe_read_usize(game_data_addr(base, rva, what)) }.unwrap_or(ZERO)
+}
+
+/// [`read_global_ptr`] for a byte-sized global. `0` for a refusal or an unreadable address.
+pub fn read_global_u8(base: usize, rva: usize, what: &'static str) -> u8 {
+    unsafe { safe_read_u8(game_data_addr(base, rva, what)) }.unwrap_or(ZERO as u8)
+}
+
+/// Store a byte into a game global by RVA. Returns whether the store happened.
+///
+/// A store is the one access that must never go through unresolved. Reading a moved global returns
+/// nonsense the caller can at least notice; writing one corrupts whatever now lives there, and
+/// writing a REFUSAL (address 0) crashes outright. Measured 2026-08-29: the title's zero-input
+/// menu-accept byte moved +0x4080 on 1.17 and its raw store landed on a neighbouring byte, logging
+/// success while the title menu never opened.
+///
+/// # Safety
+///
+/// `rva` must name a byte-sized game global. The store itself is guarded: nothing is written when
+/// the address cannot be resolved for the running build.
+pub unsafe fn write_global_u8(base: usize, rva: usize, what: &'static str, value: u8) -> bool {
+    let at = game_data_addr(base, rva, what);
+    if at == ZERO {
+        return false;
+    }
+    unsafe { *(at as *mut u8) = value };
+    true
 }
 
 /// Cheap heap-pointer sanity check: above the low 64 KiB reserve and 8-byte aligned.

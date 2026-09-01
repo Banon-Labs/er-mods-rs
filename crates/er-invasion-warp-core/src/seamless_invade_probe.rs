@@ -129,8 +129,13 @@ mod native {
     /// Game task thread.
     #[must_use]
     pub unsafe fn read_invade_destination(base: usize) -> Option<InvadeDestination> {
-        let game_man =
-            unsafe { er_game_base::mem::safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }?;
+        let game_man = unsafe {
+            er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                GAME_MAN_SINGLETON_RVA,
+                "GAME_MAN_SINGLETON_RVA",
+            ))
+        }?;
         if game_man == 0 {
             return None;
         }

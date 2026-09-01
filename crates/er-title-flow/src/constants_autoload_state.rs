@@ -1,3 +1,15 @@
+
+/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function.
+///
+/// The title flow's calls were hand-built `base + rva` function pointers. On ELDEN RING 1.17 that
+/// transfers control into whatever now occupies the 1.16.2 address, with nothing to refuse it --
+/// and a MAPPED constant is no safer that way, because the map knows the new address and
+/// `base + rva` never asks it. `CS::CSFadeImp`-adjacent title code is exactly where the 1.17 boot
+/// fault lives, so refusing here is worth a dead title feature.
+#[cfg(windows)]
+pub(crate) fn title_fn(rva: usize, what: &'static str) -> Option<usize> {
+    er_game_base::mem::game_rva_named(rva as u32, what).ok()
+}
 // ---------------------------------------------------------------------------
 // NATIVE-LOAD gate (observe-only own_stepper; corrected-autoload-design-observe-not-force-native-load-2026).
 // A SEPARATE gate from own_stepper: when enabled, the idx10 handler does NOT force the title
@@ -100,8 +112,9 @@ pub const IODEV_GETTER_RVA: usize = 0xe6e060;
 /// io20, in the SAME game-task invocation (tightest race vs the worker drain):
 ///   1. SAVE_DIR_BUILDER 0x140e0e680(rcx=&wrapper): self-fetches the userdata folder
 ///      (SHGetFolderPathW CSIDL 0x1a) + Steam id (0x140e8d550) and formats `%s/EldenRing/%s/`
-///      (fmt @0x142bda858) into the wrapper. Guarded by the Steam interface pointer
-///      *0x143b48ff0 being non-null (else it would deref null).
+///      (fmt @0x142bda858) into the wrapper. The id path runs 0x140e8d550 -> 0x140e8d510, which
+///      CALLS through the qword at 0x143b48ff0 (STEAM_ID_ACCESSOR_CALL_SLOT_RVA) before reading
+///      the id, so that slot must be non-null or the call chain executes `CALL 0`.
 ///   2. SAVE_DIR_SETTER 0x14240a2a0(rcx=io20 path-DB, edx=slot=0, r8=raw char16_t*): stores
 ///      the directory into the path database (via 0x14240dce0 -> entry+0xb0, which COPIES
 ///      our buffer) -- exactly what the opcode-0x17/0x18 handler does. r8 is the RAW data
@@ -116,9 +129,34 @@ pub const SAVE_DIR_ALLOC_GETTER_RVA: usize = 0x1eba960;
 /// entry (find-or-create; idempotent post-setter). The setter writes the directory into
 /// `entry+0xb0`. Used for the post-setter readback.
 pub const SAVE_DIR_SLOT_LOOKUP_RVA: usize = 0x240c270;
-/// Steam-interface guard pointer (abs 0x143b48ff0): SAVE_DIR_BUILDER derefs the Steam
-/// interface to read the account id; if this is null the builder must be skipped.
-pub const STEAM_INTERFACE_GUARD_RVA: usize = 0x3b48ff0;
+/// The indirect-CALL slot inside the SteamID64 accessor (abs 0x143b48ff0). Renamed from
+/// `STEAM_INTERFACE_GUARD_RVA` on 2026-08-31; the old name said "Steam interface pointer the
+/// save-dir builder dereferences" and every clause of that was wrong, which mattered because
+/// there IS a real Steam interface in this same call chain (`SteamInternal_ContextInit(&
+/// s_GetSteamUser_CallbackCounterAndContext)` inside `STEAM_ID64_GETTER_RVA`) and the old name
+/// invited a future reader to treat this qword as that object and dereference it.
+///
+/// What it actually is, from the 1.16.2 dump. `getXrefsTo 0x143b48ff0` returns EXACTLY ONE
+/// reference in the whole image -- a READ at 0x140e8d52a -- and the instruction after it is
+/// `CALL RAX`:
+///
+///   0x140e8d510  PUSH RBX / SUB RSP,0x30 / LEA RCX,[RSP+0x40] / CALL 0x140e8ab40  (scope enter)
+///   0x140e8d52a  MOV RAX, qword ptr [0x143b48ff0]
+///   0x140e8d531  CALL RAX
+///                CALL 0x140e8d590   <- STEAM_ID64_GETTER_RVA, the real Steam interface path
+///                CALL 0x140e8abe0   (scope exit)
+///
+/// So it is a code pointer that is CALLED, not an object that is dereferenced, and its reader is
+/// `0x140e8d510`, not SAVE_DIR_BUILDER -- the builder reaches it two frames down, via
+/// `0x140e8d550` ("%I64d"-format the id into a `DLString<wchar_t>`). Its stored value is a
+/// five-byte `E9 rel32` thunk sitting 0xb0 past its reader's own entry (0x140e8d5c0 in 1.16.2,
+/// 0x140e8f3c0 in 1.17), jumping into Arxan rubble, and no code Ghidra found ever WRITES the
+/// slot.
+///
+/// The null check the two callers below perform is still exactly right, and now says what it
+/// means: a null here would make `0x140e8d510` execute `CALL 0`, so SAVE_DIR_BUILDER must not be
+/// called until the slot is populated.
+pub const STEAM_ID_ACCESSOR_CALL_SLOT_RVA: usize = 0x3b48ff0;
 /// Active SteamID64 getter (0x140e8d590): returns the current signed-in Steam account's full
 /// SteamID64 as a `u64`. Static-grounded from the SAVE_DIR_BUILDER chain; used to normalize staged
 /// foreign save bytes before native deserialize stores them in GameDataMan/ProfileSummary.
@@ -178,11 +216,47 @@ pub const INPUTMGR_PENDING_13C_OFFSET: usize = 0x13c;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const RENDER_PROBE_INTERVAL: usize = 120;
 /// Splash-skip static patch (ports chozandrias76/er-skip-splash-screens to 1.16.1):
-/// inside STEP_BeginLogo 0x140b0c2a0, the branch `cmp [rdi+0xb8],0; je 0x140b0c3b2`
-/// at RVA 0xb0c35d plays the logo when the byte is 0; flipping je(0x74)->jg(0x7f)
-/// falls through to the SetState(state 3) advance instead, skipping the logo via
-/// the game's own flow. Applied early (DLL attach) before the title runs state 2.
-pub const SPLASH_SKIP_RVA: usize = 0xb0c35d;
+/// inside `STEP_BeginLogo`, the branch `cmp [rdi+0xb8],0; je ...` plays the logo when the byte is
+/// 0; flipping je(0x74)->jg(0x7f) falls through to the SetState(state 3) advance instead, skipping
+/// the logo via the game's own flow. Applied early (DLL attach) before the title runs state 2.
+///
+/// # Why this is a function plus an offset and not one address
+///
+/// It used to be the single mid-function RVA `0xb0c35d`, and that address is UNMAPPABLE: the 1.17
+/// address gate is keyed on `.pdata` function starts, and a byte in the middle of a function is not
+/// one, so the selector in `scripts/select-needed-1170-rows.py` never saw it and the patch went out
+/// ungated. On 1.17 `0xb0c35d` holds `0x4a` -- the first displacement byte of a `lea` -- and writing
+/// `0x7f` there would have corrupted an unrelated instruction. Nothing was corrupted only because
+/// `apply_splash_skip` checks the opcode before it writes, and it logged
+/// `splash-skip: ABORT -- byte at 0x140b0c35d is 0x4a, expected 0x74` on 2026-08-29.
+///
+/// Naming the FUNCTION start makes the pair mappable, and the offset then rides along. The pair is
+/// corroborated three independent ways: the whole-image masked-signature map already carries
+/// `0xb0c2a0 -> 0xb0d940`; both functions are `0x294` bytes long in `.pdata`; and the byte at
+/// `+0xbd` is `0x74` in BOTH images behind the same `bf b8 00 00 00 00` prefix. The `+0x16a0` delta
+/// is the same one the `CS::TitleStep` vtable slots move by, so the whole region shifted together.
+pub const SPLASH_SKIP_FN_RVA: usize = 0xb0c2a0;
+/// Offset of the `je` within [`SPLASH_SKIP_FN_RVA`]. Same in 1.16.2 and 1.17.
+pub const SPLASH_SKIP_JE_OFFSET: usize = 0xbd;
+/// Address of the splash-skip `je`, for the running build, or `None` when this build has no
+/// verified `STEP_BeginLogo`.
+///
+/// Lives here, beside the constants, so the patcher and the telemetry oracle that reads the byte
+/// back can never disagree about which byte that is -- they used to compute `base + <mid-function
+/// RVA>` independently, which is two places to get the 1.17 move wrong instead of none.
+#[cfg(windows)]
+pub fn splash_skip_je_address() -> Option<usize> {
+    let base = er_game_base::mem::game_module_base().ok().filter(|&b| b != 0)?;
+    er_game_base::game_build::resolve_game_address(base + SPLASH_SKIP_FN_RVA, "SPLASH_SKIP_FN_RVA")
+        .map(|resolved| resolved + SPLASH_SKIP_JE_OFFSET)
+}
+
+/// Host builds have no game image to resolve against.
+#[cfg(not(windows))]
+pub fn splash_skip_je_address() -> Option<usize> {
+    None
+}
+
 pub const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub const SPLASH_PATCH_LEN: usize = 1;
@@ -520,15 +594,65 @@ pub static START_MENU_WINDOW_LATCH: Once = Once::new();
 /// guarded below. Address is deobf/live (dump AddCancelButton
 /// 0x140920d80 -> live 0x140920c90).
 pub const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
-/// Return address immediately after the first `AddCancelButton` in the Quit Game tab builder
-/// (live/deobf `FUN_140958910`). The first native row is Quit Game / return-to-title; the second
-/// native row is Return to Desktop and must not be cloned for quick-load.
-pub const SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA: usize = 0x958a20;
-/// Return address immediately after the second native `AddCancelButton` in the Quit Game tab builder
-/// (deobf `FUN_140958910`). Used to append exactly one third in-place-style row while preserving the
-/// native GameEnd GFx component.
-pub const SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA: usize = 0x958b37;
+/// The Quit Game tab builder, `FUN_140958910` -- the function whose two `AddCancelButton` calls
+/// the product clones its three rows from.
+///
+/// # Why the FUNCTION is the constant and the return addresses are offsets
+///
+/// Both row detections are RETURN ADDRESSES, captured off the live stack and compared against a
+/// 1.16.2 RVA. A return address is mid-function, so it can never appear in the 1.16.2 -> 1.17
+/// address map -- that map is keyed on `.pdata` function starts, which is what a masked signature
+/// can identify. `scripts/select-needed-1170-rows.py` could not see `0x958a20` at all, so on 1.17
+/// the two comparisons below simply never matched: no hook was refused, no address was resolved,
+/// nothing was logged, and the Load Character / Load Character from File / Load Build from URL
+/// rows were never cloned onto the tab. Silence, not a refusal.
+///
+/// Naming the containing function makes the pair mappable and lets the offsets ride along. Both
+/// are corroborated by `scripts/derive-callsite-1170.py`: the whole-image map carries
+/// `0x958910 -> 0x959ab0`, and at `+0x110` and `+0x227` BOTH images hold an `E8` whose callee is
+/// the mapped pair of `AddCancelButton` (`0x920c90 -> 0x921e30`). Same offsets, same callee, so
+/// the two calls are the same two calls.
+///
+/// Putting the return addresses themselves into a verdict table was the alternative, and it is
+/// the wrong one: `DETOURABLE_ENTRY_EVIDENCE` accepts `NEITHER-ENTRY`, so such a row would
+/// license a mid-function address as a DETOUR target and MinHook would write five bytes into the
+/// middle of a live function.
+pub const SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA: usize = 0x958910;
+/// Offset of the return after the FIRST `AddCancelButton` within the Quit Game tab builder. The
+/// first native row is Quit Game / return-to-title; the second is Return to Desktop and must not
+/// be cloned for quick-load. Same offset in 1.16.2 and 1.17.
+pub const SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_OFFSET: usize = 0x110;
+/// Offset of the return after the SECOND native `AddCancelButton`. Used to append exactly one
+/// third in-place-style row while preserving the native GameEnd GFx component. Same offset in
+/// 1.16.2 and 1.17.
+pub const SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_OFFSET: usize = 0x227;
 pub const SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES: usize = 0x20;
+
+/// The two Quit Game tab row return addresses as RVAs on the RUNNING build, or `None` when this
+/// build has no verified `FUN_140958910`.
+///
+/// One resolution for both, deliberately: they are two offsets into ONE function, so resolving
+/// twice would emit two refusal lines for one missing mapping and invite the two halves of the
+/// same fact to disagree.
+#[cfg(windows)]
+pub fn system_quit_row_return_rvas() -> Option<(usize, usize)> {
+    let first = er_game_base::game_build::resolve_call_site_rva(
+        SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA,
+        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_OFFSET,
+        "SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA (System>Quit row cloning)",
+    )?;
+    Some((
+        first,
+        first - SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_OFFSET
+            + SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_OFFSET,
+    ))
+}
+
+/// Host builds have no running game whose stack could carry these return addresses.
+#[cfg(not(windows))]
+pub fn system_quit_row_return_rvas() -> Option<(usize, usize)> {
+    None
+}
 /// Immediate byte in the Quit Game subdialog factory that selects the one-slot `GameEnd` GFX
 /// component (`movb $0xe, 0x20(%rsp)` in live/deobf `FUN_14093bba0`). For the duplicate-button
 /// proof, patch it to the multi-slot controls component index used by `FUN_140958d40`; the Quit
@@ -1356,8 +1480,48 @@ pub const GX_CMD_QUEUE_HIST_SLOTS: usize = 32;
 pub const GX_CMD_QUEUE_SELF_TAG: usize = 1 << 63;
 /// Deobf RVA band holding reserve_command_queue_slot and its 4 thin enqueue wrappers (dump
 /// 0x141aea930..0x141aeab60, shift +0x20); return addresses inside it are transport, not producers.
+///
+/// These two are 1.16.2 RVAs and are compared against LIVE stack frames, so on 1.17 they name the
+/// wrong bytes. Use [`gx_cmd_queue_wrapper_rva_band`] rather than the raw pair; it anchors both
+/// endpoints on [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`], which the address map does carry.
 pub const GX_CMD_QUEUE_WRAPPER_RVA_MIN: usize = 0x1aea900;
 pub const GX_CMD_QUEUE_WRAPPER_RVA_MAX: usize = 0x1aeaf60;
+/// Offsets of the band's endpoints from [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`] (0x1aeae60), which sits
+/// INSIDE the band and is a mapped function start.
+///
+/// # Why an anchored band is honest here and is not honest everywhere
+///
+/// A band spanning several functions only translates if those functions moved TOGETHER. This one
+/// does, and it was measured rather than assumed: all 12 mapped `.pdata` functions overlapping
+/// `0x1aea900..0x1aeaf60` move by exactly `+0x1e00` between 2.6.2.0 and 2.7.0.0, so the block is
+/// rigid and its width is preserved. Compare `0x7a3000..0x7a4000`, where seven different deltas
+/// occur across the band's functions -- that one cannot be anchored and is refused instead.
+pub const GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET: isize =
+    GX_CMD_QUEUE_WRAPPER_RVA_MIN as isize - GX_RESERVE_CMD_QUEUE_SLOT_RVA as isize;
+pub const GX_CMD_QUEUE_WRAPPER_BAND_END_OFFSET: isize =
+    GX_CMD_QUEUE_WRAPPER_RVA_MAX as isize - GX_RESERVE_CMD_QUEUE_SLOT_RVA as isize;
+
+/// The reserve/enqueue transport band as RVAs on the RUNNING build, or `None` when this build has
+/// no verified `reserve_command_queue_slot`.
+///
+/// A caller that gets `None` must NOT fall back to the raw 1.16.2 pair: with a stale band every
+/// transport frame reads as a producer, and the histogram then names the wrong function as the
+/// thing filling the command queue -- a wrong answer that looks exactly like a right one.
+#[cfg(windows)]
+pub fn gx_cmd_queue_wrapper_rva_band() -> Option<core::ops::Range<usize>> {
+    er_game_base::game_build::resolve_call_site_band(
+        GX_RESERVE_CMD_QUEUE_SLOT_RVA,
+        GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET,
+        GX_CMD_QUEUE_WRAPPER_BAND_END_OFFSET,
+        "GX_RESERVE_CMD_QUEUE_SLOT_RVA (cmd-queue producer attribution band)",
+    )
+}
+
+/// Host builds have no running game whose stack could hold a transport frame.
+#[cfg(not(windows))]
+pub fn gx_cmd_queue_wrapper_rva_band() -> Option<core::ops::Range<usize>> {
+    None
+}
 pub static GX_CMD_QUEUE_HIST_KEYS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
     [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
 pub static GX_CMD_QUEUE_HIST_COUNTS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =

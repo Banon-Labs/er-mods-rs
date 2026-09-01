@@ -47,7 +47,7 @@
 use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::{
-    mem::{game_module_base, safe_read_usize},
+    mem::{game_module_base, game_rva_named, safe_read_usize},
     rva::{GAME_DATA_MAN_GLOBAL_RVA, REPLANISH_ITEMS_FROM_CHEST_RVA, SHOULD_REPLENISH_ITEM_RVA},
 };
 
@@ -149,18 +149,54 @@ pub(crate) fn install(base: usize) {
     // it is not, so a standalone run behaves identically and no handler is ever dropped. Both
     // targets take integer arguments only, which is exactly what the union's four-`usize` ABI
     // models -- see the module header for why the `MenuWindow::Update` prologue could not be.
+    //
+    // DTOR FIRST, CTOR SECOND, AND THE ORDER IS LOAD-BEARING (2026-08-31).
+    //
+    // `register_shared_hook` ENABLES immediately -- it is not MinHook's deferred queue -- so the
+    // first successful registration in this loop is live the instant it returns. The pair is only
+    // safe as a pair: the ctor latches `LIVE_DEPOSITORY_DIALOG` and the dtor is the sole code that
+    // clears it. Registered ctor-first, a refused dtor address (which is exactly what 1.17 hands
+    // back for an RVA with no verified mapping) left the ctor detour ARMED with no way to unlatch,
+    // and the `Err` arm's `return` did not undo it -- `er_hook` has no unregister. The caller then
+    // registers the `FrameBegin` task REGARDLESS of this function returning early, so `tick()` went
+    // on calling `live_depository_dialog()` every frame and reading through a freed
+    // `DepositoryDialog*` for the rest of the session. Only the vftable sanity read in
+    // `live_depository_dialog` stood between that and acting on a dead object.
+    //
+    // With the dtor first the partial states are both inert: a refused dtor means the ctor is never
+    // registered, so nothing ever latches; a refused ctor leaves the dtor live but harmless,
+    // because its `== a` test can never match the 0 the latch keeps. Same class as
+    // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`, reached through the
+    // immediate-enable registrar instead of through `MH_ApplyQueued`.
     for (name, target, handler, slot) in [
+        (
+            // RAW `base + rva`, NOT `game_data_addr` -- matching the ctor row below.
+            //
+            // `register_shared_hook` takes its target UNRESOLVED, deliberately, and resolves it
+            // exactly once in whichever image will own the detour (`er-hook/src/lib.rs`, the
+            // comment beginning "UNRESOLVED, deliberately"). This row used to hand it
+            // `game_data_addr(base, DEPOSITORY_DIALOG_DTOR_RVA, ..)`, which IS
+            // `resolve_game_address(base + rva).unwrap_or(0)` -- so the address was translated
+            // 1.16.2 -> 1.17 here and then handed to a registrar that translates it AGAIN. The
+            // second translation looks up a 1.17 address in a table keyed by 1.16.2 addresses:
+            // it either refuses (the feature silently never installs) or, where a 1.17 address
+            // happens to collide with a 1.16.2 key, lands on an unrelated function. Its own
+            // sibling one row down always passed raw, so the two rows disagreed about the
+            // contract of the API they both call.
+            //
+            // `scripts/check-double-resolved-hook-targets.py` is the gate for this class and did
+            // NOT catch it: its taint follows `let` bindings, and this target is an element of an
+            // array literal destructured by the `for` pattern, never bound to a local.
+            "DepositoryDialog::dtor",
+            base + DEPOSITORY_DIALOG_DTOR_RVA,
+            depository_dtor_union as er_hook::UnionFn,
+            &ORIG_DEPOSITORY_DTOR,
+        ),
         (
             "DepositoryDialog::ctor",
             base + DEPOSITORY_DIALOG_CTOR_RVA,
             depository_ctor_union as er_hook::UnionFn,
             &ORIG_DEPOSITORY_CTOR,
-        ),
-        (
-            "DepositoryDialog::dtor",
-            base + DEPOSITORY_DIALOG_DTOR_RVA,
-            depository_dtor_union as er_hook::UnionFn,
-            &ORIG_DEPOSITORY_DTOR,
         ),
     ] {
         match unsafe { register_shared_hook(target, handler, slot) } {
@@ -188,8 +224,16 @@ pub(crate) fn install(base: usize) {
     refill_log(format_args!(
         "install: gate = DepositoryDialog lifetime (ctor @0x{:x}, dtor @0x{:x}); \
          gamepad_hotkey={} hotkey={} refill_immediately={} config={}",
-        base + DEPOSITORY_DIALOG_CTOR_RVA,
-        base + DEPOSITORY_DIALOG_DTOR_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            DEPOSITORY_DIALOG_CTOR_RVA,
+            "DEPOSITORY_DIALOG_CTOR_RVA"
+        ),
+        er_game_base::mem::game_data_addr(
+            base,
+            DEPOSITORY_DIALOG_DTOR_RVA,
+            "DEPOSITORY_DIALOG_DTOR_RVA"
+        ),
         pad_chord_name(config.pad()),
         config
             .keyboard()
@@ -245,7 +289,13 @@ fn live_depository_dialog(base: usize) -> Option<*mut core::ffi::c_void> {
         return None;
     }
     let vfptr = unsafe { safe_read_usize(dialog) }?;
-    (vfptr == base + DEPOSITORY_DIALOG_VFTABLE_RVA).then_some(dialog as *mut core::ffi::c_void)
+    (vfptr
+        == er_game_base::mem::game_data_addr(
+            base,
+            DEPOSITORY_DIALOG_VFTABLE_RVA,
+            "DEPOSITORY_DIALOG_VFTABLE_RVA",
+        ))
+    .then_some(dialog as *mut core::ffi::c_void)
 }
 
 /// One `FrameBegin` tick. Returns immediately unless the storage box is open.
@@ -415,7 +465,13 @@ const fn keyboard_edge(_chord: er_hotkey_config::keys::Chord, _was_down: &mut bo
 
 /// `GameDataMan -> mainPlayerGameData -> equipGameData.itemReplenishStateTracker`.
 unsafe fn resolve_tracker(base: usize) -> Option<usize> {
-    let game_data_man = unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }?;
+    let game_data_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }?;
     let player =
         unsafe { safe_read_usize(game_data_man + GAME_DATA_MAN_MAIN_PLAYER_GAME_DATA_OFFSET) }?;
     unsafe { safe_read_usize(player + PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET) }
@@ -492,9 +548,24 @@ unsafe fn run_cycle(
         return;
     }
 
+    // Through the 1.17 gate, not `base + rva`: the map knowing where a function went is no help
+    // if the call never asks it. A refusal here costs the press; calling the 1.16.2 address on a
+    // build that moved the function costs the process.
+    let (Ok(should_replenish_addr), Ok(set_state_addr)) = (
+        game_rva_named(
+            SHOULD_REPLENISH_ITEM_RVA as u32,
+            "SHOULD_REPLENISH_ITEM_RVA",
+        ),
+        game_rva_named(SET_STATE_RVA as u32, "SET_STATE_RVA"),
+    ) else {
+        refill_log(format_args!(
+            "{source}: press ignored: ShouldReplenishItem/SetState have no verified address for this build"
+        ));
+        return;
+    };
     let should_replenish: ShouldReplenishItemFn =
-        unsafe { std::mem::transmute(base + SHOULD_REPLENISH_ITEM_RVA) };
-    let set_state: SetStateFn = unsafe { std::mem::transmute(base + SET_STATE_RVA) };
+        unsafe { std::mem::transmute(should_replenish_addr) };
+    let set_state: SetStateFn = unsafe { std::mem::transmute(set_state_addr) };
 
     // Ask the game, rather than reading entries: `ShouldReplenishItem` applies the per-type
     // defaults for an item that has no entry at all (type 2 defaults ON, type 1 OFF), so it is the
@@ -561,24 +632,44 @@ unsafe fn run_cycle(
     // Marking alone moves nothing: the transfer is `ReplanishItemsFromChest`, which vanilla runs
     // at a grace or after a load.
     if refill_immediately && target && outcome.wrote_anything() {
-        let replenish: ReplanishItemsFromChestFn =
-            unsafe { std::mem::transmute(base + REPLANISH_ITEMS_FROM_CHEST_RVA) };
-        unsafe { replenish() };
-        refill_log(format_args!(
-            "{source}: cycle#{cycles} ran ReplanishItemsFromChest"
-        ));
+        match game_rva_named(
+            REPLANISH_ITEMS_FROM_CHEST_RVA as u32,
+            "REPLANISH_ITEMS_FROM_CHEST_RVA",
+        ) {
+            Ok(address) => {
+                let replenish: ReplanishItemsFromChestFn = unsafe { std::mem::transmute(address) };
+                unsafe { replenish() };
+                refill_log(format_args!(
+                    "{source}: cycle#{cycles} ran ReplanishItemsFromChest"
+                ));
+            }
+            Err(why) => refill_log(format_args!(
+                "{source}: cycle#{cycles} could not run ReplanishItemsFromChest -- {why}"
+            )),
+        }
     }
 
     // Repaint. The rows were built BEFORE the write, so without this they keep showing the old
     // icons and the whole feature reads as inert -- which is exactly how it presented the first
     // time it was tested live. Vanilla calls the same function after its own single-item toggle,
     // so any cursor movement this causes is the game's own behaviour rather than something new.
-    let refresh: DepositoryRefreshFn =
-        unsafe { std::mem::transmute(base + DEPOSITORY_DIALOG_REFRESH_RVA) };
-    unsafe { refresh(dialog, 1) };
-    refill_log(format_args!(
-        "{source}: cycle#{cycles} rebuilt the storage list"
-    ));
+    match game_rva_named(
+        DEPOSITORY_DIALOG_REFRESH_RVA as u32,
+        "DEPOSITORY_DIALOG_REFRESH_RVA",
+    ) {
+        Ok(address) => {
+            let refresh: DepositoryRefreshFn = unsafe { std::mem::transmute(address) };
+            unsafe { refresh(dialog, 1) };
+            refill_log(format_args!(
+                "{source}: cycle#{cycles} rebuilt the storage list"
+            ));
+        }
+        // Without the repaint the rows keep showing the old icons and the feature reads as inert,
+        // so say so rather than leaving the user to conclude the press did nothing.
+        Err(why) => refill_log(format_args!(
+            "{source}: cycle#{cycles} wrote the flags but could not rebuild the storage list -- {why}"
+        )),
+    }
 }
 
 /// Read `tracker->count`.
@@ -608,16 +699,15 @@ unsafe fn flip_existing_entry(tracker: usize, item_id: i32, state: bool) -> bool
 
 /// Wait for the game module, then install. Called once from `DllMain`.
 /// Wait for the task scheduler. Only ever called from the spawned thread, never the loader lock.
-fn wait_for_task_instance() -> &'static eldenring::cs::CSTaskImp {
+fn wait_for_task_instance() -> Option<&'static eldenring::cs::CSTaskImp> {
     // `instance()` comes from this trait, not from the type.
     use fromsoftware_shared::FromStatic;
 
-    loop {
-        match unsafe { eldenring::cs::CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(_) => std::thread::yield_now(),
-        }
-    }
+    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
+    // three minutes while these threads burned 19,000 each, half of it system time. See
+    // er_game_base::wait for the measurement.
+    er_game_base::wait::poll_until(|| unsafe { eldenring::cs::CSTaskImp::instance() }.ok())
 }
 
 pub(crate) fn spawn(_module_base: usize) {
@@ -629,27 +719,34 @@ pub(crate) fn spawn(_module_base: usize) {
         .name("er-refill-all".to_owned())
         .spawn(move || {
             let mut attempts = 0u64;
-            loop {
-                match game_module_base() {
-                    Ok(base) => {
-                        install(base);
-                        break;
+            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
+            let found = er_game_base::wait::poll_until(|| match game_module_base() {
+                Ok(base) => Some(base),
+                Err(err) => {
+                    if attempts == 0 || attempts.is_multiple_of(4096) {
+                        refill_log(format_args!("install: waiting for game module base: {err}"));
                     }
-                    Err(err) => {
-                        if attempts == 0 || attempts.is_multiple_of(4096) {
-                            refill_log(format_args!(
-                                "install: waiting for game module base: {err}"
-                            ));
-                        }
-                        attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
-                    }
+                    attempts = attempts.saturating_add(1);
+                    None
                 }
-            }
+            });
+            let Some(base) = found else {
+                refill_log(format_args!(
+                    "install: no game module base; nothing installed"
+                ));
+                return;
+            };
+            install(base);
             // Per-frame work is a game task, not a hook: it owns no prologue and so can contend
             // with nothing, and FrameBegin is a thread where `GetAsyncKeyState` actually reports
             // the user's keys under Wine/Proton.
-            let task = wait_for_task_instance();
+            let Some(task) = wait_for_task_instance() else {
+                refill_log(format_args!(
+                    "install: CSTaskImp never appeared; this shell stays inert rather than spinning"
+                ));
+                return;
+            };
             refill_log(format_args!("install: registering FrameBegin tick"));
             task.run_recurring(
                 move |_data: &FD4TaskData| tick(),

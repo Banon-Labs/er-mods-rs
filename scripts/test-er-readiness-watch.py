@@ -424,7 +424,6 @@ def main() -> int:
         "oracle_own_load_wbr_max_phase": "0x2",
         "oracle_own_load_stream_io_inflight": "0x0",
         "oracle_own_load_stream_mms_state": 3,
-        "oracle_own_m28_dispatch_fired": 0,
         "oracle_player_present": False,
         "oracle_now_loading": 0,
     }
@@ -459,7 +458,11 @@ def main() -> int:
         dict(stalled_state),
         {**stalled_state, "oracle_own_load_stream_io_inflight": "0x4"},          # IO dispatched
         {**stalled_state, "oracle_own_load_stream_io_inflight": "0x4", "oracle_own_load_wbr_max_phase": "0x3"},
-        {**stalled_state, "oracle_own_m28_dispatch_fired": 1, "oracle_own_load_wbr_max_phase": "0x4"},
+        # mms_state advancing past its stalled 3 -- this step used to assert progress via
+        # `oracle_own_m28_dispatch_fired` going 0 -> 1, a transition that could never happen at
+        # runtime because the counter had no write site. A test whose "working" case is impossible
+        # proves nothing about a working stream. (2026-08-31 counter census.)
+        {**stalled_state, "oracle_own_load_stream_mms_state": 4, "oracle_own_load_wbr_max_phase": "0x4"},
         {**stalled_state, "oracle_player_present": True},                          # terminal progress
     ]
     # Even with a long tail of no-further-progress polls, the run advanced within the window each

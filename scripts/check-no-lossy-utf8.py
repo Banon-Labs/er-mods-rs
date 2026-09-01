@@ -6,19 +6,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-IGNORED_DIRECTORIES = {".git", ".worktrees", "target", "third_party"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import REPO_ROOT, rust_source_files  # noqa: E402
+
 LOSSY_CALL = "String::from_utf8_lossy"
 JUSTIFICATION_MARKER = "UTF-8 Lossy:"
-
-
-def rust_source_files() -> list[Path]:
-    paths: list[Path] = []
-    for path in REPO_ROOT.rglob("*.rs"):
-        if any(part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
-            continue
-        paths.append(path)
-    return sorted(paths)
 
 
 def has_explicit_justification(lines: list[str], index: int) -> bool:

@@ -109,10 +109,8 @@ pub unsafe extern "system" fn DllMain(
         START.call_once(|| {
             install_crash_logger(module_base);
             install_standalone_host();
-            let dir = log_dir();
             append_named_log(
-                &dir,
-                LOG_FILE_NAME,
+                &log_path(),
                 format_args!(
                     "loaded module_base=0x{module_base:x}; standalone portrait+stats shell; wine={}",
                     is_wine()
@@ -144,28 +142,51 @@ pub extern "C" fn er_loading_portrait_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
-fn log_dir() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+/// This run's copy of the shell log: the launcher's redirect, else `LOG_FILE_NAME` beside
+/// `eldenring.exe`.
+///
+/// Both of this shell's files used to resolve against the process CWD, which no launcher could
+/// move -- so every launch rotated the run before it to `.prev` and the launch after that
+/// destroyed it, and `run-portrait-dll-standalone-smoke.sh` additionally `rm -f`'d the live file
+/// pre-launch, which takes the `.prev` with it (two prior runs at once, neither the deleting
+/// run's). The redirect and its game-directory fallback live in `er_game_base::log`, shared with
+/// every other per-run artifact so a run's evidence has ONE convention for where it goes; the
+/// fallback is the GAME directory rather than the CWD because me3 sets the process CWD to
+/// arbitrary directories, which would scatter a run's evidence away from the rest of it.
+fn log_path() -> PathBuf {
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_LOADING_PORTRAIT_PATH", LOG_FILE_NAME)
+}
+
+/// Same for the crash log, which gets its OWN knob rather than following the run log's: the smoke
+/// reads the two files for different verdicts -- the run log for attach/Present, the crash log for
+/// "did anything fault" -- and one knob for both would silently leave whichever file the launcher
+/// did not name in the single-slot game directory.
+#[cfg(windows)]
+fn crash_log_path() -> PathBuf {
+    er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH",
+        CRASH_LOG_FILE_NAME,
+    )
 }
 
 fn append_dll_log(args: std::fmt::Arguments<'_>) {
-    append_named_log(&log_dir(), LOG_FILE_NAME, args);
+    append_named_log(&log_path(), args);
 }
 
 #[cfg(windows)]
 fn append_compositor_log(args: std::fmt::Arguments<'_>) {
-    append_named_log(&log_dir(), LOG_FILE_NAME, args);
+    append_named_log(&log_path(), args);
 }
 
-/// Fresh per process, per file: the first line a run writes to `name` truncates it (rotating
+/// Fresh per process, per file: the first line a run writes to `path` truncates it (rotating
 /// the previous run's aside as `<name>.prev`), later lines append. The one-shot is keyed by
 /// PATH, so the run log and the crash log each get their own clean start.
-fn append_named_log(dir: &std::path::Path, name: &str, args: std::fmt::Arguments<'_>) {
+fn append_named_log(path: &std::path::Path, args: std::fmt::Arguments<'_>) {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    er_game_base::log::append_line(&dir.join(name), format_args!("[{now_ms}] {args}"));
+    er_game_base::log::append_line(path, format_args!("[{now_ms}] {args}"));
 }
 
 #[cfg(windows)]
@@ -288,8 +309,7 @@ fn install_crash_logger(module_base: usize) {
     SELF_MODULE_BASE.store(module_base, Ordering::SeqCst);
     CRASH_LOGGER_INSTALLED.call_once(|| {
         append_named_log(
-            &log_dir(),
-            CRASH_LOG_FILE_NAME,
+            &crash_log_path(),
             format_args!("crash logger installed module_base=0x{module_base:x}"),
         );
         unsafe { AddVectoredExceptionHandler(VECTORED_FIRST_HANDLER, crash_vectored_handler) };
@@ -331,8 +351,7 @@ unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin
         bt.push_str(&address_tag(*frame as usize));
     }
     append_named_log(
-        &log_dir(),
-        CRASH_LOG_FILE_NAME,
+        &crash_log_path(),
         format_args!(
             "access-violation exception_addr={} rip={} access={} fault_addr={} rsp={} captured_bt=[{}]",
             address_tag(exception_addr),
@@ -374,8 +393,7 @@ unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin
             }
         }
         append_named_log(
-            &log_dir(),
-            CRASH_LOG_FILE_NAME,
+            &crash_log_path(),
             format_args!("stack-exec detail: bytes@rip-0x10=[{hex}] stack_scan=[{scan}]"),
         );
     }

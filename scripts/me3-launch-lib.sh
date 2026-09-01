@@ -1,4 +1,9 @@
 # shellcheck shell=bash
+# er-artifact-redirect: library
+# This file RUNS the me3 command on a caller's behalf; it has no run of its own and no
+# artifact dir. The ER_QUICKLOAD_*_PATH redirects that keep a run's evidence out of the
+# single-slot game directory belong to each CALLER, which `scripts/er-artifact-redirect-audit.py`
+# audits individually. Do not add a redirect list here -- it would silently override theirs.
 # Shared me3 launch helpers. me3 is the ONLY supported loader for er_quickload.dll:
 # the LazyLoader dinput8 proxy + lazyLoad.ini chainload delivery was removed 2026-07-04
 # (branch feat/me3-launch-smoketest) after the me3 production smoke passed end-to-end

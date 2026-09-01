@@ -62,7 +62,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         "own-load: sliced slot {want_slot} body len=0x{:x} (expected 0x{:x}) -> install+arm gate, call native parser 0x{:x}",
         leaked.len(),
         er_save_loader::bnd4::SLOT_BODY_LEN,
-        base + DESERIALIZE_SLOT_RVA
+        er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
     // (2) Install the gated 0x67b100 detour (harmless pass-through until armed).
     if !install_own_load_hook() {
@@ -76,8 +76,14 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     // (3) Set the gate, call native 0x67b290(slot) in-process, clear the gate. 0x67b290 does NOT
     // re-check b80 after the read (static-confirmed), so our al=1 + body flow into the native parse.
     OWN_LOAD_GATE.store(true, Ordering::SeqCst);
-    let parser: unsafe extern "system" fn(i32) -> i32 =
-        unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+    let parser: unsafe extern "system" fn(i32) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let pret = unsafe { parser(want_slot) };
     OWN_LOAD_GATE.store(false, Ordering::SeqCst);
     let fed = OWN_LOAD_FED_BYTES.load(Ordering::SeqCst);
@@ -92,7 +98,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     }
     append_autoload_debug(format_args!(
         "own-load: VERIFY parser 0x{:x}(slot={want_slot}) ret={pret} fed_bytes=0x{fed:x} c30 0x{c30_before:x}->0x{c30:x} c30_real={c30_real} ac0={ac0} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) presses=0 (NO SetState5/NO save write)",
-        base + DESERIALIZE_SLOT_RVA
+        er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
     unsafe { dump_load_correctness(base, n) };
     // OWNER DIAGNOSTIC (er-effects-rs-mr2, save-safe pure reads): the prior continue crash used the
@@ -112,12 +118,27 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
                 .unwrap_or(0)
         }
     };
+    // RESOLVED, through the INDEXED form. `GAME_DATA_MAN_GLOBAL_RVA` moved +0x4060 on 1.17
+    // (0x3d5df38 -> 0x3d61f98), so the raw read succeeded and handed back whatever now sits at the
+    // old address + 8, which became the recipe owner. `game_data_addr_offset` keeps a refusal a
+    // refusal: plain `+ FULLREAD_OWNER_GDM_08` would turn 0 into the address 8.
     let recipe_owner = unsafe {
-        safe_read_usize(base + CONTINUE_MANAGER_GLOBAL_RVA + FULLREAD_OWNER_GDM_08_OFFSET)
+        safe_read_usize(er_game_base::mem::game_data_addr_offset(
+            base,
+            CONTINUE_MANAGER_GLOBAL_RVA,
+            "CONTINUE_MANAGER_GLOBAL_RVA",
+            FULLREAD_OWNER_GDM_08_OFFSET,
+        ))
     }
     .unwrap_or(null);
-    let manager_vtable =
-        unsafe { safe_read_usize(base + CONTINUE_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+    let manager_vtable = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CONTINUE_MANAGER_GLOBAL_RVA,
+            "CONTINUE_MANAGER_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(null);
     let game_data_man = game_data_man_ptr_or_null();
     let gdm8 = if game_data_man == null {
         null
@@ -232,11 +253,17 @@ pub(crate) unsafe fn own_load_continue_fire(
     let shim = &raw mut OWN_STEPPER_SHIM;
     unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = title_owner };
     let shim_ptr = shim as usize;
-    let confirm: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+    let confirm: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     append_autoload_debug(format_args!(
         "own-load-continue: *** GUARD PASS -- COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} title_owner=0x{title_owner:x}) c30=0x{c30:x} level={fp_level} title_owner+0x284=0 -- continue_confirm fires SetState5 internally (AUTOSAVES) presses=0 ***",
-        base + CONTINUE_CONFIRM_RVA
+        er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA")
     ));
     timeline_event(
         "T_own_load_continue",
@@ -331,14 +358,23 @@ unsafe fn own_load_install_job_fire(
     append_autoload_debug(format_args!(
         "own-load-install-job: BEFORE slot=owner+0x130=0x{slot_addr:x} job=0x{b_job:x} vt=0x{b_vt:x} (expect IfElseJob dump 0x{:x}) +0x68_built={b_built} +0x70_seq=0x{b_seq:x} +0x10_idx=0x{b_idx:x} -- BUILD 0x{:x}(out,ctx=0,slot={want_slot},owner_ctx=0) presses=0",
         MENUJOB_IFELSE_VTABLE_DUMP_VA,
-        base + LOADGAME_JOB_BUILD_RVA,
+        er_game_base::mem::game_data_addr(base, LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA"),
     ));
     // (a) BUILD the LoadGame MenuJobWithContext into a local DLRefCountPtr (the factory writes the job
     //     ptr into *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot, owner_ctx).
     // Justify the transmute: LOADGAME_JOB_BUILD_RVA is the prologue-grounded live entry of the menu-heap
     // LoadGame-job factory; the signature matches the static decompile of FUN_140826510.
-    let build: unsafe extern "system" fn(*mut usize, usize, i32, usize) -> *mut usize =
-        unsafe { std::mem::transmute(base + LOADGAME_JOB_BUILD_RVA) };
+    let build: unsafe extern "system" fn(*mut usize, usize, i32, usize) -> *mut usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                LOADGAME_JOB_BUILD_RVA,
+                "LOADGAME_JOB_BUILD_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let mut built_job: usize = 0;
     let build_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         build(&raw mut built_job, NO_CTX, want_slot, NO_CTX)
@@ -362,7 +398,7 @@ unsafe fn own_load_install_job_fire(
     append_autoload_debug(format_args!(
         "own-load-install-job: BUILD OK job=0x{built_job:x} vt=0x{built_vt:x} (expect LoadGame dump 0x{:x}) -- INSTALL via assign 0x{:x}(slot=0x{slot_addr:x}, src=&job)",
         MENUJOB_LOADGAME_VTABLE_DUMP_VA,
-        base + MENUJOB_ASSIGN_RVA,
+        er_game_base::mem::game_data_addr(base, MENUJOB_ASSIGN_RVA, "MENUJOB_ASSIGN_RVA"),
     ));
     // (b) APPEND our built job into the owner+0x130 MenuJobQueue via PushBackJob (NOT a slot-overwrite).
     //     owner+0x130 is a CS::MenuJobQueue (active job +0x130, ring +0x138, count +0x178). The prior
@@ -374,8 +410,14 @@ unsafe fn own_load_install_job_fire(
     // CS::MenuJobQueue::PushBackJob (FUN_1407a9254).
     let queue_count_before =
         unsafe { safe_read_i32(slot_addr + MENUJOB_QUEUE_COUNT_178_OFFSET) }.unwrap_or(-1);
-    let pushback: unsafe extern "system" fn(*mut usize, *mut usize) -> *mut usize =
-        unsafe { std::mem::transmute(base + MENUJOB_PUSHBACK_RVA) };
+    let pushback: unsafe extern "system" fn(*mut usize, *mut usize) -> *mut usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(MENUJOB_PUSHBACK_RVA, "MENUJOB_PUSHBACK_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let install_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         pushback(slot_addr as *mut usize, &raw mut built_job)
     }));
@@ -467,11 +509,22 @@ unsafe fn own_load_pump_fire(
     } else {
         0
     };
-    if dialog == 0 || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog == 0
+        || dialog_vt
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
+    {
         append_autoload_debug(format_args!(
             "own-load-pump: ABORT -- live TitleTopDialog not up (owner+0x{:x}=0x{dialog:x} vt=0x{dialog_vt:x} want 0x{:x}) -> no build (save-safe)",
             TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
-            base + TITLE_TOP_DIALOG_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA"
+            )
         ));
         return;
     }
@@ -494,7 +547,7 @@ unsafe fn own_load_pump_fire(
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "own-load-pump: BUILD 0x{:x}(out, ctx_parent=dialog+0x{:x}=0x{ctx_parent:x}, slot={want_slot}, owner_ctx=*(dialog+0x{:x})=0x{owner_ctx:x}) dialog=0x{dialog:x} -- CORRECTED dialog-derived ctx (golden Continue args) presses=0",
-        base + LOADGAME_JOB_BUILD_RVA,
+        er_game_base::mem::game_data_addr(base, LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA"),
         DIALOG_CTX_PARENT_50_OFFSET,
         DIALOG_OWNER_CTX_A38_OFFSET,
     ));
@@ -502,8 +555,17 @@ unsafe fn own_load_pump_fire(
     // *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot:i32, owner_ctx).
     // Justify the transmute: LOADGAME_JOB_BUILD_RVA is the prologue-grounded live entry of the menu-heap
     // LoadGame-job factory; the signature matches the static decompile of FUN_140826510.
-    let build: unsafe extern "system" fn(*mut usize, usize, i32, usize) -> *mut usize =
-        unsafe { std::mem::transmute(base + LOADGAME_JOB_BUILD_RVA) };
+    let build: unsafe extern "system" fn(*mut usize, usize, i32, usize) -> *mut usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                LOADGAME_JOB_BUILD_RVA,
+                "LOADGAME_JOB_BUILD_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let mut built_job: usize = 0;
     let build_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         build(&raw mut built_job, ctx_parent, want_slot, owner_ctx)
@@ -583,8 +645,14 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
     // Run(this /*rcx*/, result /*rdx*/, time /*r8*/, param4 /*r9*/) -> *MenuJobResult.
     // Justify the transmute: LOADGAME_JOB_RUN_RVA is the prologue-grounded live entry of the LoadGame
     // MenuJobWithContext::Run (vtable+0x10), signature per the static decompile of FUN_140826e40.
-    let run: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + LOADGAME_JOB_RUN_RVA) };
+    let run: unsafe extern "system" fn(usize, usize, usize, usize) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(LOADGAME_JOB_RUN_RVA, "LOADGAME_JOB_RUN_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let run_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         run(job, result_ptr, time_ptr, 0)
     }));

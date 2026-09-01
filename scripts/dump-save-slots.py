@@ -27,9 +27,16 @@ assert spec and spec.loader
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
 
+# The starting classes, indexed by PlayerGameData::archetype. This is the SECOND copy of the
+# list -- the product's is `STARTING_CLASSES` in crates/er-build-import-core/src/class.rs -- and
+# it was stuck at ten when 1.17 added archetypes 10 and 11, so a character of a new class printed
+# `class=10`. The copies can no longer drift apart silently: `scripts/check-starting-classes.py`
+# compares BOTH against the installed regulation.bin and the game's own GR_MenuText strings.
 ARCHETYPES = {
     0: "Vagabond", 1: "Warrior", 2: "Hero", 3: "Bandit", 4: "Astrologer", 5: "Prophet",
     6: "Confessor", 7: "Samurai", 8: "Prisoner", 9: "Wretch",
+    # 1.17 (2026-08-27): CharaInitParam 3010/3011, GR_MenuText 288110/288111.
+    10: "Idus Knight", 11: "Heavy Knight",
 }
 
 # --- Gaitem-map walk (--deep) -------------------------------------------------

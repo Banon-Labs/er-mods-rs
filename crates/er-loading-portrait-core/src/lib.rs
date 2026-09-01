@@ -46,6 +46,10 @@ pub mod bridge;
 pub use bridge::*;
 
 pub mod layout;
+/// Is the game's own loading screen still MAKING PROGRESS, or frozen? Pure predicate over the
+/// Gauge_3 samples `dlstring_lookat_math` already takes, used by the cover's composite-cap backstop.
+/// Un-gated so its regression tests run on the host.
+pub mod native_loading_progress;
 pub use layout::*;
 
 #[cfg(windows)]

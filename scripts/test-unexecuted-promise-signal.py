@@ -12,6 +12,17 @@ NEGATIVE side: the shapes that look like the defect and must stay silent.
 
 We drive the real signal against crafted transcript JSONL under a temporary HOME so its
 `~/.claude/projects/<cwd-key>/*.jsonl` discovery resolves to our fixture, then assert the tag.
+
+WHY `scripts/audit-selftest-vacuity.py` CALLS THIS FILE "ASSERTED", AND WHY THAT IS NOT A DEFECT.
+That tool blinds the `re` module of the process it runs and asks whether the selftest notices. The
+subject here is a SHELL script run as a SUBPROCESS, whose Python is a separate interpreter the
+blinding never reaches -- and this file resolves the signal through `Path(__file__).resolve()`, so
+the tool's shadow-root subject-stub path cannot reach it either. The verdict is structural, not a
+statement about these cases, and it is identical at every commit that has touched this file.
+The question it stands in for IS answered, and more sharply, by `scripts/prove-gate-positive-controls.py`:
+`--only cupcake-signal-tests` stubs the signal silent and always-firing and requires this suite to go
+red both ways, and `--only unexecuted-promise-openers` reverts each of the three fixes behind the
+2026-09-01 present-continuous failure ONE AT A TIME and requires the frozen case below to fail.
 """
 from __future__ import annotations
 
@@ -32,6 +43,14 @@ PROJECT_DIR = "/fake/project/er-quickload"
 
 # The verbatim turn-ending that prompted the guard (user report 2026-08-22).
 THE_INSTANCE = "I'll re-record the directive with the shell metacharacters escaped rather than leave it unsaved."
+
+# The verbatim turn-ending that walked THROUGH the guard (production failure 2026-09-01): OPENER_RE
+# had no bare present continuous, so the opener never matched and the other three facts were never
+# evaluated; no `gh pr close` ran and the PR stayed open until the user asked why. Frozen here as the
+# regression case -- it is the real failure, not a synthetic one.
+THE_PRESENT_CONTINUOUS_INSTANCE = (
+    "I'm closing it rather than pushing an empty merge commit to make an empty PR green"
+)
 
 
 def user(text: str) -> dict:
@@ -624,10 +643,224 @@ def main() -> int:
         "a turn with no closing prose must not fire",
     )
 
+    # ---- BARE PRESENT CONTINUOUS ("I'm closing it") ----------------------------------------------
+    # The hole this guard shipped with, found by it failing in production 2026-09-01. OPENER_RE knew
+    # "I'll" / "I'm going to" / "let me" and NOT the bare present continuous, so the turn below ended
+    # on a commitment, nothing ran it, and the other three facts were never evaluated. Present
+    # continuous is the MORE seductive way to make an unkept promise than "I'll", because it reads to
+    # a human as already underway.
+
+    # THE INSTANCE, verbatim. Frozen: this exact sentence must halt.
+    expect(
+        "true-positive-the-present-continuous-instance",
+        [
+            user("What happened to the PR?"),
+            assistant_text(THE_PRESENT_CONTINUOUS_INSTANCE),
+        ],
+        fires,
+        "expected PROMISE for the verbatim 'I'm closing it ...' turn-ending",
+    )
+
+    # It took TWO fixes, and each must be load-bearing on its own. Controls for both live in
+    # scripts/prove-gate-positive-controls.py (sens/opener-lacks-present-continuous and
+    # sens/close-not-an-action), which revert one at a time and require this case to go green again.
+    # Here: the same sentence with a verb that was ALREADY on the allowlist isolates the opener, and
+    # an "I'll close it" isolates the ACTIONS entry.
+    expect(
+        "true-positive-present-continuous-already-listed-verb",
+        [user("What about the branch?"), assistant_text("I'm deleting the stale branch.")],
+        fires,
+        "the opener alone must carry a verb that was always on the allowlist",
+    )
+    expect(
+        "true-positive-close-with-the-old-opener",
+        [user("What happened to the PR?"), assistant_text("I'll close it rather than push an empty merge commit.")],
+        fires,
+        "'close' must be a concrete action under the openers that already worked",
+    )
+
+    # The three inflections a gerund can take. Resolved against the SAME ACTIONS list, no second
+    # vocabulary: dropped-e, doubled consonant, and the plain case.
+    expect(
+        "true-positive-gerund-dropped-e",
+        [user("Where is the DLL?"), assistant_text("I'm staging the DLL into the profile.")],
+        fires,
+        "'staging' must resolve to 'stage'",
+    )
+    expect(
+        "true-positive-gerund-doubled-consonant",
+        [user("Is it saved?"), assistant_text("I'm committing the fix.")],
+        fires,
+        "'committing' must resolve to 'commit'",
+    )
+    expect(
+        "true-positive-gerund-plain",
+        [user("And the branch?"), assistant_text("I'm landing it on main.")],
+        fires,
+        "'landing' must resolve to 'land'",
+    )
+    expect(
+        "true-positive-gerund-hyphenated-re-form",
+        [user("Save it."), assistant_text("I'm re-recording the directive.")],
+        fires,
+        "'re-recording' must resolve to 're-record'",
+    )
+    expect(
+        "true-positive-i-am-spelled-out",
+        [user("And the constant?"), assistant_text("I am reverting the offset change.")],
+        fires,
+        "'I am <gerund>' must fire like \"I'm <gerund>\"",
+    )
+
+    # ORDERING REGRESSION. The bare opener is LAST in the alternation on purpose: Python takes the
+    # first alternative that matches at a position, not the longest, so a bare "i'm" placed ahead of
+    # "i'm going to" would swallow its prefix and hand committed_verb the word "going" -- which is
+    # deliberately not an action, silently killing the case above it.
+    expect(
+        "true-positive-going-to-still-fires-after-bare-opener-added",
+        [user("The mask is missing."), assistant_text("I'm going to patch the compositor gate.")],
+        fires,
+        "'I'm going to <action>' must survive the bare present-continuous alternative",
+    )
+    expect(
+        "true-positive-about-to-still-fires-after-bare-opener-added",
+        [user("Ready?"), assistant_text("I'm about to run the gate.")],
+        fires,
+        "'I'm about to <action>' must survive the bare present-continuous alternative",
+    )
+
+    # ---- ...AND THE STATIVE USES THAT MUST STAY SILENT -------------------------------------------
+    # Present continuous is ambiguous in a way "I'll" is not, and this repo's prose is FULL of the
+    # ambiguous half. Every one of these is silenced by the pipeline that was already there: the verb
+    # simply is not on the concrete-action allowlist, or it is a hedge or a negation.
+
+    # DECLINING to act is the opposite of an unkept promise, and it is this repo's own reporting
+    # convention ("report ... rather than fix"). If this ever fires the guard is unusable.
+    expect(
+        "false-positive-declining-to-act",
+        [
+            user("Fix the drift."),
+            assistant_text("I'm reporting it rather than fixing it, because the fix needs a runtime run."),
+        ],
+        silent,
+        "declining to act must not read as promising to act",
+    )
+    expect(
+        "false-positive-stative-treating",
+        [user("Is that proven?"), assistant_text("I'm treating that as unproven until the pixel diff lands.")],
+        silent,
+        "a stance verb in the present continuous must not fire",
+    )
+    expect(
+        "false-positive-not-sure",
+        [user("Which is it?"), assistant_text("I'm not certain which of the two producers is firing.")],
+        silent,
+        "a negated present continuous must not fire",
+    )
+    expect(
+        "false-positive-about-the-message-itself",
+        [user("What failed?"), assistant_text("I'm quoting the failure below, unmodified.")],
+        silent,
+        "present continuous about the message itself must not fire",
+    )
+    expect(
+        "false-positive-present-continuous-hedge",
+        [user("Next?"), assistant_text("I'm thinking the offset moved, but nothing proves it yet.")],
+        silent,
+        "a hedge in the present continuous must not fire",
+    )
+    expect(
+        "false-positive-present-continuous-negation-verb",
+        [user("Should I keep it?"), assistant_text("I'm leaving the branch exactly as it is.")],
+        silent,
+        "a negation-family verb in the present continuous must not fire",
+    )
+
+    # Narration of work the turn then does. This is the CORRECT shape and the commonest one -- the
+    # existing tool_after check must cover the new opener exactly as it covers "I'll".
+    expect(
+        "false-positive-present-continuous-then-executed",
+        [
+            user("Close the PR."),
+            assistant_text_then_bash(THE_PRESENT_CONTINUOUS_INSTANCE, "gh pr close 371"),
+        ],
+        silent,
+        "a present-continuous narration the turn then executes must not fire",
+    )
+    expect(
+        "false-positive-present-continuous-executed-next-message",
+        [
+            user("Close the PR."),
+            assistant_text(THE_PRESENT_CONTINUOUS_INSTANCE),
+            assistant_bash("gh pr close 371"),
+        ],
+        silent,
+        "a present-continuous narration executed by a later block must not fire",
+    )
+
+    # Ongoing background work described in the present continuous. Doubly covered, and the control
+    # below separates the two: "watch" is not an action verb, AND a live job the promise waits on
+    # covers it anyway.
+    expect(
+        "false-positive-present-continuous-watching-live-work",
+        [
+            user("Build it."),
+            assistant_bash("bash scripts/er-build-dlls.sh --all", "toolu_bg", background=True),
+            background_launch_result("toolu_bg"),
+            assistant_text("I'm watching the build run."),
+        ],
+        silent,
+        "describing live background work must not fire",
+    )
+    expect(
+        "false-positive-present-continuous-waiting-on-live-work",
+        [
+            user("Build it."),
+            assistant_bash("bash scripts/er-build-dlls.sh --all", "toolu_bg", background=True),
+            background_launch_result("toolu_bg"),
+            assistant_text("I'm reading the build log the moment it lands."),
+        ],
+        silent,
+        "a present-continuous promise waiting on live background work must not fire",
+    )
+    expect(
+        "control-present-continuous-watching-without-live-work",
+        [user("What now?"), assistant_text("I'm reading the build log.")],
+        fires,
+        "the allowlist and the live job, not the tense, must be what silences the two above",
+    )
+
+    # The halt QUOTES a clause back at the agent, so it must be the promise nearest where the turn
+    # stopped. Broadening the opener set makes an incidental early match likelier -- measured on a
+    # real halted turn, where the quote moved from the closing sentence back to a table cell.
+    expect(
+        "quotes-the-last-promise-not-the-first",
+        [
+            user("What now?"),
+            assistant_text(
+                "why I'm not guessing | I'm re-running it with the crash logger loaded.\n\n"
+                "I'll revert the marker spawn to the wrapper rather than ship a coin-flip."
+            ),
+        ],
+        lambda out: out.startswith("PROMISE:") and "revert" in out,
+        "the halt must quote the promise nearest the end of the turn",
+    )
+
+    # A present-continuous commitment handed to the user is still a hand-off, not a broken promise.
+    expect(
+        "false-positive-present-continuous-handed-to-user",
+        [
+            user("Close it."),
+            assistant_text("I'm closing it once you confirm the branch is not needed."),
+        ],
+        silent,
+        "a present-continuous commitment contingent on the user must not fire",
+    )
+
     if FAILURES:
         print(f"unexecuted-promise signal: {len(FAILURES)} FAILED: {', '.join(FAILURES)}")
         return 1
-    print("unexecuted-promise signal tests passed (41 cases)")
+    print("unexecuted-promise signal tests passed (64 cases)")
     return 0
 
 

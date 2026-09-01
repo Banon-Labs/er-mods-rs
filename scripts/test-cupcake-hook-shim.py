@@ -38,7 +38,10 @@ WHAT IT ASSERTS
 
 `--table` prints the decision each case gets BEFORE the rewrite (the raw event handed
 straight to `cupcake eval`, which is what production did until this change) beside the one it
-gets AFTER, which is how the fix was measured in the first place.
+gets AFTER, which is how the fix was measured in the first place. Only the rewrite and the
+permission-mode normalisation are removed from the BEFORE column: it loads the SAME policy set
+the shim loads, global config included, so a difference in the table is the shim's doing and
+nothing else's.
 """
 
 from __future__ import annotations
@@ -106,8 +109,50 @@ def run(mode: str, command: str, env: dict[str, str] | None = None) -> tuple[int
     return proc.returncode, proc.stdout.decode("utf-8", "replace"), proc.stderr
 
 
+def global_config_root(env: dict[str, str]) -> Path:
+    """Where cupcake looks for the global config, resolved exactly the way the shim resolves it.
+
+    `${CUPCAKE_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cupcake}`, transcribed from
+    cupcake-hook.sh (`:-` treats an EMPTY value as unset, hence the `or` chain).
+    """
+    override = env.get("CUPCAKE_GLOBAL_CONFIG")
+    if override:
+        return Path(override)
+    xdg = env.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path(env.get("HOME") or str(Path.home())) / ".config"
+    return base / "cupcake"
+
+
+def global_config_args(env: dict[str, str]) -> list[str]:
+    """The `--global-config` argv the shim would pass -- including passing NONE of it.
+
+    THE ARGUMENT IS A DIRECTORY, NOT A FILE, and getting that wrong is silent. cupcake 0.5.2
+    rejects a non-directory (and a missing path) with a DEBUG line and then continues
+    project-only WITHOUT falling back to discovery, so a wrong override loads strictly LESS
+    than no override -- and at `--log-level error` nothing says so. This function used to be a
+    hard-coded `REPO/.cupcake/rulebook.yml`, which was exactly that mistake, and it made the
+    BEFORE column measure a global-less evaluation that no longer corresponds to anything: the
+    table then showed the rewrite's effect PLUS the absence of the global policy set, and
+    attributed the sum to the shim.
+
+    The two structural preconditions are the shim's, for the shim's reason: no directory, or no
+    `policies/claude` under it, means no global policy CAN load, and the shim drops the override
+    rather than forward a value the engine will discard.
+    """
+    root = global_config_root(env)
+    if not root.is_dir() or not (root / "policies" / "claude").is_dir():
+        return []
+    return ["--global-config", str(root)]
+
+
 def run_raw(command: str, env: dict[str, str] | None = None) -> str:
-    """The BEFORE column: the event handed to cupcake with no rewrite at all."""
+    """The BEFORE column: the same evaluation the shim runs, minus the shim.
+
+    No newline rewrite and no permission-mode normalisation -- but the same `--policy-dir` and
+    the same `--global-config` (see above), so the only variable between the columns is the
+    shim itself.
+    """
+    resolved_env = env if env is not None else signal_env()
     proc = subprocess.run(
         [
             "cupcake",
@@ -118,14 +163,13 @@ def run_raw(command: str, env: dict[str, str] | None = None) -> str:
             "error",
             "--policy-dir",
             str(REPO / ".cupcake"),
-            "--global-config",
-            str(REPO / ".cupcake" / "rulebook.yml"),
+            *global_config_args(resolved_env),
         ],
         input=json.dumps(event(command)).encode(),
         capture_output=True,
         text=False,
         timeout=25,
-        env=env if env is not None else signal_env(),
+        env=resolved_env,
         cwd=str(REPO),
     )
     return verdict(proc.stdout.decode("utf-8", "replace"))

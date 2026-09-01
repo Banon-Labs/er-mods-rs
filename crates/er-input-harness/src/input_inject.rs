@@ -115,7 +115,18 @@ pub fn request_open_ingame_menu(input_manager_ptr: usize) -> bool {
 
 /// Resolve the dereferenced input-manager pointer, or `None` before it is initialized.
 pub fn input_manager(base: usize) -> Option<usize> {
-    unsafe { read_usize(base + INPUT_MANAGER_GLOBAL_RVA) }.filter(|p| *p >= HEAP_LO)
+    // RESOLVED, NOT ADDED: this pointer is the root of a chain that ends in raw byte STORES (the
+    // keystate bitmap and the popup request byte), and every `.data` global moved on 1.17. A raw
+    // `base + rva` would read a moved slot, and `>= HEAP_LO` is far too coarse to catch it.
+    let address = er_game_base::mem::game_data_addr(
+        base,
+        INPUT_MANAGER_GLOBAL_RVA,
+        "INPUT_MANAGER_GLOBAL_RVA",
+    );
+    if address == 0 {
+        return None;
+    }
+    unsafe { read_usize(address) }.filter(|p| *p >= HEAP_LO)
 }
 
 // --- NATIVE EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---
@@ -159,7 +170,7 @@ pub fn popup_job_serial(input_manager_ptr: usize) -> u64 {
 /// CSPopupMenu top-job path (native enqueue + native pump ownership; no Scaleform input). Faithful
 /// nesting requires the pause menu (IngameTop) to already be the top job -- call only after
 /// `pause_menu_open()`. Game thread only. Returns true once the job was built and submitted.
-fn native_open_top_menu(base: usize, input_manager_ptr: usize, factory_rva: usize) -> bool {
+fn native_open_top_menu(input_manager_ptr: usize, factory_rva: usize) -> bool {
     type JobFactoryFn = unsafe extern "system" fn(*mut [usize; 2], usize) -> *mut [usize; 2];
     type SubmitTopJobFn =
         unsafe extern "system" fn(usize, *mut [usize; 2], *mut u64, *mut [usize; 2]);
@@ -167,8 +178,24 @@ fn native_open_top_menu(base: usize, input_manager_ptr: usize, factory_rva: usiz
     let Some(popup) = popup_menu(input_manager_ptr) else {
         return false;
     };
-    let factory: JobFactoryFn = unsafe { std::mem::transmute(base + factory_rva) };
-    let submit: SubmitTopJobFn = unsafe { std::mem::transmute(base + POPUP_SUBMIT_TOP_JOB_RVA) };
+    // Through the 1.17 gate. `base + rva` would call the 1.16.2 address on a build that moved the
+    // function, and this pair BUILDS AND SUBMITS a native MenuJob -- the worst place to land on
+    // whatever now occupies the address.
+    let (Ok(factory_addr), Ok(submit_addr)) = (
+        er_game_base::mem::game_rva_named(factory_rva as u32, "POPUP_MENU_JOB_FACTORY_RVA"),
+        er_game_base::mem::game_rva_named(
+            POPUP_SUBMIT_TOP_JOB_RVA as u32,
+            "POPUP_SUBMIT_TOP_JOB_RVA",
+        ),
+    ) else {
+        harness_log!(
+            "native-open: refused -- the MenuJob factory or CSPopupMenu submit has no verified \
+             address for this build"
+        );
+        return false;
+    };
+    let factory: JobFactoryFn = unsafe { std::mem::transmute(factory_addr) };
+    let submit: SubmitTopJobFn = unsafe { std::mem::transmute(submit_addr) };
 
     let mut job: [usize; 2] = [0; 2];
     // SAFETY: the factory constructs a DLReferencePointer<MenuJob> into raw 16-byte out storage
@@ -187,14 +214,14 @@ fn native_open_top_menu(base: usize, input_manager_ptr: usize, factory_rva: usiz
 }
 
 /// Native open of the EquipTop menu (equipped-slot summary + slot-selection grids).
-pub fn native_open_equip_menu(base: usize, input_manager_ptr: usize) -> bool {
-    native_open_top_menu(base, input_manager_ptr, EQUIP_TOP_JOB_FACTORY_RVA)
+pub fn native_open_equip_menu(_base: usize, input_manager_ptr: usize) -> bool {
+    native_open_top_menu(input_manager_ptr, EQUIP_TOP_JOB_FACTORY_RVA)
 }
 
 /// Native open of the Inventory menu (02_020_Inventory -- the Melee/Ranged/Shields tabs whose item
 /// cells carry the bottom-left ArtsIcon child, bd er-effects-rs-pe98 GFX geometry).
-pub fn native_open_inventory_menu(base: usize, input_manager_ptr: usize) -> bool {
-    native_open_top_menu(base, input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
+pub fn native_open_inventory_menu(_base: usize, input_manager_ptr: usize) -> bool {
+    native_open_top_menu(input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
 }
 
 /// Tap one menu event into the keystate bitmap (edge OR). Fault-safe: only writes once the target
@@ -216,8 +243,14 @@ pub fn tap_menu_event(input_manager_ptr: usize, event: MenuEvent) {
 /// call every frame from the drive hook (ER clears it each unfocused frame). Returns true once the
 /// flag was written at least once (for logging).
 pub fn keep_input_active(base: usize) -> bool {
-    let Some(dluid) = (unsafe { read_usize(base + DLUID_SINGLETON_RVA) }).filter(|p| *p >= HEAP_LO)
-    else {
+    let Some(dluid) = (unsafe {
+        read_usize(er_game_base::mem::game_data_addr(
+            base,
+            DLUID_SINGLETON_RVA,
+            "DLUID_SINGLETON_RVA",
+        ))
+    })
+    .filter(|p| *p >= HEAP_LO) else {
         return false;
     };
     let flag = dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET;
@@ -241,7 +274,11 @@ const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
 /// Set the title global accept byte = 1 to advance the parked PRESS ANY BUTTON title into its menu.
 /// Fault-safe; game-thread only. Returns true once written. A no-op effect once past the title.
 pub fn advance_press_any_button(base: usize) -> bool {
-    let addr = base + TITLE_GLOBAL_ACCEPT_BYTE_RVA;
+    let addr = er_game_base::mem::game_data_addr(
+        base,
+        TITLE_GLOBAL_ACCEPT_BYTE_RVA,
+        "TITLE_GLOBAL_ACCEPT_BYTE_RVA",
+    );
     if unsafe { read_u8(addr) }.is_none() {
         return false;
     }
@@ -258,8 +295,14 @@ pub fn log_resolution(base: usize) {
     harness_log!(
         "input-inject: base=0x{base:x} input_manager=0x{:x} dluid_present={} (direct keystate-bitmap + DLUID stay-active channel; no SendInput/XInput)",
         input_manager(base).unwrap_or(0),
-        (unsafe { read_usize(base + DLUID_SINGLETON_RVA) })
-            .filter(|p| *p >= HEAP_LO)
-            .is_some() as u8
+        (unsafe {
+            read_usize(er_game_base::mem::game_data_addr(
+                base,
+                DLUID_SINGLETON_RVA,
+                "DLUID_SINGLETON_RVA",
+            ))
+        })
+        .filter(|p| *p >= HEAP_LO)
+        .is_some() as u8
     );
 }

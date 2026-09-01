@@ -24,7 +24,8 @@
 
 use er_build_import_core::catalog::Kind;
 use er_build_import_core::equip::{
-    ARMAMENT_CHR_ASM_SLOTS, CHR_ASM_SLOT_ACCESSORY_1, CHR_ASM_SLOT_PROTECTOR_HEAD, PROTECTOR_PARTS,
+    AMMO_SLOTS, ARMAMENT_CHR_ASM_SLOTS, CHR_ASM_SLOT_ACCESSORY_1, CHR_ASM_SLOT_AMMO_1,
+    CHR_ASM_SLOT_PROTECTOR_HEAD, POUCH_SLOTS, PROTECTOR_PARTS, QUICKBAR_SLOTS,
 };
 use er_build_import_core::plan::{ARMAMENT_LEVEL_STEP, split_armament_id};
 
@@ -52,7 +53,7 @@ const EQUIP_GAME_DATA_MAGIC_OFFSET: usize = 0x280;
 
 /// `PlayerGameData` field offsets. Bound to the upstream typed layout so a struct change fails the
 /// build rather than reading the wrong bytes at runtime.
-mod pgd {
+pub(crate) mod pgd {
     use eldenring::cs::PlayerGameData;
 
     pub const LEVEL: usize = core::mem::offset_of!(PlayerGameData, level);
@@ -188,6 +189,18 @@ pub struct CharacterRead {
     pub talismans: Vec<ReadSlot>,
     /// Memorised spells, in slot order.
     pub spells: Vec<ReadSlot>,
+    /// Arrows and bolts the character is WEARING, in `ChrAsmSlot` order -- `Arrow1, Bolt1,
+    /// Arrow2, Bolt2`, the engine's interleave, which is also
+    /// [`er_build_import_core::model::AMMO_POSITION_KEYS`]'s order. `None` for an empty position.
+    ///
+    /// Distinct from [`CharacterRead::carried_ammunition`], which counts the quiver in the
+    /// backpack and exports nothing. These four are the equipped ones, and they are the only
+    /// ammunition the planner has anywhere to put.
+    pub ammo: Vec<Option<String>>,
+    /// Quickbar contents by position, [`QUICKBAR_SLOTS`] long; `None` for an unassigned position.
+    pub quickbar: Vec<Option<String>>,
+    /// Pouch contents by position, [`POUCH_SLOTS`] long; `None` for an unassigned position.
+    pub pouch: Vec<Option<String>>,
     /// Physick tears, in flask order; `None` for an empty half.
     pub crystal_tears: Vec<Option<String>>,
     /// Equipped great rune.
@@ -208,7 +221,7 @@ pub struct CharacterRead {
     /// can be anything other than the player's own face.
     pub face_data: Option<Vec<u8>>,
     /// Arrows and bolts the character is carrying. COUNTED, not exported -- see the ammunition
-    /// note in [`read_carried`].
+    /// note in `read_carried`.
     pub carried_ammunition: usize,
     /// Consumables, crafting materials and key items the character is carrying. COUNTED, not
     /// exported: they are the bulk of an inventory and the planner models only the handful that
@@ -241,6 +254,7 @@ type SlotsCountFn = unsafe extern "system" fn(usize, usize) -> u32;
 ///
 /// Game thread, `egd` live, `msg` a live `MsgRepositoryImp*`.
 unsafe fn read_slot(
+    get: ParamInSlotFn,
     module_base: usize,
     msg: usize,
     egd: usize,
@@ -248,8 +262,11 @@ unsafe fn read_slot(
     kind: Kind,
     equip_index: Option<u32>,
 ) -> SlotRead {
-    // Safety: verified RVA; a pure read of the slot's current param id.
-    let get: ParamInSlotFn = unsafe { core::mem::transmute(module_base + GET_PARAM_ID_IN_SLOT) };
+    // THE GETTER IS RESOLVED BY THE CALLER, not here, and that is the point. This function is
+    // called once per equipment slot; resolving inside it would ask the same question ~30 times
+    // per export and, on a build with no mapping, would answer `SlotRead::Empty` thirty times --
+    // an EXPORTED CHARACTER WEARING NOTHING, which is a plausible-looking document rather than a
+    // failure. `read_character` resolves once and refuses the whole export instead.
     // Safety: the caller's contract.
     let raw = unsafe { get(egd, slot) };
     // An empty slot reads as -1, and the engine also uses large sentinels for "nothing"; anything
@@ -325,8 +342,13 @@ unsafe fn read_slot(
 /// Game thread; `module_base` the loaded image base.
 unsafe fn worn_armament_handle(module_base: usize, slot: i32) -> Option<u32> {
     // Safety: fault-checked reads of the singleton slot and one offset inside it.
-    let world =
-        unsafe { er_game_base::mem::safe_read_usize(module_base + WORLD_CHR_MAN_GLOBAL_RVA) }?;
+    let world = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            module_base,
+            WORLD_CHR_MAN_GLOBAL_RVA,
+            "WORLD_CHR_MAN_GLOBAL_RVA",
+        ))
+    }?;
     if world == 0 {
         return None;
     }
@@ -430,8 +452,13 @@ impl WornArmament {
 pub unsafe fn worn_armament(module_base: usize, slot: i32) -> Option<WornArmament> {
     let player = {
         // Safety: a fault-checked read of the singleton slot and one offset inside it.
-        let world =
-            unsafe { er_game_base::mem::safe_read_usize(module_base + WORLD_CHR_MAN_GLOBAL_RVA) }?;
+        let world = unsafe {
+            er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                WORLD_CHR_MAN_GLOBAL_RVA,
+                "WORLD_CHR_MAN_GLOBAL_RVA",
+            ))
+        }?;
         if world == 0 {
             return None;
         }
@@ -479,6 +506,18 @@ pub unsafe fn equipped_weapon_arts_id(module_base: usize, slot: i32) -> Option<u
 pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Option<CharacterRead> {
     // Safety: the caller's contract.
     let pgd = unsafe { player_game_data() }?;
+    // RESOLVED ONCE, BEFORE ANYTHING IS READ. Every equipment slot below is answered by this one
+    // getter, so on a build where it has no mapping the honest answer is that the character
+    // cannot be read at all -- `None`, which the caller reports. Answering slot by slot would
+    // produce a fully-formed export document of a character wearing nothing, and a wrong document
+    // is worse than no document because it can be uploaded and shared.
+    let param_in_slot = crate::native::resolve(
+        module_base,
+        GET_PARAM_ID_IN_SLOT,
+        "CS::EquipGameData::GetParamIdInSlot",
+    )?;
+    // Safety: resolved for the running build immediately above.
+    let param_in_slot: ParamInSlotFn = unsafe { core::mem::transmute(param_in_slot) };
     let mut out = CharacterRead::default();
 
     // Safety: plain reads of live save data at offsets bound to the upstream typed layout.
@@ -516,8 +555,17 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     for (equip_index, slot) in ARMAMENT_CHR_ASM_SLOTS.into_iter().enumerate() {
         let equip_index = equip_index as u32;
         // Safety: the caller's contract.
-        let read =
-            unsafe { read_slot(module_base, msg, egd, slot, Kind::Weapon, Some(equip_index)) };
+        let read = unsafe {
+            read_slot(
+                param_in_slot,
+                module_base,
+                msg,
+                egd,
+                slot,
+                Kind::Weapon,
+                Some(equip_index),
+            )
+        };
         match read {
             SlotRead::Item(item) => out.armaments.push(item),
             SlotRead::Unnamed => unnamed += 1,
@@ -528,7 +576,17 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     for (offset, part) in PROTECTOR_PARTS.into_iter().enumerate() {
         let slot = CHR_ASM_SLOT_PROTECTOR_HEAD + offset as i32;
         // Safety: as above.
-        let read = unsafe { read_slot(module_base, msg, egd, slot, Kind::Protector, Some(0)) };
+        let read = unsafe {
+            read_slot(
+                param_in_slot,
+                module_base,
+                msg,
+                egd,
+                slot,
+                Kind::Protector,
+                Some(0),
+            )
+        };
         match read {
             SlotRead::Item(item) => out.protectors.push((part, item)),
             SlotRead::Unnamed => unnamed += 1,
@@ -541,6 +599,7 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
         // Safety: as above.
         let read = unsafe {
             read_slot(
+                param_in_slot,
                 module_base,
                 msg,
                 egd,
@@ -556,15 +615,69 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
         }
     }
 
+    // Ammunition, through the SAME getter every other ChrAsm equipment slot goes through -- and
+    // in the ENGINE's order, `Arrow1 = 6, Bolt1 = 7, Arrow2 = 8, Bolt2 = 9`, which interleaves the
+    // two kinds while the planner's UI groups them. Walking this loop in the planner's grouped
+    // order would put every bolt in an arrow position, so the order is the shared table's.
+    //
+    // `Kind::Ammo` rather than `Kind::Weapon` on purpose: arrows are `EquipParamWeapon` rows, but
+    // they carry no upgrade level in the last two digits and no ash of war, so the armament split
+    // has nothing to do and the gem chain has nothing to find. The name getter is the same one.
+    for index in 0..AMMO_SLOTS {
+        let slot = CHR_ASM_SLOT_AMMO_1 + index as i32;
+        // Safety: as above.
+        let read = unsafe {
+            read_slot(
+                param_in_slot,
+                module_base,
+                msg,
+                egd,
+                slot,
+                Kind::Ammo,
+                // Ammo has no `equipIndex` in the payload at all -- the KEY is the position -- so
+                // there is nothing for the read to carry here.
+                None,
+            )
+        };
+        out.ammo.push(match read {
+            SlotRead::Item(item) => Some(item.name),
+            SlotRead::Unnamed => {
+                unnamed += 1;
+                None
+            }
+            SlotRead::Empty => None,
+        });
+    }
+
+    // Quickbar and pouch, read straight out of `EquipGameData::equipmentEntries`.
+    // Safety: as above -- fault-checked reads at offsets the compiler derived from the upstream
+    // struct and pinned to the engine's own getter, see `entries`.
+    unsafe { read_quick_and_pouch(module_base, msg, egd, &mut out, &mut unnamed) };
+
     // Spells. The capacity is asked for rather than assumed: it accounts for Memory Stones and
     // talismans, and the engine clamps it to 14.
     // Safety: one pointer read at the verified EquipGameData offset.
     let emd = unsafe { *((egd + EQUIP_GAME_DATA_MAGIC_OFFSET) as *const usize) };
-    if emd != 0 {
-        // Safety: verified RVAs.
-        let slots_count: SlotsCountFn =
-            unsafe { core::mem::transmute(module_base + GET_MAGIC_SLOTS_COUNT) };
-        let magic_id: MagicIdFn = unsafe { core::mem::transmute(module_base + GET_EQUIP_MAGIC_ID) };
+    // Resolved for the running build, and only once a character actually has magic data. A
+    // refusal leaves `magic_capacity` at zero and the spell list empty, which is the same shape
+    // as a character with no spells -- so it is SAID, once, by `crate::native`, rather than left
+    // to be read off a silently short list.
+    if emd != 0
+        && let Ok([slots_count, magic_id]) = crate::native::resolve_all(
+            module_base,
+            [
+                (
+                    GET_MAGIC_SLOTS_COUNT,
+                    "CS::EquipMagicData::GetMagicSlotsCount",
+                ),
+                (GET_EQUIP_MAGIC_ID, "GetEquipMagicId"),
+            ],
+        )
+    {
+        // Safety: both addresses were resolved for the running build immediately above.
+        let slots_count: SlotsCountFn = unsafe { core::mem::transmute(slots_count) };
+        // Safety: as above.
+        let magic_id: MagicIdFn = unsafe { core::mem::transmute(magic_id) };
         // Safety: a null SpecialEffect means "derive it from the player".
         out.magic_capacity = unsafe { slots_count(emd, 0) };
         for slot in 0..out.magic_capacity.min(i32::MAX as u32) as i32 {
@@ -598,19 +711,31 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
 
     // Physick. The field holds CATEGORY-TAGGED ids (a game-filled flask reads back as e.g.
     // `0x40001FC1`), so the nibble is masked off before the row is named.
-    // Safety: verified RVA; an out-parameter getter, which is why the destination is ours.
-    let get_tear: OutParamGetterFn =
-        unsafe { core::mem::transmute(module_base + GET_PHYSIC_TEAR_BY_SLOT) };
+    // Resolved for the running build; an out-parameter getter, which is why the destination is
+    // ours. On a refusal the two tear slots are pushed as `None` -- the same value an empty flask
+    // produces. That is a known imprecision and it is bounded by the fact that `crate::native`
+    // has already logged the getter as unavailable for this session; there is no third state in
+    // `Vec<Option<String>>` to put a refusal in without changing the exported document's shape.
+    let get_tear = crate::native::resolve(
+        module_base,
+        GET_PHYSIC_TEAR_BY_SLOT,
+        "CS::EquipGameData::GetPhysicTearBySlot",
+    );
     for index in 0..2i32 {
-        let mut raw = -1i32;
-        // Safety: our own slot, and the getter writes exactly one int through it.
-        unsafe { get_tear(egd, &raw mut raw, index) };
-        let tear = u32::try_from(raw)
-            .ok()
-            .filter(|id| *id != 0 && *id != u32::MAX)
-            .and_then(|id| unsafe {
-                name_for(Kind::Tool, msg, module_base, id & ITEM_ID_ROW_MASK)
-            });
+        let tear = get_tear.and_then(|get_tear| {
+            // Safety: resolved for the running build immediately above.
+            let get_tear: OutParamGetterFn = unsafe { core::mem::transmute(get_tear) };
+            let mut raw = -1i32;
+            // Safety: our own slot, and the getter writes exactly one int through it.
+            unsafe { get_tear(egd, &raw mut raw, index) };
+            u32::try_from(raw)
+                .ok()
+                .filter(|id| *id != 0 && *id != u32::MAX)
+                // Safety: the caller's contract.
+                .and_then(|id| unsafe {
+                    name_for(Kind::Tool, msg, module_base, id & ITEM_ID_ROW_MASK)
+                })
+        });
         out.crystal_tears.push(tear);
     }
 
@@ -618,18 +743,26 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     // through to `GetEquippedGreatrune(EquipItemData*, int *out, int slot)`, whose body begins
     // `*out = -1; if (slot == 0 && ...)`. Calling it with two leaves R8 holding whatever the call
     // site had and it reports -1 no matter what is equipped.
-    // Safety: verified RVA; the out slot is ours and outlives the call.
-    let get_rune: OutParamGetterFn =
-        unsafe { core::mem::transmute(module_base + GET_EQUIPPED_GREATRUNE) };
-    let mut rune = -1i32;
-    // Safety: as above.
-    unsafe { get_rune(egd, &raw mut rune, 0) };
-    out.great_rune = u32::try_from(rune)
-        .ok()
-        .filter(|id| *id != 0 && *id != u32::MAX)
-        .and_then(|id| unsafe {
-            name_for(Kind::GreatRune, msg, module_base, id & ITEM_ID_ROW_MASK)
-        });
+    // Resolved for the running build; the out slot is ours and outlives the call.
+    out.great_rune = crate::native::resolve(
+        module_base,
+        GET_EQUIPPED_GREATRUNE,
+        "CS::EquipItemData::GetEquippedGreatrune",
+    )
+    .and_then(|get_rune| {
+        // Safety: resolved for the running build immediately above.
+        let get_rune: OutParamGetterFn = unsafe { core::mem::transmute(get_rune) };
+        let mut rune = -1i32;
+        // Safety: as above.
+        unsafe { get_rune(egd, &raw mut rune, 0) };
+        u32::try_from(rune)
+            .ok()
+            .filter(|id| *id != 0 && *id != u32::MAX)
+            // Safety: the caller's contract.
+            .and_then(|id| unsafe {
+                name_for(Kind::GreatRune, msg, module_base, id & ITEM_ID_ROW_MASK)
+            })
+    });
 
     // Two-handing, from the same `ChrAsm::equipment.arm_style` the engine renders from.
     // Safety: a read of one enum-sized field at an offset bound to the upstream layout.
@@ -643,6 +776,146 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
     Some(out)
 }
 
+/// `EquipGameData::equipmentEntries`, and the two runs of it the quickbar and the pouch occupy.
+///
+/// # A struct offset is the only failure here that says nothing
+///
+/// A wrong function address is refused by the resolver and logged; a wrong FIELD offset returns
+/// the neighbouring field, plausible and silent, forever. So these are derived three ways and all
+/// three agree:
+///
+/// 1. **The upstream typed layout.** `offset_of!` computes them, so a `ChrAsmEquipEntries` or
+///    `EquipGameData` change upstream breaks the BUILD instead of the read.
+/// 2. **The engine's own getter, on BOTH images.** `CS::EquipGameData::GetItemIdByQuickSlotIndex`
+///    (`0x140247ee0`) is `add rcx, 0x348` and a tail call to `0x14024ba10`, whose body is
+///    `cmp r8d, 9 / ja / lea eax, [r8+0x16] / mov eax, [rcx+r8*4]` -- and the pouch reader two
+///    instructions later is the same with `cmp r8d, 5 / lea eax, [r8+0x20]`. Disassembled out of
+///    `eldenring-deobf.bin` (1.16.2) and `eldenring-deobf-1.17.bin` and BYTE-IDENTICAL in both, so
+///    the base is `0x348`, the quickbar run starts at entry `0x16` and the pouch run at `0x20` on
+///    the installed build as well as the one the symbols came from.
+/// 3. **The neighbour.** The struct's 38 `int`s end at `0x348 + 0x98 = 0x3e0`, and
+///    `EquipGameData::physicTears` at `0x3e4` is already proven at runtime by
+///    `equip_native::EQUIP_GAME_DATA_PHYSIC_TEARS`.
+///
+/// The `assert!`s below are that agreement made executable: (1) is what computes the values and
+/// (2) is what they are checked against, so the two cannot drift apart quietly.
+mod entries {
+    use eldenring::cs::{ChrAsmEquipEntries, EquipGameData};
+    use er_build_import_core::equip::{CHR_ASM_SLOT_QUICK_BASE, QUICKBAR_SLOTS};
+
+    /// `EquipGameData::equipmentEntries`.
+    pub const BASE: usize = core::mem::offset_of!(EquipGameData, equipment_entries);
+    /// `ChrAsmEquipEntries::quickItem1`, i.e. `ChrAsmSlot` `0x16`.
+    pub const QUICKBAR: usize = BASE + core::mem::offset_of!(ChrAsmEquipEntries, quick_tems);
+    /// `ChrAsmEquipEntries::pouch1`, i.e. `ChrAsmSlot` `0x20`.
+    pub const POUCH: usize = BASE + core::mem::offset_of!(ChrAsmEquipEntries, pouch);
+    /// One entry: a category-tagged item id.
+    pub const STRIDE: usize = core::mem::size_of::<u32>();
+
+    /// `ChrAsmSlot` of quickbar position 0, as an array index.
+    const QUICKBAR_ENTRY: usize = CHR_ASM_SLOT_QUICK_BASE as usize;
+
+    // The literals here are the ENGINE's, read off both flat images in the doc comment above; the
+    // values they are compared against are the COMPILER's, from the upstream struct. Neither side
+    // can move without the other noticing.
+    const _: () = assert!(BASE == 0x348);
+    const _: () = assert!(QUICKBAR_ENTRY == 0x16);
+    const _: () = assert!(QUICKBAR == BASE + QUICKBAR_ENTRY * STRIDE);
+    // The pouch follows the quickbar with no gap, which is what makes the planner's single
+    // `equipIndex` axis (`0..10` quickbar, `10..16` pouch) a contiguous run of native slots.
+    const _: () = assert!(POUCH == QUICKBAR + QUICKBAR_SLOTS * STRIDE);
+    const _: () = assert!(POUCH == BASE + 0x20 * STRIDE);
+}
+
+/// The item-category nibble of a category-tagged item id, and the value that means GOODS.
+///
+/// `ItemCategory::Goods = 4`, in the top four bits. Every quickbar and pouch entry is a goods row
+/// -- consumables, the flasks, the crafting kit -- so a category that is not goods is not
+/// something the goods name getter can name, and asking it anyway would answer with whatever row
+/// of `EquipParamGoods` happens to share the number.
+const ITEM_ID_CATEGORY_MASK: u32 = 0xF000_0000;
+const ITEM_ID_CATEGORY_GOODS: u32 = 0x4000_0000;
+
+/// What one `ChrAsmEquipEntries` position held. The same three outcomes as [`SlotRead`], without
+/// the payload a ChrAsm equipment entry carries: a quickbar position is a name and nothing else.
+enum EntryRead {
+    /// Nothing assigned here.
+    Empty,
+    /// Something is assigned, and it could not be named.
+    Unnamed,
+    /// A named item.
+    Named(String),
+}
+
+/// Read one `ChrAsmEquipEntries` position and name it.
+///
+/// # Safety
+///
+/// Game thread, `egd` live, `msg` a live `MsgRepositoryImp*`.
+unsafe fn read_entry(module_base: usize, msg: usize, address: usize) -> EntryRead {
+    // Safety: fault-checked; an unmapped page answers `None` instead of taking the game down.
+    let Some(raw) = (unsafe { er_game_base::mem::safe_read_i32(address) }) else {
+        return EntryRead::Empty;
+    };
+    // REINTERPRETED, not converted. The field is an `OptionalItemId`, i.e. a `u32` whose top
+    // nibble is the category, and the only 32-bit fault-checked reader available returns `i32`.
+    // A `try_from` would reject every id with bit 31 set -- the Gem tag, `0x8` -- and report it
+    // as an EMPTY position, which is the one answer that is never worth reporting. The empty
+    // sentinel is exactly `OptionalItemId::NONE`, and it is tested for by value below.
+    let item_id = raw as u32;
+    if item_id == 0 || item_id == u32::MAX {
+        return EntryRead::Empty;
+    }
+    if item_id & ITEM_ID_CATEGORY_MASK != ITEM_ID_CATEGORY_GOODS {
+        // Not empty and not nameable BY THIS GETTER, which is a read worth counting rather than
+        // one worth guessing at.
+        return EntryRead::Unnamed;
+    }
+    // Safety: the caller's contract.
+    match unsafe { name_for(Kind::Tool, msg, module_base, item_id & ITEM_ID_ROW_MASK) } {
+        Some(name) => EntryRead::Named(name),
+        None => EntryRead::Unnamed,
+    }
+}
+
+/// Fill [`CharacterRead::quickbar`] and [`CharacterRead::pouch`], counting what could not be named.
+///
+/// Both lists come out at their FULL length with holes for the empty positions, because the
+/// position is the whole meaning here -- an item's index in this vector is the `equipIndex` the
+/// planner will be given, so a list that skipped the empties would shift every later item onto
+/// somebody else's slot.
+///
+/// # Safety
+///
+/// Game thread, `egd` a live `EquipGameData*`, `msg` a live `MsgRepositoryImp*`.
+unsafe fn read_quick_and_pouch(
+    module_base: usize,
+    msg: usize,
+    egd: usize,
+    out: &mut CharacterRead,
+    unnamed: &mut usize,
+) {
+    for (base, count, into) in [
+        (entries::QUICKBAR, QUICKBAR_SLOTS, &mut out.quickbar),
+        (entries::POUCH, POUCH_SLOTS, &mut out.pouch),
+    ] {
+        for index in 0..count {
+            // Safety: the caller's contract; the address is one entry inside a fixed-size array of
+            // a live struct, at an offset the compiler derived and the asserts pinned.
+            let read =
+                unsafe { read_entry(module_base, msg, egd + base + index * entries::STRIDE) };
+            into.push(match read {
+                EntryRead::Named(name) => Some(name),
+                EntryRead::Unnamed => {
+                    *unnamed += 1;
+                    None
+                }
+                EntryRead::Empty => None,
+            });
+        }
+    }
+}
+
 /// Read the character's name out of `PlayerGameData`.
 ///
 /// Stops at the first NUL and at the field's own bound, so neither a name that fills the array nor
@@ -651,7 +924,7 @@ pub unsafe fn read_character(module_base: usize, msg: usize, egd: usize) -> Opti
 /// # Safety
 ///
 /// `pgd` must be a live `PlayerGameData*`.
-unsafe fn read_character_name(pgd: usize) -> String {
+pub(crate) unsafe fn read_character_name(pgd: usize) -> String {
     let mut units = Vec::with_capacity(pgd::NAME_LEN_U16);
     for index in 0..pgd::NAME_LEN_U16 {
         // Safety: fault-checked; an unreadable address ends the name instead of faulting.
@@ -959,7 +1232,12 @@ fn copies_of(quantity: u32) -> (u32, bool) {
 const AMMUNITION_WEAPON_TYPES: [u16; 4] = [81, 83, 85, 86];
 
 /// Whether a `wepType` is one of the four ammunition types.
-fn is_ammunition(wep_type: u16) -> bool {
+///
+/// Shared with [`crate::catalog::Quivers`], which classifies the same rows by `weaponCategory` --
+/// the field the ENGINE's quantity gate reads -- and compares its answer against this one. Two
+/// independent offsets agreeing is what stands in for the compile-time offset pin that
+/// `EQUIP_PARAM_WEAPON_ST`'s private fields make impossible.
+pub(crate) fn is_ammunition(wep_type: u16) -> bool {
     AMMUNITION_WEAPON_TYPES.contains(&wep_type)
 }
 

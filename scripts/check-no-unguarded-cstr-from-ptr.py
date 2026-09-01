@@ -29,8 +29,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-IGNORED_DIRECTORIES = {".git", ".worktrees", ".claude", "target", "third_party"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import REPO_ROOT, rust_source_files  # noqa: E402
+
 # The whole family that walks memory looking for a terminator. A length-carrying read
 # (`slice::from_raw_parts`) is deliberately NOT here: it cannot run off the end of a mapping
 # looking for a byte that may not be there, which is the specific failure this gate is about.
@@ -44,15 +45,6 @@ BANNED_CALLS = (
 )
 JUSTIFICATION_MARKER = "Foreign pointer:"
 REPLACEMENT = "er_game_base::mem::safe_read_cstr"
-
-
-def rust_source_files() -> list[Path]:
-    paths: list[Path] = []
-    for path in REPO_ROOT.rglob("*.rs"):
-        if any(part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
-            continue
-        paths.append(path)
-    return sorted(paths)
 
 
 def banned_call_in(line: str) -> str | None:

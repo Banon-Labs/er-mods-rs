@@ -15,7 +15,8 @@ use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 pub unsafe fn profile_gx_queue_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
-    let global = base + GX_DRAW_CONTEXT_RVA;
+    let global =
+        er_game_base::mem::game_data_addr(base, GX_DRAW_CONTEXT_RVA, "GX_DRAW_CONTEXT_RVA");
     let readable = |c: usize| {
         valid(c)
             && unsafe { safe_read_usize(c + GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET) }.is_some()
@@ -92,7 +93,11 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
     let spared = LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst);
     if valid(spared)
         && unsafe { safe_read_usize(spared) }.unwrap_or(0)
-            == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            == er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
     {
         let model =
             unsafe { safe_read_usize(spared + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
@@ -117,7 +122,11 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
             unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }.unwrap_or(0);
         if !valid(r)
             || unsafe { safe_read_usize(r) }.unwrap_or(0)
-                != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                != er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             continue;
         }
@@ -202,7 +211,11 @@ unsafe fn profile_lookat_stage_probe(base: usize) {
     let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     if !valid(r)
         || unsafe { safe_read_usize(r) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
     {
         return;
     }
@@ -279,7 +292,7 @@ pub fn profile_lookat_phase_diag_tick() {
             })
             .collect();
         append_autoload_debug(format_args!(
-            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} nowload={} loadbuilds={} render_drives={} hook_hits={} gx[samples={} nonempty={}] gxpool[free_min={} free_last={} N(maskpop)={}] rt[samples={} nonblack={} changed={}] readback[some={} checker={} defer_some={} defer_nonblack={}] modeldraws={} spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
+            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} nowload={} loadbuilds={} render_drives={} hook_hits={} gx[samples={} nonempty={}] gxpool[free_min={} free_last={} N(maskpop)={}] rt[samples={} nonblack={} changed={}] readback[some={} checker={}] modeldraws={} spared[ptr=0x{:x} model_ok={} hits={}] stage0[{}] phase_ticks[{}]",
             PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst),
             LOOKAT_DRAW_PHASE_NAMES[PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst)],
             PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) as u8,
@@ -302,12 +315,9 @@ pub fn profile_lookat_phase_diag_tick() {
             PROFILE_LOOKAT_RT_CHANGED.load(Ordering::SeqCst),
             PROFILE_READBACK_SOME.load(Ordering::SeqCst),
             PROFILE_READBACK_CHECKER.load(Ordering::SeqCst),
-            PROFILE_READBACK_DEFERRED_SOME.load(Ordering::SeqCst),
-            PROFILE_READBACK_DEFERRED_NONBLACK.load(Ordering::SeqCst),
             PROFILE_PERFRAME_MODEL_DRAWS.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
-            PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
             PROFILE_PERFRAME_HOOK_HITS.load(Ordering::SeqCst),
             stages.join(" "),
             ticks.join(" ")
@@ -336,13 +346,21 @@ pub fn profile_lookat_phase_diag_tick() {
         let null = TITLE_OWNER_SCAN_START_ADDRESS;
         let (mut built_r, mut built_m) = (0u32, 0u32);
         if let Ok(b) = game_module_base() {
+            // Resolved, not `b + <1.16.2 RVA>`: the vtable moved 0x2b80128 -> 0x2b831d8 on 1.17, and
+            // a raw add never reaches the resolver, so this comparison matched nothing and reported
+            // built[r]=0/built[m]=0 forever without a single refusal line to say why.
+            let want_vt = er_game_base::mem::game_data_addr(
+                b,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            );
             for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
                 let r =
                     unsafe { safe_read_usize(portrait_renderer_table_entry(b, s)) }.unwrap_or(0);
-                if r != 0
+                if want_vt != 0
+                    && r != 0
                     && r != null
-                    && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                        == b + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    && unsafe { safe_read_usize(r) }.unwrap_or(0) == want_vt
                 {
                     built_r += 1;
                     let m = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
@@ -387,12 +405,10 @@ pub fn profile_lookat_phase_diag_tick() {
             }
         }
         append_autoload_debug(format_args!(
-            "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} copies={} rt[rgb_max={} alpha_max={}] boundtex[rgb_max={} alpha_max={}]",
+            "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} copies={} rt[rgb_max={} alpha_max={}]",
             PROFILE_RT_SRV_COPIES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_RGB_MAX.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_ALPHA_MAX.load(Ordering::SeqCst),
-            PROFILE_BOUND_GX_RGB_MAX.load(Ordering::SeqCst),
-            PROFILE_BOUND_GX_ALPHA_MAX.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
             "lookat-pump-blocks: draws={} r_bad={} vt_bad={} off_bad={} off_resource_bad={} multi={}",
@@ -404,14 +420,13 @@ pub fn profile_lookat_phase_diag_tick() {
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
-            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
+            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} hits={}] rt[samples={} nonblack={} changed={}]",
             game_module_base()
                 .map(|b| unsafe { now_loading_active(b) } as u8)
                 .unwrap_or(0),
             PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
-            PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
             PROFILE_PERFRAME_HOOK_HITS.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_SAMPLES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_NONBLACK.load(Ordering::SeqCst),
@@ -492,7 +507,11 @@ pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize)
         && let Ok(base) = game_module_base()
     {
         let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-            == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+            == er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            );
         if vt_ok {
             // Map renderer -> slot index (the look-at indices/base are cached per slot by the
             // FrameBegin apply_profile_lookat); skip if this renderer isn't in the profile table.
@@ -547,7 +566,12 @@ pub fn install_per_frame_push_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(PROFILE_PER_FRAME_PUSH_RVA as u32) else {
+    // UNRESOLVED, so `MhHook::new` owns the single 1.16.2 -> 1.17 resolve. This was `game_rva`,
+    // which resolves too, and the pair was MEASURED wrong on 2026-08-30 18:42: 0x140bba6e0 ->
+    // 0x140bbbd90 here, then 0x140bbbd90 -> 0x140bbd440 inside `MhHook::new` -- a
+    // `CSMenuFaceModelRend` method, detoured while this log line reported 0x140bbbd90.
+    // `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    let Ok(target) = game_rva_for_hook(PROFILE_PER_FRAME_PUSH_RVA as u32) else {
         return;
     };
     match unsafe { MhHook::new(target as *mut c_void, per_frame_push_hook as *mut c_void) } {
@@ -735,7 +759,7 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
 ///
 /// `slot` is range-checked against `TITLE_PROFILE_SLOT_COUNT` before it indexes the
 /// per-slot baseline.
-pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
+pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if renderer == 0 || renderer == null {
         return false;
@@ -851,8 +875,20 @@ pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: 
     }
     // Rebuild the view matrix with the engine's own builder (correct handedness/basis), then copy the 16
     // floats into the renderer's matrix slot (== the CSPersCam view matrix).
+    // Both through the 1.17 gate, resolved before the matrix is built: writing a view matrix the
+    // push can never deliver would leave the renderer half-updated.
+    let (Ok(build_addr), Ok(push_addr)) = (
+        er_game_base::mem::game_rva_named(
+            PROFILE_CAM_BUILD_MATRIX_RVA as u32,
+            "PROFILE_CAM_BUILD_MATRIX_RVA",
+        ),
+        er_game_base::mem::game_rva_named(PROFILE_CAM_PUSH_RVA as u32, "PROFILE_CAM_PUSH_RVA"),
+    ) else {
+        PROFILE_CAM_LAST_MATRIX_OK.store(0, Ordering::SeqCst);
+        return false;
+    };
     let build: unsafe extern "system" fn(usize, *mut f32) -> *mut f32 =
-        unsafe { core::mem::transmute(base + PROFILE_CAM_BUILD_MATRIX_RVA) };
+        unsafe { core::mem::transmute(build_addr) };
     let mut matrix = [0f32; 16];
     unsafe { build(renderer, matrix.as_mut_ptr()) };
     if !matrix.iter().all(|f| f.is_finite()) {
@@ -867,8 +903,7 @@ pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: 
         );
     }
     // Push the CSPersCam into the offscreen render so the next offscreen frame uses our camera.
-    let push: unsafe extern "system" fn(usize, usize) =
-        unsafe { core::mem::transmute(base + PROFILE_CAM_PUSH_RVA) };
+    let push: unsafe extern "system" fn(usize, usize) = unsafe { core::mem::transmute(push_addr) };
     unsafe { push(renderer, renderer + PROFILE_CAM_PERSCAM_OFFSET) };
     PROFILE_CAM_APPLY_CALLS.fetch_add(1, Ordering::SeqCst);
     PROFILE_CAM_LAST_SLOT.store(idx, Ordering::SeqCst);

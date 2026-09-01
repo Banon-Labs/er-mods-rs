@@ -98,6 +98,19 @@ const PAD_STICK_LX_OFFSET: usize = 0x89c; // f32 in [-1.0, 1.0]
 const PAD_STICK_LY_OFFSET: usize = 0x8a0; // f32 in [-1.0, 1.0]; +1.0 = full forward
 pub(crate) use er_telemetry_core::counters::ORIG_PAD_POLL;
 
+/// The vtable of the object the game's OWN poll wrote the stick into, latched from the hook's
+/// `this`.
+///
+/// This is the sweep's proof of class, and it costs nothing to obtain because the game hands it
+/// over every frame. The hooked function is a vtable slot of `DLUID::PadDevice`
+/// (`0x1430c9f08` -> `0x1430cd048`, its only vtable reference in either image) and writes
+/// `+0x89c`/`+0x8a0` on its own `this`, so whatever object reaches this hook is by construction the
+/// class those two floats belong to and is `HeapAlloc(0xa68)` = 2664 bytes -- room to spare for a
+/// write ending at `0x8a4`. `inject_all_pad_devices` then writes ONLY into objects carrying this
+/// same vtable, which is what makes its writes provably in-bounds without resolving a data address
+/// the 1.17 map does not carry.
+static POLLED_DEVICE_VTABLE: AtomicUsize = AtomicUsize::new(0);
+
 unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usize) -> usize {
     let orig = ORIG_PAD_POLL.load(Ordering::SeqCst);
     let ret = if orig != 0 {
@@ -110,6 +123,9 @@ unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usiz
     // After the poll filled the stick from the real source, overwrite with FULL FORWARD while probing.
     // Every device is overwritten; the priority moderator's active device is the one that moves the char.
     if this != 0 && MOVE_PROBE_ACTIVE.load(Ordering::SeqCst) {
+        if let Some(vtable) = unsafe { crate::experiments::safe_read_usize(this) } {
+            POLLED_DEVICE_VTABLE.store(vtable, Ordering::SeqCst);
+        }
         unsafe {
             *((this + PAD_STICK_LX_OFFSET) as *mut f32) = 0.0;
             *((this + PAD_STICK_LY_OFFSET) as *mut f32) = 1.0;
@@ -122,21 +138,51 @@ unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usiz
 }
 
 /// FD4PadManager singleton RVA (GLOBAL_FD4PadManager, dump 0x14485dc20 == DLUID+0x8). Its `padDevices`
-/// is a `DLFixedVector<FD4PadDevice*,4>`: inline entries at +0x18, count at +0x40. Each `FD4PadDevice`
-/// holds the concrete `DLUserInputDevice` at +0x8, which carries the normalized stick at +0x89c/+0x8a0.
+/// is a `DLFixedVector<FD4PadDevice*,4>`: inline entries at +0x18, count at +0x40.
 /// bd er-movement-input-stick-boundary-2026-07-18.
 const FD4_PAD_MANAGER_RVA: u32 = 0x485dc20;
 const PAD_MGR_DEVICES_OFFSET: usize = 0x18;
 const PAD_MGR_DEVICE_COUNT_OFFSET: usize = 0x40;
-const FD4PADDEVICE_CONCRETE_OFFSET: usize = 0x8;
 
-/// Write full-forward LY (neutral LX) to the CONCRETE device of EVERY registered pad device, not just
-/// the one the poll hook fires for. Two reasons: (1) the player's active device (phantom XInput vs real
-/// ScePad/DInput) is unknown, so cover all up-to-4; (2) this dereferences `FD4PadDevice+0x8` to reach
-/// the concrete device explicitly -- if the poll hook's `this` is the FD4PadDevice (not the concrete
-/// device), `this+0x8a0` is 8 bytes off the real stick and never moves the char; this writes the
-/// definitely-correct `concrete+0x8a0`. Every deref is low-pointer guarded. Called only while injecting.
+/// `FD4PadDevice`'s OWN `DLFixedVector<DLUID::device*,4>`: entries at +0x10, count at +0x38.
+///
+/// CORRECTED 2026-08-31, and it was a heap overrun. This used to read `FD4PadDevice + 0x8` and call
+/// the result "the concrete device". `FD4::FD4PadDevice::FD4PadDevice` (1.16.2 `0x142663880`) does
+/// set `+0x8`, but from `DLUserInputManagerImpl`'s device factory with type **7**, and that factory
+/// (`0x141f28a80` -> `0x141f2a880`) answers type 7 with `HeapAlloc(0x7f8)` +
+/// `DLUID::VirtualMultiDevice::VirtualMultiDevice` -- the aggregator, 2040 bytes. Writing a float at
+/// `+0x8a0` puts bytes 2208..2211 into it, so BOTH stores landed entirely past the end of a live
+/// allocation, up to 172 bytes out. (The type-7 path is unconditional: the GUID lookup
+/// `0x141f286c0` returns its null sentinel for anything outside 1, 2 and 3..6, so the DirectInput
+/// branch that could have produced a larger object is never taken for 7.)
+///
+/// The real per-pad devices are the fixed vector the same constructor fills from types 3..6, each a
+/// `DLUID::PadDevice` = `HeapAlloc(0xa68)` = 2664 bytes, which is the class that owns
+/// `+0x89c`/`+0x8a0` -- the game's own poll writes those two floats on its `this`. Element `i` is at
+/// `+0x10 + i*8` and the count is at `+0x38`, bounded by the constructor's own
+/// `if (4 < count + 1) DLPanic("out of memory")`.
+const FD4PADDEVICE_DEVICES_OFFSET: usize = 0x10;
+const FD4PADDEVICE_DEVICE_COUNT_OFFSET: usize = 0x38;
+const FD4PADDEVICE_DEVICES_CAPACITY: usize = 4;
+
+/// Write full-forward LY (neutral LX) into every registered pad device that is the SAME CLASS the
+/// game's own poll just wrote the stick into, not just the one the poll hook fired for this frame.
+///
+/// The class test is the point. `+0x89c`/`+0x8a0` are fields of `DLUID::PadDevice` (0xa68 bytes);
+/// the same factory also hands out `KeyboardDevice` (0x8f0), a 0x810 device and the 0x7f8
+/// `VirtualMultiDevice`, and a write ending at `0x8a4` fits in only two of those four. Rather than
+/// resolve a vtable address the 1.17 data map does not carry, the sweep compares against
+/// [`POLLED_DEVICE_VTABLE`] -- the vtable of the object the engine itself polled and wrote these
+/// exact fields on. Anything that does not match is skipped, so a write can never land in a device
+/// class these offsets do not belong to. Every deref is low-pointer guarded. Called only while
+/// injecting.
 unsafe fn inject_all_pad_devices() {
+    // No engine-polled device seen yet -> nothing to compare a class against, so write nothing.
+    // A sweep with no class evidence is exactly what put 172 bytes past the end of a 0x7f8 object.
+    let want_vtable = POLLED_DEVICE_VTABLE.load(Ordering::SeqCst);
+    if want_vtable == 0 {
+        return;
+    }
     let Ok(mgr_ptr) = crate::game_rva(FD4_PAD_MANAGER_RVA) else {
         return;
     };
@@ -146,17 +192,26 @@ unsafe fn inject_all_pad_devices() {
     }
     let count = (unsafe { *((mgr + PAD_MGR_DEVICE_COUNT_OFFSET) as *const u32) } as usize).min(4);
     for i in 0..count {
-        let dev = unsafe { *((mgr + PAD_MGR_DEVICES_OFFSET + i * 8) as *const usize) };
-        if dev < 0x10000 {
+        let pad = unsafe { *((mgr + PAD_MGR_DEVICES_OFFSET + i * 8) as *const usize) };
+        if pad < 0x10000 {
             continue;
         }
-        let concrete = unsafe { *((dev + FD4PADDEVICE_CONCRETE_OFFSET) as *const usize) };
-        if concrete < 0x10000 {
-            continue;
-        }
-        unsafe {
-            *((concrete + PAD_STICK_LX_OFFSET) as *mut f32) = 0.0;
-            *((concrete + PAD_STICK_LY_OFFSET) as *mut f32) = 1.0;
+        let devices = (unsafe { *((pad + FD4PADDEVICE_DEVICE_COUNT_OFFSET) as *const u32) }
+            as usize)
+            .min(FD4PADDEVICE_DEVICES_CAPACITY);
+        for slot in 0..devices {
+            let device =
+                unsafe { *((pad + FD4PADDEVICE_DEVICES_OFFSET + slot * 8) as *const usize) };
+            if device < 0x10000 {
+                continue;
+            }
+            if unsafe { *(device as *const usize) } != want_vtable {
+                continue;
+            }
+            unsafe {
+                *((device + PAD_STICK_LX_OFFSET) as *mut f32) = 0.0;
+                *((device + PAD_STICK_LY_OFFSET) as *mut f32) = 1.0;
+            }
         }
     }
 }
@@ -220,7 +275,7 @@ fn install_focus_override_hook() {
                 return;
             }
         }
-        let Ok(addr) = crate::game_rva(IS_ENABLE_CONTROL_ON_DISACTIVE_RVA) else {
+        let Ok(addr) = crate::game_rva_for_hook(IS_ENABLE_CONTROL_ON_DISACTIVE_RVA) else {
             append_autoload_debug(format_args!("can-move: focus-override game_rva failed"));
             return;
         };
@@ -265,7 +320,7 @@ fn install_pad_poll_hook() {
                 return;
             }
         }
-        let Ok(addr) = crate::game_rva(FD4_PAD_DEVICE_POLL_RVA) else {
+        let Ok(addr) = crate::game_rva_for_hook(FD4_PAD_DEVICE_POLL_RVA) else {
             append_autoload_debug(format_args!("can-move: pad-poll game_rva failed"));
             return;
         };

@@ -128,6 +128,12 @@ pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_RVA: u32 = 0x67b290;
 pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_INSTALLED;
+/// Claim states for [`SYSTEM_QUIT_INWORLD_LOAD_INSTALLED`], read by `mh_install_hook_once`'s
+/// compare-exchange. The guard installs LAZILY (at the moment a switch arms, not at boot) and the
+/// arm can happen many times a session, so the claim is the ROLLED-BACK kind: a real failure puts
+/// the flag back to NOT_INSTALLED and the next arm retries.
+pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_INSTALLED_YES: usize = 1;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT;
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT;
 /// Count of frames the menu-pump Run hook forced GameMan.saveState/b80 back to idle to abort a
@@ -151,6 +157,10 @@ pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA: u32 = 0x67b200;
 pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED;
+/// Claim states for [`SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED`]; same rolled-back claim as its
+/// in-world-load sibling above, for the same reason (lazy install, re-armed per switch).
+pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED_YES: usize = 1;
 /// Count of in-world load requests we neutralized (returned "not armed") during the switch so
 /// GameMan.saveState/b80 stayed 0 and no NowLoading transition started.
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT;

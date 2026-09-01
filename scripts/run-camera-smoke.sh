@@ -19,4 +19,8 @@ set +a
 : "${ARTIFACT_DIR:=$PWD/target/runtime-probe/camera-smoke}"
 export ARTIFACT_DIR
 echo "camera-smoke: ARTIFACT_DIR=$ARTIFACT_DIR"
+# er-artifact-redirect: delegates-to scripts/run-product-continue-direct-probe.sh
+# That script owns the ER_QUICKLOAD_*_PATH redirects that keep this run's artifacts out of GAME_DIR
+# (where they are single-slot and the next launch destroys them). Do NOT add a second copy of that
+# list here; add to the delegate. `scripts/er-artifact-redirect-audit.py` reads the marker above.
 exec bash scripts/run-product-continue-direct-probe.sh

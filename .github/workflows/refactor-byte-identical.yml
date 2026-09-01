@@ -45,8 +45,12 @@ permissions:
   contents: read
 
 env:
-  # Keep in lockstep with .github/workflows/check.yml.
-  FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+  # Keep in lockstep with .github/workflows/check.yml, which carries the reasoning:
+  # this pin decides which game builds the DLLs survive, because every upstream
+  # singleton (`T::instance_ptr()`) resolves through upstream's own version-keyed
+  # RVA bundle and PANICS on a build that bundle does not list. `1027d24` is the
+  # first revision that knows 2.7.0.0 (patch 1.17) while keeping 2.6.2.0.
+  FROMSOFTWARE_RS_REV: 1027d24920c0d71fcc17666194d331af0666fc3a
   CARGO_XWIN_VERSION: 0.23.0
   TARGET: x86_64-pc-windows-msvc
 

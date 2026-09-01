@@ -76,7 +76,18 @@ pub(crate) static SAVE_FLOW_BOX_RECIPE: OnceLock<Option<SaveFlowBoxRecipe>> = On
 /// Resolve an RVA and confirm the live bytes still start with the prologue this address was
 /// verified against. Same fail-closed shape as `er_save_suppress::verify`: a mismatch means
 /// the running image is not the build these addresses came from, so we refuse to call it.
-pub(crate) fn save_flow_verify_rva(rva: u32, expected: &[u8], name: &str) -> Option<usize> {
+/// `mask` is the generated companion of `expected` (`<NAME>_MASK`): 0xff = compare exactly,
+/// 0x00 = a RIP-relative displacement. Those four bytes re-encode on every game build -- both
+/// the instruction and the global it names move -- so pinning them fails a target that is
+/// byte-for-byte the right function. `SAVE_REQUEST_RETRACT_B72_SIG` / `..._B73_SIG` disarmed
+/// exactly that way on 1.17. Nothing else is ever ignored; see
+/// `er_game_base::prologue::matches_masked`.
+pub(crate) fn save_flow_verify_rva(
+    rva: u32,
+    expected: &[u8],
+    mask: &[u8],
+    name: &str,
+) -> Option<usize> {
     let address = match game_rva(rva) {
         Ok(address) => address,
         Err(err) => {
@@ -94,13 +105,41 @@ pub(crate) fn save_flow_verify_rva(rva: u32, expected: &[u8], name: &str) -> Opt
         ));
         return None;
     }
-    if window != expected {
+    if !er_game_base::prologue::matches_masked(window, expected, mask) {
+        let ignored = er_game_base::prologue::ignored_count(mask);
+        let differing = er_game_base::prologue::compared_mismatches(window, expected, mask);
         append_autoload_debug(format_args!(
-            "save-flow-box: {name} @0x{address:x}: prologue mismatch (got {window:02x?}, want {expected:02x?}) -- refusing to call the MessageBoxBuilder recipe on this build"
+            "save-flow-box: {name} @0x{address:x}: prologue mismatch in {differing} compared byte(s) ({ignored} relocation byte(s) ignored) (got {window:02x?}, want {expected:02x?}) -- refusing to call the MessageBoxBuilder recipe on this build"
         ));
         return None;
     }
     Some(address)
+}
+
+/// [`save_flow_verify_rva`] for an address about to be DETOURED: same verification, but what comes
+/// back is the UNRESOLVED `base + rva`.
+///
+/// # Why the two cannot be one function
+///
+/// Most callers of [`save_flow_verify_rva`] are building a RECIPE of function pointers to CALL, and
+/// a call needs the resolved address. A detour does not: `er_hook::MhHook::new` and
+/// `register_union_hook` resolve what they are given, and they must be the ONE resolve that decides
+/// where the five bytes land.
+///
+/// Resolving the same 1.16.2 input twice is harmless -- that is what happens here, once to read the
+/// prologue and once inside the hook API, both reaching the same address. Resolving the OUTPUT is
+/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 SOURCE of another
+/// (the shift equalling the local function spacing, `B - A == C - B`), and then the second resolve
+/// silently returns a third, unrelated function. Three live detours were measured landing that way
+/// on 2026-08-30. `scripts/check-double-resolved-hook-targets.py` gates the shape.
+pub(crate) fn save_flow_verify_rva_for_hook(
+    rva: u32,
+    expected: &[u8],
+    mask: &[u8],
+    name: &str,
+) -> Option<usize> {
+    save_flow_verify_rva(rva, expected, mask, name)?;
+    er_game_base::mem::game_rva_for_hook(rva).ok()
 }
 
 /// The verified recipe, or `None` on a build whose bytes drifted. On the first failure the
@@ -114,31 +153,37 @@ pub(crate) fn save_flow_box_recipe() -> Option<&'static SaveFlowBoxRecipe> {
                     ctor: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA,
                         SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG,
+                        SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG_MASK,
                         "MessageBoxBuilder ctor",
                     )?,
                     add_yes: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_ADD_YES_RVA,
                         SYSTEM_QUIT_MSGBOX_ADD_YES_SIG,
+                        SYSTEM_QUIT_MSGBOX_ADD_YES_SIG_MASK,
                         "MessageBoxBuilder AddYes",
                     )?,
                     add_no: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_ADD_NO_RVA,
                         SYSTEM_QUIT_MSGBOX_ADD_NO_SIG,
+                        SYSTEM_QUIT_MSGBOX_ADD_NO_SIG_MASK,
                         "MessageBoxBuilder AddNo",
                     )?,
                     default_last: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA,
                         SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG,
+                        SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG_MASK,
                         "MessageBoxBuilder DefaultLast",
                     )?,
                     finalize: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_FINALIZE_RVA,
                         SYSTEM_QUIT_MSGBOX_FINALIZE_SIG,
+                        SYSTEM_QUIT_MSGBOX_FINALIZE_SIG_MASK,
                         "MessageBoxBuilder Finalize",
                     )?,
                     dtor: save_flow_verify_rva(
                         SYSTEM_QUIT_MSGBOX_DTOR_RVA,
                         SYSTEM_QUIT_MSGBOX_DTOR_SIG,
+                        SYSTEM_QUIT_MSGBOX_DTOR_SIG_MASK,
                         "MessageBoxBuilder dtor",
                     )?,
                     menu_string: game_rva(MENU_STRING_FROM_WIDE_RVA).ok()?,
@@ -321,7 +366,13 @@ pub(crate) fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usiz
         safe_read_usize(vtable + MSGBOX_DIALOG_VTABLE_UPDATE_SLOT * core::mem::size_of::<usize>())
     }
     .unwrap_or(0);
-    let ok = vtable != 0 && update_slot == base + MSGBOX_DIALOG_UPDATE_RVA;
+    let ok = vtable != 0
+        && update_slot
+            == er_game_base::mem::game_data_addr(
+                base,
+                MSGBOX_DIALOG_UPDATE_RVA,
+                "MSGBOX_DIALOG_UPDATE_RVA",
+            );
     (vtable, update_slot, ok)
 }
 
@@ -386,7 +437,11 @@ pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDec
         SAVE_FLOW_BOX_IDENTITY_LOST_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "save-flow-box: {label} IDENTITY LOST dialog=0x{dialog:x} vtable=0x{vtable:x} vtable[2]=0x{update_slot:x} (want 0x{:x}) -- the box was freed or reused before it reported; UNDECIDABLE, ending the flow WITHOUT writing (this is NOT the user pressing No)",
-            base + MSGBOX_DIALOG_UPDATE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                MSGBOX_DIALOG_UPDATE_RVA,
+                "MSGBOX_DIALOG_UPDATE_RVA"
+            )
         ));
         return Some(save_flow_box_finish(box_id, SaveFlowDecision::Undecidable));
     }
@@ -595,9 +650,10 @@ pub(crate) fn install_menu_job_emit_result_hook() {
     if MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst) != MENU_JOB_EMIT_RESULT_NOT_INSTALLED {
         return;
     }
-    let Some(addr) = save_flow_verify_rva(
+    let Some(addr) = save_flow_verify_rva_for_hook(
         MENU_JOB_EMIT_RESULT_RVA,
         MENU_JOB_EMIT_RESULT_SIG,
+        MENU_JOB_EMIT_RESULT_SIG_MASK,
         "MenuJob::EmitResult",
     ) else {
         return;

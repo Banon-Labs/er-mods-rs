@@ -125,7 +125,7 @@ fn build_title_stats_html_utf16_with(
         s.push_str(TITLE_STATS_LABEL_COLOR);
         s.push_str("\">");
         s.push_str(labels[i]);
-        s.push_str("</font> <font");
+        s.push_str("</font><font");
         if let Some(size) = size {
             s.push_str(" size=\"");
             s.push_str(size);
@@ -285,7 +285,7 @@ mod tests {
         let compact = utf16_to_string(&build_title_stats_compact_html_utf16(&attrs));
         assert!(compact.starts_with("<p align=\"left\">"));
         assert!(compact.ends_with("</p>"));
-        assert!(compact.contains("color=\"#8f887a\">VIG</font> <font"));
+        assert!(compact.contains("color=\"#8f887a\">VIG</font><font"));
         assert!(compact.contains("color=\"#e0736b\"><b>15</b></font>"));
         assert!(compact.contains("color=\"#c489c0\"><b>7</b></font>"));
         assert!(

@@ -6,6 +6,14 @@
 //! state is enabled, calls the game's own refill routine immediately. That preserves the game's
 //! item eligibility, stack/capacity, storage removal, and unlimited-consumables gates.
 
+// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
+// warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-better-refills`
+// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
+// target is unaffected: this allow does not exist there.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 #[cfg(windows)]
 mod crashlog;
 
@@ -40,18 +48,26 @@ const BONFIRE_FIRST_LVUP_RVA: usize = 0x59c1e0;
 /// `CS::EquipGameData::GetEquipInventoryData(equipGameData)` -> main `EquipInventoryData*`.
 /// Declared once in `er-game-base`; a second crate now needs the same address.
 use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
-/// `GetMainPlayerStorageBoxInventory()` -> storage-box `EquipInventoryData*`.
-const GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA: usize = 0x786810;
-/// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId)`.
-use er_game_base::rva::GET_ITEM_INVENTORY_IDX_RVA;
-/// `EquipInventoryData::GetQuantityByItemId(inventory, int *itemId)`.
-use er_game_base::rva::GET_QUANTITY_BY_ITEM_ID_RVA;
-/// `EquipInventoryData::ChangeAmountInBox(storageInventory, int *itemId, int requestedAmount)`.
-const CHANGE_AMOUNT_IN_BOX_RVA: usize = 0x24e3d0;
-/// `TransferItemBetweenInventoryDatas(itemIdx, source, destination, quantity, isWithdraw)`.
-const TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA: usize = 0x24db90;
-/// `CS::EquipGameData::UpdateTrophyStats(equipGameData, int *itemId)`.
-const UPDATE_TROPHY_STATS_RVA: usize = 0x24a1a0;
+// THE STORAGE-BOX TRANSFER SET, moved to `er-game-base::rva` on 2026-08-31:
+//
+//   GetMainPlayerStorageBoxInventory()                                    -> box inventory
+//   EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId)
+//   EquipInventoryData::GetQuantityByItemId(inventory, int *itemId)
+//   EquipInventoryData::ChangeAmountInBox(box, int *itemId, int requested)
+//   TransferItemBetweenInventoryDatas(itemIdx, src, dst, qty, reassignQuickSlot)
+//   CS::EquipGameData::UpdateTrophyStats(equipGameData, int *itemId)
+//
+// This crate deposits INTO the box on first grace; `er-build-import-runtime` now pulls back OUT
+// of it and deposits pot-group members to free capacity for an imported build. Two crates, one
+// set of addresses, and a second literal copy of each is exactly the alias drift
+// `check-rva-alias-drift.py` refuses. The 1.16.2 values stay pinned by this crate's own
+// `rvas_match_er_1162_static_re` test, which is now the check that the shared declaration did not
+// move under it.
+use er_game_base::rva::{
+    CHANGE_AMOUNT_IN_BOX_RVA, GET_ITEM_INVENTORY_IDX_RVA,
+    GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, GET_QUANTITY_BY_ITEM_ID_RVA,
+    TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA, UPDATE_TROPHY_STATS_RVA,
+};
 
 /// `GameDataMan -> PlayerGameData` is shared in `er-game-base`; within `PlayerGameData`,
 /// `equipGameData` is by-value at +0x2b0 and the native `ItemReplenishStateTracker*` used by
@@ -105,6 +121,13 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-better-refills", log_message);
+        er_hook::set_hook_logger(log_message);
         let module_base = module as usize;
         START.call_once(|| spawn_better_refills_task(module_base));
     }
@@ -127,24 +150,26 @@ fn spawn_better_refills_task(module_base: usize) {
                 unsafe { crashlog::force_crash_for_smoke() };
             }
             let mut attempts = 0_u64;
-            loop {
-                match game_module_base() {
-                    Ok(base) => {
-                        GAME_BASE.store(base, Ordering::SeqCst);
-                        install_better_refills_hooks(base);
-                        break;
+            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
+            let found = er_game_base::wait::poll_until(|| match game_module_base() {
+                Ok(base) => Some(base),
+                Err(err) => {
+                    if attempts == 0 || attempts.is_multiple_of(4096) {
+                        log_message(format_args!("install: waiting for game module base: {err}"));
                     }
-                    Err(err) => {
-                        if attempts == 0 || attempts.is_multiple_of(4096) {
-                            log_message(format_args!(
-                                "install: waiting for game module base: {err}"
-                            ));
-                        }
-                        attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
-                    }
+                    attempts = attempts.saturating_add(1);
+                    None
                 }
-            }
+            });
+            let Some(base) = found else {
+                log_message(format_args!(
+                    "install: no game module base; nothing installed"
+                ));
+                return;
+            };
+            GAME_BASE.store(base, Ordering::SeqCst);
+            install_better_refills_hooks(base);
         });
 }
 
@@ -186,23 +211,57 @@ fn install_better_refills_hooks(base: usize) {
         ),
     ];
 
+    // ONE REFUSED HOOK MUST NOT TAKE THE OTHERS DOWN WITH IT.
+    //
+    // This loop used to `return` on the first failure. That is much worse than it looks: the
+    // failure happens at `MhHook::new`, BEFORE `MH_ApplyQueued`, so bailing there leaves the
+    // hooks that DID queue successfully queued and never applied. The mod does not degrade, it
+    // goes completely inert -- and it says nothing, because the only log line is about the one
+    // that failed. Measured on 1.17: `OnEvent_BonfireFirstLvUp` is third in this list and its
+    // address was refused, so `SetItemReplenishState` and `MoveMapStep::UpdatePlayerInfo` were
+    // both mapped, both queued, and both dead, with no `hooks ACTIVE` line to say so.
+    //
+    // A refused address is now survivable per-hook: the features behind the hooks that resolved
+    // still work, and the ones that did not are named. Partial is the honest outcome of a partial
+    // migration; silence is not.
+    let mut installed: Vec<&str> = Vec::new();
+    let mut refused: Vec<&str> = Vec::new();
     for (name, target, detour, orig_slot) in targets {
         let hook = match unsafe { MhHook::new(target as *mut c_void, detour) } {
             Ok(hook) => hook,
             Err(status) => {
                 log_message(format_args!(
-                    "install: MhHook::new({name} @0x{target:x}) failed: {status:?}"
+                    "install: MhHook::new({name} @0x{target:x}) failed: {status:?} -- skipping this hook, keeping the rest"
                 ));
-                return;
+                refused.push(name);
+                continue;
             }
         };
         orig_slot.store(hook.trampoline() as usize, Ordering::SeqCst);
         if let Err(status) = unsafe { hook.queue_enable() } {
             log_message(format_args!(
-                "install: queue_enable({name} @0x{target:x}) failed: {status:?}"
+                "install: queue_enable({name} @0x{target:x}) failed: {status:?} -- skipping this hook, keeping the rest"
             ));
-            return;
+            refused.push(name);
+            continue;
         }
+        installed.push(name);
+    }
+
+    if installed.is_empty() {
+        log_message(format_args!(
+            "install: NO hook queued ({} refused: {}); nothing to apply",
+            refused.len(),
+            refused.join(", ")
+        ));
+        return;
+    }
+    if !refused.is_empty() {
+        log_message(format_args!(
+            "install: PARTIAL -- queued [{}], refused [{}]; applying the queued ones",
+            installed.join(", "),
+            refused.join(", ")
+        ));
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -210,9 +269,21 @@ fn install_better_refills_hooks(base: usize) {
             HOOK_STATE.store(HOOK_ACTIVE, Ordering::SeqCst);
             log_message(format_args!(
                 "install: hooks ACTIVE SetItemReplenishState @0x{:x}, MoveMapStep::UpdatePlayerInfo @0x{:x}, OnEvent_BonfireFirstLvUp @0x{:x}; native refill rva=0x{REPLANISH_ITEMS_FROM_CHEST_RVA:x}",
-                base + SET_ITEM_REPLENISH_STATE_RVA,
-                base + MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA,
-                base + BONFIRE_FIRST_LVUP_RVA,
+                er_game_base::mem::game_data_addr(
+                    base,
+                    SET_ITEM_REPLENISH_STATE_RVA,
+                    "SET_ITEM_REPLENISH_STATE_RVA"
+                ),
+                er_game_base::mem::game_data_addr(
+                    base,
+                    MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA,
+                    "MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA"
+                ),
+                er_game_base::mem::game_data_addr(
+                    base,
+                    BONFIRE_FIRST_LVUP_RVA,
+                    "BONFIRE_FIRST_LVUP_RVA"
+                ),
             ));
         }
         status => log_message(format_args!("install: MH_ApplyQueued failed: {status:?}")),
@@ -258,8 +329,17 @@ unsafe extern "system" fn set_item_replenish_state_hook(item_id: *mut i32) {
     }
 
     type ShouldReplenishItemFn = unsafe extern "system" fn(usize, *mut i32) -> bool;
+    // Through the 1.17 gate. `base + rva` calls the 1.16.2 address on a build that moved the
+    // function, and nothing refuses it -- the map knowing the new address is no help to a call
+    // that never asks.
+    let Ok(should_replenish_addr) = er_game_base::mem::game_rva_named(
+        SHOULD_REPLENISH_ITEM_RVA as u32,
+        "SHOULD_REPLENISH_ITEM_RVA",
+    ) else {
+        return;
+    };
     let should_replenish: ShouldReplenishItemFn =
-        unsafe { std::mem::transmute(base + SHOULD_REPLENISH_ITEM_RVA) };
+        unsafe { std::mem::transmute(should_replenish_addr) };
     if !unsafe { should_replenish(tracker, item_id) } {
         let skipped = SKIPPED_DISABLED_AFTER_TOGGLE.fetch_add(1, Ordering::SeqCst) + 1;
         let raw_item_id = unsafe { item_id.read_unaligned() };
@@ -320,9 +400,19 @@ unsafe extern "system" fn move_map_step_update_player_info_hook(this: *mut core:
         false
     } else {
         type IsItemReplanishFromChestRequestedFn = unsafe extern "system" fn() -> bool;
-        let is_requested: IsItemReplanishFromChestRequestedFn =
-            unsafe { std::mem::transmute(base + IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA) };
-        unsafe { is_requested() }
+        match er_game_base::mem::game_rva_named(
+            IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA as u32,
+            "IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA",
+        ) {
+            Ok(address) => {
+                let is_requested: IsItemReplanishFromChestRequestedFn =
+                    unsafe { std::mem::transmute(address) };
+                unsafe { is_requested() }
+            }
+            // No verified address means we cannot know; "no vanilla request pending" is the
+            // conservative answer, and it is what an unhooked build reports anyway.
+            Err(_) => false,
+        }
     };
 
     let orig = ORIG_MOVE_MAP_STEP_UPDATE_PLAYER_INFO.load(Ordering::SeqCst);
@@ -414,20 +504,63 @@ fn deposit_inventory_item_to_storage(raw_item_id: i32) -> DepositBackResult {
         unsafe extern "system" fn(i32, usize, usize, i32, bool);
     type UpdateTrophyStatsFn = unsafe extern "system" fn(usize, *mut i32);
 
+    // All seven through the 1.17 gate, resolved together and BEFORE any of them runs: this
+    // function moves items between inventories, so half a deposit is worse than none.
+    let (
+        Ok(get_main_inventory_addr),
+        Ok(get_storage_inventory_addr),
+        Ok(get_quantity_addr),
+        Ok(get_item_idx_addr),
+        Ok(change_amount_addr),
+        Ok(transfer_item_addr),
+        Ok(update_trophy_addr),
+    ) = (
+        er_game_base::mem::game_rva_named(
+            GET_EQUIP_INVENTORY_DATA_RVA as u32,
+            "GET_EQUIP_INVENTORY_DATA_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA as u32,
+            "GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            GET_QUANTITY_BY_ITEM_ID_RVA as u32,
+            "GET_QUANTITY_BY_ITEM_ID_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            GET_ITEM_INVENTORY_IDX_RVA as u32,
+            "GET_ITEM_INVENTORY_IDX_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            CHANGE_AMOUNT_IN_BOX_RVA as u32,
+            "CHANGE_AMOUNT_IN_BOX_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA as u32,
+            "TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA",
+        ),
+        er_game_base::mem::game_rva_named(
+            UPDATE_TROPHY_STATS_RVA as u32,
+            "UPDATE_TROPHY_STATS_RVA",
+        ),
+    )
+    else {
+        return DepositBackResult::Skipped {
+            reason: "inventory transfer functions have no verified address for this build",
+        };
+    };
     let get_main_inventory: GetEquipInventoryDataFn =
-        unsafe { std::mem::transmute(base + GET_EQUIP_INVENTORY_DATA_RVA) };
+        unsafe { std::mem::transmute(get_main_inventory_addr) };
     let get_storage_inventory: GetMainPlayerStorageBoxInventoryFn =
-        unsafe { std::mem::transmute(base + GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA) };
-    let get_quantity: GetQuantityByItemIdFn =
-        unsafe { std::mem::transmute(base + GET_QUANTITY_BY_ITEM_ID_RVA) };
-    let get_item_idx: GetItemInventoryIdxFn =
-        unsafe { std::mem::transmute(base + GET_ITEM_INVENTORY_IDX_RVA) };
+        unsafe { std::mem::transmute(get_storage_inventory_addr) };
+    let get_quantity: GetQuantityByItemIdFn = unsafe { std::mem::transmute(get_quantity_addr) };
+    let get_item_idx: GetItemInventoryIdxFn = unsafe { std::mem::transmute(get_item_idx_addr) };
     let change_amount_in_box: ChangeAmountInBoxFn =
-        unsafe { std::mem::transmute(base + CHANGE_AMOUNT_IN_BOX_RVA) };
+        unsafe { std::mem::transmute(change_amount_addr) };
     let transfer_item: TransferItemBetweenInventoryDatasFn =
-        unsafe { std::mem::transmute(base + TRANSFER_ITEM_BETWEEN_INVENTORY_DATAS_RVA) };
+        unsafe { std::mem::transmute(transfer_item_addr) };
     let update_trophy_stats: UpdateTrophyStatsFn =
-        unsafe { std::mem::transmute(base + UPDATE_TROPHY_STATS_RVA) };
+        unsafe { std::mem::transmute(update_trophy_addr) };
 
     let main_inventory = unsafe { get_main_inventory(equip_game_data) };
     if main_inventory == 0 {
@@ -526,8 +659,13 @@ fn call_native_refill(source: &str) -> bool {
     }
 
     type ReplanishItemsFromChestFn = unsafe extern "system" fn();
-    let refill: ReplanishItemsFromChestFn =
-        unsafe { std::mem::transmute(base + REPLANISH_ITEMS_FROM_CHEST_RVA) };
+    let Ok(refill_addr) = er_game_base::mem::game_rva_named(
+        REPLANISH_ITEMS_FROM_CHEST_RVA as u32,
+        "REPLANISH_ITEMS_FROM_CHEST_RVA",
+    ) else {
+        return false;
+    };
+    let refill: ReplanishItemsFromChestFn = unsafe { std::mem::transmute(refill_addr) };
     unsafe { refill() };
     true
 }
@@ -535,7 +673,13 @@ fn call_native_refill(source: &str) -> bool {
 #[cfg(windows)]
 unsafe fn resolve_player_game_data() -> Option<usize> {
     let base = GAME_BASE.load(Ordering::SeqCst);
-    let game_data_man = unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }?;
+    let game_data_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }?;
     unsafe { safe_read_usize(game_data_man + 0x8) }
         .filter(|&player_game_data| player_game_data != 0)
 }

@@ -106,9 +106,10 @@ pub const WORLD_CHR_MAN_WORLD_STABLE_VALUE: i32 = 2;
 /// Sem-traced to test whether the online flags re-enable during the reload's in-world window.
 pub const GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
 pub const GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
-/// b80 (== GameMan.save_state) FSM state names for the loading-bar / logs. See the
+/// `GameMan::saveState` (b80) state names for the loading-bar / logs, as the LOAD lane walks
+/// them; the SAVE lane shares the slot and stamps 1. See the
 /// `GAME_MAN_SAVE_STATE_*` / `FULLREAD_B80_RESIDENT` constants (constants::autoload_state).
-pub fn load_in_progress_b80_name(v: i32) -> &'static str {
+pub fn save_state_b80_name(v: i32) -> &'static str {
     match v {
         GAME_MAN_SAVE_STATE_IDLE => "IDLE",
         GAME_MAN_SAVE_STATE_OPENING => "OPENING",
@@ -318,7 +319,26 @@ pub const MOUNT_GUARD_DESC_BITS_CLEAR_MASK: u32 = 0x79;
 /// the archive name is an MSVC wstring at `entry+0x08` and the `Archive*` is at `entry+0x30`; lock at
 /// `R+0xB8`. Walk it to see whether the m28 (area 0x1c) player-map archive is mounted on the load-2 stall.
 /// RE: bd step3 CSEblFileManager mount-table subagent 2026-07-17.
-pub const EBL_REGISTRY_GLOBAL_RVA: u32 = 0x084864a8;
+///
+/// ALIAS, NOT A DECLARATION. This name and `er-game-base`'s
+/// `DL_FILE_DEVICE_MANAGER_SINGLETON_RVA` are the same global under two names, and until
+/// 2026-08-30 this one held a corrupted literal of its own: `0x84864a8`, the leading digits of
+/// `0x48464a8` written `848` instead of `484`. That is `0x2684ca8` (38.5 MiB) past the end of the
+/// `0x5e01800`-byte image, so every reader took its `else` branch from the day it was written.
+///
+/// `game_rva` DID NOT REFUSE IT, and that is the part worth carrying forward. The resolver only
+/// consults the 1.16.2 -> 1.17 table for addresses INSIDE the image (`is_game_image_address`);
+/// anything outside is handed back unchanged, on the reasoning that an import or a non-image
+/// address means the same thing on every patch. A corrupt RVA is outside the image by
+/// construction, so it takes the passthrough and arrives at `safe_read_usize` looking resolved.
+/// The failure surfaced only as `ReadProcessMemory` returning false, which the call sites fold
+/// into `None`/`0` -- indistinguishable from a genuinely null global. An out-of-image constant is
+/// therefore the one class of wrong address the refusal machinery cannot catch.
+///
+/// The byte proof and the 1.17 carry live with the owning declaration; deriving instead of
+/// re-typing is what keeps the two in step.
+pub const EBL_REGISTRY_GLOBAL_RVA: u32 =
+    er_game_base::rva::DL_FILE_DEVICE_MANAGER_SINGLETON_RVA as u32;
 /// In-game player-map MOUNT ORCHESTRATOR (deobf 0x14082dbf0): a thin wrapper that calls 0x14082faf0
 /// (which builds + dispatches the player-map EBL mount -- the `0x82dc1c` step). It is dispatched as an
 /// in-game STEP (caller 0x14082eb7e is a step-thunk); on the warm System->Quit->Load reload the step is

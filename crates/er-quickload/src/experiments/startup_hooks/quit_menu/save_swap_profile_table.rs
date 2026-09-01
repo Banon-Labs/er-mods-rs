@@ -12,15 +12,37 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
         ));
         return 0;
     }
-    let mut st = system_quit_save_swap_lock();
-    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
-        st.summary_ptr = summary;
-        st.summary_snapshot = unsafe {
-            core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+    // THE SNAPSHOT IS TAKEN FRESH ON EVERY PREVIEW, NEVER REUSED.
+    //
+    // This used to short-circuit on `!summary_snapshot.is_empty() && summary_ptr == summary`, which
+    // made the snapshot a process-lifetime latch: the ProfileSummary allocation is reused across
+    // save containers, so a snapshot taken minutes and one container earlier was kept and would
+    // have been written back as "the user's real rows" -- the previous character's stats, which is
+    // the remaining half of `er-effects-rs-fmy6`. Re-reading costs one memcpy per pick.
+    //
+    // WHERE the pre-call records live is the subtlety. The save picker may have its browse-row
+    // LABELS in the live allocation right now (a pick arrives while the picker still owns the
+    // window), and `write_profile_summary_records_from_save_bytes` uses this image as the
+    // structural template for slots it cannot source -- so reading the live allocation blind would
+    // seed the preview from `[ new ]`. The picker's own snapshot IS the game's records, so prefer
+    // it whenever one is live for this same allocation.
+    let summary_snapshot = {
+        let mut st = system_quit_save_swap_lock();
+        let from_rows = st.rows_staged
+            && st.rows_summary_ptr == summary
+            && st.rows_snapshot.len() == PROFILE_SUMMARY_TOTAL_BYTES;
+        let snapshot = if from_rows {
+            st.rows_snapshot.clone()
+        } else {
+            unsafe {
+                core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES)
+                    .to_vec()
+            }
         };
-    }
-    let summary_snapshot = st.summary_snapshot.clone();
-    drop(st);
+        st.summary_ptr = summary;
+        st.summary_snapshot = snapshot.clone();
+        snapshot
+    };
 
     let (mask, preview_stats) = unsafe {
         write_profile_summary_records_from_save_bytes(base, summary, &summary_snapshot, bytes)
@@ -31,6 +53,15 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             st.candidate_slot_mask = mask;
             st.candidate_stats_utf16 = preview_stats;
             st.preview_applied = true;
+            // OWNERSHIP HANDOFF, and only now that the preview actually took. The browse rows are
+            // gone from the allocation (the writer above zeroes all ten records first) and this
+            // preview's snapshot carries the same game records the staging snapshot did, so the
+            // preview owns the backout from here. Transferring only on success matters: a preview
+            // that found no readable slot leaves the picker on screen, and the rows restore below
+            // is what puts its listing back.
+            st.rows_staged = false;
+            st.rows_summary_ptr = 0;
+            st.rows_snapshot = Vec::new();
         }
         // THE ROWS ABOUT TO BE DRAWN DESCRIBE **THIS** SAVE, SO OUR CACHES MUST TOO. The native
         // ProfileSummary above now holds the previewed save's records, but the name and the whole
@@ -58,9 +89,26 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
         if let Some(target) = er_quit_menu_core::profile_rows::preview_cursor_slot(mask as u32) {
             SYSTEM_QUIT_PROFILE_SELECT_CURSOR_TARGET_SLOT.store(target, Ordering::SeqCst);
         }
-        let refresh: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        let refresh: unsafe extern "system" fn() = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_RENDERER_REFRESH_RVA,
+                    "PROFILE_RENDERER_REFRESH_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return 0,
+                },
+            )
+        };
         unsafe { refresh() };
+    } else {
+        // NOTHING PREVIEWED, BUT THE RECORDS ARE ALREADY DESTROYED.
+        // `write_profile_summary_records_from_save_bytes` zeroes all ten records and their
+        // occupancy bytes BEFORE it discovers whether the container has a readable slot, so a
+        // refused pick leaves the live summary blank. The caller keeps the picker open so the user
+        // can choose another file -- which needs its rows back. (The old comment at that call site
+        // claimed "our browse rows were untouched"; they never were.)
+        unsafe { save_picker_restore_staged_row_records("preview-found-no-slots") };
     }
     mask
 }
@@ -102,10 +150,119 @@ pub(crate) fn system_quit_save_swap_restore_original_file(
 /// "Maddened Bean, RL 100" where RL 100, the attributes and the location were all angrE's.
 pub(crate) fn system_quit_foreign_preview_active() -> bool {
     let st = system_quit_save_swap_lock();
-    st.preview_applied && !st.committed
+    // The question this answers is "do the live ProfileSummary records describe something OTHER
+    // than the loaded character", and the save picker's staged browse rows are as much "something
+    // other" as a foreign save's records. It used to read `preview_applied` alone, which was true
+    // during row staging only because staging set that flag -- an accident of the conflation the
+    // `rows_staged` split removed. Naming the staging explicitly keeps the row presentation
+    // behaving exactly as it did while the restore concerns stay separate.
+    st.rows_staged || (st.preview_applied && !st.committed)
+}
+
+/// Put the game's own `CS::ProfileSummary` records back after the in-game save picker wrote its
+/// browse-row labels over them. Returns true when a restore was actually performed.
+///
+/// UNCONDITIONAL BY DESIGN -- IT IS NOT GATED ON `committed`, AND MUST NOT BE.
+///
+/// The defect this exists to close (live run 2026-08-29): a save-DESTINATION picker staged four row
+/// records at +313751ms; `committed` had been set at +118359ms by an unrelated cross-file load, and
+/// the only thing that ever clears it sits PAST the guard that reads it, so it is sticky for the
+/// life of the process. Every restore after that point silently no-op'd -- zero
+/// `restored live ProfileSummary snapshot` lines in a 600 MB log -- and the picker's labels stayed
+/// in the records. The user's next three loading screens rendered `[..] EldenRing` and `[ new ]`
+/// as character names beside `RL 0`, and the loading portrait drew nothing because the record it
+/// had to build from was a zeroed row.
+///
+/// A committed foreign PREVIEW genuinely must survive (its records are what the game is about to
+/// load). Browse-row labels never must: they are UI, they describe no character, and there is no
+/// state in which leaving them in a game-owned structure is correct.
+///
+/// # Safety
+///
+/// Writes `PROFILE_SUMMARY_TOTAL_BYTES` through a raw pointer, so it writes ONLY when the live
+/// summary pointer still equals the allocation the snapshot came from -- a stricter check than the
+/// preview restore's bare `>= 0x10000`, because a container reallocation between staging and
+/// restore would otherwise be a use-after-free. Menu/game-thread only, like every other writer of
+/// these records.
+pub(crate) unsafe fn save_picker_restore_staged_row_records(reason: &str) -> bool {
+    let mut st = system_quit_save_swap_lock();
+    if !st.rows_staged {
+        return false;
+    }
+    let live = unsafe { system_quit_profile_summary_ptr() };
+    let target = st.rows_summary_ptr;
+    let snapshot_len = st.rows_snapshot.len();
+    // "CANNOT READ THE SUMMARY RIGHT NOW" IS NOT "THE SUMMARY IS GONE". `GameDataMan+0x78` reads as
+    // 0 through the whole clean-title window, and consuming the latch on that reading would throw
+    // away the only copy of the user's records over a pointer that is about to come back. Keep it
+    // armed and let the per-frame sweep retry; the log is rate-limited because that sweep runs every
+    // frame.
+    if live < 0x10000 {
+        let n = SAVE_PICKER_ROW_RECORDS_RESTORE_DEFERRED.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 2 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "save-picker: DEFERRED the staged-row restore for {reason} -- the live ProfileSummary is unreadable (0x{live:x}) #{n}; the snapshot stays armed and the per-frame sweep retries"
+            ));
+        }
+        return false;
+    }
+    let writable =
+        target >= 0x10000 && target == live && snapshot_len == PROFILE_SUMMARY_TOTAL_BYTES;
+    if writable {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                st.rows_snapshot.as_ptr(),
+                target as *mut u8,
+                snapshot_len,
+            );
+        }
+    }
+    // Consume the latch now, written or not. `live` is readable and is NOT the allocation we
+    // snapshotted, so that allocation is gone: there is nothing left to put back, and keeping its
+    // image armed would only make a later restore write a dead container's records into whatever
+    // now occupies the address.
+    st.rows_staged = false;
+    st.rows_summary_ptr = 0;
+    st.rows_snapshot = Vec::new();
+    drop(st);
+    // The staging zeroed these per slot; the restored records are the game's own, whose faces this
+    // preview-only fingerprint array says nothing about.
+    for face_hash in PROFILE_PREVIEW_FACE_HASH
+        .iter()
+        .take(TITLE_PROFILE_SLOT_COUNT)
+    {
+        face_hash.store(0, Ordering::SeqCst);
+    }
+    if writable
+        && game_module_base().is_ok()
+        && let Some(address) = crate::experiments::gated_game_fn(
+            PROFILE_RENDERER_REFRESH_RVA,
+            "PROFILE_RENDERER_REFRESH_RVA",
+        )
+    {
+        let refresh: unsafe extern "system" fn() = unsafe { std::mem::transmute(address) };
+        unsafe { refresh() };
+    }
+    SAVE_PICKER_ROW_RECORDS_RESTORED.fetch_add(1, Ordering::SeqCst);
+    if !writable {
+        SAVE_PICKER_ROW_RECORDS_RESTORE_UNWRITABLE.fetch_add(1, Ordering::SeqCst);
+    }
+    SAVE_PICKER_STAGED_ROW_COUNT.store(0, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-picker: restored the game's live ProfileSummary records over the staged browse rows for {reason} summary=0x{target:x} live=0x{live:x} bytes={snapshot_len} written={writable}"
+    ));
+    true
 }
 
 pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
+    // TWO INDEPENDENT RESTORES, IN ORDER. The picker's browse rows come back unconditionally; the
+    // foreign-save preview's backout keeps its `committed` suppression, because a committed preview
+    // is the save the game is about to load. Splitting them is the fix for the sticky-`committed`
+    // defect described on `save_picker_restore_staged_row_records`. They are mutually exclusive in
+    // practice (a successful preview takes ownership of the summary from the staging), and where
+    // both were somehow live the two snapshots hold the same game records, so the order is safe
+    // either way.
+    unsafe { save_picker_restore_staged_row_records(reason) };
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
         return;
@@ -118,9 +275,18 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
                 st.summary_snapshot.len(),
             );
         }
-        if let Ok(base) = game_module_base() {
-            let refresh: unsafe extern "system" fn() =
-                unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        if let Ok(_base) = game_module_base() {
+            let refresh: unsafe extern "system" fn() = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        PROFILE_RENDERER_REFRESH_RVA,
+                        "PROFILE_RENDERER_REFRESH_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { refresh() };
         }
         append_autoload_debug(format_args!(
@@ -435,8 +601,24 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
     if PROFILE_SIZE_PATCHED.load(Ordering::SeqCst) & bit != 0 {
         return true;
     }
-    let table = base + PROFILE_OFFSCREEN_SIZE_TABLE_RVA;
-    let row = table + target as usize * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE;
+    // RESOLVED, NOT ADDED (2026-08-30): this is a `.data` table and it is WRITTEN below. A stale
+    // RVA on 1.17 does not fault -- the `cur == PROFILE_OFFSCREEN_SIZE_INIT` check would have to
+    // false-positive first -- but the value check is a filter, not a build gate, and the cost of
+    // it passing on the wrong table is a 16-byte store into an unknown global. `_offset` keeps the
+    // refusal answering 0 for every row rather than turning it into the address `row_index * 16`.
+    let row = er_game_base::mem::game_data_addr_offset(
+        base,
+        PROFILE_OFFSCREEN_SIZE_TABLE_RVA,
+        "PROFILE_OFFSCREEN_SIZE_TABLE_RVA",
+        target as usize * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE,
+    );
+    if row == 0 {
+        append_autoload_debug(format_args!(
+            "portrait-res: REFUSED -- PROFILE_OFFSCREEN_SIZE_TABLE_RVA 0x{PROFILE_OFFSCREEN_SIZE_TABLE_RVA:x} \
+             has no verified mapping for this build; the offscreen size stays native for slot {target}"
+        ));
+        return false;
+    }
     let cur = unsafe { safe_read_usize(row) }.unwrap_or(0);
     let patched = if cur == PROFILE_OFFSCREEN_SIZE_TARGET {
         true
@@ -543,7 +725,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let probe = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     if !valid(probe)
         || unsafe { safe_read_usize(probe) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
     {
         return;
     }
@@ -616,8 +802,17 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // and it re-resolves the pool pointer itself on every call.
     unsafe { portrait_equip_oracle_sample(base, summary, target_slot) };
     {
-        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
-            unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
+            core::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_MARK_SLOT_USED_RVA,
+                    "PROFILE_MARK_SLOT_USED_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let mut kicked = 0u32;
         let mut kicked_mask = 0u32;
         for s in 0..10i32 {
@@ -631,7 +826,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if !valid(r)
                 || unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    != er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
             {
                 continue;
             }
@@ -673,8 +872,17 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     }
     if counter.is_multiple_of(240) || (feed_window && counter.is_multiple_of(8)) {
         let log_this = counter.is_multiple_of(240); // throttle the in-window feed log to once per 240
-        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
-            unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 = unsafe {
+            core::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_MARK_SLOT_USED_RVA,
+                    "PROFILE_MARK_SLOT_USED_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let mut marked = 0u32;
         for s in 0..10i32 {
             // ONE SLOT (GX-overflow revert, user 2026-07-03): build ONLY the autoload target. Rendering
@@ -693,7 +901,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             let r_valid = valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+                    == er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    );
             let _ = unsafe { mark(summary, s) };
             // PER-SLOT kick replica in place of the engine's GLOBAL refresh: the global form kicked
             // every marked slot (all the save's characters) -- the cross-slot portrait swap source.
@@ -714,7 +926,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    == er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
                 && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0)
                     != 0
             {
@@ -743,7 +959,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    == er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
             {
                 unsafe { apply_profile_camera_override(base, r, s) };
             }
@@ -756,7 +976,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
         if valid(r)
             && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             let target = portrait_target_slot();
             if s == target
@@ -787,7 +1011,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if !valid(r)
                 || unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                    != er_game_base::mem::game_data_addr(
+                        base,
+                        TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                    )
             {
                 continue;
             }
@@ -992,7 +1220,11 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         };
         if valid(renderer)
             && unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
             PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
@@ -1065,7 +1297,7 @@ pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
                 let is_valid = r != 0
                     && r != null
                     && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                        == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+                        == er_game_base::mem::game_data_addr(base, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA");
                 if is_valid {
                     valid_mask |= 1 << s;
                 } else {
@@ -1099,16 +1331,17 @@ pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
         }
         if null_mask == PROFILE_TABLE_ALL_SLOTS_MASK
             && PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) != 0
+            && let Some(build_addr) =
+                crate::experiments::gated_game_fn(PROFILE_TABLE_BUILDER_RVA, "PROFILE_TABLE_BUILDER_RVA")
         {
-            let build: unsafe extern "system" fn() =
-                unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
+            let build: unsafe extern "system" fn() = unsafe { core::mem::transmute(build_addr) };
             unsafe { build() };
             let n = PROFILE_SELECT_TABLE_REPAIR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             let (revalid_mask, renull_mask) = scan_table(&mut ptrs);
             null_mask = renull_mask;
             append_crash_log(format_args!(
                 "PROFILESELECT-TABLE-REPAIR #{n}: fully-empty renderer table at native builder entry -> re-ran native table setup 0x{:x}; post-repair valid_mask=0x{revalid_mask:x} null_mask=0x{renull_mask:x} (er-effects-rs-j3r)",
-                base + PROFILE_TABLE_BUILDER_RVA
+                build_addr
             ));
             append_autoload_debug(format_args!(
                 "profileselect-table-repair #{n}: rebuilt empty 10-slot renderer table via native setup before the native builder walked it; post-repair valid_mask=0x{revalid_mask:x} (er-effects-rs-j3r)"

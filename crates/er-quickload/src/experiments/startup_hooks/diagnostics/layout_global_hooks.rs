@@ -75,7 +75,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"
         ));
@@ -101,7 +101,16 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as Load Profile and Load Save Profiles at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
+                        // Print the return address this build will actually compare against, not
+                        // the 1.16.2 constant. The old line printed 0x958a20 on every build --
+                        // including the ones where nothing was ever going to match it, which made
+                        // the log read like the feature was armed when it was inert.
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone the Quit Game row as Load Character / Load Character from File / Load Build from URL at caller rva {}",
+                        match er_title_flow::system_quit_row_return_rvas() {
+                            Some((first, second)) =>
+                                format!("0x{first:x} (second row 0x{second:x})"),
+                            None => "UNRESOLVED on this build -- no rows will be cloned".to_owned(),
+                        }
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -132,7 +141,7 @@ pub(crate) fn install_menu_window_latch_hook() {
             return;
         }
     }
-    let Ok(ctor_addr) = game_rva(SCENE_OBJ_PROXY_CTOR_RVA) else {
+    let Ok(ctor_addr) = game_rva_for_hook(SCENE_OBJ_PROXY_CTOR_RVA) else {
         append_autoload_debug(format_args!(
             "menuwindow-latch: failed to resolve SceneObjProxy ctor rva"
         ));
@@ -177,16 +186,17 @@ pub(crate) fn install_menu_window_latch_hook() {
 /// the expected opcode first (aborts if the binary differs), and restores page
 /// protection after. Spawned early at DLL attach so it lands before state 2 runs.
 pub(crate) fn apply_splash_skip() {
-    let Ok(base) = game_module_base() else {
-        append_autoload_debug(format_args!("splash-skip: module base unavailable"));
+    let Some(address) = er_title_flow::splash_skip_je_address() else {
+        append_autoload_debug(format_args!(
+            "splash-skip: STEP_BeginLogo has no verified address for this build -- not patching"
+        ));
         return;
     };
-    let target = (base + SPLASH_SKIP_RVA) as *mut u8;
+    let target = address as *mut u8;
     let existing = unsafe { *target };
     if existing != SPLASH_SKIP_EXPECTED_JE {
         append_autoload_debug(format_args!(
-            "splash-skip: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{SPLASH_SKIP_EXPECTED_JE:x}",
-            base + SPLASH_SKIP_RVA
+            "splash-skip: ABORT -- byte at 0x{address:x} is 0x{existing:x}, expected 0x{SPLASH_SKIP_EXPECTED_JE:x}"
         ));
         return;
     }
@@ -214,8 +224,7 @@ pub(crate) fn apply_splash_skip() {
         )
     };
     append_autoload_debug(format_args!(
-        "splash-skip: patched 0x{:x} 0x{SPLASH_SKIP_EXPECTED_JE:x}->0x{SPLASH_SKIP_REPLACEMENT_JG:x}",
-        base + SPLASH_SKIP_RVA
+        "splash-skip: patched 0x{address:x} 0x{SPLASH_SKIP_EXPECTED_JE:x}->0x{SPLASH_SKIP_REPLACEMENT_JG:x}"
     ));
 }
 
@@ -296,7 +305,7 @@ pub(crate) fn install_sound_post_event_observer_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SOUND_POST_EVENT_CORE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(SOUND_POST_EVENT_CORE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "sound-post-event: failed to resolve rva 0x{SOUND_POST_EVENT_CORE_RVA:x}"
         ));

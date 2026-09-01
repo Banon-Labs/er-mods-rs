@@ -253,6 +253,27 @@ pub fn register_with_host(_draw: OverlayDrawFn) -> bool {
     false
 }
 
+/// Register `draw` with a host that is KNOWN to exist, waiting out its designation.
+///
+/// Call this only after [`crate::OverlayClaim::LostToAnotherModule`], which proves some other
+/// module created the ownership mutex. That module calls [`designate_host`] a handful of
+/// instructions after the `CreateMutexW` this caller observed -- so the answer is almost always
+/// yes on the first attempt, but "almost always" is exactly the gap that a single try loses to,
+/// and losing it means a permanently blank overlay.
+///
+/// Bounded by [`er_game_base::wait::poll_until`], which spins in user space and reaches no
+/// wineserver, so a host that somehow never designates itself costs a bounded spin on this
+/// module's own install thread rather than the process.
+#[cfg(windows)]
+pub fn register_with_host_retrying(draw: OverlayDrawFn) -> bool {
+    er_game_base::wait::poll_until(|| register_with_host(draw).then_some(())).is_some()
+}
+
+#[cfg(not(windows))]
+pub fn register_with_host_retrying(_draw: OverlayDrawFn) -> bool {
+    false
+}
+
 /// Adopt the host's imgui context and allocators, then hand back its `&Ui`.
 ///
 /// Every guest draw calls this FIRST. Skipping it is not a subtle degradation: imgui's context is

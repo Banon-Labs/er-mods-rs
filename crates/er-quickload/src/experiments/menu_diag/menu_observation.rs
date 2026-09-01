@@ -82,8 +82,16 @@ pub(crate) unsafe fn diagnostic_menu_walk(
     const INTERP_COUNT: usize = 2;
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let item_vtable_abs = module_base + ITEM_VTABLE_RVA;
-    let dialog_factory_abs = module_base + DIALOG_FACTORY_RVA;
+    let item_vtable_abs =
+        er_game_base::mem::game_data_addr(module_base, ITEM_VTABLE_RVA, "ITEM_VTABLE_RVA");
+    // RESOLVED, like the `ITEM_VTABLE_RVA` sibling one line up. `CS::LiveDialogFactory` moved on
+    // 1.17 (0x81ead0 -> 0x81f950), so the raw form matched no functor and this walk classified
+    // every row as "not the Load-Game leaf".
+    let dialog_factory_abs = er_game_base::mem::game_data_addr(
+        module_base,
+        DIALOG_FACTORY_RVA,
+        "LIVE_DIALOG_FACTORY_RVA",
+    );
     let container = owner + ITEM_CONTAINER_138;
 
     let state = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
@@ -178,7 +186,9 @@ pub(crate) unsafe fn diagnostic_menu_walk(
                     }
                     hop += WALK_STEP;
                 }
-                if docall == dialog_factory_abs {
+                // Post-loop, so `docall` may be 0 from an unreadable hop -- and a refused
+                // `dialog_factory_abs` is 0 too. Screen it here; the in-loop test cannot reach 0.
+                if dialog_factory_abs != null && docall == dialog_factory_abs {
                     is_load_game = true;
                 }
             }
@@ -218,7 +228,18 @@ pub(crate) unsafe fn functor_chain_hits_factory(
     const HOP_START: usize = 0;
     const HOP_STEP: usize = 1;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let dialog_factory_abs = module_base + DIALOG_FACTORY_RVA;
+    // RESOLVED, and a refusal must not answer `true`. `LIVE_DIALOG_FACTORY_RVA` moved on 1.17
+    // (0x81ead0 -> 0x81f950), so this predicate -- the sole discriminator between the Load-Game
+    // leaf and Continue -- returned `false` for every item. Refusing early matters as much:
+    // `docall` is `unwrap_or(null)` = 0, which a refused RVA would match.
+    let dialog_factory_abs = er_game_base::mem::game_data_addr(
+        module_base,
+        DIALOG_FACTORY_RVA,
+        "LIVE_DIALOG_FACTORY_RVA",
+    );
+    if dialog_factory_abs == null {
+        return false;
+    }
     let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }.unwrap_or(null);
     if functor == null {
         return false;
@@ -244,6 +265,7 @@ pub(crate) unsafe fn functor_chain_hits_factory(
         }
         hop += HOP_STEP;
     }
+    // Screened at the top, so a `docall` of 0 from an unreadable hop cannot answer `true`.
     docall == dialog_factory_abs
 }
 
@@ -295,10 +317,20 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     } else {
         BAD_I32
     };
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "titletop-entries: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} (expect 0x{:x}) -- not the TitleTopDialog, skip",
-            base + TITLE_TOP_DIALOG_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA"
+            )
         ));
         return (None, None, cursor);
     }
@@ -315,7 +347,19 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     const QW_START: usize = 0;
     const QW_STEP: usize = 1;
     const PTR_SZ: usize = 8;
-    let router_vt = base + ROUTER_VTABLE_RVA;
+    // RESOLVED, and refused rather than used as a scan needle. The title CSMenu vtable moved on
+    // 1.17 (0x2afa070 -> 0x2afd0f0), so the raw value matched nothing, `router_this` was never
+    // found, and the selectable-row enumeration returned `(None, None, cursor)` every time. 0 as
+    // a needle would match the first zeroed qword of the 0x400-qword sweep -- the same failure
+    // `er-input-harness::title_scan` refuses to scan for.
+    let router_vt =
+        er_game_base::mem::game_data_addr(base, ROUTER_VTABLE_RVA, "ROUTER_THIS_VTABLE_RVA");
+    if router_vt == NULL {
+        append_autoload_debug(format_args!(
+            "titletop-entries: dialog=0x{dialog:x} -- ROUTER_THIS_VTABLE_RVA has no mapping on this build; refusing to scan (0 as a needle matches every zeroed qword)"
+        ));
+        return (None, None, cursor);
+    }
     // Prefer the ctor-latched router_this (cap_csmenu_ctor_hook captures it at construction --
     // it is NOT field-linked from the TitleTopDialog). Fall back to a dialog-field scan.
     let mut router_this = MENU_ROUTER_THIS.load(Ordering::SeqCst);
@@ -354,21 +398,39 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     append_autoload_debug(format_args!(
         "titletop-entries: dialog=0x{dialog:x} menu=0x{menu:x} count={count} cursor={cursor} bound={bound} vec=[0x{vec_begin:x}..0x{vec_end:x}]"
     ));
-    let factory_abs = base + DIALOG_FACTORY_RVA;
-    let confirm_abs = base + CONTINUE_CONFIRM_RVA;
-    let continue_wrapper_abs = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
+    // All three classifier targets RESOLVED. Two were raw and both moved on 1.17
+    // (`LIVE_DIALOG_FACTORY_RVA` 0x81ead0 -> 0x81f950, `TRACE_MENU_CONTINUE_WRAPPER_RVA`
+    // 0x82bac0 -> 0x82cab0), so `classify` could return only `(false, false)` and every row was
+    // logged as neither Load-Game nor Continue.
+    let factory_abs =
+        er_game_base::mem::game_data_addr(base, DIALOG_FACTORY_RVA, "LIVE_DIALOG_FACTORY_RVA");
+    let confirm_abs =
+        er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA");
+    let continue_wrapper_abs = er_game_base::mem::game_data_addr(
+        base,
+        TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
+        "TRACE_MENU_CONTINUE_WRAPPER_RVA",
+    );
     // Decode a function/thunk address forward through up to JMP_HOPS jmp-thunks, reporting if it
     // reaches the Load-Game factory, Continue confirm, or native Continue wrapper. (Full-function
     // actions that only CALL the factory internally won't chain-resolve -- the raw action address is
     // logged regardless.)
+    // A resolved 0 is a REFUSAL and the walk ends at 0 on any unreadable hop, so every comparison
+    // requires the expected side to be real -- including the two after the loop, where `tgt` is
+    // 0 most often.
+    let is_factory = |tgt: usize| factory_abs != NULL && tgt == factory_abs;
+    let is_continue = |tgt: usize| {
+        (confirm_abs != NULL && tgt == confirm_abs)
+            || (continue_wrapper_abs != NULL && tgt == continue_wrapper_abs)
+    };
     let classify = |start: usize, chain: &mut String| -> (bool, bool) {
         let mut tgt = start;
         let mut hop = HOP_START;
         while hop < JMP_HOPS && tgt != NULL {
-            if tgt == factory_abs {
+            if is_factory(tgt) {
                 return (true, false);
             }
-            if tgt == confirm_abs || tgt == continue_wrapper_abs {
+            if is_continue(tgt) {
                 return (false, true);
             }
             match unsafe { decode_thunk_hop(tgt) } {
@@ -380,10 +442,7 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
             }
             hop += HOP_STEP;
         }
-        (
-            tgt == factory_abs,
-            tgt == confirm_abs || tgt == continue_wrapper_abs,
-        )
+        (is_factory(tgt), is_continue(tgt))
     };
     let mut load_game: Option<usize> = None;
     let mut continue_entry: Option<usize> = None;
@@ -495,16 +554,31 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
         return (None, None);
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "loadgame-scan: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} != TitleTopDialog 0x{:x} -- skip",
-            base + TITLE_TOP_DIALOG_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA"
+            )
         ));
         return (None, None);
     }
-    let functor_vt = base + FUNCTOR_VTABLE_RVA;
-    let memberjob_vt = base + MEMBERFUNCJOB_VTABLE_RVA;
-    let factory_abs = base + FACTORY_RVA;
+    let functor_vt =
+        er_game_base::mem::game_data_addr(base, FUNCTOR_VTABLE_RVA, "FUNCTOR_VTABLE_RVA");
+    let memberjob_vt = er_game_base::mem::game_data_addr(
+        base,
+        MEMBERFUNCJOB_VTABLE_RVA,
+        "MEMBERFUNCJOB_VTABLE_RVA",
+    );
+    let factory_abs = er_game_base::mem::game_data_addr(base, FACTORY_RVA, "FACTORY_RVA");
     // Resolve a (member-)fn forward through up to JMP_HOPS jmp-thunks; true if it reaches the
     // Load-Game dialog_factory. (A full member fn that only CALLs the factory internally won't
     // chain-resolve; the raw fn VA is logged regardless for offline disasm.)

@@ -76,10 +76,72 @@ pub struct Entry {
     /// param row id, and the nibble is 0 for weapons/ammo, 1 for protectors,
     /// 2 for talismans and ashes of war, 4 for goods (spells and tools).
     pub full_item_id: u32,
-    /// How many the game lets you hold; `None` means "just one".
+    /// How many the game itself lets the player hold.
+    ///
+    /// `None` means the question was not asked or was not answered -- a category the engine has
+    /// no limit for, or a row that declares none -- and the grant path reads that as "just one".
+    ///
+    /// # Whose number this is
+    ///
+    /// Not a comfortable stack size picked here. `CS::EquipInventoryData::GetMaxAmountForItem`
+    /// (1.16.2 `0x14024e570`, same address on 1.17) is the engine's entire answer to "how many
+    /// more of this may be added", and for a goods item that is not pot-capped its body reduces
+    /// to `paramRow->maxNum > 0 ? paramRow->maxNum : 99`. So this is the ceiling the engine will
+    /// enforce whatever the importer asks for.
+    ///
+    /// # TWO FIELDS IN TWO TABLES, and which one this holds depends on the [`Kind`]
+    ///
+    /// `maxNum` is a GOODS field, and the engine reads it only for the goods category: every
+    /// other category is tail-jumped to `::GetMaxItemQuantity` (1.16.2 `0x140674680`, 1.17
+    /// `0x1406754d0`), which answers `1` for an armament, a protector and a talisman -- and, for
+    /// a weapon row whose `weaponCategory` is 13 or 14, `EquipParamWeapon.maxArrowQuantity`.
+    ///
+    /// So for [`Kind::Ammo`] this field is `maxArrowQuantity`, not `maxNum`; ammunition is an
+    /// `EquipParamWeapon` row and has no `maxNum` to read. Same meaning -- the engine's own
+    /// ceiling for this item -- from the table the item actually lives in.
+    ///
+    /// It is also what the planner's own item database records under this name. Measured against
+    /// the installed 1.17 `regulation.bin`, every tool, great rune and tear row the test fixture
+    /// carries matches `maxNum` exactly -- Clarifying Boluses 99, Flask of Cerulean Tears 20,
+    /// Opaline Pickled Liver 5, Blessing of Marika 1, Mohg's Great Rune 1. The planner's SPELL
+    /// rows are the one place the two disagree (it records `maxRepositoryNum`, 600, where the
+    /// game's `maxNum` is 99), and a spell is granted one copy either way, so nothing reads this
+    /// for them.
+    ///
+    /// # Not a delivery promise
+    ///
+    /// A pot-group item is capped far below `maxNum` by the mechanism [`Entry::pot_group`]
+    /// documents, and both acquisition paths clamp to it in silence. This says what the item's
+    /// own row permits, not what an add will deliver.
     pub max_stored: Option<u32>,
     /// Whether the armament upgrades with Somber Smithing Stones.
     pub somber: bool,
+    /// `EquipParamGoods.potGroupId` when this item is one the game POT-CAPS, else `None`.
+    ///
+    /// # The one inventory limit an importer cannot see coming
+    ///
+    /// A consumable in a pot group can be held only up to the number of Cracked Pots (or Ritual
+    /// Pots, or Perfume Bottles) sharing that group -- `EquipInventoryData::UpdatePotsStates`
+    /// (0x14024e930) sums the group's *materials* into `potItemsCapacity[16]` and its
+    /// *consumables* into `potItemsCount[16]`, and `GetMaxAmountForItem` (0x14024e570) hands out
+    /// the difference. Both acquisition paths then clamp to it with a silent
+    /// `if (max < amount) amount = max;` -- `InsertItem` (0x14024cfd0) and `UpdateQuantity`
+    /// (0x14024d760) -- so a grant of five Fire Pots against a full group delivers three, returns
+    /// no error, and sets no result code.
+    ///
+    /// # Consumables only, never the material
+    ///
+    /// This mirrors `EquipParamGoodsLookupResult::IsPotConsumable` exactly
+    /// (1.16.2 `0x140d3a190`, 1.17 `0x140d3b8e0`, byte-identical): `goodsType == 0` (NORMAL_ITEM)
+    /// **and** `potGroupId >= 0`. The Cracked Pot itself is `goodsType == 0x0b`
+    /// (REGENERATIVE_MATERIAL) and is deliberately excluded, because it is what SUPPLIES the
+    /// capacity -- a caller freeing pot space by depositing group members would otherwise deposit
+    /// the pots that create the space and make the problem worse.
+    ///
+    /// Measured against the installed regulation by
+    /// `scripts/regulation-potgroup-census.py`: 67 rows across 4 groups, each with exactly one
+    /// material (9500 / 9510 / 9501 / 2009500).
+    pub pot_group: Option<u8>,
 }
 
 /// Resolves an item name, within a category, to its id.
@@ -102,6 +164,35 @@ pub trait Catalog {
     /// Defaults to empty so an offline test table needs no collision machinery.
     fn alternates(&self, _kind: Kind, _name: &str) -> Vec<u32> {
         Vec::new()
+    }
+
+    /// Every id that is THIS ITEM AT SOME UPGRADE LEVEL, the primary included.
+    ///
+    /// [`Self::alternates`] is not enough for the question "does the player hold this". It
+    /// answers with the rows carrying the IDENTICAL name, and Elden Ring does not name an
+    /// upgraded flask identically: the live catalog enumerates `flask of crimson tears` at goods
+    /// 1000/1001 and `flask of crimson tears +9` at 1018/1019, four distinct rows of one belt
+    /// item under two distinct names. A character who has drunk a single Sacred Tear holds none
+    /// of the ids `alternates` returns, which is why two imports in a row reported the Crimson
+    /// and Cerulean flasks `NOT-IN-INVENTORY` while they sat visibly in the pouch -- run
+    /// 2026-08-25 missed 0x400003E9/0x4000041B and run 2026-08-31 missed 0x400003E8/0x4000041A,
+    /// i.e. BOTH rows of the unupgraded name.
+    ///
+    /// The suffix is the game's own: the upgraded row's `GoodsName` is the base name plus
+    /// ` +N`. Talismans are the same shape (`Erdtree's Favor +2`), so this is not a flask
+    /// special case. Armaments are NOT -- their level lives in the last two digits of the id and
+    /// is handled arithmetically -- so a weapon name simply has no `+N` siblings and this
+    /// returns the primary alone.
+    ///
+    /// Defaults to `alternates` plus nothing, so an offline test table needs no name scan.
+    fn upgrade_variants(&self, kind: Kind, name: &str) -> Vec<u32> {
+        let mut ids: Vec<u32> = self
+            .lookup(kind, name)
+            .map(|entry| entry.full_item_id)
+            .into_iter()
+            .collect();
+        ids.extend(self.alternates(kind, name));
+        ids
     }
 }
 
@@ -167,6 +258,35 @@ impl MapCatalog {
             .map_or(&[], Vec::as_slice)
     }
 
+    /// Every id under `name` OR under `name +N`, within `kind`, sorted and deduplicated.
+    ///
+    /// See [`Catalog::upgrade_variants`] for why the `+N` rows have to be in the answer. The
+    /// match is on the FOLDED name, and [`fold`] preserves `+`, so `"Erdtree's Favor +2"` folds
+    /// to `"erdtree's favor +2"` and is found by the prefix `"erdtree's favor +"`. The trailing
+    /// space in that prefix is load-bearing: without it `"flask of crimson tears"` would also
+    /// claim a hypothetical `"flask of crimson tears of something else"`.
+    pub fn upgrade_variants(&self, kind: Kind, name: &str) -> Vec<u32> {
+        let base = fold(name);
+        let prefix = format!("{base} +");
+        let is_family =
+            |key: &(Kind, String)| key.0 == kind && (key.1 == base || key.1.starts_with(&prefix));
+        let mut ids: Vec<u32> = self
+            .entries
+            .iter()
+            .filter(|(key, _)| is_family(key))
+            .map(|(_, entry)| entry.full_item_id)
+            .chain(
+                self.alternates
+                    .iter()
+                    .filter(|(key, _)| is_family(key))
+                    .flat_map(|(_, extra)| extra.iter().map(|entry| entry.full_item_id)),
+            )
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
     /// Every `(kind, folded name)` that resolved to more than one id, with all of its ids.
     ///
     /// Reported at import time rather than discovered from a duplicated item later.
@@ -211,13 +331,22 @@ impl Catalog for MapCatalog {
             .map(|entry| entry.full_item_id)
             .collect()
     }
+
+    fn upgrade_variants(&self, kind: Kind, name: &str) -> Vec<u32> {
+        MapCatalog::upgrade_variants(self, kind, name)
+    }
 }
 
-/// Build a simple entry with no stack limit and standard upgrade material.
+/// Build a simple entry with no known hold limit and standard upgrade material.
+///
+/// `max_stored: None` means a caller building a table by hand gets ONE of the item, which is the
+/// right default for the armaments and armour this helper exists for. A consumable wants the
+/// game's own number; see [`Entry::max_stored`].
 pub fn entry(full_item_id: u32) -> Entry {
     Entry {
         full_item_id,
         max_stored: None,
         somber: false,
+        pot_group: None,
     }
 }

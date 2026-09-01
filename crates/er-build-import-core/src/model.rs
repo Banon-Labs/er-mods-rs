@@ -189,6 +189,114 @@ pub struct Items {
     /// Flask allocation: `level` (Sacred Tears), `total`, and the crimson/cerulean split.
     #[serde(default)]
     pub flasks: Flasks,
+    /// Equipped arrows and bolts.
+    #[serde(default)]
+    pub ammo: Ammo,
+}
+
+/// The four ammunition positions, each holding an item NAME.
+///
+/// # This category has a shape of its own, and it is not a [`SlotList`]
+///
+/// Every other category is a list of [`Slot`] objects. Ammo is a flat object keyed by POSITION,
+/// whose value is the bare name string -- `{"arrow1": "Bone Arrow", "bolt2": "Lightning Bolt"}` --
+/// so there is no `order`, no `equipIndex`, no `equipSet` and no upgrade: the KEY is the equip
+/// position, and an ammo entry that is not equipped simply does not exist. Taken from the
+/// planner's own code rather than inferred: its picker writes
+/// `character.items.ammo[slot] = ammo.name` for `slot` drawn from `['arrow1','arrow2']` and
+/// `['bolt1','bolt2']`, its equip view reads `e.arrow1 ? {name: e.arrow1} : null` for each of the
+/// four, and its "already equipped" test is `n.arrow1 === name || n.arrow2 === name || ...`.
+///
+/// # Absent, empty, and the shape that was deleted
+///
+/// All three of the captured fixtures carry NO ammo -- two spell it `"ammo": {}` (which is the
+/// planner's own default for a new character) and the third, authored at planner version 3.7.7,
+/// has no `ammo` key at all, because the feature shipped in 3.9 (2025-07-25, "*New Feature: Ammo
+/// inventory*"). Unequipping the last one deletes the object again, so an absent key and an empty
+/// one mean the same thing and both have to parse.
+///
+/// There WAS an older shape, and modelling it would be modelling something the planner destroys:
+/// its migration runs `if (items.ammo && 'slots' in items.ammo) delete items.ammo`, so a
+/// `{"slots": [...]}` ammo object is not a variant to support -- it is a document the planner has
+/// already decided is unreadable.
+///
+/// # No quantity, again
+///
+/// Like every other category, nothing here says how many. `plan::ammo_quantity` documents where
+/// the number comes from instead.
+///
+/// # The keys, and why they are a shared table
+///
+/// [`AMMO_POSITION_KEYS`] holds the four spellings in `ChrAsmSlot` order, and BOTH directions
+/// read it: this module to name the position it parsed, and `er-build-import-runtime`'s exporter
+/// to name the position it is writing. Two hand-written lists is two chances to interleave them
+/// differently, and the export direction has no read-back to catch it -- a bolt written under an
+/// arrow key produces a valid document describing a different character.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Ammo {
+    /// First arrow position, `ChrAsmSlot::Arrow1`.
+    #[serde(default)]
+    pub arrow1: Option<String>,
+    /// Second arrow position, `ChrAsmSlot::Arrow2`.
+    #[serde(default)]
+    pub arrow2: Option<String>,
+    /// First bolt position, `ChrAsmSlot::Bolt1`.
+    #[serde(default)]
+    pub bolt1: Option<String>,
+    /// Second bolt position, `ChrAsmSlot::Bolt2`.
+    #[serde(default)]
+    pub bolt2: Option<String>,
+}
+
+/// The planner's four ammunition keys, **in `ChrAsmSlot` order** -- `Arrow1 = 6, Bolt1 = 7,
+/// Arrow2 = 8, Bolt2 = 9`.
+///
+/// The ORDER is the engine's and the SPELLINGS are the planner's, and neither half is free to
+/// change: the engine interleaves the two kinds while the planner's UI groups them
+/// (`['arrow1','arrow2']`, then `['bolt1','bolt2']`), so a table written in the planner's grouping
+/// and added to [`crate::equip::CHR_ASM_SLOT_AMMO_1`] puts every bolt in an arrow slot. One table,
+/// read by [`Ammo::positions`] on the way in and by the exporter on the way out.
+pub const AMMO_POSITION_KEYS: [&str; 4] = ["arrow1", "bolt1", "arrow2", "bolt2"];
+
+impl Ammo {
+    /// The four positions **in `ChrAsmSlot` order**, each with the planner key that names it.
+    ///
+    /// The order is load-bearing and is the ENGINE's, not the planner's: `ChrAsmSlot` runs
+    /// `Arrow1 = 6, Bolt1 = 7, Arrow2 = 8, Bolt2 = 9`, interleaving the two kinds, while the
+    /// planner's own UI groups them (`['arrow1','arrow2']` then `['bolt1','bolt2']`). A caller
+    /// that indexed this array and added it to the base slot while using the planner's grouping
+    /// would put bolts in the arrow slots -- so the interleave lives here, once.
+    ///
+    /// ```
+    /// use er_build_import_core::model;
+    /// let doc = model::parse(r#"{"items":{"ammo":{"bolt1":"Bolt","arrow1":"Bone Arrow"}}}"#)
+    ///     .expect("parses");
+    /// let positions = doc.items.ammo.positions();
+    /// assert_eq!(positions[0], ("arrow1", Some("Bone Arrow")));
+    /// assert_eq!(positions[1], ("bolt1", Some("Bolt")));
+    /// assert_eq!(positions[2], ("arrow2", None));
+    /// assert_eq!(positions[3], ("bolt2", None));
+    /// ```
+    pub fn positions(&self) -> [(&'static str, Option<&str>); AMMO_POSITION_KEYS.len()] {
+        let names = [
+            self.arrow1.as_deref(),
+            self.bolt1.as_deref(),
+            self.arrow2.as_deref(),
+            self.bolt2.as_deref(),
+        ];
+        core::array::from_fn(|index| (AMMO_POSITION_KEYS[index], names[index]))
+    }
+
+    /// Whether the build equips no ammunition at all.
+    ///
+    /// ```
+    /// use er_build_import_core::model;
+    /// assert!(model::parse(r#"{"items":{"ammo":{}}}"#).expect("parses").items.ammo.is_empty());
+    /// assert!(model::parse(r#"{"items":{}}"#).expect("parses").items.ammo.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.positions().iter().all(|(_, name)| name.is_none())
+    }
 }
 
 /// Flask allocation.

@@ -25,8 +25,14 @@ macro_rules! own_stepper_idx10_fallbacks {
         $pass_through(false);
         return;
     }
+    // `read_global_ptr` rather than `*(($base + RVA) as *const usize)`: the raw form was BOTH
+    // unresolved and unguarded. Every `.data` global moved between 1.16.2 and 1.17 -- this one
+    // among them -- so the raw read would have returned whatever now occupies the old slot, and it
+    // dereferenced an unvalidated address to do it. `read_global_ptr` resolves for the running
+    // build and reads fault-tolerantly, answering 0 for a refusal, an unmapped page, or a
+    // genuinely null global -- all three of which this closure already treats as "no IO device".
     let read_iodev = || {
-        let iodev = unsafe { *(($base + IODEV_GLOBAL_RVA) as *const usize) };
+        let iodev = er_game_base::mem::read_global_ptr($base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         if iodev != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe {
                 (
@@ -160,7 +166,7 @@ macro_rules! own_stepper_idx10_fallbacks {
         // hard-asserts session singleton 0x144588e98 at entry -- read it live; SetState(2) only
         // when non-null, else fall back to SetState(3). Save-safe either way: BeginLogo/BeginTitle
         // are menu-UI builds with NO save write (only SetState(5)/PlayGame writes).
-        let session = unsafe { safe_read_usize($base + SESSION_SINGLETON_144588E98_RVA) }
+        let session = unsafe { safe_read_usize(er_game_base::mem::game_data_addr($base, SESSION_SINGLETON_144588E98_RVA, "SESSION_SINGLETON_144588E98_RVA")) }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let target_state = if session != TITLE_OWNER_SCAN_START_ADDRESS {
             TITLE_STEP_BEGIN_LOGO
@@ -182,7 +188,7 @@ macro_rules! own_stepper_idx10_fallbacks {
             }
         }
         let set_state: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute($base + TITLE_SET_STATE_RVA) };
+            unsafe { std::mem::transmute(er_game_base::mem::game_data_addr($base, TITLE_SET_STATE_RVA, "TITLE_SET_STATE_RVA")) };
         unsafe { set_state($owner, target_state) };
         own_stepper_enter_menu_build_phase();
         append_autoload_debug(format_args!(
@@ -356,27 +362,67 @@ macro_rules! own_stepper_idx10_fallbacks {
                 TITLE_OWNER_SCAN_START_ADDRESS
             };
             // Only call into the dialog's FD4 state machine once $owner+0xe0 IS the TitleTopDialog.
-            if dialog_vt == $base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            //
+            // ZERO IS NOT A MATCH, and this comparison used to treat it as one. Both sides collapse
+            // to 0 on failure: `safe_read_usize(dialog)` falls back to
+            // `TITLE_OWNER_SCAN_START_ADDRESS`, which is literally `usize::MIN`, and
+            // `game_data_addr` answers 0 when the running build has no verified mapping for the
+            // RVA. So an unreadable dialog paired with a REFUSED vtable satisfied `0 == 0` and the
+            // native calls below fired on an object nothing had identified. It never bit only
+            // because TITLE_TOP_DIALOG_VTABLE_RVA happens to be mapped on 1.17
+            // (0x2b26468 -> 0x2b294e8) -- guarded by luck, not by design.
+            let title_top_dialog_vt = er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA");
+            if title_top_dialog_vt != TITLE_OWNER_SCAN_START_ADDRESS
+                && dialog_vt == title_top_dialog_vt
+            {
                 // is_in_state receiver = the ADDRESS dialog+0xa60 (the embedded SM sub-object), per
                 // the registrar's `add rcx,0xa60; call`. is_in_state(sm, desc) -> bool reads the
                 // live state by name (no hand pointer-chase). Read-only / no side effects.
                 let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-                let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-                    unsafe { std::mem::transmute($base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
-                let in_fadein = unsafe { is_in_state(sm, $base + TITLE_STATE_DESC_FADEIN_RVA) }
-                    != OWN_STEPPER_FALSE;
-                let in_loop = unsafe { is_in_state(sm, $base + TITLE_STATE_DESC_LOOP_RVA) }
-                    != OWN_STEPPER_FALSE;
-                let in_textfadeout =
-                    unsafe { is_in_state(sm, $base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) }
-                        != OWN_STEPPER_FALSE;
+                // WAS BROKEN ON 1.17 UNTIL 2026-08-30: this was `transmute($base + RVA)`, a raw
+                // `base + RVA` that never called `game_data_addr`/`game_rva`, so the 1.16.2 -> 1.17
+                // translation table was never consulted and the refusal path could never fire. The
+                // function MOVED -- docs/recon/rva-map-1162-to-1170.needed-verified.tsv maps
+                // 0x749b20 -> 0x74a970 (IDENTICAL-WHOLE, 28 insns, both .pdata entries agree) --
+                // and byte-checking both images confirms it: 1.16.2 @0x749b20 and 1.17 @0x74a970
+                // are the same prologue `48 89 54 24 10 53 48 83 ec 20`, while 1.17 @0x749b20 is
+                // `03 48 8b cb ff 10 90 eb 18`, MID-INSTRUCTION and not a function entry. The
+                // vtable gate above does NOT save it, because that RVA resolves fine and the gate
+                // therefore PASSES. Never `transmute` a raw `base + RVA` call target.
+                //
+                // The DESCRIPTOR arguments needed the same treatment for a different reason: they
+                // are pointers the native function DEREFERENCES, and `game_data_addr` hands back 0
+                // on a refusal, so a refused descriptor used to be passed to the game as a null
+                // state-name pointer. Both halves now refuse instead, and the resolved address is
+                // printed in the probe line below so `is_in_state=0x0` reads as a refusal rather
+                // than as "the state machine is in none of the three states".
+                let is_in_state_addr = er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA");
+                let in_state = |desc_rva: usize, what: &'static str| -> bool {
+                    if is_in_state_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+                        return false;
+                    }
+                    let desc = er_game_base::mem::game_data_addr($base, desc_rva, what);
+                    if desc == TITLE_OWNER_SCAN_START_ADDRESS {
+                        return false;
+                    }
+                    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+                        unsafe { std::mem::transmute(is_in_state_addr) };
+                    let answer = unsafe { is_in_state(sm, desc) };
+                    answer != OWN_STEPPER_FALSE
+                };
+                let in_fadein = in_state(TITLE_STATE_DESC_FADEIN_RVA, "TITLE_STATE_DESC_FADEIN_RVA");
+                let in_loop = in_state(TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA");
+                let in_textfadeout = in_state(
+                    TITLE_STATE_DESC_TEXTFADEOUT_RVA,
+                    "TITLE_STATE_DESC_TEXTFADEOUT_RVA",
+                );
                 let latch =
                     unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
                         .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
                         .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
                 if waits % STAGE1D_RETRY_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                     append_autoload_debug(format_args!(
-                        "own_stepper: STAGE1d probe dialog=0x{dialog:x} sm=0x{sm:x} fadein={in_fadein} loop={in_loop} textfadeout={in_textfadeout} latch={latch} waits={waits} (self-fire open-menu on Loop+latch-clear)"
+                        "own_stepper: STAGE1d probe dialog=0x{dialog:x} sm=0x{sm:x} is_in_state=0x{is_in_state_addr:x} fadein={in_fadein} loop={in_loop} textfadeout={in_textfadeout} latch={latch} waits={waits} (self-fire open-menu on Loop+latch-clear; is_in_state=0x0 means the address was REFUSED for this build, not that the SM is in no state)"
                     ));
                 }
                 // SELF-FIRE the open-menu registrar on the CORRECT gate (the native path's own
@@ -389,12 +435,19 @@ macro_rules! own_stepper_idx10_fallbacks {
                 // menu). Default ON now (no flag) since headless cannot rely on a button press;
                 // gated to the correct state (in_loop, NOT FadeIn) + once + latch-clear so it can
                 // neither corrupt the SM (titletopdialog-fadein-gate) nor double-fire.
+                // `game_data_addr` answers 0 for a refusal, which is a safe address to fail a READ
+                // at and a fatal one to jump to -- so the resolved address is bound and checked
+                // before it becomes a function pointer, per the rule stated on `mem.rs`'s own
+                // `game_data_addr`. It resolves on 1.17 today; the check is what keeps that a fact
+                // rather than an assumption.
+                let open_menu_addr = er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA");
                 if in_loop
                     && latch == TITLE_OWNER_SCAN_START_ADDRESS
+                    && open_menu_addr != TITLE_OWNER_SCAN_START_ADDRESS
                     && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
                 {
                     let open_menu: unsafe extern "system" fn(usize) =
-                        unsafe { std::mem::transmute($base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
+                        unsafe { std::mem::transmute(open_menu_addr) };
                     unsafe { open_menu(dialog) };
                     OWN_STEPPER_MENU_OPENED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     // Deterministic timing endpoint: the DLL has driven boot -> modal-skip ->
@@ -407,8 +460,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                         format_args!("dialog=0x{dialog:x} waits={waits}"),
                     );
                     append_autoload_debug(format_args!(
-                        "own_stepper: STAGE1d self-fire open-menu 0x{:x}(dialog=0x{dialog:x}) -- in Loop + latch clear (correct gate, zero-input) waits={waits}",
-                        $base + TITLE_TOP_DIALOG_OPEN_MENU_RVA
+                        "own_stepper: STAGE1d self-fire open-menu 0x{open_menu_addr:x}(dialog=0x{dialog:x}) -- in Loop + latch clear (correct gate, zero-input) waits={waits}"
                     ));
                 }
             }

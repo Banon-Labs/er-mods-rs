@@ -81,11 +81,15 @@ fn install() {
     // Wait for the game image to be mapped before resolving any RVA. No sleep: yield + re-poll,
     // the product's own wait pattern. `game_module_base` is a PE-header read, not a loader call,
     // so this is safe off the loader lock.
-    let base = loop {
-        match er_game_base::mem::game_module_base() {
-            Ok(base) if base != 0 => break base,
-            _ => std::thread::yield_now(),
-        }
+    // BOUNDED (2026-08-29): see er_game_base::wait -- an unbounded `loop { yield_now() }` starved
+    // the wineserver and hung a whole boot.
+    let Some(base) = er_game_base::wait::poll_until(|| {
+        er_game_base::mem::game_module_base()
+            .ok()
+            .filter(|base| *base != 0)
+    }) else {
+        diag_log!("er-diag-harness: no game module base; this shell stays inert");
+        return;
     };
     diag_log!("er-diag-harness: game module base 0x{base:x}");
 
@@ -111,6 +115,13 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-diag-harness", crate::log::log_line);
+        er_hook::set_hook_logger(crate::log::log_line);
         START.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-diag-harness-install".to_owned())

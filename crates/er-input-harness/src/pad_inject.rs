@@ -1,10 +1,11 @@
 //! In-world menu drive via the CS VIRTUAL-KEY layer (bd MENU-INPUT-LAYER-virtual-key-array-source-plus-
-//! 0x88). The in-world Scaleform menu reads a per-key array at `source+0x88`, where
-//! `source = *(*(base+0x485dc20)+0x18)` (FD4PadManager device 0); index = `id-1000`, ids 1000..1080, a
-//! `1` byte = "down this frame". It is rebuilt EVERY frame from GLOBAL_DLUserInputManager by the builders
+//! 0x88). The per-key array lives at `FD4PadDevice+0x88`, where the device is
+//! `*(*(base+0x485dc20) + 0x18 + dev*8)` -- `FD4PadManager::padDevices[dev]`; index = `id-1000`, ids
+//! 1000..1080, a `1` byte = "down this frame". It is rebuilt EVERY frame from GLOBAL_DLUserInputManager
+//! by the builders
 //! (deobf FUN_140240f20/FUN_1402411e0 dump = deobf 0x140240e70/0x140241130, CORRECTED 2026-07-23). Raw pad buttons (+0x890/+0x9f0) and inputmgr+0x90 are BOTH
 //! off the read path (proven at runtime across 3 cycles). So we MinHook the builders and, AFTER the
-//! original rebuilds the array, write our desired key id into `source+0x88` (a pre-original write is
+//! original rebuilds the array, write our desired key id into `padDevices[dev]+0x88` (a pre-original write is
 //! wiped by the rebuild). Edge-triggered: hold `1` one frame then `0` >=1 frame.
 //!
 //! The `id -> action` map (which of 1000..1080 = up/down/confirm/tab) is DLUID virtual-key numbering,
@@ -21,28 +22,62 @@ use crate::log::harness_log;
 // CORRECTED 2026-07-23 (bd ROOTCAUSE-padinject-builder-RVAs-are-wrong / CORRECTED-inworld-input-writer):
 // the prior RVAs (0x240dc0/0x241080/0x2634b0) were WRONG -- they pointed at neighboring thunk stubs, so
 // the MinHook detour never fired in-world (probe run4: builder_fires=0) and no injected input reached the
-// menu. Recovered from the Ghidra dump via the mcp_bridge: the writer FUN_142663490 (dump)'s callers are
-// the real builders FUN_140240f20 / FUN_1402411e0 (dump). Each builder loops ids 1000..0x438 and, for
-// each down key, calls the writer FUN_142663490 with (device=source, id). dump-deobf-shift + prologue
-// disasm confirm the deobf entries below (builder prologue `mov [rsp+8],rcx; push rbp/rsi/rdi/r12`;
-// writer `lea eax,[rdx-0x3e8]; cmp eax,0x50` = id-1000 bounds-checked 0..80).
-const BUILDER_A_RVA: usize = 0x240e70; // FUN_140240f20 (dump): rebuilds source+0x88, loops ids 1000..1080
+// menu. Recovered from the Ghidra dump: the writer 0x1426634a0's callers are the real builders
+// 0x140240e70 / 0x140241130. Each builder loops ids 1000..0x438 and, for each down key, calls the
+// writer with (device = padDevices[dev], id).
+//
+// RE-CONFIRMED 2026-08-31 against the 1.16.2 dump on :8765, which is what the MCP now serves; the
+// old "dump = deobf, shifted" bookkeeping above and the `dump-deobf-shift` reference that used to
+// stand here are both obsolete (that tool was cross-version and has been deleted -- for 1.16.2 the
+// dump VA, the deobf VA and the runtime VA are the same address). The three entries below are byte
+// checks in `eldenring-deobf.bin` (builder prologue `mov [rsp+8],rcx; push rbp/rsi/rdi/r12`; writer
+// `lea eax,[rdx-0x3e8]; cmp eax,0x50` = id-1000 bounds-checked 0..80), and all three carry HELD on
+// 1.17: the builders sit at the SAME addresses with 195/195 instructions aligned, and the writer
+// pairs to 0x142665cb0 byte-for-byte.
+const BUILDER_A_RVA: usize = 0x240e70; // rebuilds padDevices[dev]+0x88, loops ids 1000..1080
 const BUILDER_B_RVA: usize = 0x241130; // FUN_1402411e0 (dump): twin builder (second device/slot)
-const WRITER_RVA: usize = 0x26634a0; // FUN_142663490 (dump): writes source+0x88[id-1000]=1 per down key
+const WRITER_RVA: usize = 0x26634a0; // writes padDevices[dev]+0x88[id-1000]=1 per down key; 1.17 0x2665cb0
 const FD4_PAD_MANAGER_RVA: usize = 0x485dc20;
-/// FUN_1402413f0 (deobf; dump FUN_1402414a0): CSInGamePad* accessor(FD4PadManager*, deviceIndex). A
-/// padMaps MAP lookup (bounds-checked, returns 0 out of range) -- the correct way to get a device's
-/// CSInGamePad, since padMaps is a tree not a flat array (bd CORRECTION-inworld-menu-injection-NOT-solved).
-const CS_INGAME_PAD_ACCESSOR_RVA: usize = 0x2413f0;
-/// FD4PadManager.padMaps: DLFixedVector<Map<TypeID,FD4BasePad>*,4> at +0x48 (Ghidra get_structure). Each
-/// padMaps[dev] is a std::map keyed by TypeID; the CSInGamePad entry is found by TypeID.
-const PADMAPS_88_OFFSET: usize = 0x48;
-const PADMAPS_COUNT: usize = 4;
-/// The TypeID keys of the CSInGamePad entries in each padMaps map. The two real builders use adjacent
-/// keys in the deobf image: FUN_140240e70 searches `base+0x3d5df27`, while FUN_140241130 searches
-/// `base+0x3d5df28`. Search both; a wrong/missing value fails the BST search safely.
-const CS_INGAME_PAD_TYPEID_RVAS: [usize; 2] = [0x3d5df27, 0x3d5df28];
+/// `FD4PadManager::padDevices` -- `DLFixedVector<FD4PadDevice*,4>` at +0x18 (Ghidra structure), the
+/// array the game's own key writer indexes. Element `dev` is at `manager + 0x18 + dev*8`.
+///
+/// The `DLFixedVector` accessor emits an alignment fudge, `(-(u32)(manager + 0x18)) & 7`, before the
+/// index; `manager` is 8-byte-aligned heap, so that term is always 0 and the address really is
+/// `manager + 0x18 + dev*8`. Witnessed HELD on 1.17 by builder A (0x140240e70, 195/195 instructions
+/// aligned, base rsi/rcx = the manager).
 const PAD_MGR_DEVICES_18_OFFSET: usize = 0x18;
+/// `FD4PadManager::padDevices.count`. `padDevices` is 0x30 bytes at +0x18, so its count sits at
+/// +0x40 -- which is where the game itself bounds-checks (`cmp rbp, [rcx+0x40]` at the head of every
+/// builder). Also witnessed HELD on 1.17 by that same alignment.
+const PAD_DEVICES_COUNT_40_OFFSET: usize = 0x40;
+/// Highest device index the fixed vector can hold, per its `DLFixedVector<...,4>` declaration. Used
+/// only to clamp a count read out of live memory.
+const PAD_DEVICES_MAX: usize = 4;
+/// The per-key "down this frame" array on `FD4::FD4PadDevice`; entry `id-1000` is at
+/// `device + 0x88 + (id-1000)*2` (2-byte stride, low byte written).
+///
+/// OWNER AND VALUE BOTH RE-MEASURED 2026-08-31 (bd
+/// `vk-array-88-owner-is-FD4PadDevice-not-CSInGamePad-and-held-on-1170-2026-08-31`).
+///
+/// * The offset did NOT move on 1.17. The one function that writes this array, 1.16.2 0x1426634a0,
+///   pairs to 1.17 0x142665cb0 and is byte-identical -- `mov byte [rcx+rdx*2+0x88],1` after a
+///   `cmp eax,0x50` bound on `id-1000` -- so 0x88 is measured in both images, not carried.
+/// * The OWNER is `FD4::FD4PadDevice`, not `CS::CSInGamePad`. All FOUR call sites of that writer
+///   (0x140240e70, 0x140241130, 0x140e321b0, 0x140e32470) load `rcx` from `padDevices[dev]`, with no
+///   exception; `FD4PadManager::Init` fills that array with `HeapAlloc(0x3c0)` + `FD4PadDevice::
+///   FD4PadDevice` + `FD4PadDevice::vftable`. `FD4PadDevice`'s constructor (0x142663880 ->
+///   0x142666090) aligns 168/168 with ZERO moved offsets and its allocation size is still 0x3c0.
+///
+/// The `padMaps` accessor FUN_1402413f0 is deliberately NOT declared here any more: it returns the
+/// CSInGamePad, which merely HOLDS the device at `+0x10` (Ghidra names the type `CSInGamePad0x10`
+/// after that field, and its constructor 0x1426647a0 does `param_1[2] = padDevices[dev]`), so it is
+/// one indirection away from this array rather than a route to it.
+///
+/// That correction is load-bearing, because the previous code wrote this offset onto the
+/// CSInGamePad from `padMaps` instead. The CSInGamePad is `HeapAlloc(0x98)` = 152 bytes, so
+/// `0x88 + (id-1000)*2` leaves the object at id 1008 and every id above it wrote past the end of a
+/// live game allocation -- silently, since the write is fault-safe and a heap overrun does not
+/// fault. `scripts/check-object-field-offsets-1170.py` now pins this row.
 const VK_ARRAY_88_OFFSET: usize = 0x88;
 const VK_ID_MIN: u32 = 1000;
 const VK_ID_MAX: u32 = 1080;
@@ -62,7 +97,11 @@ static BUILDER_FIRES: AtomicU32 = AtomicU32::new(0);
 static WRITER_FIRES: AtomicU32 = AtomicU32::new(0);
 static GAME_SOURCE: AtomicUsize = AtomicUsize::new(0); // rcx of the real writer = the game's source
 static MY_SOURCE: AtomicUsize = AtomicUsize::new(0); // source my inject_vk computed
-static CACHED_PAD: AtomicUsize = AtomicUsize::new(0); // resolved CSInGamePad, cached to skip per-frame RPM
+static CACHED_PAD: AtomicUsize = AtomicUsize::new(0); // resolved FD4PadDevice, cached to skip per-frame RPM
+/// One-shot latch for the "could not resolve a device" line. Without it the message would repeat
+/// every frame, which is why the previous code said nothing at all -- and saying nothing is how the
+/// drive stayed inert for six weeks with no fault, no refusal line and no counter moving.
+static INERT_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static OBSERVED_IDS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)]; // 81-bit set of ids the game's writer fired (id-1000)
 
 /// Snapshot for the probe/drive to log: (builder_fires, writer_fires, game_source, my_source, obs_ids).
@@ -80,10 +119,10 @@ pub fn pad_snapshot() -> (u32, u32, usize, usize, [u32; 3]) {
     )
 }
 
-/// Probe API: inject a RAW virtual-key id (1000..1080) into `source+0x88` each frame (0 = release).
+/// Probe API: inject a RAW virtual-key id (1000..1080) into `padDevices[dev]+0x88` each frame (0 = release).
 ///
 /// This stays a RAW-id API on purpose. A typed `PadButton` wrapper used to sit in front of it and was
-/// removed 2026-08-21: the planned `source+0x88` id -> action map was never recovered, so every one of
+/// removed 2026-08-21: the planned `padDevices[dev]+0x88` id -> action map was never recovered, so every one of
 /// its variants mapped to id `0` and the enum carried no reverse-engineered information at all.
 ///
 /// The evidence behind that is negative and specific (bd
@@ -95,7 +134,7 @@ pub fn set_vk_id(id: u32) {
     DESIRED_VK_ID.store(id, Ordering::SeqCst);
 }
 
-/// After a builder rebuilds `source+0x88`, stamp the desired key id down. `manager` is the builder's
+/// After a builder rebuilds `padDevices[dev]+0x88`, stamp the desired key id down. `manager` is the builder's
 /// first arg (GLOBAL_FD4PadManager); `dev` is its device index (edx).
 unsafe fn inject_vk(manager: usize, dev: usize) {
     let id = DESIRED_VK_ID.load(Ordering::SeqCst);
@@ -111,25 +150,36 @@ unsafe fn inject_vk(manager: usize, dev: usize) {
     if source < HEAP_LO {
         return;
     }
-    // SAFETY: `source` is the live CSInGamePad "source"; +0x88+(id-1000)*2 is the per-key byte the
+    // SAFETY: `source` is `padDevices[dev]`, the live `FD4PadDevice`, read exactly the way the game's
+    // own writer computes its `this` (`mov rcx,[rcx+rsi+0x18]` at all four of its call sites);
+    // +0x88+(id-1000)*2 is the per-key byte the
     // builder itself writes (RE-verified writer 0x1426634a0).
     unsafe {
         *((source + VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2) as *mut u8) = 1;
     }
 }
 
-/// PER-FRAME DIRECT stamp of `id` into `source+0x88` (device 0), resolving the source from the game base
-/// (bd DECISIVE-builder-not-perframe-in-menu-need-perframe-direct-stamp). The builder that `builder_*_hook`
-/// stamps after does NOT run per-frame while a menu is open (builder_fires stuck), so builder-hook
-/// injection is too sparse to drive the menu; the menu READS `source+0x88` every frame, so the drive must
-/// WRITE it every frame. `source = *(*(base+FD4_PAD_MANAGER_RVA)+0x18)` (device 0). `id`=0 (or out of
-/// range) is a no-op release. Guarded by HEAP_LO on every deref; never panics.
+/// PER-FRAME DIRECT stamp of `id` into `FD4PadDevice+0x88`, resolving the device from the game base
+/// (bd DECISIVE-builder-not-perframe-in-menu-need-perframe-direct-stamp). The builder that
+/// `builder_*_hook` stamps after does NOT run per-frame while a menu is open (builder_fires stuck), so
+/// builder-hook injection is too sparse to drive the menu; the array is read every frame, so the drive
+/// must WRITE it every frame. `id`=0 (or out of range) is a no-op release. Guarded by HEAP_LO on every
+/// deref; never panics.
+///
+/// THE DEVICE IS `padDevices[dev]`, NOT THE `padMaps` CSInGamePad. Between 2026-07-23 and 2026-08-31
+/// this walked `padMaps` (+0x48) for a `CS::CSInGamePad_UserInput1` by TypeID and stamped THAT object's
+/// +0x88. Every one of the four call sites of the game's own writer 0x1426634a0 loads `rcx` from
+/// `manager + 0x18 + dev*8` instead, so the array is a field of `FD4::FD4PadDevice` and the tree-walk
+/// was aimed at the wrong object -- one that is only `HeapAlloc(0x98)` = 152 bytes, so ids from 1008 up
+/// wrote PAST THE END of a live game allocation. It never fired in practice (the TypeID needles are
+/// `.data` RVAs with no 1.17 mapping, so `game_data_addr` refused them and the search matched nothing),
+/// which is the only reason the overrun was never observed rather than a reason it was safe.
 pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) || base < HEAP_LO {
         return;
     }
     // FAULT-SAFE reads (ReadProcessMemory pseudo-handle) so a wrong offset returns None instead of
-    // CRASHING the game (raw derefs froze run10/run11). This makes the padMaps tree-walk safe to probe.
+    // CRASHING the game (raw derefs froze run10/run11).
     let rd = |p: usize| -> Option<usize> {
         if p < HEAP_LO {
             None
@@ -137,19 +187,9 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
             unsafe { crate::win32::read_usize(p) }
         }
     };
-    let Some(manager) = rd(base + FD4_PAD_MANAGER_RVA).filter(|m| *m >= HEAP_LO) else {
-        return;
-    };
-    // SAFE read-only replication of the CSInGamePad lookup (bd STRUCT-padMaps-is-at-0x48). padMaps (+0x48)
-    // is a DLFixedVector<Map<TypeID,FD4BasePad>*,4>; padMaps[dev]'s std::map (keyed by TypeID) holds the
-    // CSInGamePad. Walk the tree READ-ONLY to the CSInGamePad-TypeID entry, stamp its +0x88. MSVC _Tree
-    // node: _Left+0, _Right+0x10, _Isnil+0x19, key+0x20, value+0x28; _Myhead at map+8, root at _Myhead+8.
-    let _ = (CS_INGAME_PAD_ACCESSOR_RVA, PAD_MGR_DEVICES_18_OFFSET);
     let off = VK_ARRAY_88_OFFSET + ((id - VK_ID_MIN) as usize) * 2;
-    let targets = CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva);
-    // CACHE the resolved pad (bd BISECT-stamp_vk_direct-stops-drive): the per-frame RPM tree-walk
-    // (~10-20 syscalls/frame) stalls the CSTaskImp task and STOPS the drive. Resolve the CSInGamePad ONCE
-    // via the tree-walk, then per-frame do ONE fault-safe write to the cached pad -- no per-frame RPM.
+    // CACHE the resolved device (bd BISECT-stamp_vk_direct-stops-drive): per-frame RPM walking stalls
+    // the CSTaskImp task and STOPS the drive. Resolve once, then do ONE fault-safe write per frame.
     let cached = CACHED_PAD.load(Ordering::SeqCst);
     if cached >= HEAP_LO {
         unsafe {
@@ -157,79 +197,46 @@ pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
         }
         return;
     }
-    let ndev = rd(manager + PADMAPS_88_OFFSET + PADMAPS_COUNT * 8)
+    let Some(manager) = rd(er_game_base::mem::game_data_addr(
+        base,
+        FD4_PAD_MANAGER_RVA,
+        "FD4_PAD_MANAGER_RVA",
+    ))
+    .filter(|m| *m >= HEAP_LO) else {
+        report_inert("GLOBAL_FD4PadManager did not resolve or read back");
+        return;
+    };
+    // The game bounds-checks `dev` against padDevices.count before every write; do the same, and clamp
+    // to the vector's declared capacity so a garbage count cannot walk off the struct.
+    let ndev = rd(manager + PAD_DEVICES_COUNT_40_OFFSET)
         .unwrap_or(1)
-        .min(PADMAPS_COUNT);
-    // One-time diagnostic dump of the resolved structure (so wrong offsets are visible, not fatal).
-    let diag = false; // BISECT: DIAG logging disabled (test if the 6-line burst breaks the log)
-    if diag {
-        harness_log!(
-            "treewalk DIAG: manager=0x{manager:x} padmaps_count={ndev} targets=0x{:x}/0x{:x}",
-            targets[0],
-            targets[1]
-        );
-    }
+        .min(PAD_DEVICES_MAX);
     for dev in 0..ndev {
-        let Some(map_ptr) = rd(manager + PADMAPS_88_OFFSET + dev * 8).filter(|m| *m >= HEAP_LO)
+        let Some(device) =
+            rd(manager + PAD_MGR_DEVICES_18_OFFSET + dev * 8).filter(|d| *d >= HEAP_LO)
         else {
             continue;
         };
-        let head = rd(map_ptr + 8);
-        let root = head.and_then(rd);
-        if diag {
-            let n0key = root.and_then(|r| rd(r + 0x20));
-            let n0val = root.and_then(|r| rd(r + 0x28));
-            harness_log!(
-                "treewalk DIAG dev{dev}: map=0x{map_ptr:x} head={:x?} root={:x?} root.key={:x?} root.val={:x?}",
-                head,
-                root,
-                n0key,
-                n0val
-            );
+        MY_SOURCE.store(device, Ordering::SeqCst);
+        CACHED_PAD.store(device, Ordering::SeqCst);
+        unsafe {
+            let _ = crate::win32::write_u8(device + off, val);
         }
-        for target in targets {
-            let Some(mut node) = root.filter(|r| *r >= HEAP_LO) else {
-                continue;
-            };
-            let mut guard = 0;
-            loop {
-                guard += 1;
-                if guard > 64 || node < HEAP_LO {
-                    break;
-                }
-                match unsafe { crate::win32::read_u8(node + 0x19) } {
-                    Some(0) => {}
-                    _ => break, // nil node / unreadable -- not found
-                }
-                let Some(key) = rd(node + 0x20) else { break };
-                if key == target {
-                    if let Some(pad) = rd(node + 0x28).filter(|p| *p >= HEAP_LO) {
-                        MY_SOURCE.store(pad, Ordering::SeqCst);
-                        CACHED_PAD.store(pad, Ordering::SeqCst); // cache: subsequent frames skip the tree-walk
-                        unsafe {
-                            let _ = crate::win32::write_u8(pad + off, val);
-                        }
-                        if diag {
-                            harness_log!(
-                                "treewalk DIAG dev{dev}: FOUND pad=0x{pad:x} target=0x{target:x}"
-                            );
-                        }
-                    }
-                    break;
-                }
-                node = match if key < target {
-                    rd(node + 0x10)
-                } else {
-                    rd(node)
-                } {
-                    Some(n) => n,
-                    None => break,
-                };
-            }
-            if CACHED_PAD.load(Ordering::SeqCst) >= HEAP_LO {
-                break;
-            }
-        }
+        harness_log!("pad-inject: padDevices[{dev}] = 0x{device:x} (vk array at +0x88)");
+        return;
+    }
+    report_inert("no usable padDevices entry under the manager");
+}
+
+/// Say ONCE that the in-world virtual-key drive could not resolve a device. A drive that quietly
+/// does nothing is indistinguishable from a drive whose input the game ignored, and this path has
+/// already produced that exact confusion once.
+fn report_inert(why: &str) {
+    if INERT_LOGGED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        harness_log!("pad-inject: {why}; the in-world virtual-key drive is INERT this run");
     }
 }
 
@@ -351,7 +358,7 @@ pub fn install_pad_poll_hook(base: usize) -> bool {
     if (a || b || w) && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK) {
         HOOKS_ACTIVE.store(1, Ordering::SeqCst);
         harness_log!(
-            "pad-inject: virtual-key builder hooks active (inject into source+0x88; a={a} b={b})"
+            "pad-inject: virtual-key builder hooks active (inject into padDevices+0x88; a={a} b={b})"
         );
         true
     } else {

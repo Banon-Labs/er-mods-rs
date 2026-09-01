@@ -106,7 +106,7 @@ fn title_menu_window_id_flags(base: usize, window: usize) -> (usize, usize, bool
     if menu_id >= 0x47 {
         return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
     }
-    let cs_menu_man = unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+    let cs_menu_man = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
         .unwrap_or(NULL_PTR);
     if cs_menu_man == NULL_PTR {
         return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
@@ -168,6 +168,6 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
     let current_frame: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(base + TITLE_LOGO_GFX_CURRENT_FRAME_RVA) };
+        unsafe { std::mem::transmute(match crate::experiments::gated_game_fn(TITLE_LOGO_GFX_CURRENT_FRAME_RVA, "TITLE_LOGO_GFX_CURRENT_FRAME_RVA") { Some(address) => address, None => return 0 }) };
     unsafe { current_frame(value) }
 }

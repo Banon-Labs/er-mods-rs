@@ -228,7 +228,12 @@ pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID
     // CSOffscreenGxTexture, throttled to the first ~4 dumps.
     let h1d = read(srv_gx + 0x10);
     if h1d != 0
-        && read(h1d) == base + PROFILE_GX_GPU_WRAPPER_VTABLE_RVA
+        && read(h1d)
+            == er_game_base::mem::game_data_addr(
+                base,
+                PROFILE_GX_GPU_WRAPPER_VTABLE_RVA,
+                "PROFILE_GX_GPU_WRAPPER_VTABLE_RVA",
+            )
         && PROFILE_DET_RESOLVE_DIAG.fetch_add(1, Ordering::SeqCst) < 4
     {
         for off in (0x08..=0x60usize).step_by(0x08) {
@@ -243,17 +248,38 @@ pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID
     }
     // hop 1: srv_gx +0x10 -> CSOffscreenGxTexture (validate vtable)
     let h1 = unsafe { safe_read_usize(srv_gx + GX_TEXTURE_GPU_RESOURCE_OFFSET) }?;
-    if !valid(h1) || unsafe { safe_read_usize(h1) }? != base + PROFILE_GX_GPU_WRAPPER_VTABLE_RVA {
+    if !valid(h1)
+        || unsafe { safe_read_usize(h1) }?
+            != er_game_base::mem::game_data_addr(
+                base,
+                PROFILE_GX_GPU_WRAPPER_VTABLE_RVA,
+                "PROFILE_GX_GPU_WRAPPER_VTABLE_RVA",
+            )
+    {
         return None;
     }
     // hop 2: +0x18 -> holder A
     let h2 = unsafe { safe_read_usize(h1 + GX_RES_CHAIN_HOLDER_A_OFFSET) }?;
-    if !valid(h2) || unsafe { safe_read_usize(h2) }? != base + GX_RES_CHAIN_HOLDER_A_VTABLE_RVA {
+    if !valid(h2)
+        || unsafe { safe_read_usize(h2) }?
+            != er_game_base::mem::game_data_addr(
+                base,
+                GX_RES_CHAIN_HOLDER_A_VTABLE_RVA,
+                "GX_RES_CHAIN_HOLDER_A_VTABLE_RVA",
+            )
+    {
         return None;
     }
     // hop 3: +0x40 -> holder B
     let h3 = unsafe { safe_read_usize(h2 + GX_RES_CHAIN_HOLDER_B_OFFSET) }?;
-    if !valid(h3) || unsafe { safe_read_usize(h3) }? != base + GX_RES_CHAIN_HOLDER_B_VTABLE_RVA {
+    if !valid(h3)
+        || unsafe { safe_read_usize(h3) }?
+            != er_game_base::mem::game_data_addr(
+                base,
+                GX_RES_CHAIN_HOLDER_B_VTABLE_RVA,
+                "GX_RES_CHAIN_HOLDER_B_VTABLE_RVA",
+            )
+    {
         return None;
     }
     // hop 4: +0x20 -> the ID3D12Resource; its vtable must land in a d3d12 module.

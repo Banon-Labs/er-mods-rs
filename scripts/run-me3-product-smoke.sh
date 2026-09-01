@@ -35,6 +35,15 @@ BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
 CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-quickload-crash-log.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-quickload-autoload-debug.log}"
+# EVERY per-run artifact belongs in ARTIFACT_DIR. Anything left in GAME_DIR is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone, and a harness
+# that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two launches
+# destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to the launch env below)
+# for any future log rather than copying it out at teardown -- a copy after the run cannot recover
+# a file this run clobbered at launch, and a crashed run never reaches the copy at all.
+TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/er-quickload-continue-trace.log}"
+INPUT_TRACE_PATH="${INPUT_TRACE_PATH:-$ARTIFACT_DIR/er-quickload-input-trace.jsonl}"
+BOOT_PROFILE_PATH="${BOOT_PROFILE_PATH:-$ARTIFACT_DIR/er-quickload-profile.jsonl}"
 AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-quickload-autoload.txt}"
 AUTOLOAD_REQUEST="${AUTOLOAD_REQUEST:-}"
 BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll}"
@@ -288,6 +297,9 @@ BOOTSTRAP_PATH=$(realpath -m "$BOOTSTRAP_PATH")
 BOOTSTRAP_STATE_PATH=$(realpath -m "$BOOTSTRAP_STATE_PATH")
 CRASH_LOG_PATH=$(realpath -m "$CRASH_LOG_PATH")
 AUTOLOAD_DEBUG_PATH=$(realpath -m "$AUTOLOAD_DEBUG_PATH")
+TRACE_CONTINUE_PATH=$(realpath -m "$TRACE_CONTINUE_PATH")
+INPUT_TRACE_PATH=$(realpath -m "$INPUT_TRACE_PATH")
+BOOT_PROFILE_PATH=$(realpath -m "$BOOT_PROFILE_PATH")
 mkdir -p "$ARTIFACT_DIR"
 
 # me3 profile: the production-representative delivery -- a ModProfile with our DLL as a native.
@@ -392,7 +404,21 @@ fi
   ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   ER_QUICKLOAD_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
   ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$INPUT_TRACE_PATH" \
+  ER_QUICKLOAD_PROFILE_PATH="$BOOT_PROFILE_PATH" \
   ER_QUICKLOAD_ACTIVE_STEAMID="$ACTIVE_STEAMID_ENV" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
   "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$PROFILE_FILE" \
     > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )

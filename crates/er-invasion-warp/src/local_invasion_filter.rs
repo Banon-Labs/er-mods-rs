@@ -2194,11 +2194,27 @@ fn read_join_progress() -> Option<er_invasion_warp_core::join_progress::JoinProg
     };
 
     let base = er_game_base::mem::game_module_base().ok()?;
-    let manager = unsafe { er_game_base::mem::safe_read_usize(base + SESSION_MANAGER_GLOBAL_RVA) }?;
+    let manager = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SESSION_MANAGER_GLOBAL_RVA,
+            "SESSION_MANAGER_GLOBAL_RVA",
+        ))
+    }?;
     if manager == 0 {
         return None;
     }
-    let game_man = unsafe { er_game_base::mem::safe_read_usize(base + jp::GAME_MAN_GLOBAL_RVA) }?;
+    // Resolved for the running build, like the session-manager read directly above it -- the two
+    // sat side by side reading the same kind of global and only one of them asked. GameMan moved
+    // 0x3d69918 -> 0x3d6d988 on 1.17, so the raw form returned a neighbouring global and the
+    // call-for-warp byte was read out of it.
+    let game_man = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            jp::GAME_MAN_GLOBAL_RVA,
+            "GAME_MAN_GLOBAL_RVA",
+        ))
+    }?;
     let call_for_warp = if game_man == 0 {
         false
     } else {

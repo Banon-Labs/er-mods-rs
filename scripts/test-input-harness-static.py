@@ -10,11 +10,83 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 READINESS_WATCH = REPO_ROOT / "scripts/er-readiness-watch.py"
 
 
-def test_pad_inject_uses_both_cs_ingame_pad_typeids() -> None:
+def test_pad_inject_stamps_the_pad_device_not_the_padmaps_cs_ingame_pad() -> None:
+    """The virtual-key array is a field of `FD4::FD4PadDevice`, reached through padDevices.
+
+    THIS ASSERTION USED TO PIN THE DEFECT, twice over. Until 2026-08-31 it required the padMaps
+    TypeID tree-walk -- `CS_INGAME_PAD_TYPEID_RVAS`, `for target in targets`, and a write through
+    the `CS::CSInGamePad_UserInput1` the walk returned. That object does not own the array. The
+    only function that writes it (1.16.2 0x1426634a0, `mov byte [rcx+rdx*2+0x88],1`, bound
+    `cmp eax,0x50` on id-1000) has exactly four call sites -- 0x140240e70, 0x140241130,
+    0x140e321b0, 0x140e32470 -- and EVERY one of them computes `rcx` as
+    `*(manager + 0x18 + dev*8)`, i.e. `FD4PadManager::padDevices[dev]`. `FD4PadManager::Init`
+    fills that array with `HeapAlloc(0x3c0)` + `FD4PadDevice::FD4PadDevice` +
+    `FD4PadDevice::vftable`; the CSInGamePad merely HOLDS the device at its own +0x10.
+
+    The tree-walk was not merely useless. The CSInGamePad is `HeapAlloc(0x98)` = 152 bytes, so
+    `0x88 + (id-1000)*2` leaves the object at id 1008 and every id above wrote past the end of a
+    live game allocation. It never fired only because the TypeID needles are `.data` RVAs with no
+    1.17 mapping, so the search matched nothing -- a reason it was never observed, not a reason it
+    was safe.
+    """
     src = (REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text()
-    assert "const CS_INGAME_PAD_TYPEID_RVAS: [usize; 2] = [0x3d5df27, 0x3d5df28];" in src
-    assert "let targets = CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva);" in src
-    assert "for target in targets" in src
+    assert "const PAD_MGR_DEVICES_18_OFFSET: usize = 0x18;" in src
+    assert "const PAD_DEVICES_COUNT_40_OFFSET: usize = 0x40;" in src
+    assert "const VK_ARRAY_88_OFFSET: usize = 0x88;" in src
+    assert "rd(manager + PAD_MGR_DEVICES_18_OFFSET + dev * 8)" in src, (
+        "the direct stamp no longer resolves the device the way the game's own writer does"
+    )
+    # The bound the game itself checks `dev` against, so a garbage count cannot walk off the struct.
+    assert "rd(manager + PAD_DEVICES_COUNT_40_OFFSET)" in src
+    # ...and the disproved route must not come back. These are the exact tokens the tree-walk needed.
+    for gone in (
+        "CS_INGAME_PAD_TYPEID_RVAS",
+        "0x3d5df27",
+        "for target in targets",
+        "PADMAPS_88_OFFSET",
+    ):
+        assert gone not in src, (
+            f"the padMaps CSInGamePad tree-walk is back ({gone}). It writes the wrong object and "
+            "overruns it above id 1007; if new evidence says otherwise, rewrite this gate against "
+            "that evidence rather than deleting it"
+        )
+
+
+def test_pad_inject_says_so_when_it_cannot_resolve_a_device() -> None:
+    """A drive that resolves nothing must SAY so, exactly once.
+
+    This carries forward the concern of a sibling assertion that this file lost when the padMaps
+    tree-walk went away (it required the TypeID needles to be RESOLVED rather than `base + rva`,
+    because every `.data` global moved on 1.17 and an unresolved needle matched no node). That
+    specific check is unsatisfiable now -- there are no needles -- but the failure it was written
+    for is not about needles: the drive went inert for six weeks with no fault, no refusal line and
+    no counter moving, and silence is indistinguishable from "the game ignored the input".
+
+    `game_data_addr` still answers 0 for a refusal, and 0 still fails the read; what changed is
+    that the refusal now reaches the log instead of an early `return`.
+    """
+    src = (REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text()
+    assert 'game_data_addr(\n        base,\n        FD4_PAD_MANAGER_RVA,\n        "FD4_PAD_MANAGER_RVA",\n    )' in src, (
+        "the manager global must be RESOLVED for the running build, not `base + rva`"
+    )
+    assert 'report_inert("GLOBAL_FD4PadManager did not resolve or read back")' in src
+    assert 'report_inert("no usable padDevices entry under the manager")' in src
+    assert "INERT_LOGGED\n        .compare_exchange(0, 1" in src, (
+        "the inert line must be one-shot; a per-frame repeat is what gets logging deleted again"
+    )
+
+
+def test_pad_inject_records_why_the_owner_is_fd4paddevice() -> None:
+    """The RE that settled the owner must stay written down, not just applied.
+
+    A future pass that reads only the code sees `manager + 0x18` and no reason to prefer it over
+    the accessor at +0x48; that is exactly how the 2026-07-23 "correction" happened.
+    """
+    prose = _prose((REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text())
+    assert "FD4::FD4PadDevice" in prose
+    assert "0x1426634a0" in prose and "0x142665cb0" in prose
+    assert "HeapAlloc(0x3c0)" in prose
+    assert "HeapAlloc(0x98)" in prose
 
 
 def test_pad_inject_direct_stamp_writes_are_enabled() -> None:
@@ -22,7 +94,7 @@ def test_pad_inject_direct_stamp_writes_are_enabled() -> None:
     assert "BISect: write disabled" not in src
     assert "BISECT: write disabled" not in src
     assert "crate::win32::write_u8(cached + off, val)" in src
-    assert "crate::win32::write_u8(pad + off, val)" in src
+    assert "crate::win32::write_u8(device + off, val)" in src
 
 
 def _prose(src: str) -> str:
@@ -131,7 +203,17 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
     assert "fn set_boot_view_pump_stop_reason" in present
     assert "BOOT_VIEW_PUMP_STOP_MS.store" in present
 
-    game_oracles = (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles/write_game_module_oracles.rs").read_text()
+    # The oracle emission is a 29-line spine plus per-subsystem include files (the split that
+    # brought write_game_module_oracles.rs under the 3200-line limit on 2026-08-30). Read the
+    # WHOLE directory rather than one filename: what these assertions care about is that the
+    # field is emitted somewhere in the emission, not which file it lives in. Pinning the
+    # filename made a pure refactor look like a deleted oracle.
+    game_oracles = "\n".join(
+        sorted(
+            p.read_text()
+            for p in (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles").rglob("*.rs")
+        )
+    )
     assert '"oracle_boot_view_pump_stop_ms"' in game_oracles
     assert '"oracle_boot_view_dark_gap_failures"' in game_oracles
     assert '"oracle_boot_view_missed_handoff_failures"' in game_oracles
@@ -183,7 +265,9 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
 
 def main() -> int:
     tests = [
-        test_pad_inject_uses_both_cs_ingame_pad_typeids,
+        test_pad_inject_stamps_the_pad_device_not_the_padmaps_cs_ingame_pad,
+        test_pad_inject_records_why_the_owner_is_fd4paddevice,
+        test_pad_inject_says_so_when_it_cannot_resolve_a_device,
         test_pad_inject_direct_stamp_writes_are_enabled,
         test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids,
         test_input_harness_manifest_names_actual_hook_layer,

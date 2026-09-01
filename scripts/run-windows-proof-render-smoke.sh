@@ -122,8 +122,22 @@ BOOTSTRAP_PATH="$ARTIFACT_DIR/bootstrap.jsonl"
 BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/bootstrap-state.json"
 CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt"
 AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log"
+# EVERY per-run artifact belongs in ARTIFACT_DIR. Anything left in GAME_DIR is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone, and a harness
+# that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two launches
+# destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to the launch env below)
+# for any future log rather than copying it out at teardown -- a copy after the run cannot recover
+# a file this run clobbered at launch, and a crashed run never reaches the copy at all.
+TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log"
+INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl"
+BOOT_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl"
 VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
 GAME_DIR="${ER_GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
+# THE ONE ARTIFACT THAT CANNOT BE REDIRECTED YET. `er-telemetry-core` resolves this name against the
+# game directory with no env override (`standalone_json_path`), so it stays in GAME_DIR and the
+# copy-after-the-run below is all there is. That copy does NOT survive a crash or a kill, and the
+# `rm -f` before launch destroys the previous run's file outright. Fixing it is a knob in
+# `crates/er-telemetry-core/src/lib.rs` shaped like `ER_QUICKLOAD_INPUT_TRACE_PATH`.
 STANDALONE_TELEMETRY_JSONL="$GAME_DIR/er-telemetry-timeseries.jsonl"
 STANDALONE_TELEMETRY_JSON="$GAME_DIR/er-telemetry-standalone.json"
 
@@ -149,6 +163,20 @@ printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
   ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   ER_QUICKLOAD_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
   ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$INPUT_TRACE_PATH" \
+  ER_QUICKLOAD_PROFILE_PATH="$BOOT_PROFILE_PATH" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
   "$PRODUCT_LAUNCHER" -o > "$ARTIFACT_DIR/product-launch.out" 2> "$ARTIFACT_DIR/product-launch.err" & echo $! > "$PID_FILE"
 )
 

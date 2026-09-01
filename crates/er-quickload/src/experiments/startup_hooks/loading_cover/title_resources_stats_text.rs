@@ -17,26 +17,58 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_MENU_RESOURCE_ACQUIRE_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-resource-observer: failed to resolve AcquireMenuResource rva 0x{TITLE_MENU_RESOURCE_ACQUIRE_RVA:x}"
-        ));
-        return;
+    // THREE ADDRESSES, THREE INDEPENDENT OBSERVERS (2026-08-30). These were three `let Ok(..) else
+    // { log; return; }` bindings ahead of all three installs, so ONE unmapped RVA on 1.17 refused
+    // the other two before either was attempted -- and the Scaleform file-open row is the one this
+    // DLL SHARES with er-armament-icons through the hook union, so losing it silently breaks a
+    // second DLL too. Each row is now resolved into an `Option` and skipped alone; the three
+    // outcomes stay distinguishable (REFUSED = no map row, FAILED = MinHook said no).
+    // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    let resolve = |rva: u32, label: &str| -> Option<usize> {
+        match game_rva(rva) {
+            Ok(addr) => Some(addr),
+            Err(_) => {
+                append_autoload_debug(format_args!(
+                    "title-resource-observer: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the running build; the other observers are unaffected"
+                ));
+                None
+            }
+        }
     };
-    let Ok(file_open_addr) = game_rva(TITLE_SCALEFORM_FILE_OPEN_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-resource-observer: failed to resolve Scaleform file-open rva 0x{TITLE_SCALEFORM_FILE_OPEN_RVA:x}"
-        ));
-        return;
-    };
-    let Ok(resource_ctor_addr) = game_rva(TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-resource-observer: failed to resolve Scaleform resource-ctor rva 0x{TITLE_SCALEFORM_RESOURCE_CTOR_RVA:x}"
-        ));
-        return;
-    };
-    let mut ok = true;
-    if TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) == 0 {
+    let addr = resolve(
+        TITLE_MENU_RESOURCE_ACQUIRE_RVA as u32,
+        "AcquireMenuResource",
+    );
+    let file_open_addr = resolve(TITLE_SCALEFORM_FILE_OPEN_RVA as u32, "Scaleform file-open");
+    let resource_ctor_addr = resolve(
+        TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32,
+        "Scaleform resource-ctor",
+    );
+    // PER-HOOK OUTCOMES, NOT ONE SHARED FLAG (bd er-effects-rs-55y6, 2026-08-31).
+    //
+    // These three observers are INDEPENDENT: AcquireMenuResource drives the loading bar's
+    // ACQUIRING ASSETS phase, the Scaleform file-open counter drives OPENING / BUILDING MENU UI,
+    // and the resource-ctor observer drives neither. Until now they shared one `ok` that all three
+    // failure arms cleared, in front of an `if !ok { return; }` that stood between the queue and
+    // `MH_ApplyQueued` -- so ONE refused address left the others created, queued, and never
+    // enabled. That is the exact shape that froze the visible bar at `LOADING SAVE 7/11` and left
+    // the cover over live gameplay when the five loading-screen observers shared a flag
+    // (`er-loading-portrait-core/src/dlstring_lookat_math.rs`, since rewritten to per-hook latches).
+    //
+    // It was worse here than there. The file-open hook goes through the UNION, which the comment
+    // below says is DELIBERATELY OUTSIDE this batch -- and its failure still cleared the flag that
+    // gated the batch's apply, so a hook that was never in the batch could kill it.
+    //
+    // Each hook now carries its own answer, the apply runs whenever ANY hook queued, and each
+    // `*_INSTALLED` latch is set only for the hook that actually queued -- the old code set both
+    // MinHook latches on `MH_OK` regardless of which one got there, which would have reported a
+    // refused observer as installed and blocked its retry.
+    // `scripts/check-hook-batch-abort.py` is the gate that keeps the shape out.
+    let mut acquire_queued = false;
+    let mut resource_ctor_queued = false;
+    if let Some(addr) = addr
+        && TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) == 0
+    {
         match unsafe {
             MhHook::new(
                 addr as *mut c_void,
@@ -46,14 +78,18 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             Ok(hook) => {
                 TITLE_MENU_RESOURCE_ACQUIRE_ORIG
                     .store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
+                match unsafe { hook.queue_enable() } {
+                    Ok(()) => acquire_queued = true,
+                    Err(status) => append_autoload_debug(format_args!(
+                        "title-resource-observer: AcquireMenuResource queue_enable failed: {status:?}; the other observers are unaffected"
+                    )),
+                }
                 crate::mh::leak_installed_hook(hook);
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: AcquireMenuResource MhHook::new failed: {status:?}"
+                    "title-resource-observer: AcquireMenuResource MhHook::new failed: {status:?}; the other observers are unaffected"
                 ));
-                ok = false;
             }
         }
     }
@@ -67,7 +103,9 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     // reaches this same union from its own image through the `er_effects_union_register` export.
     // The union enables its hook immediately rather than through MinHook's queue, so this
     // deliberately sits outside the `MH_ApplyQueued` batch the other two observers share.
-    if TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) == 0 {
+    if let Some(file_open_addr) = file_open_addr
+        && TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) == 0
+    {
         match unsafe {
             crate::mh::register_union_hook(
                 file_open_addr,
@@ -77,14 +115,17 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
         } {
             Ok(()) => TITLE_SCALEFORM_FILE_OPEN_INSTALLED.store(1, Ordering::SeqCst),
             Err(status) => {
+                // Not `ok = false` any more: this hook is not in the MinHook batch at all (see
+                // the paragraph above), so its failure has no business skipping the batch's apply.
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: Scaleform file-open union register failed: {status:?}"
+                    "title-resource-observer: Scaleform file-open union register failed: {status:?}; the other observers are unaffected"
                 ));
-                ok = false;
             }
         }
     }
-    if TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) == 0 {
+    if let Some(resource_ctor_addr) = resource_ctor_addr
+        && TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) == 0
+    {
         match unsafe {
             MhHook::new(
                 resource_ctor_addr as *mut c_void,
@@ -94,27 +135,44 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             Ok(hook) => {
                 TITLE_SCALEFORM_RESOURCE_CTOR_ORIG
                     .store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
+                match unsafe { hook.queue_enable() } {
+                    Ok(()) => resource_ctor_queued = true,
+                    Err(status) => append_autoload_debug(format_args!(
+                        "title-resource-observer: Scaleform resource-ctor queue_enable failed: {status:?}; the other observers are unaffected"
+                    )),
+                }
                 crate::mh::leak_installed_hook(hook);
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: Scaleform resource-ctor MhHook::new failed: {status:?}"
+                    "title-resource-observer: Scaleform resource-ctor MhHook::new failed: {status:?}; the other observers are unaffected"
                 ));
-                ok = false;
             }
         }
     }
-    if !ok {
+    // Nothing reached MinHook's pending set, so there is nothing to apply. This is NOT the old
+    // aggregate abort: it fires only when EVERY batched hook is out, never because one is.
+    if !(acquire_queued || resource_ctor_queued) {
         return;
     }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
-            TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
+            // Only the hooks that actually queued. Setting both unconditionally reported a refused
+            // observer as installed and, because these latches also guard re-entry, permanently
+            // blocked the retry that a later pass would have made.
+            if acquire_queued {
+                TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
+            }
             // file-open is NOT set here: the union already enabled and flagged it above.
-            TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+            if resource_ctor_queued {
+                TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+            }
+            // `{:x?}` on the Options, not `{:x}` on a usize: a refused row now reports `None`
+            // instead of being absent from a line that claims all three were hooked. The
+            // `queued=` pair says which of the two BATCHED observers actually went live, so the
+            // line can no longer read as "all three hooked" when one was refused.
             append_autoload_debug(format_args!(
-                "title-resource-observer: hooked AcquireMenuResource 0x{addr:x}, Scaleform file-open 0x{file_open_addr:x}, resource-ctor 0x{resource_ctor_addr:x}; observe-only"
+                "title-resource-observer: AcquireMenuResource {addr:x?}, Scaleform file-open {file_open_addr:x?}, resource-ctor {resource_ctor_addr:x?} (None = refused for this build); queued=acquire:{acquire_queued} resource_ctor:{resource_ctor_queued}; observe-only"
             ));
         }
         status => append_autoload_debug(format_args!(
@@ -209,8 +267,14 @@ pub(crate) unsafe extern "system" fn title_flow_context_record_regulation_fix_ho
     } else {
         0
     };
-    let reg_manager =
-        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    let reg_manager = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GLOBAL_CS_REGULATION_MANAGER_RVA,
+            "GLOBAL_CS_REGULATION_MANAGER_RVA",
+        ))
+    }
+    .unwrap_or(0);
     let manager44 = if reg_manager > OWNER_CTX_MIN_PLAUSIBLE_PTR
         && reg_manager < OWNER_CTX_MAX_PLAUSIBLE_PTR
     {
@@ -252,7 +316,8 @@ pub(crate) fn install_title_flow_context_record_regulation_fix_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA as u32)
+    else {
         append_autoload_debug(format_args!(
             "title-flow-context-record-fix: failed to resolve record rva 0x{TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA:x}"
         ));
@@ -305,7 +370,7 @@ pub(crate) fn install_title_scaleform_bind_observer_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_SCALEFORM_BIND_OBSERVER_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_SCALEFORM_BIND_OBSERVER_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-b: failed to resolve Scaleform bind observer rva 0x{TITLE_SCALEFORM_BIND_OBSERVER_RVA:x}"
         ));
@@ -380,7 +445,14 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     }
     let base = game_module_base().unwrap_or(null);
     let cs_menu_man = if base != null {
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null)
+        unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .unwrap_or(null)
     } else {
         null
     };
@@ -549,10 +621,12 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
         TITLE_PRESS_START_BIND_LAST_CONTEXT.store(context, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
         record_title_text_gfx_value(value);
-        let base = game_module_base().unwrap_or(null);
-        if base != null {
+        if let Some(set_visible_addr) = crate::experiments::gated_game_fn(
+            TITLE_PRESS_START_SET_VISIBLE_RVA,
+            "TITLE_PRESS_START_SET_VISIBLE_RVA",
+        ) {
             let set_visible: unsafe extern "system" fn(usize, u8) =
-                unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+                unsafe { std::mem::transmute(set_visible_addr) };
             unsafe { set_visible(out_proxy, 0) };
             let calls = TITLE_PRESS_START_BIND_HIDE_CALLS
                 .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -571,7 +645,9 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
 }
 
 pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
-    if TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.load(Ordering::SeqCst) != 0 {
+    // ONE CLAIM, not a check-then-act read of the success latch -- two install threads own this
+    // (see `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED` for the measured race).
+    if TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
     match unsafe { MH_Initialize() } {
@@ -583,7 +659,7 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve named-child bind rva 0x{TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA:x}"
         ));
@@ -1261,6 +1337,14 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     let place_names = er_save_loader::profile_summary::slot_place_name_ids(sl2);
     let decoded = all.iter().flatten().count();
     let named = names.iter().flatten().count();
+    // Rows that will render a header with no attribute line under it (see
+    // `er_save_loader::stats::named_without_stats_mask`). Taken here, before `names` moves into
+    // the cache below, so the report can still name the character.
+    let named_without_stats = er_save_loader::stats::named_without_stats_mask(&names, &all);
+    let headerless: Vec<String> = (0..PROFILE_SLOT_COUNT as usize)
+        .filter(|slot| named_without_stats & (1u32 << slot) != 0)
+        .map(|slot| format!("{slot}:{:?}", names[slot].as_deref().unwrap_or("")))
+        .collect();
     match PROFILE_SLOT_STATS_CACHE.lock() {
         Ok(mut guard) => *guard = Some(all),
         Err(poison) => *poison.into_inner() = Some(all),
@@ -1276,11 +1360,18 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     }
     PROFILE_SLOT_STATS_DECODED.store(decoded, Ordering::SeqCst);
     PROFILE_SLOT_NAMES_DECODED.store(named, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK
+        .store(named_without_stats as usize, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "stats-text: per-slot cache loaded from {source} ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
         sl2.len()
     ));
+    if named_without_stats != 0 {
+        append_autoload_debug(format_args!(
+            "stats-text: NAMED BUT NOT DECODED mask=0x{named_without_stats:03x} {headerless:?} -- each of those Load Character rows will show its header with NO attribute line and NO WL"
+        ));
+    }
     decoded
 }
 
@@ -1309,6 +1400,7 @@ pub(crate) fn invalidate_profile_slot_caches(reason: &str) {
     }
     PROFILE_SLOT_STATS_DECODED.store(0, Ordering::SeqCst);
     PROFILE_SLOT_NAMES_DECODED.store(0, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK.store(0, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(0, Ordering::SeqCst);
     if had {
         let n = PROFILE_SLOT_CACHE_INVALIDATIONS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1347,12 +1439,20 @@ unsafe fn row_child_gfx_value_type(base: usize, row_proxy: usize, name: &str) ->
     }
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => er_game_base::mem::game_data_addr(
+            base,
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ),
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            CSSCALEFORMVALUE_DTOR_RVA,
+            "CSSCALEFORMVALUE_DTOR_RVA",
+        )?)
+    };
     let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
     let out = unsafe {
         assign(
@@ -1415,14 +1515,33 @@ pub(crate) unsafe fn push_stats_text_on_row(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => er_game_base::mem::game_data_addr(
+            base,
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ),
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
-    let settext: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let settext: unsafe extern "system" fn(usize, usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(PROFILE_SETTEXT_RVA, "PROFILE_SETTEXT_RVA") {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                CSSCALEFORMVALUE_DTOR_RVA,
+                "CSSCALEFORMVALUE_DTOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     // The binder fully constructs the out proxy without reading it (RE: assignComponentWithName
     // ctor-or-resolve paths both initialize before use); a zeroed buffer mirrors the native
     // uninitialized 0x70-byte stack slot with headroom. The name is a plain string (the binder
@@ -1521,8 +1640,14 @@ pub(crate) unsafe fn push_stats_text_on_resolved_field(
     label: &str,
     utf16: &[u16],
 ) -> bool {
-    let settext: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+    let settext: unsafe extern "system" fn(usize, usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(PROFILE_SETTEXT_RVA, "PROFILE_SETTEXT_RVA") {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let component_slot = field_proxy + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
     let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
     let comp_vt = if comp != 0 && comp != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -1603,14 +1728,36 @@ pub(crate) unsafe fn set_row_field_visible(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => er_game_base::mem::game_data_addr(
+            base,
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ),
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let set_visible: unsafe extern "system" fn(usize, u8) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_PRESS_START_SET_VISIBLE_RVA,
+                "TITLE_PRESS_START_SET_VISIBLE_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                CSSCALEFORMVALUE_DTOR_RVA,
+                "CSSCALEFORMVALUE_DTOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
     let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
     let out = unsafe {
         assign(
@@ -1645,7 +1792,12 @@ pub(crate) unsafe fn set_row_field_visible(
             }
         }
     }
-    let vtable_ok = proxy_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    let vtable_ok = proxy_vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            SCENE_OBJ_PROXY_VTABLE_RVA,
+            "SCENE_OBJ_PROXY_VTABLE_RVA",
+        );
     if vtable_ok {
         unsafe { set_visible(out, u8::from(visible)) };
     } else {
@@ -1654,7 +1806,11 @@ pub(crate) unsafe fn set_row_field_visible(
             append_autoload_debug(format_args!(
                 "save-picker: row field {} visibility SKIPPED fail-closed -- out proxy 0x{out:x} vtable 0x{proxy_vt:x} is not CS::SceneObjProxy 0x{:x} (n={n})",
                 name.trim_end_matches('\0'),
-                base + SCENE_OBJ_PROXY_VTABLE_RVA
+                er_game_base::mem::game_data_addr(
+                    base,
+                    SCENE_OBJ_PROXY_VTABLE_RVA,
+                    "SCENE_OBJ_PROXY_VTABLE_RVA"
+                )
             ));
         }
     }
@@ -2398,11 +2554,11 @@ mod tests {
 
     #[test]
     fn live_font_size_injects_into_existing_colored_stats_fonts_without_outer_font_wrap() {
-        let body = "<font color=\"#8f887a\">VIG</font> <font color=\"#e0736b\"><b>50</b></font>";
+        let body = "<font color=\"#8f887a\">VIG</font><font color=\"#e0736b\"><b>50</b></font>";
         let sized = scaleform_html_size_existing_font_tags(body, 20);
         assert_eq!(
             sized,
-            "<font size=\"20\" color=\"#8f887a\">VIG</font> <font size=\"20\" color=\"#e0736b\"><b>50</b></font>"
+            "<font size=\"20\" color=\"#8f887a\">VIG</font><font size=\"20\" color=\"#e0736b\"><b>50</b></font>"
         );
         assert!(
             !sized.contains("<font size=\"20\"><font"),

@@ -23,6 +23,7 @@ static HUDHOOK_RENDER_HITS: AtomicUsize = AtomicUsize::new(0);
 static HUDHOOK_VISIBLE_HITS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_COLLAPSED: AtomicBool = AtomicBool::new(START_COLLAPSED);
 static OVERLAY_TOGGLE_CLICKS: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_TOGGLE_KEYS: AtomicUsize = AtomicUsize::new(0);
 /// The button the last frame committed to, shared rather than owned by the render-loop struct.
 ///
 /// When this module is a GUEST there is no `NetEffectsOverlay` instance -- the host owns the only
@@ -87,16 +88,39 @@ pub(crate) fn install_present_overlay_hook(hmodule_raw: usize) {
         return;
     }
 
-    // Nobody hosts one yet, so this module will. The mutex is what stops a module loaded after
-    // this one from installing a second hook behind our back.
-    if !er_build_watermark_core::claim_owner() {
-        crash_telemetry::hudhook_apply_failed();
-        net_effects_log(format_args!(
-            "present-overlay: a module owns the overlay but did not accept a guest -- the bar \
-             cannot be drawn. It is almost certainly built against a different hudhook/imgui \
-             than this DLL; rebuild the whole profile from one tree."
-        ));
-        return;
+    // Nobody hosts one YET -- but the claim below waits for the game's window before it touches
+    // the mutex, and every other would-be host is waiting on that same window. So the probe above
+    // was taken before anyone could have designated themselves, and losing the mutex here means a
+    // host appeared in between. Ask again on that path rather than giving up: a single stale probe
+    // is precisely how this bar went missing.
+    match er_build_watermark_core::claim_overlay_ownership() {
+        er_build_watermark_core::OverlayClaim::Won => {}
+        er_build_watermark_core::OverlayClaim::LostToAnotherModule => {
+            if er_build_watermark_core::overlay_host::register_with_host_retrying(guest_draw) {
+                crash_telemetry::hudhook_apply_ok();
+                net_effects_log(format_args!(
+                    "present-overlay: another module won the overlay while this one waited for \
+                     the window; registered as a GUEST (no second Present hook)"
+                ));
+            } else {
+                crash_telemetry::hudhook_apply_failed();
+                net_effects_log(format_args!(
+                    "present-overlay: a module owns the overlay but would not accept a guest -- \
+                     the bar cannot be drawn. The host speaks a different overlay ABI than this \
+                     DLL's {:#06x}; rebuild the whole profile from one tree.",
+                    er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG
+                ));
+            }
+            return;
+        }
+        er_build_watermark_core::OverlayClaim::NoWindow => {
+            crash_telemetry::hudhook_apply_failed();
+            net_effects_log(format_args!(
+                "present-overlay: this process never got a sized top-level window, so there is \
+                 nothing to draw the bar on and no host to join. Not an ABI problem."
+            ));
+            return;
+        }
     }
 
     let hmodule = hudhook::windows::Win32::Foundation::HINSTANCE(hmodule_raw as *mut c_void);
@@ -132,6 +156,51 @@ pub(crate) fn overlay_collapsed() -> bool {
 /// How many times the player has clicked the minimize/maximize button.
 pub(crate) fn overlay_toggle_clicks() -> usize {
     OVERLAY_TOGGLE_CLICKS.load(Ordering::Relaxed)
+}
+
+/// How many times the bar was expanded or minimized from the keyboard or a driver command.
+///
+/// Emitted beside the click count rather than folded into it, because the two answer different
+/// questions: a session with clicks proves the pointer was free, and a session with only keys is
+/// the normal one. Both being zero while `hudhook_render_count` climbs is the exact signature of
+/// a bar nobody could open.
+pub(crate) fn overlay_toggle_keys() -> usize {
+    OVERLAY_TOGGLE_KEYS.load(Ordering::Relaxed)
+}
+
+/// Expand the bar, or minimize it back -- the keyboard's half of the `[+]` button.
+///
+/// Lives here rather than in `effects` because `OVERLAY_COLLAPSED` is read by the render thread
+/// every frame and is deliberately the ONE place the collapsed state lives; mirroring it into the
+/// game-thread state would lag the render loop by a frame (see `effects::selector_input_state`).
+pub(crate) fn toggle_collapsed_by_key() -> bool {
+    let now_collapsed = !OVERLAY_COLLAPSED.fetch_xor(true, Ordering::Relaxed);
+    OVERLAY_TOGGLE_KEYS.fetch_add(1, Ordering::Relaxed);
+    net_effects_log(format_args!(
+        "present-overlay: bar {} by key",
+        if now_collapsed {
+            "minimized"
+        } else {
+            "maximized"
+        }
+    ));
+    now_collapsed
+}
+
+/// Put the bar into an explicit state, for the `er-net-effects-command.txt` driver.
+///
+/// The command path exists so the expand/collapse machine can be exercised without a pointer and
+/// without a keyboard -- the click path had no such handle, which is part of why it went a whole
+/// session unproven.
+pub(crate) fn set_collapsed_by_command(collapsed: bool) {
+    if OVERLAY_COLLAPSED.swap(collapsed, Ordering::Relaxed) == collapsed {
+        return;
+    }
+    OVERLAY_TOGGLE_KEYS.fetch_add(1, Ordering::Relaxed);
+    net_effects_log(format_args!(
+        "present-overlay: bar {} by driver command",
+        if collapsed { "minimized" } else { "maximized" }
+    ));
 }
 
 /// The host-side render loop. Carries no state of its own: everything the draw needs between

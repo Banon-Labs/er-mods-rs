@@ -832,8 +832,23 @@ mod tests {
 
     #[test]
     fn a_marked_block_survives_a_save_and_reload_cycle() {
-        let dir = std::env::temp_dir().join("er-invasion-warp-config-save-test");
-        let _ = std::fs::create_dir_all(&dir);
+        // PROCESS-SCOPED, like every other temp path in this file. It was a FIXED shared name
+        // until 2026-08-31, and two copies of this binary running at once -- routine here: the
+        // host `cargo test` and the wine `cargo xwin test` run the same tests, and several agents
+        // run check.sh concurrently -- collided on the one path. Reproduced by running eight
+        // copies under wine: two failed, one at the `save` below with
+        // `Os { code: 2, kind: NotFound }` (a sibling unlinking the file mid-`File::create`) and
+        // one at the `reload_if_changed` assertion (a sibling's write read, correctly, as a
+        // foreign edit). Neither is a product defect: nothing but this DLL writes the real
+        // config, and a genuinely foreign edit SHOULD be reported. It was test cross-talk.
+        let dir = std::env::temp_dir().join(format!(
+            "er-invasion-warp-config-save-test-{}",
+            std::process::id()
+        ));
+        // EXPECTED, not discarded. Swallowing this error is what turned "the directory could not
+        // be created" into a bare `NotFound` at the write eight lines down, which reads as a bug
+        // in `save`.
+        std::fs::create_dir_all(&dir).expect("create the test's own temp directory");
         let path = dir.join("er-invasion-warp.toml");
         let _ = std::fs::remove_file(&path);
         // Interval 0 so the poll below actually READS. With the shipped ~1s throttle it would
@@ -853,6 +868,43 @@ mod tests {
         // press would also reset the key edge detectors -- and a key held at that instant fires.
         assert_eq!(hot.reload_if_changed(&path), None);
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Every temp path this file's tests use must be PROCESS-SCOPED.
+    ///
+    /// Structural, because the fix to a shared path is invisible from a green run: the collision
+    /// only shows when two copies of the binary happen to overlap, so a reintroduced fixed name
+    /// passes locally, passes in the next run, and then fails once in somebody else's suite with
+    /// an error that names `save` rather than the test. Measured 2026-08-31, eight concurrent wine
+    /// copies of `a_marked_block_survives_a_save_and_reload_cycle`: 2 of 8 failed, in two
+    /// different places. The other four temp-path tests here were already process-scoped; this
+    /// asserts the property instead of leaving it to whoever writes the sixth.
+    #[test]
+    fn every_temp_path_in_this_file_is_process_scoped() {
+        let source = include_str!("local_invasion_config.rs");
+        // Spelled in two halves so this test's own source does not match the pattern it scans for
+        // and fail on itself.
+        let needle = concat!("env::temp_", "dir().join(");
+        let mut sites = 0;
+        for (index, _) in source.match_indices(needle) {
+            // Enough of what follows the `.join(` to see the whole name expression, whether it is
+            // written on one line or wrapped over three.
+            let name = &source[index + needle.len()..source.len().min(index + needle.len() + 160)];
+            sites += 1;
+            assert!(
+                name.contains("std::process::id()"),
+                "a test temp path is shared across processes, so two concurrent copies of this \
+                 binary collide on it: {}",
+                &name[..name.len().min(90)]
+            );
+        }
+        // The property is trivially true of zero sites, and this file has had four for months.
+        assert!(
+            sites >= 4,
+            "found only {sites} temp-path sites; the scan stopped matching the code it is \
+             supposed to constrain, so a shared path would now pass unexamined"
+        );
     }
 
     /// A 60% keyboard names a key it has; that must survive the writer, since the in-game keys

@@ -42,6 +42,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 //   no-kick                 the pipeline never even targeted this window
 // A `+short` suffix marks windows shorter than the ~confirm->publish latency, where a missing
 // portrait is expected-by-latency rather than a pipeline failure.
+// A `+not-ours` suffix marks a MISS on a loading screen the product's cover never owned -- a fast
+// travel, a death respawn, an area transition. Those are excluded from the miss aggregates and
+// counted in `oracle_portrait_loadwin_not_ours` instead; `cover_owned=` on the verdict line carries
+// the raw answer for every window. Without it, run br-20260831-160354-2513 scored 2 of its 4
+// windows as portrait failures when both were fast travels and both real load windows were ok-full.
 
 /// PUBLISHED-vs-LOADED identity check for one closed window (bd er-effects-rs-qoqc defect 6 /
 /// er-effects-rs-91zb). IMPLEMENTED BUT UNPROVEN -- it changes no rendering, but nothing has yet
@@ -149,6 +154,21 @@ static LOADWIN_OK_FULL: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_DISPLAYED_SMALL: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_DISPLAYED_STALE: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_MISSING: AtomicUsize = AtomicUsize::new(0);
+/// Windows the product's cover does not own at all -- a fast travel, a death respawn, an area
+/// transition. Counted apart from [`LOADWIN_MISSING`] because they are not misses.
+static LOADWIN_NOT_OURS: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the loading cover OWNED this window's loading screen, sampled while the window is still
+/// OPEN and latched sticky.
+///
+/// SAMPLED AT OPEN, NEVER AT CLOSE, and the run that forces it is br-20260831-160354-2513.
+/// `cover_owns_current_loading_screen()` goes false once the cover stops and stamps its load
+/// witness -- and the cover stops BEFORE the window closes on every healthy load (the window closes
+/// `LOADWIN_QUIET_CLOSE_MS` after the last native tick, the cover lets go before that). So asking at
+/// close would report the user's own System->Quit->Load Character reload as "not ours": in that run
+/// the cover stopped at 239858 ms and window #3 closed at 241344 ms. Asking at open gives the four
+/// windows of that run their true answers -- boot OURS, fast travel NOT, reload OURS, fast travel
+/// NOT.
+static LOADWIN_COVER_OWNED: AtomicUsize = AtomicUsize::new(0);
 /// Last N per-window records, each a pre-rendered JSON object string (ASCII only).
 static LOADWIN_HISTORY: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -180,6 +200,13 @@ pub fn portrait_loadwin_sample_and_write(body: &mut String) {
         body,
         "oracle_portrait_loadwin_missing",
         LOADWIN_MISSING.load(Ordering::SeqCst),
+    );
+    // Windows the cover never owned (fast travel / death / area transition). Reported separately so
+    // an acceptance gate on `_missing` stops failing on a warp -- see the close path for the run.
+    push_json_usize(
+        body,
+        "oracle_portrait_loadwin_not_ours",
+        LOADWIN_NOT_OURS.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
@@ -231,6 +258,11 @@ fn portrait_loadwin_tick() {
         );
         LOADWIN_BASE_EXPOSURE.store(
             er_telemetry_core::counters::NATIVE_LS_EXPOSURE_FRAMES.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+        // Ownership, asked here and only here -- see LOADWIN_COVER_OWNED for why close is too late.
+        LOADWIN_COVER_OWNED.store(
+            er_telemetry_core::counters::cover_owns_current_loading_screen() as usize,
             Ordering::SeqCst,
         );
         // Reject-attribution baseline for windows that are NOT profile switches
@@ -292,6 +324,11 @@ fn portrait_loadwin_tick() {
                 loadwin_max_side_packed(LOADING_BG_PORTRAIT_DIMS.load(Ordering::SeqCst)),
                 Ordering::SeqCst,
             );
+        }
+        // Sticky: a window that was ours at ANY open sample stays ours, so a cover that armed a tick
+        // late cannot downgrade its own load to "not ours".
+        if er_telemetry_core::counters::cover_owns_current_loading_screen() {
+            LOADWIN_COVER_OWNED.store(1, Ordering::SeqCst);
         }
         if !screen_live {
             portrait_loadwin_close(
@@ -362,33 +399,53 @@ fn portrait_loadwin_close(close_ms: usize) {
         "no-kick"
     };
     let short = dur_ms < LOADWIN_SHORT_WINDOW_MS;
-    let cause = if short {
-        format!("{base_cause}+short")
-    } else {
-        base_cause.to_string()
-    };
+    // WHOSE LOADING SCREEN WAS THIS? Without this, a window the product never covers is scored as a
+    // portrait failure, and run br-20260831-160354-2513 scored two of them: window #2
+    // `published-not-displayed` and window #4 `kicked-no-publish` were BOTH plain fast travels
+    // (`gm-snap: ... warp_requested=true` at log 2657 and 8479). Nothing was wrong in either. The
+    // cover had released normally at 33747 ms (`reason=1`) and a warp is the game's own screen, so
+    // the composite never ran and the pump's in-world epoch fast-path
+    // (`lookat_bone_hooks.rs` `BOOT_VIEW_EPOCH_WORLD_LIVE == cur`) correctly stopped the capture.
+    // Both classes then read as defects: 2 of 4 windows "failed" on a session whose only real load
+    // windows, #1 and #3, were both `ok-full`. Same distinction, same predicate and same argument as
+    // `NATIVE_LS_GATE_UNOWNED_LOAD` on the exposure side.
+    let owned = LOADWIN_COVER_OWNED.load(Ordering::SeqCst) != 0;
+    let displayed_ok = matches!(base_cause, "ok-full" | "displayed-small" | "displayed-mid");
+    // Only a MISS gets excused. A not-ours window that somehow displayed a portrait is still
+    // reported as what it displayed -- suppressing that would hide a cover drawing where it should
+    // not, which is the opposite defect and a worse one.
+    let not_ours = !owned && !displayed_ok;
+    let cause = format!(
+        "{base_cause}{}{}",
+        if short { "+short" } else { "" },
+        if not_ours { "+not-ours" } else { "" }
+    );
     LOADWIN_TOTAL.fetch_add(1, Ordering::SeqCst);
-    match base_cause {
-        "ok-full" => {
-            LOADWIN_OK_FULL.fetch_add(1, Ordering::SeqCst);
-        }
-        "displayed-small" => {
-            LOADWIN_DISPLAYED_SMALL.fetch_add(1, Ordering::SeqCst);
-        }
-        "displayed-stale" => {
-            LOADWIN_DISPLAYED_STALE.fetch_add(1, Ordering::SeqCst);
-        }
-        _ => {
-            LOADWIN_MISSING.fetch_add(1, Ordering::SeqCst);
+    if not_ours {
+        LOADWIN_NOT_OURS.fetch_add(1, Ordering::SeqCst);
+    } else {
+        match base_cause {
+            "ok-full" => {
+                LOADWIN_OK_FULL.fetch_add(1, Ordering::SeqCst);
+            }
+            "displayed-small" => {
+                LOADWIN_DISPLAYED_SMALL.fetch_add(1, Ordering::SeqCst);
+            }
+            "displayed-stale" => {
+                LOADWIN_DISPLAYED_STALE.fetch_add(1, Ordering::SeqCst);
+            }
+            _ => {
+                LOADWIN_MISSING.fetch_add(1, Ordering::SeqCst);
+            }
         }
     }
     append_autoload_debug(format_args!(
-        "PORTRAIT-LOADWIN VERDICT #{i}: cause={cause} dur_ms={dur_ms} displayed={displayed} publishes={publishes} rejects={rejects} kicked={} cap_max_side={cap_side} pub_max_side={pub_side} slot_tag={slot_tag} identity={identity} native_exposure_frames={exposure} window={open_ms}..{close_ms}ms",
-        kicked as u8
+        "PORTRAIT-LOADWIN VERDICT #{i}: cause={cause} cover_owned={} dur_ms={dur_ms} displayed={displayed} publishes={publishes} rejects={rejects} kicked={} cap_max_side={cap_side} pub_max_side={pub_side} slot_tag={slot_tag} identity={identity} native_exposure_frames={exposure} window={open_ms}..{close_ms}ms",
+        owned as u8, kicked as u8
     ));
     let record = format!(
-        "{{\"i\":{i},\"open_ms\":{open_ms},\"dur_ms\":{dur_ms},\"disp\":{displayed},\"pub\":{publishes},\"rej\":{rejects},\"kick\":{},\"cap_side\":{cap_side},\"pub_side\":{pub_side},\"slot\":{slot_tag},\"expo\":{exposure},\"cause\":\"{cause}\"}}",
-        kicked as u8
+        "{{\"i\":{i},\"open_ms\":{open_ms},\"dur_ms\":{dur_ms},\"disp\":{displayed},\"pub\":{publishes},\"rej\":{rejects},\"kick\":{},\"owned\":{},\"cap_side\":{cap_side},\"pub_side\":{pub_side},\"slot\":{slot_tag},\"expo\":{exposure},\"cause\":\"{cause}\"}}",
+        kicked as u8, owned as u8
     );
     let mut guard = match LOADWIN_HISTORY.lock() {
         Ok(g) => g,

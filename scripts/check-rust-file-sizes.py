@@ -8,32 +8,24 @@ backsliding while semantic module extraction continues.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import NOT_REPO_SOURCE, rust_source_files  # noqa: E402
 
 DEFAULT_WARN_LINES = 900
 DEFAULT_FAIL_LINES = 3200
-SKIP_DIRS = {
-    ".git",
-    ".worktrees",
-    # `.claude/worktrees` holds transient agent worktree COPIES of the repo (gitignored); scanning them
-    # double-counts the real files. `.worktrees` above only matches the dot-prefixed top-level dir, so the
-    # part here is the bare `.claude` segment (also covers `.claude/skills` etc. -- none are product source).
-    ".claude",
-    "target",
-    "save-files",
-    "docs",
-    "third_party",
-}
+# The shared "not this repo's source" set (.git/.worktrees/.claude/target/third_party), plus two
+# this gate alone excludes: neither holds product Rust, and a size budget for hand-written source
+# should not start reporting on a game save dump or a doc snippet if one ever lands there.
+EXTRA_SKIP_DIRS = frozenset({"save-files", "docs"})
+SKIP_DIRS = NOT_REPO_SOURCE | EXTRA_SKIP_DIRS
 
 
 def rust_files(root: Path) -> list[Path]:
-    files: list[Path] = []
-    for path in root.rglob("*.rs"):
-        rel_parts = path.relative_to(root).parts
-        if any(part in SKIP_DIRS for part in rel_parts):
-            continue
-        files.append(path)
-    return sorted(files)
+    """Every `.rs` under `root` except `SKIP_DIRS`. See `scripts/repo_source_scan.py`."""
+    return rust_source_files(root, EXTRA_SKIP_DIRS)
 
 
 def line_count(path: Path) -> int:

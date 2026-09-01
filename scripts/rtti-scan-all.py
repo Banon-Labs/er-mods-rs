@@ -12,17 +12,29 @@ MSVC x64 RTTI CompleteObjectLocator (COL) layout (all RVAs):
 A vtable's [base-8] qword holds the absolute VA of its COL.
 
 Output: lines "0x<vtable_va>\t<class_name>" sorted by VA, plus a count header.
-Usage: rtti-scan-all.py [out_file]
+
+Usage: rtti-scan-all.py [out_file] [--image PATH]
+
+WHY --image EXISTS. The image was hard-coded to the 1.16.2 `eldenring-deobf.bin`, which
+made this tool unable to answer the one question it is uniquely good at during the
+1.16.2 -> 1.17 migration: does the vtable a data-map row points at in 1.17 carry the SAME
+mangled class name as the source did in 1.16.2? That is an identity check, not an
+inference, and it needs the 1.17 image. Defaults are unchanged.
 """
-import sys, struct, os
+import argparse, struct, os
 
 BASE = 0x140000000
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+IMG = os.path.join(REPO, "eldenring-deobf.bin")
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/er-deobf-rtti-classmap.tsv"
-    data = open(IMG, "rb").read()
+    ap = argparse.ArgumentParser(description="Harvest MSVC RTTI vtable -> class name.")
+    ap.add_argument("out_file", nargs="?", default="/tmp/er-deobf-rtti-classmap.tsv")
+    ap.add_argument("--image", default=IMG, help="flat de-Arxan'd image to scan")
+    args = ap.parse_args()
+    out = args.out_file
+    data = open(args.image, "rb").read()
     n = len(data)
 
     def rd_cstr(off):

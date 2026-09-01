@@ -56,7 +56,12 @@ const DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS: usize = 512;
 /// including third-party overlays that read the field straight out of game memory rather than
 /// calling a game function (ERGG does exactly that), and it costs those overlays nothing and
 /// needs no knowledge of them.
-const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x002610c0;
+///
+/// Declared once in `er-game-base::rva`, where the full three-storage layout is written down: the
+/// build importer CALLS the same function to adopt a build's name, so the address is now shared
+/// and `check-rva-alias-drift.py` requires one declaration for it.
+const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize =
+    er_game_base::rva::PLAYER_GAME_DATA_COPY_CHR_NAME_RVA;
 /// `PlayerGameData::isMainPlayer`. The local player's own name is never rewritten: it is their
 /// save's name and the name they send to everyone else.
 const PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET: usize = 0x8f0;
@@ -801,6 +806,10 @@ mod windows_runtime {
     }
 
     fn install_player_name_filter(module: *mut c_void) {
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-player-name-filter", log_message);
         er_hook::set_hook_logger(log_message);
         let module_path = match module_path(module) {
             Ok(path) => path,
@@ -823,23 +832,27 @@ mod windows_runtime {
         // switched back on without a restart, which is the whole point of the reload.
 
         let mut attempts = 0_u64;
-        loop {
-            match game_module_base() {
-                Ok(base) => {
-                    GAME_BASE.store(base, Ordering::SeqCst);
-                    install_hook(base, group_count);
-                    spawn_config_watcher(config_path);
-                    break;
+        // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+        // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
+        let found = er_game_base::wait::poll_until(|| match game_module_base() {
+            Ok(base) => Some(base),
+            Err(err) => {
+                if attempts == 0 || attempts.is_multiple_of(4096) {
+                    log_message(format_args!("install: waiting for game module base: {err}"));
                 }
-                Err(err) => {
-                    if attempts == 0 || attempts.is_multiple_of(4096) {
-                        log_message(format_args!("install: waiting for game module base: {err}"));
-                    }
-                    attempts = attempts.saturating_add(1);
-                    std::thread::yield_now();
-                }
+                attempts = attempts.saturating_add(1);
+                None
             }
-        }
+        });
+        let Some(base) = found else {
+            log_message(format_args!(
+                "install: no game module base; nothing installed"
+            ));
+            return;
+        };
+        GAME_BASE.store(base, Ordering::SeqCst);
+        install_hook(base, group_count);
+        spawn_config_watcher(config_path);
     }
 
     /// Compile a parsed config and make it live. Returns the number of usable groups.
@@ -1013,7 +1026,11 @@ mod windows_runtime {
         ));
         install_one(
             "SessionManagerPlayerEntryBase::Copy",
-            base + SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
+                "SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA",
+            ),
             SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA,
             &SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_PROLOGUE,
             session_manager_player_entry_base_copy_hook as UnionFn,
@@ -1021,7 +1038,11 @@ mod windows_runtime {
         );
         install_one(
             "PlayerGameData::CopyChrName",
-            base + PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
+                "PLAYER_GAME_DATA_COPY_CHR_NAME_RVA",
+            ),
             PLAYER_GAME_DATA_COPY_CHR_NAME_RVA,
             &PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE,
             player_game_data_copy_chr_name_hook as UnionFn,
@@ -1029,7 +1050,11 @@ mod windows_runtime {
         );
         install_one(
             "GetPlayerChrName",
-            base + GET_PLAYER_CHR_NAME_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                GET_PLAYER_CHR_NAME_RVA,
+                "GET_PLAYER_CHR_NAME_RVA",
+            ),
             GET_PLAYER_CHR_NAME_RVA,
             &GET_PLAYER_CHR_NAME_PROLOGUE,
             get_player_chr_name_hook as UnionFn,
@@ -1258,7 +1283,14 @@ mod windows_runtime {
             return false;
         };
         unsafe { release_dl_string(&mut menu_string.dl_string) };
-        let copy: super::DlStringCopyFn = unsafe { std::mem::transmute(base + DL_STRING_COPY_RVA) };
+        // Through the 1.17 gate: `base + rva` calls the 1.16.2 address on a build that moved
+        // DLString::copy, and this one writes through a caller-owned string.
+        let Ok(copy_addr) =
+            er_game_base::mem::game_rva_named(DL_STRING_COPY_RVA as u32, "DL_STRING_COPY_RVA")
+        else {
+            return false;
+        };
+        let copy: super::DlStringCopyFn = unsafe { std::mem::transmute(copy_addr) };
         unsafe { copy(&mut menu_string.dl_string, source) };
         menu_string.raw_string = std::ptr::null_mut();
         true
@@ -1279,17 +1311,27 @@ mod windows_runtime {
         if let Some(&address) = cache.get(text) {
             return Some(address as *const RawDlStringWide);
         }
-        let allocator = unsafe { *((base + MENU_HEAP_ALLOCATOR_POINTER_RVA) as *const usize) }
-            as *mut RawDlAllocator;
+        let allocator = er_game_base::mem::read_global_ptr(
+            base,
+            MENU_HEAP_ALLOCATOR_POINTER_RVA,
+            "MENU_HEAP_ALLOCATOR_POINTER_RVA",
+        ) as *mut RawDlAllocator;
         if allocator.is_null() {
             log_message(format_args!(
                 "chr-name: GLOBAL_MenuHeapAllocator is null; cannot build a replacement string"
             ));
             return None;
         }
+        // Resolve BEFORE the allocation, so a refusal does not leak the box it would have filled.
+        let Ok(from_u16_addr) = er_game_base::mem::game_rva_named(
+            DL_STRING_FROM_U16_ARRAY_RVA as u32,
+            "DL_STRING_FROM_U16_ARRAY_RVA",
+        ) else {
+            return None;
+        };
         let built: *mut RawDlStringWide = Box::into_raw(Box::new(unsafe { std::mem::zeroed() }));
         let from_u16_array: super::DlStringFromU16ArrayFn =
-            unsafe { std::mem::transmute(base + DL_STRING_FROM_U16_ARRAY_RVA) };
+            unsafe { std::mem::transmute(from_u16_addr) };
         unsafe { from_u16_array(built, units.as_ptr(), allocator) };
         cache.insert(text.to_owned(), built as usize);
         Some(built)

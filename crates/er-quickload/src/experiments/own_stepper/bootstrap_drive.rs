@@ -94,7 +94,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
     }
     let read_i32 = |off: usize| unsafe { *((gm + off) as *const i32) };
     let iodev_summary = || -> (usize, usize, usize) {
-        let iodev = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let iodev = er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         if iodev == null {
             (null, null, null)
         } else {
@@ -138,10 +138,24 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // CSTaskImp/CSWindowImp/CSEzWork, and GameMan::WriteSaveToSlot derefs it as
         // `GLOBAL_MainHeapAllocator->_vfptr->AllocateAligned`. Renamed 2026-08-01.
         const SLLOADCONTENT_SRC_RVA: usize = 0x3d87358;
-        let src1 = unsafe { safe_read_usize(base + SLLOADCONTENT_SRC_RVA) }.unwrap_or(null);
-        let src2 =
-            unsafe { safe_read_usize(base + GLOBAL_MAIN_HEAP_ALLOCATOR_RVA) }.unwrap_or(null);
-        let owner_probe = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let src1 = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                SLLOADCONTENT_SRC_RVA,
+                "SLLOADCONTENT_SRC_RVA",
+            ))
+        }
+        .unwrap_or(null);
+        let src2 = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                GLOBAL_MAIN_HEAP_ALLOCATOR_RVA,
+                "GLOBAL_MAIN_HEAP_ALLOCATOR_RVA",
+            ))
+        }
+        .unwrap_or(null);
+        let owner_probe =
+            er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         let owner8 = if owner_probe != null {
             unsafe { safe_read_usize(owner_probe + 8) }.unwrap_or(null)
         } else {
@@ -159,7 +173,14 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // This file had the identity right all along; `constants.rs` called the same address
         // an FD4 IO worker manager until 2026-08-01. Ghidra confirms this reading.
         const SLSYSTEMIMPL_PTR_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
-        let sysimpl = unsafe { safe_read_usize(base + SLSYSTEMIMPL_PTR_RVA) }.unwrap_or(null);
+        let sysimpl = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                SLSYSTEMIMPL_PTR_RVA,
+                "SLSYSTEMIMPL_PTR_RVA",
+            ))
+        }
+        .unwrap_or(null);
         let (sl_mgr, sl_tbl, sl_ready) = if sysimpl != null {
             let m = unsafe { safe_read_usize(sysimpl + 0x8) }.unwrap_or(null);
             let t = unsafe { safe_read_usize(sysimpl + 0x10) }.unwrap_or(null);
@@ -179,12 +200,18 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // so the device read an EMPTY buffer (deserialize gave c30=0xffffffff + garbage char).
         // Save-safe (sets a path + reads metadata; NO save write).
         const SLOT_MGR_PEEK_RVA: usize = 0x678a50;
-        let peek: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + SLOT_MGR_PEEK_RVA) };
+        let peek: unsafe extern "system" fn() = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(SLOT_MGR_PEEK_RVA, "SLOT_MGR_PEEK_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { peek() };
         append_autoload_debug(format_args!(
             "cold-char-mount: slot-mgr peek 0x{:x}() -> set save-file path before mount (GameMan+0xe70 ready)",
-            base + SLOT_MGR_PEEK_RVA
+            er_game_base::mem::game_data_addr(base, SLOT_MGR_PEEK_RVA, "SLOT_MGR_PEEK_RVA")
         ));
         // (0) REFRAME (2026-06-18, REFRAME-io-subsystem-present-cold-blocker-is-just-the-active-byte):
         // the FD4 IO subsystem (pool/task/iodev) is ALREADY present + CLEAN cold (snapshot-proven).
@@ -200,15 +227,28 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             null
         };
         if profile_summary != null {
-            let activate: unsafe extern "system" fn(usize, i32) =
-                unsafe { std::mem::transmute(base + PROFILE_SLOT_ACTIVATE_RVA) };
+            let activate: unsafe extern "system" fn(usize, i32) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        PROFILE_SLOT_ACTIVATE_RVA,
+                        "PROFILE_SLOT_ACTIVATE_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { activate(profile_summary, want_slot) };
             let abyte = unsafe {
                 *((profile_summary + SLOT_ACTIVE_BYTE_BASE + want_slot as usize) as *const u8)
             };
             append_autoload_debug(format_args!(
                 "cold-char-mount: ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) -> [profile+8+{want_slot}]={abyte} (so 0x67b200 slot-check 0x140261cd0 passes)",
-                base + PROFILE_SLOT_ACTIVATE_RVA
+                er_game_base::mem::game_data_addr(
+                    base,
+                    PROFILE_SLOT_ACTIVATE_RVA,
+                    "PROFILE_SLOT_ACTIVATE_RVA"
+                )
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -222,8 +262,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         unsafe {
             *((stub_ptr + SYNTHETIC_STEP_STATE_OFFSET) as *mut i32) = WORLD_WORKER_BUILD_STATE
         };
-        let worker_build: unsafe extern "system" fn(usize) -> usize =
-            unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
+        let worker_build: unsafe extern "system" fn(usize) -> usize = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    WORLD_WORKER_BUILD_RVA,
+                    "WORLD_WORKER_BUILD_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { worker_build(stub_ptr) };
         let worker = crate::runtime_heap_allocator_ptr_or_null();
         // (1.5) DEVICE MOUNT/BIND (b80-mount-routine-0x140e6e8d0-recipe-...). ROOT CAUSE of
@@ -237,8 +286,15 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // submit. The mount is internally guarded by 0x14240acd0([0x143d872e0]) which needs
         // the IO worker registry [0x144843038+0x18]!=0; if it bails (al=0) the log shows it.
         // SAVE-SAFE: the mount only OPENS a handle + registers paths for READ; no save write.
-        let iodev_before = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
-        let registry = unsafe { *((base + IO_WORKER_REGISTRY_RVA) as *const usize) };
+        let iodev_before =
+            er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
+        let registry = unsafe {
+            *((er_game_base::mem::game_data_addr(
+                base,
+                IO_WORKER_REGISTRY_RVA,
+                "IO_WORKER_REGISTRY_RVA",
+            )) as *const usize)
+        };
         let reg_count = if registry != null {
             unsafe { *((registry + IO_WORKER_REGISTRY_COUNT_18_OFFSET) as *const u32) }
         } else {
@@ -259,11 +315,26 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let (dev40_before, dev30_before) = read_dev(iodev_before);
         // The getter returns the iodev (lazily creating it if null) -- the exact value the
         // native boot passes to the mount.
-        let iodev_getter: unsafe extern "system" fn() -> usize =
-            unsafe { std::mem::transmute(base + IODEV_GETTER_RVA) };
+        let iodev_getter: unsafe extern "system" fn() -> usize = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(IODEV_GETTER_RVA, "IODEV_GETTER_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let iodev = unsafe { iodev_getter() };
-        let mount: unsafe extern "system" fn(usize) -> u8 =
-            unsafe { std::mem::transmute(base + IODEV_MOUNT_OPEN_RVA) };
+        let mount: unsafe extern "system" fn(usize) -> u8 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    IODEV_MOUNT_OPEN_RVA,
+                    "IODEV_MOUNT_OPEN_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let mount_al = if iodev != null {
             unsafe { mount(iodev) }
         } else {
@@ -272,20 +343,27 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let (dev40_after, dev30_after) = read_dev(iodev);
         append_autoload_debug(format_args!(
             "cold-char-mount: MOUNT 0x{:x}(iodev=0x{iodev:x}) al={mount_al} | registry=0x{registry:x} reg_count={reg_count} | dev40 {dev40_before}->{dev40_after} dev30 0x{dev30_before:x}->0x{dev30_after:x} (al=1 & dev40->nonzero = device bound; submit should now route to the BOUND read)",
-            base + IODEV_MOUNT_OPEN_RVA
+            er_game_base::mem::game_data_addr(base, IODEV_MOUNT_OPEN_RVA, "IODEV_MOUNT_OPEN_RVA")
         ));
         // WORKER-GATE diagnostic (b80-DEVICE-MOUNT-REFUTED-...). The read drops b80 2->0 in
         // ONE frame = the enqueue 0x14240e420 DISCARDS the request (no-op completion). Two
         // discard gates: (1) [worker+0x19]!=0 (no-accept/shutdown byte); (2) the registry
         // intrusive list [registry+0x28] does not contain the caller's key (0x141ee1240).
         // Read both (no call) to pin which gate fires cold. reg_list_empty when [[+0x28]]==[+0x28].
-        let worker_mgr = unsafe { *((base + FD4_IO_WORKER_MGR_RVA) as *const usize) };
+        let worker_mgr = er_game_base::mem::read_global_ptr(
+            base,
+            FD4_IO_WORKER_MGR_RVA,
+            "FD4_IO_WORKER_MGR_RVA",
+        );
         let worker_noaccept = if worker_mgr != null {
             unsafe { *((worker_mgr + FD4_IO_WORKER_NOACCEPT_19_OFFSET) as *const u8) }
         } else {
             0xff
         };
-        let io_pool = unsafe { *((base + FD4_IO_POOL_RVA) as *const usize) };
+        let io_pool = unsafe {
+            *((er_game_base::mem::game_data_addr(base, FD4_IO_POOL_RVA, "FD4_IO_POOL_RVA"))
+                as *const usize)
+        };
         let reg_list_node = if registry != null {
             unsafe { *((registry + IO_WORKER_REGISTRY_LIST_28_OFFSET) as *const usize) }
         } else {
@@ -349,11 +427,29 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // b80 reaches RESIDENT before deserializing.
         unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = want_slot };
         let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_save_slot(want_slot) };
-        let submit: unsafe extern "system" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
+        let submit: unsafe extern "system" fn(i32) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_FULL_LOAD_INITIATOR_RVA,
+                    "B80_FULL_LOAD_INITIATOR_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         // NOT `submit(want_slot)`: the argument is a flag the game always passes as 0, and the
         // slot was already set by `set_save_slot` above. See `B80_FULL_LOAD_SUBMIT_FLAG`.
         let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
@@ -364,7 +460,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let qd10_after = unsafe { safe_read_usize(q10_after) }.unwrap_or(null);
         append_autoload_debug(format_args!(
             "cold-char-mount: FULL-INIT slot={want_slot} b78={b78} worker=0x{worker:x} submit_ret={sret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} | q8 0x{q8_before:x}->0x{q8_after:x} [q8] 0x{qd8_before:x}->0x{qd8_after:x} q10 0x{q10_before:x}->0x{q10_after:x} [q10] 0x{qd10_before:x}->0x{qd10_after:x} (any change=ENQUEUED; none=DISCARDED) -> POLL",
-            read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+            read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET)
         ));
         // (2.4) SAVE-DIR READ-ONLY VERIFY (bd b80-cold-EXACT-dir-field-slot3-0x142410c60). The worker
         // (SLLoadSession::_Func02 0x142410cd0) -> name-builder FUN_14240d5b0 -> slot-3 0x142410c60
@@ -424,20 +520,45 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // and cap=7 (empty SSO) first. [u64;8] guarantees 8-byte alignment for the field writes.
         let mut wrapper = [0u64; 8];
         let wbase = wrapper.as_mut_ptr() as usize;
-        let alloc_getter: unsafe extern "system" fn() -> usize =
-            unsafe { std::mem::transmute(base + SAVE_DIR_ALLOC_GETTER_RVA) };
+        let alloc_getter: unsafe extern "system" fn() -> usize = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    SAVE_DIR_ALLOC_GETTER_RVA,
+                    "SAVE_DIR_ALLOC_GETTER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let allocator = unsafe { alloc_getter() };
         unsafe {
             *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
             *((wbase + U16STRING_CAP_OFFSET) as *mut usize) = U16STRING_SSO_CAP;
         }
-        // Guard: the builder derefs the Steam interface (*0x143b48ff0) for the account id; skip the
-        // call (logging the cause) if it is null cold -- that would be hypothesis-2 (Steam not live).
-        let steam_iface =
-            unsafe { safe_read_usize(base + STEAM_INTERFACE_GUARD_RVA) }.unwrap_or(null);
-        if steam_iface != null && allocator != null {
-            let builder: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(base + SAVE_DIR_BUILDER_RVA) };
+        // Guard: two frames down the builder CALLS through the qword at 0x143b48ff0 (0x140e8d550
+        // -> 0x140e8d510 -> `MOV RAX,[0x143b48ff0]; CALL RAX`), so a null there is `CALL 0`. Skip
+        // the call and log the cause -- that would be hypothesis-2 (Steam not live).
+        let steam_id_call_slot = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                STEAM_ID_ACCESSOR_CALL_SLOT_RVA,
+                "STEAM_ID_ACCESSOR_CALL_SLOT_RVA",
+            ))
+        }
+        .unwrap_or(null);
+        if steam_id_call_slot != null && allocator != null {
+            let builder: unsafe extern "system" fn(usize) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        SAVE_DIR_BUILDER_RVA,
+                        "SAVE_DIR_BUILDER_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { builder(wbase) };
         }
         let dir_cap = unsafe { *((wbase + U16STRING_CAP_OFFSET) as *const usize) };
@@ -449,12 +570,19 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         };
         let built_text = decode_u16(dir_data, dir_size);
         append_autoload_debug(format_args!(
-            "cold-char-mount: SAVE-DIR BUILD steam_iface=0x{steam_iface:x} allocator=0x{allocator:x} cap={dir_cap} size={dir_size} data=0x{dir_data:x} text=\"{built_text}\" (size>0 & real path = builder works cold = hypothesis-1 handler-never-ran; size=0 = Steam not live cold = hypothesis-2)"
+            "cold-char-mount: SAVE-DIR BUILD steam_id_call_slot=0x{steam_id_call_slot:x} allocator=0x{allocator:x} cap={dir_cap} size={dir_size} data=0x{dir_data:x} text=\"{built_text}\" (size>0 & real path = builder works cold = hypothesis-1 handler-never-ran; size=0 = Steam not live cold = hypothesis-2)"
         ));
         // Install on the LIVE path-DB slot-0 directory. The setter COPIES our buffer into the slot
         // entry's std::u16string at entry+0xb0 (via 0x14240dce0), so our stack wrapper can be dropped.
-        let setter: unsafe extern "system" fn(usize, i32, usize) =
-            unsafe { std::mem::transmute(base + SAVE_DIR_SETTER_RVA) };
+        let setter: unsafe extern "system" fn(usize, i32, usize) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(SAVE_DIR_SETTER_RVA, "SAVE_DIR_SETTER_RVA")
+                {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let set_fired =
             io20 != null && dir_data != null && dir_size > 0 && dir_size <= REQ_DIR_SANE_MAX_CU;
         if set_fired {
@@ -474,8 +602,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             0
         };
         let entry = if coll != null && set_fired {
-            let lookup: unsafe extern "system" fn(usize, i32) -> usize =
-                unsafe { std::mem::transmute(base + SAVE_DIR_SLOT_LOOKUP_RVA) };
+            let lookup: unsafe extern "system" fn(usize, i32) -> usize = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        SAVE_DIR_SLOT_LOOKUP_RVA,
+                        "SAVE_DIR_SLOT_LOOKUP_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { lookup(coll, key) }
         } else {
             null
@@ -509,8 +646,15 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         const STATE_INDEX_GETTER_RVA: usize = 0x240a1f0;
         const OWNER_HANDLE_CONTAINER_OFFSET: usize = 0x0;
         const OWNER_HANDLE_H10_OFFSET: usize = 0x10;
-        const OWNER_DF0_OFFSET: usize = 0xdf0;
-        let owner_fsm = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        // NOT the owner FSM's field and NOT a handle: `GameMan + 0xdf0` is the LENGTH of the
+        // `DLString<wchar_t>` inside the `FD4FilePathBase` at `GameMan + 0xdd0` (Ghidra's 1.16.2
+        // `GameMan` type; the ctor's `lea rdi,[rsi+0xdd0]` at 0x14067644b / 1.17 0x14067729b).
+        // `0x140679180` spells its own gate `(GLOBAL_GameMan->field479_0xdd0).string.length != 0`,
+        // so "df0!=0 = warm fast-path" below means "a save path is already set". A count, printed
+        // in decimal -- rendered hex beside `owner=0x..`/`o20=0x..` it reads as an address.
+        const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
+        let owner_fsm =
+            er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         let container = if io20 != null {
             unsafe { safe_read_usize(io20 + OWNER_HANDLE_CONTAINER_OFFSET) }.unwrap_or(null)
         } else {
@@ -527,16 +671,26 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             usize::MAX
         };
         let fsm_index = if io20 != null {
-            let idx_getter: unsafe extern "system" fn(usize) -> i32 =
-                unsafe { std::mem::transmute(base + STATE_INDEX_GETTER_RVA) };
+            let idx_getter: unsafe extern "system" fn(usize) -> i32 = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        STATE_INDEX_GETTER_RVA,
+                        "STATE_INDEX_GETTER_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             unsafe { idx_getter(io20) }
         } else {
             -1
         };
-        let df0 = unsafe { *((gm + OWNER_DF0_OFFSET) as *const usize) };
-        let b80_at_init = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let path_len =
+            unsafe { *((gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) as *const usize) };
+        let b80_at_init = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         append_autoload_debug(format_args!(
-            "cold-char-mount: OWNER-FSM owner=0x{owner_fsm:x} o18=0x{io18:x} o20=0x{io20:x} container=[o20]=0x{container:x} h10=[o20+0x10]=0x{h10:x} h10_deep=[h10+0x10]=0x{h10_deep:x} fsm_index=0x{fsm_index:x} df0=[gm+0xdf0]=0x{df0:x} b80={b80_at_init} (idx 0x14=idle->b80=3; 0x19=container-null; df0!=0=warm fast-path)"
+            "cold-char-mount: OWNER-FSM owner=0x{owner_fsm:x} o18=0x{io18:x} o20=0x{io20:x} container=[o20]=0x{container:x} h10=[o20+0x10]=0x{h10:x} h10_deep=[h10+0x10]=0x{h10_deep:x} fsm_index=0x{fsm_index:x} path_len[gm+0xdf0]={path_len} b80={b80_at_init} (idx 0x14=idle->b80=3; 0x19=container-null; path_len!=0=save path set=warm fast-path)"
         ));
         MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);
@@ -547,10 +701,19 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // resident. It keeps b80=1 while in-progress and resets b80=0 once the read completes (the
         // registered+ticked worker is what makes that completion happen). When b80==0, the iodev
         // request is resident; fire LoadSaveData 0x67b200 to re-enter the b80=2 lane (populates io18).
-        let lane: unsafe extern "system" fn() -> i32 =
-            unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+        let lane: unsafe extern "system" fn() -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_LANE1_DRIVER_RVA,
+                    "B80_LANE1_DRIVER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { lane() };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
         if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
             let (io10, io18, io20) = iodev_summary();
@@ -559,13 +722,22 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             ));
         }
         if b80 == B80_IDLE {
-            let loadsave: unsafe extern "system" fn(i32) -> i32 =
-                unsafe { std::mem::transmute(base + B80_LOAD_SAVE_DATA_INITIATOR_RVA) };
+            let loadsave: unsafe extern "system" fn(i32) -> i32 = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        B80_LOAD_SAVE_DATA_INITIATOR_RVA,
+                        "B80_LOAD_SAVE_DATA_INITIATOR_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             let lret = unsafe { loadsave(want_slot) };
             let (io10, io18, io20) = iodev_summary();
             append_autoload_debug(format_args!(
                 "cold-char-mount: preview read RESIDENT (b80->0 after {w} lane ticks) -> LoadSaveData 0x67b200 ret={lret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> POLL",
-                read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+                read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET)
             ));
             MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
             MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);
@@ -587,13 +759,28 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // the cold async full read completes EMPTY (b80->0, never resident=3) -- the worker is
         // registered+scheduler-ticked but does no actual 0x280000 disk IO. Next suspect: the df0
         // fast-path ([mgr+0xdf0]!=0 -> 0x67b100 skips the read).
-        let lane: unsafe extern "system" fn() -> i32 =
-            unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+        let lane: unsafe extern "system" fn() -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    B80_LANE1_DRIVER_RVA,
+                    "B80_LANE1_DRIVER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { lane() };
-        let poll: unsafe extern "system" fn(u8, u8) -> i32 =
-            unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+        let poll: unsafe extern "system" fn(u8, u8) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(B80_POLL_RVA, "B80_POLL_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let _ = unsafe { poll(POLL_ARG, POLL_ARG) };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
         // WARM WORKER-KICK (bd b80-WARM-kick-0x14067b4e0-worker-0x140e6ec80). The cold submit
         // 0x67b1a0 only request_transitions state 0xa, so the owner-FSM node parks at idx 0x16 (an
@@ -612,8 +799,19 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // NOT a "warm load kick": 0x67b4e0 blanks the whole save container. See
             // BLANK_SAVE_CONTAINER_REQUEST_RVA. Only referenced below to suppress an unused warning.
             const WARM_LOAD_KICK_RVA: usize = BLANK_SAVE_CONTAINER_REQUEST_RVA;
-            const GAME_MAN_LOAD_HANDLE_B98_OFFSET: usize = 0xb98;
-            const GAME_MAN_LOAD_HANDLE_BA0_OFFSET: usize = 0xba0;
+            // NOT a load handle pair. `GameMan + 0xb98` is a `DLDateTime` and 0xba0 is its
+            // upper half; a second `DLDateTime` follows at 0xba8. The constructor writes both
+            // halves through a register, not through `this` --
+            //   1406761a3  lea   rbx, [rsi+0xb98]     ; 1.17 0x140676ff3
+            //   1406761aa  mov   qword [rbx], r14     ; GameMan+0xb98
+            //   1406761ad  and   qword [rbx+8], r12   ; GameMan+0xba0
+            //   1406761d7  lea   rbx, [rsi+0xba8]     ; the second DLDateTime
+            // -- so a `this`-relative census sees 0xb98 and 0xba8 and is silent at 0xba0, which
+            // is how a wrong meaning survives a drift check. Ghidra's 1.16.2 `GameMan` type names
+            // both members `DLDateTime`, and the ctor pairs 1296/1296 with zero moved offsets.
+            // Nothing here reads them; they are kept as the measured RE fact.
+            const GAME_MAN_DLDATETIME_B98_OFFSET: usize = 0xb98;
+            const GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET: usize = 0xba0;
             // RUNTIME-PROVEN cold gate (bd b80-WARM-kick-runtime-0x140e6ec80-returns0-cold): the
             // worker-builder 0x140e6ec80 (inside the kick) returns al=0 unless BOTH [owner+0x10]==0
             // (worker) AND [owner+0x20]==0 (node) -- it only builds when nothing exists yet. In the
@@ -622,7 +820,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // parked node via the finalizer 0x140e6f200 (zeroes owner+0x10/+0x18/+0x20 -- the same
             // teardown the idx-0x14 success path runs) so the kick rebuilds worker+node cleanly and
             // submits the real FD4 read job. owner = iodev = *0x144589390.
-            let owner = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+            let owner =
+                er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
             let (o10_pre, o20_pre) = if owner != null {
                 unsafe {
                     (
@@ -634,8 +833,17 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
                 (null, null)
             };
             if owner != null {
-                let finalizer: unsafe extern "system" fn(usize) =
-                    unsafe { std::mem::transmute(base + NODE_FINALIZER_RVA) };
+                let finalizer: unsafe extern "system" fn(usize) = unsafe {
+                    std::mem::transmute(
+                        match crate::experiments::gated_game_fn(
+                            NODE_FINALIZER_RVA,
+                            "NODE_FINALIZER_RVA",
+                        ) {
+                            Some(address) => address,
+                            None => return,
+                        },
+                    )
+                };
                 unsafe { finalizer(owner) };
             }
             let o20_post = if owner != null {
@@ -645,8 +853,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             };
             let _ = (
                 WARM_LOAD_KICK_RVA,
-                GAME_MAN_LOAD_HANDLE_B98_OFFSET,
-                GAME_MAN_LOAD_HANDLE_BA0_OFFSET,
+                GAME_MAN_DLDATETIME_B98_OFFSET,
+                GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET,
                 o10_pre,
                 o20_pre,
                 o20_post,
@@ -671,7 +879,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // (harmless). See bd b80-load-builder-hangs-inline-async-needed + the off-thread crash.
             append_autoload_debug(format_args!(
                 "cold-char-mount: PROPER-LOAD disabled (load builder uncallable cold: inline hangs, off-thread crashes) -- finalize 0x{:x}(owner=0x{owner:x}) done, no load call",
-                base + NODE_FINALIZER_RVA
+                er_game_base::mem::game_data_addr(base, NODE_FINALIZER_RVA, "NODE_FINALIZER_RVA")
             ));
         }
         // (select-node pump REMOVED with the PIVOT: it was for the low-level select-node hypothesis
@@ -732,23 +940,39 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
     }
     if phase == PHASE_DESER {
         // DIAGNOSTIC (char-apply debug, COLD-B80-WALL-BROKEN-...): before the deserialize, read the
-        // suspects for why c30/char did not apply: [mgr+0xdf0] (deserialize-ready -- if set, 0x67b100
-        // takes the fast-path and does NOT read into 0x67b290's buffer = lane mismatch / empty parse);
-        // [mgr+0x18] (the async load job 0x140e6eb80 queued); [0x143d68078] (the c30-write gate that
-        // gates 0x67bd70 inside 0x67b290).
-        const DF0_OFFSET: usize = 0xdf0;
+        // suspects for why c30/char did not apply: the save-path length at GameMan+0xdf0 (if
+        // NON-ZERO, `0x67b100` takes the fast-path and does NOT read into 0x67b290's buffer = lane
+        // mismatch / empty parse); [mgr+0x18] (the async load job 0x140e6eb80 queued);
+        // [0x143d68078] (the c30-write gate that gates 0x67bd70 inside 0x67b290).
+        //
+        // It was `DF0_OFFSET`, described as "deserialize-ready", logged as `0x{:x}`. It is the
+        // LENGTH of the `DLString<wchar_t>` in the `FD4FilePathBase` at GameMan+0xdd0 -- both
+        // gates that read it, `0x140679180` and `0x14067b100`, decompile to
+        // `(GLOBAL_GameMan->field479_0xdd0).string.length != 0`. A character count, so: decimal.
+        const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
         const ASYNC_JOB_18_OFFSET: usize = 0x18;
         const C30_WRITE_GATE_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
-        let df0 = unsafe { *((gm + DF0_OFFSET) as *const usize) };
+        let path_len =
+            unsafe { *((gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) as *const usize) };
         let job18 = unsafe { *((gm + ASYNC_JOB_18_OFFSET) as *const usize) };
-        let c30_gate = unsafe { *((base + C30_WRITE_GATE_RVA) as *const usize) };
-        let deser: unsafe extern "system" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+        let c30_gate =
+            er_game_base::mem::read_global_ptr(base, C30_WRITE_GATE_RVA, "C30_WRITE_GATE_RVA");
+        let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    DESERIALIZE_SLOT_RVA,
+                    "DESERIALIZE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         let dret = unsafe { deser(want_slot) };
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         append_autoload_debug(format_args!(
-            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} | pre-deser df0(mgr+0xdf0)=0x{df0:x} async_job(mgr+0x18)=0x{job18:x} c30_gate(0x143d68078)=0x{c30_gate:x} (df0!=0 -> 0x67b100 fast-path skips the read = empty parse). NO SetState/NO save write:"
+            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} | pre-deser path_len(gm+0xdf0)={path_len} async_job(mgr+0x18)=0x{job18:x} c30_gate(0x143d68078)=0x{c30_gate:x} (path_len!=0 -> 0x67b100 fast-path skips the read = empty parse). NO SetState/NO save write:"
         ));
         unsafe { dump_load_correctness(base, n) };
         // Publish the result so a STAGE2 caller that delegates here can observe completion + the

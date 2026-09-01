@@ -86,8 +86,10 @@ pub const OWN_STEPPER_PHASE_CONTINUE: usize = OwnStepperPhase::Continue as usize
 pub const OWN_STEPPER_PHASE_MOUNT: usize = OwnStepperPhase::Mount as usize;
 /// b80 save-IO poll/driver 0x140679180(0,0): advances GameMan+0xb80 toward 3 (resident)
 /// as the stream worker drains the async slot read; sets b80=3 when the IO request state
-/// (0x14240a1f0) is resident. We call it ourselves each frame at state 10.
-pub const B80_POLL_RVA: usize = 0x679180;
+/// (0x14240a1f0) is resident. We call it ourselves each frame at state 10 -- but ONLY while
+/// `GameMan.saveState` says a LOAD owns the device, because this poll answers 4 and writes
+/// `saveState = 0` without releasing anything whenever a SAVE owns it instead.
+pub const B80_POLL_RVA: usize = er_game_base::rva::SL_LOAD_POLL_WRAPPER_RVA;
 /// Both fastcall args (cl, dl) to the b80 poll 0x140679180 are 0 in the native menu
 /// drive (matches the captured real-load poll calls poll(0,0)).
 pub const B80_POLL_ARG_ZERO: u8 = false as u8;
@@ -95,7 +97,7 @@ pub const B80_POLL_ARG_ZERO: u8 = false as u8;
 /// 0x14067b4e0; resets GameMan+0xb80 1->0 when the iodev request goes resident. NOT a
 /// dispatcher (no CSFeMan apply / no save write) -- just the lane tick the menu runs via
 /// dispatcher-1. We call it ourselves to drain the preview read to resident.
-pub const B80_LANE1_DRIVER_RVA: usize = 0x679510;
+pub const B80_LANE1_DRIVER_RVA: usize = er_game_base::rva::SL_SAVE_LANE_WRAPPER_RVA;
 /// Wall-clock fail-safe to poll b80 toward 3 before giving up the mount (avoid an infinite
 /// title hang if the worker never drains). Not a readiness/success predicate.
 pub const OWN_STEPPER_MOUNT_POLL_MAX: u64 = OWN_STEPPER_MOUNT_POLL_TIMEOUT_MS;

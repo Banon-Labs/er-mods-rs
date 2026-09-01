@@ -555,7 +555,14 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     let Ok(base) = game_module_base() else {
         return;
     };
-    let csm = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let csm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(0);
     // Failure latch first: `CSMenuMan->[0x80]+0x290` (byte) / `+0x298` (qword). Latched
     // means SaveRequest_Profile's gate FUN_14080d570 fails PERMANENTLY for the session --
     // waiting cannot help, so abort loudly instead of timing out (noise rule 3: failure
@@ -586,7 +593,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     let gm = game_man_ptr_or_null();
     let (b80, bc4) = if gm >= HEAP_LO {
         (
-            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1),
             unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
                 .unwrap_or(-1),
         )
@@ -936,8 +943,13 @@ fn save_flow_retract_stuck_request(reason: &str) {
         decline("the game module base is unavailable");
         return;
     };
-    let Some(gm) = (unsafe { safe_read_usize(base + er_game_base::rva::GAME_MAN_SINGLETON_RVA) })
-    else {
+    let Some(gm) = (unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            er_game_base::rva::GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }) else {
         decline("GameMan is unreadable");
         return;
     };

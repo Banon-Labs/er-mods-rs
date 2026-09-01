@@ -749,7 +749,19 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
         log_find_miss(stage);
         None
     };
-    let Some(ctx) = read_nn(base + G_GX_DRAW_CONTEXT_RVA) else {
+    // Resolved, not added. This is a 1.16.2 DATA address and every `.data` global moved on
+    // 1.17, so read raw it names some other object -- which is why the find reported
+    // `stage=1 candidate=0x0 vt_module=<none>` for 1200 consecutive tries: it never got past
+    // the ROOT. With the vanilla title surfaces hidden and no overlay able to draw, that is a
+    // black screen with a live process behind it. The carry is unusually well evidenced --
+    // 965 of 966 referencing sites agree on 0x47f33e0.
+    let Some(ctx_slot) = er_game_base::game_build::resolve_game_address(
+        base + G_GX_DRAW_CONTEXT_RVA,
+        "GX_DRAW_CONTEXT_RVA",
+    ) else {
+        return miss(FIND_STAGE_CTX_NULL);
+    };
+    let Some(ctx) = read_nn(ctx_slot) else {
         return miss(FIND_STAGE_CTX_NULL);
     };
     // Precise chain: output-vector begin -> entry[0] output object -> output[0] swapchain.
@@ -853,6 +865,78 @@ fn log_find_miss(stage: usize) {
 /// pointer in the dxgi vtable -- NOT the function body -- so it sidesteps the W^X code-page patch that
 /// MinHook cannot apply on Wine's dxgi.dll (it reports MH_OK yet the detour never fires). `VirtualProtect`
 /// the 8-byte slot to RW, swap the pointer, then restore the original page protection.
+/// A 12-byte `mov rax, imm64; jmp rax` stub that jumps to `target`, in freshly allocated RWX memory.
+///
+/// # Why the vtable slot must not point straight at a Rust function
+///
+/// Under vkd3d-proton EVERY dxgi swapchain in the process shares ONE DXVK `CDXGISwapChain`
+/// vtable, which this file already relies on -- it is why a dummy swapchain can resolve the
+/// game's `Present`. The consequence runs the other way too: the slot this code patches is the
+/// slot EVERY other overlay reads.
+///
+/// hudhook, which `er-net-effects` and `er-build-watermark` both use, resolves `Present` exactly
+/// that way and then MinHook-patches the function it finds. Once this file has swapped the slot,
+/// the function it finds is `present_hook` -- a Rust function body inside `er_quickload.dll`.
+/// MinHook writes a jump over its prologue and relocates the displaced instructions into a
+/// trampoline, which is a thing you may do to a function compiled to be hooked and not to one
+/// LLVM emitted under its own assumptions.
+///
+/// MEASURED, 2026-08-29. Bisected over eighteen DLLs: `er-quickload` alone survives past
+/// fourteen seconds and presents 338 frames; `er-net-effects` alone is fine; together the
+/// process dies ~300ms after `boot-view: first draw`, with hudhook's own telemetry reporting
+/// `hudhook_render_count=0` -- it never completed a render. The ordering is not in doubt either:
+/// at swap time the slot still held dxgi's own Present (0x6ffffc8fabf0, equal to the module
+/// hint), so this code was first and hudhook arrived afterwards.
+///
+/// # Why a thunk fixes it rather than hiding it
+///
+/// The slot points at twelve bytes THIS code owns. A third party is free to MinHook them: the
+/// first instruction is a 10-byte `mov rax, imm64`, which is position-independent and longer
+/// than the five bytes MinHook needs, so it relocates cleanly into a trampoline. The chain then
+/// runs hudhook's detour -> its trampoline -> this stub -> `present_hook` -> the real Present,
+/// and both overlays work. Nothing is disabled and nothing is ordered by luck.
+unsafe fn hookable_thunk(target: usize) -> Option<usize> {
+    use windows::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc,
+    };
+    // A whole page per stub. It is never freed: the vtable slot points into it for the life of
+    // the process, and a third party's trampoline may too.
+    let page = unsafe {
+        VirtualAlloc(
+            None,
+            THUNK_PAGE_BYTES,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_EXECUTE_READWRITE,
+        )
+    };
+    if page.is_null() {
+        return None;
+    }
+    let mut code = [0u8; THUNK_CODE_BYTES];
+    code[0] = 0x48; // REX.W
+    code[1] = 0xB8; // mov rax, imm64
+    code[2..10].copy_from_slice(&(target as u64).to_le_bytes());
+    code[10] = 0xFF; // jmp rax
+    code[11] = 0xE0;
+    // Pad the rest of the page with int3 rather than leaving it zero: 0x00 0x00 decodes as
+    // `add [rax], al`, so a stray entry into the tail would fault somewhere confusing instead
+    // of trapping where it happened.
+    unsafe {
+        core::ptr::copy_nonoverlapping(code.as_ptr(), page as *mut u8, code.len());
+        core::ptr::write_bytes(
+            (page as *mut u8).add(code.len()),
+            0xCC,
+            THUNK_PAGE_BYTES - code.len(),
+        );
+    }
+    Some(page as usize)
+}
+
+/// One page per stub; see [`hookable_thunk`].
+const THUNK_PAGE_BYTES: usize = 0x1000;
+/// `mov rax, imm64` (10) + `jmp rax` (2).
+const THUNK_CODE_BYTES: usize = 12;
+
 pub(crate) unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
     use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, PAGE_READWRITE, VirtualProtect};
     let slot = slot_addr as *mut usize;
@@ -936,15 +1020,29 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     PRESENT1_ORIG.store(present22, Ordering::SeqCst);
     let slot8 = vt + PRESENT_VTABLE_INDEX * 8;
     let slot22 = vt + PRESENT1_VTABLE_INDEX * 8;
-    let swap8 = unsafe { vtable_swap_slot(slot8, present_hook as *const () as usize) }.is_some();
-    let swap22 = unsafe { vtable_swap_slot(slot22, present1_hook as *const () as usize) }.is_some();
+    // Publish THUNKS, not our Rust function bodies -- see `hookable_thunk` for the measured
+    // reason. If a thunk cannot be allocated, publish nothing: pointing the shared vtable at a
+    // Rust body is the failure this exists to avoid, so the overlay goes without rather than
+    // take the crash back.
+    let (Some(thunk8), Some(thunk22)) = (
+        unsafe { hookable_thunk(present_hook as *const () as usize) },
+        unsafe { hookable_thunk(present1_hook as *const () as usize) },
+    ) else {
+        append_autoload_debug(format_args!(
+            "present-overlay: SKIPPED VMT-swap -- could not allocate a hookable thunk; refusing to put a \
+             Rust function body in the DXVK-shared vtable where another overlay's MinHook would patch it"
+        ));
+        return;
+    };
+    let swap8 = unsafe { vtable_swap_slot(slot8, thunk8) }.is_some();
+    let swap22 = unsafe { vtable_swap_slot(slot22, thunk22) }.is_some();
     // Read the slots back so a failed patch is visible in the log (self-validating: a later FIRED line plus
     // readback=true proves the redirect took; readback=true with no FIRED means the game presents elsewhere).
     let now8 = unsafe { safe_read_usize(slot8) }.unwrap_or(0);
     let now22 = unsafe { safe_read_usize(slot22) }.unwrap_or(0);
     append_autoload_debug(format_args!(
         "present-overlay: VMT-swap game swapchain 0x{sc:x} (tries={tries}) Present8=0x{present8:x} Present1_22=0x{present22:x} slot8@0x{slot8:x} swap={swap8} readback={} slot22@0x{slot22:x} swap={swap22} readback={}",
-        now8 == present_hook as *const () as usize,
-        now22 == present1_hook as *const () as usize,
+        now8 == thunk8,
+        now22 == thunk22,
     ));
 }

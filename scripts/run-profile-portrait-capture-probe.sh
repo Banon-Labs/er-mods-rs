@@ -143,7 +143,10 @@ def ready_reason(t: dict | None) -> tuple[bool, list[str], dict]:
         "native_profile_capture_enabled": t.get("oracle_native_profile_capture_enabled") is True,
         "product_autoload_not_armed": t.get("product_autoload_armed") is False,
         "no_custom_profile_select_built": t.get("oracle_title_custom_cover_profile_select_any_built") is False,
-        "no_custom_cover_run": t.get("oracle_title_custom_cover_run_any") is False,
+        # "no_custom_cover_run" was here until 2026-08-31: `oracle_title_custom_cover_run_any is
+        # False`. It could never be anything but True -- the counter behind that oracle had no write
+        # site, so the check passed unconditionally and proved nothing. The oracle has been removed;
+        # keeping the check would have flipped it to permanently FAILING on the absent key.
         "no_title_visual_suppression": as_int(t.get("oracle_title_native_menu_visual_suppressed_builds"), 0) == 0,
         "source_ready": t.get("oracle_native_profile_source_ready") is True,
         "source_slot0": as_int(t.get("oracle_title_custom_cover_profile_source_slot"), -1) == 0,
@@ -157,7 +160,6 @@ def ready_reason(t: dict | None) -> tuple[bool, list[str], dict]:
         "autoload_method": t.get("autoload_method"),
         "product_autoload_armed": t.get("product_autoload_armed"),
         "custom_profile_select_built": t.get("oracle_title_custom_cover_profile_select_any_built"),
-        "custom_cover_run": t.get("oracle_title_custom_cover_run_any"),
         "title_visual_suppressed_builds": t.get("oracle_title_native_menu_visual_suppressed_builds"),
         "renderer": t.get("oracle_title_custom_cover_profile_source_renderer"),
         "renderer_vtable": t.get("oracle_title_custom_cover_profile_source_renderer_vtable"),

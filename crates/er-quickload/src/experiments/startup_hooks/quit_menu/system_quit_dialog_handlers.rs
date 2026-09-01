@@ -41,7 +41,11 @@ pub(crate) unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usiz
     }
     let scene_proxy = system_dialog + SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET;
     let scene_proxy_vt = unsafe { safe_read_usize(scene_proxy) }.unwrap_or(NULL);
-    let want_scene_proxy_vt = base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    let want_scene_proxy_vt = er_game_base::mem::game_data_addr(
+        base,
+        SCENE_OBJ_PROXY_VTABLE_RVA,
+        "SCENE_OBJ_PROXY_VTABLE_RVA",
+    );
     if scene_proxy_vt != want_scene_proxy_vt {
         append_autoload_debug(format_args!(
             "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} scene_proxy=dialog+0x{SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET:x}=0x{scene_proxy:x} vt=0x{scene_proxy_vt:x} want=0x{want_scene_proxy_vt:x}"
@@ -852,8 +856,13 @@ pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
 /// Fails CLOSED through `save_flow_verify_rva`: an unresolvable address or a single drifted
 /// byte skips the call and reports it. Not retracting costs CPU; calling unknown code costs
 /// the process.
-pub(crate) unsafe fn call_verified_retract(rva: u32, expected: &[u8], name: &str) -> bool {
-    let Some(address) = save_flow_verify_rva(rva, expected, name) else {
+pub(crate) unsafe fn call_verified_retract(
+    rva: u32,
+    expected: &[u8],
+    mask: &[u8],
+    name: &str,
+) -> bool {
+    let Some(address) = save_flow_verify_rva(rva, expected, mask, name) else {
         return false;
     };
     let retract: unsafe extern "system" fn() = unsafe { std::mem::transmute(address) };
@@ -871,6 +880,7 @@ pub(crate) unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (
             call_verified_retract(
                 SAVE_REQUEST_RETRACT_B72_RVA,
                 SAVE_REQUEST_RETRACT_B72_SIG,
+                SAVE_REQUEST_RETRACT_B72_SIG_MASK,
                 "b72",
             )
         };
@@ -879,6 +889,7 @@ pub(crate) unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (
             call_verified_retract(
                 SAVE_REQUEST_RETRACT_B73_RVA,
                 SAVE_REQUEST_RETRACT_B73_SIG,
+                SAVE_REQUEST_RETRACT_B73_SIG_MASK,
                 "b73",
             )
         };
@@ -1048,9 +1059,68 @@ pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
     }
 }
 
+/// A 1.16.2-only stack band, and one that CANNOT be carried forward.
+///
+/// The pair below is a 4 KB window of `.text`, not a function plus an offset, so there is nothing
+/// for the 1.16.2 -> 1.17 map to key on. That is not a gap in the map; it is a property of the
+/// band. Measured across the 33 `.pdata` functions it overlaps: 12 are unmapped outright and the
+/// 21 that map move by SEVEN different deltas (`+0xdf0`, `+0xe20`, `+0xe30`, `+0xe40`, `+0xe80`,
+/// `+0xe90`, `+0x1560`). A band whose contents move apart has no translated width, so no anchor
+/// rescues it -- unlike the GX transport band, whose 12 functions all move `+0x1e00` together and
+/// which is therefore anchored rather than refused.
+///
+/// It is also the weakest-evidenced comparison in the tree. `SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA`
+/// (`0x67a3a0`) has exactly ONE direct caller in the whole 1.16.2 image, at `0x59d90e` inside
+/// `FUN_14059d8b0`, which is nowhere near this band; nothing records what the band was measured
+/// from. So the honest treatment is to decline on any build it was not measured on and say so,
+/// rather than invent a 1.17 window. The branch it guards is documented dormant -- the product row
+/// path clears the arming latch before this hook runs -- so declining costs a safety net that
+/// nothing currently reaches, and 1.16.2 behaviour is unchanged.
+const LEGACY_CONFIRM_CALLER_BAND: core::ops::Range<usize> = 0x7a3000..0x7a4000;
+
+/// Say once, per process, that a 1.16.2-only comparison has declined on this build.
+///
+/// Once and not per-call: these sit on hook paths that run at frame rate, and the failure mode
+/// this whole change exists to fix is a silent one -- the cure for silence is a line a reader can
+/// find, not 300,000 of them. (One session logged 339,764 copies of a single refusal; see
+/// `scripts/check-no-rva-zero.py`.)
+fn note_unsupported_build_comparison(what: &str) {
+    use std::sync::atomic::AtomicUsize;
+    static SAID: AtomicUsize = AtomicUsize::new(0);
+    const SAY_AT_MOST: usize = 8;
+    if SAID.fetch_add(1, Ordering::SeqCst) >= SAY_AT_MOST {
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "callsite-gate: {what} compares a live return address against a 1.16.2 RVA that has no \
+         verified address for this build -- the comparison is DECLINED rather than run against \
+         the wrong bytes, so the feature behind it is inert on this build"
+    ));
+}
+
+/// The System>Quit row detection could not be placed on this build. Separate wording from the
+/// band above because the fix is different: this one needs a map row for `FUN_140958910`, and the
+/// band needs someone to re-derive what it was ever watching.
+fn system_quit_row_returns_unavailable_once() {
+    note_unsupported_build_comparison(
+        "System>Quit row cloning (SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA 0x958910)",
+    );
+}
+
 pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
-    if dialog >= 0x10000 && callstack_contains_game_rva(0x7a3000, 0x7a4000) {
+    let legacy_confirm_caller = if er_game_base::game_build::is_supported_build() {
+        callstack_contains_game_rva(
+            LEGACY_CONFIRM_CALLER_BAND.start,
+            LEGACY_CONFIRM_CALLER_BAND.end,
+        )
+    } else {
+        note_unsupported_build_comparison(
+            "the legacy Save Game confirm caller band (0x7a3000..0x7a4000, untranslatable)",
+        );
+        false
+    };
+    if dialog >= 0x10000 && legacy_confirm_caller {
         // Dormant safety net (the product row path clears the arming latch). It keeps the
         // WP1 semantics -- close-then-fire straight to the commit, no confirm chain.
         unsafe { system_quit_save_game_close_menus(dialog, "legacy_confirm", true) };
@@ -1089,15 +1159,23 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
     }
     let original: unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
+    // BOTH return addresses come from ONE resolution of the containing function
+    // (`FUN_140958910`), because they are two offsets into it. Reached raw, these were 1.16.2
+    // RVAs compared against live stack frames: on 1.17 neither ever matched, nothing was hooked
+    // or resolved so nothing was logged, and all three cloned rows silently vanished from the
+    // System>Quit tab. A refusal here is loud, once, and names the constant.
+    let Some((first_row_return, second_row_return)) = er_title_flow::system_quit_row_return_rvas()
+    else {
+        system_quit_row_returns_unavailable_once();
+        return unsafe { original(dialog, label, action_fn, enabled_fn, keyguide_fn) };
+    };
     let first_row_call = callstack_contains_game_rva(
-        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA
-            .saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
-        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
+        first_row_return.saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
+        first_row_return + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
     );
     let second_row_call = callstack_contains_game_rva(
-        SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA
-            .saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
-        SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
+        second_row_return.saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
+        second_row_return + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
     );
     let before =
         unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }

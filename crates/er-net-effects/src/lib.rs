@@ -67,13 +67,12 @@ fn state_or_recover(
 }
 
 #[cfg(windows)]
-fn wait_for_task_instance() -> &'static CSTaskImp {
-    loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(_) => std::thread::yield_now(),
-        }
-    }
+fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
+    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
+    // three minutes while these threads burned 19,000 each, half of it system time. See
+    // er_game_base::wait for the measurement.
+    er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
 }
 
 #[cfg(windows)]
@@ -88,7 +87,12 @@ fn spawn_game_task(state: Arc<Mutex<NetEffectsState>>) {
         .name("er-net-effects-task".to_owned())
         .spawn(move || {
             net_effects_log(format_args!("game task thread waiting for CSTaskImp"));
-            let task = wait_for_task_instance();
+            let Some(task) = wait_for_task_instance() else {
+                net_effects_log(format_args!(
+                    "CSTaskImp never appeared; this shell stays inert rather than spinning"
+                ));
+                return;
+            };
             net_effects_log(format_args!("game task registering FrameBegin tick"));
             task.run_recurring(
                 move |_data: &FD4TaskData| {
@@ -150,6 +154,13 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-net-effects", crate::net_effects_log);
+        er_hook::set_hook_logger(crate::net_effects_log);
         START.call_once(|| {
             crash_telemetry::set_module_base(_module);
             let hmodule_raw = _module.0 as usize;

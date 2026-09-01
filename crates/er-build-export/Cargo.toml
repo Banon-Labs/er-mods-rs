@@ -16,5 +16,14 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# THE READER, as a DEV dependency only. `tests/round_trip.rs` drives a document this crate wrote
+# through the encoder, back through an independent decoder, and into the importer's own parser and
+# equip planner -- so "the quickbar survives the round trip" is asserted against the code that
+# actually reads it rather than against this crate's opinion of the format. The direction matters:
+# er-build-import-core does NOT depend on er-build-export, so this stays a one-way edge and the
+# shipping graph is unchanged.
+[dev-dependencies]
+er-build-import-core = { path = "../er-build-import-core" }
+
 [lints]
 workspace = true

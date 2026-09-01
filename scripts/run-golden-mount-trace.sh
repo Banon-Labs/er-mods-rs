@@ -32,10 +32,37 @@ BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
 DEPLOYED_DLL="${DEPLOYED_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll}"
 
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last --
+# and several sessions launch concurrently in this repo, which makes that the normal case rather
+# than a race. A copy at teardown cannot fix it (this run already clobbered the last one's file at
+# launch) and never runs at all when the game crashes, which is exactly the run worth keeping.
+CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-quickload-crash-log.txt}"
+AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-quickload-autoload-debug.log}"
+TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/er-quickload-continue-trace.log}"
+INPUT_TRACE_PATH="${INPUT_TRACE_PATH:-$ARTIFACT_DIR/er-quickload-input-trace.jsonl}"
+PROFILE_PATH="${PROFILE_PATH:-$ARTIFACT_DIR/er-quickload-profile.jsonl}"
+RELOAD_TRACE_PATH="${RELOAD_TRACE_PATH:-$ARTIFACT_DIR/er-reload-trace.log}"
+INPUT_HARNESS_LOG_PATH="${INPUT_HARNESS_LOG_PATH:-$ARTIFACT_DIR/er-input-harness.log}"
+INPUT_HARNESS_PHASES_PATH="${INPUT_HARNESS_PHASES_PATH:-$ARTIFACT_DIR/er-input-harness-phases.jsonl}"
+DIAG_HARNESS_PATH="${DIAG_HARNESS_PATH:-$ARTIFACT_DIR/er-diag-harness.log}"
+TIMESERIES_PATH="${TIMESERIES_PATH:-$ARTIFACT_DIR/er-telemetry-timeseries.jsonl}"
+CPU_PROFILE_PATH="${CPU_PROFILE_PATH:-$ARTIFACT_DIR/er-cpu-profile.txt}"
+ARMAMENT_ICONS_PATH="${ARMAMENT_ICONS_PATH:-$ARTIFACT_DIR/er-armament-icons.log}"
+SAVE_DISABLE_LOG_PATH="${SAVE_DISABLE_LOG_PATH:-$ARTIFACT_DIR/er-save-disable.log}"
+SAVE_DISABLE_TELEMETRY_PATH="${SAVE_DISABLE_TELEMETRY_PATH:-$ARTIFACT_DIR/er-save-disable-telemetry.json}"
+LOADING_PORTRAIT_PATH="${LOADING_PORTRAIT_PATH:-$ARTIFACT_DIR/er-loading-portrait.log}"
+LOADING_PORTRAIT_CRASH_LOG_PATH="${LOADING_PORTRAIT_CRASH_LOG_PATH:-$ARTIFACT_DIR/er-loading-portrait-crash-log.txt}"
+
 # Game-dir control files this scout writes/manages.
 BREAKPOINTS_FILE="$GAME_DIR/er-quickload-breakpoints.txt"
 CRASH_LOG_ON_FILE="$GAME_DIR/er-quickload-crash-log.txt"
-CRASH_LOG="$GAME_DIR/er-quickload-crash.log"
+# THE SW-BP EVIDENCE FILE, AND IT WAS READING THE WRONG NAME. This was `$GAME_DIR/er-quickload-
+# crash.log` -- a name the DLL stopped writing on 2026-06-22, when `crash_log_path()` settled on the
+# canonical `er-quickload-crash-log.txt`. Every `grep -a 'sw-bp'` below therefore ran against a file
+# that does not exist and reported nothing rather than failing. It now follows the redirect, so the
+# INT3 hits land in this run's own directory and the post-run grep reads what the DLL actually wrote.
+CRASH_LOG="$CRASH_LOG_PATH"
 AUTOLOAD_PATH="$GAME_DIR/er-quickload-autoload.txt"
 AUTOLOAD_BACKUP="$GAME_DIR/er-quickload-autoload.txt.golden-mount-trace.bak"
 BLOCK_INPUT_FILE="$GAME_DIR/er-quickload-block-input.txt"
@@ -130,8 +157,10 @@ arm_scout_files() {
   cp -f "$BREAKPOINTS_FILE" "$ARTIFACT_DIR/er-quickload-breakpoints.txt"
   # 1b) UI overlay OFF: no extra render hooks/overhead for a clean trace run.
   : > "$GAME_DIR/er-quickload-no-overlay.txt"
-  # 2) Crash log on (file channel; reliable through Proton). Do NOT truncate er-quickload-crash.log --
-  #    the new sw-bp lines APPEND to whatever the user already has.
+  # 2) Crash log on (file channel; reliable through Proton). The sentinel is vestigial --
+  #    `crash_logger_enabled()` has returned an unconditional `true` since 2026-07-08 -- but the file
+  #    is still touched so an older staged DLL behaves the same. The LOG itself is redirected into
+  #    this run's directory, so there is nothing of the user's to preserve or truncate here.
   [[ -f "$CRASH_LOG_ON_FILE" ]] || : > "$CRASH_LOG_ON_FILE"
   # 3) No autoload: the USER drives the native menu. Move the existing autoload request aside so our
   #    own-load/SetState5 path never arms; restore on exit so the user's config survives.
@@ -230,6 +259,22 @@ export ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH"
   ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \
   ER_QUICKLOAD_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
   ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+  ER_QUICKLOAD_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
+  ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$INPUT_TRACE_PATH" \
+  ER_QUICKLOAD_PROFILE_PATH="$PROFILE_PATH" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$RELOAD_TRACE_PATH" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$INPUT_HARNESS_LOG_PATH" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$INPUT_HARNESS_PHASES_PATH" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$DIAG_HARNESS_PATH" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$TIMESERIES_PATH" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$CPU_PROFILE_PATH" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARMAMENT_ICONS_PATH" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$SAVE_DISABLE_LOG_PATH" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$SAVE_DISABLE_TELEMETRY_PATH" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$LOADING_PORTRAIT_PATH" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$LOADING_PORTRAIT_CRASH_LOG_PATH" \
   "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-quickload-trace.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )
 

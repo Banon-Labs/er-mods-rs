@@ -66,8 +66,14 @@ pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
     // if done -> *rcx=0. Pass a local slot (job ptr persists in TFC_DRAIN_JOB across frames).
     let mut job_slot: usize = job;
     let slot_ptr = (&raw mut job_slot) as usize;
-    let exec: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + EXECUTE_MENU_JOB_RVA) };
+    let exec: unsafe extern "system" fn(usize, usize) = unsafe {
+        std::mem::transmute(
+            match title_fn(EXECUTE_MENU_JOB_RVA, "EXECUTE_MENU_JOB_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let exec_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         exec(slot_ptr, time_ptr)
     }));
@@ -75,7 +81,7 @@ pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
         TFC_DRAIN_JOB.store(0, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "tfc-drain: ExecuteMenuJob 0x{:x}(rcx=&job=0x{job:x}) PANICKED (caught) at tick {ticks} -> stop pumping",
-            base + EXECUTE_MENU_JOB_RVA
+            er_game_base::mem::game_data_addr(base, EXECUTE_MENU_JOB_RVA, "EXECUTE_MENU_JOB_RVA")
         ));
         return;
     }
@@ -117,8 +123,14 @@ pub fn auto_confirm_tap() {
         // Past the modal -> stop tapping (do NOT confirm Continue on the main menu).
         return;
     }
-    let inputmgr =
-        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+    let inputmgr = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SELECTBOT_INPUT_MANAGER_GLOBAL_RVA,
+            "SELECTBOT_INPUT_MANAGER_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(null);
     if inputmgr == null {
         return;
     }
@@ -142,7 +154,13 @@ pub unsafe fn title_press_button_component_ready(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
     let proxy_vt = unsafe { safe_read_usize(proxy) }.unwrap_or(null);
-    if proxy_vt != base + SCENE_OBJ_PROXY_VTABLE_RVA {
+    if proxy_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCENE_OBJ_PROXY_VTABLE_RVA,
+            "SCENE_OBJ_PROXY_VTABLE_RVA",
+        )
+    {
         return None;
     }
     let context =
@@ -155,11 +173,43 @@ pub unsafe fn title_press_button_component_ready(
 pub unsafe fn title_dialog_state(dialog: usize, base: usize) -> TitleDialogState {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
-    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
-    let in_textfadeout =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_TOP_DIALOG_IS_IN_STATE_RVA,
+                "TITLE_TOP_DIALOG_IS_IN_STATE_RVA",
+            ) {
+                Some(address) => address,
+                None => {
+                    return TitleDialogState {
+                        in_loop: false,
+                        in_textfadeout: false,
+                        menu_opened_latch: TITLE_OWNER_SCAN_START_ADDRESS,
+                    };
+                }
+            },
+        )
+    };
+    let in_loop = unsafe {
+        is_in_state(
+            sm,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_STATE_DESC_LOOP_RVA,
+                "TITLE_STATE_DESC_LOOP_RVA",
+            ),
+        )
+    } != OWN_STEPPER_FALSE;
+    let in_textfadeout = unsafe {
+        is_in_state(
+            sm,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_STATE_DESC_TEXTFADEOUT_RVA,
+                "TITLE_STATE_DESC_TEXTFADEOUT_RVA",
+            ),
+        )
+    } != OWN_STEPPER_FALSE;
     let menu_opened_latch =
         unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
             .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
@@ -178,8 +228,14 @@ pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
         .unwrap_or(TITLE_STATE_OWNER_GONE);
     let table =
         unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
-    let session =
-        unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }.unwrap_or(null);
+    let session = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SESSION_SINGLETON_144588E98_RVA,
+            "SESSION_SINGLETON_144588E98_RVA",
+        ))
+    }
+    .unwrap_or(null);
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
     let dialog_vt = if dialog != null {
@@ -189,19 +245,55 @@ pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     };
     if committed != TITLE_STEP_MENU_JOB_WAIT
         || requested != TITLE_STEP_MENU_JOB_WAIT
-        || table != base + INNER_TITLE_STATE_TABLE_RVA
+        || table
+            != er_game_base::mem::game_data_addr(
+                base,
+                INNER_TITLE_STATE_TABLE_RVA,
+                "INNER_TITLE_STATE_TABLE_RVA",
+            )
         || session == null
-        || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA
+        || dialog_vt
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
         || unsafe { title_press_button_component_ready(dialog, base) }.is_none()
     {
         return false;
     }
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
-    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
-    let in_textfadeout =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_TOP_DIALOG_IS_IN_STATE_RVA,
+                "TITLE_TOP_DIALOG_IS_IN_STATE_RVA",
+            ) {
+                Some(address) => address,
+                None => return false,
+            },
+        )
+    };
+    let in_loop = unsafe {
+        is_in_state(
+            sm,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_STATE_DESC_LOOP_RVA,
+                "TITLE_STATE_DESC_LOOP_RVA",
+            ),
+        )
+    } != OWN_STEPPER_FALSE;
+    let in_textfadeout = unsafe {
+        is_in_state(
+            sm,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_STATE_DESC_TEXTFADEOUT_RVA,
+                "TITLE_STATE_DESC_TEXTFADEOUT_RVA",
+            ),
+        )
+    } != OWN_STEPPER_FALSE;
     in_loop || in_textfadeout
 }
 pub unsafe fn title_scheduler_ready(owner: usize, base: usize) -> bool {
@@ -223,15 +315,28 @@ pub unsafe fn product_core_autoload_ready(
         .unwrap_or(TITLE_STATE_OWNER_GONE);
     let table =
         unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
-    let session =
-        unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }.unwrap_or(null);
+    let session = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SESSION_SINGLETON_144588E98_RVA,
+            "SESSION_SINGLETON_144588E98_RVA",
+        ))
+    }
+    .unwrap_or(null);
     let game_data_man = game_data_man_ptr_or_null();
     let profile_summary = if game_data_man != null {
         unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
     } else {
         null
     };
-    let iodev = unsafe { safe_read_usize(base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+    let iodev = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            IODEV_GLOBAL_RVA,
+            "IODEV_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(null);
     let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
@@ -240,19 +345,34 @@ pub unsafe fn product_core_autoload_ready(
     } else {
         null
     };
-    let press_start = if dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    let press_start = if dialog_vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        ) {
         unsafe { title_press_button_component_ready(dialog, base) }
     } else {
         None
     };
-    let title_state = if dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    let title_state = if dialog_vt
+        == er_game_base::mem::game_data_addr(
+            base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        ) {
         Some(unsafe { title_dialog_state(dialog, base) })
     } else {
         None
     };
     if committed != TITLE_STEP_MENU_JOB_WAIT
         || requested != TITLE_STEP_MENU_JOB_WAIT
-        || table != base + INNER_TITLE_STATE_TABLE_RVA
+        || table
+            != er_game_base::mem::game_data_addr(
+                base,
+                INNER_TITLE_STATE_TABLE_RVA,
+                "INNER_TITLE_STATE_TABLE_RVA",
+            )
         || session == null
         || game_data_man == null
         || profile_summary == null
@@ -288,8 +408,17 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
     }
     let value = proxy + 0x18;
     TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+    let set_visible: unsafe extern "system" fn(usize, u8) = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_PRESS_START_SET_VISIBLE_RVA,
+                "TITLE_PRESS_START_SET_VISIBLE_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { set_visible(proxy, 0) };
     let prev = TITLE_PRESS_START_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
     TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
@@ -300,7 +429,11 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
     if prev == 0 {
         append_autoload_debug(format_args!(
             "title-cover-part-a: hid 05_000_Title PressStart/StaticSystemText_101000 via SceneObjProxy visibility wrapper 0x{:x} dialog=0x{dialog:x} proxy=0x{proxy:x} context=0x{context:x}",
-            base + TITLE_PRESS_START_SET_VISIBLE_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_PRESS_START_SET_VISIBLE_RVA,
+                "TITLE_PRESS_START_SET_VISIBLE_RVA"
+            ),
         ));
     }
 }
@@ -324,8 +457,17 @@ pub unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAuto
     if unsafe { safe_read_usize(logo) }.is_none() {
         return;
     }
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+    let set_visible: unsafe extern "system" fn(usize, u8) = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+                "TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { set_visible(logo, 0) };
     let prev = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
     TITLE_LOGO_GFX_HIDE_LAST_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
@@ -335,7 +477,11 @@ pub unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAuto
     if prev == 0 {
         append_autoload_debug(format_args!(
             "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} via native SceneObjProxy visibility wrapper 0x{:x} dialog=0x{:x} logo=0x{logo:x}",
-            base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+                "TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA"
+            ),
             ready.title_dialog,
         ));
     }
@@ -349,8 +495,12 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
     if slot >= TITLE_PROFILE_SLOT_COUNT {
         return false;
     }
-    let renderer_slot =
-        base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA + slot * core::mem::size_of::<usize>();
+    let renderer_slot = er_game_base::mem::game_data_addr_offset(
+        base,
+        TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA,
+        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA",
+        slot * core::mem::size_of::<usize>(),
+    );
     let renderer =
         unsafe { safe_read_usize(renderer_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let renderer_vtable = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
@@ -358,7 +508,12 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
-    let offscreen = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    let offscreen = if renderer_vtable
+        == er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        ) {
         unsafe {
             safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
         }
@@ -374,7 +529,12 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
-    let tex_index = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    let tex_index = if renderer_vtable
+        == er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        ) {
         unsafe { safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET) }
             .map(|value| value & 0xffff_ffff)
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
@@ -404,7 +564,12 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
     TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX.store(tex_index, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754.store(ready_754, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755.store(ready_755, Ordering::SeqCst);
-    renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    renderer_vtable
+        == er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
         && offscreen != TITLE_OWNER_SCAN_START_ADDRESS
         && offscreen != 0
         && tex_rescap != TITLE_OWNER_SCAN_START_ADDRESS
@@ -413,11 +578,7 @@ pub unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bo
         && ready_755 != TITLE_OWNER_SCAN_START_ADDRESS
 }
 
-
-pub unsafe fn maybe_refresh_title_profile_cover(
-    base: usize,
-    ready: &ProductCoreAutoloadReady,
-) {
+pub unsafe fn maybe_refresh_title_profile_cover(base: usize, ready: &ProductCoreAutoloadReady) {
     if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
         return;
     }
@@ -427,10 +588,28 @@ pub unsafe fn maybe_refresh_title_profile_cover(
     {
         return;
     }
-    let init: unsafe extern "system" fn() =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA) };
-    let refresh: unsafe extern "system" fn() =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA) };
+    let init: unsafe extern "system" fn() = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let refresh: unsafe extern "system" fn() = unsafe {
+        std::mem::transmute(
+            match title_fn(
+                TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { init() };
     unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
     unsafe { refresh() };
@@ -440,8 +619,16 @@ pub unsafe fn maybe_refresh_title_profile_cover(
         .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-b: initialized profile renderer table via 0x{:x}, refreshed post-SL2 profile portrait render targets via 0x{:x} profile_summary=0x{:x} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
-        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA,
-        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA"
+        ),
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA"
+        ),
         ready.profile_summary,
     ));
 }
@@ -503,10 +690,16 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let cfin = cmms
             .and_then(|m| unsafe { safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET) })
             .unwrap_or(0xff);
-        let cmenu = unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }
-            .filter(|&m| m > 0x10000)
-            .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
-            .filter(|&d| d > 0x10000);
+        let cmenu = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .filter(|&m| m > 0x10000)
+        .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+        .filter(|&d| d > 0x10000);
         let c5d = cmenu
             .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) })
             .unwrap_or(0xff);
@@ -661,8 +854,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // menuData+0x5d is 0 to begin with, the functor never set it. The real root is the incomplete teardown
     // functor, not our clear. See bd ending-request-fix-was-wrong / rt5d-never-set findings.)
     // SWITCH-OUTCOME ORACLE (read-only, user-mandated reliable semaphore). Runs whenever a slot is picked,
-    // OUTSIDE the dormancy gate below, so it observes the post-commit native session too. Literals: CSMenuMan
-    // global +0x3d6b7b0, in-game menu job +0x798; InGameStep = TitleStep(owner)+0x2e8, requestCode +0xd8.
+    // OUTSIDE the dormancy gate below, so it observes the post-commit native session too. CSMenuMan comes
+    // from CS_MENU_MAN_GLOBAL_RVA (1.16.2 +0x3d6b7b0), resolved for the running build like every other read
+    // of it here; literals: in-game menu job +0x798, InGameStep = TitleStep(owner)+0x2e8, requestCode +0xd8.
     // The trace classifies the outcome with no eyeballs: stable_frames (player present + requestCode==2 +
     // menu_job!=0) climbing high = LOADED_STABLE; resetting after a peak = the world DROPPED (bounce/reload);
     // the line STOPPING = FROZE; bc4 stuck at 1 = never-tears-down freeze.
@@ -671,14 +865,19 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let ig_d8 = if owner != null {
             unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
                 .filter(|&ig| ig > 0x10000)
-                .and_then(|ig| unsafe {
-                    safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET)
-                })
+                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
                 .unwrap_or(-1)
         } else {
             -1
         };
-        let menu_man = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }.filter(|&m| m > 0x10000);
+        let menu_man = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .filter(|&m| m > 0x10000);
         let menu_job = menu_man
             .and_then(|m| unsafe { safe_read_usize(m + 0x798) })
             .unwrap_or(0);
@@ -863,39 +1062,38 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     // mapId2 != 0x1c000000, i.e. a STALE block-res left over from the prior in-world
                     // load and never reset on the switch. Dump each entry's mapId2 to identify the
                     // stale block. Change-detected (base ^ first ^ count) so a steady stall logs once.
-                    if ar_bres > 0 && ar_bres <= 64
+                    if ar_bres > 0
+                        && ar_bres <= 64
                         && let Some(ce0_base) =
                             unsafe { safe_read_usize(bp + 0xce0) }.filter(|&v| v > 0x10000)
-                        {
-                            let mut mapids = String::new();
-                            let mut first: u32 = u32::MAX;
-                            for k in 0..ar_bres {
-                                let entry = ce0_base + (k as usize) * 0xb98;
-                                let wbi = unsafe { safe_read_usize(entry + 0x8) }.unwrap_or(0);
-                                let m = if wbi > 0x10000 {
-                                    unsafe { safe_read_i32(wbi + 0x34) }
-                                        .map(|v| v as u32)
-                                        .unwrap_or(u32::MAX)
-                                } else {
-                                    u32::MAX
-                                };
-                                if k == 0 {
-                                    first = m;
-                                }
-                                let _ = core::fmt::Write::write_fmt(
-                                    &mut mapids,
-                                    format_args!("{m:#x},"),
-                                );
+                    {
+                        let mut mapids = String::new();
+                        let mut first: u32 = u32::MAX;
+                        for k in 0..ar_bres {
+                            let entry = ce0_base + (k as usize) * 0xb98;
+                            let wbi = unsafe { safe_read_usize(entry + 0x8) }.unwrap_or(0);
+                            let m = if wbi > 0x10000 {
+                                unsafe { safe_read_i32(wbi + 0x34) }
+                                    .map(|v| v as u32)
+                                    .unwrap_or(u32::MAX)
+                            } else {
+                                u32::MAX
+                            };
+                            if k == 0 {
+                                first = m;
                             }
-                            static LAST_CE0_SIG: core::sync::atomic::AtomicUsize =
-                                core::sync::atomic::AtomicUsize::new(0);
-                            let sig = ce0_base ^ ((first as usize) << 8) ^ (ar_bres as usize);
-                            if LAST_CE0_SIG.swap(sig, core::sync::atomic::Ordering::SeqCst) != sig {
-                                append_autoload_debug(format_args!(
-                                    "STALE-CE0 dump: area=0x{cur_area:x} bp=0x{bp:x} ce0_base=0x{ce0_base:x} cnt={ar_bres} entry_mapids=[{mapids}] -- getter wants 0x{cur_area:x}000000 (blk_ls null => none match)"
-                                ));
-                            }
+                            let _ =
+                                core::fmt::Write::write_fmt(&mut mapids, format_args!("{m:#x},"));
                         }
+                        static LAST_CE0_SIG: core::sync::atomic::AtomicUsize =
+                            core::sync::atomic::AtomicUsize::new(0);
+                        let sig = ce0_base ^ ((first as usize) << 8) ^ (ar_bres as usize);
+                        if LAST_CE0_SIG.swap(sig, core::sync::atomic::Ordering::SeqCst) != sig {
+                            append_autoload_debug(format_args!(
+                                "STALE-CE0 dump: area=0x{cur_area:x} bp=0x{bp:x} ce0_base=0x{ce0_base:x} cnt={ar_bres} entry_mapids=[{mapids}] -- getter wants 0x{cur_area:x}000000 (blk_ls null => none match)"
+                            ));
+                        }
+                    }
                     // Read the load-state exactly like FUN_14066d4d0: block->vtable[0x10](block) returns
                     // the load-state object; then +0x2d / +0x35. This is the same getter the game polls
                     // on this same block every frame, so it is safe. RCX = block (Windows x64 ABI).
@@ -980,16 +1178,16 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                     }
                                     .map(|v| (v & 0xffff_ffff) as i64)
                                     .unwrap_or(-1);
-                                    let fl = unsafe { safe_read_u8(cap + FD4_FILECAP_FLAGS_89_OFFSET) }
-                                        .map(|v| v as i32)
-                                        .unwrap_or(-1);
+                                    let fl =
+                                        unsafe { safe_read_u8(cap + FD4_FILECAP_FLAGS_89_OFFSET) }
+                                            .map(|v| v as i32)
+                                            .unwrap_or(-1);
                                     let lp = unsafe {
                                         safe_read_usize(cap + FD4_FILECAP_LOADPROCESS_78_OFFSET)
                                     }
                                     .unwrap_or(0);
-                                    let (proc_ptr, content, csize, acq) = unsafe {
-                                        fd4_filecap_content_state(lp)
-                                    };
+                                    let (proc_ptr, content, csize, acq) =
+                                        unsafe { fd4_filecap_content_state(lp) };
                                     let name = unsafe { fd4_filecap_name(cap) };
                                     let _ = core::fmt::Write::write_fmt(
                                         &mut caps,
@@ -1007,10 +1205,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                 // semaphore.
                                 let module_base = game_module_base().ok().filter(|&b| b != 0);
                                 let (now_loading, fake_cover) = match module_base {
-                                    Some(b) => (
-                                        unsafe { now_loading_active(b) } as i32,
-                                        unsafe { fake_loading_screen_visible(b) } as i32,
-                                    ),
+                                    Some(b) => (unsafe { now_loading_active(b) } as i32, unsafe {
+                                        fake_loading_screen_visible(b)
+                                    }
+                                        as i32),
                                     None => (-1, -1),
                                 };
                                 // The caps above name `mapstudio_dlc2:/m28_*.msb`, so dump the DLIO
@@ -1051,7 +1249,20 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 ls_phase2,
             )
         } else {
-            (-1, String::new(), -1, -1, -1, 0, 0, -1, -1, -1, 0, String::new())
+            (
+                -1,
+                String::new(),
+                -1,
+                -1,
+                -1,
+                0,
+                0,
+                -1,
+                -1,
+                -1,
+                0,
+                String::new(),
+            )
         };
         // FILE-CAP READINESS (RE FUN_140613710): the state-2 handler advances 2->3 only when every present
         // FD4FileCap slot on the WorldAreaRes has load-status +0x88 == 0x04. Scan them so the stall shows
@@ -1218,8 +1429,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // WorldChrMan via InGameStep::_Common_Finalize. Hold only that advance bit low during the active
         // reload handoff, and release it as soon as the current reload epoch proves movement.
         let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-        let movement_proven_for_reload = crate::compat::CAN_MOVE_CONFIRMED
-            .load(Ordering::SeqCst)
+        let movement_proven_for_reload = crate::compat::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
             && crate::compat::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch;
         // PHASE-3 (bd PHASE3-render-release-is-CommonFinalize): while the outgoing-teardown fix is active,
         // do NOT clear the +0x4b8 advance gate. Blocking Cleanup/Finish here is exactly what keeps the
@@ -1231,23 +1441,23 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             && !movement_proven_for_reload
             && mms_step == 18
             && !crate::compat::gating::outgoing_teardown_suppresses_holds()
-            && let Some(mms_ptr) = mms {
-                let old_gate =
-                    unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
-                        .unwrap_or(0);
-                if old_gate != 0 {
-                    unsafe {
-                        *((mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) as *mut u8) = 0;
-                    }
-                    let n =
-                        SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n <= 8 || n.is_power_of_two() {
-                        append_autoload_debug(format_args!(
-                            "AUTOLOAD-HANDOFF MMS4B8 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} old_gate={old_gate}; blocking Cleanup/Finish until movement proof"
-                        ));
-                    }
+            && let Some(mms_ptr) = mms
+        {
+            let old_gate =
+                unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
+                    .unwrap_or(0);
+            if old_gate != 0 {
+                unsafe {
+                    *((mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) as *mut u8) = 0;
+                }
+                let n = SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 8 || n.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "AUTOLOAD-HANDOFF MMS4B8 HOLD #{n}: epoch={reload_epoch} ig_d8={ig_d8} mms_step={mms_step} old_gate={old_gate}; blocking Cleanup/Finish until movement proof"
+                    ));
                 }
             }
+        }
         // ENDING-REQUEST diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
         // to its -1 terminal only while the advancer FUN_140afa7c0 sets menuData+0x5e (cVar10 = an
         // ending/load-completion condition). If 0x5e stays 0 on a re-load, the child parks at resident
@@ -1260,10 +1470,16 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let ig_pnext = ig_ptr
             .and_then(|ig| unsafe { safe_read_i32(ig + INGAMESTEP_NEXT_STATE_OFFSET) })
             .unwrap_or(-1);
-        let menudata = unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }
-            .filter(|&m| m > 0x10000)
-            .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
-            .filter(|&d| d > 0x10000);
+        let menudata = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                CS_MENU_MAN_GLOBAL_RVA,
+                "CS_MENU_MAN_GLOBAL_RVA",
+            ))
+        }
+        .filter(|&m| m > 0x10000)
+        .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+        .filter(|&d| d > 0x10000);
         let md_5d = menudata
             .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) })
             .map(|b| b as i32)
@@ -1272,10 +1488,15 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) })
             .map(|b| b as i32)
             .unwrap_or(-1);
-        let ending_force =
-            unsafe { safe_read_u8(module_base + ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA) }
-                .map(|b| b as i32)
-                .unwrap_or(-1);
+        let ending_force = unsafe {
+            safe_read_u8(er_game_base::mem::game_data_addr(
+                module_base,
+                ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA,
+                "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA",
+            ))
+        }
+        .map(|b| b as i32)
+        .unwrap_or(-1);
         // Remaining cVar10 ending-request INPUTS read straight off GameMan (the load-in signals): 0xb7c,
         // 0xb7d, warpRequested@0x10. On a good load one is 1; on the stuck re-load they should reveal the
         // stale one. gm is the live GameMan ptr from the outer guard; safe_read guards a bad offset.
@@ -1296,11 +1517,17 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .and_then(|m| unsafe { safe_read_u8(m + CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET) })
             .map(|b| b as i32)
             .unwrap_or(-1);
-        let gm_bf5 = unsafe { safe_read_u8(gm + GAME_MAN_LOADING_MODE_BF5_OFFSET) }
+        let gm_bf5 = unsafe { safe_read_u8(gm + GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
-        let delay_delete =
-            unsafe { safe_read_usize(module_base + CS_DELAY_DELETE_MAN_GLOBAL_RVA) }.unwrap_or(0);
+        let delay_delete = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                CS_DELAY_DELETE_MAN_GLOBAL_RVA,
+                "CS_DELAY_DELETE_MAN_GLOBAL_RVA",
+            ))
+        }
+        .unwrap_or(0);
         let dd40 = if delay_delete != null {
             unsafe { safe_read_i32(delay_delete + CS_DELAY_DELETE_PENDING_40_OFFSET) }.unwrap_or(-1)
         } else {
@@ -1444,7 +1671,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             },
             Ordering::SeqCst,
         );
-        // b80 (load_in_progress) IS GameMan.save_state. Publish for the loading bar, and DRAIN the
+        // b80 IS `GameMan::saveState`. Publish for the loading bar, and DRAIN the
         // FD4-IO reload's stuck residency: the reload SUBMIT/DRAIN leaves b80=3 (the resident IO buffer
         // is never consumed by the feed), and the finalize case-7 gate (FUN_14067a170 == saveState==0)
         // waits on it forever. Force b80->0 ONLY at the exact stuck signature -- AUTOLOAD_HANDOFF,
@@ -1452,7 +1679,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // genuinely resident+live) -- so a healthy load (b80 already draining) is never touched.
         // Marker-gated (er-quickload-reload-drainb80.txt) for A/B against the stuck baseline.
         let b80_now = if gm != null {
-            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1)
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1)
         } else {
             -1
         };
@@ -1495,30 +1722,37 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // player is briefly gone, which is exactly the frame STEP_EndFlow reads it (run 1707: the
             // clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
-            let warp_req = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
+            let warp_req =
+                unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
             if warp_req == 0
-                && let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
-                    .filter(|&m| m > PAB_MIN_HEAP_PTR)
-                    .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
-                    .filter(|&m| m > PAB_MIN_HEAP_PTR)
-                {
-                    let e5 = unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
-                        .unwrap_or(0);
-                    let d5 = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
-                        .unwrap_or(0);
-                    if e5 != 0 || d5 != 0 {
-                        unsafe {
-                            *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
-                            *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
-                        }
-                        let n = RELOAD_ENDING_LATCH_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                        if n <= 8 || n.is_power_of_two() {
-                            append_autoload_debug(format_args!(
-                                "reload-ending-latch-residual-clear #{n}: warp consumed (warp=0), cleared menuData+0x5e={e5}/+0x5d={d5} residual (mms_step={mms_step} finalize={finalize_now}) -- prevents the post-warp return-to-title revert"
-                            ));
-                        }
+                && let Some(md) = (unsafe {
+                    safe_read_usize(er_game_base::mem::game_data_addr(
+                        module_base,
+                        CS_MENU_MAN_GLOBAL_RVA,
+                        "CS_MENU_MAN_GLOBAL_RVA",
+                    ))
+                })
+                .filter(|&m| m > PAB_MIN_HEAP_PTR)
+                .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+                .filter(|&m| m > PAB_MIN_HEAP_PTR)
+            {
+                let e5 =
+                    unsafe { safe_read_u8(md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }.unwrap_or(0);
+                let d5 = unsafe { safe_read_u8(md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+                    .unwrap_or(0);
+                if e5 != 0 || d5 != 0 {
+                    unsafe {
+                        *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
+                        *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
+                    }
+                    let n = RELOAD_ENDING_LATCH_HOLD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n <= 8 || n.is_power_of_two() {
+                        append_autoload_debug(format_args!(
+                            "reload-ending-latch-residual-clear #{n}: warp consumed (warp=0), cleared menuData+0x5e={e5}/+0x5d={d5} residual (mms_step={mms_step} finalize={finalize_now}) -- prevents the post-warp return-to-title revert"
+                        ));
                     }
                 }
+            }
         }
         // Unblock the finalize case-7->8 gate on the warm reload. The gate is
         // FUN_14067a170() (== saveState==0) && !ShouldSave() (saveRequested==0) && !FUN_140679460()
@@ -1538,7 +1772,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         {
             if b80_now == FULLREAD_B80_RESIDENT {
                 unsafe {
-                    *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32) =
+                    *((gm + GAME_MAN_SAVE_STATE_B80_OFFSET) as *mut i32) =
                         GAME_MAN_SAVE_STATE_IDLE;
                 }
             }
@@ -1597,7 +1831,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // the legacy 30 stable frames as a fallback. Latch is per-reload-epoch (NOT FRESH_DESER_DONE,
         // which own_load consumes at commit -- that consumption is exactly why this block never fired
         // and the world reverted after finish). bd er-effects-rs-9fmm.
-        let reload_epoch_now = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        let reload_epoch_now =
+            SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let can_move_for_reload = reload_epoch_now > 0
             && crate::compat::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
             && crate::compat::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == reload_epoch_now;
@@ -1642,7 +1877,11 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             mms_step,
             sf as i64,
         );
-        if n <= 10 || n.is_multiple_of(30) || matches!(sf, 1 | 60 | 300 | 600) || dropped || mms_step_changed
+        if n <= 10
+            || n.is_multiple_of(30)
+            || matches!(sf, 1 | 60 | 300 | 600)
+            || dropped
+            || mms_step_changed
         {
             let cls = if peak >= 300 {
                 "LOADED_STABLE"
@@ -1751,7 +1990,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // 12 of them -- reported quickload phase 3. Zero fired at phase >= 4. So this bound is inert on a
     // run that behaves, and only bites the stuck-latch shape above.
     let b78_guard_quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    let b78_guard_window_open = (SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF).contains(&b78_guard_quickload_phase)
+    let b78_guard_window_open = (SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&b78_guard_quickload_phase)
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO;
@@ -1785,7 +2026,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // evidence is a "kept gm_b78=-1" 650ms AFTER the fd4io COMMIT. COMMIT is therefore the exact
     // and only window where the finalize owns b78 as the warp target and this guard must not touch
     // it; DRAIN keeps the pre-existing behavior.
-    let fd4io_owns_b78 = er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst)
+    let fd4io_owns_b78 = er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_PHASE
+        .load(Ordering::SeqCst)
         == er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_COMMIT;
     if b78_guard_window_open && fd4io_owns_b78 {
         // ENGAGEMENT SEMAPHORE. Count every frame the guard would have forced b78=-1 and now does
@@ -1845,8 +2087,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // is the runtime semaphore: >0 on a switch == that switch's quit-save was gated OFF and we unblocked it.
         if world_up && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING
         {
-            let cs_menu_man =
-                unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null);
+            let cs_menu_man = unsafe {
+                safe_read_usize(er_game_base::mem::game_data_addr(
+                    module_base,
+                    CS_MENU_MAN_GLOBAL_RVA,
+                    "CS_MENU_MAN_GLOBAL_RVA",
+                ))
+            }
+            .unwrap_or(null);
             if cs_menu_man != null && unsafe { is_heap_aligned_ptr(cs_menu_man) } {
                 let dsm = (cs_menu_man + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) as *mut u8;
                 let prev = unsafe { core::ptr::read_volatile(dsm) };
@@ -1928,93 +2176,205 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // save-gate diag DURING the stall (bc4=1): the quit-save orchestrator FUN_140afb970 (RE 1.16.1)
             // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0, AND the
             // menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0). Names the blocker while
-            // bc4 is frozen. Literals: 0x3d856a0 = load-active latch, 0x3d6b7b0 = CSMenuMan global.
-            let dsg_force = unsafe { safe_read_u8(module_base + 0x3d856a0) }.unwrap_or(0xff);
-            let dsg_ss = unsafe { safe_read_i32(gm + 0xb80) }.unwrap_or(-1);
-            let dsg_csm = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }.unwrap_or(0);
-            let dsg_sub = if dsg_csm > 0x10000 {
-                unsafe { safe_read_usize(dsg_csm + 0x80) }.unwrap_or(0)
-            } else {
-                0
+            // bc4 is frozen. Both globals are read through their RVA constants
+            // (ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA = the load-active latch, CS_MENU_MAN_GLOBAL_RVA), so the
+            // 1.16.2 addresses quoted above are RE provenance, not addresses this code reaches for.
+            // AN UNREAD VALUE IS NOT A MEASURED ONE. Every read below is fault-tolerant, and
+            // this block used to fold each failure into an in-band sentinel -- `0xff` for a
+            // byte, `-1` for `disableSaveMenu`, `usize::MAX` for a pointer -- and then compare
+            // the sentinel as if it were the field. `disableSaveMenu = -1` (CSMenuMan null or
+            // unreadable) satisfied `!= 0`, so `pump_fallback` came out TRUE and the line named
+            // "QUIT-SAVE FALLBACK(saveSlot>=10 or disableSaveMenu!=0)" as the definitive blocker
+            // for a value that was never read. The same run printed `menu_gate_ok=false` from
+            // the same unreadable CSMenuMan, and `case7-gate` reported `c2_not_shouldsave` as
+            // PASSING because `dsg_dsm == 0` was false for the same reason. Three conclusions,
+            // one absent pointer, no way for a reader to tell.
+            //
+            // The reads are `Option` now and every derived predicate is `Option`: a missing
+            // input makes the verdict UNREADABLE and names the field, instead of manufacturing
+            // a blocker. `render` prints "unreadable" where a sentinel used to print as data.
+            //
+            // The gate being described (RE 1.16.1): the quit-save orchestrator FUN_140afb970
+            // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0,
+            // AND the menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0).
+            // The 1.16.2 RVAs quoted here are RE provenance; the reads below go through
+            // ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA and CS_MENU_MAN_GLOBAL_RVA, resolved for the
+            // running build. A refusal makes the read `None`, which the Option chain already
+            // reports as `unreadable` -- it can never be mistaken for a measured `Some(0)`.
+            let dsg_force = unsafe {
+                safe_read_u8(er_game_base::mem::game_data_addr(
+                    module_base,
+                    ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA,
+                    "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA",
+                ))
             };
-            let (dsg_m290, dsg_m298) = if dsg_sub > 0x10000 {
-                (
-                    unsafe { safe_read_u8(dsg_sub + 0x290) }.unwrap_or(0xff),
-                    unsafe { safe_read_usize(dsg_sub + 0x298) }.unwrap_or(usize::MAX),
-                )
-            } else {
-                (0xff, usize::MAX)
+            let dsg_ss = unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) };
+            let dsg_csm = unsafe {
+                safe_read_usize(er_game_base::mem::game_data_addr(
+                    module_base,
+                    CS_MENU_MAN_GLOBAL_RVA,
+                    "CS_MENU_MAN_GLOBAL_RVA",
+                ))
+            }
+            .filter(|csm| *csm > 0x10000);
+            let dsg_sub = dsg_csm
+                .and_then(|csm| unsafe { safe_read_usize(csm + 0x80) })
+                .filter(|sub| *sub > 0x10000);
+            let dsg_m290 = dsg_sub.and_then(|sub| unsafe { safe_read_u8(sub + 0x290) });
+            let dsg_m298 = dsg_sub.and_then(|sub| unsafe { safe_read_usize(sub + 0x298) });
+            // `None` = at least one operand of FUN_14080d660 could not be read. NOT `false`:
+            // "the menu gate is shut" and "we could not see the menu gate" are different facts
+            // and only one of them is a blocker.
+            let dsg_menu_ok = match (dsg_m290, dsg_m298) {
+                (Some(m290), Some(m298)) => Some(m290 == 0 && m298 == 0),
+                _ => None,
             };
-            let dsg_menu_ok = dsg_m290 == 0 && dsg_m298 == 0;
-            // The REAL orchestrator (FUN_140afb970) pump gate is bVar5 (NOT what this diag checked before):
+            // The REAL orchestrator (FUN_140afb970) pump gate is bVar5:
             // bVar5 = ShouldSave() [saveRequested(b72) && !CanShowSaveMenu() && menu_gate && bc4!=3]
             //      || FUN_140679460() [b73 && menu_gate && bc4!=3]  ||  GetRequestedSaveSlotLoad()(b78) != -1.
-            // If bVar5==0 the orchestrator returns without pumping bc4. b78==-1 is likely OUR b78 guard
-            // starving the third term. Read the components so the stall names the exact failing term.
-            let dsg_b72 = unsafe { safe_read_u8(gm + 0xb72) }.unwrap_or(0xff);
-            let dsg_b73 = unsafe { safe_read_u8(gm + 0xb73) }.unwrap_or(0xff);
-            let dsg_b78 = unsafe { safe_read_i32(gm + 0xb78) }.unwrap_or(-99);
+            // If bVar5==0 the orchestrator returns without pumping bc4.
+            let dsg_b72 = unsafe { safe_read_u8(gm + 0xb72) };
+            let dsg_b73 = unsafe { safe_read_u8(gm + 0xb73) };
+            let dsg_b78 = unsafe { safe_read_i32(gm + 0xb78) };
             let bc4_not3 = return_title_job_predicate_bc4 != 3;
-            let dsg_should_save = dsg_b72 != 0 && dsg_menu_ok && bc4_not3;
-            let dsg_679460 = dsg_b73 != 0 && dsg_menu_ok && bc4_not3;
-            let bvar5_est = dsg_should_save || dsg_679460 || dsg_b78 != -1;
+            let dsg_should_save = match (dsg_b72, dsg_menu_ok) {
+                (Some(b72), Some(menu_ok)) => Some(b72 != 0 && menu_ok && bc4_not3),
+                _ => None,
+            };
+            let dsg_679460 = match (dsg_b73, dsg_menu_ok) {
+                (Some(b73), Some(menu_ok)) => Some(b73 != 0 && menu_ok && bc4_not3),
+                _ => None,
+            };
+            // A disjunction can be decided by a readable TRUE even when a term is unreadable,
+            // and only that shape is honest: `Some(true)` needs one true term, `Some(false)`
+            // needs every term readable and false.
+            let bvar5_est = {
+                let terms = [dsg_should_save, dsg_679460, dsg_b78.map(|b78| b78 != -1)];
+                if terms.contains(&Some(true)) {
+                    Some(true)
+                } else if terms.iter().all(|term| *term == Some(false)) {
+                    Some(false)
+                } else {
+                    None
+                }
+            };
             // The REAL bc4 blocker (deeper than bVar5): the quit-save FUN_14067ba30 does the full
-            // bc4-advancing save ONLY if saveSlot < 10 AND disableSaveMenu == 0; otherwise it FALLS BACK
-            // to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and clears
-            // saveRequested). CanShowSaveMenu() == (CSMenuMan->disableSaveMenu != 0). Read both.
+            // bc4-advancing save ONLY if saveSlot < 10 AND disableSaveMenu == 0; otherwise it FALLS
+            // BACK to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and
+            // clears saveRequested). CanShowSaveMenu() == (CSMenuMan->disableSaveMenu != 0).
             let dsg_slot = unsafe {
                 safe_read_i32(gm + core::mem::offset_of!(eldenring::cs::GameMan, save_slot))
-            }
-            .unwrap_or(-99);
-            let dsg_dsm = if dsg_csm > 0x10000 {
-                unsafe { safe_read_u8(dsg_csm + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) }
-                    .map(|v| v as i32)
-                    .unwrap_or(-1)
-            } else {
-                -1
             };
-            let pump_fallback = !(0..=9).contains(&dsg_slot) || dsg_dsm != 0;
-            let dsg_blocker = if pump_fallback {
+            let dsg_dsm = dsg_csm.and_then(|csm| unsafe {
+                safe_read_u8(csm + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET)
+            });
+            let pump_fallback = match (dsg_slot, dsg_dsm) {
+                (Some(slot), Some(dsm)) => Some(!(0..=9).contains(&slot) || dsm != 0),
+                // Same disjunction rule: an out-of-range slot decides it on its own.
+                (Some(slot), None) if !(0..=9).contains(&slot) => Some(true),
+                (None, Some(dsm)) if dsm != 0 => Some(true),
+                _ => None,
+            };
+            /// Render an optional read for the log: the VALUE when it was read, the word
+            /// `unreadable` when it was not. Never a sentinel that can be mistaken for data.
+            fn render<T: core::fmt::Display>(value: Option<T>) -> String {
+                value.map_or_else(|| "unreadable".to_owned(), |value| value.to_string())
+            }
+            let dsg_blocker = if pump_fallback == Some(true) {
                 "QUIT-SAVE FALLBACK(saveSlot>=10 or disableSaveMenu!=0 -> plain save, bc4 NOT advanced)"
-            } else if dsg_force != 0 {
+            } else if dsg_force == Some(0)
+                && dsg_ss == Some(0)
+                && dsg_menu_ok == Some(true)
+                && bvar5_est == Some(true)
+                && pump_fallback == Some(false)
+            {
+                "NONE(every gate READ and passing, but bc4 stuck -- recheck the orchestrator)"
+            } else if dsg_force.is_none()
+                || dsg_ss.is_none()
+                || dsg_menu_ok.is_none()
+                || pump_fallback.is_none()
+                || bvar5_est.is_none()
+            {
+                // The honest answer whenever any operand is missing: this diag has NOT found a
+                // blocker, and must not name one. Which field is absent is in the line itself.
+                "UNREADABLE(one or more gate inputs could not be read -- NO blocker determined)"
+            } else if dsg_force != Some(0) {
                 "FORCE_LATCH(0x143d856a0)"
-            } else if dsg_ss != 0 {
+            } else if dsg_ss != Some(0) {
                 "save_state"
-            } else if !dsg_menu_ok {
+            } else if dsg_menu_ok != Some(true) {
                 "MENU_GATE(ProfileSelect)"
-            } else if !bvar5_est {
-                "bVar5=0(no save cond: b72/b73 off AND b78==-1 -- b78 likely OUR guard starving the pump)"
             } else {
-                "NONE(bVar5 est OK but bc4 stuck -- CanShowSaveMenu()==true killing ShouldSave? recheck)"
+                "bVar5=0(no save cond: b72/b73 off AND b78==-1 -- b78 likely OUR guard starving the pump)"
             };
             append_autoload_debug(format_args!(
-                "save-gate-diag(stall): force=0x{dsg_force:x} save_state={dsg_ss} bc4=0x{return_title_job_predicate_bc4:x} menu_gate_ok={dsg_menu_ok} b72={dsg_b72} b73={dsg_b73} b78={dsg_b78} bVar5_est={bvar5_est} saveSlot={dsg_slot} disableSaveMenu={dsg_dsm} pump_fallback={pump_fallback} -> blocked_by={dsg_blocker}"
+                "save-gate-diag(stall): force={} save_state={} bc4=0x{return_title_job_predicate_bc4:x} menu_gate_ok={} b72={} b73={} b78={} bVar5_est={} saveSlot={} disableSaveMenu={} pump_fallback={} -> blocked_by={dsg_blocker}",
+                render(dsg_force.map(|force| format!("0x{force:x}"))),
+                render(dsg_ss),
+                render(dsg_menu_ok),
+                render(dsg_b72),
+                render(dsg_b73),
+                render(dsg_b78),
+                render(bvar5_est),
+                render(dsg_slot),
+                render(dsg_dsm),
+                render(pump_fallback),
             ));
             // CASE-7 7->8 GATE, computed EXACTLY from the decompiled formulas (FUN_140afa7c0 case 7,
             // bd CORRECTED-load2-substate7-NOT-save-drain-saving-disabled-shouldsave-structurally-false-2026-07-20).
             // Advance needs ALL of: c1 FUN_14067a170[saveState b80==0], c2 !ShouldSave, c3 !FUN_140679460,
             // c4 FUN_140a9ceb0(CSRemo) [historically PASSING]. ShouldSave = b72 && !CanShowSaveMenu()
-            // && menu_gate && bc4!=3, and !CanShowSaveMenu()==(disableSaveMenu==0). Since saving is
-            // DISABLED BY DESIGN (disableSaveMenu!=0), ShouldSave is STRUCTURALLY FALSE => c2 passes and
-            // b72 is irrelevant. This line names whether C1 (saveState) or C3 (b73) is the real blocker,
-            // no game-function calls (zero side-effect risk). All inputs already read above.
+            // && menu_gate && bc4!=3, and !CanShowSaveMenu()==(disableSaveMenu==0).
+            //
+            // `shouldsave` previously read `dsg_dsm == 0`, so an UNREADABLE CSMenuMan made it
+            // false and reported C2 as passing -- a conclusion drawn from a pointer nobody read.
+            // Every condition is now `Option` and an unread input names itself.
             let bc4_not3_c = return_title_job_predicate_bc4 != 3;
-            let c1_savestate0 = dsg_ss == 0;
-            let shouldsave = dsg_b72 != 0 && dsg_dsm == 0 && dsg_menu_ok && bc4_not3_c;
-            let fun679460 = dsg_b73 != 0 && dsg_menu_ok && bc4_not3_c;
-            let c2_not_shouldsave = !shouldsave;
-            let c3_not_679460 = !fun679460;
-            let case7_blocker = if !c1_savestate0 {
+            let c1_savestate0 = dsg_ss.map(|save_state| save_state == 0);
+            let shouldsave = match (dsg_b72, dsg_dsm, dsg_menu_ok) {
+                (Some(b72), Some(dsm), Some(menu_ok)) => {
+                    Some(b72 != 0 && dsm == 0 && menu_ok && bc4_not3_c)
+                }
+                // A conjunction is FALSE as soon as one readable term is false, however many
+                // others are missing -- the mirror of the disjunction rule above.
+                (Some(0), _, _) | (_, _, Some(false)) => Some(false),
+                _ if !bc4_not3_c => Some(false),
+                _ => None,
+            };
+            let fun679460 = match (dsg_b73, dsg_menu_ok) {
+                (Some(b73), Some(menu_ok)) => Some(b73 != 0 && menu_ok && bc4_not3_c),
+                (Some(0), _) | (_, Some(false)) => Some(false),
+                _ if !bc4_not3_c => Some(false),
+                _ => None,
+            };
+            let c2_not_shouldsave = shouldsave.map(|value| !value);
+            let c3_not_679460 = fun679460.map(|value| !value);
+            let case7_blocker = if c1_savestate0 == Some(false) {
                 "C1 saveState(b80)!=0"
-            } else if !c2_not_shouldsave {
+            } else if c2_not_shouldsave == Some(false) {
                 "C2 ShouldSave==true (unexpected: saving-disabled should force it false)"
-            } else if !c3_not_679460 {
+            } else if c3_not_679460 == Some(false) {
                 "C3 FUN_140679460==true (b73 && menu_gate && bc4!=3)"
+            } else if c1_savestate0.is_none()
+                || c2_not_shouldsave.is_none()
+                || c3_not_679460.is_none()
+            {
+                "UNREADABLE(a case-7 condition's input could not be read -- NO verdict)"
             } else {
                 "C1-3 pass -> C4 CSRemo (FUN_140a9ceb0) or advancer not ticking"
             };
             append_autoload_debug(format_args!(
-                "case7-gate(4-bool): c1_savestate0={c1_savestate0} c2_not_shouldsave={c2_not_shouldsave}(shouldsave={shouldsave}) c3_not_679460={c3_not_679460}(f679460={fun679460}) [b80={dsg_ss} b72={dsg_b72} b73={dsg_b73} disableSaveMenu={dsg_dsm} menu_gate_ok={dsg_menu_ok} bc4!=3={bc4_not3_c}] -> case7_blocker={case7_blocker}"
+                "case7-gate(4-bool): c1_savestate0={} c2_not_shouldsave={}(shouldsave={}) c3_not_679460={}(f679460={}) [b80={} b72={} b73={} disableSaveMenu={} menu_gate_ok={} bc4!=3={bc4_not3_c}] -> case7_blocker={case7_blocker}",
+                render(c1_savestate0),
+                render(c2_not_shouldsave),
+                render(shouldsave),
+                render(c3_not_679460),
+                render(fun679460),
+                render(dsg_ss),
+                render(dsg_b72),
+                render(dsg_b73),
+                render(dsg_dsm),
+                render(dsg_menu_ok),
             ));
         }
     }
@@ -2189,8 +2549,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .unwrap_or(TITLE_STATE_OWNER_GONE);
         let table =
             unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
-        let session = unsafe { safe_read_usize(module_base + SESSION_SINGLETON_144588E98_RVA) }
-            .unwrap_or(null);
+        let session = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                SESSION_SINGLETON_144588E98_RVA,
+                "SESSION_SINGLETON_144588E98_RVA",
+            ))
+        }
+        .unwrap_or(null);
         let game_data_man = game_data_man_ptr_or_null();
         let profile_summary = if game_data_man != null {
             unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
@@ -2198,7 +2564,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         } else {
             null
         };
-        let iodev = unsafe { safe_read_usize(module_base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+        let iodev = unsafe {
+            safe_read_usize(er_game_base::mem::game_data_addr(
+                module_base,
+                IODEV_GLOBAL_RVA,
+                "IODEV_GLOBAL_RVA",
+            ))
+        }
+        .unwrap_or(null);
         let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
         let dialog =
             unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
@@ -2213,14 +2586,31 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         } else {
             null
         };
-        let press_start_context = if press_start_vt == module_base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        // Both expected vtables resolved ONCE, and neither may be zero. `press_start_vt` and
+        // `dialog_vt` are both `unwrap_or(null)` where `null` is `usize::MIN` = 0, which is also
+        // what `game_data_addr` answers for a refusal -- so `0 == 0` would read a PRESS-START
+        // context out of an object with no vtable and take the title's loop/fadeout state off a
+        // dialog nothing had identified.
+        let want_scene_obj_proxy_vt = er_game_base::mem::game_data_addr(
+            module_base,
+            SCENE_OBJ_PROXY_VTABLE_RVA,
+            "SCENE_OBJ_PROXY_VTABLE_RVA",
+        );
+        let want_title_dialog_vt = er_game_base::mem::game_data_addr(
+            module_base,
+            TITLE_TOP_DIALOG_VTABLE_RVA,
+            "TITLE_TOP_DIALOG_VTABLE_RVA",
+        );
+        let press_start_vt_is_scene_obj_proxy =
+            want_scene_obj_proxy_vt != null && press_start_vt == want_scene_obj_proxy_vt;
+        let press_start_context = if press_start_vt_is_scene_obj_proxy {
             unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
                 .unwrap_or(null)
         } else {
             null
         };
         let (title_loop, title_textfadeout, menu_opened_latch) =
-            if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            if want_title_dialog_vt != null && dialog_vt == want_title_dialog_vt {
                 let state = unsafe { title_dialog_state(dialog, module_base) };
                 (state.in_loop, state.in_textfadeout, state.menu_opened_latch)
             } else {
@@ -2237,7 +2627,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let blocker =
             if committed != TITLE_STEP_MENU_JOB_WAIT || requested != TITLE_STEP_MENU_JOB_WAIT {
                 PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE
-            } else if table != module_base + INNER_TITLE_STATE_TABLE_RVA {
+            } else if table
+                != er_game_base::mem::game_data_addr(
+                    module_base,
+                    INNER_TITLE_STATE_TABLE_RVA,
+                    "INNER_TITLE_STATE_TABLE_RVA",
+                )
+            {
                 PRODUCT_CORE_BLOCKER_TITLE_TABLE
             } else if session == null {
                 PRODUCT_CORE_BLOCKER_SESSION
@@ -2249,11 +2645,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 PRODUCT_CORE_BLOCKER_IODEV
             } else if heap_allocator == null {
                 PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR
-            } else if dialog_vt != module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            } else if want_title_dialog_vt == null || dialog_vt != want_title_dialog_vt {
                 PRODUCT_CORE_BLOCKER_TITLE_DIALOG
-            } else if press_start_vt != module_base + SCENE_OBJ_PROXY_VTABLE_RVA
-                || press_start_context == null
-            {
+            // RESOLVED, reusing the value the PRESS-START context read above already screened.
+            // `CS::SceneObjProxy`'s vtable moved on 1.17 (0x2a94a70 -> 0x2a97af0), so this raw
+            // comparison could not match and product-core readiness reported
+            // `BLOCKER_PRESS_START` forever -- the autoload's own boot gate, stuck on a stale
+            // address rather than on anything the title was doing.
+            } else if !press_start_vt_is_scene_obj_proxy || press_start_context == null {
                 PRODUCT_CORE_BLOCKER_PRESS_START
             } else if !title_loop
                 && !title_textfadeout

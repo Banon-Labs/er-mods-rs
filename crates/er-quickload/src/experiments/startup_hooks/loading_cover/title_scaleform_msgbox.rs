@@ -358,9 +358,21 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     write_policy_oracle_snapshot("tos_title_ctor");
     append_autoload_debug(format_args!(
         "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x} stack0=0x{stack_arg0:x} backing_flag_ptr=0x{backing_flag_ptr:x}) stored_backing_flag_ptr=0x{stored_backing_flag_ptr:x} backing_flag_value={backing_flag_value} requested_flag_value={requested_flag_value} text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",
-        base + POLICY_TOS_TITLE_CTOR_RVA as usize,
-        base + POLICY_TOS_TITLE_VTABLE_RVA,
-        base + POLICY_TOS_TITLE_TEXT_PATH_RVA
+        er_game_base::mem::game_data_addr(
+            base,
+            POLICY_TOS_TITLE_CTOR_RVA as usize,
+            "POLICY_TOS_TITLE_CTOR_RVA"
+        ),
+        er_game_base::mem::game_data_addr(
+            base,
+            POLICY_TOS_TITLE_VTABLE_RVA,
+            "POLICY_TOS_TITLE_VTABLE_RVA"
+        ),
+        er_game_base::mem::game_data_addr(
+            base,
+            POLICY_TOS_TITLE_TEXT_PATH_RVA,
+            "POLICY_TOS_TITLE_TEXT_PATH_RVA"
+        )
     ));
     ret
 }
@@ -379,147 +391,120 @@ pub(crate) fn install_policy_tos_title_hook() {
             return;
         }
     }
-    let Ok(wrapper_addr) = game_rva(POLICY_TOS_TITLE_CTOR_WRAPPER_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS ctor wrapper rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            wrapper_addr as *mut c_void,
+    // ONE ROW PER HOOK, AND A REFUSAL SKIPS ONLY ITS OWN ROW (2026-08-30).
+    //
+    // This was six sequential `let Ok(addr) = game_rva(..) else { log; return; }` blocks, so a
+    // single unmapped address on 1.17 took the other five down with it -- the whole Privacy/ToS
+    // surface oracle, which exists to say a run's proof is INVALID, going dark because one of its
+    // six functions moved. Same shape and same fix as `er-better-refills` and the System->Quit
+    // installer; see bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    //
+    // ARMED / REFUSED / FAILED are three different outcomes and are logged as three different
+    // words: REFUSED means the 1.17 map has no row for that RVA (a migration gap, fix the map),
+    // FAILED means MinHook would not take the address it was given (a different problem entirely).
+    let plan: [(&str, u32, *mut c_void, &AtomicUsize); 6] = [
+        (
+            "ToS ctor wrapper",
+            POLICY_TOS_TITLE_CTOR_WRAPPER_RVA,
             policy_tos_title_ctor_wrapper_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS ctor wrapper failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(selector_wrapper_addr) = game_rva(POLICY_TOS_SELECTOR_WRAPPER_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS selector wrapper rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            selector_wrapper_addr as *mut c_void,
+            &POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG,
+        ),
+        (
+            "ToS selector wrapper",
+            POLICY_TOS_SELECTOR_WRAPPER_RVA,
             policy_tos_selector_wrapper_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_SELECTOR_WRAPPER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS selector wrapper failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(selector_ctor_addr) = game_rva(POLICY_TOS_SELECTOR_CTOR_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS selector ctor rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            selector_ctor_addr as *mut c_void,
+            &POLICY_TOS_SELECTOR_WRAPPER_ORIG,
+        ),
+        (
+            "ToS selector ctor",
+            POLICY_TOS_SELECTOR_CTOR_RVA,
             policy_tos_selector_ctor_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_SELECTOR_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS selector ctor failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(predicate_addr) = game_rva(POLICY_TOS_STATUS_PREDICATE_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS status predicate rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            predicate_addr as *mut c_void,
+            &POLICY_TOS_SELECTOR_CTOR_ORIG,
+        ),
+        (
+            "ToS status predicate",
+            POLICY_TOS_STATUS_PREDICATE_RVA,
             policy_tos_status_predicate_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_STATUS_PREDICATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS status predicate failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(flag_setter_addr) = game_rva(POLICY_TOS_FLAG_SETTER_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve ToS flag setter rva"
-        ));
-        return;
-    };
-    if let Ok(hook) = unsafe {
-        MhHook::new(
-            flag_setter_addr as *mut c_void,
+            &POLICY_TOS_STATUS_PREDICATE_ORIG,
+        ),
+        (
+            "ToS flag setter",
+            POLICY_TOS_FLAG_SETTER_RVA,
             policy_tos_flag_setter_hook as *mut c_void,
-        )
-    } {
-        POLICY_TOS_FLAG_SETTER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-        if let Err(status) = unsafe { hook.queue_enable() } {
-            append_autoload_debug(format_args!(
-                "policy-oracle: queue_enable ToS flag setter failed: {status:?}"
-            ));
-        } else {
-            crate::mh::leak_installed_hook(hook);
-        }
-    }
-    let Ok(ctor_addr) = game_rva(POLICY_TOS_TITLE_CTOR_RVA) else {
-        append_autoload_debug(format_args!(
-            "policy-oracle: failed to resolve TosTitle ctor rva"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            ctor_addr as *mut c_void,
+            &POLICY_TOS_FLAG_SETTER_ORIG,
+        ),
+        (
+            "TosTitle ctor",
+            POLICY_TOS_TITLE_CTOR_RVA,
             policy_tos_title_ctor_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            POLICY_TOS_TITLE_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
+            &POLICY_TOS_TITLE_CTOR_ORIG,
+        ),
+    ];
+    let mut armed: Vec<String> = Vec::new();
+    let mut refused: Vec<&str> = Vec::new();
+    let mut failed: Vec<&str> = Vec::new();
+    for (label, rva, detour, orig) in plan {
+        let Ok(addr) = game_rva_for_hook(rva) else {
+            append_autoload_debug(format_args!(
+                "policy-oracle: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the running build; the other rows are unaffected"
+            ));
+            refused.push(label);
+            continue;
+        };
+        let hook = match unsafe { MhHook::new(addr as *mut c_void, detour) } {
+            Ok(hook) => hook,
+            Err(status) => {
                 append_autoload_debug(format_args!(
-                    "policy-oracle: queue_enable TosTitle ctor failed: {status:?}"
+                    "policy-oracle: FAILED {label} @0x{addr:x} -- MhHook::new: {status:?}"
                 ));
-                return;
+                failed.push(label);
+                continue;
             }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    POLICY_TOS_TITLE_HOOK_INSTALLED
-                        .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "policy-oracle: hooked TosTitle ctor 0x{ctor_addr:x}, ctor wrapper 0x{wrapper_addr:x}, selector wrapper 0x{selector_wrapper_addr:x}, selector ctor 0x{selector_ctor_addr:x}, status predicate 0x{predicate_addr:x}, and flag setter 0x{flag_setter_addr:x} (native Privacy/ToS surface oracle)"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "policy-oracle: MH_ApplyQueued TosTitle ctor failed: {status:?}"
-                )),
-            }
+        };
+        orig.store(hook.trampoline() as usize, Ordering::SeqCst);
+        if let Err(status) = unsafe { hook.queue_enable() } {
+            orig.store(HOOK_ORIGINAL_UNSET, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "policy-oracle: FAILED {label} @0x{addr:x} -- queue_enable: {status:?}"
+            ));
+            failed.push(label);
+            continue;
         }
-        Err(status) => append_autoload_debug(format_args!(
-            "policy-oracle: MhHook::new TosTitle ctor failed: {status:?}"
+        crate::mh::leak_installed_hook(hook);
+        armed.push(format!("{label} 0x{addr:x}"));
+    }
+    if armed.is_empty() {
+        append_autoload_debug(format_args!(
+            "policy-oracle: NOTHING ARMED -- refused={refused:?} failed={failed:?}; the Privacy/ToS surface is UNWATCHED this run"
+        ));
+        POLICY_TOS_TITLE_HOOK_INSTALLED
+            .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            POLICY_TOS_TITLE_HOOK_INSTALLED
+                .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "policy-oracle: ARMED {} of {} (native Privacy/ToS surface oracle): {}{}{}",
+                armed.len(),
+                armed.len() + refused.len() + failed.len(),
+                armed.join(", "),
+                if refused.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | REFUSED {refused:?}")
+                },
+                if failed.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | FAILED {failed:?}")
+                },
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "policy-oracle: MH_ApplyQueued failed: {status:?} -- {} queued rows are NOT live",
+            armed.len()
         )),
     }
 }
@@ -579,7 +564,7 @@ pub(crate) fn install_server_status_hook() {
             return;
         }
     }
-    let Ok(formatter_addr) = game_rva(SERVER_STATUS_FORMATTER_RVA) else {
+    let Ok(formatter_addr) = game_rva_for_hook(SERVER_STATUS_FORMATTER_RVA) else {
         append_autoload_debug(format_args!(
             "server-status-oracle: failed to resolve formatter rva"
         ));
@@ -656,29 +641,30 @@ pub(crate) unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<Strin
     Some(String::from_utf16_lossy(&buf))
 }
 
-/// Diagnostic: dump the MessageBoxDialog builder Spec (`r8`) to NAME the modal's message. The text id
-/// is NOT in rdx/r9 (a pointer pair 0x40 apart) and is NOT fetched via GetGR_System_Message at build
-/// time, so read it straight from the Spec. Tries the reported MenuString offset (+0x8e0) plus a scan
-/// of early offsets for any embedded/pointed-to DLW string. Read-only; logs each decoded string.
-pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize) {
+/// Diagnostic: dump a builder argument to NAME the modal. Pass BOTH `r8` and `r9`: the wrapper
+/// `FUN_1407b03f0` (1.16.2) / `FUN_1407b1270` (1.17) calls `builder(dialog, sfObj, param_3, text)`,
+/// so `r8` is `param_3` and the MESSAGE is `r9` -- dumping only `r8` is why run
+/// br-20260831-160354-2513 logged a suppressed build with no `spec #0:` line. Tries the reported
+/// MenuString offset (+0x8e0) plus a scan of early offsets. Read-only; logs each decoded string.
+pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize, reg: &str) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if c <= null {
         return;
     }
     if let Some(text) = unsafe { read_dlw_string(safe_read_usize(c + 0x8e0).unwrap_or(null), 80) } {
-        append_autoload_debug(format_args!("spec #{n}: text@*(r8+0x8e0)=\"{text}\""));
+        append_autoload_debug(format_args!("spec #{n}: text@*({reg}+0x8e0)=\"{text}\""));
     }
     let mut off = 0usize;
     while off < 0x120 {
         // Inline DLW string at r8+off.
         if let Some(text) = unsafe { read_dlw_string(c + off, 80) } {
-            append_autoload_debug(format_args!("spec #{n}: inline[r8+0x{off:x}]=\"{text}\""));
+            append_autoload_debug(format_args!("spec #{n}: inl[{reg}+0x{off:x}]=\"{text}\""));
         }
         // Pointer-to-DLW-string at r8+off.
         if let Some(ptr) = unsafe { safe_read_usize(c + off) }
             && let Some(text) = unsafe { read_dlw_string(ptr, 80) }
         {
-            append_autoload_debug(format_args!("spec #{n}: *[r8+0x{off:x}]=\"{text}\""));
+            append_autoload_debug(format_args!("spec #{n}: *[{reg}+0x{off:x}]=\"{text}\""));
         }
         off += 8;
     }
@@ -726,7 +712,16 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             append_autoload_debug(format_args!(
                 "save-flow-box: expected build for {} produced dialog=0x{ret:x} vt=0x{vt:x} vt[2]=0x{update_slot:x} (want vt[2]=0x{:x}) -- NOT captured",
                 save_flow_box_label(expected_box),
-                base.wrapping_add(MSGBOX_DIALOG_UPDATE_RVA)
+                // The SAME address `save_flow_box_identity` compared against, resolved for the
+                // running build. `base.wrapping_add(MSGBOX_DIALOG_UPDATE_RVA)` printed the 1.16.2
+                // slot while the check used the 1.17 one, so the line reporting a mismatch named
+                // a value that was not the one it wanted -- and `.wrapping_add` kept it out of
+                // reach of every gate that looks for `base + CONST`.
+                er_game_base::mem::game_data_addr(
+                    base,
+                    MSGBOX_DIALOG_UPDATE_RVA,
+                    "MSGBOX_DIALOG_UPDATE_RVA"
+                )
             ));
         }
         return ret;
@@ -766,7 +761,8 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 "msgbox-skip #{n}: suppressed MessageBoxDialog build scope={scope} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
-            unsafe { dump_msgbox_spec(c, n) };
+            unsafe { dump_msgbox_spec(c, n, "r8") };
+            unsafe { dump_msgbox_spec(d, n, "r9") };
         }
         // SEAMLESS post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
         // building it would then sit on MenuJobResult(Continue) forever (ERSC's post-PAB MessageBox
@@ -797,7 +793,12 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             }
         };
         let vt = unsafe { safe_read_usize(ret) }.unwrap_or(null);
-        let is_msgbox = vt == base + MSGBOX_DIALOG_VTABLE_RVA;
+        let is_msgbox = vt
+            == er_game_base::mem::game_data_addr(
+                base,
+                MSGBOX_DIALOG_VTABLE_RVA,
+                "MSGBOX_DIALOG_VTABLE_RVA",
+            );
         let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
         // CAPTURE the startup MessageBoxDialog (connection-error / EULA / warning) pre-world so
         // the game task can dismiss it via the real OK handler. Post-load/in-world dialogs are
@@ -820,8 +821,8 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 "msgbox-builder #{n}: dialog=0x{ret:x} vt=0x{vt:x} vt_rva=0x{vt_rva:x} captured={is_msgbox} in_world={in_world} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
-            // NAME the modal: read its message text straight from the Spec (r8=c).
-            unsafe { dump_msgbox_spec(c, n) };
+            unsafe { dump_msgbox_spec(c, n, "r8") };
+            unsafe { dump_msgbox_spec(d, n, "r9") };
         }
     }
     ret

@@ -28,6 +28,9 @@ import threading
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import resolve_artifact  # noqa: E402
+
 RENDER_READY_DWELL_SECONDS = 5.0  # goal SS4 hard render gate dwell
 POLL_SECONDS = 0.5  # capture cadence (user 2026-07-19: 3s log throttle hid the completion->teardown)
 LOG_THROTTLE_SECONDS = 0.5  # console log cadence -- match the poll so fast transitions are visible
@@ -349,7 +352,7 @@ def capture_portrait(artifact_dir: Path) -> None:
 def _load_semaphore_rows(artifact_dir: Path, game_dir: Path) -> list[dict]:
     paths = [
         artifact_dir / "load-semaphore-trace.jsonl",
-        game_dir / "er-quickload-input-trace.jsonl",
+        resolve_artifact("er-quickload-input-trace.jsonl", game_dir, prefer=artifact_dir),
     ]
     trace_path = next((p for p in paths if p.exists()), paths[0])
     rows: list[dict] = []
@@ -920,7 +923,30 @@ def main() -> int:
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     run_start_epoch = time.time()  # crash-dump filter: only parse minidumps written after the run began
-    telemetry_path = args.game_dir / "er-quickload-telemetry.json"
+    # WHERE THE TELEMETRY ACTUALLY IS. Launchers redirect the DLL's per-run artifacts into the run's
+    # own directory, because a game-directory artifact is SINGLE-SLOT and the next launch destroys
+    # it. A monitor pinned to the game directory would find nothing for a redirected run and report
+    # a perfectly healthy load as never happening -- the exact false negative this file exists to
+    # rule out. `resolve_artifact` prefers the run directory and falls back to the game directory
+    # (by existence), so a run whose env did not survive me3 -> Proton is still read.
+    # RE-RESOLVED EVERY POLL, not once here, and never older than this run. Resolving once at t=0
+    # binds to whatever exists at t=0 -- and for a redirected run that is the GAME-DIRECTORY copy
+    # belonging to the PREVIOUS run, because the DLL has not written the redirect yet. Measured
+    # 2026-08-31 (run wedge-writers-20260831-a): this watcher read the last run's final telemetry,
+    # saw `fresh_deser_count = 2` with `player_present`, printed "epoch 2: WORLD-STABLE reached" at
+    # elapsed 0.0s, never wrote a switch-control file, and tore down a game that was still booting.
+    # `newer_than=run_start_epoch` makes a previous run's file unreadable by construction; until the
+    # DLL writes, the resolve returns the run directory's not-yet-existing path and the loop simply
+    # waits, which is the correct behaviour for "the run has not produced evidence yet".
+    def telemetry_now() -> Path:
+        return resolve_artifact(
+            "er-quickload-telemetry.json",
+            args.game_dir,
+            prefer=args.artifact_dir,
+            newer_than=run_start_epoch,
+        )
+
+    telemetry_path = telemetry_now()
 
     # Per-epoch record: first-seen ts, the max/settled snapshot, whether render-ready was ever held.
     epochs: dict[int, dict] = {}
@@ -1057,6 +1083,10 @@ def main() -> int:
                 if gone_streak >= 4:
                     result = "GAME_EXITED"
                     break
+        # Re-resolve while the DLL has not written this run's file yet. Once it has, this returns the
+        # same path every poll; before that it keeps returning a path that does not exist, which is
+        # what stops the previous run's artifact from ever being read.
+        telemetry_path = telemetry_now()
         # BACKSTOP: hung-but-alive (process present, telemetry frozen) -- long window, not a primary signal.
         try:
             mtime = os.path.getmtime(telemetry_path)
@@ -1470,16 +1500,21 @@ def main() -> int:
     with contextlib.suppress(Exception):
         ts_f.close()
 
-    # Snapshot artifacts before teardown clears live state.
+    # FALLBACK SNAPSHOT ONLY. These are redirected into the artifact directory at launch, so this
+    # copy exists for the run whose environment did not survive the launch chain and whose DLL fell
+    # back to the game directory. It is not how the evidence is preserved: a copy here can only ever
+    # recover THIS run's output -- the previous run's was clobbered at launch, before any copy could
+    # run -- and a crashed or killed run never reaches it.
     for name in (
         "er-quickload-telemetry.json",
         "er-quickload-autoload-debug.log",
         "er-reload-trace.log",
     ):
-        src = args.game_dir / name
-        if src.exists():
+        destination = args.artifact_dir / name
+        src = resolve_artifact(name, args.game_dir, prefer=args.artifact_dir)
+        if src.exists() and src != destination:
             with contextlib.suppress(OSError):
-                (args.artifact_dir / name).write_bytes(src.read_bytes())
+                destination.write_bytes(src.read_bytes())
 
     teardown()
 

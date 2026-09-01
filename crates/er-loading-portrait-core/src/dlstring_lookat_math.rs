@@ -417,182 +417,370 @@ pub unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
     }
 }
 
-pub fn install_now_loading_helper_observer_hooks() {
-    if NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) != 0 {
+// =================================================================================================
+// THE FIVE LOADING-SCREEN OBSERVER DETOURS -- EACH INSTALLED ON ITS OWN MERITS.
+//
+// ONE REFUSED HOOK USED TO COST FOUR WORKING ONES. Until 2026-08-30 all five installs shared a
+// single `ok` flag and the function returned on `!ok` BEFORE `MH_ApplyQueued`, so the one address
+// MinHook declined took the whole batch down with it: four detours created, queued, and never
+// applied. Those four are what the visible loading bar and the cover's release predicate are made
+// of, so `LOADING_SCREEN_UPDATE_HITS`, `LOADING_SCREEN_BAR_PROGRESS_PERMILLE` and
+// `LOADING_SCREEN_CLOSE_SENT_HITS` all stayed at 0, `BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN` never
+// latched, and a user played for seven minutes under an opaque loading cover.
+//
+// IT COULD NOT SELF-HEAL, WHICH IS THE OTHER HALF. The aggregate latch was set only inside the
+// all-five success path, so the callers re-entered the installer every ~50-80ms, and from the
+// second pass on the four HEALTHY hooks failed `MH_ERROR_ALREADY_CREATED` against themselves --
+// the registry collision lines name the same detour address on both sides of the collision. One
+// session produced 8,430 refusal lines and a 1,018,993,636-byte debug log.
+//
+// So each hook now carries its own latch and its own terminal decision:
+//
+//   * a hook that cannot install logs ONCE and leaves the other four alone -- a missing hook must
+//     cost one feature, never four;
+//   * a latched hook is never re-created, which is what makes `MH_ERROR_ALREADY_CREATED`
+//     structurally impossible rather than merely tolerated;
+//   * a permanently fatal status is terminal for THAT hook with no retry, because no retry can
+//     change the answer: the build gate refusing an address, bytes that are not executable, and a
+//     target that is not there are all properties of the image, not of the moment;
+//   * only `MH_ERROR_NOT_INITIALIZED` and `MH_ERROR_MEMORY_ALLOC` leave a hook retryable, and even
+//     those are bounded by `OBSERVER_INSTALL_MAX_PASSES`, so the poll loop always terminates.
+//
+// The detours stay BARE `MhHook`, deliberately. `crate::mh::register_union_hook` would give
+// idempotency for free, but `UnionFn` is `extern "system" fn(usize, usize, usize, usize) -> usize`
+// and `loading_screen_update_hook` takes `dt: f32` in XMM1 -- routing the load-bearing hook of this
+// whole bug through the union dispatcher would silently drop the float. Per-hook latches are the
+// fix; the union is not a safe one-line swap here.
+// =================================================================================================
+
+/// How many observer detours the installer manages.
+const OBSERVER_HOOK_COUNT: usize = 5;
+
+/// Ceiling on installer re-entries while any hook is still retryable.
+///
+/// The number matters less than the existence of one. The failure this replaces had no bound at
+/// all: the aggregate latch was set only on the all-five success path, so callers polling every
+/// ~50-80ms re-ran the installer for the life of the process. Only the two genuinely transient
+/// MinHook statuses can consume this budget; every other failure is terminal on its first pass.
+const OBSERVER_INSTALL_MAX_PASSES: usize = 8;
+
+/// Never attempted, or attempted and left retryable. The aggregate latch stays here while any one
+/// observer is still in this state, which is what keeps the callers polling.
+pub const OBSERVER_HOOK_NOT_ATTEMPTED: usize = 0;
+/// Created, enabled and applied. This observer's hit counters mean what they say: a 0 on one of
+/// them is now genuinely "the game never called it".
+pub const OBSERVER_HOOK_INSTALLED: usize = 1;
+/// Terminal failure. This observer will not fire in this process and will not be retried -- the
+/// address was refused for the running build, or MinHook declined the target outright.
+pub const OBSERVER_HOOK_PERMANENTLY_REFUSED: usize = 2;
+/// Created and queue-enabled, waiting on an `MH_ApplyQueued` that has not succeeded yet. MinHook
+/// keeps the queue flag across a failed apply, so the retry is another apply -- never another
+/// create.
+pub const OBSERVER_HOOK_QUEUED_PENDING_APPLY: usize = 3;
+
+/// Installer entries so far, so the bounded retry can end and say how many passes it took.
+static NOW_LOADING_OBSERVER_PASSES: AtomicUsize = AtomicUsize::new(0);
+
+/// One observer detour: everything the installer needs to attempt it independently of the other
+/// four, plus the latch that remembers how far it got.
+struct ObserverHook {
+    /// Names this hook in every log line and in the `game_rva_named` refusal, so a reader can tell
+    /// WHICH observer went inert without counting arguments in a summary line.
+    what: &'static str,
+    /// The 1.16.2 RVA, left untranslated on purpose: `MhHook::new` owns the detour-safe
+    /// translation, and resolving one address twice is its own documented hazard.
+    rva: u32,
+    detour: *mut c_void,
+    /// Trampoline sink the detour body calls the original through.
+    orig: &'static AtomicUsize,
+    /// This hook's latch, one of the `OBSERVER_HOOK_*` values.
+    state: &'static AtomicUsize,
+}
+
+/// The five observers, in install order.
+///
+/// `LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED` describes exactly the GFx fade-out hook here. It
+/// used to be set when EITHER that hook or the Scaleform label-goto resolved, which meant the
+/// label-goto installing could report the fade-out hook as live while it was refused -- the same
+/// conflation, one level down, as the shared `ok` flag. The label-goto now has its own latch.
+fn observer_hooks() -> [ObserverHook; OBSERVER_HOOK_COUNT] {
+    [
+        ObserverHook {
+            what: "now-loading ctor",
+            rva: NOW_LOADING_HELPER_CTOR_RVA as u32,
+            detour: now_loading_helper_ctor_hook as *mut c_void,
+            orig: &NOW_LOADING_HELPER_CTOR_ORIG,
+            state: &NOW_LOADING_HELPER_CTOR_HOOK_INSTALLED,
+        },
+        ObserverHook {
+            what: "now-loading update",
+            rva: NOW_LOADING_HELPER_UPDATE_RVA as u32,
+            detour: now_loading_helper_update_hook as *mut c_void,
+            orig: &NOW_LOADING_HELPER_UPDATE_ORIG,
+            state: &NOW_LOADING_HELPER_UPDATE_HOOK_INSTALLED,
+        },
+        ObserverHook {
+            what: "CS::LoadingScreen update",
+            rva: LOADING_SCREEN_UPDATE_RVA as u32,
+            detour: loading_screen_update_hook as *mut c_void,
+            orig: &LOADING_SCREEN_UPDATE_ORIG,
+            state: &LOADING_SCREEN_UPDATE_HOOK_INSTALLED,
+        },
+        ObserverHook {
+            what: "Scaleform label goto",
+            rva: SCALEFORM_LABEL_GOTO_RVA as u32,
+            detour: scaleform_label_goto_hook as *mut c_void,
+            orig: &SCALEFORM_LABEL_GOTO_ORIG,
+            state: &SCALEFORM_LABEL_GOTO_HOOK_INSTALLED,
+        },
+        ObserverHook {
+            what: "KnowledgeLoadingScreen GFx FadeOut",
+            rva: LOADING_SCREEN_GFX_FADEOUT_RVA as u32,
+            detour: loading_screen_gfx_fadeout_hook as *mut c_void,
+            orig: &LOADING_SCREEN_GFX_FADEOUT_ORIG,
+            state: &LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED,
+        },
+    ]
+}
+
+/// Whether `status` could plausibly answer differently on a later pass.
+///
+/// Only two can. `MH_ERROR_NOT_INITIALIZED` and `MH_ERROR_MEMORY_ALLOC` describe MinHook's own
+/// transient state. Every other status is a statement about the ADDRESS -- the build gate declining
+/// to translate it, a target that is not a relocatable function entry, bytes that are not
+/// executable -- and no number of retries moves a function somewhere else. That is why the old hot
+/// loop logged 8,430 times and changed nothing.
+fn observer_status_is_retryable(status: MH_STATUS) -> bool {
+    matches!(
+        status,
+        MH_STATUS::MH_ERROR_NOT_INITIALIZED | MH_STATUS::MH_ERROR_MEMORY_ALLOC
+    )
+}
+
+/// One word per latch value, for the summary line.
+fn observer_state_word(state: usize) -> &'static str {
+    match state {
+        OBSERVER_HOOK_INSTALLED => "installed",
+        OBSERVER_HOOK_PERMANENTLY_REFUSED => "REFUSED",
+        OBSERVER_HOOK_QUEUED_PENDING_APPLY => "queued",
+        _ => "not-attempted",
+    }
+}
+
+/// Mark every observer that is still retryable as permanently refused, because the retry budget is
+/// spent. Without this the bounded loop would merely stop RETRYING while the aggregate latch stayed
+/// at `OBSERVER_HOOK_NOT_ATTEMPTED`, and the callers would keep polling forever.
+fn retire_remaining_observer_hooks(hooks: &[ObserverHook], reason: &str) {
+    for hook in hooks {
+        let state = hook.state.load(Ordering::SeqCst);
+        if state == OBSERVER_HOOK_INSTALLED || state == OBSERVER_HOOK_PERMANENTLY_REFUSED {
+            continue;
+        }
+        hook.state
+            .store(OBSERVER_HOOK_PERMANENTLY_REFUSED, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "loading-bar: GIVING UP on the {} observer after {OBSERVER_INSTALL_MAX_PASSES} passes -- {reason}; it will not be retried again in this process",
+            hook.what
+        ));
+    }
+}
+
+/// Latch the aggregate once every observer has reached a terminal state, and say which is which.
+///
+/// The summary line renders all five by name and state, so "four live, one refused" is readable
+/// from the log without inferring it from an absence. It is emitted exactly once, on the pass that
+/// makes the set terminal, because the latch it sets is also the guard at the top of the installer.
+fn latch_observer_terminal_state(hooks: &[ObserverHook], pass: usize) {
+    let mut installed = 0usize;
+    let mut terminal = 0usize;
+    let mut summary = String::new();
+    for hook in hooks {
+        let state = hook.state.load(Ordering::SeqCst);
+        match state {
+            OBSERVER_HOOK_INSTALLED => {
+                installed += 1;
+                terminal += 1;
+            }
+            OBSERVER_HOOK_PERMANENTLY_REFUSED => terminal += 1,
+            _ => {}
+        }
+        let _ = write!(summary, "{}={} ", hook.what, observer_state_word(state));
+    }
+    if terminal != hooks.len() {
         return;
     }
+    NOW_LOADING_HELPER_HOOKS_INSTALLED.store(
+        if installed > 0 {
+            OBSERVER_HOOK_INSTALLED
+        } else {
+            OBSERVER_HOOK_PERMANENTLY_REFUSED
+        },
+        Ordering::SeqCst,
+    );
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: loading-screen observers settled after {pass} pass(es), {installed}/{} live :: {summary}(REFUSED = no verified detour target on this build; the live observers are unaffected); observe-only",
+        hooks.len()
+    ));
+}
+
+/// Install the five loading-screen observer detours, each independently, at most once each.
+///
+/// Safe to call from every caller that wants the observers up -- the gated product tick and the
+/// ungated per-loading-window table build both land here, and the latch that stops the work is in
+/// THIS function, not in either caller.
+pub fn install_now_loading_helper_observer_hooks() {
+    if NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) != OBSERVER_HOOK_NOT_ATTEMPTED {
+        return;
+    }
+    let hooks = observer_hooks();
+    let pass = NOW_LOADING_OBSERVER_PASSES.fetch_add(1, Ordering::SeqCst) + 1;
+    let final_pass = pass >= OBSERVER_INSTALL_MAX_PASSES;
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
             append_autoload_debug(format_args!(
-                "title-cover-part-b: now-loading observer MH_Initialize failed: {status:?}"
+                "title-cover-part-b: now-loading observer MH_Initialize failed: {status:?} (pass {pass}/{OBSERVER_INSTALL_MAX_PASSES})"
             ));
+            if final_pass {
+                retire_remaining_observer_hooks(&hooks, "MH_Initialize never succeeded");
+                latch_observer_terminal_state(&hooks, pass);
+            }
             return;
         }
     }
-    let Ok(ctor) = game_rva(NOW_LOADING_HELPER_CTOR_RVA as u32) else {
-        return;
-    };
-    let Ok(update) = game_rva(NOW_LOADING_HELPER_UPDATE_RVA as u32) else {
-        return;
-    };
-    let loading_update = match game_rva(LOADING_SCREEN_UPDATE_RVA as u32) {
-        Ok(addr) => Some(addr),
-        Err(_) => {
-            append_autoload_debug(format_args!(
-                "loading-bar: failed to resolve CS::LoadingScreen update rva 0x{LOADING_SCREEN_UPDATE_RVA:x}"
-            ));
-            None
+    let mut queued = 0usize;
+    for hook in &hooks {
+        match hook.state.load(Ordering::SeqCst) {
+            // Terminal either way: nothing to do, and re-creating an installed hook is precisely
+            // the self-collision this rewrite exists to remove.
+            OBSERVER_HOOK_INSTALLED | OBSERVER_HOOK_PERMANENTLY_REFUSED => continue,
+            // Created and queued by an earlier pass whose apply failed. MinHook keeps the queue
+            // flag across a failed `MH_ApplyQueued`, so the retry is the apply below.
+            OBSERVER_HOOK_QUEUED_PENDING_APPLY => {
+                queued += 1;
+                continue;
+            }
+            _ => {}
         }
-    };
-    let scaleform_label_goto = match game_rva(SCALEFORM_LABEL_GOTO_RVA as u32) {
-        Ok(addr) => Some(addr),
-        Err(_) => {
-            append_autoload_debug(format_args!(
-                "loading-bar: failed to resolve Scaleform label goto rva 0x{SCALEFORM_LABEL_GOTO_RVA:x}"
-            ));
-            None
-        }
-    };
-    let loading_gfx_fadeout = match game_rva(LOADING_SCREEN_GFX_FADEOUT_RVA as u32) {
-        Ok(addr) => Some(addr),
-        Err(_) => {
-            append_autoload_debug(format_args!(
-                "loading-bar: failed to resolve KnowledgeLoadingScreen GFx FadeOut rva 0x{LOADING_SCREEN_GFX_FADEOUT_RVA:x}"
-            ));
-            None
-        }
-    };
-    let mut ok = true;
-    match unsafe {
-        MhHook::new(
-            ctor as *mut c_void,
-            now_loading_helper_ctor_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            NOW_LOADING_HELPER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            ok &= unsafe { hook.queue_enable() }.is_ok();
-            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-            // address -- so letting the handle go does NOT uninstall the hook.
-        }
-        Err(status) => {
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: now-loading ctor hook failed: {status:?}"
-            ));
-            ok = false;
-        }
-    }
-    match unsafe {
-        MhHook::new(
-            update as *mut c_void,
-            now_loading_helper_update_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            NOW_LOADING_HELPER_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            ok &= unsafe { hook.queue_enable() }.is_ok();
-            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-            // address -- so letting the handle go does NOT uninstall the hook.
-        }
-        Err(status) => {
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: now-loading update hook failed: {status:?}"
-            ));
-            ok = false;
-        }
-    }
-    if let Some(addr) = loading_update {
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                loading_screen_update_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                LOADING_SCREEN_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
+        let rva = hook.rva;
+        // UNRESOLVED, and `MhHook::new` below owns the single 1.16.2 -> 1.17 resolve. This used to
+        // be `game_rva_named`, which resolves too -- and resolving an already-resolved address is
+        // not idempotent on a collision row (a 1.17 destination that is also some other row's
+        // 1.16.2 source), where the second resolve silently returns a third, unrelated function.
+        // Three live detours were measured landing that way on 2026-08-30.
+        //
+        // WHERE THE ADDRESS REFUSAL WENT. It moved down one line, into `MhHook::new`, whose
+        // `Err(status)` arm latches `OBSERVER_HOOK_PERMANENTLY_REFUSED` for exactly the statuses
+        // that are statements about the address rather than about MinHook's own state -- see
+        // `observer_status_is_retryable`. So a build that moved this function is still terminal on
+        // the first pass and still says so; the line naming the address now comes from er-hook.
+        // What is left here is the module-base lookup, which cannot fail per-observer.
+        let address = match game_rva_for_hook(rva) {
+            Ok(address) => address,
+            Err(reason) => {
+                hook.state
+                    .store(OBSERVER_HOOK_PERMANENTLY_REFUSED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "loading-bar: REFUSED the {} observer -- rva 0x{rva:x}: {reason}; the other observers are unaffected and this one will not be retried",
+                    hook.what
+                ));
+                continue;
+            }
+        };
+        match unsafe { MhHook::new(address as *mut c_void, hook.detour) } {
+            Ok(handle) => {
+                hook.orig
+                    .store(handle.trampoline() as usize, Ordering::SeqCst);
+                match unsafe { handle.queue_enable() } {
+                    Ok(()) => {
+                        hook.state
+                            .store(OBSERVER_HOOK_QUEUED_PENDING_APPLY, Ordering::SeqCst);
+                        queued += 1;
+                    }
+                    Err(status) => {
+                        // A queue-enable that fails on a hook MinHook just created is not a
+                        // transient: it means MinHook's own state disagrees with itself, and the
+                        // detour bytes exist but will never be armed.
+                        hook.state
+                            .store(OBSERVER_HOOK_PERMANENTLY_REFUSED, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "loading-bar: {} observer queue_enable failed: {status:?}; the detour was created but is not armed and will not be retried",
+                            hook.what
+                        ));
+                    }
+                }
                 // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
                 // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-                // address -- so letting the handle go does NOT uninstall the hook.
+                // address -- so letting the handle go does NOT uninstall the hook. There is no
+                // `MH_RemoveHook` anywhere in this workspace, so a created detour is permanent;
+                // that is why idempotency has to come from the latch above rather than from
+                // unwinding a partial install.
+            }
+            Err(MH_STATUS::MH_ERROR_ALREADY_CREATED) => {
+                // We already hold this address (our own trampoline is recorded), so the detour is
+                // live and the create is redundant rather than failed -- latch it. With the latch
+                // above this should be unreachable; it stays because the alternative reading of
+                // ALREADY_CREATED matters: if the trampoline is UNSET the address belongs to
+                // somebody else, MinHook binds exactly one detour per address, and ours would
+                // never fire no matter how often it is retried.
+                let owned = hook.orig.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
+                hook.state.store(
+                    if owned {
+                        OBSERVER_HOOK_INSTALLED
+                    } else {
+                        OBSERVER_HOOK_PERMANENTLY_REFUSED
+                    },
+                    Ordering::SeqCst,
+                );
+                append_autoload_debug(format_args!(
+                    "loading-bar: {} observer address 0x{address:x} was already hooked; owned_by_us={owned} -- {}",
+                    hook.what,
+                    if owned {
+                        "latched as installed, not re-created"
+                    } else {
+                        "another owner holds the single MinHook slot, so this observer can never fire; not retried"
+                    }
+                ));
             }
             Err(status) => {
+                let retryable = observer_status_is_retryable(status) && !final_pass;
+                if !retryable {
+                    hook.state
+                        .store(OBSERVER_HOOK_PERMANENTLY_REFUSED, Ordering::SeqCst);
+                }
                 append_autoload_debug(format_args!(
-                    "loading-bar: CS::LoadingScreen update hook failed: {status:?}"
+                    "loading-bar: {} observer hook failed: {status:?} (pass {pass}/{OBSERVER_INSTALL_MAX_PASSES}); {}",
+                    hook.what,
+                    if retryable {
+                        "transient MinHook state, will retry"
+                    } else {
+                        "terminal for this observer; the others are unaffected"
+                    }
                 ));
-                ok = false;
             }
         }
     }
-    if let Some(addr) = scaleform_label_goto {
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                scaleform_label_goto_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                SCALEFORM_LABEL_GOTO_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
-                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-                // address -- so letting the handle go does NOT uninstall the hook.
+    if queued > 0 {
+        match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                for hook in &hooks {
+                    if hook.state.load(Ordering::SeqCst) == OBSERVER_HOOK_QUEUED_PENDING_APPLY {
+                        hook.state.store(OBSERVER_HOOK_INSTALLED, Ordering::SeqCst);
+                    }
+                }
             }
-            Err(status) => {
-                append_autoload_debug(format_args!(
-                    "loading-bar: Scaleform label goto hook failed: {status:?}"
-                ));
-                ok = false;
-            }
+            status => append_autoload_debug(format_args!(
+                "title-cover-part-b: now-loading observer MH_ApplyQueued failed: {status:?} ({queued} queued, pass {pass}/{OBSERVER_INSTALL_MAX_PASSES})"
+            )),
         }
     }
-    if let Some(addr) = loading_gfx_fadeout {
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                loading_screen_gfx_fadeout_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                LOADING_SCREEN_GFX_FADEOUT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                ok &= unsafe { hook.queue_enable() }.is_ok();
-                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-                // address -- so letting the handle go does NOT uninstall the hook.
-            }
-            Err(status) => {
-                append_autoload_debug(format_args!(
-                    "loading-bar: KnowledgeLoadingScreen GFx FadeOut hook failed: {status:?}"
-                ));
-                ok = false;
-            }
-        }
+    if final_pass {
+        retire_remaining_observer_hooks(
+            &hooks,
+            "its install never completed inside the retry budget",
+        );
     }
-    if !ok {
-        return;
-    }
-    match unsafe { MH_ApplyQueued() } {
-        MH_STATUS::MH_OK => {
-            NOW_LOADING_HELPER_HOOKS_INSTALLED.store(1, Ordering::SeqCst);
-            if loading_update.is_some() {
-                LOADING_SCREEN_UPDATE_HOOK_INSTALLED.store(1, Ordering::SeqCst);
-            }
-            if scaleform_label_goto.is_some() || loading_gfx_fadeout.is_some() {
-                LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED.store(1, Ordering::SeqCst);
-            }
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; loading-bar-update={} scaleform-label-goto={} loading-gfx-fadeout={}; observe-only",
-                loading_update.unwrap_or(0),
-                scaleform_label_goto.unwrap_or(0),
-                loading_gfx_fadeout.unwrap_or(0)
-            ));
-        }
-        status => append_autoload_debug(format_args!(
-            "title-cover-part-b: now-loading observer MH_ApplyQueued failed: {status:?}"
-        )),
-    }
+    latch_observer_terminal_state(&hooks, pass);
 }
 
 /// # Safety
@@ -707,7 +895,16 @@ pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
     } else {
         0
     };
-    base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA + idx * core::mem::size_of::<usize>()
+    // `_offset`, not `+`: on a refusal `game_data_addr` answers 0, and `0 + idx * 8` is a
+    // NON-zero address (24 for slot 3) that every caller's `!= 0` guard waves through -- including
+    // the teardown that WRITES a null into `table[slot]`. Adding the index inside the resolver
+    // keeps a refusal answering 0 for every slot.
+    er_game_base::mem::game_data_addr_offset(
+        base,
+        TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA,
+        "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA",
+        idx * core::mem::size_of::<usize>(),
+    )
 }
 
 /// Walk the CSMenuProfModelRend chain for `slot` to its live portrait `CSGxTexture`, or 0 if the
@@ -727,7 +924,13 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
         return 0;
     }
     let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
-    if vt != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    if vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
+    {
         return 0;
     }
     let offscreen = unsafe {
@@ -800,7 +1003,13 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
         return;
     }
     let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
-    if vt != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+    if vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
+    {
         return;
     }
     // NOTE: driving the menu offscreen render (FUN_140bb8d90) post-Continue crashes during world-load

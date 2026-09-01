@@ -97,21 +97,26 @@ pub unsafe extern "system" fn DllMain(
 fn spawn_param_patch_task() {
     write_runtime_log("patch task started");
     let mut attempts = NO_PATCH_ATTEMPTS;
-    let cs_task = loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => break instance,
-            Err(error) => {
-                attempts = attempts.saturating_add(FIRST_PATCH_ATTEMPT);
-                if attempts == FIRST_PATCH_ATTEMPT
-                    || attempts % PATCH_RETRY_LOG_INTERVAL == PATCH_RETRY_REMAINDER
-                {
-                    write_runtime_log(&format!(
-                        "waiting for CSTaskImp attempt={attempts} error={error:?}"
-                    ));
-                }
-                std::thread::yield_now();
+    // BOUNDED (2026-08-29): the unbounded form of this loop starved the wineserver and hung a
+    // whole boot -- see er_game_base::wait. The attempt counter and its throttled log are kept;
+    // what changed is that the wait backs off in user space and ends.
+    let cs_task = er_game_base::wait::poll_until(|| match unsafe { CSTaskImp::instance() } {
+        Ok(instance) => Some(instance),
+        Err(error) => {
+            attempts = attempts.saturating_add(FIRST_PATCH_ATTEMPT);
+            if attempts == FIRST_PATCH_ATTEMPT
+                || attempts % PATCH_RETRY_LOG_INTERVAL == PATCH_RETRY_REMAINDER
+            {
+                write_runtime_log(&format!(
+                    "waiting for CSTaskImp attempt={attempts} error={error:?}"
+                ));
             }
+            None
         }
+    });
+    let Some(cs_task) = cs_task else {
+        write_runtime_log("CSTaskImp never appeared; this shell stays inert rather than spinning");
+        return;
     };
     write_runtime_log(&format!("found CSTaskImp after {attempts} retry attempts"));
 

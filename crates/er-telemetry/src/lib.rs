@@ -287,14 +287,16 @@ pub unsafe extern "system" fn DllMain(
                 .spawn(|| {
                     // Wait for the game's task manager, then register a game-thread
                     // per-frame tick (same pattern as the product's wait_for_task_instance).
-                    let task = loop {
-                        match unsafe { CSTaskImp::instance() } {
-                            Ok(t) => break t,
-                            // No sleep (banned by scripts/check-no-timeouts.py): yield to the
-                            // game threads and re-poll -- the exact wait the product uses in
-                            // wait_for_task_instance (bootstrap.rs).
-                            Err(_) => std::thread::yield_now(),
-                        }
+                    // BOUNDED (2026-08-29). This loop is the one that hung a boot: on 1.17 the
+                    // singleton did not appear, and this thread plus er-invasion-path's twin
+                    // saturated the wineserver -- 19,348 CPU ticks here against the game's 104,
+                    // fifty-nine game threads asleep, no window. er_game_base::wait spins in user
+                    // space between attempts and GIVES UP, so a missing singleton leaves this
+                    // shell inert instead of taking the process with it.
+                    let Some(task) =
+                        er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+                    else {
+                        return;
                     };
                     task.run_recurring(
                         |_data: &FD4TaskData| {

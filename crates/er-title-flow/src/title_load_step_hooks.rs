@@ -20,17 +20,17 @@ unsafe fn title_dialog_sm_state(
         return None;
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
         return None;
     }
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+        unsafe { std::mem::transmute(title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA")?) };
     let in_fadein =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) } != OWN_STEPPER_FALSE;
-    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_FADEIN_RVA, "TITLE_STATE_DESC_FADEIN_RVA")) } != OWN_STEPPER_FALSE;
+    let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) } != OWN_STEPPER_FALSE;
     let latch = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
         .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
         .unwrap_or(0);
@@ -87,13 +87,27 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     {
         return; // lost the one-shot race
     }
+    let Some(set_state_addr) = title_fn(TITLE_FD4_SETSTATE_RVA, "TITLE_FD4_SETSTATE_RVA") else {
+        return;
+    };
     let set_state: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + TITLE_FD4_SETSTATE_RVA) };
+        unsafe { std::mem::transmute(set_state_addr) };
+    // THE ARGUMENT NEEDED RESOLVING TOO. The call target was already gated by `title_fn`, but the
+    // Loop state DESCRIPTOR was passed as a raw `base + RVA` -- and `set_state` dereferences it.
+    // `.rdata` moved on 1.17 like everything else (0x2a8f9e8 -> 0x2a92a68), so the FD4 state
+    // machine was being handed a pointer to whatever now occupies the 1.16.2 slot and told to
+    // transition to whatever it found there. A refusal returns instead: the fade is not skipped,
+    // which is cosmetic, where the wrong descriptor is not.
+    let Some(loop_desc) = er_game_base::game_build::resolve_game_address(
+        base + TITLE_STATE_DESC_LOOP_RVA,
+        "TITLE_STATE_DESC_LOOP_RVA",
+    ) else {
+        return;
+    };
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
+    unsafe { set_state(sm, loop_desc) };
     append_autoload_debug(format_args!(
-        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop) via 0x{:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***",
-        base + TITLE_FD4_SETSTATE_RVA
+        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop desc=0x{loop_desc:x}) via 0x{set_state_addr:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***"
     ));
 }
 
@@ -147,7 +161,11 @@ pub unsafe fn install_title_anim_speed_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "title-anim-speed-hook: INSTALLED on STEP_MenuJobWait 0x{:x} -- one-shot FadeIn->Loop skip armed (zero-input, save-safe)",
-            base + TITLE_MENU_JOB_WAIT_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_MENU_JOB_WAIT_RVA,
+                "TITLE_MENU_JOB_WAIT_RVA"
+            ),
         )),
         status => append_autoload_debug(format_args!(
             "title-anim-speed-hook: MH_ApplyQueued failed: {status:?}"
@@ -266,7 +284,11 @@ pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "movemapstep-step-movemap-gate-hook: INSTALLED on 0x{:x} -- after-original +0x4b8/+0x4c reload hold armed",
-        base + MOVEMAPSTEP_STEP_MOVEMAP_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            MOVEMAPSTEP_STEP_MOVEMAP_RVA,
+            "MOVEMAPSTEP_STEP_MOVEMAP_RVA"
+        ),
     ));
     std::mem::forget(hooks);
 }
@@ -376,7 +398,11 @@ pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "ingamestep-step-movemap-update-defer-hook: INSTALLED on 0x{:x} -- defers d8=2/teardown while MoveMapStep finalize in [1..8] on a committed reload (default, no marker)",
-        base + INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+            "INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA"
+        ),
     ));
     std::mem::forget(hooks);
 }
@@ -504,7 +530,7 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "child-done-query-override-hook: INSTALLED on 0x{:x} -- holds MoveMapStep child (mms+0x108) done->not-done while finalize<9 on a committed reload (prevents premature teardown)",
-        base + CHILD_DONE_QUERY_RVA,
+        er_game_base::mem::game_data_addr(base, CHILD_DONE_QUERY_RVA, "CHILD_DONE_QUERY_RVA"),
     ));
     std::mem::forget(hooks);
 }
@@ -591,7 +617,7 @@ pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "loadlist-init-capture-hook: INSTALLED on 0x{:x} -- logs worldloadlistlistVirtualPath (InGameStep+0x108) per epoch to disambiguate the mms18 stall (empty-loadlist root vs downstream)",
-        base + LOADLIST_INIT_RVA,
+        er_game_base::mem::game_data_addr(base, LOADLIST_INIT_RVA, "LOADLIST_INIT_RVA"),
     ));
     std::mem::forget(hooks);
 }
@@ -630,7 +656,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
             && let Ok(base) = game_module_base() {
                 let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
                     .unwrap_or(0);
-                if table == base + INNER_TITLE_STATE_TABLE_RVA {
+                if table == er_game_base::mem::game_data_addr(base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA") {
                     let previous = TITLE_OWNER_PTR.swap(owner, Ordering::SeqCst);
                     TITLE_OWNER_SCAN_COUNTDOWN
                         .store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
@@ -678,7 +704,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
         };
         let (md5d, md5e) = game_module_base()
             .ok()
-            .and_then(|base| unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) })
+            .and_then(|base| unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) })
             .filter(|&m| m > PAB_MIN_HEAP_PTR)
             .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
             .filter(|&m| m > PAB_MIN_HEAP_PTR)
@@ -748,7 +774,7 @@ pub unsafe fn install_title_setstate_trace_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "title-setstate-trace-hook: INSTALLED on SetState(owner,int) 0x{:x} -- read-only native state-transition timeline armed",
-            base + TITLE_SET_STATE_RVA,
+            er_game_base::mem::game_data_addr(base, TITLE_SET_STATE_RVA, "TITLE_SET_STATE_RVA"),
         )),
         status => append_autoload_debug(format_args!(
             "title-setstate-trace-hook: MH_ApplyQueued failed: {status:?}"

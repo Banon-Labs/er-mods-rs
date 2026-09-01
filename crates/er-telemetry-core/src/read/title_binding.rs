@@ -15,7 +15,7 @@
 //! fault-safe `safe_read_*`; NO vtable function is ever called.
 
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::{safe_read_i32, safe_read_u8, safe_read_usize, vtable_in_game_image};
 
@@ -92,6 +92,9 @@ const PAGE_NOACCESS: u32 = 0x01;
 const PAGE_GUARD: u32 = 0x100;
 
 static CACHED_OWNER: AtomicUsize = AtomicUsize::new(0);
+/// One line per process for a refused needle. The refusal is a permanent property of the build,
+/// so a line per throttle boundary would be the same sentence forever in an append-only file.
+static NEEDLE_REFUSAL_LOGGED: AtomicBool = AtomicBool::new(false);
 static SCAN_COUNTDOWN: AtomicU64 = AtomicU64::new(0);
 
 /// Windows `MEMORY_BASIC_INFORMATION` (x64). Only `base_address`, `region_size`,
@@ -180,8 +183,33 @@ fn scan_chunk(
 /// Bounded, fault-safe full address-space walk for the title owner. Only called on
 /// the throttle boundary while the owner is not yet cached.
 fn scan_for_owner(base: usize) -> Option<usize> {
-    let want_vtable = base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
-    let want_table = base.checked_add(INNER_TITLE_STATE_TABLE_RVA)?;
+    let want_vtable =
+        er_game_base::mem::game_data_addr(base, TITLE_OWNER_VTABLE_RVA, "TITLE_OWNER_VTABLE_RVA");
+    let want_table = er_game_base::mem::game_data_addr(
+        base,
+        INNER_TITLE_STATE_TABLE_RVA,
+        "INNER_TITLE_STATE_TABLE_RVA",
+    );
+    // A refused RVA resolves to 0. As a dereference target that is safe -- the guarded read just
+    // fails -- but as a SEARCH NEEDLE it inverts: `vtable == 0` matches every zeroed qword in the
+    // address space, and the cross-check does not save us because it is built from the same
+    // refusal (`want_table` is 0 too, so `[cand+0x10] == want_table` also passes). The first
+    // zeroed block would be captured, cached, and re-validated forever, and this oracle would
+    // emit fields read out of blank memory. Refuse instead. `dialog_active.rs::dialog_class`
+    // carries the same guard for the same reason.
+    if want_vtable == 0 || want_table == 0 {
+        if !NEEDLE_REFUSAL_LOGGED.swap(true, Ordering::SeqCst) {
+            // Deliberately shaped as a non-sample: `epoch` is null, so the analyzer buckets it
+            // on its own (`analyze-title-binding-stream.py` already sorts a null epoch last) and
+            // none of the `proxy_*` fractions can absorb it. One line, once, per process.
+            super::append_line(
+                OUT_FILE,
+                "{\"epoch\":null,\"owner_ptr\":null,\"scan_refused\":\"needle-rva-unmapped\",\
+\"why\":\"a refused RVA resolves to 0 and 0 as a scan needle matches every zeroed qword\"}\n",
+            );
+        }
+        return None;
+    }
     let mut buf = vec![0u8; SCAN_CHUNK];
     let mut address: usize = 0;
     while address < SCAN_MAX {
@@ -226,7 +254,13 @@ fn scan_for_owner(base: usize) -> Option<usize> {
 fn find_title_owner(base: usize) -> Option<usize> {
     let cached = CACHED_OWNER.load(Ordering::SeqCst);
     if cached != 0 {
-        if unsafe { safe_read_usize(cached) } == Some(base + TITLE_OWNER_VTABLE_RVA) {
+        if unsafe { safe_read_usize(cached) }
+            == Some(er_game_base::mem::game_data_addr(
+                base,
+                TITLE_OWNER_VTABLE_RVA,
+                "TITLE_OWNER_VTABLE_RVA",
+            ))
+        {
             return Some(cached);
         }
         CACHED_OWNER.store(0, Ordering::SeqCst);
@@ -260,8 +294,7 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_DIALOG_E0_OFFSET) }.filter(|p| *p >= HEAP_LO);
     let dialog_vtable = dialog.and_then(|d| unsafe { safe_read_usize(d) });
-    let dialog_vtable_ok =
-        matches!(dialog_vtable, Some(vt) if vt == base + TITLE_TOP_DIALOG_VTABLE_RVA);
+    let dialog_vtable_ok = matches!(dialog_vtable, Some(vt) if vt == er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA"));
     let valid_dialog = if dialog_vtable_ok { dialog } else { None };
 
     // press-start SceneObjProxy window (dialog+0xb78): the deadlock hinges here.
@@ -271,7 +304,7 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
     let proxy_vtable = proxy.and_then(|p| unsafe { safe_read_usize(p) });
     let proxy_vtable_ok = matches!(
         proxy_vtable,
-        Some(vt) if vt == base + SCENE_OBJ_PROXY_VTABLE_RVA && vtable_in_game_image(vt, base)
+        Some(vt) if vt == er_game_base::mem::game_data_addr(base, SCENE_OBJ_PROXY_VTABLE_RVA, "SCENE_OBJ_PROXY_VTABLE_RVA") && vtable_in_game_image(vt, base)
     );
     let proxy_component =
         proxy.and_then(|p| unsafe { safe_read_usize(p + SCENE_OBJ_PROXY_COMPONENT_08_OFFSET) });
@@ -287,8 +320,7 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
         .and_then(|d| unsafe { safe_read_usize(d + DIALOG_TFC_A38_OFFSET) })
         .filter(|p| *p >= HEAP_LO);
     let tfc_vtable = tfc.and_then(|t| unsafe { safe_read_usize(t) });
-    let tfc_vtable_ok =
-        matches!(tfc_vtable, Some(vt) if vt == base + TITLE_FLOW_CONTEXT_VTABLE_RVA);
+    let tfc_vtable_ok = matches!(tfc_vtable, Some(vt) if vt == er_game_base::mem::game_data_addr(base, TITLE_FLOW_CONTEXT_VTABLE_RVA, "TITLE_FLOW_CONTEXT_VTABLE_RVA"));
     let valid_tfc = if tfc_vtable_ok { tfc } else { None };
     let tfc_14c =
         valid_tfc.and_then(|t| unsafe { safe_read_i32(t + TFC_DISPATCH_STATE_14C_OFFSET) });

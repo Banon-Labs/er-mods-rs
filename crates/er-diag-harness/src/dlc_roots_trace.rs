@@ -50,7 +50,7 @@ use std::{
 
 use er_game_base::{
     filecap::dlio_virtual_roots_summary,
-    mem::{game_module_base, game_rva},
+    mem::{game_module_base, game_rva_for_hook},
 };
 use er_hook::{MH_Initialize, MH_STATUS, MhHook};
 
@@ -104,12 +104,50 @@ pub(crate) fn install_dlc_roots_trace() {
         &DLC_ROOTS_REFILL_ORIG,
         "refill",
     );
-    install_one_dlc_roots_hook(
-        DLC_ROOTS_JOB_RVA,
-        dlc_roots_job_trace_hook as *mut c_void,
-        &DLC_ROOTS_JOB_ORIG,
-        "job",
-    );
+    install_shared_dlc_roots_job_hook();
+}
+
+/// Register the JOB-BODY trace (`0x836f30`) on the process's SINGLE MinHook instance.
+///
+/// WHY THIS ONE IS NOT `install_one_dlc_roots_hook`. `er-reload-trace` detours the same prologue
+/// (`HookSpec { name: "map_request_do_836f30", rva: 0x836f30, .. }`, its `lib.rs`), and both shells
+/// are co-loaded by hand-written profiles -- `~/Elden/group-1170.me3` carries `er_quickload`,
+/// `er_diag_harness`, `er_reload_trace` and `er_armament_icons` together. A bare `MhHook` here is a
+/// SECOND MinHook instance on that prologue: each instance is a per-DLL static, so neither can see
+/// the other's `MH_CreateHook`, and the second writes its five-byte JMP over the first's. The loser
+/// reports installed, never fires, and its counter reads 0 forever -- indistinguishable from a
+/// feature that was never enabled. That is the measured 2026-08-23 failure (product +
+/// `er-armament-icons` on `TITLE_SCALEFORM_FILE_OPEN_RVA`), re-created on a different address.
+///
+/// `register_shared_hook` is the repo's answer: it resolves `er_quickload.dll`'s
+/// `er_effects_union_register` export and CHAINS this handler onto the product's one instance,
+/// falling back to this DLL's own union when the product is absent (a standalone
+/// `sweep-er-diag-harness.me3` run is therefore unchanged). Install order stops deciding who runs.
+///
+/// The address is handed over UNTRANSLATED on purpose. `game_rva` resolves 1.16.2 -> the running
+/// build, and so does `register_shared_hook`; passing an already-resolved address would translate
+/// TWICE, and a 1.17 destination can itself be another row's 1.16.2 source (see
+/// `er_hook::register_shared_hook_with_budget`'s own note). So this passes `base + rva` and lets the
+/// registrar own the single resolve -- exactly what `er-reload-trace`'s `install_one` does.
+fn install_shared_dlc_roots_job_hook() {
+    let Ok(base) = game_module_base() else {
+        diag_log!("dlc-roots-trace: failed to resolve module base for the job trace");
+        return;
+    };
+    match unsafe {
+        er_hook::register_shared_hook(
+            base + DLC_ROOTS_JOB_RVA,
+            dlc_roots_job_trace_hook,
+            &DLC_ROOTS_JOB_ORIG,
+        )
+    } {
+        Ok(route) => diag_log!(
+            "dlc-roots-trace: hooked DLC-root job rva 0x{DLC_ROOTS_JOB_RVA:x} via {route:?}"
+        ),
+        Err(status) => diag_log!(
+            "dlc-roots-trace: job register_shared_hook failed: {status:?} -- nothing was written at this address"
+        ),
+    }
 }
 
 /// Shared install body for the two root traces -- same shape, different target.
@@ -119,7 +157,7 @@ fn install_one_dlc_roots_hook(
     orig: &'static AtomicUsize,
     label: &str,
 ) {
-    let Ok(addr) = game_rva(rva as u32) else {
+    let Ok(addr) = game_rva_for_hook(rva as u32) else {
         diag_log!("dlc-roots-trace: failed to resolve {label} rva 0x{rva:x}");
         return;
     };
@@ -178,26 +216,48 @@ pub(crate) unsafe extern "system" fn dlc_roots_blank_trace_hook(csdlc: usize, en
 /// reload that never fires it means the job was never enqueued, and its creator is a dynamically
 /// built `std::function` with no static registration, so no call site can be patched.
 ///
-/// Takes two args because the native is `(this, rdx)` with `rdx` stored at `[rsp+0x10]` on entry.
+/// FOUR ARGUMENTS, AND ALL FOUR ARE FORWARDED -- which is a bug fix, not only a mechanism change.
+///
+/// This used to be declared `(this, arg2) -> usize` and forward `f(this, arg2)`, on the reasoning
+/// that "the native is `(this, rdx)`". The 1.16.2 decompile says otherwise:
+///
+/// ```text
+/// ulonglong FUN_140836f30(longlong p1, ulonglong p2, undefined8 p3, undefined8 p4)
+/// { FUN_14082e230(p2, p2 & 0xff, p1 + 8, p4, 0, 0xfffffffffffffffe); return p2; }
+/// ```
+///
+/// `p4` (`r9`) is a live argument, passed straight through to `FUN_14082e230`. A two-argument
+/// `extern "system"` detour only sets `rcx`/`rdx` before calling the trampoline, so whatever this
+/// function body last left in `r8`/`r9` was handed to the native instead -- silently, on every
+/// call. The four-argument shape carries them verbatim.
+///
+/// It is also exactly [`er_hook::UnionFn`], which is what lets this handler CHAIN rather than own a
+/// second MinHook instance. `er-hook`'s constraint is "<=4 integer/pointer args, no floats", and
+/// this target is four integer args returning an integer -- inside it with nothing to spare.
 ///
 /// # Safety
-/// Called by the game; the trampoline is invoked with the arguments unchanged and its result
-/// returned verbatim.
-pub(crate) unsafe extern "system" fn dlc_roots_job_trace_hook(this: usize, arg2: usize) -> usize {
+/// Called by the game (or by the previous handler in the union chain). `orig` may hold the NEXT
+/// HANDLER rather than the game trampoline, so it is called through the same four-argument
+/// signature -- never through the native's narrower one -- and its result is returned verbatim.
+pub(crate) unsafe extern "system" fn dlc_roots_job_trace_hook(
+    this: usize,
+    arg2: usize,
+    arg3: usize,
+    arg4: usize,
+) -> usize {
     let n = DLC_ROOTS_JOB_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
     let roots = match game_module_base().ok().filter(|&b| b != 0) {
         Some(b) => unsafe { dlio_virtual_roots_summary(b) },
         None => String::from("<nobase>"),
     };
     diag_log!(
-        "dlc-roots-JOB #{n}: this=0x{this:x} arg2=0x{arg2:x} refills_so_far={} roots=[{roots}]",
+        "dlc-roots-JOB #{n}: this=0x{this:x} arg2=0x{arg2:x} arg3=0x{arg3:x} arg4=0x{arg4:x} refills_so_far={} roots=[{roots}]",
         DLC_ROOTS_REFILL_CALLS.load(Ordering::SeqCst)
     );
     let orig = DLC_ROOTS_JOB_ORIG.load(Ordering::SeqCst);
     if orig != HOOK_ORIGINAL_UNSET {
-        let f: unsafe extern "system" fn(usize, usize) -> usize =
-            unsafe { core::mem::transmute(orig) };
-        return unsafe { f(this, arg2) };
+        let f: er_hook::UnionFn = unsafe { core::mem::transmute(orig) };
+        return unsafe { f(this, arg2, arg3, arg4) };
     }
     0
 }

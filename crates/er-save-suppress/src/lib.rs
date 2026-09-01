@@ -117,6 +117,14 @@
 //! "saving..." MenuJob reads `0` and reports Success, and the autosave spinner retires
 //! within one `CSFeManImp::Update`. No field is forged and no state is poked.
 
+// Windows-only items are dead code on the host, and the workspace denies warnings -- so
+// `cargo test -p er-save-suppress` did not COMPILE here and every `#[cfg(test)]` test in this
+// crate had never once run, including the pure classifiers that exist SO THAT the device logic
+// can be checked with no game attached. Scoped to non-Windows, so the shipping build keeps full
+// strictness; an inner attribute rather than per-item gates because one unused constant
+// (`QUIT_PHASE_SETTLE_SIG`) lives in a GENERATED file that cannot carry a `cfg`.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(windows)]
@@ -128,10 +136,13 @@ use er_game_base::mem::{game_rva, read_bytes};
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn, register_union_hook};
 
 // ============================================================================
-// HOST-DLL SEAMS. The core has no log file and no telemetry file of its own; the one
-// DLL that links it installs both sinks before `install`. Same fn-pointer-in-atomic
+// HOST-DLL SEAMS. The core has no log file, no telemetry file and no clock of its own;
+// the one DLL that links it installs the sinks before `install`. Same fn-pointer-in-atomic
 // pattern as `er_hook::set_hook_logger`. Uninstalled sinks are silent no-ops so the
 // pure decision logic stays host-testable with no wiring.
+//
+// A fourth seam, the CLOCK, lives in `save_wedge_birth.rs` beside its only consumer; a
+// fifth, the caller-RVA stack walk, in `save_state_witness.rs` beside its.
 // ============================================================================
 
 /// Signature of the human-log sink: receives `format_args!` output, one line per call.
@@ -327,54 +338,6 @@ impl SlRequestSlot {
     }
 }
 
-/// No decline has been classified yet.
-pub const SL_BAIL_UNSAMPLED: usize = 0;
-/// The device pointer or its fields could not be read; the sample proves nothing.
-pub const SL_BAIL_IODEV_UNREADABLE: usize = 1;
-/// `iodev+0x10` still holds an `SLSaveContent`: a previous SAVE request was never released.
-pub const SL_BAIL_SAVE_CONTENT_LATCHED: usize = 2;
-/// `iodev+0x20` holds a job and `iodev+0x18` holds load content: a completed LOAD was never
-/// consumed, and it is occupying the shared job slot the save needs.
-pub const SL_BAIL_LOAD_JOB_LATCHED: usize = 3;
-/// `iodev+0x20` holds a job with no content on either side -- an orphaned job.
-pub const SL_BAIL_JOB_LATCHED: usize = 4;
-/// Both guard operands are populated.
-pub const SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED: usize = 5;
-/// The precondition HOLDS, so the builder got past its guard: the refusal is the
-/// NetworkHeap `SLSaveContent` allocation, or the lane bailed before calling the builder.
-pub const SL_BAIL_PRECONDITION_CLEAR: usize = 6;
-
-/// Name the reason code produced by [`classify_sl_bail`].
-pub fn sl_bail_reason_label(code: usize) -> &'static str {
-    match code {
-        SL_BAIL_IODEV_UNREADABLE => "iodev-unreadable",
-        SL_BAIL_SAVE_CONTENT_LATCHED => "save-content-latched-0x10",
-        SL_BAIL_LOAD_JOB_LATCHED => "load-job-latched-0x18+0x20",
-        SL_BAIL_JOB_LATCHED => "orphan-job-latched-0x20",
-        SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED => "save-content-and-job-latched-0x10+0x20",
-        SL_BAIL_PRECONDITION_CLEAR => "precondition-clear-builder-alloc-refused",
-        _ => "unsampled",
-    }
-}
-
-/// Say WHICH operand of the submit builders' precondition failed, from one slot sample.
-///
-/// Pure and total so the mapping is unit-testable on the host with no game attached: the
-/// whole point of the instrument is that a single decline names the culprit, and a
-/// classifier that is only exercised at runtime cannot be trusted to do that.
-pub fn classify_sl_bail(slot: Option<SlRequestSlot>) -> usize {
-    let Some(slot) = slot else {
-        return SL_BAIL_IODEV_UNREADABLE;
-    };
-    match (slot.save_content != 0, slot.job != 0) {
-        (true, true) => SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED,
-        (true, false) => SL_BAIL_SAVE_CONTENT_LATCHED,
-        (false, true) if slot.load_content != 0 => SL_BAIL_LOAD_JOB_LATCHED,
-        (false, true) => SL_BAIL_JOB_LATCHED,
-        (false, false) => SL_BAIL_PRECONDITION_CLEAR,
-    }
-}
-
 /// Render a slot sample for a log line: every guard operand, by name, with its value.
 ///
 /// The values matter as much as the verdict. "The precondition failed" is a conclusion; a
@@ -495,7 +458,8 @@ impl SlotSampleCell {
     }
 }
 
-/// The slot as it stood when the lane last DECLINED -- the sample that names the culprit.
+/// The slot as it stood when the lane last DECLINED -- the sample that names the culprit, but only
+/// once [`dispatch_refusal_is_the_mutex`] has said the builder was reached at all.
 static DECLINE_SLOT: SlotSampleCell = SlotSampleCell::new();
 /// The slot as it stood immediately BEFORE the last swallow's `FUN_140e6f200` call.
 static SWALLOW_SLOT_BEFORE: SlotSampleCell = SlotSampleCell::new();
@@ -721,6 +685,14 @@ pub fn load_consumer_slot_before() -> Option<SlRequestSlot> {
 pub fn load_consumer_slot_after() -> Option<SlRequestSlot> {
     LOAD_CONSUMER_SLOT_AFTER.snapshot()
 }
+
+include!("save_bail_classifier.rs");
+include!("save_orphan_drain.rs");
+include!("save_state_device.rs");
+include!("save_state_witness.rs");
+include!("save_wedge_birth.rs");
+include!("save_state_writers.rs");
+include!("save_submit_latch.rs");
 
 // ============================================================================
 // SAVE-DISPATCH OBSERVERS. Pure observation of the three native save-dispatch lanes and
@@ -1191,7 +1163,7 @@ pub fn settle_observer_installed() -> bool {
 }
 
 /// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
-pub fn counters() -> [(&'static str, u64); 36] {
+pub fn counters() -> [(&'static str, u64); 44] {
     [
         (
             "suppress_submits_swallowed",
@@ -1350,6 +1322,46 @@ pub fn counters() -> [(&'static str, u64); 36] {
         (
             "save_write_branch_no_trampoline",
             WRITE_BRANCH_NO_TRAMPOLINE.load(Ordering::SeqCst),
+        ),
+        // THE FORGOTTEN SAVE REQUEST. `detections` counts the state in which saving is dead
+        // for the rest of the process; `released` counts the times the game's own poll brought
+        // it back. detections > 0 with released == 0 is a run that LOST the save system.
+        (
+            "save_orphan_detections",
+            SAVE_ORPHAN_DETECTIONS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_orphan_drains",
+            SAVE_ORPHAN_DRAINS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_orphan_released",
+            SAVE_ORPHAN_RELEASED_COUNT.load(Ordering::SeqCst),
+        ),
+        (
+            "save_orphan_still_latched",
+            SAVE_ORPHAN_STILL_LATCHED_COUNT.load(Ordering::SeqCst),
+        ),
+        (
+            "save_orphan_shared_device_skips",
+            SAVE_ORPHAN_SHARED_DEVICE_SKIPS.load(Ordering::SeqCst),
+        ),
+        (
+            "save_orphan_poll_unavailable",
+            SAVE_ORPHAN_POLL_UNAVAILABLE_COUNT.load(Ordering::SeqCst),
+        ),
+        // THE LOAD LANE'S HALF OF THE SAME SHARED DEVICE. `refusals` counts the times a load
+        // submit was about to be offered a device that would have refused it -- the state that
+        // arms an unsatisfiable drain -- and `repairs` counts the times the game's own poll
+        // opened it again. refusals > 0 with repairs == 0 is a load the device blocked and
+        // nothing could unblock.
+        (
+            "load_gate_refusals",
+            LOAD_GATE_REFUSALS.load(Ordering::SeqCst),
+        ),
+        (
+            "load_gate_repairs",
+            LOAD_GATE_REPAIRS.load(Ordering::SeqCst),
         ),
     ]
 }
@@ -1514,7 +1526,8 @@ pub fn swallow_slot_after() -> Option<SlRequestSlot> {
 }
 
 /// Reason code (`SL_BAIL_*`) for the most recent dispatch decline. Pair it with
-/// [`sl_bail_reason_label`] for the name.
+/// [`sl_bail_reason_label`] for the name. Read [`decline_save_state`] FIRST: this code only names
+/// the cause when the refusing `saveState` was IDLE.
 pub fn decline_bail_reason() -> usize {
     DECLINE_BAIL_REASON.load(Ordering::SeqCst)
 }
@@ -1537,12 +1550,18 @@ fn decide_status(raw: u32, armed: bool, swallowed: u64) -> u32 {
     }
 }
 
-/// True when `actual` starts with `expected`.
+/// True when `actual` starts with `expected` at every byte `mask` marks compared.
 ///
-/// Kept separate from the hooking code for the same reason: an address guard that is
-/// itself unverified would be decoration.
-fn prologue_matches(actual: &[u8], expected: &[u8]) -> bool {
-    actual.len() >= expected.len() && &actual[..expected.len()] == expected
+/// Delegates to [`er_game_base::prologue::matches_masked`] -- the rule about which operand bytes
+/// a game patch is allowed to re-encode has one implementation, shared with the other crate that
+/// byte-checks generated prologues. `QUIT_PHASE_SETTLE_SIG` is why: it opens with
+/// `mov rax,[rip+disp32]`, that displacement re-encoded on 1.17 at a correctly translated
+/// address, and the gate disarmed a hook whose function had not changed at all.
+///
+/// Kept as a named function for the same reason it always was: an address guard that is itself
+/// unverified would be decoration, and this one has unit tests.
+fn prologue_matches(actual: &[u8], expected: &[u8], mask: &[u8]) -> bool {
+    er_game_base::prologue::matches_masked(actual, expected, mask)
 }
 
 /// Whether occurrence `count` of a repeating event earns a log line.
@@ -1582,8 +1601,10 @@ fn note_opcode(opcode: u32) -> bool {
     SEEN_OPCODES.fetch_or(bit, Ordering::SeqCst) & bit == 0
 }
 
+/// `mask` is the generated companion of `expected` (`<NAME>_MASK`): 0xff = compare, 0x00 = a
+/// RIP-relative displacement, which re-encodes on every build and therefore proves nothing.
 #[cfg(windows)]
-fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
+fn verify(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize> {
     let address = match game_rva(rva as u32) {
         Ok(address) => address,
         Err(err) => {
@@ -1600,9 +1621,12 @@ fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
         PROLOGUE_MISMATCHES.fetch_add(1, Ordering::SeqCst);
         return None;
     }
-    if !prologue_matches(window, expected) {
+    if !prologue_matches(window, expected, mask) {
+        let ignored = er_game_base::prologue::ignored_count(mask);
+        let differing = er_game_base::prologue::compared_mismatches(window, expected, mask);
         log_message(format_args!(
-            "suppress: {name} @0x{address:x}: prologue mismatch (got {:02x?}, want {:02x?}) \
+            "suppress: {name} @0x{address:x}: prologue mismatch in {differing} compared byte(s) \
+             ({ignored} relocation byte(s) ignored) (got {:02x?}, want {:02x?}) \
              -- refusing to hook; this build is not the 1.16.2 image these addresses were \
              verified against",
             window, expected
@@ -1611,6 +1635,33 @@ fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
         return None;
     }
     Some(address)
+}
+
+/// [`verify`] for an address about to be DETOURED: same prologue verification, but what comes back
+/// is the UNRESOLVED `base + rva`.
+///
+/// # Why this is not just [`verify`]
+///
+/// Most callers of [`verify`] `transmute` the result into a function pointer and CALL it, and a
+/// call needs the resolved address. A detour does not: `er_hook::MhHook::new` and
+/// `register_union_hook` resolve what they are handed, and they must be the ONE resolve that
+/// decides where MinHook writes.
+///
+/// Resolving the same 1.16.2 input twice is harmless -- that is what happens here, once to read the
+/// prologue and once inside the hook API, both landing on the same address. Resolving the OUTPUT is
+/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 SOURCE of another
+/// (a region shift equal to the local function spacing, `B - A == C - B`), and the second resolve
+/// then silently returns a third, unrelated function -- three live detours were measured doing
+/// exactly that on 2026-08-30. `scripts/check-double-resolved-hook-targets.py` gates the shape.
+///
+/// Note the two also consult DIFFERENT tables: [`verify`] resolves through the CALL map, while the
+/// hook API resolves through the detour-audited one. A row good enough to call that has not been
+/// audited as a detour target is now REFUSED by the hook API with a log line, instead of being
+/// waved through by the already-translated shortcut.
+#[cfg(windows)]
+fn verify_for_hook(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize> {
+    verify(rva, expected, mask, name)?;
+    er_game_base::mem::game_rva_for_hook(rva as u32).ok()
 }
 
 /// Install the suppression detours. Returns the number bound.
@@ -1626,6 +1677,10 @@ fn verify(rva: usize, expected: &[u8], name: &str) -> Option<usize> {
 /// partial install is worse than none, so a failure of either backs the whole thing out.
 #[cfg(windows)]
 pub fn install(disarm_for_census: bool) -> usize {
+    // One sink for this DLL's hook + address lines, installed here rather than in a DllMain
+    // because a host calls this. Without it a refused address is silent HERE: every cdylib links
+    // its own copy of er-hook/er-game-base, so the logger is a per-DLL static.
+    er_hook::set_hook_logger(log_message);
     if disarm_for_census {
         log_message(format_args!(
             "suppress: DISARMED by caller -- census-only positive-control run; saves will \
@@ -1645,6 +1700,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     let Some(enqueue) = verify(
         SL_ENQUEUE_SAVE_JOB_RVA,
         SL_ENQUEUE_SAVE_JOB_SIG,
+        SL_ENQUEUE_SAVE_JOB_SIG_MASK,
         "SL_EnqueueSaveJob",
     ) else {
         return 0;
@@ -1652,6 +1708,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     let Some(poll) = verify(
         SL_POLL_SAVE_STATUS_RVA,
         SL_POLL_SAVE_STATUS_SIG,
+        SL_POLL_SAVE_STATUS_SIG_MASK,
         "SL_PollSaveStatus",
     ) else {
         return 0;
@@ -1659,11 +1716,17 @@ pub fn install(disarm_for_census: bool) -> usize {
     let Some(release) = verify(
         SL_RELEASE_REQUEST_RVA,
         SL_RELEASE_REQUEST_SIG,
+        SL_RELEASE_REQUEST_SIG_MASK,
         "SL_ReleaseRequest",
     ) else {
         return 0;
     };
     SL_RELEASE_REQUEST.store(release, Ordering::SeqCst);
+    // The forgotten-save-request drain calls this address when nothing has detoured it, and
+    // the trampoline when something has. Stored from the SAME prologue-verified resolution
+    // the suppressor uses, so the repair can never be pointed at a different function than
+    // the one the signature proved.
+    SL_POLL_SAVE_STATUS_ADDR.store(poll, Ordering::SeqCst);
 
     // The quit-settle observer. Not a suppressor -- it calls the original and only
     // counts. It exists because sampling GameMan+0xbc4 provably cannot see the 2 -> 3
@@ -1671,6 +1734,7 @@ pub fn install(disarm_for_census: bool) -> usize {
     let settle = verify(
         QUIT_PHASE_SETTLE_RVA,
         QUIT_PHASE_SETTLE_SIG,
+        QUIT_PHASE_SETTLE_SIG_MASK,
         "QuitPhaseSettle",
     );
 
@@ -1737,6 +1801,12 @@ pub fn install(disarm_for_census: bool) -> usize {
     // suppressor batch, where an `MhHook::new` failure on it returned 0 and disarmed
     // everything -- the opposite of what its own comment promised.)
     install_observers(settle);
+    // Also on the ARMED path, and not only in `install_observers_only`: that function early-returns
+    // when `is_armed()`, so a run that arms suppression first would otherwise have no witness at all
+    // -- exactly the configuration in which an abandoned save is hardest to attribute.
+    install_save_state_witness();
+    install_save_state_writers();
+    install_save_submit_latch();
     SUPPRESSOR_HOOKS
 }
 
@@ -1759,6 +1829,11 @@ pub fn install(disarm_for_census: bool) -> usize {
 /// Binds no suppressor, never sets `ARMED`, and returns the observer count so a caller can log it.
 /// `MH_Initialize` is idempotent (`MH_ERROR_ALREADY_INITIALIZED` is accepted), so this composes with
 /// any other MinHook user in the process.
+///
+/// `#[cfg(windows)]` like [`install`] beside it: without the gate this referenced MinHook and the
+/// prologue constants unconditionally, which is what stopped the crate compiling for `cargo test`.
+/// Its one caller is the Windows DLL bootstrap.
+#[cfg(windows)]
 pub fn install_observers_only() -> usize {
     if is_armed() {
         // `install` already bound them; re-binding the same prologues would double-detour.
@@ -1779,16 +1854,38 @@ pub fn install_observers_only() -> usize {
     if let Some(release) = verify(
         SL_RELEASE_REQUEST_RVA,
         SL_RELEASE_REQUEST_SIG,
+        SL_RELEASE_REQUEST_SIG_MASK,
         "SL_ReleaseRequest",
     ) {
         SL_RELEASE_REQUEST.store(release, Ordering::SeqCst);
     }
+    // Observers-only is the PRODUCT configuration, so this is the resolution that matters:
+    // without it `save_orphan_poll_unavailable` climbs and a forgotten save request stays
+    // forgotten. Nothing detours `FUN_140e6e430` on this path, so the address is called
+    // directly.
+    if let Some(poll) = verify(
+        SL_POLL_SAVE_STATUS_RVA,
+        SL_POLL_SAVE_STATUS_SIG,
+        SL_POLL_SAVE_STATUS_SIG_MASK,
+        "SL_PollSaveStatus",
+    ) {
+        SL_POLL_SAVE_STATUS_ADDR.store(poll, Ordering::SeqCst);
+    }
     let settle = verify(
         QUIT_PHASE_SETTLE_RVA,
         QUIT_PHASE_SETTLE_SIG,
+        QUIT_PHASE_SETTLE_SIG_MASK,
         "QuitPhaseSettle",
     );
     install_observers(settle);
+    // Default-on in the PRODUCT configuration, because that is the only one that can be running
+    // when a save is abandoned. It forwards every call unchanged and writes no game memory; the
+    // cost is two device samples per wrapper call, and the stack walk happens only on a finding.
+    install_save_state_witness();
+    install_save_state_writers();
+    // The vantage point the writer witnesses cannot reach: which SUBMIT latched the device, and
+    // whether its lane accepted. Observer-only and non-fatal, like the two above.
+    install_save_submit_latch();
     dispatch_observers_installed()
 }
 
@@ -1859,11 +1956,12 @@ fn install_observers(settle: Option<usize>) {
     // contract that exists for this. `FUN_14067dc00` currently has no other registrant;
     // going through the union anyway costs nothing and makes a future one safe.
     let mut dispatch_bound = 0_usize;
-    for (name, rva, sig, handler, orig_slot) in [
+    for (name, rva, sig, mask, handler, orig_slot) in [
         (
             "SaveDispatchCombined",
             SAVE_DISPATCH_COMBINED_RVA,
             SAVE_DISPATCH_COMBINED_SIG,
+            SAVE_DISPATCH_COMBINED_SIG_MASK,
             save_dispatch_combined_hook as UnionFn,
             &ORIG_SAVE_DISPATCH_COMBINED,
         ),
@@ -1871,6 +1969,7 @@ fn install_observers(settle: Option<usize>) {
             "SaveDispatchChar",
             SAVE_DISPATCH_CHAR_RVA,
             SAVE_DISPATCH_CHAR_SIG,
+            SAVE_DISPATCH_CHAR_SIG_MASK,
             save_dispatch_char_hook as UnionFn,
             &ORIG_SAVE_DISPATCH_CHAR,
         ),
@@ -1878,6 +1977,7 @@ fn install_observers(settle: Option<usize>) {
             "SaveDispatchSystem",
             SAVE_DISPATCH_SYSTEM_RVA,
             SAVE_DISPATCH_SYSTEM_SIG,
+            SAVE_DISPATCH_SYSTEM_SIG_MASK,
             save_dispatch_system_hook as UnionFn,
             &ORIG_SAVE_DISPATCH_SYSTEM,
         ),
@@ -1885,11 +1985,12 @@ fn install_observers(settle: Option<usize>) {
             "SaveSerializeChar",
             SAVE_SERIALIZE_CHAR_RVA,
             SAVE_SERIALIZE_CHAR_SIG,
+            SAVE_SERIALIZE_CHAR_SIG_MASK,
             save_serialize_char_hook as UnionFn,
             &ORIG_SAVE_SERIALIZE_CHAR,
         ),
     ] {
-        let Some(address) = verify(rva, sig, name) else {
+        let Some(address) = verify_for_hook(rva, sig, mask, name) else {
             continue;
         };
         match unsafe { register_union_hook(address, handler, orig_slot) } {
@@ -2219,7 +2320,15 @@ unsafe fn observe_dispatch(
         return 0;
     }
     let original: UnionFn = unsafe { core::mem::transmute(orig) };
+    // Taken on the way IN, because a latch is closed by the lane call that produced it: if
+    // `SUBMIT_LATCHES` moves across this call, the submit the builder observers just recorded is
+    // THIS lane's, and its return plus the `saveState` it leaves behind are the accept. See
+    // `save_submit_latch.rs`; no extra hook and no extra read on the frames where nothing latched.
+    let latches_before = submit_latches();
     let ret = unsafe { original(a, b, c, d) };
+    if submit_latches() != latches_before {
+        note_lane_closed_latch(lane, ret);
+    }
     let calls = DISPATCH_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
     DISPATCH_LAST_LANE.store(lane, Ordering::SeqCst);
     if ret & 0xff != 0 {
@@ -2233,8 +2342,15 @@ unsafe fn observe_dispatch(
     // can have failed. One decline therefore names the culprit outright.
     let slot = read_sl_slot();
     store_slot_sample(slot, &DECLINE_SLOT);
+    let refusing_state = read_save_state();
+    DECLINE_SAVE_STATE.store(refusing_state.unwrap_or(u32::MAX), Ordering::SeqCst);
     let reason = classify_sl_bail(slot);
     DECLINE_BAIL_REASON.store(reason, Ordering::SeqCst);
+    // FIRST occurrence, not last -- see the BIRTH OF THE WEDGE block on the statics. Same sample,
+    // no extra read, no extra hook.
+    if dispatch_sample_is_wedged(slot, refusing_state) {
+        note_wedged_dispatch(slot, lane, calls);
+    }
     if bypass_pending() {
         DISPATCH_DECLINES_WITH_BYPASS.fetch_add(1, Ordering::SeqCst);
         if BYPASS_DECLINE_REPORTED.swap(1, Ordering::SeqCst) == 0 {
@@ -2257,48 +2373,29 @@ unsafe fn observe_dispatch(
     } else if should_report(declines, false) {
         log_message(format_args!(
             "suppress: save dispatch lane {lane} declined (#{declines} of {calls} entries) -- \
-             request flags stay latched, no submit built. SL request slot: {}",
+             request flags stay latched, no submit built. {}. SL request slot: {}",
+            match refusing_state {
+                Some(state) if dispatch_refusal_is_the_mutex(Some(state)) => format!(
+                    "REFUSED BY THE MUTEX: GameMan.saveState is {state}, so the lane returned \
+                     before `FUN_140e6ef60` and the device fields below did not cause this"
+                ),
+                Some(_) => "saveState is IDLE, so the lane DID reach `FUN_140e6ef60` and the \
+                            device fields below are what refused it"
+                    .to_owned(),
+                None => "saveState unreadable, so it is unknown whether the builder was reached"
+                    .to_owned(),
+            },
             describe_slot(slot)
         ));
     }
+    // THE ONE PLACE THIS CRATE CHANGES ANYTHING, and it changes it by asking the GAME to.
+    // A decline is the only moment a forgotten save request can be observed from inside the
+    // process AND still be worth repairing: the request that was just refused is still
+    // latched in `GameMan+0xb72`/`+0xb73`, so the dispatcher re-enters this lane next frame
+    // and the user's save is built one frame late instead of never. See the ORPHANED SAVE
+    // REQUEST block for why the poll is safe to run here and what it refuses to touch.
+    drain_orphaned_save_request("save dispatch decline");
     ret
-}
-
-/// Turn a `SL_BAIL_*` code into the sentence that says what to do about it.
-///
-/// Kept beside the classifier rather than in the caller so the decline log line and the
-/// telemetry oracle can never drift apart on what a code means.
-pub fn bail_verdict(reason: usize) -> &'static str {
-    match reason {
-        SL_BAIL_IODEV_UNREADABLE => {
-            "the SL device could not be read, so this decline attributes nothing -- check \
-             slot_read_failures before believing any iodev oracle in this run"
-        }
-        SL_BAIL_SAVE_CONTENT_LATCHED | SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED => {
-            "a previous SAVE request is still latched at iodev+0x10. Only FUN_140e6f200 \
-             clears it, so either a swallow's release did not run (check \
-             swallow_release_left_dirty and release_unavailable) or a builder took the \
-             iodev+0x28 DEFERRED branch, which returns success without ever calling \
-             FUN_140e6fb50 and leaves +0x10 populated for FUN_140e6f370 to replay"
-        }
-        SL_BAIL_LOAD_JOB_LATCHED => {
-            "a completed LOAD is still occupying the shared job slot. FUN_140e6e080 case \
-             0x14 deliberately does not release on success; the consumer FUN_14067b100 -> \
-             FUN_140e6e380 -> FUN_140e6f200 does. This is NOT the swallow's doing -- the \
-             load was never consumed, so every save is blocked by the load's job"
-        }
-        SL_BAIL_JOB_LATCHED => {
-            "a job is latched at iodev+0x20 with no content on either side -- an enqueue \
-             whose poll never reached a terminal case, so nothing ever called \
-             FUN_140e6f200"
-        }
-        SL_BAIL_PRECONDITION_CLEAR => {
-            "the precondition HOLDS, so the builder passed its guard: the refusal is the \
-             NetworkHeap HeapAlloc(0x298)/SLSaveContent construction, or the lane bailed \
-             before reaching the builder at all"
-        }
-        _ => "no decline has been classified yet",
-    }
 }
 
 /// Observer on `FUN_14067dc00`, the character serializer.
@@ -2362,22 +2459,6 @@ fn read_serialize_bytes() -> Option<usize> {
         return None;
     }
     unsafe { safe_read_usize(addr) }
-}
-
-/// Read `GameMan+0xb80` (`saveState`), or `None` when it is not reachable.
-#[cfg(windows)]
-fn read_save_state() -> Option<u32> {
-    use er_game_base::{mem::safe_read_usize, rva::GAME_MAN_SINGLETON_RVA};
-
-    const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
-
-    let base = er_game_base::mem::game_module_base().ok()?;
-    let game_man = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }?;
-    if game_man < 0x10000 {
-        return None;
-    }
-    let raw = unsafe { safe_read_usize(game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) }?;
-    Some((raw & 0xffff_ffff) as u32)
 }
 
 /// Observer on `FUN_14067a980`, the sole performer of the `bc4` 2 -> 3 transition.
@@ -2455,7 +2536,13 @@ fn read_quit_phase() -> Option<usize> {
     const GAME_MAN_QUIT_PHASE_BC4_OFFSET: usize = 0xbc4;
 
     let base = er_game_base::mem::game_module_base().ok()?;
-    let game_man = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }?;
+    let game_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }?;
     if game_man < 0x10000 {
         return None;
     }
@@ -2559,19 +2646,51 @@ mod tests {
         assert_eq!(adopt_completed_save_job_as_final_status(), None);
     }
 
+    /// Every byte compared -- the mask every prologue with no RIP-relative operand gets.
+    // Not a prologue: a comparison MASK, not machine code. 0xff means "this byte must match";
+    // it is never assembled, written, or byte-checked against the game.
+    const EXACT_3: &[u8] = &[0xff, 0xff, 0xff];
+
     #[test]
     fn prologue_guard_accepts_exact_and_longer_reads() {
-        assert!(prologue_matches(&[0x40, 0x53, 0x56], &[0x40, 0x53, 0x56]));
+        assert!(prologue_matches(
+            &[0x40, 0x53, 0x56],
+            &[0x40, 0x53, 0x56],
+            EXACT_3
+        ));
         assert!(prologue_matches(
             &[0x40, 0x53, 0x56, 0x57],
-            &[0x40, 0x53, 0x56]
+            &[0x40, 0x53, 0x56],
+            EXACT_3
         ));
     }
 
     #[test]
     fn prologue_guard_rejects_drift_and_short_reads() {
-        assert!(!prologue_matches(&[0x40, 0x53, 0x99], &[0x40, 0x53, 0x56]));
-        assert!(!prologue_matches(&[0x40, 0x53], &[0x40, 0x53, 0x56]));
+        assert!(!prologue_matches(
+            &[0x40, 0x53, 0x99],
+            &[0x40, 0x53, 0x56],
+            EXACT_3
+        ));
+        assert!(!prologue_matches(
+            &[0x40, 0x53],
+            &[0x40, 0x53, 0x56],
+            EXACT_3
+        ));
+    }
+
+    /// `QUIT_PHASE_SETTLE_SIG` is the reason the mask exists: its opening
+    /// `mov rax,[rip+disp32]` re-encoded on 1.17 at a correctly translated address, and the
+    /// unmasked gate refused a function that had not changed. Masking the displacement accepts
+    /// it; mutating the opcode still refuses.
+    #[test]
+    fn prologue_guard_accepts_a_relocated_rip_displacement_but_not_a_new_opcode() {
+        let want = &[0x48, 0x8b, 0x05, 0x91, 0xef, 0x6e, 0x03, 0xc3];
+        let mask = &[0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff];
+        let relocated = &[0x48, 0x8b, 0x05, 0xb1, 0x21, 0x6f, 0x03, 0xc3];
+        assert!(prologue_matches(relocated, want, mask));
+        let other_instruction = &[0x48, 0x8d, 0x05, 0xb1, 0x21, 0x6f, 0x03, 0xc3];
+        assert!(!prologue_matches(other_instruction, want, mask));
     }
 
     #[test]

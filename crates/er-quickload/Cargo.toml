@@ -61,6 +61,9 @@ erpx-rs = { path = "../erpx-rs", default-features = false }
 # Backend-neutral loading-bar labels/font/raster primitives. Runtime adapters in this crate still own
 # Elden Ring semaphores, D3D12 swapchains, and ME3/product integration.
 er-loading-bar-core = { path = "../er-loading-bar-core" }
+# Boot-cover screenshot background: discovery + WIC decode + the aspect-cover/vignette pixel passes.
+# The product keeps only the once-per-process cache and the answer to "where do I look".
+er-boot-background = { path = "../er-boot-background" }
 # Loading-screen portrait + stats feature (path B capture pipeline + compositors + native
 # overlay host), extracted in the portrait crate split. The product keeps bundling it;
 # product state crosses the seam via `er_loading_portrait_core::install_host` in bootstrap.rs.
@@ -70,6 +73,9 @@ er-loading-portrait-core = { path = "../er-loading-portrait-core" }
 # re-read), extracted from four files of this crate. Product state crosses the seam via
 # `er_profile_summary_core::host::install_host` in bootstrap.rs.
 er-profile-summary-core = { path = "../er-profile-summary-core" }
+# The release fade's D3D12 half: the cover's command objects plus the alpha-blended full-screen
+# frame. This crate still decides when the fade runs, at what alpha, and what the frame contains.
+er-cover-fade = { path = "../er-cover-fade" }
 er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"

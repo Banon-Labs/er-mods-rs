@@ -46,10 +46,185 @@ pub(crate) fn deliberate_fail_fast_enabled() -> bool {
     false
 }
 
+/// One-line file naming HOW the run ended, written beside the game executable.
+///
+/// It exists because "the process is gone" is not a diagnosis and reading it as one is expensive:
+/// on 2026-08-28 a player quitting to desktop was reported as three crashes, and 26 hook addresses
+/// were quarantined on that inference before the crash log was read properly (it held 8 records,
+/// every one `fatal=false`). The crash log cannot settle it either -- `note_process_detach` says so
+/// in its own doc comment: a detach with no fatal record means "shut down OR killed from outside".
+///
+/// THE EXIT CODE DOES NOT SEPARATE THEM ON THIS TARGET. That was this file's first design and it
+/// was wrong: the user quit to desktop and the run was recorded as `fault`, because a normal
+/// ELDEN RING quit under Wine/Proton exits through `NtTerminateProcess` carrying `0xc0000005` --
+/// the same code an access violation would carry. An exit code is not a diagnosis here.
+///
+/// What DOES separate them is whether an exception went UNHANDLED, which is the one thing a
+/// first-chance handler structurally cannot tell you and the only thing that means "the process is
+/// dying BY this fault". So [`fatal_exception_filter`] stamps the file the moment the top-level
+/// filter is reached, and that stamp wins:
+///
+/// * `fatal-exception` -- an exception reached the unhandled filter. This one really crashed.
+/// * `clean-exit` -- an exit path ran with code 0.
+/// * `exit-unclassified` -- an exit path ran with a non-zero code and NO fatal exception was seen.
+///   Recorded verbatim and left uninterpreted, because on this target that is what a quit looks
+///   like.
+///
+/// AND OUR OWN FILTER IS NOT THE ONLY WITNESS, which was this file's second wrong assumption.
+/// `SetUnhandledExceptionFilter` keeps exactly ONE top-level filter: whoever registers last owns
+/// it, and earlier ones are reachable only by being chained to. This DLL and `er-crash-logging`
+/// both register. On 2026-08-28 a run ended with `er-crash-latest.txt` recording `fatal=true` --
+/// an access violation at `eldenring.exe+0x1ebb799` that reached a top-level filter -- while this
+/// instrument wrote `exit-unclassified`, which reads as "somebody quit". It had crashed. So
+/// [`log_process_exit`] now also reads that record, and `fatal-exception` is stamped whichever
+/// filter saw it.
+///
+/// The file is also written ONCE AT INSTALL as `outcome=running`, which is what makes its later
+/// states readable. Without that, two very different things looked identical -- the process being
+/// killed from outside, and these hooks never installing at all -- and a reader has no way to tell
+/// which. So:
+///
+/// * `running`, after the process is gone -- no exit path ran: killed from outside (an agent
+///   teardown, `wineserver`, the OOM killer) or died without reaching any exit API.
+/// * file ABSENT -- this logger never installed, so the file says nothing about the game and the
+///   reader should go looking for why the DLL did not start.
+const RUN_OUTCOME_FILE_NAME: &str = "er-run-outcome.txt";
+/// The crash logger's newest-record file. Read, never written, by this module.
+const CRASH_LATEST_FILE_NAME: &str = "er-crash-latest.txt";
+/// Value written at install, before anything can go wrong.
+const RUN_OUTCOME_RUNNING: &str = "outcome=running api=- code=-\n";
+
+/// Set once the unhandled-exception filter has stamped the outcome, so the exit hook that follows
+/// it a few microseconds later cannot overwrite a real diagnosis with an uninterpretable code.
+static FATAL_OUTCOME_STAMPED: AtomicUsize = AtomicUsize::new(0);
+/// Whatever unhandled-exception filter was registered before ours, so it still gets its turn.
+static PREVIOUS_UNHANDLED_FILTER: AtomicUsize = AtomicUsize::new(0);
+/// `EXCEPTION_CONTINUE_SEARCH` as returned from a top-level filter.
+const EXCEPTION_CONTINUE_SEARCH_RESULT: i32 = 0;
+
+unsafe extern "system" {
+    fn SetUnhandledExceptionFilter(filter: usize) -> usize;
+}
+
+/// Register [`fatal_exception_filter`]. Idempotent: the first registration wins, and the previous
+/// filter is remembered so the chain is preserved.
+pub(crate) fn install_fatal_exception_filter() {
+    let previous = unsafe { SetUnhandledExceptionFilter(fatal_exception_filter as *const () as usize) };
+    let _ = PREVIOUS_UNHANDLED_FILTER.compare_exchange(
+        0,
+        previous,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+}
+
+/// Classify an exit code -- WITHOUT pretending a non-zero code means a fault. See the module note:
+/// a normal quit exits `0xc0000005` on this target, so the only honest split here is "zero" and
+/// "not zero, and I am not going to guess".
+fn classify_exit_code(code: u32) -> &'static str {
+    if code == 0 {
+        "clean-exit"
+    } else {
+        "exit-unclassified"
+    }
+}
+
+/// Stamp `outcome=running` as soon as the exit hooks are armed, so a later absence of any exit
+/// record is readable as "no exit path ran" rather than "nothing was watching".
+pub(crate) fn mark_run_started() {
+    let Some(directory) = er_game_base::log::game_directory_path() else {
+        return;
+    };
+    let _ = std::fs::write(directory.join(RUN_OUTCOME_FILE_NAME), RUN_OUTCOME_RUNNING);
+}
+
+/// Write one self-describing line to the outcome file.
+fn stamp_outcome(line: &str) {
+    if let Some(directory) = er_game_base::log::game_directory_path() {
+        let _ = std::fs::write(directory.join(RUN_OUTCOME_FILE_NAME), line);
+    }
+}
+
+/// Whether the crash log's newest record says an exception reached a top-level filter.
+///
+/// `er-crash-logging-core` writes `fatal=true` from its own `SetUnhandledExceptionFilter` handler
+/// and nowhere else, so the flag means exactly what this instrument wants to know, independently of
+/// which DLL's filter ended up owning the top-level slot.
+fn crash_record_says_fatal() -> bool {
+    let Some(directory) = er_game_base::log::game_directory_path() else {
+        return false;
+    };
+    std::fs::read_to_string(directory.join(CRASH_LATEST_FILE_NAME))
+        .map(|text| text.lines().any(|line| line.trim() == "fatal=true"))
+        .unwrap_or(false)
+}
+
+fn write_run_outcome(api: &str, code: u32) {
+    let Some(directory) = er_game_base::log::game_directory_path() else {
+        return;
+    };
+    let outcome = classify_exit_code(code);
+    // Deliberately one line and self-describing: the reader is usually an agent deciding whether a
+    // run proved anything, and a format that needs parsing invites the guess this file replaces.
+    let _ = std::fs::write(
+        directory.join(RUN_OUTCOME_FILE_NAME),
+        format!("outcome={outcome} api={api} code=0x{code:x}\n"),
+    );
+}
+
+/// Top-level filter: reached only when nothing in the process claimed the exception, which is the
+/// definition of fatal. It observes and chains on -- Seamless Co-op's crashpad, the game's own
+/// filter and WER all still get their turn.
+pub(crate) unsafe extern "system" fn fatal_exception_filter(info: *mut ExceptionPointersMin) -> i32 {
+    FATAL_OUTCOME_STAMPED.store(1, Ordering::SeqCst);
+    let (code, address) = if info.is_null() {
+        (0, 0)
+    } else {
+        let record = unsafe { (*info).exception_record };
+        if record.is_null() {
+            (0, 0)
+        } else {
+            (unsafe { (*record).exception_code }, unsafe {
+                (*record).exception_address as usize
+            })
+        }
+    };
+    if let Some(directory) = er_game_base::log::game_directory_path() {
+        let _ = std::fs::write(
+            directory.join(RUN_OUTCOME_FILE_NAME),
+            format!("outcome=fatal-exception code=0x{code:x} rip=0x{address:x}\n"),
+        );
+    }
+    let previous = PREVIOUS_UNHANDLED_FILTER.load(Ordering::SeqCst);
+    if previous != HOOK_ORIGINAL_UNSET && previous != 0 {
+        let chained: unsafe extern "system" fn(*mut ExceptionPointersMin) -> i32 =
+            unsafe { std::mem::transmute(previous) };
+        return unsafe { chained(info) };
+    }
+    EXCEPTION_CONTINUE_SEARCH_RESULT
+}
+
 pub(crate) fn log_process_exit(api: &str, code: u32, handle: usize) {
     // Log only the first terminator -- the one that actually quits the game.
     if PROCESS_EXIT_LOGGED.swap(true, Ordering::SeqCst) {
         return;
+    }
+    // A fatal stamp is a diagnosis; an exit code on this target is not. Never overwrite the former
+    // with the latter.
+    //
+    // OUR filter firing is not the only way to learn the run died by an exception, and relying on
+    // it alone was wrong. `SetUnhandledExceptionFilter` keeps ONE top-level filter: whoever
+    // registers last owns it and every earlier one is reachable only by being chained to. This DLL
+    // and `er-crash-logging` both register, and on 2026-08-28 the crash logger recorded
+    // `fatal=true` -- an access violation that reached a top-level filter -- while this instrument
+    // wrote `exit-unclassified`, i.e. "looks like a quit". The run had crashed. Reading the crash
+    // record settles it whatever the registration order turned out to be.
+    if FATAL_OUTCOME_STAMPED.load(Ordering::SeqCst) == 0 {
+        if crash_record_says_fatal() {
+            stamp_outcome("outcome=fatal-exception api=crash-record code=-\n");
+        } else {
+            write_run_outcome(api, code);
+        }
     }
     append_crash_log(format_args!(
         "process-exit via {api} code=0x{code:x} handle=0x{handle:x} {}",
@@ -342,12 +517,76 @@ fn annotate_addr(addr: usize, game_base: usize) -> String {
     String::new()
 }
 
+std::thread_local! {
+    /// Closed while THIS thread is somewhere inside [`crash_vectored_handler`].
+    static VEH_IN_PROGRESS: er_game_base::reentry::ReentryLatch =
+        const { er_game_base::reentry::ReentryLatch::new() };
+}
+
+/// `Some(token)` for the outermost VEH entry on this thread, `None` for a nested one.
+///
+/// # Why a crash logger of all things needs a re-entrancy latch
+///
+/// Everything the access-violation arm below does to describe a fault reads raw memory belonging
+/// to the faulting thread: `av_stack_game_returns` and `av_module_backtrace` walk its stack,
+/// `av_object_probe` and `safe_read_usize` chase pointers out of its registers, `loaded_modules`
+/// walks the loader list. That is exactly the state a fault says is not trustworthy, so any of
+/// them can fault in turn -- and a VEH is re-entered for its OWN faults, on the SAME thread, on
+/// top of the frame it is already in.
+///
+/// `MAX_AV_LOG_LINES` does not bound that. It is checked once per entry and each entry costs a
+/// whole handler frame, so the stack runs out first:
+///
+/// MEASURED 2026-08-28 on ELDEN RING 1.17, `control-quickload-only.me3`. One execute-fault
+/// (`exception_access_kind=8`) at `0x3cb67a0` entered this handler; describing it read
+/// NULL inside `ntdll+0x3969c`; that re-entered the handler, which read NULL again. The crash log
+/// holds 215 copies of that identical second fault with `rsp` marching DOWN by exactly `0x1260` a
+/// line, from `0x2fc50` to `0x13a50`. At 4704 bytes a level the 1 MiB main-thread stack is gone
+/// after ~220 levels, and the budget is 256 -- it could never have been reached. The whole record
+/// is preserved in the game directory as `er-net-effects-crash-telemetry.log.prev` (record 1 is
+/// the execute fault, records 2..216 the descent).
+///
+/// The thread then took a SIGSEGV that Wine could not even report: `virtual_setup_exception` needs
+/// stack to build the exception frame, had none, and called `abort_thread`. So the game died with
+/// no crash record, no minidump and no unhandled-filter line, and the ROOT fault -- the single
+/// line at the top naming the bad call target -- was buried under 215 copies of the amplifier.
+///
+/// TWO CORRECTIONS TO THE ABOVE, both measured after it was first written (2026-08-30):
+///
+/// 1. "called from `eldenring.exe+0xb3d2e8`" was WRONG and is deleted. That address came from the
+///    `modbt=` field, which is a stack SCAN and mixes dead frames with live. In 1.17 it is the
+///    return address of `call 0x141ebbfc0` at `0x140b3d2e3` -- an atomic AddRef leaf inside
+///    `0x140b3d215..0x140b3d2f8`. A leaf that returns cannot have called `0x3cb67a0`. The real
+///    caller is `CS::CSFadeImp::CSFadeImp` (1.16.2 `0x140b3cc40` -> 1.17 `0x140b3e2e0`), whose
+///    `call *0x18(%rax)` at `0x140b3e43a` is vtable slot 3 of the helper it HeapAlloc'd itself;
+///    `[rsp]=0x3cb67a0` with `[rsp+8]=0x3cb67f8` is `this` and `this+0x58` == `param_1 + 0xb`,
+///    the loop sentinel, which fits that constructor and nothing else.
+/// 2. This latch is correct defensive code but it is NOT what stops that descent. Re-run with the
+///    latch in place, the 215-line descent reproduced byte for byte with
+///    `oracle_veh_reentrant_refusals = 0` -- every dispatch is a fresh top-level VEH entry and the
+///    recursion lives in Wine's own exception dispatch. See bd
+///    `veh-descent-is-wine-dispatch-not-handler-reentrancy-2026-08-29`.
+///
+/// A nested entry therefore returns `EXCEPTION_CONTINUE_SEARCH` having touched NOTHING: not the
+/// record, not the context, no counter but its own. The outer entry is still mid-way through its
+/// line and finishes it, and the process goes on to die the way it should -- through the unhandled
+/// filter, which writes the fatal record and the minidump.
+fn enter_veh() -> Option<er_game_base::reentry::ReentryToken> {
+    er_game_base::reentry::ReentryLatch::enter(&VEH_IN_PROGRESS, &VEH_REENTRANT_REFUSALS)
+}
+
 /// Vectored handler: log access violations (faulting RVA + caller stack) so an
 /// in-process crash points straight at the instruction. Rate-limited; never
 /// changes behavior (returns EXCEPTION_CONTINUE_SEARCH).
 pub(crate) unsafe extern "system" fn crash_vectored_handler(
     info: *mut ExceptionPointersMin,
 ) -> i32 {
+    // FIRST, before `info` is even dereferenced: a fault raised while describing a fault must not
+    // re-enter this handler. See `enter_veh` -- without this the descent exhausts the stack
+    // long before any line budget notices.
+    let Some(_not_nested) = enter_veh() else {
+        return EXCEPTION_CONTINUE_SEARCH;
+    };
     if !info.is_null() {
         let record = unsafe { (*info).exception_record };
         let context = unsafe { (*info).context_record };
@@ -876,3 +1115,4 @@ fn parse_byte_pattern(spec: &str) -> Vec<Option<u8>> {
         })
         .collect()
 }
+

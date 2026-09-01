@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run a cupcake hook evaluation, surviving harness permission modes cupcake does not know yet.
 #
-# THREE BUGS THIS EXISTS TO FIX. The first two were observed live on 2026-08-24 with
-# cupcake 0.5.2, the third was measured against the same binary on 2026-08-26:
+# FOUR BUGS THIS EXISTS TO FIX. The first two were observed live on 2026-08-24 with
+# cupcake 0.5.2, the third was measured against the same binary on 2026-08-26, and the
+# fourth on 2026-08-31:
 #
 # 1. NEW PERMISSION MODES ARE FATAL. Claude Code grew an `auto` permission mode; cupcake
 #    deserializes `permission_mode` into a closed enum and exits 1 on anything outside
@@ -50,6 +51,48 @@
 #    the false positive bd er-effects-rs-dt2e removed. Where this shim and the policies
 #    disagree about what is quoted, one of them is wrong; keeping them the same rule is the
 #    point.
+#
+# 4. `--global-config` WANTS A DIRECTORY, AND THE WRONG SHAPE IS SILENT. This file used to
+#    pass `--global-config <repo>/.cupcake/rulebook.yml` -- a FILE. cupcake 0.5.2's own
+#    `--help` calls the argument a "global configuration file path", so the shape has to be
+#    measured rather than read: the engine rejects anything that is not a directory, and then
+#    carries on regardless.
+#
+#        DEBUG Failed to discover global config: Global config path must be a directory: ...
+#        DEBUG No global configuration found - using project config only
+#
+#    Both lines are DEBUG and this hook runs at `--log-level error` (bug 2), so the degrade
+#    was invisible: the hook loaded NO global policies for its whole life while reporting
+#    success. Measured on 2026-08-31, same event both ways: with the file path
+#    `gh pr ready 999` returned `{}` (allow); with the directory it DENIES. The global set is
+#    not inert -- its builtins are all disabled, but ~/.config/cupcake/policies/claude carries
+#    two live policies (github_pr_draft_guard, github_attribution_guard) this hook never saw.
+#    Nothing was lost in practice only because the user's ~/.claude/settings.json registers a
+#    SECOND cupcake hook that does load them; that is a property of this machine, not of this
+#    file.
+#
+#    WHAT THE ENGINE WANTS is the global config ROOT DIRECTORY -- the one holding
+#    rulebook.yml, policies/<harness>/ and signals/ -- which it otherwise discovers itself at
+#    ${XDG_CONFIG_HOME:-$HOME/.config}/cupcake. Both branches of that expression were measured
+#    against 0.5.2, as were its two rejection modes ("must be a directory", "does not exist").
+#    In BOTH rejection modes it goes project-only and does NOT fall back to discovery, so a
+#    bad override loads strictly less than no override -- which is why the failure path below
+#    drops the override instead of forwarding it.
+#
+#    FAIL LOUD, NOT CLOSED. The precondition is checked here, before the engine runs, and a
+#    failure is announced twice: a banner on stderr, and a `systemMessage` merged into the
+#    hook's JSON stdout, which Claude Code shows to the user on every hook it fires. It
+#    deliberately does NOT block. This hook sits in front of EVERY tool call, so exiting
+#    non-zero on a bad config path would stop all work including the work needed to repair it;
+#    and since cupcake signals a deny through stdout JSON at exit 0, changing the exit code
+#    risks the harness discarding a real deny verdict -- the same fail-open as bug 1. Shouting
+#    on every call is the point, and it stops the moment the path is right.
+#
+#    RESIDUE, stated rather than hidden: this checks the two structural preconditions that
+#    make loading POSSIBLE -- the root is a directory, and the harness policy directory exists
+#    under it -- not that any policy actually compiled. cupcake reports that only at
+#    INFO/DEBUG, which bug 2 suppresses on purpose. A global root whose policies/claude is
+#    present but empty still contributes nothing and still reports success here.
 #
 # stdout, stdin and the exit code are passed through untouched: the exit code is how cupcake
 # denies an action, so swallowing it would disable the guards just as thoroughly as bug 1.
@@ -297,9 +340,76 @@ if [ "$normalize_rc" -ne 0 ] || [ -z "$normalized" ]; then
 	normalized=$raw_event
 fi
 
-printf '%s' "$normalized" | "$CUPCAKE_BIN" eval \
-	--harness claude \
-	--log-level error \
-	--policy-dir "$repo_root/.cupcake" \
-	--global-config "$repo_root/.cupcake/rulebook.yml"
-exit "${PIPESTATUS[1]}"
+# The global policy set lives OUTSIDE the repo. Resolve it the way cupcake 0.5.2 resolves it
+# when given no override (measured, both branches of the expression), so the value passed below
+# is the one discovery would have found anyway, and CUPCAKE_GLOBAL_CONFIG can still point a
+# test or another machine somewhere else.
+cupcake_global_root="${CUPCAKE_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cupcake}"
+
+global_problem=""
+if [ ! -d "$cupcake_global_root" ]; then
+	global_problem="global config root is not a directory: $cupcake_global_root"
+elif [ ! -d "$cupcake_global_root/policies/claude" ]; then
+	# No harness policy directory means no global policy CAN load -- builtins live under
+	# policies/<harness>/builtins/ too -- so this is a guaranteed-inert config, not a style note.
+	global_problem="global config has no claude policies: $cupcake_global_root/policies/claude"
+fi
+
+run_cupcake() {
+	printf '%s' "$normalized" | "$CUPCAKE_BIN" eval \
+		--harness claude \
+		--log-level error \
+		--policy-dir "$repo_root/.cupcake" \
+		"$@"
+	return "${PIPESTATUS[1]}"
+}
+
+if [ -z "$global_problem" ]; then
+	run_cupcake --global-config "$cupcake_global_root"
+	exit $?
+fi
+
+warning="cupcake global policies are NOT loaded -- $global_problem. Project policies still ran; every policy under that root is inert for this hook. Point CUPCAKE_GLOBAL_CONFIG at the global config ROOT DIRECTORY (the one holding rulebook.yml and policies/claude/), or create it."
+printf 'cupcake-hook: %s\n' "$warning" >&2
+
+# No python3 means no way to add the systemMessage, and a broken announcer would swallow the
+# verdict on stdout -- which is the fail-open this file exists to prevent. The stderr banner
+# above is then the only channel, and the verdict still goes through untouched.
+if ! command -v python3 >/dev/null 2>&1; then
+	run_cupcake
+	exit $?
+fi
+
+ANNOUNCER=$(cat <<'PYSRC'
+import json
+import sys
+
+message = "cupcake-hook: " + sys.argv[1]
+raw = sys.stdin.read()
+
+if not raw.strip():
+    # cupcake prints nothing on some events; the warning still has to reach the user.
+    sys.stdout.write(json.dumps({"systemMessage": message}))
+    sys.exit(0)
+try:
+    parsed = json.loads(raw)
+except (ValueError, TypeError):
+    parsed = None
+if not isinstance(parsed, dict):
+    # Not an object this can extend. The verdict matters more than the warning, so the bytes
+    # go through byte-for-byte and the stderr banner carries the message alone.
+    sys.stdout.write(raw)
+    sys.exit(0)
+existing = parsed.get("systemMessage")
+if isinstance(existing, str) and existing:
+    parsed["systemMessage"] = message + "\n" + existing
+else:
+    parsed["systemMessage"] = message
+sys.stdout.write(json.dumps(parsed))
+PYSRC
+)
+
+# The override is DROPPED here rather than forwarded: a rejected --global-config does not fall
+# back to discovery, so passing a known-bad value can only load less than omitting it.
+run_cupcake | python3 -c "$ANNOUNCER" "$warning"
+exit "${PIPESTATUS[0]}"

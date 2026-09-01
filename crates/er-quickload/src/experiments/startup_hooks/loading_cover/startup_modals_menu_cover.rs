@@ -79,14 +79,21 @@ pub(crate) fn force_dismiss_startup_dialog() {
     // CLOSES the dialog and emits its result so the title flow PROCEEDS. This is what a real OK
     // does; OnDecide/field-writes/input-injection all failed to close it. Runs each frame on every
     // captured MessageBoxDialog -> skips ALL of them (connection-error, starting-offline, ...).
-    let ok_handler: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + MSGBOX_OK_HANDLER_RVA) };
+    let ok_handler: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(MSGBOX_OK_HANDLER_RVA, "MSGBOX_OK_HANDLER_RVA")
+            {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { ok_handler(dialog) };
     let n = DISMISS_WRITE_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     if n % AUTO_ACCEPT_LOG_INTERVAL == null {
         append_autoload_debug(format_args!(
             "auto-accept: OK-handler 0x{:x}(MessageBoxDialog 0x{dialog:x}) -- real OK-press to close + proceed #{n}",
-            base + MSGBOX_OK_HANDLER_RVA
+            er_game_base::mem::game_data_addr(base, MSGBOX_OK_HANDLER_RVA, "MSGBOX_OK_HANDLER_RVA")
         ));
     }
     let _ = (
@@ -119,7 +126,7 @@ pub(crate) fn install_auto_accept_hook() {
             return;
         }
     }
-    let Ok(builder_addr) = game_rva(MSGBOX_BUILDER_RVA) else {
+    let Ok(builder_addr) = game_rva_for_hook(MSGBOX_BUILDER_RVA) else {
         append_autoload_debug(format_args!("auto-accept: failed to resolve builder rva"));
         return;
     };
@@ -271,7 +278,7 @@ pub(crate) fn install_gr_sysmsg_log_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(GR_SYSTEM_MESSAGE_RVA) else {
+    let Ok(addr) = game_rva_for_hook(GR_SYSTEM_MESSAGE_RVA) else {
         append_autoload_debug(format_args!("grsysmsg-log: failed to resolve rva"));
         return;
     };
@@ -361,7 +368,18 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+        // moved this vftable and nothing verified where to, and a 0 here is not a
+        // degraded value -- it is a NULL vptr in an object the engine will later
+        // call through. Leaving the field as the native left it is strictly safer.
+        let vftable = er_game_base::mem::game_data_addr(
+            base,
+            FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+            "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+        );
+        if vftable != null {
+            unsafe { *(r8 as *mut usize) = vftable };
+        }
     }
     if NETWORK_CHECK_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(
@@ -389,7 +407,7 @@ pub(crate) fn install_network_check_shortcircuit_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(NETWORK_CHECK_JOB_RUN_RVA) else {
+    let Ok(addr) = game_rva_for_hook(NETWORK_CHECK_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "network-check-shortcircuit: failed to resolve rva"
         ));
@@ -492,7 +510,7 @@ pub(crate) unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str
     if unsafe { PlayerIns::local_player_mut() }.is_ok() {
         return;
     }
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return;
     };
     let gm = game_man_ptr_or_null();
@@ -504,8 +522,17 @@ pub(crate) unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str
     if ac0_before == picked {
         return;
     }
-    let set_save_slot: unsafe extern "system" fn(i32) =
-        unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     unsafe { set_save_slot(picked) };
     let ac0_after = unsafe { safe_read_i32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) }
         .unwrap_or(OWN_STEPPER_SLOT_NONE);
@@ -567,7 +594,18 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                 && r8 > null
                 && unsafe { safe_read_usize(r8) }.is_some()
             {
-                unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+                // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+                // moved this vftable and nothing verified where to, and a 0 here is not a
+                // degraded value -- it is a NULL vptr in an object the engine will later
+                // call through. Leaving the field as the native left it is strictly safer.
+                let vftable = er_game_base::mem::game_data_addr(
+                    base,
+                    FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+                    "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+                );
+                if vftable != null {
+                    unsafe { *(r8 as *mut usize) = vftable };
+                }
             }
             if d < 16 || d.is_power_of_two() {
                 append_autoload_debug(format_args!(
@@ -609,7 +647,18 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         && r8 > null
         && unsafe { safe_read_usize(r8) }.is_some()
     {
-        unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        // NEVER STORE A REFUSAL. `game_data_addr` answers 0 when the running build
+        // moved this vftable and nothing verified where to, and a 0 here is not a
+        // degraded value -- it is a NULL vptr in an object the engine will later
+        // call through. Leaving the field as the native left it is strictly safer.
+        let vftable = er_game_base::mem::game_data_addr(
+            base,
+            FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,
+            "FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA",
+        );
+        if vftable != null {
+            unsafe { *(r8 as *mut usize) = vftable };
+        }
     }
     if SHOW_PROGRESS_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(
@@ -637,7 +686,7 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SHOW_PROGRESS_JOB_RUN_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SHOW_PROGRESS_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "show-progress-shortcircuit: failed to resolve rva"
         ));
@@ -861,8 +910,17 @@ pub(crate) unsafe fn build_profile_select_cover_job(
         return;
     }
     let mut cover_slot = null;
-    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
     let cover_job = cover_slot;
     TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
@@ -871,7 +929,11 @@ pub(crate) unsafe fn build_profile_select_cover_job(
     TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
-        base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA"
+        ),
     ));
 }
 
@@ -890,8 +952,17 @@ pub(crate) unsafe fn build_black_cover_job(
         return;
     }
     let mut cover_slot = null;
-    let cover_builder: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA) };
+    let cover_builder: unsafe extern "system" fn(usize, usize) -> usize = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA,
+                "TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx) };
     let cover_job = cover_slot;
     TITLE_CUSTOM_COVER_BLACK_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
@@ -900,7 +971,11 @@ pub(crate) unsafe fn build_black_cover_job(
     TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-b: BUILT non-returned custom black cover {TITLE_CUSTOM_COVER_BLACK_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; will be pumped above native title/PAB jobs",
-        base + TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA,
+            "TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA"
+        ),
     ));
 }
 
@@ -938,7 +1013,11 @@ pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     masquerade_preserved_job_note(native_job);
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_PAB_INFORMATION_VISUAL_NAME} wrapper 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for PAB cover (out_slot=0x{out_slot:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
-        base + TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
+            "TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA"
+        ),
     ));
     native_ret
 }
@@ -1000,8 +1079,16 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
 
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
-        base + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
-        base + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
+            "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA"
+        ),
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
+            "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA"
+        ),
     ));
     native_ret
 }
@@ -1020,16 +1107,35 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
         return;
     }
     let orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
-            unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(orig) }
-        } else {
-            unsafe {
-                std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(
-                    base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
-                )
+    let target = if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
+        // A MinHook trampoline. Already correct for the running build by construction, and NOT an
+        // address to resolve -- it does not live in the game image at all.
+        orig
+    } else {
+        // THE FALLBACK THAT CRASHED THE 1.17 BOOT AT ~11s, three runs running. This called
+        // `base + 0x9a62c0` raw. On 1.16.2 that is a thunk (`add rcx,0x70; jmp ...`); on 1.17 the
+        // same RVA holds `lea eax,[rsp+0x40]; cmp rcx,rax; setne dl` -- the middle of an unrelated
+        // function, and the address has no verified mapping. The crash record proves the landing:
+        // return address 0x1409a62ce, exactly +0xe into it, with rcx holding `logo`, and RIP ending
+        // up at heap 0x1d107080 -- an EXECUTE fault (access kind 8) in no module.
+        //
+        // Resolving means an unmapped address REFUSES and the logo simply is not hidden. A title
+        // logo left visible is a cosmetic defect; this was a boot-killer.
+        match er_game_base::game_build::resolve_game_address(
+            base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            "title-logo SetVisible",
+        ) {
+            Some(address) => address,
+            None => {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: SKIPPED hiding {TITLE_LOGO_BACK_VIEW_PARTS_NAME} via {source} --                      SetVisible has no verified mapping for the running build (logo stays visible)"
+                ));
+                return;
             }
-        };
+        }
+    };
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(target) };
     unsafe { set_visible(logo, 0) };
     let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
@@ -1090,8 +1196,15 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
     if unsafe { safe_read_usize(logo) }.is_none() {
         return;
     }
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+    // Same raw call, same address, same crash if left ungated. See
+    // `force_hide_title_logo_surface` for the record that proved it.
+    let Some(target) = er_game_base::game_build::resolve_game_address(
+        base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+        "title-logo SetVisible (start-login)",
+    ) else {
+        return;
+    };
+    let set_visible: unsafe extern "system" fn(usize, u8) = unsafe { std::mem::transmute(target) };
     unsafe { set_visible(logo, 0) };
     let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
@@ -1101,6 +1214,10 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
         .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} after native TitleTopDialog start-login via 0x{:x} dialog=0x{dialog:x} logo=0x{logo:x} hide_calls={calls}",
-        base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            "TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA"
+        ),
     ));
 }

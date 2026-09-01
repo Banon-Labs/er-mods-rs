@@ -1,16 +1,15 @@
 use super::*;
 use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64};
 
-/// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
+/// Install the row-populate hook (`FUN_1408758d0`). Runs at most once per process -- the claim is
+/// the first statement -- and mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
-    let current_row_installed =
-        PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
-    let player_name_getter_installed =
-        PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) != 0;
-    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0
-        && current_row_installed
-        && player_name_getter_installed
-    {
+    // ONE CLAIM, not a check-then-act read of the success latches -- this installer has TWO owners
+    // (`title_visual_startup.rs:31` synchronously, then `:37` on the thread that call spawns), and
+    // every latch it could consult instead is stored only after its own apply succeeds. See
+    // `PROFILE_ROW_POPULATE_CLAIMED`, and `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED` for the
+    // sibling that was measured racing rather than merely able to.
+    if PROFILE_ROW_POPULATE_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
     match unsafe { MH_Initialize() } {
@@ -22,12 +21,20 @@ pub(crate) fn install_profile_row_populate_hook() {
             return;
         }
     }
-    if PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) == 0 {
-        let Ok(addr) = game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
+    // FOUR INDEPENDENT ROWS, EACH SKIPPING ONLY ITSELF (2026-08-30). Every block below used a
+    // bare `return` for its own refusal, so one unmapped RVA on 1.17 took the remaining rows with
+    // it -- e.g. a refused player-name getter also cost the ProfileSelect row-populate and the
+    // row-model builder, which are unrelated functions serving unrelated rows. A labelled block
+    // per row keeps a refusal local. bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    'name_getter: {
+        if PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) != 0 {
+            break 'name_getter;
+        }
+        let Ok(addr) = game_rva_for_hook(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve player-name getter rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x}"
+                "stats-text: REFUSED player-name getter -- rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'name_getter;
         };
         match unsafe {
             MhHook::new(
@@ -42,7 +49,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable player-name getter failed: {status:?}"
                     ));
-                    return;
+                    break 'name_getter;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -62,12 +69,15 @@ pub(crate) fn install_profile_row_populate_hook() {
             )),
         }
     }
-    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) == 0 {
-        let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
+    'row_populate: {
+        if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
+            break 'row_populate;
+        }
+        let Ok(addr) = game_rva_for_hook(PROFILE_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve row-populate rva 0x{PROFILE_ROW_POPULATE_RVA:x}"
+                "stats-text: REFUSED row-populate -- rva 0x{PROFILE_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'row_populate;
         };
         match unsafe {
             MhHook::new(
@@ -81,7 +91,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable row-populate failed: {status:?}"
                     ));
-                    return;
+                    break 'row_populate;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -105,12 +115,15 @@ pub(crate) fn install_profile_row_populate_hook() {
     // a slot's ProfileSummary record is still a record: it reads `record[0x34]` and the filler turns
     // that into the row's `Location` string. A save whose summary table was copied in from another
     // file needs its place name corrected HERE or not at all.
-    if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) == 0 {
-        let Ok(addr) = game_rva(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
+    'row_model_build: {
+        if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) != 0 {
+            break 'row_model_build;
+        }
+        let Ok(addr) = game_rva_for_hook(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve row-model-build rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x}"
+                "stats-text: REFUSED row-model-build -- rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'row_model_build;
         };
         match unsafe {
             MhHook::new(
@@ -124,7 +137,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable row-model-build failed: {status:?}"
                     ));
-                    return;
+                    break 'row_model_build;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -144,12 +157,15 @@ pub(crate) fn install_profile_row_populate_hook() {
             )),
         }
     }
-    if !current_row_installed {
-        let Ok(addr) = game_rva(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
+    'current_row: {
+        if PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET {
+            break 'current_row;
+        }
+        let Ok(addr) = game_rva_for_hook(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: failed to resolve title-load row-populate rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x}"
+                "stats-text: REFUSED title-load row-populate -- rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
-            return;
+            break 'current_row;
         };
         match unsafe {
             MhHook::new(
@@ -164,7 +180,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     append_autoload_debug(format_args!(
                         "stats-text: queue_enable title-load row-populate failed: {status:?}"
                     ));
-                    return;
+                    break 'current_row;
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
@@ -200,12 +216,17 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
         target != null && target != 0 && value == target
     });
     let caller_rva = trace_first_game_caller_rva();
-    let title_fadein_visible_ordinal =
-        if caller_rva == TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA && visible != 0 {
-            TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN.fetch_add(1, Ordering::SeqCst) + 1
-        } else {
-            0
-        };
+    // The call site is resolved for the RUNNING build, not compared against the raw 1.16.2
+    // `0x744e02`. Reached raw, this comparison never matched on 1.17 and the title FadeIn
+    // suppression was inert with nothing in any log to say so -- no hook to refuse, no address to
+    // resolve, so no refusal line either.
+    let title_fadein_call_site = title_gfx_visible_title_fadein_caller_rva();
+    let title_fadein_visible_ordinal = if title_fadein_call_site == Some(caller_rva) && visible != 0
+    {
+        TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        0
+    };
     let force_title_fadein_visible =
         title_fadein_visible_ordinal == TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL;
     let forced = (single_target != null && single_target != 0 && value == single_target)
@@ -241,7 +262,7 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_GFX_VALUE_SET_VISIBLE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_GFX_VALUE_SET_VISIBLE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve GFx visibility setter rva 0x{TITLE_GFX_VALUE_SET_VISIBLE_RVA:x}"
         ));
@@ -266,7 +287,16 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
                     crate::mh::leak_installed_hook(hook);
                     TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing 05_000_Title FadeIn flash ordinal {TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL} at rva 0x{TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA:x} false"
+                        // Report the call site this build will actually compare against. Printing
+                        // the 1.16.2 constant made the line read as armed on builds where the
+                        // comparison could never match.
+                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing 05_000_Title FadeIn flash ordinal {TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL} at rva {} false",
+                        match title_gfx_visible_title_fadein_caller_rva() {
+                            Some(rva) => format!("0x{rva:x}"),
+                            None =>
+                                "UNRESOLVED on this build -- the FadeIn flash will not be suppressed"
+                                    .to_owned(),
+                        }
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -369,7 +399,7 @@ pub(crate) fn install_title_logo_start_login_hide_hook() {
             return;
         }
     }
-    let Ok(start_login_addr) = game_rva(TITLE_TOP_START_LOGIN_RVA as u32) else {
+    let Ok(start_login_addr) = game_rva_for_hook(TITLE_TOP_START_LOGIN_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve TitleTopDialog start-login rva 0x{TITLE_TOP_START_LOGIN_RVA:x}"
         ));
@@ -424,7 +454,7 @@ pub(crate) fn install_title_pab_information_visual_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve PAB/TitleInformation wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA:x}"
         ));
@@ -478,7 +508,8 @@ pub(crate) fn install_title_native_menu_visual_suppression_hook() {
             return;
         }
     }
-    let Ok(begin_title_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA as u32) else {
+    let Ok(begin_title_addr) = game_rva_for_hook(TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA as u32)
+    else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve BeginTitle visual wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA:x}"
         ));
@@ -536,7 +567,8 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
             return;
         }
     }
-    let Ok(fadein_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA as u32) else {
+    let Ok(fadein_addr) = game_rva_for_hook(TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA as u32)
+    else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve MenuWindowJob FadeIn helper rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA:x}"
         ));
@@ -565,7 +597,11 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
                         Ordering::SeqCst,
                     );
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear visible flags mask 0x{TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK:x} from CSMenuMan+0x90 when Run returns at rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA:x}"
+                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear visible flags mask 0x{TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK:x} from CSMenuMan+0x90 when Run returns at rva {}",
+                        match title_native_menu_visual_window_fadein_run_caller_rva() {
+                            Some(rva) => format!("0x{rva:x}"),
+                            None => "UNRESOLVED on this build".to_owned(),
+                        }
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -652,7 +688,14 @@ pub(crate) unsafe fn system_quit_menu_window_set_visible_and_flags(
     unsafe { dtor(scratch_ptr + 0x28) };
 
     let menu_id = unsafe { safe_read_u16(window + 0x180) }.unwrap_or(u16::MAX);
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     let mut flags_before = NULL;
     let mut flags_after = NULL;
     if menu_id < 0x47 && cs_menu_man >= HEAP_LO {
@@ -913,7 +956,14 @@ pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
 pub(crate) unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &str) -> i32 {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     if cs_menu_man < HEAP_LO {
         return -1;
     }
@@ -946,7 +996,14 @@ pub(crate) unsafe fn system_quit_force_return_title_bc4_ready(base: usize, sourc
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
-    let gm = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(NULL);
+    let gm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     if gm < HEAP_LO {
         return -1;
     }
@@ -977,18 +1034,39 @@ pub(crate) unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     if !(n <= 8 || n.is_multiple_of(240)) {
         return;
     }
-    let force = unsafe { safe_read_u8(base + FORCE_LATCH_RVA) }.unwrap_or(0xff);
-    let gm = unsafe { safe_read_usize(base + GAME_MAN_SINGLETON_RVA) }.unwrap_or(NULL);
+    let force = unsafe {
+        safe_read_u8(er_game_base::mem::game_data_addr(
+            base,
+            FORCE_LATCH_RVA,
+            "FORCE_LATCH_RVA",
+        ))
+    }
+    .unwrap_or(0xff);
+    let gm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_MAN_SINGLETON_RVA,
+            "GAME_MAN_SINGLETON_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     let (save_state, bc4) = if gm >= HEAP_LO {
         (
-            unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1),
             unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
                 .unwrap_or(-1),
         )
     } else {
         (-1, -1)
     };
-    let csm = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let csm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
     let sub = if csm >= HEAP_LO {
         unsafe { safe_read_usize(csm + 0x80) }.unwrap_or(NULL)
     } else {
@@ -1100,37 +1178,28 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
             )),
         }
     }
-    let Ok(builder_addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: direct return-title chain abort source={source} -- builder rva 0x{SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA:x} unresolved"
-        ));
-        return false;
-    };
-    let Ok(submit_addr) = game_rva(MENU_JOB_SUBMIT_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: direct return-title chain abort source={source} -- submit rva 0x{MENU_JOB_SUBMIT_RVA:x} unresolved"
-        ));
-        return false;
-    };
-    let builder: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(builder_addr) };
-    let submit: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(submit_addr) };
-    let mut job_slot: usize = 0;
-    let job_slot_ptr = (&raw mut job_slot) as usize;
-    unsafe { builder(job_slot_ptr, list) };
-    let job = job_slot;
-    if job < HEAP_LO {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: direct return-title chain builder produced no plausible job source={source} dialog=0x{system_dialog:x} list=0x{list:x} job=0x{job:x}"
-        ));
-        return false;
-    }
+    // NO NATIVE CONFIRM CHAIN IS SUBMITTED (P0 fix, run br-20260831-160354-2513).
+    // `SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA` (1.16.2 0x79d700 == 1.17 0x79e580) builds a
+    // FixOrderJobSequence of FIVE jobs whose HEAD is a MessageBox job (FUN_1407b73d0) carrying
+    // `GetGR_Dialogues(110000)` -- engus "Save the game and return to title menu?", anchor
+    // L"\u{6c7a}\u{5b9a}" -- the vanilla Quit-Game confirm. Submitting it is the sole reason a
+    // `CS::MessageBoxDialog` was ever built on the switch path (`msgbox-skip #0
+    // scope=switch-active`; game callers 0x1407b1347 = the dialog factory FUN_1407b1270,
+    // 0x1407ae13c = CS::MenuWindowJob::Run, 0x1407ab13b = FixOrderJobSequence::Run).
+    // The box's only semantic side effect is the user's yes/no gate on advancing that sequence to
+    // its FINAL job, FUN_14079f690 == `SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA` -- which we
+    // already build and submit ourselves, without UI, from the bc4==READY path (that path also owns
+    // `system_quit_save_swap_recommit_after_return_title_save`, so it must stay where it is).
+    // With the head suppressed its factory returns null, and `MenuWindowJob::Run`'s
+    // `owningMenuWindow == 0` path sets MenuJobResult Failed -- terminal after ONE Run (hence
+    // exactly one msgbox-skip, never a #1), so the sequence aborts and jobs 2..5 never execute. The
+    // submit was pure overhead whose one observable effect was a MessageBoxDialog build, plus a job
+    // that held the queue not-ready and delayed the real final functor. Bump the counter that path
+    // gates on and submit nothing.
     SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "system-quit-quickload: direct return-title chain SUBMIT source={source} builder=0x{builder_addr:x} submit=0x{submit_addr:x} dialog=0x{system_dialog:x} queue=0x{queue:x} list=0x{list:x} job=0x{job:x}; waiting for real title menu rebuild before Continue fallback"
+        "system-quit-quickload: direct return-title chain ARMED source={source} dialog=0x{system_dialog:x} queue=0x{queue:x} list=0x{list:x} -- native confirm chain 0x{SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA:x} deliberately NOT submitted (its head is the GR_Dialogues(110000) return-to-title MessageBox); the final functor fires from the bc4==READY path"
     ));
-    unsafe { submit(queue, job_slot_ptr) };
     true
 }
 
@@ -1555,15 +1624,39 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // Prefer the hooked ORIG trampoline so the resolve is not double-instrumented (as in
-    // push_stats_text_on_row); else the raw game RVA.
+    // push_stats_text_on_row); else the game function, RESOLVED for the running build.
+    //
+    // The fallback arm used to be a bare `base + RVA`. It is reached exactly when the detour is
+    // NOT installed -- which on a moved build is the likeliest state, because an unmapped hook
+    // target is refused -- so the one path that runs without the hook was the one path that never
+    // asked where the function went. `CS::SceneObjProxy` named-child bind MOVED on 1.17
+    // (0x74a2f0 -> 0x74b140, byte-checked: 1.16.2 @0x74a2f0 and 1.17 @0x74b140 are the same
+    // prologue `4c 89 44 24 18 4c 89 4c 24 20 55 53 56 57 41 56`, while 1.17 @0x74a2f0 is
+    // mid-instruction), so the fallback pointed into unrelated code. `gated_game_fn` refuses
+    // instead, and the pane-visibility oracle simply does not sample.
     let assign_addr = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        _ => match crate::experiments::gated_game_fn(
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+        ) {
+            Some(address) => address,
+            None => return,
+        },
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign_addr) };
-    let dtor: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let dtor: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                CSSCALEFORMVALUE_DTOR_RVA,
+                "CSSCALEFORMVALUE_DTOR_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let root_proxy = option_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
 
     // The pane CONTAINER: its resolved-but-not-visible state IS the direct blank-pane signature.
@@ -1619,7 +1712,14 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     // OptionSetting MenuWindowJob::Run also fires during preload/hidden states; without this gate the
     // blank fired at +26s before the user could reproduce.
     let menu_id = unsafe { safe_read_u16(option_window + 0x180) }.unwrap_or(u16::MAX);
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(0);
     let flag = if menu_id < 0x47 && cs_menu_man >= OPTIONSETTING_WINDOW_MIN_PTR {
         unsafe { safe_read_u8(cs_menu_man + 0x90 + menu_id as usize) }.unwrap_or(0)
     } else {
@@ -1937,8 +2037,8 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     {
         let gm = game_man_ptr_or_null();
         if gm != 0 && gm != TITLE_OWNER_SCAN_START_ADDRESS {
-            let ss_ptr = (gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32;
-            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }
+            let ss_ptr = (gm + GAME_MAN_SAVE_STATE_B80_OFFSET) as *mut i32;
+            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }
                 && (ss == GAME_MAN_SAVE_STATE_READING || ss == FULLREAD_B80_RESIDENT)
             {
                 unsafe { *ss_ptr = GAME_MAN_SAVE_STATE_IDLE };

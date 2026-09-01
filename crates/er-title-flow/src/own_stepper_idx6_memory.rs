@@ -24,7 +24,7 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
-    let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = unsafe { *((er_game_base::mem::game_data_addr(base, CSFEMAN_SINGLETON_RVA, "CSFEMAN_SINGLETON_RVA")) as *const usize) };
     let read_gm = |off: usize| {
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((gm + off) as *const i32) }
@@ -32,7 +32,7 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
             TITLE_STATE_OWNER_GONE
         }
     };
-    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let b80 = read_gm(GAME_MAN_SAVE_STATE_B80_OFFSET);
     let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
     let n = OWN_STEPPER_IDX6_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
     let pass6 = || {

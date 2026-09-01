@@ -935,7 +935,11 @@ fn locate_frame_counter() -> Option<usize> {
     if !is_expected_host {
         return None;
     }
-    Some(base + GAME_FRAME_COUNTER_RVA)
+    Some(er_game_base::mem::game_data_addr(
+        base,
+        GAME_FRAME_COUNTER_RVA,
+        "GAME_FRAME_COUNTER_RVA",
+    ))
 }
 
 /// Watch the counter until it has demonstrably advanced, and only then let the watchdog arm.

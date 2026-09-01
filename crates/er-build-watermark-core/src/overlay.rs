@@ -126,7 +126,38 @@ pub fn visible_rows() -> usize {
     VISIBLE_ROWS.load(Ordering::Relaxed)
 }
 
+/// How a bid to host the overlay turned out.
+///
+/// The two failures are NOT interchangeable and collapsing them into one `false` is what made
+/// this whole class of bug unreadable. [`LostToAnotherModule`](OverlayClaim::LostToAnotherModule)
+/// PROVES a host exists and the caller should register as a guest; [`NoWindow`](
+/// OverlayClaim::NoWindow) means this process never got a window and nobody will host anything.
+/// Reporting the second as though it were the first, or either as an ABI mismatch, sends the
+/// reader hunting a version skew that is not there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayClaim {
+    /// This call created the mutex and is the host. [`crate::overlay_host::designate_host`] has
+    /// already run, so guests can find this module from this instant.
+    Won,
+    /// Another module created the mutex first. It is the host, or is a few instructions from
+    /// designating itself one -- so the correct response is to register as a guest, retrying
+    /// across that gap, NEVER to give up.
+    LostToAnotherModule,
+    /// No visible, non-empty top-level window appeared for this process within the bounded wait.
+    /// There is nothing to host an overlay on and no host to join.
+    NoWindow,
+}
+
 /// Claim process-wide ownership of the hudhook overlay, returning whether THIS call won.
+///
+/// Prefer [`claim_overlay_ownership`]: this bool form cannot distinguish losing the mutex from
+/// never getting a window, and a caller that must decide whether to become a guest needs to know
+/// which happened. Kept for the watermark, whose loser path is the same either way.
+pub fn claim_owner() -> bool {
+    claim_overlay_ownership() == OverlayClaim::Won
+}
+
+/// Bid to host the process's one hudhook overlay.
 ///
 /// Split out from [`install_if_owner`] because a second overlay in this workspace --
 /// `er-net-effects` -- installs hudhook for its own bar, and two `Hudhook::apply()` calls in
@@ -138,24 +169,55 @@ pub fn visible_rows() -> usize {
 /// closing it would destroy the mutex once no other opener held it, letting a later-loading DLL
 /// believe it was first and install a second hook. Nothing is leaked in the Rust sense -- a Win32
 /// `HANDLE` is `Copy` with no `Drop`, so simply not calling `CloseHandle` IS the retention.
-pub fn claim_owner() -> bool {
+pub fn claim_overlay_ownership() -> OverlayClaim {
     use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
     use windows::Win32::System::Threading::CreateMutexW;
 
+    // WAIT FOR THE GAME'S WINDOW FIRST, and do it here because this is the one function every
+    // would-be host calls -- er-build-watermark, er-net-effects and er-invasion-path all route
+    // their `Hudhook::apply()` through this claim, so the precondition belongs here rather than
+    // in three copies that can drift apart.
+    //
+    // hudhook builds its pipeline on the first Present it INTERCEPTS, and that starts with
+    // `GetClientRect(swap_chain.GetDesc().OutputWindow).unwrap()`. Hook Present before the game
+    // has a window and the first Present intercepted can carry an OutputWindow that is not a live
+    // window: GetClientRect returns 0x80070578, the unwrap panics, and a panic crossing an
+    // `extern "system"` callback is an abort.
+    //
+    // MEASURED 2026-08-29, in two different modules and therefore not a property of either:
+    // er_build_watermark died that way 229 ms after the first backbuffer draw, and with that shell
+    // excluded er_net_effects -- the next module to win this very claim -- died identically at
+    // +2060 ms. A third run of the same binaries did NOT die and reached a mapped window, which is
+    // what makes it a race against window creation, and what makes waiting the fix rather than a
+    // hope. The wait is bounded; a window that never appears costs a claim, not a process.
+    //
+    // AND IT IS WHY A LOSER MUST RE-PROBE FOR THE HOST. Before this wait existed the claim was a
+    // bare `CreateMutexW` -- microseconds after a caller's "does anyone host this?" probe, so a
+    // module that lost the mutex had almost certainly seen the winner already. The wait moved the
+    // mutex attempt to SECONDS after that probe, and worse, it releases every would-be host at the
+    // same instant (they are all waiting on the same window). So the losers' probes are now taken
+    // uniformly BEFORE any module could possibly have designated itself host, and a caller that
+    // treats its one stale probe as final never draws again. See `OverlayClaim`.
+    if !er_game_base::game_window::wait_for_process_window() {
+        return OverlayClaim::NoWindow;
+    }
+
     // SAFETY: a named-mutex creation with a static name; the handle is intentionally never closed.
     let Ok(_handle) = (unsafe { CreateMutexW(None, true, OWNER_MUTEX_NAME) }) else {
-        return false;
+        // The mutex could not be created at all, so this module is certainly not the host. Report
+        // it as a loss: a guest probe is the right next move and costs nothing if nobody answers.
+        return OverlayClaim::LostToAnotherModule;
     };
     // ERROR_ALREADY_EXISTS means the mutex was created by an earlier caller and this call merely
     // opened it -- so somebody else is the owner.
     let last = unsafe { GetLastError() };
-    let won = last != ERROR_ALREADY_EXISTS;
-    if won {
-        // Synchronously, before any install is attempted: a guest asking "who hosts this?" during
-        // the gap between claiming and applying must get an answer, or it concludes nobody does.
-        crate::overlay_host::designate_host();
+    if last == ERROR_ALREADY_EXISTS {
+        return OverlayClaim::LostToAnotherModule;
     }
-    won
+    // Synchronously, before any install is attempted: a guest asking "who hosts this?" during
+    // the gap between claiming and applying must get an answer, or it concludes nobody does.
+    crate::overlay_host::designate_host();
+    OverlayClaim::Won
 }
 
 /// Draw the watermark rows onto an EXISTING imgui frame.

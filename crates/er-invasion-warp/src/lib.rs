@@ -134,14 +134,12 @@ fn spawn_catalog_task() {
     let _ = std::thread::Builder::new()
         .name("er-invasion-warp".to_owned())
         .spawn(|| {
-            let task = loop {
-                match unsafe { CSTaskImp::instance() } {
-                    Ok(task) => break task,
-                    // No sleep (banned by scripts/check-no-timeouts.py): yield to the game
-                    // threads and re-poll, exactly as er-telemetry and the product's
-                    // wait_for_task_instance do.
-                    Err(_) => std::thread::yield_now(),
-                }
+            // BOUNDED (2026-08-29): the unbounded form of this loop starved the wineserver and
+            // hung a boot. er_game_base::wait backs off in user space and gives up.
+            let Some(task) =
+                er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+            else {
+                return;
             };
             standalone_log(format_args!(
                 "CSTaskImp resolved; registering the invasion-warp catalog sampler on FrameBegin"
@@ -294,6 +292,14 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         let module_base = module as usize;
         START.call_once(|| {
+            // ONE sink for both refusal channels, installed before anything resolves an address.
+            //
+            // Every cdylib statically links its own copy of `er-hook` and `er-game-base`, so an
+            // uninstalled sink is silent PER DLL -- and this DLL had none. `HOOK REFUSED` and
+            // `ADDRESS REFUSED` lines, the two things that say a 1.16.2 address did not survive
+            // 1.17, were being written to nowhere while the map surface simply failed to appear.
+            // `set_hook_logger` installs the address-resolution sink too.
+            er_hook::set_hook_logger(standalone_log);
             let installed = install_standalone_host();
             append_log(
                 &log_dir(),
@@ -343,10 +349,36 @@ mod tests {
         }
     }
 
+    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    ///
+    /// `std::env::temp_dir()` is ONE directory shared by every process on the machine, so a name
+    /// keyed only by `tag` is the same directory -- and here the same FILE, since the leaf is the
+    /// fixed artifact name this DLL writes -- in two test binaries at once. Two at once is the
+    /// ordinary case in this repo: two agents running `scripts/check.sh` concurrently, the gate
+    /// run twice over, or a second checkout. The test below writes a long document, overwrites it
+    /// with a short one and requires the short one to have TRUNCATED the long one; a second
+    /// process writing its own long document into that same path between this one's rewrite and
+    /// its read-back makes the truncation look as though it never happened.
+    ///
+    /// Measured before the pid was added, over ten rounds of eight concurrent copies of this
+    /// crate's test binary: one of the 80 runs went red, `assertion left == right failed, left:
+    /// "", right: "{}"` -- the read landing between a sibling's `write` and its content, and the
+    /// truncating-write contract taking the blame. Rare is not benign here: the gate runs this
+    /// crate on every invocation, and a one-in-eighty red with a product-shaped message costs
+    /// more to diagnose than a reliable one.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "er-invasion-warp-{tag}-p{pid}",
+            pid = std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        dir
+    }
+
     #[test]
     fn the_telemetry_sink_writes_the_document_verbatim_and_replaces_the_previous_one() {
-        let dir = std::env::temp_dir().join("er-invasion-warp-telemetry-test");
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = scratch_dir("telemetry-test");
         let path = dir.join(TELEMETRY_FILE_NAME);
         let long = er_invasion_warp_core::catalog_oracle_json("sampling", "first");
         std::fs::write(&path, long.as_bytes()).expect("write");

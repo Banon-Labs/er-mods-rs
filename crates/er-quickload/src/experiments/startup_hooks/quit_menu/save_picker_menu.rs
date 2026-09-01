@@ -46,6 +46,13 @@ pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REOPEN_PENDING;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REPOPULATE_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_RESUBMIT_COUNT;
+/// Restores postponed because the live summary was unreadable this frame (retried by the sweep).
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORE_DEFERRED;
+/// The subset of those restores that could not write, because the summary allocation moved.
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORE_UNWRITABLE;
+/// Cumulative restores of the game's real records over our staged browse rows. Compare against
+/// `SAVE_PICKER_OPEN_COUNT`: fewer restores than opens means labels were left in game-owned state.
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORED;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_STAGED_ROW_COUNT;
 /// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
 /// through it (the destination picker is opened by the save flow, which has no row action object).
@@ -151,11 +158,51 @@ pub(crate) unsafe fn save_picker_write_row_records(
     visible
 }
 
+/// Snapshot the game's own `CS::ProfileSummary` image before the first staging of a picker
+/// session, so [`save_picker_restore_staged_row_records`] can put it back on EVERY exit.
+///
+/// SNAPSHOT ON THE TRANSITION, NOT ON EVERY CALL. Staging re-runs on every browse keypress and at
+/// every native list build (`save_picker_profile_list_builder_hook`), and by the second call the
+/// live allocation holds OUR labels -- re-reading it then would snapshot `[ new ]` as "the user's
+/// real rows" and the restore would put the bug back. The latch is per-session (every restore
+/// clears it), which is the property the old `summary_snapshot.is_empty()` guard lacked: that one
+/// was cleared only by a restore that ran, so a suppressed restore left a snapshot from a previous
+/// save container armed indefinitely.
+///
+/// The pointer term is not redundant with the latch. If the container is reallocated while a
+/// picker session is live, the new allocation still holds the game's real records (we never staged
+/// into it), so re-snapshotting is both safe and required -- and it retargets the restore away from
+/// an address that may already be freed.
+///
+/// # Safety
+///
+/// `summary` must be the live `CS::ProfileSummary` allocation: this reads
+/// `PROFILE_SUMMARY_TOTAL_BYTES` from it through a raw pointer. Same thread rules as the staging
+/// it precedes.
+pub(crate) unsafe fn save_picker_arm_row_snapshot(summary: usize) {
+    let mut st = system_quit_save_swap_lock();
+    if st.rows_staged && st.rows_summary_ptr == summary {
+        return;
+    }
+    st.rows_summary_ptr = summary;
+    st.rows_snapshot = unsafe {
+        core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+    };
+    st.rows_staged = true;
+}
+
 /// Stage the model's visible rows as synthetic ProfileSummary records (name field = row label;
 /// everything else zeroed) and leave the slots beyond them unoccupied. Snapshots the live summary
-/// first via the save-swap state -- occupancy bytes included -- so every existing backout path
-/// restores the user's real rows. Menu-thread only (record writes + renderer refresh -- same
-/// context the foreign-save preview uses).
+/// first -- occupancy bytes included -- so every backout path restores the user's real rows.
+/// Menu-thread only (record writes + renderer refresh -- same context the foreign-save preview
+/// uses).
+///
+/// THE SNAPSHOT IS THE STAGING'S OWN, not the foreign-save preview's. This used to set
+/// `preview_applied` and lean on the preview's snapshot/restore, and that conflation is the whole
+/// defect: the preview restore is (correctly) suppressed once `committed` is set, `committed` is
+/// sticky for the life of the process, and so the picker's labels were left in the game's records
+/// for every session after the first cross-file load. See
+/// [`save_picker_restore_staged_row_records`].
 pub(crate) unsafe fn save_picker_stage_row_records(
     model: &crate::experiments::save_picker::SavePickerModel,
 ) -> bool {
@@ -167,24 +214,21 @@ pub(crate) unsafe fn save_picker_stage_row_records(
         ));
         return false;
     }
-    {
-        let mut st = system_quit_save_swap_lock();
-        if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
-            st.summary_ptr = summary;
-            st.summary_snapshot = unsafe {
-                core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES)
-                    .to_vec()
-            };
-        }
-        // Mark the summary as replaced so `system_quit_save_swap_restore_profile_summary`
-        // restores the user's real rows on any backout path.
-        st.preview_applied = true;
-    }
+    unsafe { save_picker_arm_row_snapshot(summary) };
     let staged = unsafe { save_picker_write_row_records(model, summary) };
     SAVE_PICKER_STAGED_ROW_COUNT.store(staged, Ordering::SeqCst);
-    if let Ok(base) = game_module_base() {
-        let refresh: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+    if let Ok(_base) = game_module_base() {
+        let refresh: unsafe extern "system" fn() = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    PROFILE_RENDERER_REFRESH_RVA,
+                    "PROFILE_RENDERER_REFRESH_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return false,
+                },
+            )
+        };
         unsafe { refresh() };
     }
     append_autoload_debug(format_args!(
@@ -546,6 +590,15 @@ pub(crate) unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reas
     SAVE_DEST_COMMIT_PENDING.store(1, Ordering::SeqCst);
     save_flow_box_clear();
     unsafe { save_picker_native_close(dialog, reason) };
+    // RESTORE BEFORE THE SAVE FIRES, not merely before the next loading screen. The save-flow tick
+    // is about to run a native save, and the native save WRITES the ProfileSummary table into the
+    // container (`FUN_14067b940` -> `MarkProfileIndexAsUsed` + `FUN_140262270`). Firing while our
+    // browse-row labels are still in those records would persist `[ new ]` as a character name
+    // into the file the user just chose. The picker's own close path restores too; this is
+    // deliberately not left to it, because "commit" is one of the three exits the restore must
+    // cover and the ordering here is what makes it a save-correctness fix rather than a cosmetic
+    // one.
+    unsafe { save_picker_restore_staged_row_records("save-dest-commit") };
     append_autoload_debug(format_args!(
         "save-dest: commit staged (reason={reason}) target='{}'; picker closing, the save-flow tick will close the menus and fire",
         save_dest_target()
@@ -681,9 +734,11 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
                 SAVE_PICKER_OPEN_SLOTS_PENDING.store(1, Ordering::SeqCst);
                 unsafe { save_picker_native_close(dialog, "picked-file") };
             } else {
-                // Invalid container: stay in the picker so the user can choose another file.
-                // The ingest pipeline already restaged nothing (preview only applies on
-                // success), but our browse rows were untouched -- the window stays coherent.
+                // Invalid container: stay in the picker so the user can choose another file. The
+                // browse rows are NOT untouched (the old comment here claimed they were):
+                // `write_profile_summary_records_from_save_bytes` zeroes all ten records before it
+                // discovers the container has no readable slot, so the preview path restores this
+                // listing itself on that refusal before returning 0.
                 SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             0
@@ -713,6 +768,174 @@ pub(crate) unsafe fn save_picker_native_close(dialog: usize, reason: &str) {
 pub(crate) fn save_picker_resubmit_pending() -> bool {
     SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst) != 0
         || SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst) != 0
+}
+
+/// Per-frame sweep: put the game's records back if a picker session ended without any of the
+/// named exits running the restore. No-op in the overwhelmingly common case.
+///
+/// WHY A SWEEP AND NOT JUST MORE CALL SITES. The restore already runs at the close, at the
+/// destination commit, and on every open/rollback path -- but "did EVERY exit remember to call it"
+/// is precisely the property that failed here, and the failure mode is silent and only visible
+/// three loading screens later. The abort paths alone are five separate `save_dest_reset` /
+/// `save_flow_enter_stage(IDLE)` sites in `save_flow.rs` (commit plan refused, bypass arm refused,
+/// redirect arm failed, aborted without writing, unknown stage), and a sixth added tomorrow would
+/// reintroduce the bug. This closes the class instead of the instances: rows staged, no picker on
+/// screen, no resubmit queued means nobody owns those labels any more.
+///
+/// The two exemptions are both real states, not escapes:
+///   * `missing_save_selection_pending` -- the STARTUP picker deliberately keeps its rows staged
+///     across window closes (`save_picker_reset` says so and returns early), because the native
+///     Load Game row must re-open the same listing;
+///   * a queued resubmit -- the picker is mid-reopen for a directory change or the post-pick slot
+///     view, and the rows must survive the gap.
+///
+/// # Safety
+///
+/// Delegates to [`save_picker_restore_staged_row_records`], which writes the live summary through a
+/// raw pointer only after re-checking that the allocation is still the one it snapshotted. Game
+/// thread only, called from the per-frame task tick.
+pub(crate) unsafe fn save_picker_sweep_orphaned_row_records() {
+    // Read and RELEASE before anything else: the restore below takes the same lock.
+    let staged = system_quit_save_swap_lock().rows_staged;
+    if !staged {
+        return;
+    }
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+        || missing_save_selection_pending()
+        || save_picker_resubmit_pending()
+    {
+        return;
+    }
+    unsafe { save_picker_restore_staged_row_records("orphaned-row-records-sweep") };
+}
+
+/// Game-task ticks since the DLL attached, for [`save_picker_scan_orphaned_records`]'s throttle.
+static SAVE_PICKER_ORPHAN_SCAN_TICK: AtomicUsize = AtomicUsize::new(0);
+/// Sample the record table every this-many ticks (~0.5s at 60fps), matching
+/// `SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS`. Nothing is lost by the gap: an orphaned stomp is a
+/// state of the records that persists until something writes them, not an event that can be missed.
+const SAVE_PICKER_ORPHAN_SCAN_INTERVAL_TICKS: usize = 30;
+
+/// Publish which live `CS::ProfileSummary` slots are marked OCCUPIED while holding something that
+/// is not a character, at a moment when no picker owns the rows -- the RAM oracle for
+/// `er-effects-rs-fmy6`.
+///
+/// WHY THIS EXISTS RATHER THAN A COUNT OF RESTORES. `SAVE_PICKER_ROW_RECORDS_RESTORED` says we ran
+/// the restore; it cannot say the records are actually the game's. Three separate defects have left
+/// labels in these records (a sticky `committed` flag suppressing the restore, a snapshot latched
+/// from a previous container, and a build site that stages without arming one), and each was found
+/// only after the user watched a loading screen name a character `[ new ]`. The records themselves
+/// are the one place all three converge, so the oracle reads THEM. The rule is
+/// [`er_loading_portrait_core::portrait_identity::scan_live_records`], host-tested there.
+///
+/// CALLED AFTER [`save_picker_sweep_orphaned_row_records`], IN THE SAME TICK, AND THAT ORDER IS THE
+/// WHOLE POINT. The frame a picker closes, its rows are legitimately still staged and the sweep is
+/// what puts them back; sampling first would set a bit on every ordinary close and the oracle would
+/// be non-zero in the healthy case, which is how an oracle earns its own dismissal. Sampling after
+/// the heal means a bit can only set when the heal did not happen.
+///
+/// SAMPLED EVERY [`SAVE_PICKER_ORPHAN_SCAN_INTERVAL_TICKS`] TICKS, NOT EVERY FRAME. Ten occupied
+/// slots cost up to 190 `ReadProcessMemory`-guarded reads (`read_utf16_name_units` costs one per
+/// UTF-16 unit), which at 60fps would be over eleven thousand a second to watch a state that
+/// persists until something writes the records. The defect cannot hide inside a half-second window:
+/// an orphaned stomp survives until a restore or the game's own save path overwrites it.
+///
+/// # Safety
+///
+/// Every game access is a fault-guarded read of the live summary allocation, and nothing is
+/// written; an unreadable pointer or a torn record yields no sample rather than a fault. Game
+/// thread only, for the same reason the sweep is: the records it reads are the ones the save
+/// deserialize rewrites, and sampling them from another thread mixes two characters.
+pub(crate) unsafe fn save_picker_scan_orphaned_records() {
+    use er_game_base::profile_summary::{PROFILE_SUMMARY_LEVEL_OFFSET, PROFILE_SUMMARY_MAP_OFFSET};
+    use er_loading_portrait_core::portrait_identity::{LiveRecordSample, scan_live_records};
+    use er_telemetry_core::counters::{
+        PROFILE_SUMMARY_ORPHANED_RECORD_MASK, PROFILE_SUMMARY_ORPHANED_RECORD_SCANS,
+        PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ,
+    };
+
+    let tick = SAVE_PICKER_ORPHAN_SCAN_TICK.fetch_add(1, Ordering::SeqCst);
+    if !tick.is_multiple_of(SAVE_PICKER_ORPHAN_SCAN_INTERVAL_TICKS) {
+        return;
+    }
+    // While the picker owns the rows the labels are supposed to be there. Same ownership question
+    // the sweep asks, so the two cannot disagree about whether a stomp is orphaned.
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+        || missing_save_selection_pending()
+        || save_picker_resubmit_pending()
+        || system_quit_save_swap_lock().rows_staged
+    {
+        return;
+    }
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary < 0x10000 {
+        return;
+    }
+    // Fields first, samples second: a `LiveRecordSample` borrows its name, so the decoded strings
+    // have to outlive the sample vector rather than be built into it.
+    let mut names: [String; TITLE_PROFILE_SLOT_COUNT] = Default::default();
+    let mut levels = [0i32; TITLE_PROFILE_SLOT_COUNT];
+    let mut maps = [0i32; TITLE_PROFILE_SLOT_COUNT];
+    let mut occupied = [false; TITLE_PROFILE_SLOT_COUNT];
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        // A record whose occupancy byte will not read is not evidence of anything: leave the slot
+        // at its zeroed default, which is an unoccupied empty record and contributes no bit.
+        let Some(flag) =
+            (unsafe { safe_read_u8(summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) })
+        else {
+            continue;
+        };
+        occupied[slot] = flag != 0;
+        // AN UNOCCUPIED SLOT'S RECORD IS NEVER READ FURTHER. It produces no row (the native builder
+        // appends only where `saveSlotsStates[slot]` is set), so it can contribute no bit and no
+        // character to the has-been-deserialized gate -- and skipping it is most of this scan's
+        // cost on a save with three characters in it.
+        if !occupied[slot] {
+            continue;
+        }
+        let record = profile_summary_record_address(summary, slot);
+        let (units, len) = unsafe { read_utf16_name_units(record) };
+        names[slot] = String::from_utf16_lossy(&units[..len]);
+        levels[slot] = unsafe { safe_read_i32(record + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
+        maps[slot] = unsafe { safe_read_i32(record + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(0);
+    }
+    let samples = (0..TITLE_PROFILE_SLOT_COUNT).map(|slot| LiveRecordSample {
+        occupied: occupied[slot],
+        name: names[slot].as_str(),
+        level: levels[slot],
+        map: maps[slot],
+    });
+    let scan = scan_live_records(samples);
+    // HAS THIS TABLE EVER BEEN READ? Process-lifetime state, latched here, because the allocation
+    // exists long before `CS::ProfileSummary::Deserialize` fills it and uninitialised bytes must
+    // not be judged. It cannot be answered from THIS sample: a picker staging its rows leaves zero
+    // characters in the table, so "this sample holds a character" would go dark in exactly the
+    // state the mask exists to report. Once one sample has seen a populated table, every later
+    // sample of the same process is meaningful.
+    if scan.characters > 0 {
+        PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ.store(1, Ordering::SeqCst);
+    } else if PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    PROFILE_SUMMARY_ORPHANED_RECORD_SCANS.fetch_add(1, Ordering::SeqCst);
+    let mask = scan.orphaned_mask;
+    if mask == 0 {
+        return;
+    }
+    let previous = PROFILE_SUMMARY_ORPHANED_RECORD_MASK.fetch_or(mask as usize, Ordering::SeqCst);
+    // Log only the slots this sample ADDS, so a stomp that survives for minutes writes one line
+    // rather than one per frame -- and a later, different stomp still gets its own.
+    let fresh = mask & !(previous as u32);
+    if fresh == 0 {
+        return;
+    }
+    let offenders: Vec<String> = (0..TITLE_PROFILE_SLOT_COUNT)
+        .filter(|slot| fresh & (1u32 << slot) != 0)
+        .map(|slot| format!("{slot}:{:?} level={}", names[slot], levels[slot]))
+        .collect();
+    append_autoload_debug(format_args!(
+        "save-picker: ORPHANED ProfileSummary records -- occupied slots holding non-characters with no picker owning the rows mask=0x{mask:03x} new=0x{fresh:03x} {offenders:?} summary=0x{summary:x}; a loading screen reading these slots will show a row label where a character name belongs"
+    ));
 }
 
 const PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET: usize = 0xa38;
@@ -797,11 +1020,15 @@ unsafe fn save_picker_event_point(event: usize) -> Option<(f32, f32)> {
     if event == 0 {
         return None;
     }
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return None;
     };
-    let point_fn: unsafe extern "system" fn(usize, *mut u64) -> *mut u64 =
-        unsafe { std::mem::transmute(base + MENU_VIEWER_EVENT_POINT_RVA) };
+    let point_fn: unsafe extern "system" fn(usize, *mut u64) -> *mut u64 = unsafe {
+        std::mem::transmute(crate::experiments::gated_game_fn(
+            MENU_VIEWER_EVENT_POINT_RVA,
+            "MENU_VIEWER_EVENT_POINT_RVA",
+        )?)
+    };
     let mut packed = 0_u64;
     unsafe { point_fn(event, &mut packed as *mut u64) };
     let x = f32::from_bits(packed as u32);
@@ -904,8 +1131,27 @@ fn save_picker_rebuild_target_is_live(
     list_vtable: usize,
     game_base: usize,
 ) -> bool {
-    dialog_vtable == game_base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA
-        && list_vtable == game_base + PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA
+    // Both expected vtables are RESOLVED for the running build, and neither comparison may be
+    // satisfied by zero. The dialog half used to be a raw `game_base + RVA` sitting next to a
+    // resolved sibling: `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78), so
+    // that half could never match and the in-place list rebuild was silently declined on every
+    // records-changed event. The zero screens close the other direction -- `game_data_addr` answers
+    // 0 for a refusal and both observed vtables arrive here as `unwrap_or(0)`, so `0 == 0` would
+    // have called the native rebuild on a dialog nothing had identified.
+    let expected_dialog_vtable = er_game_base::mem::game_data_addr(
+        game_base,
+        er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA,
+        "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+    );
+    let expected_list_vtable = er_game_base::mem::game_data_addr(
+        game_base,
+        PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA,
+        "PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA",
+    );
+    expected_dialog_vtable != 0
+        && expected_list_vtable != 0
+        && dialog_vtable == expected_dialog_vtable
+        && list_vtable == expected_list_vtable
 }
 
 unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
@@ -946,8 +1192,16 @@ mod rebuild_liveness_tests {
     #[test]
     fn rebuild_requires_the_live_dialog_and_final_derived_list_vtables() {
         let base = 0x140000000;
-        let dialog = base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA;
-        let list = base + PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA;
+        let dialog = er_game_base::mem::game_data_addr(
+            base,
+            er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA,
+            "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+        );
+        let list = er_game_base::mem::game_data_addr(
+            base,
+            PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA,
+            "PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA",
+        );
         assert!(save_picker_rebuild_target_is_live(dialog, list, base));
         assert!(!save_picker_rebuild_target_is_live(
             dialog,
@@ -1311,11 +1565,20 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
             | crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK,
     );
     let pressed = drive_strip_pressed_mask(prev_down, down_mask, nav_edges);
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return;
     };
-    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    let cursor_getter: unsafe extern "system" fn(usize) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                MENU_ITEM_LIST_CURSOR_GETTER_RVA,
+                "MENU_ITEM_LIST_CURSOR_GETTER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
         if pressed != 0 {
@@ -1610,7 +1873,13 @@ static SAVE_PICKER_GRID_GEOMETRY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// The live `CSMenuManImp` keystate bitmap (`+0x90`), one byte per menu event id.
 unsafe fn save_picker_menu_event_keystate() -> Option<*mut u8> {
     let base = game_module_base().ok()?;
-    let inputmgr = unsafe { *((base + CS_MENU_MAN_GLOBAL_RVA) as *const usize) };
+    let inputmgr = unsafe {
+        *((er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        )) as *const usize)
+    };
     (inputmgr != 0).then(|| (inputmgr + INPUTMGR_BITMAP_90_OFFSET) as *mut u8)
 }
 
@@ -1704,7 +1973,7 @@ pub(crate) fn install_save_picker_set_cursor_hook() {
     if SAVE_PICKER_SET_CURSOR_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_ITEM_LIST_SET_CURSOR_RVA as u32) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve select-index rva 0x{MENU_ITEM_LIST_SET_CURSOR_RVA:x}"
         ));
@@ -1806,7 +2075,7 @@ pub(crate) fn install_save_picker_wheel_delta_hook() {
     if SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA as u32) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve wheel-delta rva 0x{MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA:x}"
         ));
@@ -1950,7 +2219,7 @@ pub(crate) fn install_save_picker_hit_test_hook() {
     if SAVE_PICKER_HIT_TEST_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_ITEM_LIST_POINT_TO_INDEX_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_ITEM_LIST_POINT_TO_INDEX_RVA as u32) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve hit-test rva 0x{MENU_ITEM_LIST_POINT_TO_INDEX_RVA:x}"
         ));
@@ -2075,11 +2344,20 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
         SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(EDGE_SCROLL_NO_PREV_CURSOR, Ordering::SeqCst);
         return;
     }
-    let Ok(base) = game_module_base() else {
+    let Ok(_base) = game_module_base() else {
         return;
     };
-    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    let cursor_getter: unsafe extern "system" fn(usize) -> i32 = unsafe {
+        std::mem::transmute(
+            match crate::experiments::gated_game_fn(
+                MENU_ITEM_LIST_CURSOR_GETTER_RVA,
+                "MENU_ITEM_LIST_CURSOR_GETTER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     unsafe { save_picker_log_grid_geometry_once(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     // Remember where the selection was BEFORE this tick's key was read. The native list moves and
@@ -2744,6 +3022,12 @@ pub(crate) unsafe extern "system" fn save_picker_profile_list_builder_hook(
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 || missing_save_selection_pending() {
         let summary = unsafe { system_quit_profile_summary_ptr() };
         if summary != TITLE_OWNER_SCAN_START_ADDRESS {
+            // This is a SECOND writer of the same records, reached from the native builder rather
+            // than from `save_picker_stage_row_records`, so it has to arm the restore snapshot on
+            // its own -- otherwise a build that lands before any staging call (or after a restore
+            // cleared the latch) would destroy the records with nothing left to put back. A no-op
+            // whenever this session already holds a snapshot for this allocation.
+            unsafe { save_picker_arm_row_snapshot(summary) };
             let staged = {
                 let guard = crate::experiments::save_picker::active_save_picker_lock();
                 guard
@@ -2784,7 +3068,7 @@ pub(crate) fn install_save_picker_list_builder_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(PROFILE_SELECT_LIST_BUILDER_RVA) else {
+    let Ok(addr) = game_rva_for_hook(PROFILE_SELECT_LIST_BUILDER_RVA) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve list-builder rva 0x{PROFILE_SELECT_LIST_BUILDER_RVA:x}"
         ));

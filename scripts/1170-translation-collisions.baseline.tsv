@@ -1,0 +1,60 @@
+# Translation collisions that have been LOOKED AT, for scripts/check-1170-translation-collisions.py.
+#
+# A collision is a pair of rows `A -> B` and `B -> C`, both real moves, in the tables
+# `crates/er-game-base/build.rs` emits. Resolving A once gives B, which is right; resolving the
+# result AGAIN gives C, which is wrong -- and it is wrong SILENTLY, because the table cannot tell
+# a destination from a source when both are just addresses. It bit once already: `native_submit`
+# 0x7ac890 -> 0x7ad710 through `register_shared_hook`, which handed the resolved address to the
+# product's union register, which resolved again.
+#
+# THIS IS NOT AN EXCUSE LIST. Every line here is printed in full on every run, and the gate fails
+# on any collision that is NOT here, or on a recorded one that reaches a table it did not reach
+# before. It exists because the three below are facts about two shipped images that this gate is
+# not permitted to edit away, and a gate that is red on arrival gets deleted rather than fixed.
+#
+# TO CLEAR A LINE: delete the offending row from the ledger and delete the line here. `--strict`
+# ignores this file entirely and is the mode to run once they are gone.
+#
+# HISTORY OF THIS FILE'S OWN ADVICE, because it has been wrong twice and both times in the
+# direction that destroys something:
+#
+#   (1) Until 2026-08-30 all three notes ended "the row carries no feature: delete it from both
+#       ledgers." That came from a test which searched for `const NAME: usize = 0x<addr>;` and read
+#       its own silence as proof of absence. The same test called 0xb0d400 unclaimed while it was
+#       declared `MenuJobWait = 0x00b0d400` inside `#[repr(u32)] pub enum MenuTraceRva`, with live
+#       uses on the autoload path.
+#
+#   (2) The correction then over-swung. The notes were rewritten to say NOT PROVEN because four
+#       declarations in `crates/` could not be evaluated. Those four are now evaluated and were
+#       never addresses -- `SP_EFFECT_PARAM_INDEX` is a param row index of 15,
+#       `CHR_ASM_UNKD4_OFFSET`/`CHR_ASM_UNKD8_OFFSET` are struct offsets 0xd4/0xd8, and
+#       `CHR_ASM_ENTRY_COUNT` is a count of 22, each matching an independently documented meaning.
+#       The residue that could hold a `.text` RVA is now EMPTY for all three addresses, so the
+#       answer today is PROVEN unclaimed, and the NOT-PROVEN wording below was stale.
+#
+# WHAT "PROVEN UNCLAIMED" DOES AND DOES NOT MEAN. It means nothing in `crates/` DECLARES the
+# address and no bare literal of it occurs in code. It does NOT mean the address is unreachable:
+# a value can be computed from another constant, read out of a live vtable or recovered from a
+# call site, and `docs/recon/rva-1170-observed-refusals.txt` exists precisely because 42 of the 54
+# addresses the running game asked for on 2026-08-29 were invisible to a declaration scan. Nor is
+# a wrong deletion here recoverable from a log: once row B is gone its source is a destination
+# that no row claims as a source, `already_translated_in` takes it, and the resolver hands the
+# address back UNTRANSLATED with no refusal and no log line -- and on 1.17 that address is a
+# different function. The gate computes and prints that per row (`deletion_failure_mode`).
+#
+# WHAT SETTLED ALL THREE, 2026-08-30, was a RUN and not a scan. The evidence is in each note:
+# every appearance of these addresses in every DLL log is as some other row's translated OUTPUT,
+# never as a first request, and each is immediately re-resolved by a hook API. So the collisions
+# are NOT inert -- three product detours are being installed on the wrong function right now, and
+# each feature's own log line reports the address it MEANT rather than the one it got.
+#
+# THE PRIMARY FIX IS THE CALL SITE, NOT THIS FILE. `MhHook::new` and `register_union_hook` resolve
+# internally, so a caller that does `game_rva(RVA)` and hands them the RESULT resolves twice. The
+# three call sites are named in the notes. Retiring row B is a second, independent mitigation that
+# also happens to make these three double resolves idempotent; it is recommended AFTER the call
+# sites are fixed and a run confirms no first request for the address, and nobody has executed it.
+#
+# first source	collision address	second destination	routes	note
+0x614870	0x6156c0	0x616510	CALL>CALL,CALL>DETOUR,DETOUR>CALL,DETOUR>DETOUR	Row B (0x6156c0 -> 0x616510) is named `(refused at runtime 0x6156c0)` in needed.tsv and needed-verified.tsv -- added to silence a refusal that WAS the double resolve. BOTH ROWS ARE CORRECT MAPPINGS, byte-checked: 1162@0x614870 == 1170@0x6156c0 over all 92 bytes, and 1162@0x6156c0 vs 1170@0x616510 is 201/231 with the diffs at rip-relative displacements (Ghidra: 92-byte/2-caller pair, and a 231-byte/1-caller pair calling GetRuntimeClassName+DLPanic). The control proves the hazard: 1162@0x6156c0 vs 1170@0x6156c0 match only 5/92 bytes -- different functions. CLAIM STATUS 2026-08-30 (supersedes the earlier NOT PROVEN): PROVEN unclaimed. All address-capable declarations in crates/ were evaluated, none is 0x6156c0, no bare literal occurs, and the residue wide enough to hold it is empty; its only appearances in crates/ are doc comments about this collision. RUN EVIDENCE, er-quickload-autoload-debug.log 2026-08-30 18:42 +916ms: `ADDRESS TRANSLATED (game_rva @ crates/er-quickload/src/experiments/own_load/drive.rs:373): 0x140614870 -> 0x1406156c0` immediately followed by `ADDRESS TRANSLATED (MhHook::new 0x1406156c0): 0x1406156c0 -> 0x140616510`. That is the only appearance of the address in any log -- never a first request. LIVE CONSEQUENCE: install_wbr_update_hook's detour is on 0x140616510, while its own next line says `wbr-update: hooked 0x1406156c0`. RECOMMENDED, NOT EXECUTED: pass the UNRESOLVED WORLDBLOCKRES_UPDATE_RVA to MhHook::new at drive.rs:373; afterwards row B may be retired from both ledgers.
+0x7ac890	0x7ad710	0x7ae590	CALL>CALL,CALL>DETOUR,DETOUR>CALL,DETOUR>DETOUR	The one that bit, via er-reload-trace's native_submit_7ac890. Row B (0x7ad710 -> 0x7ae590) is named `(refused at runtime 0x7ad710)`. BOTH ROWS ARE CORRECT MAPPINGS, byte-checked: 1162@0x7ac890 == 1170@0x7ad710 over 46/46 bytes and 1162@0x7ad710 == 1170@0x7ae590 over 255/255 (Ghidra: a 46-byte/2-caller leaf, and a 255-byte CSScaleformLoadInfo consumer with 16+ callers). The control: 1162@0x7ad710 vs 1170@0x7ad710 share 0 of 46 bytes. CLAIM STATUS 2026-08-30 (supersedes the earlier NOT PROVEN): PROVEN unclaimed, residue for this address empty; its only appearances in crates/ are doc comments about this collision. RUN EVIDENCE, er-quickload-autoload-debug.log 2026-08-30 18:42 +991ms: `ADDRESS TRANSLATED (game_rva @ crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:274): 0x1407ac890 -> 0x1407ad710` immediately followed by `ADDRESS TRANSLATED (register_union_hook 0x1407ad710): 0x1407ad710 -> 0x1407ae590`. Never a first request. LIVE CONSEQUENCE: the er-reload-trace path was restructured, but create_continue_trace_hook is a SECOND, still-live instance -- er-quickload-continue-trace.log says `hook native_submit_7ac890: unioned on 0x1407ad710` while the union was actually taken on 0x1407ae590, a hot Scaleform function. RECOMMENDED, NOT EXECUTED: pass the UNRESOLVED rva to register_union_hook at menu_trace_hooks.rs:274; afterwards row B may be retired from both ledgers.
+0xbba6e0	0xbbbd90	0xbbd440	CALL>CALL,CALL>DETOUR,DETOUR>CALL,DETOUR>DETOUR	Row B (0xbbbd90 -> 0xbbd440) is named `(refused at runtime 0xbbbd90)`. BOTH ROWS ARE CORRECT MAPPINGS, byte-checked: 1162@0xbba6e0 vs 1170@0xbbbd90 is 69/72 and 1162@0xbbbd90 vs 1170@0xbbd440 is 244/253, every diff a rip-relative displacement, sizes equal on both sides (Ghidra: a 72-byte CSMenuAsmModelRend method, and a 253-byte CSMenuFaceModelRend method -- adjacent classes, different functions). The control: 1162@0xbbbd90 vs 1170@0xbbbd90 share 7 of 72 bytes. CLAIM STATUS 2026-08-30 (supersedes the earlier NOT PROVEN): PROVEN unclaimed, residue for this address empty; its only appearances in crates/ are doc comments about this collision. RUN EVIDENCE, er-quickload-autoload-debug.log 2026-08-30 18:42 +2102ms: `ADDRESS TRANSLATED (game_rva @ crates/er-loading-portrait-core/src/lookat_stage_camera.rs:575): 0x140bba6e0 -> 0x140bbbd90` immediately followed by `ADDRESS TRANSLATED (MhHook::new 0x140bbbd90): 0x140bbbd90 -> 0x140bbd440`. Never a first request. LIVE CONSEQUENCE: the per-frame push detour is on 0x140bbd440 (CSMenuFaceModelRend), while its own next line says `perframe-push-hook: installed on per-frame push 0x140bbbd90`. RECOMMENDED, NOT EXECUTED: pass the UNRESOLVED PROFILE_PER_FRAME_PUSH_RVA to MhHook::new at lookat_stage_camera.rs:575; afterwards row B may be retired from both ledgers.

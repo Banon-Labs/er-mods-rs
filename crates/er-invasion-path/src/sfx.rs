@@ -80,10 +80,16 @@ fn transform_at(position: [f32; 3]) -> WorldTransform {
 #[repr(C, align(16))]
 struct WorldTransform([f32; 16]);
 
-/// Resolve a game function by RVA, refusing anything that is not inside the game image.
+/// Resolve a game function by RVA for the RUNNING build, refusing what it cannot place.
+///
+/// The doc comment here used to make this claim while the body only added the base -- it checked
+/// nothing. It now delegates to the shared resolver, which returns the translated address on a
+/// build that moved the code and `None` when no mapping is verified. That matters more here than
+/// almost anywhere: these addresses are transmuted into function pointers and CALLED, so a stale
+/// one transfers control into whatever now occupies those bytes.
 fn function(rva: u32) -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
-    Some(module_base + rva as usize)
+    er_game_base::game_build::resolve_game_address(module_base + rva as usize, "invasion-path sfx")
 }
 
 /// Bytes of `UnkSfxCtrlStruct`, the control block `SpawnFfxInstance` writes into.
@@ -357,8 +363,18 @@ pub(crate) unsafe fn despawn(mut marker: Marker) {
 unsafe fn sfx_singleton() -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
     // SAFETY: fault-tolerant read; None rather than a fault if the page is not mapped.
-    let singleton =
-        unsafe { er_game_base::mem::safe_read_usize(module_base + GLOBAL_CSSFX_RVA as usize) }?;
+    //
+    // RESOLVED, not `module_base + RVA`. Every `.data` global moved between 1.16.2 and 1.17 --
+    // this one 0x3d839b8 -> 0x3d87a28 -- and a stale READ does not announce itself the way a
+    // stale CALL does: `safe_read_usize` SUCCEEDS and hands back whatever now occupies the old
+    // slot, which the heap-alignment screen below cannot tell from a real CSSfx pointer.
+    let singleton = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            module_base,
+            GLOBAL_CSSFX_RVA as usize,
+            "GLOBAL_CSSFX_RVA",
+        ))
+    }?;
     // SAFETY: a plausibility screen on the raw value; reads nothing through the pointer.
     (singleton != 0 && unsafe { er_game_base::mem::is_heap_aligned_ptr(singleton) })
         .then_some(singleton)

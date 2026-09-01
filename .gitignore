@@ -24,6 +24,9 @@ __pycache__/
 
 # Deobfuscated (Arxan-decrypted) ER image for static RE -- copyrighted game binary, NEVER commit
 eldenring-deobf.bin
+# Same rule, 1.17: a de-Arxan'd copy of the game binary. Regenerate with
+# scripts/dearxan-deobfuscate.rs; never commit it.
+eldenring-deobf-1.17.bin
 *.deobf.bin
 # Raw executable bytes exported from the Ghidra runtime DUMP (copyrighted) -- used by
 # scripts/dump-deobf-shift.py to ground-truth dump<->deobf addresses. NEVER commit.
@@ -71,3 +74,9 @@ reference-captures/
 
 # Third-party JS installed for the planner reference decoder (npm --prefix ... install lzutf8).
 crates/er-build-export/tests/reference/node_modules/
+
+# The whole-image function map: 2.4 MB of derived data, regenerated in about a minute by
+# scripts/build-1162-1170-function-map.py from the two deobf images (themselves untracked).
+# What the build actually consumes is the small selected subset, which IS tracked:
+# docs/recon/rva-map-1162-to-1170.needed.tsv and .data.tsv.
+docs/recon/rva-map-1162-to-1170.functions.tsv

@@ -7,8 +7,19 @@ use super::*;
 /// pump is not draining the torn-down profile renderers, whose still-registered draw tasks then keep
 /// filling the GX command queue.
 pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
-    let base = game_rva(0).ok()?;
-    let man = unsafe { safe_read_usize(base + DELAY_DELETE_MAN_SINGLETON_PTR_RVA) }?;
+    // `game_module_base()`, NOT `game_rva(0)`. RVA 0 is the PE header, never a code or data
+    // address, so there is nothing for the 1.16.2 -> 1.17 map to translate and asking it is
+    // always a refusal. This site alone logged 339,764 of them in one session (it is on the
+    // 4 Hz telemetry write), each reading `ADDRESS REFUSED (game_rva): 0x140000000` and naming
+    // nothing. The module base is version-independent; take it directly.
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            DELAY_DELETE_MAN_SINGLETON_PTR_RVA,
+            "DELAY_DELETE_MAN_SINGLETON_PTR_RVA",
+        ))
+    }?;
     if man < 0x10000 {
         return None;
     }
@@ -85,11 +96,22 @@ pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
     };
     // Only a LIVE profile renderer (correct vtable) -- never a freed/garbage pointer.
     if unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-        != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        != er_game_base::mem::game_data_addr(
+            base,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+            "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+        )
     {
         return false;
     }
-    let man = unsafe { safe_read_usize(base + DELAY_DELETE_MAN_SINGLETON_PTR_RVA) }.unwrap_or(0);
+    let man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            DELAY_DELETE_MAN_SINGLETON_PTR_RVA,
+            "DELAY_DELETE_MAN_SINGLETON_PTR_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if man < 0x10000 {
         return false;
     }
@@ -237,6 +259,24 @@ pub(crate) unsafe fn gx_cmd_arena_sample_remaining(queue: usize) -> Option<i64> 
     Some(remaining)
 }
 
+/// Say once, bounded, that producer attribution has no transport band on this build.
+///
+/// Bounded because this sits on `reserve_command_queue_slot`, which runs thousands of times a
+/// frame; an unbounded line here would be the 339,764-refusal failure from
+/// `scripts/check-no-rva-zero.py` all over again.
+fn gx_cmd_queue_band_unavailable_once() {
+    static SAID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    const SAY_AT_MOST: usize = 4;
+    if SAID.fetch_add(1, Ordering::SeqCst) >= SAY_AT_MOST {
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "callsite-gate: GX cmd-queue producer attribution has no verified transport band on this \
+         build (GX_RESERVE_CMD_QUEUE_SLOT_RVA 0x{GX_RESERVE_CMD_QUEUE_SLOT_RVA:x} unresolved) -- \
+         producers are recorded as 0 rather than mis-attributed to the transport wrappers"
+    ));
+}
+
 /// Telemetry-only wrapper for `reserve_command_queue_slot` (deobf 0x141aeae60): the fixed 192-slot
 /// GX command queue whose full-queue null-slot write is the repeated-switch crash at rva 0x1aeaf05
 /// (reproduced at switch #4, run autostep10c-directarm-20260703-145348). Tracks occupancy
@@ -262,8 +302,17 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
         GX_CMD_QUEUE_CAP_SEEN.store(cap as usize, Ordering::Relaxed);
     }
     GX_CMD_QUEUE_SUBMITS.fetch_add(1, Ordering::Relaxed);
-    let (producer, self_in_stack) =
-        stack_producer_rva(GX_CMD_QUEUE_WRAPPER_RVA_MIN..GX_CMD_QUEUE_WRAPPER_RVA_MAX);
+    // The transport band is an EXCLUSION set, so a stale one is not inert -- it is wrong in a way
+    // that reads as right: every reserve/enqueue frame would be counted as a producer and the
+    // histogram would name the transport wrapper as the thing filling the queue. Resolve it, and
+    // when this build has no answer, attribute nothing rather than attributing it wrongly.
+    let (producer, self_in_stack) = match er_title_flow::gx_cmd_queue_wrapper_rva_band() {
+        Some(band) => stack_producer_rva(band),
+        None => {
+            gx_cmd_queue_band_unavailable_once();
+            (0, false)
+        }
+    };
     let key = if self_in_stack {
         producer | GX_CMD_QUEUE_SELF_TAG
     } else {
@@ -406,6 +455,11 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
         ));
         return;
     };
+    // HOOK-BATCH-ATOMIC: the dtor detour SKIPS the game's real destructor for any object absent
+    // from the live-set that only the ctor detour fills, so a dtor installed without its ctor
+    // would classify EVERY teardown as a double-free and skip it. Partial installation of this
+    // pair is worse than none, which is why the all-or-nothing abort below is correct here and
+    // is a defect everywhere else (`scripts/check-hook-batch-abort.py`).
     let mut ok = true;
     match unsafe {
         MhHook::new(
@@ -746,7 +800,7 @@ pub(crate) fn install_menu_window_job_finalize_guard() {
     if MENU_WINDOW_JOB_FINALIZE_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_WINDOW_JOB_FINALIZE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_WINDOW_JOB_FINALIZE_RVA as u32) else {
         append_crash_log(format_args!(
             "menu-window-finalize-guard: failed to resolve finalize rva 0x{MENU_WINDOW_JOB_FINALIZE_RVA:x}"
         ));
@@ -791,7 +845,7 @@ pub(crate) fn install_menu_window_job_dtor_guard() {
             return;
         }
     }
-    let Ok(dtor_addr) = game_rva(MENU_WINDOW_JOB_DTOR_RVA as u32) else {
+    let Ok(dtor_addr) = game_rva_for_hook(MENU_WINDOW_JOB_DTOR_RVA as u32) else {
         append_autoload_debug(format_args!(
             "menu-window-job-guard: failed to resolve dtor rva 0x{MENU_WINDOW_JOB_DTOR_RVA:x}"
         ));
@@ -847,7 +901,7 @@ pub(crate) fn install_system_quit_window_list_push_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(MENU_WINDOW_LIST_PUSH_RVA) else {
+    let Ok(addr) = game_rva_for_hook(MENU_WINDOW_LIST_PUSH_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve MenuWindow list push rva 0x{MENU_WINDOW_LIST_PUSH_RVA:x}"
         ));
@@ -891,7 +945,14 @@ pub(crate) fn install_system_quit_window_list_push_hook() {
 /// teardown (the world unload drops it); it stays resident through loads. Reproduces the game's own
 /// check (`GetParamResCap(repo, MenuOffscrRendParam, 0) == NULL`) read-only.
 pub(crate) unsafe fn menu_offscr_rend_param_table_absent(base: usize) -> bool {
-    let repo = unsafe { safe_read_usize(base + SOLO_PARAM_REPOSITORY_PTR_RVA) }.unwrap_or(0);
+    let repo = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            SOLO_PARAM_REPOSITORY_PTR_RVA,
+            "SOLO_PARAM_REPOSITORY_PTR_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if repo == 0 {
         return false; // repo itself not up yet -> not the quit-teardown condition; forward.
     }
@@ -940,7 +1001,7 @@ pub(crate) fn install_quit_to_desktop_clean_kill_hook() {
             return;
         }
     }
-    let Ok(lookup_addr) = game_rva(MENU_OFFSCR_REND_PARAM_LOOKUP_RVA as u32) else {
+    let Ok(lookup_addr) = game_rva_for_hook(MENU_OFFSCR_REND_PARAM_LOOKUP_RVA as u32) else {
         append_autoload_debug(format_args!(
             "quit-to-desktop: failed to resolve MenuOffscrRendParam lookup rva 0x{MENU_OFFSCR_REND_PARAM_LOOKUP_RVA:x}"
         ));
@@ -1001,130 +1062,145 @@ pub(crate) fn install_system_quit_noop_action_hook() {
             return;
         }
     }
+    // EACH ROW INSTALLS OR FAILS ON ITS OWN. These three used to `return` out of the whole
+    // function when an address would not resolve, so a single refused RVA on the FIRST row took
+    // the other two with it -- including the guard that sits in front of the native
+    // Return-to-Desktop confirmation, which is the irreversible one. On 1.17 that is not
+    // hypothetical: SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA is declared `: u32` where the row
+    // selector's regex requires `: usize`, so it is invisible to the scanner, absent from the map,
+    // and refused at runtime -- silently disabling the entire Quit-tab routing.
+    // A labelled block gives each row its own exit: it skips itself and nothing else.
     if !first_installed {
-        let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: failed to resolve Save Game/Quit action invoke rva 0x{SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA:x}"
-            ));
-            return;
-        };
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                system_quit_noop_desktop_action_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                SYSTEM_QUIT_NOOP_ACTION_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                if let Err(status) = unsafe { hook.queue_enable() } {
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: queue_enable first-row action hook failed: {status:?}"
-                    ));
-                    return;
-                }
-                match unsafe { MH_ApplyQueued() } {
-                    MH_STATUS::MH_OK => {
-                        crate::mh::leak_installed_hook(hook);
-                        SYSTEM_QUIT_NOOP_ACTION_INSTALLED
-                            .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
+        'first: {
+            let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve Save Game/Quit action invoke rva 0x{SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA:x}"
+                ));
+                break 'first;
+            };
+            match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    system_quit_noop_desktop_action_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    SYSTEM_QUIT_NOOP_ACTION_ORIG
+                        .store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
                         append_autoload_debug(format_args!(
-                            "system-quit-dup: hooked first Quit-tab action invoke 0x{addr:x}; native first row routes to Save Game"
+                            "system-quit-dup: queue_enable first-row action hook failed: {status:?}"
                         ));
+                        break 'first;
                     }
-                    status => append_autoload_debug(format_args!(
-                        "system-quit-dup: MH_ApplyQueued first-row action hook failed: {status:?}"
-                    )),
+                    match unsafe { MH_ApplyQueued() } {
+                        MH_STATUS::MH_OK => {
+                            crate::mh::leak_installed_hook(hook);
+                            SYSTEM_QUIT_NOOP_ACTION_INSTALLED
+                                .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
+                            append_autoload_debug(format_args!(
+                                "system-quit-dup: hooked first Quit-tab action invoke 0x{addr:x}; native first row routes to Save Game"
+                            ));
+                        }
+                        status => append_autoload_debug(format_args!(
+                            "system-quit-dup: MH_ApplyQueued first-row action hook failed: {status:?}"
+                        )),
+                    }
                 }
+                Err(status) => append_autoload_debug(format_args!(
+                    "system-quit-dup: MhHook::new first-row action hook failed: {status:?}"
+                )),
             }
-            Err(status) => append_autoload_debug(format_args!(
-                "system-quit-dup: MhHook::new first-row action hook failed: {status:?}"
-            )),
         }
     }
     if !second_installed {
-        let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA) else {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: failed to resolve Return-to-Desktop action invoke rva 0x{SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA:x}"
-            ));
-            return;
-        };
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                system_quit_return_desktop_action_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG
-                    .store(hook.trampoline() as usize, Ordering::SeqCst);
-                if let Err(status) = unsafe { hook.queue_enable() } {
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: queue_enable second-row action hook failed: {status:?}"
-                    ));
-                    return;
-                }
-                match unsafe { MH_ApplyQueued() } {
-                    MH_STATUS::MH_OK => {
-                        crate::mh::leak_installed_hook(hook);
-                        SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.store(
-                            SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES,
-                            Ordering::SeqCst,
-                        );
+        'second: {
+            let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve Return-to-Desktop action invoke rva 0x{SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA:x}"
+                ));
+                break 'second;
+            };
+            match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    system_quit_return_desktop_action_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG
+                        .store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
                         append_autoload_debug(format_args!(
-                            "system-quit-dup: hooked second Quit-tab action invoke 0x{addr:x}; cloned Load Profile/Load Save Profiles rows route before native Return-to-Desktop confirmation"
+                            "system-quit-dup: queue_enable second-row action hook failed: {status:?}"
                         ));
+                        break 'second;
                     }
-                    status => append_autoload_debug(format_args!(
-                        "system-quit-dup: MH_ApplyQueued second-row action hook failed: {status:?}"
-                    )),
+                    match unsafe { MH_ApplyQueued() } {
+                        MH_STATUS::MH_OK => {
+                            crate::mh::leak_installed_hook(hook);
+                            SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.store(
+                                SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES,
+                                Ordering::SeqCst,
+                            );
+                            append_autoload_debug(format_args!(
+                                "system-quit-dup: hooked second Quit-tab action invoke 0x{addr:x}; cloned Load Profile/Load Save Profiles rows route before native Return-to-Desktop confirmation"
+                            ));
+                        }
+                        status => append_autoload_debug(format_args!(
+                            "system-quit-dup: MH_ApplyQueued second-row action hook failed: {status:?}"
+                        )),
+                    }
                 }
+                Err(status) => append_autoload_debug(format_args!(
+                    "system-quit-dup: MhHook::new second-row action hook failed: {status:?}"
+                )),
             }
-            Err(status) => append_autoload_debug(format_args!(
-                "system-quit-dup: MhHook::new second-row action hook failed: {status:?}"
-            )),
         }
     }
     if !controller_installed {
-        let Ok(addr) = game_rva(PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA) else {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: failed to resolve PropertyNewButtonController activation rva 0x{PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA:x}"
-            ));
-            return;
-        };
-        match unsafe {
-            MhHook::new(
-                addr as *mut c_void,
-                property_new_button_controller_activate_hook as *mut c_void,
-            )
-        } {
-            Ok(hook) => {
-                PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_ORIG
-                    .store(hook.trampoline() as usize, Ordering::SeqCst);
-                if let Err(status) = unsafe { hook.queue_enable() } {
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: queue_enable PropertyNewButtonController activation hook failed: {status:?}"
-                    ));
-                    return;
-                }
-                match unsafe { MH_ApplyQueued() } {
-                    MH_STATUS::MH_OK => {
-                        crate::mh::leak_installed_hook(hook);
-                        PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED.store(
-                            PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES,
-                            Ordering::SeqCst,
-                        );
+        'controller: {
+            let Ok(addr) = game_rva_for_hook(PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve PropertyNewButtonController activation rva 0x{PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA:x}"
+                ));
+                break 'controller;
+            };
+            match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    property_new_button_controller_activate_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_ORIG
+                        .store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
                         append_autoload_debug(format_args!(
-                            "system-quit-dup: hooked PropertyNewButtonController activation 0x{addr:x}; custom Quit rows route by controller before native confirmation"
+                            "system-quit-dup: queue_enable PropertyNewButtonController activation hook failed: {status:?}"
                         ));
+                        break 'controller;
                     }
-                    status => append_autoload_debug(format_args!(
-                        "system-quit-dup: MH_ApplyQueued PropertyNewButtonController activation hook failed: {status:?}"
-                    )),
+                    match unsafe { MH_ApplyQueued() } {
+                        MH_STATUS::MH_OK => {
+                            crate::mh::leak_installed_hook(hook);
+                            PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED.store(
+                                PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES,
+                                Ordering::SeqCst,
+                            );
+                            append_autoload_debug(format_args!(
+                                "system-quit-dup: hooked PropertyNewButtonController activation 0x{addr:x}; custom Quit rows route by controller before native confirmation"
+                            ));
+                        }
+                        status => append_autoload_debug(format_args!(
+                            "system-quit-dup: MH_ApplyQueued PropertyNewButtonController activation hook failed: {status:?}"
+                        )),
+                    }
                 }
+                Err(status) => append_autoload_debug(format_args!(
+                    "system-quit-dup: MhHook::new PropertyNewButtonController activation hook failed: {status:?}"
+                )),
             }
-            Err(status) => append_autoload_debug(format_args!(
-                "system-quit-dup: MhHook::new PropertyNewButtonController activation hook failed: {status:?}"
-            )),
         }
     }
 }
@@ -1144,7 +1220,7 @@ pub(crate) fn install_system_quit_save_game_text_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(MSG_REPOSITORY_GET_AND_FORMAT_RVA) else {
+    let Ok(addr) = game_rva_for_hook(MSG_REPOSITORY_GET_AND_FORMAT_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve MsgRepository::GetAndFormat rva 0x{MSG_REPOSITORY_GET_AND_FORMAT_RVA:x}"
         ));
@@ -1200,7 +1276,7 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve return-title request rva 0x{SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA:x}"
         ));
@@ -1260,11 +1336,21 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         unsafe { std::mem::transmute(orig) };
     let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    // RESOLVED. `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78), so the
+    // raw form matched no dialog and every slot activation on the profile picker fell through to
+    // "forward-original(no-op)" -- neither the save-file picker branch nor ARM-load reachable, on
+    // a stale address, with nothing in the log to say so. `vt` is `unwrap_or(0)` and a refusal
+    // resolves to 0, so `vt_matches` screens the sentinel for every comparison below.
     let expected_vt = if base != TITLE_OWNER_SCAN_START_ADDRESS {
-        base + PROFILE_LOAD_DIALOG_VTABLE_RVA
+        er_game_base::mem::game_data_addr(
+            base,
+            PROFILE_LOAD_DIALOG_VTABLE_RVA,
+            "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+        )
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
+    let vt_matches = expected_vt != TITLE_OWNER_SCAN_START_ADDRESS && vt == expected_vt;
     let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
 
@@ -1274,9 +1360,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     let flow_active_diag = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
     append_autoload_debug(format_args!(
         "sqdiag: ProfileLoadDialog ACTIVATE dialog=0x{dialog:x} vt_match={} flow_active={flow_active_diag} (old-async: hidden={hidden} profile_window=0x{profile_window:x}) save_picker={} -> {}",
-        vt == expected_vt,
+        vt_matches,
         SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
-        if flow_active_diag && vt == expected_vt {
+        if flow_active_diag && vt_matches {
             "ARM-load"
         } else {
             "forward-original(no-op)"
@@ -1290,7 +1376,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // row rather than a left/right axis. Routed before ALL other logic:
     // at the title the in-game predicate below is false (nothing hidden), but the picker still
     // owns the dialog. Never forwards the native activation (which would arm a world load).
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && vt == expected_vt {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && vt_matches {
         let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
@@ -1310,7 +1396,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // route FIRE) plus the dialog vtable read right here -- both known AT click time, no run_post dependency,
     // so the click can't race a value it reads itself.
     let flow_active = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
-    let system_quit_profile_active = flow_active && vt == expected_vt;
+    let system_quit_profile_active = flow_active && vt_matches;
     if !system_quit_profile_active {
         return unsafe { original(dialog, b, c, d) };
     }
@@ -1381,6 +1467,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         // picked slot at a clean title. If it did NOT take, fall through to the native activation so
         // the pick is not silently dropped.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            // Baseline `oracle_msgbox_builds_since_switch_arm`: score the switch on ITS OWN builds.
+            let msgbox_baseline = er_title_flow::MSGBOX_BUILDER_LOG.load(Ordering::SeqCst);
+            MSGBOX_BUILDS_AT_SWITCH_ARM.store(msgbox_baseline, Ordering::SeqCst);
             if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
                 let close_fn: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(close_addr) };
@@ -1389,7 +1478,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
                 SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={slot} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {slot} (zero MessageBox)"
+                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={slot} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {slot}. NO OUTCOME IS CLAIMED HERE: this line is emitted BEFORE the return-title chain runs, so it can only say that THIS path builds no ProfileSelect load-confirm MessageBox. Whether the whole switch stayed at zero is oracle_msgbox_builds_since_switch_arm, baselined now at {msgbox_baseline} builds (run br-20260831-160354-2513 printed a flat \"zero MessageBox\" here 0.67s before one was built)"
             ));
             return 0;
         }

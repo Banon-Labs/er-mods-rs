@@ -629,8 +629,57 @@ unsafe fn pe_size_of_image(base: usize) -> Option<usize> {
     unsafe { safe_read_usize(optional + PE_SIZE_OF_IMAGE_IN_OPTIONAL) }.map(|v| v & 0xffff_ffff)
 }
 
+/// Nested `crash_vectored_handler` entries the re-entrancy latch refused.
+///
+/// THE VEH stack-overflow semaphore for this shell. Non-zero means describing one fault faulted
+/// again on the same thread. See [`enter_veh`].
+#[cfg(windows)]
+static VEH_REENTRANT_REFUSALS: AtomicUsize = AtomicUsize::new(0);
+
+/// Nested VEH entries the latch refused. Non-zero says the report you are reading is the
+/// outermost of a pile and the FIRST record is the real fault.
+#[cfg(windows)]
+pub fn veh_reentrant_refusals() -> usize {
+    VEH_REENTRANT_REFUSALS.load(Ordering::SeqCst)
+}
+
+#[cfg(windows)]
+std::thread_local! {
+    /// Closed while THIS thread is somewhere inside `crash_vectored_handler`.
+    static VEH_IN_PROGRESS: er_game_base::reentry::ReentryLatch =
+        const { er_game_base::reentry::ReentryLatch::new() };
+}
+
+/// `Some(token)` for the outermost VEH entry on this thread, `None` for a nested one.
+///
+/// # Why a crash logger of all things needs this
+///
+/// Describing a fault reads memory the fault just said is not trustworthy -- the faulting thread's
+/// stack, its registers' pointees, the loader list -- so the reporting path can fault in turn, and
+/// a VEH is re-entered for its OWN faults, on the SAME thread, on top of the frame it is already
+/// in. The record budget does not bound that: it is checked once per entry and each entry costs a
+/// whole handler frame, so the stack runs out first.
+///
+/// MEASURED 2026-08-28 in the sibling handler in `er-quickload` on ELDEN RING 1.17: one execute
+/// fault, then 215 identical copies of a NULL read raised while reporting it, `rsp` marching down
+/// by exactly `0x1260` a line until the 1 MiB main-thread stack was gone. Wine then could not even
+/// raise the overflow -- `virtual_setup_exception` needs stack to build the exception frame -- so
+/// it called `abort_thread` and the process died with no crash record, no minidump, and the one
+/// line that named the real fault buried under 215 copies of the amplifier.
+///
+/// A nested entry returns `EXCEPTION_CONTINUE_SEARCH` having touched nothing.
+#[cfg(windows)]
+fn enter_veh() -> Option<er_game_base::reentry::ReentryToken> {
+    er_game_base::reentry::ReentryLatch::enter(&VEH_IN_PROGRESS, &VEH_REENTRANT_REFUSALS)
+}
+
 #[cfg(windows)]
 unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin) -> i32 {
+    // FIRST, before `info` is dereferenced: a fault raised while describing a fault must not
+    // re-enter this handler. See `enter_veh`.
+    let Some(_not_nested) = enter_veh() else {
+        return EXCEPTION_CONTINUE_SEARCH;
+    };
     let Some(snapshot) = (unsafe { ExceptionSnapshot::from_raw(info) }) else {
         return EXCEPTION_CONTINUE_SEARCH;
     };

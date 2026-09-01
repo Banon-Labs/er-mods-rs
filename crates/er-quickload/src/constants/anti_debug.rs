@@ -134,6 +134,77 @@ pub(crate) const RESULT_EVENT_HANDLER_RVA: u32 = MENU_JOB_EMIT_RESULT_RVA;
 pub(crate) const RESULT_ACTION_BUILDER_RVA: u32 = 0x00746a00;
 pub(crate) const RESULT_EVENT_WRAPPER_BUILDER_RVA: u32 = 0x00744a60;
 pub(crate) const TRACE_UNKNOWN_TABLE_RVA: u32 = 0;
+/// How far into `RESULT_ACTION_BUILDER_RVA` the trace treats a captured frame as "from the result
+/// action builder". Its `.pdata` extent is `0x746a00..0x746e80` (0x480 bytes), so this covers most
+/// of the body; it is a diagnostic attribution window, not a product gate.
+pub(crate) const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
+
+/// The result-action-builder attribution band as RVAs on the RUNNING build.
+///
+/// The band's endpoints are both offsets from ONE function entry, and that entry is in the address
+/// map, so unlike a free-floating `.text` window this one translates exactly.
+pub(crate) fn result_action_builder_trace_band() -> Option<std::ops::Range<usize>> {
+    er_game_base::game_build::resolve_call_site_band(
+        RESULT_ACTION_BUILDER_RVA as usize,
+        0,
+        RESULT_ACTION_BUILDER_TRACE_SIZE as isize,
+        "RESULT_ACTION_BUILDER_RVA (result-action trace attribution band)",
+    )
+}
+
+/// The function containing the disabled-`Continue` idle-insert call site, `FUN_140764290`
+/// (`.pdata` extent `0x764290..0x7643bc`).
+///
+/// # 1.17 is `0x7650e0`, but the MAP does not carry it yet
+///
+/// `0x76432c` was a bare return address compared against a live stack frame -- unmappable by
+/// construction, and dead in silence on any build that moved. Declaring the containing FUNCTION
+/// puts it in front of `scripts/select-needed-1170-rows.py`, which is the only way it can ever
+/// acquire a 1.17 pair.
+///
+/// The whole-image `.pdata` signature map does NOT pair `0x764290`, and the reason is visible in
+/// the neighbourhood: `0x764290`, `0x7643c0` and `0x7644f0` are three consecutive `0x12c`-byte
+/// functions with the same shape -- template instantiations the masked-signature matcher cannot
+/// tell apart, so it declines all three rather than guess.
+///
+/// The pair is still derivable, by BRACKETING rather than by signature. The run is bounded on both
+/// sides by functions the map does carry, at the same delta -- `0x7641e0 -> 0x765030` and
+/// `0x764620 -> 0x765470`, both `+0xe50` -- and between those anchors each image has the identical
+/// `.pdata` size sequence `0xa3, 0x12c, 0x12c, 0x12c, 0x190`. Second-of-five maps to
+/// second-of-five: `0x764290 -> 0x7650e0`. Confirmed at the call site itself, where both images
+/// hold the same three instructions at `+0x9c` (`lea; lea; call`) and both callees move together
+/// (`0x7acf80 -> 0x7ade00` and `0x7a7b60 -> 0x7a89e0`, `+0xe80`).
+///
+/// Until a row `0x764290 -> 0x7650e0` lands in `docs/recon/` (which this crate does not own),
+/// [`menu_continue_idle_insert_call_site`] returns `None` on 1.17 and the trace falls through to
+/// its object-identity matches (`arg0`/`arg1` against the idle ctor's own pointers), which are
+/// version-independent and were always the stronger evidence anyway.
+pub(crate) const MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA: usize = 0x764290;
+/// Offset of the idle-insert call's return within [`MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA`].
+pub(crate) const MENU_CONTINUE_IDLE_INSERT_CALL_OFFSET: usize = 0x9c;
+/// Start of the looser "somewhere in this caller" window, as an offset within the same function.
+pub(crate) const MENU_CONTINUE_IDLE_INSERT_BAND_START_OFFSET: isize = 0x20;
+/// End of that window: the function's own end (`0x7643bc`), rounded to the next entry.
+pub(crate) const MENU_CONTINUE_IDLE_INSERT_BAND_END_OFFSET: isize = 0x130;
+
+/// The exact idle-insert call site as an RVA on the RUNNING build, or `None` when unmapped.
+pub(crate) fn menu_continue_idle_insert_call_site() -> Option<usize> {
+    er_game_base::game_build::resolve_call_site_rva(
+        MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA,
+        MENU_CONTINUE_IDLE_INSERT_CALL_OFFSET,
+        "MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA (disabled-Continue idle insert call site)",
+    )
+}
+
+/// The looser idle-insert caller window as RVAs on the RUNNING build, or `None` when unmapped.
+pub(crate) fn menu_continue_idle_insert_caller_band() -> Option<std::ops::Range<usize>> {
+    er_game_base::game_build::resolve_call_site_band(
+        MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA,
+        MENU_CONTINUE_IDLE_INSERT_BAND_START_OFFSET,
+        MENU_CONTINUE_IDLE_INSERT_BAND_END_OFFSET,
+        "MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA (idle insert caller window)",
+    )
+}
 
 #[repr(C)]
 pub(crate) struct MenuTaskStateLayout {
@@ -184,14 +255,28 @@ pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 /// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
 pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
 /// PART-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
-/// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acbf0. Suppressing
+/// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acb00. Suppressing
 /// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
 /// FixOrderJobSequence, native Continue/save-load state, and STEP_PlayGame untouched. It must never
-/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait). Ghidra dump addresses are +0xf0;
-/// these constants are deobf/live RVAs used for the actual hook.
+/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait).
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0;
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0;
+/// The factory is `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA`, and is spelled as that constant rather than
+/// as a second literal.
+///
+/// THIS WAS 0x7acbf0 UNTIL 2026-08-30, WHICH IS MID-INSTRUCTION. `0xf0` into `FUN_1407acb00` lands
+/// on the third byte of the `mov %rbx,0x38(%rsp)` at 0x1407acbee -- not a function entry, not an
+/// instruction boundary, not an address anything may call or patch. The comment that used to sit
+/// here named the cause in passing: "Ghidra dump addresses are +0xf0". They are not. The 1.16.2
+/// dump, `eldenring-deobf.bin` and live memory all share one address space and the shift is ZERO
+/// (AGENTS.md, "SUPERSEDED FOR 1.16.2"), so subtracting a shift that does not exist moved a
+/// correct address 0xf0 bytes into the middle of its own function.
+///
+/// It survived because its only consumer is the log line below, which formatted a number nobody
+/// dereferenced. As `0x7acbf0` it is also absent from every 1.17 map, so on the current game it
+/// would print a translation refusal; `0x7acb00` is mapped to `0x7ad980` and verified.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize =
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA as usize;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title";
 pub(crate) const TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation";
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED: usize = 0;
@@ -234,11 +319,48 @@ pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA: AtomicUsize =
 /// draw-bit-only assumption: the title logo / PAB / Continue can still show with flags==1. Therefore
 /// product suppression clears the full native-visible mask for the preserved `05_000_Title` window.
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530;
-/// Current-branch GFx SetVisible return site inside the native title MenuWindowJob FadeIn helper.
-/// Ordered log proof: `user-visible-gfx-visible-logonly-current-branch-20260713-140820` first
-/// title-window visible calls were `value=0x10f6a0/0x10f350 caller_rva=0x744e02`.
-pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA: usize = 0x744e02;
+/// Offset, within `MenuWindowJob::Run` ([`MENU_WINDOW_JOB_RUN_RVA`]), of the return after its call
+/// to the FadeIn helper above. Same offset in 1.16.2 and 1.17; the callee is
+/// `0x744dd0 -> 0x745c20` in both, which is how the two calls are known to be the same call
+/// (`scripts/derive-callsite-1170.py 0x7ad530`).
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET: usize = 0x370;
+/// Current-branch GFx SetVisible return site inside the native title MenuWindowJob FadeIn helper,
+/// as an offset within [`TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA`].
+///
+/// Ordered log proof for the site itself: `user-visible-gfx-visible-logonly-current-branch-
+/// 20260713-140820` -- the first title-window visible calls were
+/// `value=0x10f6a0/0x10f350 caller_rva=0x744e02`, i.e. `0x744dd0 + 0x32`.
+///
+/// # Why it stopped being the single RVA `0x744e02`
+///
+/// It is a RETURN ADDRESS compared against a live stack frame. A return address is mid-function,
+/// so it can never be in the 1.16.2 -> 1.17 map (keyed on `.pdata` function starts), and on 1.17
+/// the comparison in `title_gfx_value_set_visible_hook` simply never matched: no hook refused, no
+/// address resolved, nothing logged, and the title FadeIn suppression was dead in silence.
+///
+/// Naming the containing function makes it mappable. Corroborated by
+/// `scripts/derive-callsite-1170.py 0x744e02`: the map carries `0x744dd0 -> 0x745c20`, and at
+/// `+0x32` both images hold an `E8` whose callee is the mapped pair of the GFx SetVisible setter
+/// (`0x733340 -> 0x734190`).
+pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALL_OFFSET: usize = 0x32;
+
+/// The GFx-SetVisible call site inside the title FadeIn helper, as an RVA on the RUNNING build.
+pub(crate) fn title_gfx_visible_title_fadein_caller_rva() -> Option<usize> {
+    er_game_base::game_build::resolve_call_site_rva(
+        TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA,
+        TITLE_GFX_VISIBLE_TITLE_FADEIN_CALL_OFFSET,
+        "TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA (title FadeIn GFx SetVisible call site)",
+    )
+}
+
+/// The FadeIn-helper call site inside `MenuWindowJob::Run`, as an RVA on the RUNNING build.
+pub(crate) fn title_native_menu_visual_window_fadein_run_caller_rva() -> Option<usize> {
+    er_game_base::game_build::resolve_call_site_rva(
+        MENU_WINDOW_JOB_RUN_RVA,
+        TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET,
+        "MENU_WINDOW_JOB_RUN_RVA (FadeIn-helper call site)",
+    )
+}
 /// Within the title FadeIn GFx SetVisible callsite, this observed visible-call ordinal produces
 /// the user-visible flash/glare during the autoload transition. Keep the name behavioral: the
 /// underlying Scaleform object identity is still unknown.
@@ -318,7 +440,6 @@ pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
-pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_CALLS;
 /// PAB detour -> system_quit_menu_window_run_post call count. Confirms the deterministic-winner wiring
 /// (2026-07-15 install-race fix) is live at runtime: >0 means PAB is driving run_post on MenuWindowJob::Run
 /// passes, so the hide + slot-activation-gate latches get written regardless of the MinHook race.
@@ -469,10 +590,7 @@ pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
 /// SYSTEX profile texture normally targets `MENU_DummyProfileFace_01`; rewrite slot0 to the
 /// visibly placed `MENU_FL_40135_Profile` surface and expose it as a distinct oracle.
 pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Profile";
-pub(crate) use er_telemetry_core::counters::TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES;
-pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+// The four counters that were meant to record that rewrite -- _BIND_REWRITES, _BIND_LAST_OWNER,
+// _BIND_LAST_PAIR, _BIND_LAST_SYMBOL_PTR -- were removed 2026-08-31. The rewrite above was never
+// implemented, so none of them had a write site and the five oracles they fed reported absence
+// forever. The SYMBOL constant is kept: title_resources_stats_text.rs genuinely uses it.

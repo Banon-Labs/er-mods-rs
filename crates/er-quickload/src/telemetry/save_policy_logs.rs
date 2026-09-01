@@ -62,13 +62,13 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         core::mem::offset_of!(IoDeviceSnapshotLayout, inflight);
     const IO_DEVICE_REQHANDLE_20_OFFSET: usize =
         core::mem::offset_of!(IoDeviceSnapshotLayout, request_handle);
-    let io_pool = unsafe { crate::experiments::safe_read_usize(base + FD4_IO_POOL_RVA) }
+    let io_pool = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_POOL_RVA, "FD4_IO_POOL_RVA")) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_worker_manager =
-        unsafe { crate::experiments::safe_read_usize(base + FD4_IO_WORKER_MANAGER_RVA) }
+        unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_WORKER_MANAGER_RVA, "FD4_IO_WORKER_MANAGER_RVA")) }
             .unwrap_or(NULL_POINTER_VALUE);
     let stream_task = crate::runtime_heap_allocator_ptr_or_null();
-    let io_device = unsafe { crate::experiments::safe_read_usize(base + IO_DEVICE_SINGLETON_RVA) }
+    let io_device = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, IO_DEVICE_SINGLETON_RVA, "IO_DEVICE_SINGLETON_RVA")) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_inflight = if io_device == NULL_POINTER_VALUE {
         None
@@ -148,7 +148,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         "  \"oracle_privacy_policy_gate\": {privacy_policy_gate},\n"
     ));
     // SPLASH-SKIP SEMAPHORE (splash-skip-correctness): the only failure mode of the BeginLogo logo
-    // skip is the je->jg branch flip at base+SPLASH_SKIP_RVA not being live (never applied, or
+    // skip is the je->jg branch flip inside STEP_BeginLogo not being live (never applied, or
     // reverted by Arxan / another mod). So read that .text byte directly each telemetry frame:
     //   jg (0x7f) = patch LIVE -> STEP_BeginLogo falls through past the ESRB/illegal-copy logo build
     //               (the logos are skipped, the title advances SetState(2)->(3) without them);
@@ -157,9 +157,8 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // apply_splash_skip runs at DLL attach (before the title runs state 2), so by the time telemetry
     // writes (at the title/menu) a live jg means the skip already executed this boot. This is the
     // in-process detector that was MISSING for "are we correctly skipping the splash screens".
-    if let Ok(base) = crate::experiments::game_module_base() {
-        let splash_byte =
-            unsafe { crate::experiments::safe_read_u8(base + crate::SPLASH_SKIP_RVA) }.unwrap_or(0);
+    if let Some(address) = er_title_flow::splash_skip_je_address() {
+        let splash_byte = unsafe { crate::experiments::safe_read_u8(address) }.unwrap_or(0);
         body.push_str(&format!(
             "  \"oracle_splash_skip_armed\": {},\n  \"oracle_splash_skip_patch_byte\": \"{:#x}\",\n",
             splash_byte == crate::SPLASH_SKIP_REPLACEMENT_JG,
@@ -735,6 +734,37 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     *LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(file);
 }
 
+/// Run-length filter for the save-picker mode decision. Separate from the Continue trace's
+/// filter so neither can silence the other's family.
+static SAVE_PICKER_MODE_REPEATS: er_game_base::repeat::RepeatFilter =
+    er_game_base::repeat::RepeatFilter::new();
+
+/// Record the save-picker flavour decision ON CHANGE, with an occurrence count.
+///
+/// `save_picker_seamless_mode_after_settle` RE-DERIVES this from the live ERSC module latch on
+/// every call, and several callers sit on hot paths -- `active_default_save_file_names()` is one.
+/// Measured on run `br-20260831-160354-2513`: 1,905 lines of `seamless=false
+/// reason=active-default-save-file-names`, a dead-flat 112 lines per 30s for the whole run
+/// regardless of state, 20% of the autoload debug log. The decision is worth logging; re-stating
+/// an unchanged decision 1,904 more times is not, and the count keeps "it never changed" and "it
+/// was only asked once" distinguishable.
+pub(crate) fn log_save_picker_mode(seamless: bool, reason: &str) {
+    let message = format!(
+        "save-override: save-picker mode from ERSC module latch seamless={seamless} reason={reason}"
+    );
+    let (note, write_message) = match SAVE_PICKER_MODE_REPEATS.observe(&message) {
+        er_game_base::repeat::Verdict::Emit { note } => (note, true),
+        er_game_base::repeat::Verdict::Note(note) => (Some(note), false),
+        er_game_base::repeat::Verdict::Suppress => return,
+    };
+    if let Some(note) = note {
+        append_autoload_debug(format_args!("{note}"));
+    }
+    if write_message {
+        append_autoload_debug(format_args!("{message}"));
+    }
+}
+
 #[cfg(test)]
 mod autoload_debug_log_tests {
     use super::*;
@@ -836,8 +866,43 @@ pub(crate) fn game_directory_path() -> Option<PathBuf> {
         .and_then(|path| path.parent().map(PathBuf::from))
 }
 
+/// Run-length filter over the whole Continue trace. One `static` for every call site, because
+/// the filter keys itself off the message's own family (first two tokens, digit runs collapsed)
+/// rather than off a key each site has to remember to pass -- a key nobody can forget cannot go
+/// stale as sites are added, and ~120 sites write to this file.
+static CONTINUE_TRACE_REPEATS: er_game_base::repeat::RepeatFilter =
+    er_game_base::repeat::RepeatFilter::new();
+
 /// Fresh per process: one Continue trace per run. Two runs' traces in one file cannot be told
 /// apart by a reader counting transitions, which is the whole use of this file.
+///
+/// # Why verbatim repeats are collapsed here rather than at each hook
+///
+/// Several of these hooks sit on POLLED game paths -- the game asks the same question every
+/// frame and the hook answers identically. Measured on run `br-20260831-160354-2513` (8m39s):
+/// `combined_load_67b940` was entered 8,639 times, every one of them `slot=-1 arg1=0 arg2=1`
+/// from a single 8-frame caller stack, and all 8,639 ENTER lines had **seven** distinct
+/// contents between them. `ENTER`/`LEAVE` together were 94% of an 18,368-line, 5.43 MB file
+/// (37 MB/h, unbounded) -- and the trace is NOT a diagnostic mode: `trace_continue_enabled()`
+/// is `product_autoload_enabled()`, so every product run pays it.
+///
+/// Collapsing at the writer rather than per hook means no call site can be added without the
+/// bound, and it keeps `experiments/**` from growing to hold a suppressor per site. Nothing in
+/// the repo parses this file (it is copied by `scripts/er-smoke-driver.sh` and size-polled by
+/// `scripts/er-user-session-watch.py`, neither of which reads a line), so no consumer's counting
+/// is disturbed -- and the counts are written down regardless.
 pub(crate) fn append_continue_trace(args: std::fmt::Arguments<'_>) {
-    er_game_base::log::append_line(&continue_trace_log_path(), args);
+    let message = args.to_string();
+    let (note, write_message) = match CONTINUE_TRACE_REPEATS.observe(&message) {
+        er_game_base::repeat::Verdict::Emit { note } => (note, true),
+        er_game_base::repeat::Verdict::Note(note) => (Some(note), false),
+        er_game_base::repeat::Verdict::Suppress => return,
+    };
+    let path = continue_trace_log_path();
+    if let Some(note) = note {
+        er_game_base::log::append_line(&path, format_args!("{note}"));
+    }
+    if write_message {
+        er_game_base::log::append_line(&path, format_args!("{message}"));
+    }
 }

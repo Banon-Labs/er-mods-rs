@@ -26,11 +26,49 @@ pub(crate) unsafe fn product_continue_action_ready(
         return false;
     }
     let dialog_vt = unsafe { safe_read_usize(ready.title_dialog) }.unwrap_or(null);
-    dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
+    // `null` is `usize::MIN` = 0, and so is a refused `game_data_addr`: without the screen an
+    // unreadable dialog and an unmapped RVA agree at zero and this reports READY at a title with
+    // no dialog at all.
+    let want_dialog_vt = er_game_base::mem::game_data_addr(
+        base,
+        TITLE_TOP_DIALOG_VTABLE_RVA,
+        "TITLE_TOP_DIALOG_VTABLE_RVA",
+    );
+    want_dialog_vt != null && dialog_vt == want_dialog_vt
 }
+/// `CS::MenuItem`'s constant-false accept predicate: a 3-byte `xor eax,eax; ret` leaf a row carries
+/// at `+0xf8` while it is NOT accept-ready.
+///
+/// MAPPED 2026-08-30 as `0x7add70 -> 0x7aebf0`, after being the one constant here with no 1.17
+/// row -- and the reason it was missing is worth keeping. It is a `.pdata`-less LEAF, invisible to
+/// the whole-image function-table alignment, and NOTHING CALLS IT: its address is only ever taken,
+/// so the caller-vote tools were blind to it too until they learned to count `lea`s. The evidence
+/// is a unanimous 1-of-1 -- each image contains exactly ONE rip-relative reference to its address,
+/// both at byte offset +0xa5 inside `0x7acf80 -> 0x7ade00` (`IDENTICAL-WHOLE`, 151 insns, `.pdata`
+/// 0x232 in both), both spelled `48 8d 05 44 0d 00 00`.
+///
+/// Its ledger verdict is `IDENTICAL-LEAF-NOPATCH`: both 3-byte bodies compared in full and equal,
+/// and MinHook's own rules refuse the site, so `er-game-base` admits the row to the CALL/READ map
+/// and never to the detour one. That is exactly the shape this site needs -- it only compares.
+/// The verdict exists because the two used to be one decision: `IDENTICAL-SHORT` refused the hook
+/// AND withdrew the address from comparing, and this constant was what paid for it.
+const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
+
+/// `CS::MenuItem`'s real accept predicate: the row is selectable. `0x7ad810 -> 0x7ae690`.
+const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+
+/// Is `accept_predicate` the constant-false idle predicate? Resolved, and never satisfied by zero:
+/// a refusal resolves to 0 and an uninitialised row reads 0 at `+0xf8`.
+fn accept_predicate_is_idle(base: usize, accept_predicate: usize) -> bool {
+    let idle = er_game_base::mem::game_data_addr(
+        base,
+        MENU_ITEM_ACCEPT_IDLE_RVA,
+        "MENU_ITEM_ACCEPT_IDLE_RVA",
+    );
+    idle != 0 && accept_predicate == idle
+}
+
 pub(crate) fn record_continue_candidate(item: usize, accept_predicate: usize, base: usize) {
-    const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
-    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if item == null {
         return;
@@ -44,9 +82,14 @@ pub(crate) fn record_continue_candidate(item: usize, accept_predicate: usize, ba
             "MENU-CONTINUE-CANDIDATE accept predicate changed item=0x{item:x} prior=0x{prior:x} now=0x{accept_predicate:x}"
         ));
     }
-    if base != null && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA {
+    let native_accept = er_game_base::mem::game_data_addr(
+        base,
+        MENU_ITEM_ACCEPT_NATIVE_RVA,
+        "MENU_ITEM_ACCEPT_NATIVE_RVA",
+    );
+    if base != null && native_accept != null && accept_predicate == native_accept {
         MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
-    } else if base != null && accept_predicate == base + MENU_ITEM_ACCEPT_IDLE_RVA {
+    } else if base != null && accept_predicate_is_idle(base, accept_predicate) {
         MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
     } else {
         MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
@@ -66,10 +109,20 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
         return None;
     }
     let item_vt = unsafe { safe_read_usize(item) }?;
-    if item_vt != base + MENU_WINDOW_JOB_VTABLE_RVA {
+    if item_vt
+        != er_game_base::mem::game_data_addr(
+            base,
+            MENU_WINDOW_JOB_VTABLE_RVA,
+            "MENU_WINDOW_JOB_VTABLE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} vt=0x{item_vt:x} expected=0x{:x}",
-            base + MENU_WINDOW_JOB_VTABLE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                MENU_WINDOW_JOB_VTABLE_RVA,
+                "MENU_WINDOW_JOB_VTABLE_RVA"
+            )
         ));
         return None;
     }
@@ -79,28 +132,46 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
     }
     let functor_vt = unsafe { safe_read_usize(functor) }?;
     let do_call = unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }?;
-    if do_call != base + MENU_TITLE_CONTINUE_DOCALL_RVA {
+    // RESOLVED, and never satisfied by zero. `MenuTitleContinue::_Do_call` moved on 1.17
+    // (0x764b80 -> 0x7659d0), so the raw comparison could not match and EVERY native Continue
+    // MenuWindowJob was rejected here -- the autoload's own path to the Continue row, refused on a
+    // stale address rather than on anything about the item, and silently.
+    let expected_do_call = er_game_base::mem::game_data_addr(
+        base,
+        MENU_TITLE_CONTINUE_DOCALL_RVA,
+        "MENU_TITLE_CONTINUE_DOCALL_RVA",
+    );
+    if expected_do_call == 0 || do_call != expected_do_call {
         append_autoload_debug(format_args!(
-            "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} functor=0x{functor:x} docall=0x{do_call:x} expected=0x{:x}",
-            base + MENU_TITLE_CONTINUE_DOCALL_RVA
+            "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} functor=0x{functor:x} docall=0x{do_call:x} expected=0x{expected_do_call:x}"
         ));
         return None;
     }
     const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
-    const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
-    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
     let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }?;
     record_continue_candidate(item, accept_predicate, base);
-    if accept_predicate == base + MENU_ITEM_ACCEPT_IDLE_RVA {
+    // The idle predicate is a REJECTION, and the native-accept check below rejects the same items
+    // for the same reason, so a refusal here costs the precise log line and not the decision.
+    if accept_predicate_is_idle(base, accept_predicate) {
         append_autoload_debug(format_args!(
             "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} accept_predicate=0x{accept_predicate:x} (constant false idle predicate) -- not a semantic accept-ready Continue item"
         ));
         return None;
     }
-    if accept_predicate != base + MENU_ITEM_ACCEPT_NATIVE_RVA {
+    if accept_predicate
+        != er_game_base::mem::game_data_addr(
+            base,
+            MENU_ITEM_ACCEPT_NATIVE_RVA,
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+        )
+    {
         append_autoload_debug(format_args!(
             "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} accept_predicate=0x{accept_predicate:x} expected native accept predicate 0x{:x}",
-            base + MENU_ITEM_ACCEPT_NATIVE_RVA
+            er_game_base::mem::game_data_addr(
+                base,
+                MENU_ITEM_ACCEPT_NATIVE_RVA,
+                "MENU_ITEM_ACCEPT_NATIVE_RVA"
+            )
         ));
         return None;
     }
@@ -158,8 +229,18 @@ pub(crate) unsafe fn submit_native_continue_item_action(
     const CONTINUE_WRAPPER_EVENT_CODE_INDEX: usize = 0;
     #[allow(dead_code)] // Retained: Word index within the decoded Continue event payload; see CONTINUE_WRAPPER_EVENT_WORDS.
     const CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX: usize = 1;
-    let native_submit = base + MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
-    let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
+    let native_submit = er_game_base::mem::game_data_addr(
+        base,
+        MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+        "MENU_WINDOW_CLOSE_WITH_FAILED_RVA",
+    );
+    // Logged, not called -- but printing a 1.16.2 address as though it described the running build
+    // is how a stale constant survives review. `0x7a91e0 -> 0x7aa060` on 1.17.
+    let fd4_event_constructor = er_game_base::mem::game_data_addr(
+        base,
+        FD4_EVENT_CONSTRUCTOR_RVA,
+        "FD4_EVENT_CONSTRUCTOR_RVA",
+    );
     let native_submit_fn: unsafe extern "system" fn(usize) =
         unsafe { std::mem::transmute(native_submit) };
     append_autoload_debug(format_args!(
@@ -220,7 +301,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             }
             return;
         }
-        let b80_before = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80_before = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         if b80_before != OWN_STEPPER_B80_IDLE {
             if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
                 append_autoload_debug(format_args!(
@@ -285,8 +366,17 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         };
         unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_save_slot(slot) };
         OWN_STEPPER_EXPECTED_SLOT.store(slot, Ordering::SeqCst);
         OWN_STEPPER_CONFIRMED.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
@@ -297,14 +387,18 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         else {
             return;
         };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
         append_autoload_debug(format_args!(
             "product-core-autoload: *** SUBMITTED native Continue MenuWindowJob result mode={result_mode} submit=0x{:x}(result=0x{:x}, result_vt=0x{:x}, item=0x{:x}, functor=0x{:x}, docall=0x{:x}) after set_save_slot({slot}) b78={b78} ac0={ac0} c30=0x{c30:x} b80={b80} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) dialog=0x{:x} menu_latch={} tick={tick} -- no input/direct_load/direct_build/raw deserialize/direct_confirm ***",
-            base + MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+                "MENU_WINDOW_CLOSE_WITH_FAILED_RVA"
+            ),
             action.result,
             action.result_vt,
             action.item,
@@ -330,7 +424,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_DESER_FIRED_OK;
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
@@ -363,8 +457,17 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             let shim = &raw mut OWN_STEPPER_SHIM;
             unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner };
             let shim_ptr = shim as usize;
-            let confirm: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+            let confirm: unsafe extern "system" fn(usize) = unsafe {
+                std::mem::transmute(
+                    match crate::experiments::gated_game_fn(
+                        CONTINUE_CONFIRM_RVA,
+                        "CONTINUE_CONFIRM_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return,
+                    },
+                )
+            };
             append_autoload_debug(format_args!(
                 "product-core-autoload: MODAL-CONFIRM-DISABLED loaded evidence ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true(profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={}) b80={b80} owner+0x284={new_game_flag} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x} (no confirm input)",
                 slot_identity.profile_summary,
@@ -458,14 +561,30 @@ pub(crate) unsafe fn fire_product_title_load_action(
     OWN_STEPPER_SELECTOR_STEP.store(null, Ordering::SeqCst);
     OWN_STEPPER_SELECTOR_CTX.store(null, Ordering::SeqCst);
     reset_phase_timer(&OWN_STEPPER_S2_PHASE_STARTED_MS);
-    let run: unsafe extern "system" fn(usize) = unsafe {
-        std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(
-            base + MENU_MEMBER_FUNC_JOB_RUN_RVA,
-        )
-    };
+    // CHECK THE RESOLUTION BEFORE IT BECOMES A FUNCTION POINTER. `game_data_addr` answers 0 when
+    // the running build has no verified mapping for the RVA, and `mem.rs` says of it in as many
+    // words: "NEVER use this for a call target. Zero is a safe address to fail a read at and a
+    // fatal one to jump to." This transmuted the result straight into a fn pointer and called it.
+    //
+    // It is not a live crash today -- MENU_MEMBER_FUNC_JOB_RUN_RVA (0x9aaba0) IS mapped for 1.17
+    // (-> 0x9abd40), so the address that arrives here is the right one. It is the CONTRACT that was
+    // broken: nothing at this site established that, and the day the row leaves the map this jumps
+    // to address 0.
+    let run_addr = er_game_base::mem::game_data_addr(
+        base,
+        MENU_MEMBER_FUNC_JOB_RUN_RVA,
+        "MENU_MEMBER_FUNC_JOB_RUN_RVA",
+    );
+    if run_addr == null {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native TitleTopDialog Load-Game run REFUSED for this build (MENU_MEMBER_FUNC_JOB_RUN_RVA has no verified mapping) node=0x{node:x} slot={slot} tick={tick} -- NOT firing; the one-shot is consumed because a refusal does not become a hit on a later tick"
+        ));
+        return;
+    }
+    let run: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(run_addr) };
     append_autoload_debug(format_args!(
-        "product-core-autoload: *** FIRING native TitleTopDialog Load-Game run 0x{:x}(rcx=node=0x{node:x}) vt=0x{node_vt:x} member_dialog=0x{member_dialog:x} member_fn=0x{member_fn:x} member_adjust=0x{member_adjust:x} window_item=0x{window_item:x} slot={slot} tick={tick} -- no direct_build/forged ctx ***",
-        base + MENU_MEMBER_FUNC_JOB_RUN_RVA
+        "product-core-autoload: *** FIRING native TitleTopDialog Load-Game run 0x{run_addr:x}(rcx=node=0x{node:x}) vt=0x{node_vt:x} member_dialog=0x{member_dialog:x} member_fn=0x{member_fn:x} member_adjust=0x{member_adjust:x} window_item=0x{window_item:x} slot={slot} tick={tick} -- no direct_build/forged ctx ***"
     ));
     timeline_event(
         "T_native_load_action",
@@ -571,9 +690,21 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
         *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
             *((pgd + PGD_RUNE_MEMORY_70_OFFSET) as *const i32);
         let copy_face_data_from_buffer: unsafe extern "system" fn(usize, usize) =
-            std::mem::transmute(base + FACE_DATA_COPY_FROM_BUFFER_RVA);
-        let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize =
-            std::mem::transmute(base + CHR_ASM_COPY_RVA);
+            std::mem::transmute(
+                match crate::experiments::gated_game_fn(
+                    FACE_DATA_COPY_FROM_BUFFER_RVA,
+                    "FACE_DATA_COPY_FROM_BUFFER_RVA",
+                ) {
+                    Some(address) => address,
+                    None => return false,
+                },
+            );
+        let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize = std::mem::transmute(
+            match crate::experiments::gated_game_fn(CHR_ASM_COPY_RVA, "CHR_ASM_COPY_RVA") {
+                Some(address) => address,
+                None => return false,
+            },
+        );
         copy_face_data_from_buffer(
             slot_data.wrapping_add(PROFILE_SUMMARY_FACE_DATA_OFFSET),
             pgd + PGD_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET,

@@ -13,7 +13,7 @@ fn poll_cached_mms18_ending_request_advancer() {
     let Ok(base) = game_module_base() else {
         return;
     };
-    let Some(md) = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+    let Some(md) = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
         .filter(|m| *m > 0x10000)
         .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
         .filter(|d| *d > 0x10000)
@@ -113,7 +113,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_THREAD_STARTED,
             BOOTSTRAP_DETAIL_START,
         );
-        let cs_task = wait_for_task_instance();
+        let Some(cs_task) = wait_for_task_instance() else {
+            // The product without its per-frame task is a product that does nothing, which is
+            // still strictly better than the alternative this replaced: a thread spinning on
+            // `yield_now` hard enough to stop the game from ever reaching a window.
+            append_autoload_debug(format_args!(
+                "game task: CSTaskImp never appeared -- no per-frame tick registered; the DLL \
+                 stays inert rather than spinning"
+            ));
+            return;
+        };
         write_bootstrap_event(
             BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY,
             BOOTSTRAP_DETAIL_DONE,

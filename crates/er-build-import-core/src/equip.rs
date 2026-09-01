@@ -14,6 +14,7 @@
 //! | armour | `protectors.<part>.slots[].equipSet` | non-null = this is the worn one |
 //! | talismans | `talismans.slots[].equipSet` | 0..4 |
 //! | spells | `spells.slots[].order` | memorisation order; there is no equip position |
+//! | ammo | `items.ammo` | `{arrow1, bolt1, arrow2, bolt2}` -> name; the KEY is the position |
 //! | quickbar | `items.tools.slots[].equipIndex` | `< 10` -> quickbar position |
 //! | pouch | `items.tools.slots[].equipIndex` | `10..16` -> up, right, left, down, 1, 2 |
 //! | physick | `items.crystalTears` | two entries, `null` when empty |
@@ -67,7 +68,7 @@
 //! Losers land in [`EquipPlan::rejected`] as well as [`EquipPlan::contested`], so
 //! a caller that only counts rejections still cannot miss a collision.
 
-use crate::catalog::{Catalog, Kind};
+use crate::catalog::{Catalog, Entry, Kind};
 use crate::model::BuildDoc;
 use std::collections::BTreeMap;
 
@@ -125,6 +126,21 @@ pub fn armament_planner_index(slot: i32) -> Option<u32> {
         .and_then(|index| u32::try_from(index).ok())
 }
 
+/// `ChrAsmSlot` of the first ammunition position; the other three follow consecutively.
+///
+/// `ChrAsmSlot` runs `Arrow1 = 6, Bolt1 = 7, Arrow2 = 8, Bolt2 = 9` -- the two kinds INTERLEAVE,
+/// which is why [`crate::model::Ammo::positions`] yields them in that order rather than in the
+/// planner's grouped one. (`Arrow3 = 10` and `Bolt3 = 11` exist in the enum and the engine's own
+/// bound accepts them -- `GetEquipmentGaitemHandleBySlot` validates `(uint)(slot + 6) < 0x12` --
+/// but the planner offers only four positions, so only four are ever asked for.)
+pub const CHR_ASM_SLOT_AMMO_1: i32 = 6;
+/// Ammunition positions a build can fill: arrows 1-2 and bolts 1-2.
+pub const AMMO_SLOTS: usize = 4;
+
+// The slot count and the key table describe the same four positions, from two modules. A mismatch
+// would truncate one direction against the other rather than fail, so it fails here instead.
+const _: () = assert!(crate::model::AMMO_POSITION_KEYS.len() == AMMO_SLOTS);
+
 /// `ChrAsmSlot::ProtectorHead`; chest, hands and legs follow consecutively.
 pub const CHR_ASM_SLOT_PROTECTOR_HEAD: i32 = 12;
 /// `ChrAsmSlot::Accessory1`; the other three talisman slots follow consecutively.
@@ -149,8 +165,42 @@ pub struct EquipRef {
     pub item_id: u32,
     /// Bare param row id, which is what most native equip calls take.
     pub param_id: u32,
+    /// OTHER category-tagged ids the game files this same item under.
+    ///
+    /// The equip asks the inventory "where is item X". That question has to be asked about every
+    /// row the item can be, not just the row the catalog answered with, for exactly the reason
+    /// [`Grant::also_known_as`](crate::plan::Grant::also_known_as) carries the same list: an
+    /// upgraded flask or talisman is a DIFFERENT goods row from the unupgraded one, so a
+    /// character who has drunk one Sacred Tear does not hold the id the build named. Two
+    /// consecutive live imports reported the Crimson and Cerulean flasks `NOT-IN-INVENTORY`
+    /// while they were in the player's pouch, once per row of the unupgraded name.
+    ///
+    /// Empty for the overwhelming majority of items. Never contains [`Self::item_id`].
+    pub also_known_as: Vec<u32>,
     /// Display name, for logs.
     pub name: String,
+}
+
+impl EquipRef {
+    /// Resolve one equip position's item, carrying every id the game files it under.
+    ///
+    /// `offset` is an armament's affinity. It is added to the alternates as well as to the
+    /// primary so the whole list stays in one id space -- the same treatment the grant planner
+    /// gives `Grant::also_known_as`.
+    fn resolve(catalog: &dyn Catalog, kind: Kind, name: &str, found: Entry, offset: u32) -> Self {
+        let item_id = found.full_item_id + offset;
+        Self {
+            item_id,
+            param_id: found.param_id() + offset,
+            also_known_as: catalog
+                .upgrade_variants(kind, name)
+                .into_iter()
+                .map(|id| id + offset)
+                .filter(|id| *id != item_id)
+                .collect(),
+            name: name.to_owned(),
+        }
+    }
 }
 
 /// Why a requested equip could not be honoured.
@@ -207,6 +257,8 @@ impl Default for Capacity {
 pub struct EquipPlan {
     /// Armaments by slot; `None` means "leave empty".
     pub armaments: Vec<Option<EquipRef>>,
+    /// Arrows and bolts, in `ChrAsmSlot` order: arrow 1, bolt 1, arrow 2, bolt 2.
+    pub ammo: Vec<Option<EquipRef>>,
     /// Head armour.
     pub head: Option<EquipRef>,
     /// Body armour.
@@ -266,6 +318,18 @@ impl EquipPlan {
                 out.push(PlannedPosition {
                     kind: PositionKind::Armament,
                     slot: u32::try_from(index).ok().and_then(armament_slot),
+                    index,
+                    item: item.clone(),
+                });
+            }
+        }
+        for (index, entry) in self.ammo.iter().enumerate() {
+            if let Some(item) = entry {
+                out.push(PlannedPosition {
+                    kind: PositionKind::Ammo,
+                    slot: i32::try_from(index)
+                        .ok()
+                        .map(|index| CHR_ASM_SLOT_AMMO_1 + index),
                     index,
                     item: item.clone(),
                 });
@@ -354,6 +418,13 @@ impl EquipPlan {
 pub enum PositionKind {
     /// A hand slot.
     Armament,
+    /// An arrow or bolt position.
+    ///
+    /// A kind of its own rather than an [`PositionKind::Armament`]: it is written by the same
+    /// `ChrAsm` path, but nothing minted an instance for it, its id carries no upgrade level to
+    /// normalise away in the read-back, and calling it an armament is what would send a quiver of
+    /// arrows down the gem-mounting grant path.
+    Ammo,
     /// One of the four armour pieces.
     Protector,
     /// A talisman slot.
@@ -373,6 +444,7 @@ impl PositionKind {
     pub fn label(self) -> &'static str {
         match self {
             PositionKind::Armament => "armament",
+            PositionKind::Ammo => "ammo",
             PositionKind::Protector => "armour",
             PositionKind::Talisman => "talisman",
             PositionKind::Quickbar => "quickbar",
@@ -472,7 +544,17 @@ pub struct LedgerCounts {
     /// Positions that already held it.
     pub already: usize,
     /// Positions that were attempted and did not end up right.
+    ///
+    /// The sum of [`Self::mismatched`], [`Self::not_in_inventory`] and [`Self::not_attempted`],
+    /// kept as one number because the headline reports failure as one number.
     pub failed: usize,
+    /// Positions that were WRITTEN and read back holding something else.
+    pub mismatched: usize,
+    /// Positions whose item could not be found in the character's inventory, so nothing was
+    /// written.
+    pub not_in_inventory: usize,
+    /// Positions the pass reached and deliberately did not write, with a reason.
+    pub not_attempted: usize,
     /// Positions for which no result was ever recorded -- the pass simply never visited them.
     pub unaccounted: usize,
 }
@@ -481,6 +563,16 @@ impl LedgerCounts {
     /// Whether every planned position is accounted for and correct.
     pub fn reconciles(&self) -> bool {
         self.failed == 0 && self.unaccounted == 0
+    }
+
+    /// Positions the pass actually wrote or found already in place.
+    pub fn reached(&self) -> usize {
+        self.verified + self.already + self.mismatched
+    }
+
+    /// Positions nothing was written for, for any reason.
+    pub fn never_written(&self) -> usize {
+        self.not_in_inventory + self.not_attempted + self.unaccounted
     }
 }
 
@@ -553,10 +645,42 @@ impl EquipLedger {
                 None => counts.unaccounted += 1,
                 Some(PositionResult::Verified) => counts.verified += 1,
                 Some(PositionResult::Already) => counts.already += 1,
-                Some(_) => counts.failed += 1,
+                Some(PositionResult::Mismatch { .. }) => counts.mismatched += 1,
+                Some(PositionResult::NotInInventory) => counts.not_in_inventory += 1,
+                Some(PositionResult::NotAttempted(_)) => counts.not_attempted += 1,
             }
         }
+        counts.failed = counts.mismatched + counts.not_in_inventory + counts.not_attempted;
         counts
+    }
+
+    /// THE BALANCE. Planned, reached, still holding the build's item at the end -- with the
+    /// difference between each pair named on the same line.
+    ///
+    /// This exists because the numbers that would have caught the last defect were all present
+    /// and none of them were subtracted from each other. One run printed `25 planned` and
+    /// `5 failed` in the same line and `3 position(s) NO LONGER hold what was written` three
+    /// lines above it, and nobody could tell from the log whether that was 5 casualties or 8, or
+    /// which of them had ever been right. A pass that quietly drops a fifth of its work is the
+    /// failure; a pass that cannot say how much it dropped is how that survives.
+    ///
+    /// `stripped` is the number of positions that PASSED their own read-back and were wrong
+    /// again by the end -- the only ones anything can be said to have taken back off. It is the
+    /// caller's because only the pass can observe it.
+    pub fn balance(&self, stripped: usize) -> String {
+        let counts = self.counts();
+        format!(
+            "{} planned = {} reached + {} never written; of the {} reached, {} hold the build's \
+             item on the final read-back and {} do not ({} of those were verified first and \
+             stripped afterwards)",
+            counts.planned,
+            counts.reached(),
+            counts.never_written(),
+            counts.reached(),
+            counts.verified + counts.already,
+            counts.mismatched,
+            stripped,
+        )
     }
 
     /// Every position that did not end up holding what the build asked for, named.
@@ -641,11 +765,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         armaments.push(Claim {
             order: slot.order,
             index: index as usize,
-            item: EquipRef {
-                item_id: found.full_item_id + offset,
-                param_id: found.param_id() + offset,
-                name: slot.name.clone(),
-            },
+            item: EquipRef::resolve(catalog, Kind::Weapon, &slot.name, found, offset),
         });
     }
     settle(
@@ -677,11 +797,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             claims.push(Claim {
                 order: slot.order,
                 index: 0,
-                item: EquipRef {
-                    item_id: found.full_item_id,
-                    param_id: found.param_id(),
-                    name: slot.name.clone(),
-                },
+                item: EquipRef::resolve(catalog, Kind::Protector, &slot.name, found, 0),
             });
         }
         let target = match part.as_str() {
@@ -725,11 +841,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         talismans.push(Claim {
             order: slot.order,
             index: index as usize,
-            item: EquipRef {
-                item_id: found.full_item_id,
-                param_id: found.param_id(),
-                name: slot.name.clone(),
-            },
+            item: EquipRef::resolve(catalog, Kind::Talisman, &slot.name, found, 0),
         });
     }
     settle(
@@ -760,11 +872,13 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             });
             continue;
         }
-        out.spells.push(EquipRef {
-            item_id: found.full_item_id,
-            param_id: found.param_id(),
-            name: slot.name.clone(),
-        });
+        out.spells.push(EquipRef::resolve(
+            catalog,
+            Kind::Spell,
+            &slot.name,
+            found,
+            0,
+        ));
     }
 
     let mut quickbar = Vec::new();
@@ -780,11 +894,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
             });
             continue;
         };
-        let item = EquipRef {
-            item_id: found.full_item_id,
-            param_id: found.param_id(),
-            name: slot.name.clone(),
-        };
+        let item = EquipRef::resolve(catalog, Kind::Tool, &slot.name, found, 0);
         let index = index as usize;
         let (target, index) = match index.checked_sub(QUICKBAR_SLOTS) {
             None => (&mut quickbar, index),
@@ -826,11 +936,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         physick.push(Claim {
             order: index as i64,
             index,
-            item: EquipRef {
-                item_id: found.full_item_id,
-                param_id: found.param_id(),
-                name: tear.clone(),
-            },
+            item: EquipRef::resolve(catalog, Kind::Tool, tear, found, 0),
         });
     }
     settle(
@@ -842,14 +948,31 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         &mut out.contested,
     );
 
+    // AMMUNITION NEEDS NO CONTEST. Every other category can put two rows on one position, because
+    // the planner leaves a stale `equipIndex` on the row that used to hold it; ammo cannot, because
+    // the POSITION IS THE KEY -- an object has one value per key, and the planner deletes the key
+    // when the slot is emptied. So this is a plain walk rather than a `settle`, and there is
+    // nothing for `contested` to record.
+    out.ammo = vec![None; AMMO_SLOTS];
+    for (index, (key, name)) in doc.items.ammo.positions().into_iter().enumerate() {
+        let Some(name) = name else { continue };
+        match catalog.lookup(Kind::Ammo, name) {
+            Some(found) => {
+                out.ammo[index] = Some(EquipRef::resolve(catalog, Kind::Ammo, name, found, 0));
+            }
+            None => out.rejected.push(Rejected {
+                name: name.to_owned(),
+                // Named by the planner's own key rather than by the slot number: `arrow1` is what
+                // the author sees, and 6 is what the engine calls it.
+                reason: format!("ammo not in catalog (position {key})"),
+            }),
+        }
+    }
+
     if let Some(rune) = doc.great_rune.as_deref() {
         match catalog.lookup(Kind::GreatRune, rune) {
             Some(found) => {
-                out.great_rune = Some(EquipRef {
-                    item_id: found.full_item_id,
-                    param_id: found.param_id(),
-                    name: rune.to_owned(),
-                });
+                out.great_rune = Some(EquipRef::resolve(catalog, Kind::GreatRune, rune, found, 0));
             }
             None => out.rejected.push(Rejected {
                 name: rune.to_owned(),

@@ -8,9 +8,10 @@
 //!
 //! # Two halves, both borrowed rather than invented
 //!
-//! *Rows* come from [`SoloParamRepository::rows`], which yields `(row_id, &row)` for a
-//! param table. *Names* come from the game's own per-category getters, each a one-call
-//! wrapper around `MsgRepositoryImp::LookupEntry` that walks its own bundle chain.
+//! *Rows* come from [`SoloParamRepository::rows`](eldenring::cs::SoloParamRepository::rows), which
+//! yields `(row_id, &row)` for a param table. *Names* come from the game's own per-category
+//! getters, each a one-call wrapper around `MsgRepositoryImp::LookupEntry` that walks its own
+//! bundle chain.
 //!
 //! Calling those wrappers rather than reimplementing the chain is not fastidiousness.
 //! `GetGoodsName` consults **four** bundles (`0x6f`, `0xa`, `0x13f`, `0x1a3`), while the
@@ -46,25 +47,25 @@ const ERROR_PLACEHOLDER_PREFIX: &str = "[error]";
 /// Each takes `(MsgRepositoryImp*, u32 row_id)` and returns a NUL-terminated `wchar_t*`.
 mod rva {
     /// `MsgRepositoryImp::GetWeaponName` -- base bundle `0x136`.
-    pub const GET_WEAPON_NAME: usize = 0xd11370;
+    pub const GET_WEAPON_NAME_RVA: usize = 0xd11370;
     /// `MsgRepositoryImp::GetProtectorName` -- base bundle `0x139`.
-    pub const GET_PROTECTOR_NAME: usize = 0xd10d90;
+    pub const GET_PROTECTOR_NAME_RVA: usize = 0xd10d90;
     /// `MsgRepositoryImp::GetAccessoryName` -- base bundle `0x13c`, DLC `0x1a0`.
-    pub const GET_ACCESSORY_NAME: usize = 0xd0fda0;
+    pub const GET_ACCESSORY_NAME_RVA: usize = 0xd0fda0;
     /// `MsgRepositoryImp::GetGoodsName` -- bundles `0x6f`, `0xa`, `0x13f`, `0x1a3`.
-    pub const GET_GOODS_NAME: usize = 0xd10600;
+    pub const GET_GOODS_NAME_RVA: usize = 0xd10600;
     /// `MsgRepositoryImp::GetGemName` -- base bundle `0x142`, DLC `0x1a6`.
     ///
     /// Names the *gem item* ("Ash of War: Lion's Claw"), which is NOT what a build's
     /// `weaponArt` says -- so it is not what the catalog keys on. It is used as the test for
     /// whether a gem row is a real, obtainable ash rather than a development placeholder,
     /// which is how the ash catalog picks between several gems carrying one skill.
-    pub const GET_GEM_NAME: usize = 0xd103d0;
+    pub const GET_GEM_NAME_RVA: usize = 0xd103d0;
     /// `MsgRepositoryImp::GetArtsName` -- base bundle `0x14b`.
     ///
     /// Names the *skill* ("Lion's Claw"), keyed by `SwordArtsParam` row id -- which is
     /// exactly what a build's `weaponArt` carries and what `weaponSkill` encodes.
-    pub const GET_ARTS_NAME: usize = 0xd0ff70;
+    pub const GET_ARTS_NAME_RVA: usize = 0xd0ff70;
 }
 
 /// The category tag the game ORs into the high nibble of an item id.
@@ -118,36 +119,49 @@ struct Source {
 /// Spells and tools are BOTH `EquipParamGoods` rows sharing one name bundle -- a sorcery's
 /// item id really is `0x4 << 28 | goodsRowId`. They are separated by whether the same row
 /// id also exists in `MAGIC_PARAM_ST`, which is the game's own distinction, not a heuristic.
+///
+/// Armaments and AMMUNITION are the second such pair: arrows and bolts are `EquipParamWeapon`
+/// rows sharing the weapon name bundle and the weapon category nibble, and the game separates
+/// them by `weaponCategory` -- see [`Quivers`]. They are split rather than left in one kind
+/// because the planner does the same: its build document keeps ammo in `items.ammo`, keyed by
+/// equip position, and its item database serves `ammo` from a store of its own beside `weapons`,
+/// so a build's `inventory` never names an arrow and a `Kind::Weapon` lookup never needs to find
+/// one.
 const SOURCES: &[Source] = &[
     Source {
         kind: Kind::Weapon,
         tag: Tag::Weapon,
-        getter_rva: rva::GET_WEAPON_NAME,
+        getter_rva: rva::GET_WEAPON_NAME_RVA,
     },
     Source {
         kind: Kind::Protector,
         tag: Tag::Protector,
-        getter_rva: rva::GET_PROTECTOR_NAME,
+        getter_rva: rva::GET_PROTECTOR_NAME_RVA,
     },
     Source {
         kind: Kind::Talisman,
         tag: Tag::Accessory,
-        getter_rva: rva::GET_ACCESSORY_NAME,
+        getter_rva: rva::GET_ACCESSORY_NAME_RVA,
     },
     Source {
         kind: Kind::Spell,
         tag: Tag::Goods,
-        getter_rva: rva::GET_GOODS_NAME,
+        getter_rva: rva::GET_GOODS_NAME_RVA,
     },
     Source {
         kind: Kind::Tool,
         tag: Tag::Goods,
-        getter_rva: rva::GET_GOODS_NAME,
+        getter_rva: rva::GET_GOODS_NAME_RVA,
     },
     Source {
         kind: Kind::GreatRune,
         tag: Tag::Goods,
-        getter_rva: rva::GET_GOODS_NAME,
+        getter_rva: rva::GET_GOODS_NAME_RVA,
+    },
+    Source {
+        kind: Kind::Ammo,
+        tag: Tag::Weapon,
+        getter_rva: rva::GET_WEAPON_NAME_RVA,
     },
 ];
 
@@ -173,6 +187,29 @@ pub struct BuildStats {
     /// the skill are right -- but it is the exact defect a player reports as "the ash symbol
     /// says ICON", so it is a number here rather than a discovery in-game.
     pub iconless_ashes: usize,
+    /// Goods rows the game POT-CAPS, i.e. rows [`PotGroups`] classified as pot consumables.
+    ///
+    /// Reported because a ZERO here means the grant path's pot handling is inert for the session
+    /// -- the param table was not readable when the catalog was built -- and that failure is
+    /// otherwise indistinguishable from a character who simply has no pot conflicts.
+    pub pot_capped_rows: usize,
+    /// Goods rows that declared a `maxNum`, i.e. rows [`MaxHeld`] could read.
+    ///
+    /// Same reason as the field above, for the same table. A zero means every consumable in the
+    /// build falls back to one copy each, which looks exactly like a build with no consumables
+    /// in it unless the number is in the log.
+    pub max_held_rows: usize,
+    /// `EquipParamWeapon` rows [`Quivers`] classified as ammunition.
+    ///
+    /// Reported for a sharper reason than the two above: this number is a DENOMINATOR for the
+    /// armament catalog as well. Ammunition is subtracted from `Kind::Weapon` and added to
+    /// `Kind::Ammo`, so a zero here does not merely mean "no arrows resolve" -- it means the
+    /// split did not happen, `Kind::Weapon` still holds every arrow, and an ammo name in a build
+    /// will come back UNRESOLVED while the same name sits in the armament catalog. The installed
+    /// 1.17 table has 73; anything far from that is the param read, not the build.
+    pub ammo_rows: usize,
+    /// Rows the two ammunition classifications disagreed about. See [`Quivers::disagreements`].
+    pub ammo_classification_disagreements: usize,
 }
 
 /// Read a NUL-terminated UTF-16 string, bounded so a bad pointer cannot run away.
@@ -234,7 +271,7 @@ unsafe fn name_of(getter: usize, msg: usize, row_id: u32) -> Option<String> {
 /// in hand when it asks.
 fn getter_rva_for(kind: Kind) -> Option<usize> {
     if kind == Kind::AshOfWar {
-        return Some(rva::GET_ARTS_NAME);
+        return Some(rva::GET_ARTS_NAME_RVA);
     }
     SOURCES
         .iter()
@@ -259,10 +296,37 @@ fn getter_rva_for(kind: Kind) -> Option<usize> {
 ///
 /// `msg` must be a live `MsgRepositoryImp*` and `module_base` the loaded image base.
 pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) -> Option<String> {
-    let getter = module_base + getter_rva_for(kind)?;
-    // Safety: `getter` is a verified RVA within the loaded module and `msg` is the caller's live
-    // repository pointer.
+    // RESOLVED, not added. `name_of` transmutes this into a function pointer and CALLS it, and its
+    // safety comment says the caller guarantees the address is one of the verified getters --
+    // which was not true while this was bare addition against a 1.16.2 RVA. A refusal means the
+    // row goes unnamed, which is an answer this function already has.
+    let getter = getter_rva_for(kind)?;
+    let getter = crate::native::resolve(module_base, getter, name_getter_of(getter))?;
+    // Safety: `getter` was resolved for the running build immediately above and `msg` is the
+    // caller's live repository pointer.
     unsafe { name_of(getter, msg, row_id) }
+}
+
+/// The engine's own name for one name getter, for the refusal log.
+///
+/// Keyed on the RVA rather than on [`Kind`] because that is what the getter IS -- several kinds
+/// share one getter (talismans and great runes both come out of the goods bundle), and a label
+/// derived from the kind would report the same missing function under three different names.
+/// A name per getter rather than one shared label, because a reader who sees a refusal wants to
+/// know WHICH table stopped naming rows.
+fn name_getter_of(getter_rva: usize) -> &'static str {
+    match getter_rva {
+        rva::GET_WEAPON_NAME_RVA => "MsgRepositoryImp::GetWeaponName",
+        rva::GET_PROTECTOR_NAME_RVA => "MsgRepositoryImp::GetProtectorName",
+        rva::GET_ACCESSORY_NAME_RVA => "MsgRepositoryImp::GetAccessoryName",
+        rva::GET_GOODS_NAME_RVA => "MsgRepositoryImp::GetGoodsName",
+        rva::GET_GEM_NAME_RVA => "MsgRepositoryImp::GetGemName",
+        rva::GET_ARTS_NAME_RVA => "MsgRepositoryImp::GetArtsName",
+        // Unreachable through `SOURCES` and `getter_rva_for`, which between them cover every
+        // constant above. A catch-all rather than a panic: this is a LOG LABEL, and taking a
+        // game-loaded DLL down to complain about one is not a trade worth making.
+        _ => "an unrecognised MsgRepositoryImp name getter",
+    }
 }
 
 /// Insert one resolved row.
@@ -273,14 +337,44 @@ pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) 
 /// armament upgrades: [`ReinforceLevels`] asks the game which `reinforceTypeId + level` rows
 /// exist and clamps to the highest one the build can have. Reviving the flag would put a guessed
 /// level back in front of a measured one.
-fn insert(catalog: &mut MapCatalog, source: &Source, row_id: u32, name: &str) {
+fn insert(
+    catalog: &mut MapCatalog,
+    source: &Source,
+    row_id: u32,
+    name: &str,
+    pots: &PotGroups,
+    max_held: &MaxHeld,
+    quivers: &Quivers,
+) {
     catalog.insert(
         source.kind,
         name,
         Entry {
             full_item_id: (source.tag as u32) | row_id,
-            max_stored: None,
+            // GOODS ONLY, because `maxNum` is a goods field and the engine does not consult it
+            // for anything else: `GetMaxAmountForItem` sends every other category to
+            // `GetMaxItemQuantity`, a different function with a different answer. Leaving those
+            // `None` says "not asked", which the plan reads as one -- the right number for an
+            // armament or a piece of armour anyway.
+            max_stored: match (source.kind, source.tag) {
+                // AMMUNITION HAS ITS OWN FIELD IN ITS OWN TABLE, and the engine reads that one
+                // rather than `maxNum` for it: `GetMaxAmountForItem` sends every non-goods
+                // category to `GetMaxItemQuantity`, whose weapon branch answers
+                // `maxArrowQuantity` for categories 13 and 14 and a bare 1 for every other
+                // armament. See [`Quivers`].
+                (Kind::Ammo, _) => quivers.of(row_id),
+                (_, Tag::Goods) => max_held.of(row_id),
+                _ => None,
+            },
             somber: false,
+            // Only a goods row can be pot-capped, and `group_of` answers `None` for every id it
+            // did not enumerate -- so this is safe to ask for every category rather than gated on
+            // one, and a weapon or protector row that happens to share a number with a pot row
+            // cannot pick up its group.
+            pot_group: match source.tag {
+                Tag::Goods => pots.group_of(row_id),
+                _ => None,
+            },
         },
     );
 }
@@ -289,7 +383,7 @@ fn insert(catalog: &mut MapCatalog, source: &Source, row_id: u32, name: &str) {
 ///
 /// Returns an empty list rather than failing when the repository is not up yet; the caller
 /// sees that as zero named rows, which is the honest report for "the game is not ready".
-fn row_ids(kind: Kind, spells: &BTreeSet<u32>) -> Vec<u32> {
+fn row_ids(kind: Kind, spells: &BTreeSet<u32>, quivers: &Quivers) -> Vec<u32> {
     use eldenring::cs::{
         EquipParamAccessory, EquipParamGoods, EquipParamProtector, EquipParamWeapon,
         SoloParamRepository,
@@ -302,7 +396,21 @@ fn row_ids(kind: Kind, spells: &BTreeSet<u32>) -> Vec<u32> {
         return Vec::new();
     };
     match kind {
-        Kind::Weapon => repo.rows::<EquipParamWeapon>().map(|(id, _)| id).collect(),
+        // The weapon table carries both; `weaponCategory` decides which, exactly as the goods
+        // table is split by membership in `MAGIC_PARAM_ST`.
+        //
+        // MEMBERSHIP, NOT QUANTITY. `contains` and not `of(..).is_none()`: an ammunition row that
+        // declares no `maxArrowQuantity` is still ammunition, and asking the quantity question
+        // would file it back under `Kind::Weapon` -- putting an arrow in the armament catalog,
+        // where a name lookup could equip it into a hand. The two questions are separate for
+        // exactly this reason, and no row in the installed table declares zero, so the difference
+        // would never have shown up in a test that used real data.
+        Kind::Weapon => repo
+            .rows::<EquipParamWeapon>()
+            .map(|(id, _)| id)
+            .filter(|id| !quivers.contains(*id))
+            .collect(),
+        Kind::Ammo => quivers.rows(),
         Kind::Protector => repo
             .rows::<EquipParamProtector>()
             .map(|(id, _)| id)
@@ -325,7 +433,6 @@ fn row_ids(kind: Kind, spells: &BTreeSet<u32>) -> Vec<u32> {
             .filter(|id| !spells.contains(id))
             .collect(),
         Kind::GreatRune => GREAT_RUNE_ROWS.collect(),
-        Kind::Ammo => Vec::new(),
     }
 }
 
@@ -349,20 +456,47 @@ fn spell_row_ids() -> BTreeSet<u32> {
 /// game must be far enough along that the message repository and param tables are populated.
 pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, BuildStats) {
     let spells = spell_row_ids();
+    let pots = PotGroups::read();
+    let max_held = MaxHeld::read();
+    let quivers = Quivers::read();
     let mut catalog = MapCatalog::new();
     let mut stats = BuildStats {
         spell_rows: spells.len(),
+        pot_capped_rows: pots.len(),
+        max_held_rows: max_held.len(),
+        ammo_rows: quivers.len(),
+        ammo_classification_disagreements: quivers.disagreements(),
         ..BuildStats::default()
     };
 
     for source in SOURCES {
-        let getter = module_base + source.getter_rva;
-        for row_id in row_ids(source.kind, &spells) {
-            // Safety: `getter` is a verified RVA within the loaded module and `msg` is the
-            // caller's live repository pointer.
+        // Resolved for the RUNNING build, once per table rather than once per row: the loop below
+        // is thousands of calls and a refusal is a property of the build, not of a row. A table
+        // whose getter has no mapping contributes no names, and every row in it lands in
+        // `stats.unnamed` -- which the caller already prints beside `stats.named`, so a catalog
+        // that came up empty cannot be read as a catalog that found nothing to name.
+        let Some(getter) = crate::native::resolve(
+            module_base,
+            source.getter_rva,
+            name_getter_of(source.getter_rva),
+        ) else {
+            stats.unnamed += row_ids(source.kind, &spells, &quivers).len();
+            continue;
+        };
+        for row_id in row_ids(source.kind, &spells, &quivers) {
+            // Safety: `getter` was resolved for the running build immediately above and `msg` is
+            // the caller's live repository pointer.
             match unsafe { name_of(getter, msg, row_id) } {
                 Some(name) => {
-                    insert(&mut catalog, source, row_id, &name);
+                    insert(
+                        &mut catalog,
+                        source,
+                        row_id,
+                        &name,
+                        &pots,
+                        &max_held,
+                        &quivers,
+                    );
                     stats.named += 1;
                 }
                 None => stats.unnamed += 1,
@@ -413,8 +547,26 @@ unsafe fn insert_ashes_of_war(
     let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
         return;
     };
-    let arts_getter = module_base + rva::GET_ARTS_NAME;
-    let gem_getter = module_base + rva::GET_GEM_NAME;
+    // Resolved for the running build rather than added blind: `name_of` transmutes these into
+    // function pointers and CALLS them, and its safety comment says the caller guarantees the
+    // address is one of the verified getters -- which was not true while this was bare addition.
+    // On a build that moved the code, an unresolvable getter means no ash names, not a call into
+    // whatever now occupies the address.
+    // Through `crate::native` rather than the resolver directly, so a refusal here is named in
+    // this crate's own log exactly once for the life of the process, like every other native it
+    // asks for -- and under the same name the two loops above would report.
+    let Ok([arts_getter, gem_getter]) = crate::native::resolve_all(
+        module_base,
+        [
+            (
+                rva::GET_ARTS_NAME_RVA,
+                name_getter_of(rva::GET_ARTS_NAME_RVA),
+            ),
+            (rva::GET_GEM_NAME_RVA, name_getter_of(rva::GET_GEM_NAME_RVA)),
+        ],
+    ) else {
+        return;
+    };
 
     // skill row -> (this gem IS the canonical `arts * 100` row, it draws an icon, it has an
     // item name, gem row).
@@ -506,8 +658,12 @@ unsafe fn insert_ashes_of_war(
                     &name,
                     Entry {
                         full_item_id: (Tag::Gem as u32) | gem_id,
+                        // An ash is an `EquipParamGem` row, not a goods row: neither `maxNum` nor
+                        // `potGroupId` exists on that table to read. Nothing grants an ash as an
+                        // item anyway -- it rides onto its armament as `Grant::weapon_skill`.
                         max_stored: None,
                         somber: false,
+                        pot_group: None,
                     },
                 );
                 stats.named += 1;
@@ -516,6 +672,358 @@ unsafe fn insert_ashes_of_war(
         }
     }
     stats.iconless_ashes = iconless;
+}
+
+/// Every goods row the game POT-CAPS, and which group it is capped against.
+///
+/// # What a pot group is, and why an importer has to know
+///
+/// `EquipParamGoods.potGroupId` (壺グループID, `s8`, `-1..15`) ties a crafted consumable to the
+/// vessel it needs. `EquipInventoryData::UpdatePotsStates` (1.16.2 `0x14024e930`, same address on
+/// 1.17) walks the CARRIED inventory once and builds two `int[16]` tables on the inventory
+/// itself: `potItemsCapacity` at `+0xc8`, summed from the group's REGENERATIVE MATERIALS (the
+/// Cracked Pots), and `potItemsCount` at `+0x88`, summed from its CONSUMABLES (the pots you
+/// throw). `GetMaxAmountForItem` (`0x14024e570`) then answers `capacity[g] - count[g]`.
+///
+/// Both ways of acquiring an item clamp to that answer and say nothing:
+/// `EquipInventoryData::InsertItem` (`0x14024cfd0`) and `UpdateQuantity` (`0x14024d760`) each do
+/// `if (max < amount) amount = max;`. So "grant five Fire Pots" against a full group delivers
+/// three, returns no error, and leaves `EquipGameData.lastItemAddResult` at zero. Crafting does
+/// not escape it either -- every acquisition funnels through those two functions -- which is why
+/// the grant path frees space in the group instead of trying to make more pots.
+///
+/// # Consumables only
+///
+/// The predicate is the engine's own `EquipParamGoodsLookupResult::IsPotConsumable`
+/// (1.16.2 `0x140d3a190`, 1.17 `0x140d3b8e0`; the two are byte-for-byte identical, which is how
+/// the field offsets below were confirmed to survive the patch):
+///
+/// ```text
+/// CMP byte ptr [RDX + 0x3e], 0x0   ; goodsType == NORMAL_ITEM
+/// MOVZX ECX, byte ptr [RDX + 0x2e] ; potGroupId
+/// TEST CL, CL / JS                 ; ... >= 0
+/// ```
+///
+/// The Cracked Pot itself is `goodsType == 0x0b` (REGENERATIVE_MATERIAL, per
+/// `IsRegenerativeMaterial` at `0x140d3a1c0` / `0x140d3b910`) and is deliberately NOT in here.
+/// It is what SUPPLIES the capacity, so a caller that deposited it to free space would be
+/// removing the space. Measured against the installed regulation by
+/// `scripts/regulation-potgroup-census.py`: 67 consumable rows across 4 groups, each group with
+/// exactly one material (9500, 9510, 9501, 2009500).
+///
+/// # Read from the game, not from a list
+///
+/// The rows are enumerated live rather than hard-coded, for the same reason the name catalog is:
+/// the table is the player's patch level with their DLC, and a shipped list of pot ids would be
+/// a copy of it that goes stale silently.
+pub struct PotGroups {
+    /// Goods ROW id -> group, for pot consumables only.
+    by_row: std::collections::BTreeMap<u32, u8>,
+    /// Group -> every pot-consumable ITEM id (goods-tagged) in it.
+    members: [Vec<u32>; POT_GROUP_COUNT],
+}
+
+/// `EquipInventoryData::potItemsCount` / `potItemsCapacity` are `int[16]`, and `UpdatePotsStates`
+/// discards any group id at or above that -- `if (uVar5 < 0x10)` guards both accumulations.
+const POT_GROUP_COUNT: usize = 16;
+
+/// `EquipParamGoods.goodsType` value for an ordinary consumable, the one half of
+/// `IsPotConsumable`'s test that is not the group id.
+const GOODS_TYPE_NORMAL_ITEM: u8 = 0x00;
+
+impl PotGroups {
+    /// Read the goods table. Empty when the repository is not up, which makes every pot-aware
+    /// path inert rather than wrong -- the grant still runs, it just cannot free space first.
+    pub fn read() -> Self {
+        use eldenring::cs::{EquipParamGoods, SoloParamRepository};
+        use fromsoftware_shared::FromStatic;
+
+        let mut by_row = std::collections::BTreeMap::new();
+        let mut members: [Vec<u32>; POT_GROUP_COUNT] = Default::default();
+        // Safety: read-only enumeration behind the populated-singleton check.
+        let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+            return Self { by_row, members };
+        };
+        for (row_id, row) in repo.rows::<EquipParamGoods>() {
+            if row.goods_type() != GOODS_TYPE_NORMAL_ITEM {
+                continue;
+            }
+            let group = row.pot_group_id();
+            if group < 0 || usize::from(group.unsigned_abs()) >= POT_GROUP_COUNT {
+                continue;
+            }
+            let group = group.unsigned_abs();
+            by_row.insert(row_id, group);
+            members[usize::from(group)].push((Tag::Goods as u32) | row_id);
+        }
+        Self { by_row, members }
+    }
+
+    /// The group a goods ROW id is capped against, or `None` when the game does not cap it.
+    pub fn group_of(&self, row_id: u32) -> Option<u8> {
+        self.by_row.get(&row_id).copied()
+    }
+
+    /// Every pot-consumable ITEM id in `group`, goods category nibble included.
+    ///
+    /// These are the only items whose deposit RAISES the ceiling for another member of the group.
+    pub fn members(&self, group: u8) -> &[u32] {
+        self.members
+            .get(usize::from(group))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// How many rows the game pot-caps at all. Zero means this table could not be read.
+    pub fn len(&self) -> usize {
+        self.by_row.len()
+    }
+
+    /// Whether nothing was read.
+    pub fn is_empty(&self) -> bool {
+        self.by_row.is_empty()
+    }
+}
+
+/// Which `EquipParamWeapon` rows are AMMUNITION, and how many of each the game lets a player hold.
+///
+/// # Ammunition is a weapon, and `maxNum` says nothing about it
+///
+/// Arrows and bolts are `EquipParamWeapon` rows -- which is why they equip into dedicated
+/// `ChrAsmSlot` positions rather than the quickbar -- so [`MaxHeld`], which reads
+/// `EquipParamGoods.maxNum`, cannot answer for them and the engine never asks it to.
+/// `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 and 1.17 both `0x14024e570`) handles the
+/// goods category inline and tail-jumps every other category to `::GetMaxItemQuantity`
+/// (1.16.2 `0x140674680`, 1.17 `0x1406754d0`), whose weapon branch is the whole of the answer:
+///
+/// ```text
+/// EquipParamWeapon::GetEntry(&lookup, itemId & 0x0FFFFFFF);
+/// if (lookup.row && (row->weaponCategory == 13 || row->weaponCategory == 14))
+///     return row->maxArrowQuantity;
+/// return 1;                                   // every other weapon: one armament
+/// ```
+///
+/// So the same two fields answer BOTH questions this type exists for -- "is this row ammunition"
+/// and "how many of it may be held" -- and they answer them the way the engine does rather than
+/// the way a classification of our own would.
+///
+/// # The two offsets, confirmed on both images
+///
+/// A wrong struct offset is the one failure mode with no symptom: no refusal, no fault, no log
+/// line, just a number read from the wrong place. Both are therefore established twice over and
+/// then pinned to the compiler:
+///
+/// * The 1.16.2 dump's own `_EQUIP_PARAM_WEAPON_ST` (struct size 664) names `weaponCategory` at
+///   offset 230 (`0xE6`, `u8`) and `maxArrowQuantity` at 565 (`0x235`, `u8`).
+/// * 1.17 confirms them by reading the function that CONSUMES them. The instruction bytes are
+///   identical between builds --
+///   `0f b6 91 e6 00 00 00 / 80 fa 0d / 74 09 / 80 fa 0e / 0f 85 .. / 0f b6 81 35 02 00 00` --
+///   at `0x140674887` in `eldenring-deobf.bin` and `0x1406756d7` in `eldenring-deobf-1.17.bin`.
+/// * The installed 1.17 `regulation.bin` corroborates by VALUE
+///   (`scripts/regulation-ammo-census.py`): it derives the same 664-byte stride, finds 73 rows in
+///   categories 13 and 14, and reads `maxArrowQuantity` `{1: 2, 20: 5, 30: 8, 99: 58}` -- the 20s
+///   the five Ballista Bolts, the 30s the eight Great Arrows, the 99s every ordinary arrow and
+///   bolt. Those are the quiver limits the game enforces.
+///
+/// The `const` assertions below are the part that cannot rot: they ask the COMPILER where the
+/// fields are, so a layout change in `../fromsoftware-rs` becomes a build error rather than a
+/// wrong read at runtime.
+///
+/// # Two classifications of ammunition, measured to agree
+///
+/// [`crate::read_character`] classifies ammunition by `wepType` (81 Arrow, 83 Great Arrow,
+/// 85 Bolt, 86 Ballista Bolt) because that is what the EXPORT side has in hand. This side uses
+/// `weaponCategory` because that is the field the engine's own quantity gate reads. The two select
+/// the identical 73 rows of the installed table, with zero rows on either side of the difference,
+/// and `scripts/regulation-ammo-census.py` exits non-zero if they ever stop agreeing -- so the
+/// duplication is checked rather than merely asserted.
+pub struct Quivers {
+    /// Ammunition ROW id -> `maxArrowQuantity`, whatever it declares.
+    by_row: std::collections::BTreeMap<u32, u32>,
+    /// Rows the `weaponCategory` and `wepType` classifications disagreed about. See
+    /// [`Quivers::disagreements`].
+    disagreements: usize,
+}
+
+impl Quivers {
+    /// `EquipParamWeapon.weaponCategory` for arrows.
+    const CATEGORY_ARROW: u8 = 13;
+    /// `EquipParamWeapon.weaponCategory` for bolts.
+    const CATEGORY_BOLT: u8 = 14;
+
+    /// Read the weapon table. Empty when the repository is not up -- which leaves the ammunition
+    /// catalog empty and every arrow in the build UNRESOLVED, rather than silently reclassifying
+    /// arrows as armaments and equipping them into a hand.
+    pub fn read() -> Self {
+        use eldenring::cs::{EquipParamWeapon, SoloParamRepository};
+        use fromsoftware_shared::FromStatic;
+
+        // WHAT THE COMPILER CAN BE ASKED, AND WHAT IT CANNOT. `EQUIP_PARAM_WEAPON_ST`'s fields
+        // are private in `../fromsoftware-rs`, so `offset_of!` cannot name them and the
+        // field-level pin used for `PlayerGameData` is simply not available here. Its SIZE is,
+        // and 664 is verified twice over -- the 1.16.2 dump's struct is 664 bytes, and the
+        // installed 1.17 `regulation.bin` derives a 664-byte stride from the gaps between its own
+        // row offsets. That is a bracket, not a proof: a compensating insert-and-remove inside
+        // the struct leaves the size unmoved. It is pinned because it is measured, and the
+        // disagreement count below is what covers what it cannot.
+        const _: () =
+            assert!(core::mem::size_of::<eldenring::param::EQUIP_PARAM_WEAPON_ST>() == 664);
+
+        let mut by_row = std::collections::BTreeMap::new();
+        let mut disagreements = 0usize;
+        // Safety: read-only enumeration behind the populated-singleton check.
+        let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+            return Self {
+                by_row,
+                disagreements,
+            };
+        };
+        for (row_id, row) in repo.rows::<EquipParamWeapon>() {
+            let category = row.weapon_category();
+            let by_category = category == Self::CATEGORY_ARROW || category == Self::CATEGORY_BOLT;
+            // THE CROSS-CHECK THAT STANDS IN FOR THE PIN THE COMPILER WOULD NOT TAKE. `wepType`
+            // is a SECOND field, at a different offset (`+0x1A6`, `u16`), whose ammunition values
+            // the exporter measured independently -- and on the installed table the two select
+            // the identical 73 rows. A layout shift that moved one of them would move it out from
+            // under only one of these two reads, so a non-zero count here is a wrong-offset alarm
+            // for a failure that is otherwise perfectly silent.
+            if by_category != crate::read_character::is_ammunition(row.wep_type()) {
+                disagreements += 1;
+            }
+            if !by_category {
+                continue;
+            }
+            // A row in an ammunition category with no declared quantity is still ammunition, so
+            // it belongs in the ROW SET either way; it is the QUANTITY that is absent, and the
+            // plan reads that as one. Recorded as such rather than dropped, because dropping it
+            // would send an arrow back into `Kind::Weapon` and into a hand slot.
+            by_row.insert(row_id, u32::from(row.max_arrow_quantity()));
+        }
+        Self {
+            by_row,
+            disagreements,
+        }
+    }
+
+    /// Rows the two ammunition classifications disagreed about.
+    ///
+    /// Zero on every build this has been measured against. Non-zero means `weaponCategory` and
+    /// `wepType` no longer describe the same set, which in practice means one of the two offsets
+    /// is being read out of the wrong place -- the one defect in this module that produces no
+    /// fault, no refusal and no log line of its own.
+    pub fn disagreements(&self) -> usize {
+        self.disagreements
+    }
+
+    /// Every ammunition row id.
+    pub fn rows(&self) -> Vec<u32> {
+        self.by_row.keys().copied().collect()
+    }
+
+    /// The `maxArrowQuantity` an ammunition ROW declares, or `None` for a row that is not
+    /// ammunition at all.
+    ///
+    /// A declared zero comes back as `None` for the same reason [`MaxHeld`] leaves a
+    /// `maxNum <= 0` row absent: the plan reads absence as one copy, and one is the right answer
+    /// for an item the table has no opinion about.
+    pub fn of(&self, row_id: u32) -> Option<u32> {
+        self.by_row.get(&row_id).copied().filter(|max| *max > 0)
+    }
+
+    /// Whether `row_id` is an ammunition row, whatever quantity it declares.
+    pub fn contains(&self, row_id: u32) -> bool {
+        self.by_row.contains_key(&row_id)
+    }
+
+    /// How many ammunition rows were found. Zero means this table could not be read.
+    pub fn len(&self) -> usize {
+        self.by_row.len()
+    }
+
+    /// Whether nothing was read.
+    pub fn is_empty(&self) -> bool {
+        self.by_row.is_empty()
+    }
+}
+
+/// How many of each goods row the game lets a player hold: `EquipParamGoods.maxNum`.
+///
+/// # The engine's own answer, not a stack size chosen here
+///
+/// `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 `0x14024e570`, same address on 1.17) is
+/// the whole of the engine's opinion on "how many more of this may be added". For an item id in
+/// the goods category its body is:
+///
+/// ```text
+/// GetEntry(&lookup, itemId & 0x0FFFFFFF);
+/// if (GetPotGroupId(&lookup) >= 0)  return limitedPots ? capacity[g] - count[g] : 99;
+/// if (lookup.paramRow && 0 < lookup.paramRow->maxNum) return lookup.paramRow->maxNum;
+/// return 99;
+/// ```
+///
+/// So `maxNum` is the ceiling the add will be clamped to anyway, and the pot branch above it is
+/// the reason [`PotGroups`] exists next to this.
+///
+/// # The offset, on both images
+///
+/// `maxNum` is `+0x3A` in a 176-byte `EQUIP_PARAM_GOODS_ST`, between the `potGroupId` (`+0x2E`)
+/// and `goodsType` (`+0x3E`) that [`PotGroups`] already pins. That is what the 1.16.2 dump's own
+/// `_EQUIP_PARAM_GOODS_ST` says (field 21, offset 58, struct size 176), and it holds on 1.17:
+/// the installed 1.17 `regulation.bin` derives the same 176-byte stride, and the `s16` at `+0x3A`
+/// reads 1 for every great rune, 1 for every crystal tear, 20 for the Flask of Cerulean Tears, 99
+/// for both boluses and 10 for every pot-group consumable -- the caps the game actually enforces,
+/// and the same numbers the planner's own item database records. A wrong offset here would be
+/// silent, which is why it is corroborated by value and not only by neighbour.
+///
+/// # Read from the game, not from a list
+///
+/// Same reason as the name catalog and the pot groups: the table is the player's patch level with
+/// their DLC, and the actual read goes through `EquipParamGoods::max_num()`, so the offset above
+/// is documentation of what that accessor owns rather than a second copy of it.
+pub struct MaxHeld {
+    /// Goods ROW id -> `maxNum`, for rows that declare a positive one.
+    by_row: std::collections::BTreeMap<u32, u32>,
+}
+
+impl MaxHeld {
+    /// Read the goods table. Empty when the repository is not up, which makes every consumable
+    /// fall back to a single copy rather than to a wrong number.
+    pub fn read() -> Self {
+        use eldenring::cs::{EquipParamGoods, SoloParamRepository};
+        use fromsoftware_shared::FromStatic;
+
+        let mut by_row = std::collections::BTreeMap::new();
+        // Safety: read-only enumeration behind the populated-singleton check.
+        let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
+            return Self { by_row };
+        };
+        for (row_id, row) in repo.rows::<EquipParamGoods>() {
+            let max_num = row.max_num();
+            // `0 < maxNum` IS THE ENGINE'S OWN TEST, kept rather than paraphrased. A row that
+            // declares nothing is left absent, so the plan grants one -- the engine would hand
+            // out 99 for such a row, and handing a player 99 of something the game itself has no
+            // opinion about is the over-grant this whole path is trying not to be. Two rows in
+            // the installed 1.17 table are in that state.
+            if max_num > 0 {
+                by_row.insert(row_id, max_num.unsigned_abs().into());
+            }
+        }
+        Self { by_row }
+    }
+
+    /// The `maxNum` a goods ROW declares, or `None` when it declares none.
+    pub fn of(&self, row_id: u32) -> Option<u32> {
+        self.by_row.get(&row_id).copied()
+    }
+
+    /// How many rows declared one. Zero means this table could not be read.
+    pub fn len(&self) -> usize {
+        self.by_row.len()
+    }
+
+    /// Whether nothing was read.
+    pub fn is_empty(&self) -> bool {
+        self.by_row.is_empty()
+    }
 }
 
 /// Whether a param table has been streamed in.
@@ -572,7 +1080,11 @@ pub fn msg_repository() -> Option<usize> {
     let base = er_game_base::mem::game_module_base().ok()?;
     // Safety: a fault-checked read of one pointer-sized slot in the loaded image.
     let repository = unsafe {
-        er_game_base::mem::safe_read_usize(base + er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA)
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA,
+            "MSG_REPOSITORY_GLOBAL_RVA",
+        ))
     }?;
     (repository != 0).then_some(repository)
 }
