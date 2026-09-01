@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,896 |
+| all `experiments/**` | 76 | 49,961 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
