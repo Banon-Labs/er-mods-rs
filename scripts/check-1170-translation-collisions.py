@@ -98,7 +98,31 @@ BASELINE
 A collision that is not in it, or a baselined one that reaches a table it did not reach before,
 fails the run. Baselined ones are printed in full on every run -- an allowlist that hides its
 contents is how this class stays invisible. `--strict` ignores the baseline entirely and is the
-mode to run once the three unreferenced rows are dropped.
+mode to run once a collision has actually been cleared from the ledgers.
+
+PROVEN UNCLAIMED IS NOT A DELETION LICENCE (2026-08-30, the SECOND correction)
+------------------------------------------------------------------------------
+`rva_symbols` can now evaluate every address-capable declaration in `crates/`, so all three
+baselined addresses come back PROVEN unclaimed. That is a fact about this repo's SOURCE, and this
+gate used to turn it straight into "deleting it removes this collision at zero cost." It must not,
+for two reasons the resolver cannot see:
+
+  * an address can be asked for by a value the source never spells -- computed from another
+    constant, read out of a live vtable, recovered from a call site. Not hypothetical:
+    `docs/recon/rva-1170-observed-refusals.txt` exists because 42 of the 54 addresses the running
+    game asked for on 2026-08-29 were invisible to a declaration scan;
+  * DELETING THE ROW DOES NOT MAKE A LATER REQUEST FAIL LOUDLY. With row B gone its source is a
+    destination and no longer a source, so `already_translated_in` claims it and
+    `resolve_on_running_build` hands the address BACK UNTRANSLATED -- no refusal, no log line --
+    and on 1.17 that address is a DIFFERENT function. `deletion_failure_mode` computes this per row
+    from the tables and prints it, because "if I am wrong the failure is loud" is the assumption
+    the delete-it advice rested on, and for this shape it is false.
+
+So the PROVEN branch reports what is proven and what is still owed, and NO branch may print a
+sentence this file's own `COSTLESS_CLAIM` / `DELETION_ADVICE` detectors would refuse in a baseline
+note -- the gate held notes to a standard its own prose did not meet. What actually settles a row
+is a RUN: the log must show the address arriving only as some other row's translated output, never
+as a first request. For all three baselined rows it does; the evidence is in the baseline notes.
 
 USAGE
     python3 scripts/check-1170-translation-collisions.py            # gate mode
@@ -542,6 +566,54 @@ def claims_on(rva):
         return None
 
 
+def _already_translated_in(pairs, rva):
+    """`already_translated_in` from `crates/er-game-base/src/game_build.rs`, on `(src, dst)` pairs.
+
+    Reproduced rather than imported because it is Rust, and reproduced HERE rather than assumed
+    because the whole point below is what the RUNTIME would do with a row this gate suggests
+    removing. Kept byte-for-byte equivalent to that function: a destination of some other row that
+    is not itself the source of a move.
+    """
+    is_destination = any(dst == rva and src != rva for src, dst in pairs)
+    is_source_of_a_move = any(src == rva and dst != rva for src, dst in pairs)
+    return is_destination and not is_source_of_a_move
+
+
+# What a genuine, first-time request for the collision address would get once row B is gone.
+LOUD = "REFUSED"  # `resolve_on_running_build` logs ADDRESS REFUSED and returns None
+SILENT = "HANDED BACK UNTRANSLATED"  # `already_translated_in` claims it; no log line at all
+STILL_MAPPED = "STILL TRANSLATED"  # another row keys the same source
+
+
+def deletion_failure_mode(tables, collision):
+    """`{table: (kind, address)}` -- what asking for the collision address gets AFTER row B goes.
+
+    THIS IS THE QUESTION THE OLD "AT ZERO COST" SENTENCE ASSUMED AN ANSWER TO. Deleting a row is
+    only cheap-if-wrong when being wrong is LOUD: a missing address costs a feature and says so.
+    For this exact shape it is not. Row B's source is row A's DESTINATION, so once row B is deleted
+    the source is a destination that no row claims as a source -- which is precisely the condition
+    `already_translated_in` tests -- and the resolver hands the address straight back with no
+    translation, no refusal and no log line. On 1.17 that address is a different function.
+
+    So the gate computes the failure mode instead of assuming it, and prints it beside any
+    suggestion to delete. `LOUD` would make a deletion recoverable from a log; `SILENT` means a
+    wrong deletion looks exactly like the collision it replaced.
+    """
+    out = {}
+    for name, rows in tables.items():
+        pairs = [
+            (row.src, row.dst)
+            for row in rows
+            if not (row.src == collision.address and row.dst == collision.second)
+        ]
+        if _already_translated_in(pairs, collision.address):
+            out[name] = (SILENT, collision.address)
+            continue
+        onward = next((dst for src, dst in pairs if src == collision.address), None)
+        out[name] = (STILL_MAPPED, onward) if onward is not None else (LOUD, None)
+    return out
+
+
 # --------------------------------------------------------------------------------------------
 # Baseline
 # --------------------------------------------------------------------------------------------
@@ -574,22 +646,49 @@ def read_baseline(path=BASELINE):
 # claimed-by-no-feature line, which was a text search for one spelling. The notes are printed on
 # every run, so a stale one is read far more often than the code that produced it. This refuses a
 # note that advises deletion unless the address is PROVEN unclaimed right now.
+#
+# TWO detectors, because the two phrases are refused for different reasons and one of them can
+# never be earned. "Claimed by no feature" is a statement about `crates/`, which `rva_symbols` can
+# settle. "At zero cost" is a statement about the whole system -- source, ledgers and the running
+# game -- and NOTHING in this repo establishes it. It is also false in the specific direction that
+# matters here: see `deletion_failure_mode`, where deleting one of these rows makes a later request
+# for the address silently WRONG rather than loudly refused.
 DELETION_ADVICE = re.compile(
-    r"zero(?: feature)? cost|carries no feature|claimed by no feature|safe to delete|costs nothing",
-    re.I,
+    r"carries no feature|claimed by no feature|safe to delete|deleting it removes", re.I
 )
+COSTLESS_CLAIM = re.compile(r"zero(?: feature)? cost|costs nothing|at no cost|free to delete", re.I)
 
 
 def unearned_deletion_advice(known, baseline):
-    """Baselined notes that advise deleting a row whose address is not PROVEN unclaimed."""
+    """Baselined notes whose advice this gate cannot stand behind: `(collision, note, claims, why)`.
+
+    Two grounds, and they are not the same fact:
+
+    * a COSTLESS claim, refused unconditionally -- no check in this repo computes the cost of a
+      deletion, and for a collision row the cost of being wrong is a silent misroute;
+    * DELETION advice about an address that is not PROVEN unclaimed -- "I found no reference" read
+      as "there is no reference", which is the failure this whole file exists for.
+    """
     out = []
     for collision in known:
         note = baseline[collision.key()]["note"]
-        if not DELETION_ADVICE.search(note):
+        costless = COSTLESS_CLAIM.search(note)
+        advises = DELETION_ADVICE.search(note)
+        if not costless and not advises:
             continue
         claims = claims_on(collision.address)
-        if claims is None or not claims.proven_unclaimed:
-            out.append((collision, note, claims))
+        if costless:
+            out.append(
+                (
+                    collision,
+                    note,
+                    claims,
+                    "it claims a deletion is costless, which nothing here computes and which "
+                    "deletion_failure_mode contradicts",
+                )
+            )
+        elif claims is None or not claims.proven_unclaimed:
+            out.append((collision, note, claims, "the address is not PROVEN unclaimed"))
     return out
 
 
@@ -685,7 +784,13 @@ def newest_generated(rules):
 # --------------------------------------------------------------------------------------------
 
 
-def describe(collision, out):
+def describe(collision, out, tables=None):
+    """Print one collision in full. `tables` lets it compute what DELETING row B would do.
+
+    Without `tables` the deletion-failure-mode paragraph is replaced by a line saying it could not
+    be computed -- never by silence, because its absence is what let the old "at zero cost"
+    sentence sound like a finished argument.
+    """
     first, second = collision.rows["first"], collision.rows["second"]
     print(f"\n  COLLISION at 0x{collision.address:x}   ({', '.join(sorted(collision.routes))})", file=out)
     print(
@@ -749,10 +854,52 @@ def describe(collision, out):
         )
     elif claims.proven_unclaimed:
         print(
-            f"    NOTHING in crates/ claims 0x{second.src:x}, and that is PROVEN: all\n"
+            f"    NOTHING in crates/ DECLARES 0x{second.src:x}, and THAT MUCH is PROVEN: all\n"
             f"    {claims.universe} address-capable declarations were evaluated, none is this\n"
-            f"    address, and no bare literal of it occurs in code. Row B is claimed by no\n"
-            f"    feature: deleting it removes this collision at zero cost.",
+            f"    address, and no bare literal of it occurs in code.",
+            file=out,
+        )
+        print(
+            f"    THAT IS NOT A LICENCE TO DELETE ROW B, and this gate will not write one. What\n"
+            f"    the resolver reads is this repo's SOURCE; an address can still be asked for by a\n"
+            f"    value the source never spells -- computed from another constant, read out of a\n"
+            f"    live vtable, recovered from a call site. docs/recon/rva-1170-observed-refusals.txt\n"
+            f"    exists because 42 of the 54 addresses the running game asked for on 2026-08-29\n"
+            f"    were invisible to a declaration scan.",
+            file=out,
+        )
+        if tables is None:
+            print(
+                f"    AND THE COST OF BEING WRONG WAS NOT COMPUTED: describe() was called without\n"
+                f"    the tables, so what a later request for 0x{second.src:x} would get after a\n"
+                f"    deletion is unknown here. Do not delete on this page alone.",
+                file=out,
+            )
+        else:
+            outcomes = deletion_failure_mode(tables, collision)
+            summary = ", ".join(
+                f"{name} map: {kind}" + (f" -> 0x{landing:x}" if landing is not None else "")
+                for name, (kind, landing) in sorted(outcomes.items())
+            )
+            print(
+                f"    IF ROW B WERE DELETED, a later first request for 0x{second.src:x} would be\n"
+                f"    -- {summary}.",
+                file=out,
+            )
+            if any(kind == SILENT for kind, _ in outcomes.values()):
+                print(
+                    f"    THAT IS THE SILENT DIRECTION, so a wrong deletion here is NOT cheap. With\n"
+                    f"    row B gone, 0x{second.src:x} is a destination that no row claims as a\n"
+                    f"    source -- exactly what `already_translated_in` tests -- so the resolver\n"
+                    f"    hands it back unchanged with no translation, no refusal and no log line,\n"
+                    f"    and on 1.17 that address is a DIFFERENT function. A wrong deletion looks\n"
+                    f"    exactly like the collision it replaced.",
+                    file=out,
+                )
+        print(
+            f"    WHAT WOULD SETTLE IT is a RUN, not a scan: the DLL logs must show 0x{second.src:x}\n"
+            f"    arriving only as some other row's ADDRESS TRANSLATED output and never as a first\n"
+            f"    request of its own. Record that evidence in the baseline note, then decide.",
             file=out,
         )
     else:
@@ -797,17 +944,25 @@ def preamble(out):
 def epilogue(out):
     print(
         "\nWHAT TO DO. In order of preference:\n"
-        "  1. Drop the row whose source is the other's destination -- but ONLY where the gate says\n"
-        "     above that nothing claims it and that this is PROVEN. `NOT PROVEN` means the\n"
-        "     resolver found nothing and could not read everything, which is not the same fact and\n"
-        "     is not grounds for a deletion; `IS CLAIMED` names the symbol that would lose its\n"
-        "     address. An enum discriminant is a declaration: 0xb0d400 is spelled\n"
-        "     `MenuJobWait = 0x00b0d400`, and the shape `const NAME: usize = 0x..;` never occurs\n"
-        "     for it.\n"
-        "  2. If both rows are load-bearing, keep them and record the collision in\n"
+        "  1. FIX THE DOUBLE RESOLVE AT THE CALL SITE, which is the defect itself and the only\n"
+        "     remedy that generalises. A caller that does `game_rva(RVA)` and then hands the\n"
+        "     RESULT to `MhHook::new` / `register_union_hook` resolves twice; those entry points\n"
+        "     resolve internally, so they take the UNRESOLVED 1.16.2 address. Grep the run log for\n"
+        "     two adjacent ADDRESS TRANSLATED lines where the second's source is the first's\n"
+        "     destination -- that pair names the call site.\n"
+        "  2. Only then consider dropping the row whose source is the other's destination, and\n"
+        "     ONLY where the gate says above that nothing DECLARES it and that this is PROVEN.\n"
+        "     PROVEN is a fact about `crates/`, not about the game: it does not cover an address\n"
+        "     computed at runtime, and -- read the deletion-failure-mode lines above -- being\n"
+        "     wrong about it is SILENT here, not loud. `NOT PROVEN` means the resolver found\n"
+        "     nothing and could not read everything, which is not the same fact and is not grounds\n"
+        "     for a deletion; `IS CLAIMED` names the symbol that would lose its address. An enum\n"
+        "     discriminant is a declaration: 0xb0d400 is spelled `MenuJobWait = 0x00b0d400`, and\n"
+        "     the shape `const NAME: usize = 0x..;` never occurs for it.\n"
+        "  3. If both rows are load-bearing, keep them and record the collision in\n"
         f"     {os.path.relpath(BASELINE, ROOT)} with a note saying why -- it is then printed on\n"
         "     every run rather than forgotten.\n"
-        "  3. Never 'fix' an ADDRESS REFUSED log line by adding a row for the refused address\n"
+        "  4. Never 'fix' an ADDRESS REFUSED log line by adding a row for the refused address\n"
         "     without first checking whether it is already some row's destination. That is how\n"
         "     all three current collisions were created.\n"
         "Context for one address: python3 scripts/pdata-enclosing-function.py 1162:0x<va>\n",
@@ -1135,7 +1290,11 @@ def selftest():
             collision.rows["second"] = Row(0xB0D400, 0x3000, "synthetic", 2, "")
             describe(collision, spoken)
             said = spoken.getvalue()
-            check("a claimed address is never called free to delete", "zero cost" in said, False)
+            check(
+                "a claimed address is never called free to delete",
+                bool(COSTLESS_CLAIM.search(said)),
+                False,
+            )
             check("...and the declaring symbol is named", "MenuTraceRva::MenuJobWait" in said, True)
             check("...as is the constant that reaches it", "TITLE_MENU_JOB_WAIT_RVA" in said, True)
 
@@ -1147,8 +1306,46 @@ def selftest():
             collision = Collision(0x1000, 0x555000, 0x3000)
             collision.rows["first"] = Row(0x1000, 0x555000, "synthetic", 1, "")
             collision.rows["second"] = Row(0x555000, 0x3000, "synthetic", 2, "")
-            describe(collision, spoken)
-            check("...and only then is deletion advised", "zero cost" in spoken.getvalue(), True)
+            # PROVEN must be DISTINGUISHABLE from the other two branches (or the control is
+            # vacuous) and must STILL not license a deletion -- the second correction, 2026-08-30.
+            proven_tables = {
+                CALL: [
+                    Row(0x1000, 0x555000, "synthetic", 1, ""),
+                    Row(0x555000, 0x3000, "synthetic", 2, ""),
+                ],
+                DETOUR: [
+                    Row(0x1000, 0x555000, "synthetic", 1, ""),
+                    Row(0x555000, 0x3000, "synthetic", 2, ""),
+                ],
+            }
+            describe(collision, spoken, proven_tables)
+            proven_said = spoken.getvalue()
+            check("...and PROVEN is still said in those words", "is PROVEN" in proven_said, True)
+            check("...distinguishably from NOT PROVEN", "NOT PROVEN" in proven_said, False)
+            check(
+                "...but PROVEN never becomes a costless claim",
+                bool(COSTLESS_CLAIM.search(proven_said)),
+                False,
+            )
+            check(
+                "...nor a deletion licence",
+                bool(DELETION_ADVICE.search(proven_said)),
+                False,
+            )
+            check(
+                "...and the SILENT failure mode of deleting the row is spelled out",
+                SILENT in proven_said,
+                True,
+            )
+            # Called WITHOUT tables, the cost paragraph must be replaced by an admission, never
+            # dropped: its silence is what made "at zero cost" sound finished.
+            blind = io.StringIO()
+            describe(collision, blind)
+            check(
+                "describe() without tables admits the cost was not computed",
+                "WAS NOT COMPUTED" in blind.getvalue(),
+                True,
+            )
         finally:
             rva_symbols.index = saved
 
@@ -1176,7 +1373,11 @@ def selftest():
             collision.rows["second"] = Row(0x555000, 0x3000, "synthetic", 2, "")
             describe(collision, spoken)
             said = spoken.getvalue()
-            check("an unproven address is NEVER called free to delete", "zero cost" in said, False)
+            check(
+                "an unproven address is NEVER called free to delete",
+                bool(COSTLESS_CLAIM.search(said)) or bool(DELETION_ADVICE.search(said)),
+                False,
+            )
             check("...and the gate says so in those words", "NOT PROVEN" in said, True)
             check("...naming what it could not read", "OPAQUE_RVA" in said, True)
         finally:
@@ -1188,7 +1389,7 @@ def selftest():
     noted = Collision(0x1000, 0xB0D400, 0x3000)
     check(
         "a note advising deletion of a CLAIMED address is refused",
-        [c.label() for c, _, _ in unearned_deletion_advice(
+        [c.label() for c, _, _, _ in unearned_deletion_advice(
             [noted],
             {noted.key(): {"routes": set(), "note": "carries no feature, delete at zero cost"}},
         )],
@@ -1200,6 +1401,79 @@ def selftest():
             [noted], {noted.key(): {"routes": set(), "note": "both rows are load-bearing"}}
         ),
         [],
+    )
+    # ...AND A COSTLESS CLAIM IS REFUSED EVEN WHEN THE ADDRESS *IS* PROVEN UNCLAIMED. Nothing in
+    # this repo computes the cost of a deletion, and for this shape the cost of being wrong is a
+    # silent misroute, so the phrase can never be earned. 0x555000 is unclaimed in the real tree.
+    free = Collision(0x1000, 0x555000, 0x3000)
+    check(
+        "a costless claim is refused even on a PROVEN-unclaimed address",
+        [c.label() for c, _, _, _ in unearned_deletion_advice(
+            [free],
+            {free.key(): {"routes": set(), "note": "nothing declares it, so this costs nothing"}},
+        )],
+        [free.label()],
+    )
+    check(
+        "...and the refusal says which of the two grounds it is",
+        [why for _, _, _, why in unearned_deletion_advice(
+            [free],
+            {free.key(): {"routes": set(), "note": "nothing declares it, so this costs nothing"}},
+        )][0].startswith("it claims a deletion is costless"),
+        True,
+    )
+
+    # THE COST OF BEING WRONG, computed rather than assumed. `A -> B` and `B -> C`: delete row B
+    # and B is a destination that no row sources, so `already_translated_in` claims it and the
+    # resolver hands it back UNTRANSLATED. That is the silent direction, and it is why "at zero
+    # cost" could never be said about one of these rows.
+    shape = Collision(0x1000, 0x2000, 0x3000)
+    rows = [Row(0x1000, 0x2000, "synthetic", 1, ""), Row(0x2000, 0x3000, "synthetic", 2, "")]
+    check(
+        "deleting row B makes a later request SILENT, not loud",
+        deletion_failure_mode({CALL: rows, DETOUR: rows}, shape),
+        {CALL: (SILENT, 0x2000), DETOUR: (SILENT, 0x2000)},
+    )
+    # The control that makes it non-vacuous: an address that is NOT any surviving row's
+    # destination is genuinely refused, which is the loud direction the old advice assumed.
+    lone = Collision(0x1000, 0x2000, 0x3000)
+    check(
+        "an address no surviving row lands on is REFUSED instead, which is loud",
+        deletion_failure_mode({CALL: [Row(0x2000, 0x3000, "synthetic", 1, "")]}, lone),
+        {CALL: (LOUD, None)},
+    )
+    # ...and a duplicate row keying the same source keeps the translation alive.
+    check(
+        "a second row on the same source keeps it translated",
+        deletion_failure_mode(
+            {
+                CALL: [
+                    Row(0x1000, 0x2000, "synthetic", 1, ""),
+                    Row(0x2000, 0x3000, "synthetic", 2, ""),
+                    Row(0x2000, 0x4000, "synthetic", 3, ""),
+                ]
+            },
+            shape,
+        ),
+        {CALL: (STILL_MAPPED, 0x4000)},
+    )
+    # And the reproduction of `already_translated_in` must agree with the Rust on the case the
+    # whole rule turns on: an address that is BOTH a destination and a source is NOT claimed by
+    # the shortcut, because translation has to win for real sources.
+    check(
+        "the shortcut declines on an address that is both a destination and a source",
+        _already_translated_in([(0x1000, 0x2000), (0x2000, 0x3000)], 0x2000),
+        False,
+    )
+    check(
+        "...and claims one that is only a destination",
+        _already_translated_in([(0x1000, 0x2000)], 0x2000),
+        True,
+    )
+    check(
+        "...and declines a row that did not move",
+        _already_translated_in([(0x2000, 0x2000)], 0x2000),
+        False,
     )
 
     # THE LIVE CASE, against the real tree rather than a fixture: 0xb0d400 is claimed today, and
@@ -1383,7 +1657,7 @@ def main():
             note = baseline[collision.key()]["note"]
             print(f"  {collision.label()}   {note}")
             if args.list:
-                describe(collision, sys.stdout)
+                describe(collision, sys.stdout, tables)
 
     if stale:
         print(f"\nBASELINE STALE -- {len(stale)} recorded collision(s) no longer exist. Delete from")
@@ -1397,12 +1671,25 @@ def main():
     unearned = unearned_deletion_advice(known, baseline)
     if unearned:
         print(
-            f"\n{len(unearned)} baselined note(s) advise DELETING a row whose address is not "
-            "proven unclaimed:",
+            f"\n{len(unearned)} baselined note(s) carry advice this gate cannot stand behind:",
             file=sys.stderr,
         )
-        for collision, note, claims in unearned:
-            print(f"\n  {collision.label()}\n    note says: {note}", file=sys.stderr)
+        for collision, note, claims, why in unearned:
+            print(
+                f"\n  {collision.label()}\n    note says: {note}\n    refused because: {why}",
+                file=sys.stderr,
+            )
+            if COSTLESS_CLAIM.search(note):
+                for name, (kind, landing) in sorted(
+                    deletion_failure_mode(tables, collision).items()
+                ):
+                    where = f" -> 0x{landing:x}" if landing is not None else ""
+                    print(
+                        f"    ...and on the {name} map a later request for "
+                        f"0x{collision.address:x} after that deletion would be {kind}{where}.",
+                        file=sys.stderr,
+                    )
+                continue
             if claims is None:
                 print("    ...and the symbol resolver could not run to check it.", file=sys.stderr)
             elif claims.declarations or claims.literals:
@@ -1426,7 +1713,7 @@ def main():
         print(f"\n{len(novel)} {label}:", file=sys.stderr)
         preamble(sys.stderr)
         for collision in novel:
-            describe(collision, sys.stderr)
+            describe(collision, sys.stderr, tables)
         epilogue(sys.stderr)
         print("If both rows must stay, add these lines to " + os.path.relpath(BASELINE, ROOT) + ":", file=sys.stderr)
         for collision in novel:
@@ -1442,7 +1729,7 @@ def main():
             "bytes at the wrong address.",
             file=sys.stderr,
         )
-        describe(collision, sys.stderr)
+        describe(collision, sys.stderr, tables)
         failed = True
 
     if tripwire:

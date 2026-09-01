@@ -71,6 +71,24 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# ONE DIALECT, NOT FOUR. This file used to carry its own comment/string blanker. It was the fourth
+# copy in `scripts/`, and it was the WRONG one: it did not know what a char literal is, so a
+# `'"'` opened a string as far as it was concerned and it blanked live code from there to the next
+# quote. Measured 2026-08-30: 42 files under `crates/` where the local blanker erased real code the
+# shared reader keeps -- `.replace('"', "&quot;")`, `trim_matches('"')`, `s.push('"')` and friends,
+# every one of them followed by code this scanner could then no longer see. A false NEGATIVE in a
+# bypass audit is the expensive direction.
+try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
+    from rva_symbols import code_only
+except ImportError as missing:  # a shared reader that cannot load must stop the audit, not degrade
+    raise ImportError(
+        "scripts/rva_symbols.py could not be imported, so comments and string bodies cannot be "
+        "blanked before matching. Without it this audit reports its own documentation as bypasses "
+        "-- every class in it is quoted in a doc comment somewhere. Fix the import rather than "
+        "restoring a local copy."
+    ) from missing
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------------------------------------------------------- the gate
@@ -102,6 +120,20 @@ GATE_TAIL = re.compile(
 # Identifiers that hold a MODULE BASE. Not a naming convention being trusted: this is the set of
 # spellings actually bound from `game_module_base()` / `GetModuleHandleA` in this tree, plus the
 # obvious synonyms. `--selftest` plants one of each.
+#
+# A `\$?` WAS PROPOSED HERE ON 2026-08-30 AND MEASURED TO BE A NO-OP -- recorded so nobody adds it
+# again. A declarative macro that takes the module base as a metavariable spells every use `$base`,
+# and one such `$` really did hide a live 1.17 crash (`transmute($base +
+# TITLE_TOP_DIALOG_IS_IN_STATE_RVA)`, a function that moved 0x749b20 -> 0x74a970) from
+# `check-stale-rva-calls.py`. That gate anchored on `\(\s*` before the base, which the `$` blocks.
+# THIS one anchors on `\b`, and there IS a word boundary between `$` and `b` -- so `\bbase\s*\+`
+# already matches `transmute($base + FOO_RVA)`, at the `b`. One line proves it:
+#
+#     python3 -c "import re; print(re.search(r'\bbase\s*\+', 'transmute(\$base + FOO)'))"
+#
+# The `--selftest` widening control that was written for it failed as VACUOUS -- the frozen pre-fix
+# pattern caught the macro body too -- which is what a vacuity check is for. Widening the identifier
+# would have changed only where the match STARTS, never whether there is one.
 BASE_IDENT = r"(?:base|image_base|module_base|game_base|mod_base|game_module|module_handle|img_base|exe_base|ersc_base|seamless_base|dll_base|self\.base|self\.module_base|the_base)"
 
 # `base + X`, with X anything: a literal, a CONST, a field (`spec.rva`), a call. The field form is
@@ -190,54 +222,16 @@ def blank_comments_and_strings(text: str) -> str:
     Positions are preserved so a hit maps back to a real line. Comments have to go: this repo's
     doc comments quote the very code shapes being hunted (`base + rva`, `MH_CreateHook`), and a
     scanner that counts them reports its own documentation as a bypass.
+
+    DELEGATES TO `rva_symbols.code_only` SINCE 2026-08-30, and it is not a tidy-up. The local
+    implementation this replaced had no idea what a char literal is, so `'"'` looked like the start
+    of a string and it blanked everything to the next quote. Measured across `crates/`: 42 files
+    where that swallowed live code -- `.replace('"', "&quot;")`, `trim_matches('"')`,
+    `out.push('"')` -- and everything after it on those lines became invisible to every detector
+    below. It also could not nest block comments, which Rust does. The shared reader handles both,
+    and preserves offsets identically, which is the property every `lineno()` call here depends on.
     """
-    out = list(text)
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        if c == "/" and i + 1 < n and text[i + 1] == "/":
-            j = text.find("\n", i)
-            j = n if j < 0 else j
-            for k in range(i, j):
-                out[k] = " "
-            i = j
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "*":
-            j = text.find("*/", i)
-            j = n if j < 0 else j + 2
-            for k in range(i, j):
-                if text[k] != "\n":
-                    out[k] = " "
-            i = j
-            continue
-        if c == "r" and i + 1 < n and text[i + 1] in '#"':
-            m = re.match(r'r(#*)"', text[i:])
-            if m:
-                close = '"' + m.group(1)
-                j = text.find(close, i + m.end())
-                j = n if j < 0 else j + len(close)
-                for k in range(i, j):
-                    if text[k] != "\n":
-                        out[k] = " "
-                i = j
-                continue
-        if c == '"':
-            j = i + 1
-            while j < n:
-                if text[j] == "\\":
-                    j += 2
-                    continue
-                if text[j] == '"':
-                    j += 1
-                    break
-                j += 1
-            for k in range(i, j):
-                if text[k] != "\n":
-                    out[k] = " "
-            i = j
-            continue
-        i += 1
-    return "".join(out)
+    return code_only(text)
 
 
 class Source:
@@ -1253,6 +1247,99 @@ REGRESSION_CONTROLS = {
     """),
 }
 
+# ---------------------------------------------------------------- the two 2026-08-30 widenings
+# THE MATCHERS THIS FILE USED, frozen as LITERALS so the controls below keep meaning what they say.
+# A control the OLD form also catches would pass on the broken scanner and prove nothing.
+#
+# SPELLED OUT, NOT COMPOSED FROM `BASE_IDENT` / `code_only`. A frozen control assembled from the
+# live pieces is not frozen: it widens whenever they widen, so "the old form misses this" silently
+# becomes "the new form misses this", which is the opposite claim. `check-stale-rva-calls.py` was
+# very nearly caught by exactly that -- its "legacy" pattern was built from the live `BASE_EXPR`,
+# so widening `BASE_EXPR` to accept `$base` would have taught the legacy pattern the same spelling.
+LEGACY_ARITH_ADD = re.compile(
+    r"\b(?:base|image_base|module_base|game_base|mod_base|game_module|module_handle|img_base"
+    r"|exe_base|ersc_base|seamless_base|dll_base|self\.base|self\.module_base|the_base)"
+    r"\s*\+\s*(?![\s]*//)"
+)
+
+
+def legacy_blank_comments_and_strings(text: str) -> str:
+    """The pre-2026-08-30 blanker, verbatim. It does not know what a char literal is."""
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            for k in range(i, j):
+                out[k] = " "
+            i = j
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i)
+            j = n if j < 0 else j + 2
+            for k in range(i, j):
+                if text[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+        if c == "r" and i + 1 < n and text[i + 1] in '#"':
+            m = re.match(r'r(#*)"', text[i:])
+            if m:
+                close = '"' + m.group(1)
+                j = text.find(close, i + m.end())
+                j = n if j < 0 else j + len(close)
+                for k in range(i, j):
+                    if text[k] != "\n":
+                        out[k] = " "
+                i = j
+                continue
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            for k in range(i, j):
+                if text[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+        i += 1
+    return "".join(out)
+
+
+# `(class, body, legacy matcher that must MISS it)`. A shape the audit could not see before
+# 2026-08-30. It fires nowhere in this tree today -- the finding count is byte-identical across the
+# fix, 166 before and 166 after -- so this control is the ONLY evidence the new path executes at
+# all, and "no change" without it would be indistinguishable from "no effect".
+#
+# `assert bad == 0` over a filter that matches nothing is how nine instruments in this repo
+# reported false greens in one day. A widening with an unchanged count is the same claim in a
+# different key, and it needs the same proof.
+WIDENING_CONTROLS = {
+    # A `'"'` char literal. The old blanker read it as the start of a string and erased everything
+    # up to the next quote -- which on 42 files in this tree was live code, invisible to every
+    # detector below from that column to the end of the erased run.
+    "code after a `'\"'` char literal": (
+        "UNGATED_ARITH",
+        """
+        fn escape(s: &str, base: usize) -> String {
+            let out = s.replace('"', "&quot;");
+            let target = base + SOME_RVA;
+            unsafe { core::mem::transmute::<usize, fn()>(target)() };
+            out
+        }
+        """,
+        lambda body: LEGACY_ARITH_ADD.search(legacy_blank_comments_and_strings(body)),
+    ),
+}
+
 # A site that IS gated must not be reported. Without this the whole suite passes for a scanner
 # that flags every line in the tree.
 NEGATIVE_CONTROLS = {
@@ -1312,6 +1399,58 @@ def selftest() -> int:
             )
         else:
             print(f"  ok   negative control {name:<28} -> silent")
+
+    # THE TWO WIDENINGS OF 2026-08-30. Neither changes a count in this tree, so each is asserted
+    # BOTH ways: the current scanner must see it, and the frozen pre-fix form must not. Only the
+    # second half makes the first half evidence of anything.
+    for name, (cls, body, legacy_misses_it) in WIDENING_CONTROLS.items():
+        src = Source("crates/control-widening/src/lib.rs", body)
+        hits = []
+        for det in DETECTORS:
+            hits.extend(f for f in det(src) if f.cls == cls)
+        if not hits:
+            failures.append(f"WIDENING CONTROL {name} ({cls}) did NOT fire")
+        elif legacy_misses_it(body):
+            failures.append(
+                f"WIDENING CONTROL {name} is VACUOUS: the pre-fix matcher catches it too, so it "
+                "proves nothing about the widening"
+            )
+        else:
+            print(f"  ok   widening control {name:<32} -> {cls} x{len(hits)}")
+
+    # NON-VACUITY OF THE WALK, which is a different fact from non-vacuity of the findings. The
+    # controls above prove the detectors work without touching the tree; these prove the tree was
+    # actually read. A scan that silently walks nothing prints `0 finding(s)`, and so does a clean
+    # workspace -- and only one of those is good news.
+    sources = rust_sources(REPO)
+    if len(sources) < 200:
+        failures.append(
+            f"only {len(sources)} .rs files found under {REPO}; the walk is broken, so every "
+            "count this audit reports is unfounded"
+        )
+    else:
+        blanked = sum(
+            1
+            for rel in sources[:400]
+            if legacy_blank_comments_and_strings(
+                open(os.path.join(REPO, rel), encoding="utf-8", errors="replace").read()
+            )
+            != code_only(open(os.path.join(REPO, rel), encoding="utf-8", errors="replace").read())
+        )
+        # If this ever reaches zero, either the tree stopped using char literals and raw strings
+        # or the two blankers have converged -- and in the second case the control above has
+        # quietly stopped being a control.
+        if blanked == 0:
+            failures.append(
+                "the frozen pre-fix blanker now agrees with the shared reader on every source, "
+                "so the char-literal control is no longer distinguishing anything"
+            )
+        else:
+            print(
+                f"  ok   walk reads {len(sources)} sources; the pre-fix blanker still disagrees "
+                f"with the shared reader on {blanked} of the first 400"
+            )
+
     if failures:
         print("\nSELFTEST FAILED:")
         for f in failures:

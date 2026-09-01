@@ -156,6 +156,58 @@ crates/er-charm-enemies/src/hotkey.rs:215 `register_shared_hook(get_state_addres
 get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
 `with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
 
+[[shared]]
+a = "er-diag-harness"
+b = "er-reload-trace"
+target = "er_game_base::rva::DLC_ROOTS_JOB_RVA (0x836f30; 1.17 0x837f20)"
+mechanism = "hook-union"
+handler_a = "dlc_roots_job_trace_hook"
+handler_b = "hook_map_request_do"
+reason = """RESOLVED 2026-08-30, and it was a LIVE collision, not a latent one. Both shells detour \
+`FUN_140836f30` -- the `Do` body of the MenuFunctorJob that reaches the DLC virtual-root refill \
+(1.16.2 `ulonglong FUN_140836f30(longlong p1, ulonglong p2, undefined8 p3, undefined8 p4)`, 65 \
+bytes, one callee `FUN_14082e230`; BYTE-IDENTICAL at 1.17 `0x837f20` per \
+docs/recon/rva-map-1162-to-1170.verified.tsv). er-diag-harness traces it as the "job ran / job \
+never enqueued" fork for the reload softlock; er-reload-trace traces it as `map_request_do_836f30`.
+
+CO-LOADED, MEASURED FROM THE PROFILES THEMSELVES: `~/Elden/group-1170.me3` lists `er_quickload`, \
+`er_diag_harness`, `er_reload_trace` AND `er_armament_icons` together. So this was not a pair the \
+launcher merely might build -- it is a pair the user's own hand-written profile launches. (Note \
+that `er-dll-closure.py` would never GENERATE it: er-reload-trace conflicts with the product below, \
+and the product is in every closure. The hand-written profiles are outside that arbiter, which is \
+precisely why the address-level gate has to catch this rather than the closure ranking.)
+
+THE FAILURE IT WOULD HAVE PRODUCED. er-diag-harness installed this one with a bare `MhHook`, in \
+its own statically linked MinHook instance; er-reload-trace registers through \
+`er_hook::register_shared_hook`, which chains onto `er_quickload.dll`'s single instance. Two \
+instances, one prologue, and neither can see the other's `MH_CreateHook` -- so the second writes \
+its five-byte JMP over the first's, and the loser reports installed, never fires, and its counter \
+reads 0 forever. Indistinguishable from a feature that was never enabled; that is the measured \
+2026-08-23 Scaleform failure on a different address.
+
+THE FIX, on the er-diag-harness side, because it was the one holding the private instance: its job \
+trace moved to `er_hook::register_shared_hook` and its handler was reshaped to `er_hook::UnionFn`. \
+The signature was CHECKED before proposing the union rather than assumed -- `UnionFn` is \
+`extern "system" fn(usize, usize, usize, usize) -> usize` and er-hook documents it as "not for \
+float-arg or >4-stack-arg targets"; this target takes four INTEGER arguments and returns an \
+integer, so it fits with nothing to spare and no XMM argument is silently dropped.
+
+That reshape also fixed a real bug the collision was hiding. The handler used to be declared \
+`(this, arg2) -> usize` and forwarded `f(this, arg2)`, but the decompile shows `p4` (`r9`) is a \
+live argument passed straight through to `FUN_14082e230`. A two-argument `extern "system"` detour \
+only sets `rcx`/`rdx` before calling the trampoline, so whatever the handler body last left in \
+`r8`/`r9` was handed to the native on every call. All four are now forwarded verbatim.
+
+Standalone runs are unchanged: with no product DLL in the process `register_shared_hook` falls \
+back to this DLL's own union, so `~/Elden/sweep-er-diag-harness.me3` behaves as before."""
+evidence = """crates/er-diag-harness/src/dlc_roots_trace.rs `install_shared_dlc_roots_job_hook` \
+(`register_shared_hook(base + DLC_ROOTS_JOB_RVA, dlc_roots_job_trace_hook, &DLC_ROOTS_JOB_ORIG)`, \
+address handed over UNTRANSLATED so the registrar owns the single 1.16.2 -> 1.17 resolve); \
+crates/er-reload-trace/src/lib.rs `HookSpec { rva: 0x836f30, detour: hook_map_request_do }` \
+installed via `install_one` -> `register_shared_hook`/`register_union_hook`; \
+crates/er-hook/src/lib.rs `register_shared_hook`. Ghidra 1.16.2 MCP (:8765) \
+`getDecompiledCode 140836f30` for the four-integer-argument signature."""
+
 [[conflict]]
 a = "er-quickload"
 b = "er-save-disable"
@@ -296,16 +348,26 @@ writes nothing."""
 shell exists to carry five detours the product USED TO install unconditionally, so every one of \
 its addresses is one the product has stopped claiming. `0x21bbf0` (the sole `MsbFileCap::msbResCap` \
 writer), `0xaf1800` (`CS::MoveMapListStep::STEP_LoadListWait`), and `0xe06490` / `0xe05fb0` / \
-`0x836f30` (the DLC virtual-root blank, refill and job body) had exactly one claimant before the \
-move and have exactly one after it -- the claimant is just a different image now. No other shell \
-in this table names any of the five.
+`0x836f30` (the DLC virtual-root blank, refill and job body).
+
+FOUR OF THE FIVE HAVE ONE CLAIMANT. THE FIFTH DOES NOT, AND THIS ENTRY SAID OTHERWISE UNTIL \
+2026-08-30. The sentence that stood here -- "No other shell in this table names any of the five" -- \
+was FALSE of `0x836f30`: `er-reload-trace` detours the same prologue as \
+`HookSpec { name: "map_request_do_836f30", rva: 0x836f30, detour: hook_map_request_do, .. }`, a \
+BARE `rva:` field with no constant name at all. Nothing keyed on NAMES could contradict the claim, \
+because the two sides shared an address and no spelling; `check-shared-hook-rvas.py` only found it \
+once its collision key became the RESOLVED VALUE. The pair is now recorded as a [[shared]] row \
+above, and this sentence is kept as a warning rather than deleted: a "no other shell names this" \
+assertion is exactly the kind that a name-keyed scan cannot check and a reader cannot audit.
 
 It cannot corrupt a co-load in the ways the other rows describe. It installs no D3D12 Present or \
 compositor hook, drives no input, and reads no product static: every value in its log lines comes \
-from GAME memory through `er_game_base::filecap`, and each of its detours calls its own MinHook \
-trampoline and returns the native result verbatim. It links only `er-hook` and `er-game-base` \
-(tier A), so it is not a second owner of any feature crate's state machine -- deliberately, since \
-that is the `duplicate-owner` failure mode above.
+from GAME memory through `er_game_base::filecap`. Its `0x21bbf0` / `0xaf1800` / `0xe06490` / \
+`0xe05fb0` detours call their own MinHook trampoline and return the native result verbatim; the \
+`0x836f30` job trace no longer owns a MinHook instance at all and chains through the union (see \
+the [[shared]] row). It links only `er-hook` and `er-game-base` (tier A), so it is not a second \
+owner of any feature crate's state machine -- deliberately, since that is the `duplicate-owner` \
+failure mode above.
 
 ONE SOFT COUPLING IS DOCUMENTED RATHER THAN CONFLICTING. `er-title-flow`'s DLC-root self-heal \
 prefers the refill trampoline over the refill's RVA so it does not re-enter our detour; Rust \
