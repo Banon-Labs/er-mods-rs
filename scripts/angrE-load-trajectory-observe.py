@@ -3,13 +3,48 @@
 mms_step, return-title-chain waits, and log growth. Pure observation, no teardown.
 
 Usage: python3 scripts/angrE-load-trajectory-observe.py [cap_seconds=200]
-Env: ER_QUICKLOAD_TELEMETRY_PATH, ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH (default: Windows game dir).
-"""
-import json, os, re, subprocess, sys, time
 
-GD = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-TEL = os.environ.get("ER_QUICKLOAD_TELEMETRY_PATH", os.path.join(GD, "er-quickload-telemetry.json"))
-LOG = os.environ.get("ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH", os.path.join(GD, "er-quickload-autoload-debug.log"))
+WHICH FILES THIS READS, AND WHY THAT IS NOT A CONSTANT ANY MORE
+--------------------------------------------------------------
+Every launcher in this repo now redirects the DLL's per-run artifacts OUT of the game directory
+(`ER_QUICKLOAD_TELEMETRY_PATH`, `ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH`, ...), because a game-directory
+log is SINGLE-SLOT: the DLL rotates `<name>` to `<name>.prev` on its first write, so the next launch
+destroys the run before last. So the game directory is now the FALLBACK, not the source of truth --
+point this observer at the run's artifact dir with `ER_ARTIFACT_DIR=<dir>` (or set the two
+`ER_QUICKLOAD_*_PATH` variables the launcher used), and it reads that run instead of whatever
+happens to be lying next to the executable.
+
+`ER_GAME_DIR` / `ME3_STEAM_DIR` override the fallback. The literal that used to sit here,
+`/mnt/c/SteamLibrary/...`, belonged to the retired WSL2 setup and resolves to NOTHING on this
+machine -- which reads as "the run wrote no telemetry" rather than "you looked in the wrong place".
+"""
+import json, os, re, subprocess, sys, threading, time
+
+
+def _game_dir() -> str:
+    explicit = os.environ.get("ER_GAME_DIR")
+    if explicit:
+        return explicit
+    steam = os.environ.get(
+        "ME3_STEAM_DIR", os.path.join(os.path.expanduser("~"), ".local/share/Steam")
+    )
+    return os.path.join(steam, "steamapps/common/ELDEN RING/Game")
+
+
+def _artifact(name: str, env_var: str) -> str:
+    """The run's copy of `name`: the explicit path, else ER_ARTIFACT_DIR, else the game dir."""
+    explicit = os.environ.get(env_var)
+    if explicit:
+        return explicit
+    artifact_dir = os.environ.get("ER_ARTIFACT_DIR")
+    if artifact_dir:
+        return os.path.join(artifact_dir, name)
+    return os.path.join(GD, name)
+
+
+GD = _game_dir()
+TEL = _artifact("er-quickload-telemetry.json", "ER_QUICKLOAD_TELEMETRY_PATH")
+LOG = _artifact("er-quickload-autoload-debug.log", "ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH")
 CAP = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 
 
@@ -19,12 +54,26 @@ def bounded_poll_wait(seconds: float) -> None:
     threading.Event().wait(min(max(float(seconds), 0.0), 30.0))
 
 def alive():
-    try:
-        return "eldenring.exe" in subprocess.run(
-            ["tasklist.exe", "/FI", "IMAGENAME eq eldenring.exe", "/NH"],
-            capture_output=True, text=True, timeout=10).stdout.lower()
-    except Exception:
-        return False
+    """True while an `eldenring.exe` is running, read straight out of /proc.
+
+    NOT `tasklist.exe` (this machine is a native Linux Steam install; that binary does not exist
+    here, so the old form returned False forever and the observer stopped on its first poll) and
+    NOT `pgrep`, which this repo's guard blocks and which false-negatives on the Proton stack.
+    Mirrors `scripts/er_run_lib.py::find_game_pids`.
+    """
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry.name}/comm", "rb") as handle:
+                if handle.read().strip().lower() == b"eldenring.exe":
+                    return True
+            with open(f"/proc/{entry.name}/cmdline", "rb") as handle:
+                if b"eldenring.exe" in handle.read().lower():
+                    return True
+        except OSError:
+            continue
+    return False
 
 
 def tel():
