@@ -75,7 +75,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"
         ));
@@ -141,7 +141,7 @@ pub(crate) fn install_menu_window_latch_hook() {
             return;
         }
     }
-    let Ok(ctor_addr) = game_rva(SCENE_OBJ_PROXY_CTOR_RVA) else {
+    let Ok(ctor_addr) = game_rva_for_hook(SCENE_OBJ_PROXY_CTOR_RVA) else {
         append_autoload_debug(format_args!(
             "menuwindow-latch: failed to resolve SceneObjProxy ctor rva"
         ));
@@ -305,7 +305,7 @@ pub(crate) fn install_sound_post_event_observer_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SOUND_POST_EVENT_CORE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(SOUND_POST_EVENT_CORE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "sound-post-event: failed to resolve rva 0x{SOUND_POST_EVENT_CORE_RVA:x}"
         ));

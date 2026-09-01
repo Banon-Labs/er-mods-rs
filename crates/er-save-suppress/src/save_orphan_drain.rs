@@ -373,6 +373,242 @@ pub fn save_orphan_slot_after() -> Option<SlRequestSlot> {
     SAVE_ORPHAN_SLOT_AFTER.snapshot()
 }
 
+// ============================================================================
+// THE OTHER CONSUMER OF THE SAME DEVICE, and the reason a repair that only runs on a
+// declined SAVE is not a repair at all.
+//
+// `iodev+0x20` is SHARED (see `SlRequestSlot::admits_a_load`), so the orphan above does not
+// merely kill saving -- it kills LOADING, through a completely different door. The load
+// builder (`FUN_140e6f430`/`FUN_140e6f5b0`, reached from `FUN_14067b1a0`) opens with
+// `iodev+0x18 == 0 && iodev+0x20 == 0` on EVERY branch and returns 0 WITHOUT releasing
+// anything. Its caller then leaves `GameMan+0xb80` at IDLE, so a caller that armed a drain
+// on the strength of `saveState == 0` waits for `b80 == RESIDENT(3)` on a request that was
+// never accepted. That wait is not slow, it is EMPTY: unsatisfiable by construction.
+//
+// MEASURED (run claims76-20260831-142135, the third same-character load): two SUBMIT lines
+// 18s apart, same format string --
+//
+//   [+32999ms] reload-fd4io: SUBMIT slot=1 ... ret=1 b80=2 -> DRAIN   commits, load2 renders
+//   [+51260ms] reload-fd4io: SUBMIT slot=1 ... ret=0 b80=0 -> DRAIN   b80 pinned at 0, 281 waits
+//
+// -- with an orphaned save latched onto the device 6 seconds before the second one.
+//
+// WHY `sl_device_is_free` ALONE COULD NOT SEE IT. That predicate reads `GameMan+0xb80` and
+// nothing else, and the wedge's DEFINING property is `saveState == 0` WITH the device
+// latched. The mutex says the device is unowned while the device itself is occupied, so a
+// mutex-only gate is structurally blind to exactly the state that refuses. Both operands
+// have to be read, and `SlRequestSlot::admits_a_load` is the one that reads the second.
+//
+// WHERE THE REPAIR IS DRIVEN FROM, and why it is not a private tick. The orphan is created
+// by the LAST save of a world: `CS::MoveMapStep::DoSaveStuff` polls only under
+// `IsSaveState1()`, so once `saveState` falls back to 0 the game's own completion owner is
+// disarmed by its own selector and nothing will ever poll again. Until now the only site
+// that noticed was `observe_dispatch`'s DECLINE arm -- which requires a LATER SAVE to be
+// requested. When the wedge IS the last save of a world, no later save comes, and the repair
+// that exists is unreachable.
+//
+// The fix is not a timer and not a per-frame sweep. It is the OTHER point of use: the device
+// has exactly two consumers, and each one now checks the precondition it is about to be
+// judged against, at the moment it is about to submit, and asks the GAME to release what it
+// finds. The save lane checks it in `observe_dispatch` (inside `FUN_140afb880`, the game's
+// own dispatcher, on the game's own frame); the load lane checks it here, called from the
+// switch reload's SUBMIT gate. Neither invents a schedule, neither writes a device field,
+// and the only thing that frees anything is still `FUN_140e6f200` reached through the game's
+// own `FUN_140e6e430` terminal arm. A wedge with neither a later save nor a later load harms
+// nothing until one of the two arrives -- and both arrivals now repair it.
+// ============================================================================
+
+/// The device admitted a load with nothing to repair.
+pub const LOAD_GATE_OPEN: usize = 0;
+/// `GameMan.saveState` is not IDLE, so a submit builder refuses before it ever reads the
+/// device. Nothing here may hurry that along: the owning transaction is live and the fields
+/// belong to it.
+pub const LOAD_GATE_MUTEX_HELD: usize = 1;
+/// The device could not be sampled. Never reported as admitting -- an unreadable sample is
+/// the one answer that proves nothing.
+pub const LOAD_GATE_UNREADABLE: usize = 2;
+/// The device refused a load, and the game's own poll released it on this call.
+pub const LOAD_GATE_REPAIRED: usize = 3;
+/// The device refused a load and still refuses after the repair attempt. Either the job has
+/// not gone terminal yet (retry next frame) or the holder is not a drainable orphan.
+pub const LOAD_GATE_STILL_HELD: usize = 4;
+
+/// Name a [`LoadGate`] outcome for a log line.
+pub fn load_gate_outcome_label(code: usize) -> &'static str {
+    match code {
+        LOAD_GATE_OPEN => "open",
+        LOAD_GATE_MUTEX_HELD => "mutex-held",
+        LOAD_GATE_UNREADABLE => "iodev-unreadable",
+        LOAD_GATE_REPAIRED => "repaired",
+        LOAD_GATE_STILL_HELD => "still-held",
+        _ => "unknown",
+    }
+}
+
+/// What the load-submit gate saw, and what it did about it.
+#[derive(Clone, Copy, Debug)]
+pub struct LoadGate {
+    /// One of the `LOAD_GATE_*` codes.
+    pub outcome: usize,
+    /// The device as the gate first read it.
+    pub before: Option<SlRequestSlot>,
+    /// The device after any repair. Equal to `before` when none was attempted.
+    pub after: Option<SlRequestSlot>,
+    /// `GameMan+0xb80` at the gate.
+    pub save_state: Option<u32>,
+}
+
+impl LoadGate {
+    /// May the full-read initiator be offered a request right now?
+    ///
+    /// Only the two outcomes that actually satisfy `iodev+0x18 == 0 && iodev+0x20 == 0`
+    /// with the mutex IDLE. An unreadable sample is a refusal, for the same reason
+    /// [`sl_device_is_free`] treats it as one.
+    pub fn admits(&self) -> bool {
+        matches!(self.outcome, LOAD_GATE_OPEN | LOAD_GATE_REPAIRED)
+    }
+
+    /// The gate as one log fragment: the verdict plus every operand behind it.
+    pub fn describe(&self) -> String {
+        let state = match self.save_state {
+            Some(state) => format!("{state}"),
+            None => "unreadable".to_owned(),
+        };
+        if self.outcome == LOAD_GATE_OPEN || self.outcome == LOAD_GATE_MUTEX_HELD {
+            return format!(
+                "{} saveState={state} device {}",
+                load_gate_outcome_label(self.outcome),
+                describe_slot(self.before)
+            );
+        }
+        format!(
+            "{} saveState={state} device before {} after {}",
+            load_gate_outcome_label(self.outcome),
+            describe_slot(self.before),
+            describe_slot(self.after)
+        )
+    }
+}
+
+/// Gate calls whose device refused a load, i.e. the state the old mutex-only gate could not see.
+static LOAD_GATE_REFUSALS: AtomicU64 = AtomicU64::new(0);
+/// Gate calls after which the device admitted a load again because the game's poll released
+/// the orphan. **This is the "the third load was not blocked by a forgotten save" oracle.**
+static LOAD_GATE_REPAIRS: AtomicU64 = AtomicU64::new(0);
+
+/// Read the LOAD builder's real precondition, and repair it if a forgotten save is what fails it.
+///
+/// `origin` names the calling submit site for the log. Pure observation plus, at most, one call
+/// to [`drain_orphaned_save_request`] -- which refuses everything that is not unambiguously an
+/// orphan and frees nothing itself. The device is re-read after the repair so a release that
+/// happened on this call is usable on this frame rather than the next.
+#[cfg(windows)]
+pub fn open_the_device_for_a_load(origin: &str) -> LoadGate {
+    let save_state = read_save_state();
+    let before = read_sl_slot();
+    if !sl_device_is_free(save_state) {
+        // A live transaction owns the mutex. It is not an orphan and it is not ours.
+        return LoadGate {
+            outcome: LOAD_GATE_MUTEX_HELD,
+            before,
+            after: before,
+            save_state,
+        };
+    }
+    let Some(sample) = before else {
+        return LoadGate {
+            outcome: LOAD_GATE_UNREADABLE,
+            before,
+            after: before,
+            save_state,
+        };
+    };
+    if sample.admits_a_load() {
+        return LoadGate {
+            outcome: LOAD_GATE_OPEN,
+            before,
+            after: before,
+            save_state,
+        };
+    }
+    let refusals = LOAD_GATE_REFUSALS.fetch_add(1, Ordering::SeqCst) + 1;
+    drain_orphaned_save_request(origin);
+    let after = read_sl_slot();
+    let outcome = if after.is_some_and(|slot| slot.admits_a_load()) {
+        let repairs = LOAD_GATE_REPAIRS.fetch_add(1, Ordering::SeqCst) + 1;
+        if should_report(repairs, false) {
+            log_message(format_args!(
+                "suppress: {origin} found the LOAD builder's `iodev+0x18 == 0 && \
+                 iodev+0x20 == 0` precondition failing with saveState IDLE (refusal \
+                 #{refusals}) and the game's own poll released it (repair #{repairs}). \
+                 Before {}, after {}. The full-read initiator can be offered a request \
+                 again, so the reload submits instead of arming a drain on a request that \
+                 was never accepted",
+                describe_slot(before),
+                describe_slot(after)
+            ));
+            publish_snapshot();
+        }
+        LOAD_GATE_REPAIRED
+    } else {
+        if should_report(refusals, false) {
+            log_message(format_args!(
+                "suppress: {origin} found the LOAD builder's precondition failing with \
+                 saveState IDLE (refusal #{refusals}) and it is STILL failing after the \
+                 repair attempt -- the full-read initiator would return 0 and the caller \
+                 must NOT arm a drain. Before {}, after {}",
+                describe_slot(before),
+                describe_slot(after)
+            ));
+            publish_snapshot();
+        }
+        LOAD_GATE_STILL_HELD
+    };
+    LoadGate {
+        outcome,
+        before,
+        after,
+        save_state,
+    }
+}
+
+/// The full-read initiator's verdict as one log fragment: its answer, the mutex it left behind,
+/// what the caller's gate had concluded, and the device on both sides of the call.
+///
+/// `ret == 0` means the builder refused and NO REQUEST EXISTS, so `b80` can never leave 0 --
+/// the sentence says that outright rather than leaving a reader to infer it from two numbers.
+/// It lives here because every operand in it is this crate's model of the SL device.
+pub fn describe_load_submit(
+    ret: i32,
+    save_state: i32,
+    gate: &str,
+    before: Option<SlRequestSlot>,
+    after: Option<SlRequestSlot>,
+) -> String {
+    format!(
+        "ret={ret} b80={save_state} gate={gate} accepted={} -> {} | device before {} | device after {}",
+        ret != 0,
+        if ret != 0 {
+            "DRAIN (replicating boot native-fullread residency before feed+continue_confirm)"
+        } else {
+            "NO DRAIN (the initiator refused, so b80 can never leave 0 and the wait would be empty)"
+        },
+        describe_slot(before),
+        describe_slot(after)
+    )
+}
+
+/// Load-submit gate calls whose device refused the load builder's precondition.
+pub fn load_gate_refusals() -> u64 {
+    LOAD_GATE_REFUSALS.load(Ordering::SeqCst)
+}
+
+/// Refusals the game's own poll cleared. `refusals > 0` with this at 0 is a load the device
+/// blocked and nothing could unblock.
+pub fn load_gate_repairs() -> u64 {
+    LOAD_GATE_REPAIRS.load(Ordering::SeqCst)
+}
+
 // The predicate is pure and portable ON PURPOSE: it is what decides whether to free an object
 // the SL worker thread may still be writing the user's save through, so it must be checkable
 // with no game attached. No `cfg(windows)` here -- that would put it back out of reach of
@@ -501,6 +737,61 @@ mod save_orphan_drain_tests {
         ));
         assert!(sl_device_is_free(Some(GAME_MAN_SAVE_STATE_IDLE)));
         assert!(!orphan.admits_a_save());
+    }
+
+    /// THE PREDICATE THE THIRD SAME-CHARACTER LOAD HUNG ON, exercised with no game attached.
+    ///
+    /// The wedge is `saveState == 0` WITH the device latched, so a gate that reads only the
+    /// mutex reports "free" on the exact state the load builder refuses. These cases pin the
+    /// two apart: `sl_device_is_free` says yes to all of them, `admits` says yes to none of
+    /// the held ones. An unreadable device is a refusal, because a submit offered on the
+    /// strength of an unknown returns 0 and arms an unsatisfiable drain.
+    #[test]
+    fn a_latched_device_never_admits_a_load_however_idle_the_mutex_is() {
+        let wedge = SlRequestSlot {
+            // The measured 2026-08-31 third-load signature.
+            save_content: 0x8875_0080,
+            job: 0x8848_6d80,
+            ..SlRequestSlot::default()
+        };
+        let gate = |outcome, before| LoadGate {
+            outcome,
+            before,
+            after: before,
+            save_state: Some(GAME_MAN_SAVE_STATE_IDLE),
+        };
+        // The mutex is IDLE for every case below, which is the whole trap.
+        assert!(sl_device_is_free(Some(GAME_MAN_SAVE_STATE_IDLE)));
+        assert!(!wedge.admits_a_load());
+        assert!(!gate(LOAD_GATE_STILL_HELD, Some(wedge)).admits());
+        assert!(!gate(LOAD_GATE_UNREADABLE, None).admits());
+        assert!(!gate(LOAD_GATE_MUTEX_HELD, Some(wedge)).admits());
+        // The two that genuinely satisfy `iodev+0x18 == 0 && iodev+0x20 == 0`.
+        assert!(gate(LOAD_GATE_OPEN, Some(SlRequestSlot::default())).admits());
+        assert!(gate(LOAD_GATE_REPAIRED, Some(SlRequestSlot::default())).admits());
+        // A LOAD holding the job is refused just as firmly as a stale save: `+0x20` is shared.
+        assert!(
+            !SlRequestSlot {
+                load_content: 0xb368_6200,
+                job: 0x8848_6d80,
+                ..SlRequestSlot::default()
+            }
+            .admits_a_load()
+        );
+        // Every outcome names itself, and the describe never panics on an unreadable side.
+        let mut labels = Vec::new();
+        for code in [
+            LOAD_GATE_OPEN,
+            LOAD_GATE_MUTEX_HELD,
+            LOAD_GATE_UNREADABLE,
+            LOAD_GATE_REPAIRED,
+            LOAD_GATE_STILL_HELD,
+        ] {
+            let label = load_gate_outcome_label(code);
+            assert!(!labels.contains(&label), "duplicate label {label}");
+            labels.push(label);
+            assert!(gate(code, None).describe().contains(label));
+        }
     }
 
     /// Every drain outcome needs its own code and its own name: `save_orphan_released` and

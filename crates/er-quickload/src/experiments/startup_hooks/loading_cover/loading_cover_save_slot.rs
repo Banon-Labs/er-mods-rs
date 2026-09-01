@@ -580,11 +580,28 @@ pub(crate) fn portrait_loaded_slot() -> i32 {
 /// the correct 5 the whole time -- and slot 9's face sat on the loading screen for 29.7 seconds.
 ///
 /// So the sources are consulted strongest-first (see
-/// `er_loading_portrait_core::portrait_target_slot_from_sources`, which is host-tested):
+/// `er_loading_portrait_core::portrait_target_slot_attributed`, which is host-tested):
 ///   1. the user's explicit on-screen save-picker pick, until that slot's load completes;
 ///   2. `GameMan+0xb78`, the native load-REQUEST register -- a load for it is in flight, so ac0
 ///      is stale by definition. `-1` is its no-request sentinel and falls through;
-///   3. ac0, then the `OWN_STEPPER_SLOT` autoload hint.
+///   3. ac0.
+///
+/// THE `OWN_STEPPER_SLOT` AUTOLOAD HINT IS NO LONGER A SOURCE, AND REMOVING IT IS THE FIX FOR
+/// run br-20260831-014208-b1d6. It used to sit at the end of that list as an `.or_else`, i.e. at
+/// the same rank as a measured read -- so when every register was still invalid the window
+/// committed to a CONFIG FILE's opinion and then defended it as though it had observed something:
+///
+/// ```text
+/// [+1184ms]   window LATCHED portrait target slot 0 (picker=None b78=None ac0=-1 from_pick=false)
+/// [+19552ms]  SUPPRESSED a mid-window retarget 0 -> 2 (picker=None b78=Some(-1) ac0=2)
+/// ```
+///
+/// Slot 2 (`Bean Smith`) was loading, correctly -- that run configured no slot, so the native
+/// builder used the container's persisted last-used slot -- while slot 0 (`Bonky Bean`) was on
+/// screen, and the latch refused the real ac0 3371 times. A configured hint and an observed fact
+/// are not the same rank of evidence, and when only the hint is available the honest answer is
+/// `None`: no portrait is better than a confidently wrong one. The hint still steers the LOAD
+/// (`OWN_STEPPER_SLOT`, `configured_autoload_slot`); it just no longer claims to have seen it.
 pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
         .map(er_save_loader::GameManSaveAccess::save_slot)
@@ -602,18 +619,12 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     let request = (gm != TITLE_OWNER_SCAN_START_ADDRESS)
         .then(|| unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) })
         .flatten();
-    let resolved = er_loading_portrait_core::portrait_target_slot_from_sources(
+    let resolved = er_loading_portrait_core::portrait_target_slot_attributed(
         picker,
         request,
         Some(ac0),
         TITLE_PROFILE_SLOT_COUNT as i32,
-    )
-    .or_else(|| {
-        let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-        (0..TITLE_PROFILE_SLOT_COUNT as i32)
-            .contains(&own)
-            .then_some(own)
-    });
+    );
     // PER-WINDOW LATCH. Everything above is a precedence ordering re-evaluated on every kick, so
     // its answer can change WHILE a loading screen is on screen -- and when it does, the user
     // watches the face of the character they clicked be replaced by someone else's. Measured
@@ -629,49 +640,62 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
         0 => None,
         packed => Some((packed - 1) as i32),
     };
-    // Whether the WINNING source was the user's own pick, on each side of the latch. A latch
-    // adopted from a guess must yield once to a real pick; one adopted from the pick never yields.
-    // Without this the boot window commits to the autoload hint at ~+1s and then rejects the pick
-    // the user makes minutes later (measured 2026-08-26: latched 0, picked 1, rendered 0).
-    let latched_from_pick =
-        PORTRAIT_WINDOW_TARGET_FROM_PICK.load(Ordering::SeqCst) == PORTRAIT_WINDOW_TARGET_PICK_YES;
-    let resolved_from_pick = picker.is_some_and(|p| resolved == Some(p));
-    let decision = er_loading_portrait_core::portrait_window_target_slot_authoritative(
+    // WHICH SOURCE the latch rests on, on each side of the decision. A latch yields exactly once
+    // per rank increase, to strictly better evidence: an ac0 read (weakest) yields to the load
+    // REQUEST register and to a pick, a pick yields to nothing. The old boolean form could only
+    // say "pick or not pick", which filed a STALE ac0 read and the user's own click under one
+    // word -- so the across-save-files switch latched slot 0 off an obsolete ac0 and then refused
+    // the b78 that named the real slot 1 (bd er-effects-rs-fmy6).
+    let latched_source = er_loading_portrait_core::PortraitSlotSource::from_rank(
+        PORTRAIT_WINDOW_TARGET_SOURCE.load(Ordering::SeqCst),
+    );
+    let decision = er_loading_portrait_core::portrait_window_target_slot_by_evidence(
         latched,
-        latched_from_pick,
+        latched_source,
         resolved,
-        resolved_from_pick,
     );
     let target = decision.slot;
+    // Stored on EVERY call, not only when latching: a resolution that agrees with the held slot
+    // but carries stronger evidence tightens the latch without changing the face, and dropping
+    // that upgrade would leave an already-confirmed target movable.
+    PORTRAIT_WINDOW_TARGET_SOURCE.store(
+        decision.source.map_or(0, |source| source.rank()),
+        Ordering::SeqCst,
+    );
+    PORTRAIT_WINDOW_TARGET_FROM_PICK.store(
+        if decision.source == Some(er_loading_portrait_core::PortraitSlotSource::UserPick) {
+            PORTRAIT_WINDOW_TARGET_PICK_YES
+        } else {
+            PORTRAIT_WINDOW_TARGET_PICK_NO
+        },
+        Ordering::SeqCst,
+    );
+    let source_label = decision.source.map_or("none", |source| source.label());
     if decision.latching
         && let Some(slot) = target
     {
         PORTRAIT_WINDOW_TARGET_SLOT.store(slot as usize + 1, Ordering::SeqCst);
-        PORTRAIT_WINDOW_TARGET_FROM_PICK.store(
-            if resolved_from_pick {
-                PORTRAIT_WINDOW_TARGET_PICK_YES
-            } else {
-                PORTRAIT_WINDOW_TARGET_PICK_NO
-            },
-            Ordering::SeqCst,
-        );
-        if decision.promoted_by_pick {
-            PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS.fetch_add(1, Ordering::SeqCst);
+        if latched.is_some() {
+            if decision.promoted_by_pick {
+                PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS.fetch_add(1, Ordering::SeqCst);
+            }
             append_autoload_debug(format_args!(
-                "loading-portrait: window PROMOTED portrait target {} -> {slot} on the user's pick (picker={picker:?} b78={request:?} ac0={ac0}) -- the earlier latch was a guess, not a choice",
-                latched.unwrap_or(-1)
+                "loading-portrait: window PROMOTED portrait target {} -> {slot} on stronger evidence src={source_label} (was src={} picker={picker:?} b78={request:?} ac0={ac0}) -- the earlier latch rested on weaker evidence than this",
+                latched.unwrap_or(-1),
+                latched_source.map_or("none", |source| source.label())
             ));
         } else {
             append_autoload_debug(format_args!(
-                "loading-portrait: window LATCHED portrait target slot {slot} (picker={picker:?} b78={request:?} ac0={ac0} from_pick={resolved_from_pick}) -- held until this loading screen closes"
+                "loading-portrait: window LATCHED portrait target slot {slot} src={source_label} (picker={picker:?} b78={request:?} ac0={ac0}) -- held until this loading screen closes, or until strictly better evidence arrives"
             ));
         }
-    } else if let (Some(held), Some(fresh)) = (target, resolved)
+    } else if let (Some(held), Some((fresh, fresh_source))) = (target, resolved)
         && held != fresh
         && PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.fetch_add(1, Ordering::SeqCst) == 0
     {
         append_autoload_debug(format_args!(
-            "loading-portrait: SUPPRESSED a mid-window retarget {held} -> {fresh} (picker={picker:?} b78={request:?} ac0={ac0}) -- the face the user clicked stays on screen for this window"
+            "loading-portrait: SUPPRESSED a mid-window retarget {held} -> {fresh} (held src={source_label} vs fresh src={} picker={picker:?} b78={request:?} ac0={ac0}) -- the fresh read is no better evidence than what this window already committed to",
+            fresh_source.label()
         ));
     }
     target
@@ -828,6 +852,27 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     };
     let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     let fresh_deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst);
+    // WHERE THE TARGET CAME FROM, in the same line as the mismatch it caused. `ac0`/`b78` above
+    // are what the registers read NOW; the window latched its target once, possibly minutes
+    // earlier, from whatever they read THEN -- and the two answers being different is the entire
+    // failure mode this semaphore keeps catching. Diagnosing br-20260831-014208-b1d6 meant
+    // finding the `window LATCHED` line 12,000 lines away in a 1.9 GB log to learn that the latch
+    // had been taken with every source invalid. That provenance belongs here.
+    let window_latch = match PORTRAIT_WINDOW_TARGET_SLOT.load(Ordering::SeqCst) {
+        0 => -1,
+        packed => (packed - 1) as i32,
+    };
+    let window_src = er_loading_portrait_core::PortraitSlotSource::from_rank(
+        PORTRAIT_WINDOW_TARGET_SOURCE.load(Ordering::SeqCst),
+    )
+    .map_or("none", |source| source.label());
+    let window_from_pick =
+        PORTRAIT_WINDOW_TARGET_FROM_PICK.load(Ordering::SeqCst) == PORTRAIT_WINDOW_TARGET_PICK_YES;
+    let window_promotions = PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS.load(Ordering::SeqCst);
+    let window_suppressed = PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.load(Ordering::SeqCst);
+    let provenance = format!(
+        "window_latch={window_latch} window_src={window_src} from_pick={window_from_pick} promotions={window_promotions} retargets_suppressed={window_suppressed}"
+    );
     let cond = ((!name_match) as usize) | ((map_mismatch as usize) << 1);
     // areaId (the high byte), NOT `& 0xff` -- the low byte of a packed BlockId is the indexId and
     // is 0 on nearly every real map, so the old packing threw away the only discriminating byte.
@@ -842,10 +887,10 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     let live_text = String::from_utf16_lossy(&live_name[..live_len]);
     if PORTRAIT_RENDER_SEMAPHORE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
         append_crash_log(format_args!(
-            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name='{our_text}' len={our_len} map=0x{our_map:x}) but the LOADED character is name='{live_text}' len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch} record_is_ours={record_is_ours} ac0={ac0} b78={b78} quickload_phase={quickload_phase} fresh_deser={fresh_deser}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fault only if ER_QUICKLOAD_FAIL_FAST=1"
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name='{our_text}' len={our_len} map=0x{our_map:x}) but the LOADED character is name='{live_text}' len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch} record_is_ours={record_is_ours} ac0={ac0} b78={b78} {provenance} quickload_phase={quickload_phase} fresh_deser={fresh_deser}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fault only if ER_QUICKLOAD_FAIL_FAST=1"
         ));
         append_autoload_debug(format_args!(
-            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot={render_target_slot} record(name='{our_text}' len={our_len} map=0x{our_map:x}) vs loaded(name='{live_text}' len={live_len} map=0x{live_map:x}) name_match={name_match} map_mismatch={map_mismatch} record_is_ours={record_is_ours} ac0={ac0} b78={b78} quickload_phase={quickload_phase} fresh_deser={fresh_deser}"
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot={render_target_slot} record(name='{our_text}' len={our_len} map=0x{our_map:x}) vs loaded(name='{live_text}' len={live_len} map=0x{live_map:x}) name_match={name_match} map_mismatch={map_mismatch} record_is_ours={record_is_ours} ac0={ac0} b78={b78} {provenance} quickload_phase={quickload_phase} fresh_deser={fresh_deser}"
         ));
     }
     if crate::crashlog::deliberate_fail_fast_enabled() {
@@ -880,6 +925,32 @@ pub(crate) struct SystemQuitSaveSwapState {
     pub(crate) recommitted: bool,
     pub(crate) summary_ptr: usize,
     pub(crate) summary_snapshot: Vec<u8>,
+    // --- SAVE-PICKER ROW STAGING. A SEPARATE CONCERN FROM THE PREVIEW ABOVE ---------------------
+    //
+    // The in-game file picker renders its browse rows by writing them INTO the live
+    // `CS::ProfileSummary`: `save_picker_write_row_records` memsets each 0x2a0-byte record to zero
+    // and copies the row label into the name field. That destroys the game's own records -- face
+    // data (+0x38), ChrAsm (+0x1a8), level (+0x24), map (+0x30) -- and they must be put back when
+    // the picker is done, on EVERY exit: close, commit, and abort.
+    //
+    // THIS USED TO RIDE ON `preview_applied`/`committed` AND THAT CONFLATION WAS THE BUG. Row
+    // staging and the foreign-save preview are different things that happen to write the same
+    // allocation, but only the PREVIEW may be suppressed by `committed` (a committed preview must
+    // survive to be loaded). Sharing one bit meant an earlier cross-file load commit set
+    // `committed` -- which nothing resets except the tail of the restore it was blocking -- and
+    // every later picker's rows were then left in the records for the rest of the process. The
+    // user's loading screens rendered `[..] EldenRing` and `[ new ]` as character names.
+    //
+    // So the staging keeps its OWN latch and its OWN snapshot, restored unconditionally.
+    /// The live ProfileSummary currently holds picker browse-row labels, not the game's records.
+    pub(crate) rows_staged: bool,
+    /// The allocation `rows_snapshot` was taken from; a restore refuses to write anywhere else.
+    pub(crate) rows_summary_ptr: usize,
+    /// The `PROFILE_SUMMARY_TOTAL_BYTES` image of that allocation as it looked BEFORE the first
+    /// staging of the current picker session. Re-taken per session (the latch is cleared by every
+    /// restore), never a process-lifetime latch -- a stale one would resurrect a previous save
+    /// container's records, which is the other half of `er-effects-rs-fmy6`.
+    pub(crate) rows_snapshot: Vec<u8>,
 }
 
 pub(crate) static SYSTEM_QUIT_SAVE_SWAP_STATE: OnceLock<Mutex<SystemQuitSaveSwapState>> =
@@ -926,6 +997,15 @@ pub(crate) fn system_quit_save_swap_arm_original(path: &str) -> bool {
     };
     let hash = system_quit_hash_bytes(&bytes);
     let mut st = system_quit_save_swap_lock();
+    // CARRY THE ROW-STAGING SNAPSHOT ACROSS THIS RESET. Arming is a SAVE-FILE concern and this
+    // wholesale reset is how the preview's bookkeeping is cleared, but the picker's staged rows are
+    // live UI state that can already be on screen when a re-arm happens. Dropping their snapshot
+    // here would leave labels in the records with nothing left to restore them from.
+    let (rows_staged, rows_summary_ptr, rows_snapshot) = (
+        st.rows_staged,
+        st.rows_summary_ptr,
+        core::mem::take(&mut st.rows_snapshot),
+    );
     *st = SystemQuitSaveSwapState {
         armed: true,
         path: path.to_owned(),
@@ -933,6 +1013,9 @@ pub(crate) fn system_quit_save_swap_arm_original(path: &str) -> bool {
         original_hash: hash,
         original_len: len,
         original_modified_ns: modified_ns,
+        rows_staged,
+        rows_summary_ptr,
+        rows_snapshot,
         ..SystemQuitSaveSwapState::default()
     };
     append_autoload_debug(format_args!(

@@ -42,6 +42,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -52,6 +53,7 @@ REPO_ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 import er_run_lib  # noqa: E402
+from er_artifact_env import artifact_env  # noqa: E402
 from runtime_timeout_cap import runtime_timeout_cap_seconds  # noqa: E402
 
 
@@ -112,8 +114,24 @@ def clamped_alive_seconds(requested: int) -> int:
     return max(1, min(requested, int(runtime_timeout_cap_seconds())))
 
 
-def autoload_log_path() -> Path:
-    return er_run_lib.game_dir() / AUTOLOAD_LOG_NAME
+def attempt_dir(label: str) -> Path:
+    """This attempt's own artifact directory. One per scored DLL, so nothing is shared."""
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-") or "attempt"
+    directory = WORK / "runs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def autoload_log_path(art: Path | None = None) -> Path:
+    """Where THIS attempt's autoload debug log lives.
+
+    It used to be the game directory's shared copy, which `score` then `unlink`ed before launching.
+    That deleted somebody ELSE's run -- several sessions launch concurrently here -- and it deleted
+    two generations at once, because `er_game_base::log::begin_fresh_run` removes `<name>.prev`
+    unconditionally when the live file is absent. With a per-attempt directory there is nothing
+    shared to clear and nothing of anyone else's to lose.
+    """
+    return (art if art is not None else er_run_lib.game_dir()) / AUTOLOAD_LOG_NAME
 
 
 def write_single_dll_profile(dll: Path, destination: Path) -> Path:
@@ -264,9 +282,9 @@ def score(dll: Path, label: str, alive_seconds: int) -> dict[str, object]:
             "would score this build as a false failure"
         )
 
-    profile = write_single_dll_profile(dll, WORK / "bisect.me3")
-    log = autoload_log_path()
-    log.unlink(missing_ok=True)
+    art = attempt_dir(label)
+    profile = write_single_dll_profile(dll, art / "bisect.me3")
+    log = autoload_log_path(art)
 
     # Wall clock, not monotonic: this is compared against a file mtime.
     launched_at = time.time()
@@ -275,7 +293,12 @@ def score(dll: Path, label: str, alive_seconds: int) -> dict[str, object]:
         # `-o`: offline/solo. launch.sh includes ersc.dll by default (2026-08-24) and a
         # co-loaded Seamless would give any death a second suspect.
         ["bash", str(LAUNCHER), "-o"],
-        env={**os.environ, "ME3_PROFILE": str(profile)},
+        # EVERY per-run artifact into THIS attempt's directory. A game-directory artifact is
+        # SINGLE-SLOT (`begin_fresh_run` keeps one generation), so a bisect that scores twenty
+        # builds used to leave evidence for the last two and destroy the other eighteen -- and it
+        # took concurrent sessions' logs with it. `read_log_evidence` below reads the redirected
+        # copy, so the reader moved with the writer.
+        env={**os.environ, "ME3_PROFILE": str(profile), **artifact_env(art)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,

@@ -83,7 +83,7 @@ def main() -> int:
 
     print(f"# per-phase timing + boundary semaphores{fps_note}")
     print("#   fixed_spf: 0.0500=20fps loading cap / 0.0167=60fps (the differential-loop metric)")
-    hdr = f"{'idx':>3} {'phase':<22} {'outcome':<9} {'ms':>7} {'frames':>7} {'fps':>5} {'fixed_spf':>9} {'nowload':>7} {'load_fsm':>8} {'world':>5}"
+    hdr = f"{'idx':>3} {'phase':<22} {'outcome':<9} {'ms':>7} {'frames':>7} {'fps':>5} {'fixed_spf':>9} {'nowload':>7} {'save_state':>8} {'world':>5}"
     print(hdr)
     print("-" * len(hdr))
     total_ms = 0
@@ -100,7 +100,7 @@ def main() -> int:
         print(
             f"{r.get('idx','?'):>3} {str(r.get('phase','?')):<22} {outcome:<9} "
             f"{dur_ms:>7} {r.get('duration_frames','?'):>7} {fps_s} {spf_s} "
-            f"{r.get('now_loading','?'):>7} {r.get('load_fsm','?'):>8} {r.get('world_sim','?'):>5}{mark}"
+            f"{r.get('now_loading','?'):>7} {r.get('save_state','?'):>8} {r.get('world_sim','?'):>5}{mark}"
         )
     print("-" * len(hdr))
     print(f"total driven time: {total_ms} ms ({total_ms/1000:.1f}s) across {len(rows)} phases")

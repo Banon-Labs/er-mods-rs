@@ -108,6 +108,36 @@ fn reference_bundle() -> Result<PathBuf, String> {
         })
 }
 
+/// Whether `node` can actually `require` the shim, i.e. whether `lzutf8` is installed.
+///
+/// A separate, tiny `node -e` rather than a flag on the main run: the gate's assertion has to stay
+/// unconditional once it decides to run, or a missing library and a decoder disagreement would
+/// come back through the same channel and the second one would be reported as the first.
+fn bundle_loads(bundle: &std::path::Path) -> Result<(), String> {
+    let output = Command::new("node")
+        .arg("-e")
+        .arg("require(process.env[process.argv[1]]); process.exit(0)")
+        .arg(REFERENCE_JS_ENV)
+        .env(REFERENCE_JS_ENV, bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|err| err.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    // Strict, like the main run's reads: node writes UTF-8, and a stderr that is not UTF-8 is a
+    // finding rather than something to smooth over -- so it falls back to a fixed sentence
+    // instead of being displayed with replacement characters.
+    let reason = String::from_utf8(output.stderr).unwrap_or_default();
+    Err(reason
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("node could not load the bundle")
+        .to_owned())
+}
+
 /// Whether a usable `node` is on PATH.
 fn node_available() -> bool {
     Command::new("node")
@@ -132,6 +162,21 @@ fn decode_through_the_site(doc: &BuildExportDoc) -> Option<String> {
             return None;
         }
     };
+    // FINDING THE SHIM IS NOT THE SAME AS BEING ABLE TO LOAD IT. `tests/reference/lzutf8_extract.js`
+    // is versioned here, so the existence check above always passes -- but the shim `require`s
+    // `lzutf8` from npm, which is not, and a checkout that never ran the install got four hard
+    // FAILURES from a gate whose whole design is to skip loudly when its environment is absent.
+    // The library is third-party minified JavaScript pulled from a live site and deliberately not
+    // vendored (see the module header), so "absent" is the ordinary state on a fresh checkout and
+    // on CI, and it has to read as a skip.
+    if let Err(reason) = bundle_loads(&bundle) {
+        eprintln!(
+            "SKIP: {} is present but cannot be loaded -- {reason}\n      \
+             npm --prefix crates/er-build-export/tests/reference install lzutf8@0.6.3",
+            bundle.display()
+        );
+        return None;
+    }
 
     let url = share_url(doc);
     let payload = url

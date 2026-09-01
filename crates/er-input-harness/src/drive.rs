@@ -24,8 +24,9 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use crate::game_mem::{
     OPTIONSETTING_MENU_ID, OPTIONSETTING_QUIT_TAB_INDEX, flip_fixed_spf, flip_mode_current,
-    load_fsm, menu_data_ptr, menu_flags, now_loading, optionsetting_tab_index, pause_menu_open,
-    read_drive_mode_flag, return_title_requested, top_menu_id, top_menu_job_ptr, world_simulating,
+    menu_data_ptr, menu_flags, now_loading, optionsetting_tab_index, pause_menu_open,
+    read_drive_mode_flag, return_title_requested, save_state, top_menu_id, top_menu_job_ptr,
+    world_simulating,
 };
 use crate::input_inject::{
     MenuEvent, advance_press_any_button, input_manager, keep_input_active, native_open_equip_menu,
@@ -225,7 +226,7 @@ struct Sem {
     menu: usize,
     world_sim: bool,
     now_loading: bool,
-    load_fsm: i32,
+    save_state: i32,
 }
 
 impl Sem {
@@ -234,13 +235,13 @@ impl Sem {
             menu: menu_data_ptr(),
             world_sim,
             now_loading: now_loading(),
-            load_fsm: load_fsm(),
+            save_state: save_state(),
         }
     }
     /// A load has actually STARTED (Continue took effect): the load FSM left idle, the now-loading latch
     /// tripped, or the world is already simulating.
     fn load_started(&self) -> bool {
-        self.world_sim || self.now_loading || self.load_fsm > 0
+        self.world_sim || self.now_loading || self.save_state > 0
     }
 }
 
@@ -385,7 +386,9 @@ impl Phase {
                 crate::game_mem::request_return_to_title();
                 return_title_requested() || !sem.world_sim
             }
-            Phase::QuitTeardown => !sem.world_sim && sem.load_fsm <= 0 && frame > TAP_CYCLE_FRAMES,
+            Phase::QuitTeardown => {
+                !sem.world_sim && sem.save_state <= 0 && frame > TAP_CYCLE_FRAMES
+            }
             Phase::NativeQuit => {
                 // Direct native return-to-title: write menuData+0x5d=1 each frame (bd BREAKTHROUGH-native-
                 // return-to-title). No menu input. Complete when the world ACTUALLY tears down (!world_sim),
@@ -760,13 +763,13 @@ fn emit_phase_telemetry(
     let fixed_spf = flip_fixed_spf();
     let flip_mode = flip_mode_current();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"load_fsm\":{}}}",
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"save_state\":{}}}",
         pause_menu_open() as u8,
         return_title_requested() as u8,
         sem.menu,
         sem.world_sim as u8,
         sem.now_loading as u8,
-        sem.load_fsm
+        sem.save_state
     );
     log_phase(&line);
 }
@@ -822,14 +825,14 @@ pub fn on_frame(base: usize) {
         Status::Running => {}
         Status::Advanced => {
             harness_log!(
-                "phase[{idx}] {} ADVANCED after {frame}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} load_fsm={} title_state={})",
+                "phase[{idx}] {} ADVANCED after {frame}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} save_state={} title_state={})",
                 phase.name(),
                 pause_menu_open() as u8,
                 top_menu_id(),
                 optionsetting_tab_index(),
                 return_title_requested() as u8,
                 sem.world_sim as u8,
-                sem.load_fsm,
+                sem.save_state,
                 title_scan::title_state(base)
             );
             emit_phase_telemetry(base, phase.name(), idx, "advanced", start_tick, frame, &sem);
@@ -841,7 +844,7 @@ pub fn on_frame(base: usize) {
         }
         Status::Derailed => {
             harness_log!(
-                "phase[{idx}] {} DERAILED: effect not seen within {}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} load_fsm={} title_state={}) -- STOPPING drive; tear down and analyze",
+                "phase[{idx}] {} DERAILED: effect not seen within {}f (pause_menu={} menu_id={} tab={} return_title={} world_sim={} save_state={} title_state={}) -- STOPPING drive; tear down and analyze",
                 phase.name(),
                 phase.budget(),
                 pause_menu_open() as u8,
@@ -849,7 +852,7 @@ pub fn on_frame(base: usize) {
                 optionsetting_tab_index(),
                 return_title_requested() as u8,
                 sem.world_sim as u8,
-                sem.load_fsm,
+                sem.save_state,
                 title_scan::title_state(base)
             );
             emit_phase_telemetry(base, phase.name(), idx, "derailed", start_tick, frame, &sem);

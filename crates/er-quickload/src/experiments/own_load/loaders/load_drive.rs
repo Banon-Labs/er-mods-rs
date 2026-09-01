@@ -62,7 +62,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         "own-load: sliced slot {want_slot} body len=0x{:x} (expected 0x{:x}) -> install+arm gate, call native parser 0x{:x}",
         leaked.len(),
         er_save_loader::bnd4::SLOT_BODY_LEN,
-        base + DESERIALIZE_SLOT_RVA
+        er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
     // (2) Install the gated 0x67b100 detour (harmless pass-through until armed).
     if !install_own_load_hook() {

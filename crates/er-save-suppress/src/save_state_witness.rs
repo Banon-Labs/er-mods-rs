@@ -44,7 +44,7 @@
 
 /// `FUN_140679180` (1.16.2): the LOAD-side poll wrapper. Writes `saveState` 3 or 0 depending on
 /// `FUN_140e6e080`'s answer. 1.17 `0x140679fd0`, verdict IDENTICAL-WHOLE over 39 instructions,
-/// BOTH-ENTRIES, 5B relocatable (`docs/recon/rva-1170-detour-audited.tsv`).
+/// BOTH-ENTRIES, PDATA:0x94/0x94 (`docs/recon/rva-map-1162-to-1170.needed-verified.tsv`).
 const SAVE_STATE_LOAD_POLL_RVA: usize = er_game_base::rva::SL_LOAD_POLL_WRAPPER_RVA;
 
 /// `FUN_140679510` (1.16.2): the SAVE-side lane wrapper. Writes `saveState = 0` for any

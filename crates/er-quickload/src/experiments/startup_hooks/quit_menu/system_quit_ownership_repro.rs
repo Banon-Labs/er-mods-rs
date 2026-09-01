@@ -455,6 +455,11 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
         ));
         return;
     };
+    // HOOK-BATCH-ATOMIC: the dtor detour SKIPS the game's real destructor for any object absent
+    // from the live-set that only the ctor detour fills, so a dtor installed without its ctor
+    // would classify EVERY teardown as a double-free and skip it. Partial installation of this
+    // pair is worse than none, which is why the all-or-nothing abort below is correct here and
+    // is a defect everywhere else (`scripts/check-hook-batch-abort.py`).
     let mut ok = true;
     match unsafe {
         MhHook::new(
@@ -795,7 +800,7 @@ pub(crate) fn install_menu_window_job_finalize_guard() {
     if MENU_WINDOW_JOB_FINALIZE_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_WINDOW_JOB_FINALIZE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_WINDOW_JOB_FINALIZE_RVA as u32) else {
         append_crash_log(format_args!(
             "menu-window-finalize-guard: failed to resolve finalize rva 0x{MENU_WINDOW_JOB_FINALIZE_RVA:x}"
         ));
@@ -840,7 +845,7 @@ pub(crate) fn install_menu_window_job_dtor_guard() {
             return;
         }
     }
-    let Ok(dtor_addr) = game_rva(MENU_WINDOW_JOB_DTOR_RVA as u32) else {
+    let Ok(dtor_addr) = game_rva_for_hook(MENU_WINDOW_JOB_DTOR_RVA as u32) else {
         append_autoload_debug(format_args!(
             "menu-window-job-guard: failed to resolve dtor rva 0x{MENU_WINDOW_JOB_DTOR_RVA:x}"
         ));
@@ -896,7 +901,7 @@ pub(crate) fn install_system_quit_window_list_push_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(MENU_WINDOW_LIST_PUSH_RVA) else {
+    let Ok(addr) = game_rva_for_hook(MENU_WINDOW_LIST_PUSH_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve MenuWindow list push rva 0x{MENU_WINDOW_LIST_PUSH_RVA:x}"
         ));
@@ -996,7 +1001,7 @@ pub(crate) fn install_quit_to_desktop_clean_kill_hook() {
             return;
         }
     }
-    let Ok(lookup_addr) = game_rva(MENU_OFFSCR_REND_PARAM_LOOKUP_RVA as u32) else {
+    let Ok(lookup_addr) = game_rva_for_hook(MENU_OFFSCR_REND_PARAM_LOOKUP_RVA as u32) else {
         append_autoload_debug(format_args!(
             "quit-to-desktop: failed to resolve MenuOffscrRendParam lookup rva 0x{MENU_OFFSCR_REND_PARAM_LOOKUP_RVA:x}"
         ));
@@ -1067,7 +1072,7 @@ pub(crate) fn install_system_quit_noop_action_hook() {
     // A labelled block gives each row its own exit: it skips itself and nothing else.
     if !first_installed {
         'first: {
-            let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
+            let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
                 append_autoload_debug(format_args!(
                     "system-quit-dup: failed to resolve Save Game/Quit action invoke rva 0x{SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA:x}"
                 ));
@@ -1110,7 +1115,7 @@ pub(crate) fn install_system_quit_noop_action_hook() {
     }
     if !second_installed {
         'second: {
-            let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA) else {
+            let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA) else {
                 append_autoload_debug(format_args!(
                     "system-quit-dup: failed to resolve Return-to-Desktop action invoke rva 0x{SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA:x}"
                 ));
@@ -1155,7 +1160,7 @@ pub(crate) fn install_system_quit_noop_action_hook() {
     }
     if !controller_installed {
         'controller: {
-            let Ok(addr) = game_rva(PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA) else {
+            let Ok(addr) = game_rva_for_hook(PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA) else {
                 append_autoload_debug(format_args!(
                     "system-quit-dup: failed to resolve PropertyNewButtonController activation rva 0x{PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA:x}"
                 ));
@@ -1215,7 +1220,7 @@ pub(crate) fn install_system_quit_save_game_text_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(MSG_REPOSITORY_GET_AND_FORMAT_RVA) else {
+    let Ok(addr) = game_rva_for_hook(MSG_REPOSITORY_GET_AND_FORMAT_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve MsgRepository::GetAndFormat rva 0x{MSG_REPOSITORY_GET_AND_FORMAT_RVA:x}"
         ));
@@ -1271,7 +1276,7 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve return-title request rva 0x{SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA:x}"
         ));
@@ -1462,6 +1467,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         // picked slot at a clean title. If it did NOT take, fall through to the native activation so
         // the pick is not silently dropped.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            // Baseline `oracle_msgbox_builds_since_switch_arm`: score the switch on ITS OWN builds.
+            let msgbox_baseline = er_title_flow::MSGBOX_BUILDER_LOG.load(Ordering::SeqCst);
+            MSGBOX_BUILDS_AT_SWITCH_ARM.store(msgbox_baseline, Ordering::SeqCst);
             if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
                 let close_fn: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(close_addr) };
@@ -1470,7 +1478,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
                 SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={slot} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {slot} (zero MessageBox)"
+                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={slot} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {slot}. NO OUTCOME IS CLAIMED HERE: this line is emitted BEFORE the return-title chain runs, so it can only say that THIS path builds no ProfileSelect load-confirm MessageBox. Whether the whole switch stayed at zero is oracle_msgbox_builds_since_switch_arm, baselined now at {msgbox_baseline} builds (run br-20260831-160354-2513 printed a flat \"zero MessageBox\" here 0.67s before one was built)"
             ));
             return 0;
         }

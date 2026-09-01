@@ -46,6 +46,13 @@ pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REOPEN_PENDING;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REPOPULATE_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_RESUBMIT_COUNT;
+/// Restores postponed because the live summary was unreadable this frame (retried by the sweep).
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORE_DEFERRED;
+/// The subset of those restores that could not write, because the summary allocation moved.
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORE_UNWRITABLE;
+/// Cumulative restores of the game's real records over our staged browse rows. Compare against
+/// `SAVE_PICKER_OPEN_COUNT`: fewer restores than opens means labels were left in game-owned state.
+pub(crate) use er_telemetry_core::counters::SAVE_PICKER_ROW_RECORDS_RESTORED;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_STAGED_ROW_COUNT;
 /// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
 /// through it (the destination picker is opened by the save flow, which has no row action object).
@@ -151,11 +158,51 @@ pub(crate) unsafe fn save_picker_write_row_records(
     visible
 }
 
+/// Snapshot the game's own `CS::ProfileSummary` image before the first staging of a picker
+/// session, so [`save_picker_restore_staged_row_records`] can put it back on EVERY exit.
+///
+/// SNAPSHOT ON THE TRANSITION, NOT ON EVERY CALL. Staging re-runs on every browse keypress and at
+/// every native list build (`save_picker_profile_list_builder_hook`), and by the second call the
+/// live allocation holds OUR labels -- re-reading it then would snapshot `[ new ]` as "the user's
+/// real rows" and the restore would put the bug back. The latch is per-session (every restore
+/// clears it), which is the property the old `summary_snapshot.is_empty()` guard lacked: that one
+/// was cleared only by a restore that ran, so a suppressed restore left a snapshot from a previous
+/// save container armed indefinitely.
+///
+/// The pointer term is not redundant with the latch. If the container is reallocated while a
+/// picker session is live, the new allocation still holds the game's real records (we never staged
+/// into it), so re-snapshotting is both safe and required -- and it retargets the restore away from
+/// an address that may already be freed.
+///
+/// # Safety
+///
+/// `summary` must be the live `CS::ProfileSummary` allocation: this reads
+/// `PROFILE_SUMMARY_TOTAL_BYTES` from it through a raw pointer. Same thread rules as the staging
+/// it precedes.
+pub(crate) unsafe fn save_picker_arm_row_snapshot(summary: usize) {
+    let mut st = system_quit_save_swap_lock();
+    if st.rows_staged && st.rows_summary_ptr == summary {
+        return;
+    }
+    st.rows_summary_ptr = summary;
+    st.rows_snapshot = unsafe {
+        core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+    };
+    st.rows_staged = true;
+}
+
 /// Stage the model's visible rows as synthetic ProfileSummary records (name field = row label;
 /// everything else zeroed) and leave the slots beyond them unoccupied. Snapshots the live summary
-/// first via the save-swap state -- occupancy bytes included -- so every existing backout path
-/// restores the user's real rows. Menu-thread only (record writes + renderer refresh -- same
-/// context the foreign-save preview uses).
+/// first -- occupancy bytes included -- so every backout path restores the user's real rows.
+/// Menu-thread only (record writes + renderer refresh -- same context the foreign-save preview
+/// uses).
+///
+/// THE SNAPSHOT IS THE STAGING'S OWN, not the foreign-save preview's. This used to set
+/// `preview_applied` and lean on the preview's snapshot/restore, and that conflation is the whole
+/// defect: the preview restore is (correctly) suppressed once `committed` is set, `committed` is
+/// sticky for the life of the process, and so the picker's labels were left in the game's records
+/// for every session after the first cross-file load. See
+/// [`save_picker_restore_staged_row_records`].
 pub(crate) unsafe fn save_picker_stage_row_records(
     model: &crate::experiments::save_picker::SavePickerModel,
 ) -> bool {
@@ -167,19 +214,7 @@ pub(crate) unsafe fn save_picker_stage_row_records(
         ));
         return false;
     }
-    {
-        let mut st = system_quit_save_swap_lock();
-        if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
-            st.summary_ptr = summary;
-            st.summary_snapshot = unsafe {
-                core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES)
-                    .to_vec()
-            };
-        }
-        // Mark the summary as replaced so `system_quit_save_swap_restore_profile_summary`
-        // restores the user's real rows on any backout path.
-        st.preview_applied = true;
-    }
+    unsafe { save_picker_arm_row_snapshot(summary) };
     let staged = unsafe { save_picker_write_row_records(model, summary) };
     SAVE_PICKER_STAGED_ROW_COUNT.store(staged, Ordering::SeqCst);
     if let Ok(_base) = game_module_base() {
@@ -555,6 +590,15 @@ pub(crate) unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reas
     SAVE_DEST_COMMIT_PENDING.store(1, Ordering::SeqCst);
     save_flow_box_clear();
     unsafe { save_picker_native_close(dialog, reason) };
+    // RESTORE BEFORE THE SAVE FIRES, not merely before the next loading screen. The save-flow tick
+    // is about to run a native save, and the native save WRITES the ProfileSummary table into the
+    // container (`FUN_14067b940` -> `MarkProfileIndexAsUsed` + `FUN_140262270`). Firing while our
+    // browse-row labels are still in those records would persist `[ new ]` as a character name
+    // into the file the user just chose. The picker's own close path restores too; this is
+    // deliberately not left to it, because "commit" is one of the three exits the restore must
+    // cover and the ordering here is what makes it a save-correctness fix rather than a cosmetic
+    // one.
+    unsafe { save_picker_restore_staged_row_records("save-dest-commit") };
     append_autoload_debug(format_args!(
         "save-dest: commit staged (reason={reason}) target='{}'; picker closing, the save-flow tick will close the menus and fire",
         save_dest_target()
@@ -690,9 +734,11 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
                 SAVE_PICKER_OPEN_SLOTS_PENDING.store(1, Ordering::SeqCst);
                 unsafe { save_picker_native_close(dialog, "picked-file") };
             } else {
-                // Invalid container: stay in the picker so the user can choose another file.
-                // The ingest pipeline already restaged nothing (preview only applies on
-                // success), but our browse rows were untouched -- the window stays coherent.
+                // Invalid container: stay in the picker so the user can choose another file. The
+                // browse rows are NOT untouched (the old comment here claimed they were):
+                // `write_profile_summary_records_from_save_bytes` zeroes all ten records before it
+                // discovers the container has no readable slot, so the preview path restores this
+                // listing itself on that refusal before returning 0.
                 SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             0
@@ -722,6 +768,45 @@ pub(crate) unsafe fn save_picker_native_close(dialog: usize, reason: &str) {
 pub(crate) fn save_picker_resubmit_pending() -> bool {
     SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst) != 0
         || SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst) != 0
+}
+
+/// Per-frame sweep: put the game's records back if a picker session ended without any of the
+/// named exits running the restore. No-op in the overwhelmingly common case.
+///
+/// WHY A SWEEP AND NOT JUST MORE CALL SITES. The restore already runs at the close, at the
+/// destination commit, and on every open/rollback path -- but "did EVERY exit remember to call it"
+/// is precisely the property that failed here, and the failure mode is silent and only visible
+/// three loading screens later. The abort paths alone are five separate `save_dest_reset` /
+/// `save_flow_enter_stage(IDLE)` sites in `save_flow.rs` (commit plan refused, bypass arm refused,
+/// redirect arm failed, aborted without writing, unknown stage), and a sixth added tomorrow would
+/// reintroduce the bug. This closes the class instead of the instances: rows staged, no picker on
+/// screen, no resubmit queued means nobody owns those labels any more.
+///
+/// The two exemptions are both real states, not escapes:
+///   * `missing_save_selection_pending` -- the STARTUP picker deliberately keeps its rows staged
+///     across window closes (`save_picker_reset` says so and returns early), because the native
+///     Load Game row must re-open the same listing;
+///   * a queued resubmit -- the picker is mid-reopen for a directory change or the post-pick slot
+///     view, and the rows must survive the gap.
+///
+/// # Safety
+///
+/// Delegates to [`save_picker_restore_staged_row_records`], which writes the live summary through a
+/// raw pointer only after re-checking that the allocation is still the one it snapshotted. Game
+/// thread only, called from the per-frame task tick.
+pub(crate) unsafe fn save_picker_sweep_orphaned_row_records() {
+    // Read and RELEASE before anything else: the restore below takes the same lock.
+    let staged = system_quit_save_swap_lock().rows_staged;
+    if !staged {
+        return;
+    }
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+        || missing_save_selection_pending()
+        || save_picker_resubmit_pending()
+    {
+        return;
+    }
+    unsafe { save_picker_restore_staged_row_records("orphaned-row-records-sweep") };
 }
 
 const PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET: usize = 0xa38;
@@ -1759,7 +1844,7 @@ pub(crate) fn install_save_picker_set_cursor_hook() {
     if SAVE_PICKER_SET_CURSOR_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_ITEM_LIST_SET_CURSOR_RVA as u32) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve select-index rva 0x{MENU_ITEM_LIST_SET_CURSOR_RVA:x}"
         ));
@@ -1861,7 +1946,7 @@ pub(crate) fn install_save_picker_wheel_delta_hook() {
     if SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA as u32) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve wheel-delta rva 0x{MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA:x}"
         ));
@@ -2005,7 +2090,7 @@ pub(crate) fn install_save_picker_hit_test_hook() {
     if SAVE_PICKER_HIT_TEST_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let Ok(addr) = game_rva(MENU_ITEM_LIST_POINT_TO_INDEX_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(MENU_ITEM_LIST_POINT_TO_INDEX_RVA as u32) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve hit-test rva 0x{MENU_ITEM_LIST_POINT_TO_INDEX_RVA:x}"
         ));
@@ -2808,6 +2893,12 @@ pub(crate) unsafe extern "system" fn save_picker_profile_list_builder_hook(
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 || missing_save_selection_pending() {
         let summary = unsafe { system_quit_profile_summary_ptr() };
         if summary != TITLE_OWNER_SCAN_START_ADDRESS {
+            // This is a SECOND writer of the same records, reached from the native builder rather
+            // than from `save_picker_stage_row_records`, so it has to arm the restore snapshot on
+            // its own -- otherwise a build that lands before any staging call (or after a restore
+            // cleared the latch) would destroy the records with nothing left to put back. A no-op
+            // whenever this session already holds a snapshot for this allocation.
+            unsafe { save_picker_arm_row_snapshot(summary) };
             let staged = {
                 let guard = crate::experiments::save_picker::active_save_picker_lock();
                 guard
@@ -2848,7 +2939,7 @@ pub(crate) fn install_save_picker_list_builder_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(PROFILE_SELECT_LIST_BUILDER_RVA) else {
+    let Ok(addr) = game_rva_for_hook(PROFILE_SELECT_LIST_BUILDER_RVA) else {
         append_autoload_debug(format_args!(
             "save-picker: failed to resolve list-builder rva 0x{PROFILE_SELECT_LIST_BUILDER_RVA:x}"
         ));

@@ -118,8 +118,11 @@ pub static PROFILE_LOOKAT_BONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_LOOKAT_BONES_DUMPED_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_READBACK_SOME: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_READBACK_CHECKER: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_READBACK_DEFERRED_SOME: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_READBACK_DEFERRED_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+// PROFILE_READBACK_DEFERRED_SOME / _NONBLACK removed 2026-08-31: the H2-vs-H3 deferred-readback
+// diagnostic that wrote them was deleted (see lookat_bone_hooks.rs, "has been removed now that the
+// ..."), but both were still PRINTED every `lookat-phase-sweep` line as `defer_some=`/`defer_nonblack=`.
+// The 2026-08-31 settlement run emitted six such lines reading 0, which is indistinguishable from
+// "the deferred readback ran and found nothing". er-effects-rs counter census.
 pub static PROFILE_CHECKER_DUMPED: AtomicBool = AtomicBool::new(false);
 pub static PROFILE_PERFRAME_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -227,11 +230,16 @@ pub static PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST: AtomicUsize = AtomicUsize::n
 pub static PROFILE_SLOT_NAMES_DUMPED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_READBACK_CHECKER_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_TEAR_EMA: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_ALPHA0_CLEARS: AtomicUsize = AtomicUsize::new(0);
+// PROFILE_ALPHA0_CLEARS removed 2026-08-31: the scene-alpha clear it counted is compiled off
+// (lookat_bone_hooks.rs keeps `portrait_alpha0_clear` alive only through a `let _ =` discard), so
+// `oracle_portrait_alpha0_clears` emitted 0 forever. Note the discard `let _ = &PROFILE_ALPHA0_CLEARS`
+// is exactly what made the by-reference write rule read this as a live counter.
 pub static PROFILE_MODEL_PARTS_DUMPED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PERFRAME_MODEL_DRAWS: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_PERFRAME_SPARED_DRAWS: AtomicUsize = AtomicUsize::new(0);
+// PROFILE_PERFRAME_SPARED_DRAWS removed 2026-08-31: no writer, yet printed twice per
+// `lookat-phase-sweep` line as `spared[... draws=]`. PROFILE_PERFRAME_MODEL_DRAWS (written) is the
+// live per-frame draw counter; the spared-model variant counted a draw path that no longer exists.
 pub static PROFILE_SPARED_MODEL_OK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_GX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_GX_QUEUE_NONEMPTY: AtomicUsize = AtomicUsize::new(0);
@@ -288,7 +296,11 @@ pub static PORTRAIT_RENDER_WINDOW_DONE: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_BIND_OBSERVER_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES: AtomicUsize = AtomicUsize::new(0);
+// TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES removed 2026-08-31 with its three
+// TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_* siblings in constants/anti_debug.rs: the visible-surface
+// bind rewrite they were declared for was never implemented, so all four read 0 forever while five
+// oracles emitted them -- one of which scripts/er-readiness-watch.py copied into the
+// loading-screen-portrait event JSON.
 pub static LS_PORTRAIT_LAST_W: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_LAST_H: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
@@ -446,7 +458,12 @@ pub static TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS: AtomicUsize = AtomicUsize::
 pub static TITLE_CUSTOM_COVER_BLACK_BUILDS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_CUSTOM_COVER_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_CUSTOM_COVER_RUN_CALLS: AtomicUsize = AtomicUsize::new(0);
+// TITLE_CUSTOM_COVER_RUN_CALLS removed 2026-08-31. Its sole writer
+// (title_custom_cover_menu_window_run_hook) was never codegen'd -- the same reason its siblings
+// TITLE_CUSTOM_COVER_RUN_LAST_* are pinned to literals in oracles_title_visuals.rs. It was the fifth
+// AND-term of `oracle_title_loaded_character_portrait_rendered`, whose second and third terms are
+// already pinned `false`/`0`, so that oracle was STRUCTURALLY incapable of being true and has been
+// removed with it rather than left emitting a permanent `false`.
 pub static PAB_RUN_POST_CALLS: AtomicUsize = AtomicUsize::new(0);
 // TITLE_OVERLAY_COVER_* removed 2026-07-31: six counters with zero writers, read once each to emit
 // oracles for the unbuilt custom title render surface (er-effects-rs-trp). A permanently-0 counter
@@ -1928,7 +1945,14 @@ pub static OWN_LOAD_BODY_LEN: AtomicUsize = AtomicUsize::new(0);
 pub static OWN_LOAD_FED_BYTES: AtomicUsize = AtomicUsize::new(0);
 pub static OWN_LOAD_WBR_UPDATE_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static OWN_LOAD_WBR_MAX_PHASE: AtomicU64 = AtomicU64::new(0);
-pub static OWN_LOAD_M28_DISPATCH_FIRED: AtomicUsize = AtomicUsize::new(0);
+// OWN_LOAD_M28_DISPATCH_FIRED removed 2026-08-31. `own_load_m28_dispatch` is VERIFY-ONLY: the
+// AddDefaultFileLoadProcess call it counted was disabled after the block getter AV-faulted, and the
+// function's own comment says "NO native call is made here". The counter therefore could not move,
+// yet it was one of five components of `world_stream_progress_watermark` in
+// scripts/er-readiness-watch.py -- a run-STOPPING stall decision -- documented there as
+// "increments on a working stream". It contributed a constant 0 to every stall verdict. Re-add it
+// WITH the increment if and when the dispatch is re-enabled. OWN_LOAD_M28_DISPATCH_DIAG_CALLS (the
+// throttle counter, genuinely written) stays.
 pub static WBR_PHASE2_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static WBR_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static REQUEST_MOVE_MAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);

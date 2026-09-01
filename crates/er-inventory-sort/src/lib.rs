@@ -5,6 +5,14 @@
 //! name, own config file, own log file, and no dependency on save/autoload/render
 //! product crates.
 
+// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
+// warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-inventory-sort`
+// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
+// target is unaffected: this allow does not exist there.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 use std::{
     fmt,
     path::PathBuf,

@@ -204,9 +204,9 @@ pub const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
 pub const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, row_registry);
 
-/// GameMan+0xb80 (== GameMan.save_state == load_in_progress) FSM values. The full-save read walks
+/// GameMan+0xb80 (== GameMan.save_state == save_state) FSM values. The full-save read walks
 /// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
-/// the deserialize consumes the 0x280000 buffer. `load_in_progress_b80_name` (constants::return_title)
+/// the deserialize consumes the 0x280000 buffer. `save_state_b80_name` (constants::return_title)
 /// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
 /// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
 pub const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
@@ -513,15 +513,43 @@ pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
 #[cfg(windows)]
 pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
 
-/// Save-manager load-in-progress flag (GameMan/save-mgr singleton 0x143d69918):
-/// `0x14067b570` sets `[mgr+0xb80]=1` when it begins the load and clears it to 0
-/// when finished. The native autoload (recipe A) arms the load by setting the
-/// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
-/// per-frame update `0x14067f5d0` performs it.
-/// Bound to upstream `GameMan::save_state` (compiler-verified equal to our offset); our research
-/// reads this same dword as the load-in-progress lane (set 1 on load begin, cleared on finish).
+/// `CS::GameMan::saveState` -- the ONE-SLOT ARBITER over the single SL device, off the GameMan
+/// singleton `0x143d69918`. NOT a load flag, in either direction.
+///
+/// CORRECTED 2026-08-31. This was `GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET`, and two more crates
+/// spelled the same field `GAME_MAN_LOAD_PHASE_B80_OFFSET` (er-reload-trace) and
+/// `GAME_MAN_LOAD_FSM_B80_OFFSET` (er-input-harness). Three constants saying "load" is how the
+/// save-wedge diagnosis gets re-derived backwards: the wedge turned on the SAVE lane owning this
+/// slot while a clear-to-0 ran underneath it, which is unreadable if the field is a load flag.
+///
+/// THREE WITNESSES, none of them the name it used to carry:
+///
+///   1. The type. Ghidra's curated 1.16.2 `CS::GameMan` names `+0xb80` `saveState`, `int`;
+///      `fromsoftware-rs` independently declares `pub save_state: u32` at the same slot, which is
+///      what the `offset_of!` below binds to and what the compiler checks.
+///   2. The game's own predicates. `IsSaveState1` (`0x14067a010`) and `IsSaveState2`
+///      (`0x140679ff0`) are two-instruction leaves -- `mov rax,[rip+GameMan] ; cmp dword ptr
+///      [rax+0xb80],N ; sete al ; ret` -- so the field's SPELLING is in the image, not inferred.
+///   3. The constructor. `mov %r14d,0xb80(%rsi)` at `0x14067616f` (1.17 `0x140676fbf`), pinned in
+///      `scripts/check-object-field-offsets-1170.py`, 1296/1296 aligned across both images.
+///
+/// THE VALUE TABLE, from a complete scan of every access in the 288 functions that reference the
+/// GameMan singleton (37 sites, all of them `[reg+0xb80]`):
+///
+/// ```text
+///   0  IDLE -- nothing owns the SL device
+///   1  a SAVE or the preview read owns it: 0x14067b4e0 (preview), 0x14067b570, 0x14067b750,
+///      0x14067b940, 0x14067bc10 all store 1, each after a `cmp [rax+0xb80],0` idle check
+///   2  a LOAD owns it: 0x14067b1a0, 0x14067b200, 0x14067b480
+///   3  the load's payload is RESIDENT: 0x140679180
+///   4  0x14067b0b0        7  0x14067b030 (tested back by 0x140679fd0)
+/// ```
+///
+/// So BOTH lanes stamp it, which is exactly why "load in progress" was wrong and why the correct
+/// name is the game's: the field says WHO owns the device, not WHAT KIND of operation is running.
+/// A reader that only wants "is the device busy" should test `!= 0`, never `== 2`.
 #[cfg(windows)]
-pub const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
+pub const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
 
 /// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
 #[cfg(windows)]
@@ -530,9 +558,48 @@ pub const SLOT_MANAGER_DATA_OFFSET: usize =
 
 pub const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 
-/// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
-/// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
-pub const SESSION_SINGLETON_RVA: usize = TitleSessionRva::MoveMapSession as usize;
+/// `g_GxDrawContext` -- the GXSR rendering system's draw-context singleton (absolute
+/// 0x1447ef360; RVA = 0x1447ef360 - 0x140000000 = 0x47ef360).
+///
+/// CORRECTED 2026-08-30. This was declared as `SESSION_SINGLETON_RVA` /
+/// `TitleSessionRva::MoveMapSession` and documented as a "session manager singleton;
+/// NULL at the title, built by the move-map/load path". Both halves were wrong. The
+/// 1.16.2 dump names the global itself `g_GxDrawContext`, typed `GxDrawContext *`.
+///
+/// EVIDENCE. Of the global's 1242 xrefs exactly TWO are WRITES, and both are the
+/// ctor/dtor pair in the render region -- nothing in the move-map/load region (0x140a)
+/// writes it at all, which a "built by the move-map/load path" singleton would require:
+///   * `0x1419e6340` allocates 0x1010 bytes (== `sizeof(GxDrawContext)`, corroborated
+///     by the struct's own size) from `GLOBAL_RenderingSystemAllocator`, runs
+///     `GXSR::GxDrawContext::GxDrawContext`, stores the result here, then calls
+///     `GXSR::GxDrawContext::Initilize` (entry `0x1419e7cf0`).
+///   * `0x1419e63a0` deallocates it and writes NULL back.
+///
+/// The 1240 readers are the graphics stack: `GXRayTracingSystem`, `GXLightBase`,
+/// `GXSimpleDrawContextImplBase`, `FD4HkDrawSceneContext`, `render`, `SetupSubsystems`,
+/// `enter_/leave_gxrendermanager_critical_section`, `CSMovieGxTexture`, `~StageRend`.
+///
+/// IT IS NOT NULL AT THE TITLE, so it is worthless as a readiness or progress gate --
+/// testing `!= null` here tests a constant. `CS::CSMovieGxTexture::CSMovieGxTexture`
+/// dereferences it with NO null check (`FUN_1419e7990(g_GxDrawContext)`) and the title
+/// background movie is exactly such a texture; `CS::OptionSettingDialog`'s constructor
+/// reads it too, and that dialog opens from the title screen.
+///
+/// The GENUINE title/boot session singleton is a DIFFERENT address --
+/// `TitleSessionRva::SaveSafeBeginLogoSession` (0x4588e98), 38 xrefs, read by
+/// `STEP_BeginLogo` / `STEP_InitProfile` / `STEP_LoadList` / `STEP_PlayGame` /
+/// `STEP_Finish`. `title_tick_cover.rs`'s `PRODUCT_CORE_BLOCKER_SESSION` readiness gate
+/// uses that one, correctly. Do not let the two converge again: this file previously
+/// spelled a render pointer `SESSION_SINGLETON_RVA` while a real session singleton was
+/// spelled `SESSION_SINGLETON_144588E98_RVA`, so two different log lines both printed
+/// `session=0x...` for two unrelated objects.
+///
+/// Deliberately NOT spelled `GX_DRAW_CONTEXT_RVA`: `er-loading-portrait-core` declares
+/// that name for this same address, and the 1.16.2->1.17 data ledger emits one row per
+/// declaring name, so an exact name match would produce the byte-identical duplicate row
+/// that `check-no-duplicate-ledger-rows.py` R4 forbids. The two declarations remain
+/// parked as `todo:centralize-global-rva` in `scripts/rva-alias-allowlist.txt`.
+pub const GX_DRAW_CONTEXT_SINGLETON_RVA: usize = TitleSessionRva::GxDrawContextSingleton as usize;
 
 /// Alias of the `CSMenuMan` singleton. Derived from `er-game-base`'s table so the value has
 /// exactly one definition (2026-08-01 RVA dedupe); the name is kept for its call sites.
@@ -614,6 +681,13 @@ pub const TFC_NOT_RELEASE_FLAG_CLEAR: u8 = 0;
 /// Verified by disasm of 0x1409a8eb0 + the live user-Continue capture (selector body 0x9a8f09 ->
 /// 0x9b3070). bd LIVE-continue-chain-via-selector-NOT-confirm-handler.
 pub const TITLE_CONTINUE_SELECTOR_RVA: usize = 0x9a8eb0;
+
+/// The load dispatcher `0x1409b3070` the selector above tail-calls on its LOAD branch -- the proper
+/// `CS::MenuJob::ChainMenuJobs` enqueue. Named here because `fire_tfc_continue` used to print it as
+/// a bare `base + 0x9b3070usize` in the line that reports the dispatch, which on 1.17 named an
+/// address the dispatch did not go to. Nothing CALLS this constant; it exists so the log can
+/// resolve what it claims.
+pub const TITLE_CONTINUE_LOAD_DISPATCHER_RVA: usize = 0x9b3070;
 
 /// CS::TitleTopDialog MenuJobQueue at `dialog+0x10` (ring at +0x18) -- the queue the native Continue
 /// path posts the built LoadGame job into, drained each frame by the menu pump `0x1409aa680` (which
@@ -789,9 +863,21 @@ pub const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
 
 pub const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
 
-/// Gate used by the loading-screen mode setter at deobf `FUN_14067a410`: when this byte is 0,
-/// mode 2 is normalized to mode 0 before calling the `CSMenuMan+0x720` mode writer.
-pub const GAME_MAN_LOADING_MODE_BF5_OFFSET: usize = 0xbf5;
+/// `CS::GameMan::loadingScreenTextState` (+0xbf5), a bool -- NOT the loading mode itself.
+///
+/// RENAMED 2026-08-31 from `GAME_MAN_LOADING_MODE_BF5_OFFSET`, whose own doc comment already
+/// described a GATE while its name claimed to be the MODE. The two accesses in the image are the
+/// whole story, and the cited `FUN_14067a410` does not exist in 1.16.2 (it is an address from the
+/// retired 1.16.1 dump; it lands inside `FUN_14067a3a0`):
+///
+///   * WRITER `FUN_14067a860` -- a one-line setter, `GLOBAL_GameMan->loadingScreenTextState = arg`.
+///   * READER `FUN_14067a320` -- `if (loadingScreenTextState == false && mode == 2) mode = 0;`
+///     then writes `mode` into `CSMenuMan->loadingScreenData.field_0x8`. So the byte decides
+///     whether loading-screen mode 2 SURVIVES; the mode is the caller's argument.
+///
+/// `fromsoftware-rs` names the same slot `simple_loading_screen` and records the EMEVD command
+/// that sets it (`2003[80] ShowTextOnLoadingScreen`), which agrees on the mechanism.
+pub const GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET: usize = 0xbf5;
 
 pub const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
 
@@ -814,9 +900,16 @@ pub const TITLE_STEP_IN_GAME_STEP_2E8_OFFSET: usize = 0x2e8;
 /// stable in-world idle (see block comment above).
 pub const IN_GAME_STEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
 
-/// In-game menu job pointer at CSMenuMan+0x798 (unnamed in fromsoftware-rs `unk748`); nonzero while
-/// the in-game session's menu job lives. STEP_RequestWait ends the session when it reads 0 at
-/// request code 2.
+/// In-game menu job pointer at CSMenuMan+0x798; nonzero while the in-game session's menu job
+/// lives. STEP_RequestWait ends the session when it reads 0 at request code 2.
+///
+/// "Unnamed in fromsoftware-rs `unk748`" is what this comment used to offer as provenance, and it
+/// is not one: that a filler array SPANS a byte says nothing about where a member starts. The
+/// offset is now measured -- `CS::CSMenuManImp::CSMenuManImp` (1.16.2 0x1407650a0, 1.17
+/// 0x140765ef0) aligns 121/121 instructions with 30 field offsets, zero moved, and does
+/// `lea 0x798(%rbx),%rax` at 0x14076517b with 0x790 and 0x7a0 witnessed on either side. Frozen in
+/// `scripts/check-object-field-offsets-1170.py`. That fixes the BOUNDARY; that the member is a
+/// `MenuJob*` is a separate claim resting on STEP_RequestWait's own read, not on this alignment.
 pub const CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET: usize = 0x798;
 
 /// Loading-screen active bit written by `CS::InGameStep::STEP_MoveMap_Finish` before common finalize
@@ -856,7 +949,7 @@ pub static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
 /// -1 = no live MoveMapStep. See MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.
 pub static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
 
-/// Last sampled GameMan load-in-progress FSM (b80, == GameMan.save_state): 0 idle/done, 2 read
+/// Last sampled `GameMan::saveState` (b80): 0 idle/done, 2 read
 /// submitted, 3 resident. Published for the loading bar (a distinct, meaningful load-state the user
 /// asked to see). The finalize case-7 gate (FUN_14067a170 = saveState==0) needs this back at 0.
 pub static SWITCH_ORACLE_B80: AtomicI32 = AtomicI32::new(-1);
@@ -1135,22 +1228,41 @@ pub const TITLE_TOP_DIALOG_UPDATE_RVA: usize = 0x9aac10;
 /// already valid.
 pub const TITLE_TOP_DIALOG_CLEANUP_RVA: usize = TitleDialogRva::Cleanup as usize;
 
-/// Active-screen array 0x143d6d8d0 (RVA): the per-frame pump 0x1409aa680 iterates it. 10 contiguous
-/// screen* slots (stride 8). The LIVE-dialog scan reads each slot's [scr] vtable to find the live
-/// TitleTopDialog and MenuWindow (the factory's SceneProxy capture + rdx) -- no blind heap scan.
-pub const ACTIVE_SCREEN_ARRAY_RVA: usize = TitleDialogRva::ActiveScreenArray as usize;
+/// Profile model-renderer table 0x143d6d8d0 (RVA): 10 contiguous `CS::CSMenuProfModelRend*`
+/// slots (stride 8), one per profile/save slot. The per-frame pump 0x1409aa680 iterates it.
+///
+/// CORRECTED 2026-08-30 (was `ACTIVE_SCREEN_ARRAY_RVA`, "10 contiguous screen* slots ... the
+/// LIVE-dialog scan reads each slot's [scr] vtable to find the live TitleTopDialog and
+/// MenuWindow"). These are not screens and no TitleTopDialog vtable will ever appear in them.
+/// Evidence, 1.16.2 dump -- 9 xrefs total, all in the title-dialog region:
+///   * `0x1409af3a0` BUILDS the table: it calls the clear below, then loops 10 times doing
+///     `HeapAlloc(0xa30, 0x10, GLOBAL_GfxHeapAllocator)` and
+///     `CS::CSMenuProfModelRend::CSMenuProfModelRend(mem, i)`, storing each into
+///     `DAT_143d6d8d0[i]`.
+///   * `0x1409b2db0` CLEARS it: for all 10 slots it hands the pointer to
+///     `GLOBAL_CSDelayDeleteMan` and writes 0 back. `TitleTopDialog::Cleanup` (0x1409a8890)
+///     calls it, which is why counting non-null slots after cleanup is a real signal.
+///   * `0x1409aa680` PUMPS it: `CS::GameDataMan::GetProfileSummary()`, then per slot feeds
+///     `CS::FaceData::GetFaceDataBuffer(...)` and friends into the renderer -- it is building
+///     each save slot's character portrait, which is what `CSMenuProfModelRend` renders.
+///
+/// `er-loading-portrait-core`'s `TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA` was the
+/// accurate name of the two (and `scripts/read-portrait-chain.py` already documented the slots
+/// as `CSMenuProfModelRend*`). Renamed to agree without an exact collision, for the
+/// duplicate-ledger-row reason noted on `GX_DRAW_CONTEXT_SINGLETON_RVA`.
+pub const PROFILE_MODEL_REND_TABLE_RVA: usize = TitleDialogRva::ProfileModelRendTable as usize;
 
-/// Active-screen array slot count (bounded scan; the native pump iterates the same span).
-pub const ACTIVE_SCREEN_ARRAY_SLOTS: usize =
-    core::mem::size_of::<ActiveScreenArrayLayout>() / core::mem::size_of::<usize>();
+/// Table slot count (bounded scan; the native pump iterates the same span).
+pub const PROFILE_MODEL_REND_TABLE_SLOTS: usize =
+    core::mem::size_of::<ProfileModelRendTableLayout>() / core::mem::size_of::<usize>();
 
-/// Active-screen array slot stride (one screen* per slot).
-pub const ACTIVE_SCREEN_ARRAY_STRIDE: usize = core::mem::size_of::<usize>();
+/// Table slot stride (one `CSMenuProfModelRend*` per slot).
+pub const PROFILE_MODEL_REND_TABLE_STRIDE: usize = core::mem::size_of::<usize>();
 
 /// Scan slot start / step.
-pub const ACTIVE_SCREEN_SLOT_START: usize = usize::MIN;
+pub const PROFILE_MODEL_REND_SLOT_START: usize = usize::MIN;
 
-pub const ACTIVE_SCREEN_SLOT_STEP: usize = true as usize;
+pub const PROFILE_MODEL_REND_SLOT_STEP: usize = true as usize;
 
 /// TitleTopDialog SceneProxy capture slot: [dialog+0xa38] holds the live SceneProxy* the
 /// TitleTopDialog ctor 0x1409a81a0 stored at 0x1409a8213. The LIVE-dialog factory 0x14081ead0
@@ -1287,9 +1399,35 @@ pub const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = er_save_loader::SET_SAVE_SL
 /// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc, so it orphaned.)
 pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 
-/// Private saved-map slot inside the GameMan block immediately after
-/// `stay_in_multiplay_area_saved_rotation`; derive it from the adjacent typed
-/// vector layout instead of retaining the raw absolute field offset.
+/// `CS::GameMan::stayInMultipleAreaBlockId` (+0xc30). KEPT UNDER THE PRODUCT NAME "saved map"
+/// after a 2026-08-31 audit, because that is what the value IS in the window every consumer reads
+/// it in -- but the field has THREE writers and only one of them is the save, so read this before
+/// using it anywhere else.
+///
+/// The complete access set (5 sites, from a scan of every function referencing the GameMan
+/// singleton, each one decompiled):
+///
+///   * `FUN_14067bd70`, the slot DESERIALIZER: `param_1->stayInMultipleAreaBlockId =
+///     local_50._4_4_` -- the dword at slot body+0x04, which is exactly what
+///     `er_save_loader::bnd4::slot_saved_map` reads off the file. THIS is the writer the
+///     `oracle_saved_map_c30` contract rests on, and it makes "saved map" literally true at mount.
+///   * `FUN_14067dc00`, the slot SERIALIZER: reads it back out through the getter below.
+///   * `FUN_14067afa0`: writes it when `CS::GameMan::UpdateStayInMultiplayPosition` succeeds.
+///   * `FUN_14067aac0`: resets the `stayInMultiplaySaved{Position,MapId,Rotation}` family and then
+///     stores `MakeBlockId(10,1,0,0)` here -- m10_01_00_00, the "new game default map" this repo
+///     already tracks by that name in `constants/stage2_menu_drive.rs`.
+///   * `FUN_140679560`: a one-line getter. Its consumer is `SetMoveMapStepBlockId`
+///     (`0x14067abd0`), which writes `GameMan::moveMapStepBlockId` at **+0x14**.
+///
+/// TWO CONSEQUENCES. (a) +0xc30 is the SOURCE of the map you load into, not the map you are in --
+/// so it is not "the current map"; er-reload-trace called it that until this audit and no longer
+/// does. (b) During play it is stay-in-multiplay bookkeeping, so a mid-session read is not a
+/// "saved map" at all. Every current consumer reads it inside the load window, where writer 1
+/// owns it.
+///
+/// The offset is derived from the adjacent typed vector layout rather than retained as a raw
+/// literal; the ctor store `movl $-1,0xc30(%rsi)` at `0x14067628d` (1.17 `0x1406770dd`) is pinned
+/// in `scripts/check-object-field-offsets-1170.py`.
 #[cfg(windows)]
 pub const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
     core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
@@ -1646,7 +1784,9 @@ pub enum TitleSessionRva {
     SaveSafeBeginLogoSession = 0x4588e98,
     SessionA = 0x3d687a0,
     SessionB = 0x3d67bd0,
-    MoveMapSession = 0x47ef360,
+    /// `g_GxDrawContext`, the GXSR render draw-context singleton -- NOT a session and
+    /// NOT null at the title. See `GX_DRAW_CONTEXT_SINGLETON_RVA` for the evidence.
+    GxDrawContextSingleton = 0x47ef360,
 }
 
 /// Partial SimpleTitleStep owner layout used by the zero-input title/menu driver.
@@ -1754,12 +1894,41 @@ pub enum OwnStepperPhase {
 pub enum ProfileLoadMenuRva {
     ProfileSlotActivate = 0x262250,
     MenuItemUpdate = 0x007ad1c0,
-    ProfileLoadSelectorTick = 0x826d50,
+    /// `vt[2]` (slot +0x10) of the `CS::MenuJobWithContext<LoadJobContext, lambda>` vtable
+    /// below -- the load job's Run/Execute virtual, NOT a per-frame "selector tick".
+    ///
+    /// CORRECTED 2026-08-30 (was `ProfileLoadSelectorTick`). Evidence, 1.16.2 dump: the
+    /// function at `0x140826d50` has NO callers and only three DATA xrefs (it is reached
+    /// through a vtable); Ghidra types it `MenuJobResult *FUN_140826d50(longlong this,
+    /// MenuJobResult *out, undefined8 *time, ...)` and its body calls
+    /// `MenuJobResult::SetResult(out, Failed, 0)` before dispatching through
+    /// `(**(this + 0x70))(...)`. Taking a `MenuJobResult` out-param and setting the job
+    /// result is the MenuJob Run signature. One of its DATA xrefs is `0x142ac71f0`, which
+    /// is `SelectorStepVtable`'s address + 0x10 -- i.e. this function IS that vtable's
+    /// third slot, and the RTTI on that vtable names the class (see below).
+    ///
+    /// `er-quickload`'s `SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA` was the accurate name of the
+    /// two; this declaration is renamed to agree with it without colliding (an exact name
+    /// match would emit a byte-identical 1.17 ledger row, which
+    /// `check-no-duplicate-ledger-rows.py` R4 forbids).
+    LoadJobRun = 0x826d50,
     MenuDeser = 0x0082c240,
     CsMenuCtor = 0x009060d0,
     MenuMemberFuncJobRun = 0x9aaba0,
     MenuLoadGameFunctorVtable = 0x02ac3ea8,
-    SelectorStepVtable = 0x2ac71e0,
+    /// Vtable of `CS::MenuJobWithContext<LoadJobContext, lambda_1af212c996936ea2325f4f98c4366979>`
+    /// -- a MenuJob vtable, NOT a "selector step" vtable.
+    ///
+    /// CORRECTED 2026-08-30 (was `SelectorStepVtable`). Proven by RTTI rather than
+    /// inference, read out of `eldenring-deobf.bin` (flat image, `VA = 0x140000000 + file
+    /// offset`, shift 0): `vtable[-1]` at `0x142ac71d8` -> complete-object-locator
+    /// `0x1432fc230` (signature 1) -> `COL+0x0c` type-descriptor RVA `0x3ca5d40` ->
+    /// `TD+0x10` mangled name
+    /// `.?AV?$MenuJobWithContext@VLoadJobContext@?A0x7c8d539b@@V<lambda_...>@@@CS@@`.
+    /// Slots: `vt[0]=0x140744d90`, `vt[1]=0x140826100`, `vt[2]=0x140826d50` (== `LoadJobRun`).
+    ///
+    /// `er-quickload`'s `MENUJOB_LOADGAME_VTABLE_DUMP_VA` was the accurate name of the two.
+    MenuJobLoadContextVtable = 0x2ac71e0,
     ProfileLoadDialogVtable = 0x2b229f8,
     /// `CS::ProfileLoadDialog::SelectSaveSlot(this, int slot) -> bool` -- the game's OWN
     /// "park the list cursor on the row that describes slot N". Its constructor
@@ -1867,11 +2036,13 @@ pub enum TitleDialogRva {
     Cleanup = 0x9a8890,
     OpenMenu = 0x9b24e0,
     Vtable = 0x2b26468,
-    ActiveScreenArray = 0x3d6d8d0,
+    /// 10-slot `CS::CSMenuProfModelRend*` table -- profile portrait renderers, NOT screens.
+    /// See `PROFILE_MODEL_REND_TABLE_RVA` for the evidence.
+    ProfileModelRendTable = 0x3d6d8d0,
 }
 
 #[repr(C)]
-pub struct ActiveScreenArrayLayout {
+pub struct ProfileModelRendTableLayout {
     pub slots: [usize; 10],
 }
 

@@ -84,10 +84,33 @@ pub const WORLD_INFO_OWNER_RESIDENT_BLOCKS_RVA: usize = 0x66_9af0;
 /// `MsbResCap`.
 pub const WORLD_INFO_OWNER_GET_MSB_RES_CAP_RVA: usize = 0x66_9ea0;
 /// `FieldArea+0x10` -- the owned `WorldInfoOwner` pointer used by the previous typed
-/// `FieldArea::instance().world_info_owner` path. Both the CI-pinned and local binding layouts pin
-/// this field at the same offset.
+/// `FieldArea::instance().world_info_owner` path.
+///
+/// MEASURED. The previous note here said only that "both the CI-pinned and local binding layouts
+/// pin this field at the same offset", which is two copies of one declaration agreeing with each
+/// other -- the exact shape that left `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` wrong for its whole
+/// life. The instructions: in `CS::FieldArea::FieldArea` (`0x140618bf0`) the constructor's first
+/// act after installing the vtable is
+///
+/// ```text
+///   140618c2c  call 0x14066d5c0          ; rcx = the WorldInfoOwner* argument
+///   140618c31  mov  [rsi+0x10], rax      ; this->worldInfoOwner
+///   140618c35  mov  [rsi+0x18], r14      ; this->worldInfoOwner2
+/// ```
+///
+/// with `rsi = this`. `FUN_14066d5c0` is a one-shot ownership claim: it sets a flag inside the
+/// argument's `worldres` and returns the ARGUMENT (it `DLPanic`s in `WorldRes.cpp:0x482` on a
+/// second claim), so at construction `+0x10` and `+0x18` receive the SAME pointer -- the "owned"
+/// in the name is about the claim, not about a different object.
+///
+/// It has not moved: that constructor aligns 311/311 instructions against its 1.17 counterpart
+/// (`0x140619a40`) with 101 `this`-relative offsets and ZERO moved. Re-measured every run by
+/// `scripts/check-object-field-offsets-1170.py`.
 pub const FIELD_AREA_WORLD_INFO_OWNER_OFFSET: usize = 0x10;
-/// `FieldArea+0x18` -- `worldInfoOwner2`, the owner the native lookup calls above take.
+/// `FieldArea+0x18` -- `worldInfoOwner2`, the owner the native lookup calls above take. Written by
+/// the very next instruction of the constructor above (`mov [rsi+0x18],r14` at `0x140618c35`), and
+/// held across 1.17 by the same 311/311 alignment. It is the frozen negative for the row above: a
+/// walk that confused the two adjacent `WorldInfoOwner*` members would land here.
 pub const FIELD_AREA_WORLD_INFO_OWNER2_OFFSET: usize = 0x18;
 /// `CSMsbPoint+0x18` -- `shapeData`.
 pub const CS_MSB_POINT_SHAPE_DATA_OFFSET: usize = 0x18;
@@ -409,6 +432,103 @@ mod native {
     /// did not come from the executable and the object is not what we think it is.
     const MAX_IMAGE_SPAN: usize = 0x1000_0000;
 
+    /// The six natives this reader calls, resolved for the running build exactly once.
+    ///
+    /// # Why this is cached rather than resolved per read
+    ///
+    /// ON 1.17 IT IS NOT RESOLVABLE AT ALL, AND THAT IS NOT A BUG.
+    /// `docs/recon/rva-map-1162-to-1170.verified.tsv` records [`CS_MSB_POINT_CTOR_RVA`]
+    /// (`0x140cf9300`) as deliberately absent: its 1.17 pair `0x140cfa9d0` is CORRECT by 16 caller
+    /// votes -- both bodies write `.?AVDLNonCopyable@DLUT@@`'s vtable -- but the pair verifies
+    /// DIVERGES 0.09 on an Arxan entry-jmp whose targets differ over inert stack-shuffle spills,
+    /// and writing a row that weak would make `refuted_sources()` drop the constructor from the
+    /// CALL map as well. So the address is genuinely unmapped, this reader is genuinely
+    /// unavailable on 1.17, and the honest behaviour is to say so once and stop asking.
+    ///
+    /// Before this cache it asked on every map open: the 2026-08-30 21:16 session's
+    /// `er-invasion-warp.log` carries 628 lines of
+    /// `ADDRESS REFUSED (CS_MSB_POINT_CTOR_RVA): 0x140cf9300`, each preceded by a live
+    /// `GetPointDataSectionItemCount` call into the game whose answer was then thrown away.
+    ///
+    /// # What is NOT changed by being unavailable
+    ///
+    /// [`read_map_invasion_points`] still answers `None`, which means "no answer yet" and leaves
+    /// the block UNOBSERVED. That is deliberate and must stay: an observed-and-empty block both
+    /// denies the map its precise pins AND retracts the provisional whole-dungeon marker standing
+    /// in for them, so degrading to "this map has no invasion points" would make dungeon icons
+    /// disappear. Unavailable means the precise pins never arrive and the provisional markers
+    /// stand, which is the correct fallback.
+    ///
+    /// The base is a process constant (`GetModuleHandleA(NULL)`), so resolving against the first
+    /// caller's `base` is sound for every later one.
+    struct PointApi {
+        get_count: GetPointCountFn,
+        ctor: MsbPointCtorFn,
+        dtor: MsbPointDtorFn,
+        has_no_shape_data: HasNoShapeDataFn,
+        compute_position: OutVectorFn,
+        get_angle: OutVectorFn,
+    }
+
+    /// `None` once any of the six is unmapped on the running build. Resolved on first use.
+    static POINT_API: std::sync::OnceLock<Option<PointApi>> = std::sync::OnceLock::new();
+
+    /// The cached natives, or `None` on a build where this reader cannot run.
+    ///
+    /// Each `game_call` here logs its own refusal through the address logger the DLL installed --
+    /// bounded per address by `er_game_base::game_build`, and reached at most once per process
+    /// from here, which is the "say so once" half. The `OnceLock` is the "stop asking" half.
+    fn point_api(base: usize) -> Option<&'static PointApi> {
+        POINT_API
+            .get_or_init(|| {
+                Some(PointApi {
+                    get_count: unsafe {
+                        core::mem::transmute::<usize, GetPointCountFn>(crate::game_call(
+                            base,
+                            GET_POINT_DATA_SECTION_ITEM_COUNT_RVA,
+                            "GET_POINT_DATA_SECTION_ITEM_COUNT_RVA",
+                        )?)
+                    },
+                    ctor: unsafe {
+                        core::mem::transmute::<usize, MsbPointCtorFn>(crate::game_call(
+                            base,
+                            CS_MSB_POINT_CTOR_RVA,
+                            "CS_MSB_POINT_CTOR_RVA",
+                        )?)
+                    },
+                    dtor: unsafe {
+                        core::mem::transmute::<usize, MsbPointDtorFn>(crate::game_call(
+                            base,
+                            CS_MSB_POINT_DTOR_RVA,
+                            "CS_MSB_POINT_DTOR_RVA",
+                        )?)
+                    },
+                    has_no_shape_data: unsafe {
+                        core::mem::transmute::<usize, HasNoShapeDataFn>(crate::game_call(
+                            base,
+                            CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA,
+                            "CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA",
+                        )?)
+                    },
+                    compute_position: unsafe {
+                        core::mem::transmute::<usize, OutVectorFn>(crate::game_call(
+                            base,
+                            CS_MSB_POINT_COMPUTE_POSITION_RVA,
+                            "CS_MSB_POINT_COMPUTE_POSITION_RVA",
+                        )?)
+                    },
+                    get_angle: unsafe {
+                        core::mem::transmute::<usize, OutVectorFn>(crate::game_call(
+                            base,
+                            CS_MSB_POINT_GET_ANGLE_RVA,
+                            "CS_MSB_POINT_GET_ANGLE_RVA",
+                        )?)
+                    },
+                })
+            })
+            .as_ref()
+    }
+
     /// Whether `cap` is plausibly a live `MsbResCap` rather than a stale or uninitialised slot.
     ///
     /// `WorldInfo::world_block_info()` is the engine's block LIST, not a list of blocks whose
@@ -472,19 +592,17 @@ mod native {
         block: BlockKey,
         msb_res_cap: usize,
     ) -> Option<MapPointRead> {
+        // Asked once per process, not once per map open -- and answered `None` for the whole
+        // session on a build where any of the six natives is unmapped. See [`point_api`]: on 1.17
+        // the CSMsbPoint constructor has no verified row, so this reader is genuinely unavailable
+        // and used to refuse 628 times rather than once.
+        let api = point_api(base)?;
         if !unsafe { msb_res_cap_looks_live(base, msb_res_cap) } {
             // Not loaded. Say so, so the caller leaves this block unobserved and looks again once
             // the player actually goes there.
             return None;
         }
-        let get_count: GetPointCountFn = unsafe {
-            core::mem::transmute(crate::game_call(
-                base,
-                GET_POINT_DATA_SECTION_ITEM_COUNT_RVA,
-                "GET_POINT_DATA_SECTION_ITEM_COUNT_RVA",
-            )?)
-        };
-        let count = unsafe { get_count(msb_res_cap, MSB_POINT_TYPE_INVASION_POINT) };
+        let count = unsafe { (api.get_count)(msb_res_cap, MSB_POINT_TYPE_INVASION_POINT) };
         if count > MAX_POINTS_PER_MAP {
             // NOT an answer. The doc above this constant says such a map "is skipped and reported",
             // but this branch used to fall in with `count <= 0` and return an empty vector -- which
@@ -502,42 +620,6 @@ mod native {
             });
         }
 
-        let ctor: MsbPointCtorFn = unsafe {
-            core::mem::transmute(crate::game_call(
-                base,
-                CS_MSB_POINT_CTOR_RVA,
-                "CS_MSB_POINT_CTOR_RVA",
-            )?)
-        };
-        let dtor: MsbPointDtorFn = unsafe {
-            core::mem::transmute(crate::game_call(
-                base,
-                CS_MSB_POINT_DTOR_RVA,
-                "CS_MSB_POINT_DTOR_RVA",
-            )?)
-        };
-        let has_no_shape_data: HasNoShapeDataFn = unsafe {
-            core::mem::transmute(crate::game_call(
-                base,
-                CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA,
-                "CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA",
-            )?)
-        };
-        let compute_position: OutVectorFn = unsafe {
-            core::mem::transmute(crate::game_call(
-                base,
-                CS_MSB_POINT_COMPUTE_POSITION_RVA,
-                "CS_MSB_POINT_COMPUTE_POSITION_RVA",
-            )?)
-        };
-        let get_angle: OutVectorFn = unsafe {
-            core::mem::transmute(crate::game_call(
-                base,
-                CS_MSB_POINT_GET_ANGLE_RVA,
-                "CS_MSB_POINT_GET_ANGLE_RVA",
-            )?)
-        };
-
         let mut points = Vec::with_capacity(count as usize);
         for index in 0..count {
             // 16-byte aligned so the engine's MOVAPS-using vector writes are legal, and sized from
@@ -548,7 +630,7 @@ mod native {
             let point = core::ptr::from_mut(&mut storage).cast::<u8>();
 
             unsafe {
-                ctor(
+                (api.ctor)(
                     point,
                     msb_res_cap,
                     0,
@@ -558,13 +640,13 @@ mod native {
             }
             // A point with no shape data has no position to read. The engine's own consumer skips
             // these; reading through one would be a wild dereference.
-            let usable = !unsafe { has_no_shape_data(point.cast_const()) };
+            let usable = !unsafe { (api.has_no_shape_data)(point.cast_const()) };
             if usable {
                 let mut position = FloatVector4::default();
                 let mut angle = FloatVector4::default();
                 unsafe {
-                    compute_position(point.cast_const(), &raw mut position);
-                    get_angle(point.cast_const(), &raw mut angle);
+                    (api.compute_position)(point.cast_const(), &raw mut position);
+                    (api.get_angle)(point.cast_const(), &raw mut angle);
                 }
                 points.push(MsbInvasionPoint {
                     block,
@@ -573,7 +655,7 @@ mod native {
                     yaw: angle.y,
                 });
             }
-            unsafe { dtor(point) };
+            unsafe { (api.dtor)(point) };
         }
         Some(MapPointRead {
             reported: count,

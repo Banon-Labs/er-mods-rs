@@ -80,6 +80,58 @@ def sidecar_for(dll: Path) -> Path:
     return dll.with_suffix(".toml")
 
 
+# The OTHER slot channel. `er-quickload-autoload.txt` sits in the game directory, no launcher owns
+# it, and several probe scripts here write it and do not always clean it up -- so it outlives the
+# run that made it and keeps steering later launches from a file nobody remembers.
+AUTOLOAD_REQUEST_FILE = "er-quickload-autoload.txt"
+
+
+def autoload_file_slot(game_dir: Path) -> tuple[Path, int, str] | None:
+    """The game-directory autoload request file's `slot=`, if it names one.
+
+    Returns `(path, line_number, line)` so the refusal can quote the exact line rather than make
+    the reader go looking for it.
+    """
+    path = game_dir / AUTOLOAD_REQUEST_FILE
+    try:
+        contents = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line_no, raw in enumerate(contents.splitlines(), 1):
+        line = raw.strip()
+        key, _, value = line.partition("=")
+        if key.strip() == "slot" and value.strip():
+            return (path, line_no, line)
+    return None
+
+
+def refuse_stale_slot_channel(game_dir: Path) -> None:
+    """A `--save-default` run must not launch while a second slot channel is open.
+
+    `--save-default` writes `save_file_default = true`, and the sidecar's whole promise is that the
+    DLL resolves the active Steam user's own container with no inherited preference. A `slot=` in
+    the game-directory autoload request file is a preference the sidecar cannot see -- it lives in
+    a different file, read by a different code path -- so the promise was only ever half kept.
+
+    Run br-20260831-014208-b1d6 is what that costs: a nine-day-old `slot=0` from a probe script
+    armed `OWN_STEPPER_SLOT`, the load correctly used the container's persisted slot 2, and the
+    loading screen showed slot 0's face for the whole window. The DLL now discards this file's slot
+    when `save_file_default` is set, so a launch through it is no longer wrong -- but a launcher
+    that saw the contradiction and said nothing is how it stayed invisible for nine days. Refuse,
+    name the file and the line, and let the user decide which channel they meant.
+    """
+    found = autoload_file_slot(game_dir)
+    if found is None:
+        return
+    path, line_no, line = found
+    raise RuntimeError(
+        f"--save-default promises the active Steam user's own container with no slot preference, "
+        f"but {path}:{line_no} still names one: '{line}'. That file is a SECOND slot channel the "
+        f"sidecar cannot reach. Delete it (rm -f '{path}'), or drop --save-default and pass the "
+        f"save you actually mean."
+    )
+
+
 def artifact_paths(closure: dict, target_dir: Path) -> list[Path]:
     return [target_dir / artifact for artifact in closure["artifacts"]]
 
@@ -228,6 +280,9 @@ def generate(args) -> dict:
     save = json.loads(Path(args.save).read_text(encoding="utf-8")) if args.save else None
     if args.save_default:
         save = None
+
+    if args.save_default:
+        refuse_stale_slot_channel(steam_game_dir())
 
     target_dir = Path(args.target_dir).resolve()
     dlls = artifact_paths(closure, target_dir)
@@ -393,6 +448,32 @@ def selftest() -> int:
             f"default mode assigns only the explicit unset key "
             f"(got {sorted(assigned_keys(default))})",
         )
+
+        # THE SECOND SLOT CHANNEL. `save_file_default` clears the sidecar/TOML slot, and cannot
+        # reach the game-directory autoload request file at all -- so a stale `slot=` there kept
+        # steering "default container" runs (br-20260831-014208-b1d6).
+        game = tmp / "Game"
+        game.mkdir()
+        check(autoload_file_slot(game) is None, "no autoload request file means no slot channel")
+
+        stale = game / AUTOLOAD_REQUEST_FILE
+        stale.write_text("method=both\nslot=0\nrequire_title_bootstrap=false\n", encoding="utf-8")
+        found = autoload_file_slot(game)
+        check(found is not None and found[1] == 2, "the offending line is located, not just found")
+        try:
+            refuse_stale_slot_channel(game)
+            check(False, "--save-default must refuse while a stale slot channel is open")
+        except RuntimeError as err:
+            check(
+                AUTOLOAD_REQUEST_FILE in str(err) and "slot=0" in str(err),
+                "the refusal names the file and quotes the line the user has to act on",
+            )
+
+        # `slot=` with no value is not a preference, and `own_load=1` is not a slot. Neither may
+        # block a default-save run: a refusal that fires on unrelated keys gets routed around.
+        stale.write_text("own_load=1\nslot=\n", encoding="utf-8")
+        check(autoload_file_slot(game) is None, "an empty or absent slot is not a slot channel")
+        refuse_stale_slot_channel(game)
 
     print("selftest:", "PASS" if ok else "FAIL")
     return EXIT_OK if ok else EXIT_ERROR

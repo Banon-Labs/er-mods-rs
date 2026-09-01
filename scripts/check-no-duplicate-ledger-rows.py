@@ -77,7 +77,6 @@ BASE = 0x140000000
 CURATED = "curated"  # one row per source, full stop
 GENERATED = "generated"  # one row per DECLARING NAME, so repeats are expected
 SINGLE_COLUMN = "single-column"  # `quarantined()` reads column 0 only; a repeat is inert
-INERT = "inert"  # declared in build.rs and not read (`let _ = AUDITED_DETOURS;`)
 
 # Keyed on BASENAME, because build.rs spells the paths relative to its own crate dir.
 LEDGER_KIND = {
@@ -86,7 +85,6 @@ LEDGER_KIND = {
     "rva-map-1162-to-1170.needed-verified.tsv": GENERATED,
     "rva-map-1162-to-1170.data.tsv": GENERATED,
     "rva-1170-quarantine.tsv": SINGLE_COLUMN,
-    "rva-1170-detour-audited.tsv": INERT,
 }
 
 # `const NAME: &str = "../../docs/recon/whatever.tsv";` in build.rs.
@@ -170,7 +168,7 @@ def check_ledgers(ledgers: list[tuple[str, str, str]]) -> tuple[list[str], dict]
     by_source_globally: dict[int, dict[str, set[int]]] = collections.defaultdict(dict)
 
     for const_name, path, kind in ledgers:
-        if kind in (INERT, SINGLE_COLUMN):
+        if kind == SINGLE_COLUMN:
             continue
         rows = read_rows(path)
         stats["rows"] += len(rows)

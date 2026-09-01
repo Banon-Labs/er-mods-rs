@@ -110,7 +110,20 @@ OWNERS: dict[str, object] = {
     "INGAMESTEP_OVERRIDE_TRIGGER_OFFSET": ("CS::InGameStep", "CS::TitleStep"),
     "INGAMESTEP_OVERRIDE_GUARD_OFFSET": ("CS::InGameStep", "CS::TitleStep"),
     "INGAMESTEP_OVERRIDE_TARGET_OFFSET": ("CS::InGameStep", "CS::TitleStep"),
-    "CS_SYSTEM_STEP_CURRENT_STATE_OFFSET": "CS::CSSystemStep",
+    # ADJUDICATED 2026-08-31: 0x48, and it had been 0x40 since introduction -- not drift, an
+    # offset that was never a field. The step-template constructor (1.16.2 0x140dec6d0 /
+    # 1.17 0x140dee4d0, 57/57 aligned) zeroes currentState+requestedState as one qword at
+    # +0x48 in BOTH builds and never touches 0x40, which holds
+    # FD4ComponentAttachSystem_Step::allocator. Frozen in
+    # scripts/check-object-field-offsets-1170.py and pinned there to 0x48.
+    "CS_SYSTEM_STEP_CURRENT_STATE_OFFSET": "CS::CSSystemStep",  # 0x48 CLEARED
+    # The same field under the boot-progress crate's local alias, which is a straight
+    # `= er_game_base::rva::CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` and whose doc comment names
+    # `CS::CSSystemStep` outright. It went unattributed the moment the shared constant moved
+    # 0x40 -> 0x48, because the ratchet keys on (name, file, VALUE) -- so a corrected offset
+    # enters as a NEW row and the gate refuses growth. Attributing the alias is the documented
+    # exit from that, not a refresh.
+    "BOOT_SYS_STEP_STATE_OFFSET": "CS::CSSystemStep",
     # --- menus --------------------------------------------------------------------------------
     "GRID_CONTROL_VIEW_COL_BASE_OFFSET": "CS::GridControl",
     "GRID_CONTROL_VIEW_ROW_BASE_OFFSET": "CS::GridControl",
@@ -196,6 +209,15 @@ OWNERS: dict[str, object] = {
     "SERVER_CONNECTION_ENABLED_BC9_OFFSET": "CS::GameMan",
     "GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET": "CS::GameMan",
     "GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET": "CS::GameMan",
+    # Owner named by Ghidra's own decompilation of the two functions that read it, which spell it
+    # `(GLOBAL_GameMan->field479_0xdd0).string.length` -- 0xdf0 is the length member of the
+    # `DLString<wchar_t>` inside the `FD4FilePathBase` at GameMan+0xdd0. Deliberately absent from
+    # the WITNESSES table below: `GameMan::GameMan` reaches the whole 0xdd0..0xe08 region through
+    # `lea rdi,[rsi+0xdd0]` and never writes 0xdf0 through `this`, so a displacement census keyed
+    # on the ctor's base register finds nothing and a witness row here would fail, not confirm.
+    # It carried two other names -- `OWNER_DF0_OFFSET` and `DF0_OFFSET`, both in
+    # `bootstrap_drive.rs`, both claiming a mechanism it does not have -- until 2026-08-31.
+    "GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET": "CS::GameMan",
     # --- 2026-08-31 unattributed-owner sweep --------------------------------------------------
     # Each of these was UNATTRIBUTED until its own doc comment was read at the definition site;
     # every class below is RTTI-paired in both images, and the verdict beside it is what

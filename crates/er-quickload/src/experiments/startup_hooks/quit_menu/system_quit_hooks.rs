@@ -13,7 +13,7 @@ pub(crate) fn install_system_quit_continue_confirm_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(CONTINUE_CONFIRM_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(CONTINUE_CONFIRM_RVA as u32) else {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve continue_confirm rva 0x{CONTINUE_CONFIRM_RVA:x}"
         ));
@@ -103,7 +103,7 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
+    let Ok(addr) = game_rva_for_hook(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
         append_autoload_debug(format_args!(
             "child-finish-request: failed to resolve rva 0x{EZ_CHILD_STEP_REQUEST_FINISH_RVA:x}"
         ));
@@ -658,7 +658,7 @@ pub(crate) fn mh_install_hook_once(
 }
 
 pub(crate) fn install_system_quit_profile_load_activate_hook() {
-    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog activation rva 0x{SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA:x}"
         ));
@@ -676,7 +676,7 @@ pub(crate) fn install_system_quit_profile_load_activate_hook() {
 }
 
 pub(crate) fn install_system_quit_profile_load_confirmed_hook() {
-    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog confirmed-load rva 0x{SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA:x}"
         ));
@@ -694,7 +694,7 @@ pub(crate) fn install_system_quit_profile_load_confirmed_hook() {
 }
 
 pub(crate) fn install_system_quit_profile_load_job_run_hook() {
-    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog load-job Run rva 0x{SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA:x}"
         ));

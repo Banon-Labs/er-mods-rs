@@ -40,9 +40,13 @@ use super::*;
 // SAVE-SOURCE OVERRIDE / DEFAULT-SAVE FALLBACK
 // ===========================================================================
 //
-// Explicit save sources still come from `ER_QUICKLOAD_SAVE_FILE` or DLL-adjacent
-// `er-quickload.toml` (`save_file = "..."`). If neither is provided, the product path
-// now intentionally falls back to the active Steam user's default save file at
+// An explicit save source comes from `save_file = "..."` in the GAME-DIRECTORY
+// `er-quickload.toml`, optionally overridden by the per-run DLL-adjacent sidecar
+// (`<dll-stem>.toml`, `config.rs::apply_sidecar_overlay`) -- whose `save_file_default = true`
+// deliberately CLEARS it. `ER_QUICKLOAD_SAVE_FILE` used to be a third route and was REMOVED, not
+// deprecated; do not reintroduce it in prose or in a log line, because naming it tells a reader
+// to go set a variable that does nothing. If no source survives, the product path
+// intentionally falls back to the active Steam user's default save file at
 // `%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2`; if that default save does not exist,
 // the DLL prompts with the missing-save picker (OK -> choose a save, Cancel -> exit)
 // instead of drifting into a no-character menu. Pure telemetry/observe-only mode
@@ -718,11 +722,16 @@ fn env_save_file_path() -> Option<PathBuf> {
 type SaveRedirectSource = er_save_redirect::SaveSourcePlan;
 
 fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
+    // The path is named, and the reason is spelled out. The `{err:?}` this replaced printed
+    // `MissingOrNotFile` for a save on a dropped network mount -- accurate about the variant,
+    // wrong about the world, and it named neither the file nor the OS error.
+    let shown = path.display().to_string();
     match er_save_redirect::validate_save_file_path(path) {
         Ok(path) => Some(path),
         Err(err) => {
             append_autoload_debug(format_args!(
-                "save-override: rejected save source during shared validation: {err:?}"
+                "save-override: REJECTED save source '{shown}' -- {}",
+                err.describe()
             ));
             None
         }
@@ -1258,7 +1267,8 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
         SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DEFAULT_USER, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-override: DEFAULT-USER-SAVE -- no ER_QUICKLOAD_SAVE_FILE/save_file configured; using active SteamID64 {steam_id} ({reason}) default save '{}' with no redirect",
+            "save-override: DEFAULT-USER-SAVE -- {}; using active SteamID64 {steam_id} ({reason}) default save '{}' with no redirect",
+            configured_save_file_absence_reason(),
             file.display()
         ));
         return SaveOverrideMode::DefaultUserSave;
@@ -1267,7 +1277,7 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no usable autoload save (configured save missing/invalid, or no readable active default among {:?} exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
+        "save-override: no usable autoload save (a configured save was rejected -- the REJECTED line above names the file and the exact reason -- or there is no readable active default among {:?} at exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
         default_save_boot_container_names(),
         SAVE_OVERRIDE_EXPECTED_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
@@ -1291,9 +1301,8 @@ pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
     // PEB-register. (Compatibility flag: early-Seamless disambiguation now depends on the latch
     // being populated by settle time -- see deprecate report; verify on a Seamless launch.)
     let seamless = crate::telemetry::seamless_coop_loaded();
-    append_autoload_debug(format_args!(
-        "save-override: save-picker mode from ERSC module latch seamless={seamless} reason={reason}"
-    ));
+    // Logged ON CHANGE with an occurrence count -- this is re-derived per call from hot paths.
+    crate::telemetry::log_save_picker_mode(seamless, reason);
     seamless
 }
 

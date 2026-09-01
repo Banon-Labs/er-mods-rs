@@ -16,6 +16,25 @@ use crate::prelude::*;
 /// from the readback/publish counters (which prove the head was CAPTURED, not displayed).
 pub use er_telemetry_core::counters::PORTRAIT_ONTO_DRAW_HITS;
 
+/// PER-WINDOW twin of [`PORTRAIT_ONTO_DRAW_HITS`], incremented at the SAME site so the two can never
+/// disagree about what "displayed" means.
+///
+/// THE DEAD COUNTER (run br-20260831-160354-2513). This static had NO writer anywhere in the
+/// workspace -- only a `.load()` in `portrait_worker` and a `.swap(0)` in the window reset -- so it
+/// read 0 unconditionally, and three separate outputs reported that 0 as fact:
+///   1. `present-overlay: loading-portrait window reset ... displayed {display} frames`, which said
+///      `displayed 0` for a window whose `PORTRAIT-LOADWIN VERDICT` said `displayed=270`;
+///   2. `oracle_portrait_display_frames_last_window`, 0 in every telemetry snapshot ever archived
+///      under `save-files/` -- the corroboration that this was structural, not a one-run fluke;
+///   3. `first_keyed=` (and `oracle_portrait_first_keyed_display_last_window`), which
+///      `portrait_worker` stamps FROM this counter, so every window claimed its first keyed publish
+///      landed on display frame 0 -- i.e. instantly -- while `oracle_portrait_confirm_to_publish_ms`
+///      measured 3609 ms for the same window.
+///
+/// Incrementing it here repairs all three at once, because all three ultimately want the number this
+/// line produces: overlay frames on which a portrait was actually blended.
+pub use er_telemetry_core::counters::PROFILE_DISPLAY_FRAMES_WINDOW;
+
 /// Last measured alpha-coverage of the captured portrait, in percent of the full source area (telemetry
 /// `oracle_portrait_alpha_cover_pct`). The captured head sits in a central region of the square source with
 /// transparent padding around it; this is how much of that square the head's bounding box actually fills, so
@@ -317,6 +336,10 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         }
     }
     PORTRAIT_ONTO_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
+    // Same event, per-window. Kept adjacent on purpose: the window reset's `displayed` and the
+    // `PORTRAIT-LOADWIN VERDICT`'s `displayed=` must be the same measurement, and the only way to
+    // guarantee that is to count them at one site. See PROFILE_DISPLAY_FRAMES_WINDOW's doc above.
+    PROFILE_DISPLAY_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
     true
 }
 

@@ -167,6 +167,9 @@ sess = dev.attach(procs[0].pid)  # usually one process named Gadget
 js = r'''
 function hx(p) { return p.isNull() ? '0x0' : p.toString(); }
 function rptr(p) { try { return p.readPointer(); } catch (_) { return ptr(0); } }
+// For COUNTS, not addresses. Decimal, and an unreadable read says so instead of returning a
+// number: `hx(rptr(...))` renders 0 as '0x0', so a failed read and a real zero print identically.
+function rlen(p) { try { return p.readU64().toString(); } catch (_) { return '<unreadable>'; } }
 rpc.exports = {
   snap: function () {
     const base = Process.getModuleByName('eldenring.exe').base;
@@ -184,7 +187,7 @@ rpc.exports = {
         bf5: gm.add(0xbf5).readU8(),
         ac8: '0x' + (gm.add(0xac8).readU32() >>> 0).toString(16),
         c30: '0x' + (gm.add(0xc30).readU32() >>> 0).toString(16),
-        df0: hx(rptr(gm.add(0xdf0))),
+        pathLenDf0: rlen(gm.add(0xdf0)),
       };
     }
     return out;
@@ -205,16 +208,29 @@ PY
 - `GameDataMan` global RVA: `0x3d5df38`
 - menu/input manager global RVA: `0x3d6b7b0`
 - title proceed gate RVA: `0x3d856a0`
-- important `GameMan` offsets:
-  - `+0xb72` save requested byte
-  - `+0xb73` save-request companion byte
-  - `+0xb78` requested save slot load / warp target
-  - `+0xb80` load FSM
-  - `+0xbc4` return-title predicate
-  - `+0xbf5` loading mode
-  - `+0xac8` load target map id
-  - `+0xc30` current/saved map id
-  - `+0xdf0` resident device pointer
+- important `GameMan` offsets. The **member name** column is Ghidra's curated 1.16.2 `GameMan`
+  type (`getStructure GameMan` on `:8765`), which is the authority here; where this repo's own
+  constant says something different, both are given and the repo's is marked. Read that column
+  before treating a field as the thing its repo constant is named after.
+
+  | offset | Ghidra 1.16.2 member | type | this repo has also called it |
+  |---|---|---|---|
+  | `+0x10`  | `warpRequested`             | `bool`    | `GAME_MAN_CALL_FOR_WARP_OFFSET` |
+  | `+0xac0` | `saveSlot`                  | `int`     | -- |
+  | `+0xac8` | `loadTargetMapId`           | `BlockId` | -- |
+  | `+0xb72` | `saveRequested`             | `bool`    | -- |
+  | `+0xb73` | *(unnamed)*                 | `undefined` | "save-request companion byte" -- our RE, not Ghidra's |
+  | `+0xb78` | `requestedSaveSlotLoad`     | `int`     | "...or warp target" -- an extra claim the type does not make |
+  | `+0xb80` | `saveState`                 | `int`     | `GAME_MAN_SAVE_STATE_B80_OFFSET` -- FIXED 2026-08-31, was `LOAD_FSM` / `LOAD_PHASE` / `LOAD_IN_PROGRESS` in three crates. Both lanes stamp it: SAVE/preview = 1, LOAD = 2, resident = 3. The game names it itself in `IsSaveState1` (`0x14067a010`) and `IsSaveState2` (`0x140679ff0`) |
+  | `+0xb98` | *(unnamed)* `DLDateTime`    | 16 bytes  | **`+0xb98` and `+0xba0` are ONE object**, `FILETIME timeu64` + `TimeStructHighPartUnion packed_time`, not two fields |
+  | `+0xbc4` | *(unnamed)*                 | `int`     | "return-title predicate" / "quit phase" -- our RE, not Ghidra's |
+  | `+0xbc8` | `isInOnlineMode`            | `bool`    | -- |
+  | `+0xbc9` | `serverConnectionEnabled`   | `bool`    | -- |
+  | `+0xbca` | `eventWorldType`            | `byte`    | `GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET` -- FIXED 2026-08-31, was `SUBMIT_GATE_BCA`. Accessors `EventWorldType` (`0x140679820`) / `SetWorldEventType` (`0x14067aeb0`); `IsMyWorld` tests it `== 0` |
+  | `+0xbf5` | `loadingScreenTextState`    | `bool`    | `GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET` -- FIXED 2026-08-31, was "loading mode". It is a BOOL that decides whether loading-screen mode 2 survives (`FUN_14067a320`); the mode is that function's argument. Ctor default 1 |
+  | `+0xc30` | `stayInMultipleAreaBlockId` | `BlockId` | **"current map" is FIXED** (2026-08-31) -- it is not where you are; `moveMapStepBlockId` at `+0x14` is, and `SetMoveMapStepBlockId` writes that FROM this. `GAME_MAN_SAVED_MAP_C30_OFFSET` / `oracle_saved_map_c30` are KEPT: the slot deserializer `FUN_14067bd70` writes slot body+0x04 here, so "saved map" is exactly true at mount -- but during play `FUN_14067afa0`/`FUN_14067aac0` maintain it as the stay-in-multiplay anchor, so a mid-session read is NOT a saved map |
+  | `+0xdd0` | *(unnamed)* `FD4FilePathBase` | 56 bytes | spans `0xdd0..0xe08`; its `DLString<wchar_t>` starts at `+0xdd8` |
+  | `+0xdf0` | `FD4FilePathBase.string.length` | `size_t` | **"resident device pointer"** -- it is a CHARACTER COUNT. `FUN_140679180` and `FUN_14067b100` both gate on `(GLOBAL_GameMan->field479_0xdd0).string.length != 0`, i.e. "a save path is set". Read it in decimal; hex makes a small integer look like an address |
 
 ## Poking rules
 

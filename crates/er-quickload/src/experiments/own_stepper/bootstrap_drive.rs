@@ -244,7 +244,11 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             };
             append_autoload_debug(format_args!(
                 "cold-char-mount: ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) -> [profile+8+{want_slot}]={abyte} (so 0x67b200 slot-check 0x140261cd0 passes)",
-                base + PROFILE_SLOT_ACTIVATE_RVA
+                er_game_base::mem::game_data_addr(
+                    base,
+                    PROFILE_SLOT_ACTIVATE_RVA,
+                    "PROFILE_SLOT_ACTIVATE_RVA"
+                )
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -456,7 +460,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let qd10_after = unsafe { safe_read_usize(q10_after) }.unwrap_or(null);
         append_autoload_debug(format_args!(
             "cold-char-mount: FULL-INIT slot={want_slot} b78={b78} worker=0x{worker:x} submit_ret={sret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} | q8 0x{q8_before:x}->0x{q8_after:x} [q8] 0x{qd8_before:x}->0x{qd8_after:x} q10 0x{q10_before:x}->0x{q10_after:x} [q10] 0x{qd10_before:x}->0x{qd10_after:x} (any change=ENQUEUED; none=DISCARDED) -> POLL",
-            read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+            read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET)
         ));
         // (2.4) SAVE-DIR READ-ONLY VERIFY (bd b80-cold-EXACT-dir-field-slot3-0x142410c60). The worker
         // (SLLoadSession::_Func02 0x142410cd0) -> name-builder FUN_14240d5b0 -> slot-3 0x142410c60
@@ -532,17 +536,18 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
             *((wbase + U16STRING_CAP_OFFSET) as *mut usize) = U16STRING_SSO_CAP;
         }
-        // Guard: the builder derefs the Steam interface (*0x143b48ff0) for the account id; skip the
-        // call (logging the cause) if it is null cold -- that would be hypothesis-2 (Steam not live).
-        let steam_iface = unsafe {
+        // Guard: two frames down the builder CALLS through the qword at 0x143b48ff0 (0x140e8d550
+        // -> 0x140e8d510 -> `MOV RAX,[0x143b48ff0]; CALL RAX`), so a null there is `CALL 0`. Skip
+        // the call and log the cause -- that would be hypothesis-2 (Steam not live).
+        let steam_id_call_slot = unsafe {
             safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
-                STEAM_INTERFACE_GUARD_RVA,
-                "STEAM_INTERFACE_GUARD_RVA",
+                STEAM_ID_ACCESSOR_CALL_SLOT_RVA,
+                "STEAM_ID_ACCESSOR_CALL_SLOT_RVA",
             ))
         }
         .unwrap_or(null);
-        if steam_iface != null && allocator != null {
+        if steam_id_call_slot != null && allocator != null {
             let builder: unsafe extern "system" fn(usize) = unsafe {
                 std::mem::transmute(
                     match crate::experiments::gated_game_fn(
@@ -565,7 +570,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         };
         let built_text = decode_u16(dir_data, dir_size);
         append_autoload_debug(format_args!(
-            "cold-char-mount: SAVE-DIR BUILD steam_iface=0x{steam_iface:x} allocator=0x{allocator:x} cap={dir_cap} size={dir_size} data=0x{dir_data:x} text=\"{built_text}\" (size>0 & real path = builder works cold = hypothesis-1 handler-never-ran; size=0 = Steam not live cold = hypothesis-2)"
+            "cold-char-mount: SAVE-DIR BUILD steam_id_call_slot=0x{steam_id_call_slot:x} allocator=0x{allocator:x} cap={dir_cap} size={dir_size} data=0x{dir_data:x} text=\"{built_text}\" (size>0 & real path = builder works cold = hypothesis-1 handler-never-ran; size=0 = Steam not live cold = hypothesis-2)"
         ));
         // Install on the LIVE path-DB slot-0 directory. The setter COPIES our buffer into the slot
         // entry's std::u16string at entry+0xb0 (via 0x14240dce0), so our stack wrapper can be dropped.
@@ -641,7 +646,13 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         const STATE_INDEX_GETTER_RVA: usize = 0x240a1f0;
         const OWNER_HANDLE_CONTAINER_OFFSET: usize = 0x0;
         const OWNER_HANDLE_H10_OFFSET: usize = 0x10;
-        const OWNER_DF0_OFFSET: usize = 0xdf0;
+        // NOT the owner FSM's field and NOT a handle: `GameMan + 0xdf0` is the LENGTH of the
+        // `DLString<wchar_t>` inside the `FD4FilePathBase` at `GameMan + 0xdd0` (Ghidra's 1.16.2
+        // `GameMan` type; the ctor's `lea rdi,[rsi+0xdd0]` at 0x14067644b / 1.17 0x14067729b).
+        // `0x140679180` spells its own gate `(GLOBAL_GameMan->field479_0xdd0).string.length != 0`,
+        // so "df0!=0 = warm fast-path" below means "a save path is already set". A count, printed
+        // in decimal -- rendered hex beside `owner=0x..`/`o20=0x..` it reads as an address.
+        const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
         let owner_fsm =
             er_game_base::mem::read_global_ptr(base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
         let container = if io20 != null {
@@ -675,10 +686,11 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         } else {
             -1
         };
-        let df0 = unsafe { *((gm + OWNER_DF0_OFFSET) as *const usize) };
-        let b80_at_init = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let path_len =
+            unsafe { *((gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) as *const usize) };
+        let b80_at_init = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         append_autoload_debug(format_args!(
-            "cold-char-mount: OWNER-FSM owner=0x{owner_fsm:x} o18=0x{io18:x} o20=0x{io20:x} container=[o20]=0x{container:x} h10=[o20+0x10]=0x{h10:x} h10_deep=[h10+0x10]=0x{h10_deep:x} fsm_index=0x{fsm_index:x} df0=[gm+0xdf0]=0x{df0:x} b80={b80_at_init} (idx 0x14=idle->b80=3; 0x19=container-null; df0!=0=warm fast-path)"
+            "cold-char-mount: OWNER-FSM owner=0x{owner_fsm:x} o18=0x{io18:x} o20=0x{io20:x} container=[o20]=0x{container:x} h10=[o20+0x10]=0x{h10:x} h10_deep=[h10+0x10]=0x{h10_deep:x} fsm_index=0x{fsm_index:x} path_len[gm+0xdf0]={path_len} b80={b80_at_init} (idx 0x14=idle->b80=3; 0x19=container-null; path_len!=0=save path set=warm fast-path)"
         ));
         MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);
@@ -701,7 +713,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             )
         };
         let _ = unsafe { lane() };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
         if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
             let (io10, io18, io20) = iodev_summary();
@@ -725,7 +737,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             let (io10, io18, io20) = iodev_summary();
             append_autoload_debug(format_args!(
                 "cold-char-mount: preview read RESIDENT (b80->0 after {w} lane ticks) -> LoadSaveData 0x67b200 ret={lret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> POLL",
-                read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+                read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET)
             ));
             MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
             MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);
@@ -768,7 +780,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             )
         };
         let _ = unsafe { poll(POLL_ARG, POLL_ARG) };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
         // WARM WORKER-KICK (bd b80-WARM-kick-0x14067b4e0-worker-0x140e6ec80). The cold submit
         // 0x67b1a0 only request_transitions state 0xa, so the owner-FSM node parks at idx 0x16 (an
@@ -787,8 +799,19 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // NOT a "warm load kick": 0x67b4e0 blanks the whole save container. See
             // BLANK_SAVE_CONTAINER_REQUEST_RVA. Only referenced below to suppress an unused warning.
             const WARM_LOAD_KICK_RVA: usize = BLANK_SAVE_CONTAINER_REQUEST_RVA;
-            const GAME_MAN_LOAD_HANDLE_B98_OFFSET: usize = 0xb98;
-            const GAME_MAN_LOAD_HANDLE_BA0_OFFSET: usize = 0xba0;
+            // NOT a load handle pair. `GameMan + 0xb98` is a `DLDateTime` and 0xba0 is its
+            // upper half; a second `DLDateTime` follows at 0xba8. The constructor writes both
+            // halves through a register, not through `this` --
+            //   1406761a3  lea   rbx, [rsi+0xb98]     ; 1.17 0x140676ff3
+            //   1406761aa  mov   qword [rbx], r14     ; GameMan+0xb98
+            //   1406761ad  and   qword [rbx+8], r12   ; GameMan+0xba0
+            //   1406761d7  lea   rbx, [rsi+0xba8]     ; the second DLDateTime
+            // -- so a `this`-relative census sees 0xb98 and 0xba8 and is silent at 0xba0, which
+            // is how a wrong meaning survives a drift check. Ghidra's 1.16.2 `GameMan` type names
+            // both members `DLDateTime`, and the ctor pairs 1296/1296 with zero moved offsets.
+            // Nothing here reads them; they are kept as the measured RE fact.
+            const GAME_MAN_DLDATETIME_B98_OFFSET: usize = 0xb98;
+            const GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET: usize = 0xba0;
             // RUNTIME-PROVEN cold gate (bd b80-WARM-kick-runtime-0x140e6ec80-returns0-cold): the
             // worker-builder 0x140e6ec80 (inside the kick) returns al=0 unless BOTH [owner+0x10]==0
             // (worker) AND [owner+0x20]==0 (node) -- it only builds when nothing exists yet. In the
@@ -830,8 +853,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             };
             let _ = (
                 WARM_LOAD_KICK_RVA,
-                GAME_MAN_LOAD_HANDLE_B98_OFFSET,
-                GAME_MAN_LOAD_HANDLE_BA0_OFFSET,
+                GAME_MAN_DLDATETIME_B98_OFFSET,
+                GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET,
                 o10_pre,
                 o20_pre,
                 o20_post,
@@ -856,7 +879,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // (harmless). See bd b80-load-builder-hangs-inline-async-needed + the off-thread crash.
             append_autoload_debug(format_args!(
                 "cold-char-mount: PROPER-LOAD disabled (load builder uncallable cold: inline hangs, off-thread crashes) -- finalize 0x{:x}(owner=0x{owner:x}) done, no load call",
-                base + NODE_FINALIZER_RVA
+                er_game_base::mem::game_data_addr(base, NODE_FINALIZER_RVA, "NODE_FINALIZER_RVA")
             ));
         }
         // (select-node pump REMOVED with the PIVOT: it was for the low-level select-node hypothesis
@@ -917,14 +940,20 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
     }
     if phase == PHASE_DESER {
         // DIAGNOSTIC (char-apply debug, COLD-B80-WALL-BROKEN-...): before the deserialize, read the
-        // suspects for why c30/char did not apply: [mgr+0xdf0] (deserialize-ready -- if set, 0x67b100
-        // takes the fast-path and does NOT read into 0x67b290's buffer = lane mismatch / empty parse);
-        // [mgr+0x18] (the async load job 0x140e6eb80 queued); [0x143d68078] (the c30-write gate that
-        // gates 0x67bd70 inside 0x67b290).
-        const DF0_OFFSET: usize = 0xdf0;
+        // suspects for why c30/char did not apply: the save-path length at GameMan+0xdf0 (if
+        // NON-ZERO, `0x67b100` takes the fast-path and does NOT read into 0x67b290's buffer = lane
+        // mismatch / empty parse); [mgr+0x18] (the async load job 0x140e6eb80 queued);
+        // [0x143d68078] (the c30-write gate that gates 0x67bd70 inside 0x67b290).
+        //
+        // It was `DF0_OFFSET`, described as "deserialize-ready", logged as `0x{:x}`. It is the
+        // LENGTH of the `DLString<wchar_t>` in the `FD4FilePathBase` at GameMan+0xdd0 -- both
+        // gates that read it, `0x140679180` and `0x14067b100`, decompile to
+        // `(GLOBAL_GameMan->field479_0xdd0).string.length != 0`. A character count, so: decimal.
+        const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
         const ASYNC_JOB_18_OFFSET: usize = 0x18;
         const C30_WRITE_GATE_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
-        let df0 = unsafe { *((gm + DF0_OFFSET) as *const usize) };
+        let path_len =
+            unsafe { *((gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) as *const usize) };
         let job18 = unsafe { *((gm + ASYNC_JOB_18_OFFSET) as *const usize) };
         let c30_gate =
             er_game_base::mem::read_global_ptr(base, C30_WRITE_GATE_RVA, "C30_WRITE_GATE_RVA");
@@ -943,7 +972,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         append_autoload_debug(format_args!(
-            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} | pre-deser df0(mgr+0xdf0)=0x{df0:x} async_job(mgr+0x18)=0x{job18:x} c30_gate(0x143d68078)=0x{c30_gate:x} (df0!=0 -> 0x67b100 fast-path skips the read = empty parse). NO SetState/NO save write:"
+            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} | pre-deser path_len(gm+0xdf0)={path_len} async_job(mgr+0x18)=0x{job18:x} c30_gate(0x143d68078)=0x{c30_gate:x} (path_len!=0 -> 0x67b100 fast-path skips the read = empty parse). NO SetState/NO save write:"
         ));
         unsafe { dump_load_correctness(base, n) };
         // Publish the result so a STAGE2 caller that delegates here can observe completion + the

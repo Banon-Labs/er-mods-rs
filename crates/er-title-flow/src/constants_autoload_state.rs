@@ -112,8 +112,9 @@ pub const IODEV_GETTER_RVA: usize = 0xe6e060;
 /// io20, in the SAME game-task invocation (tightest race vs the worker drain):
 ///   1. SAVE_DIR_BUILDER 0x140e0e680(rcx=&wrapper): self-fetches the userdata folder
 ///      (SHGetFolderPathW CSIDL 0x1a) + Steam id (0x140e8d550) and formats `%s/EldenRing/%s/`
-///      (fmt @0x142bda858) into the wrapper. Guarded by the Steam interface pointer
-///      *0x143b48ff0 being non-null (else it would deref null).
+///      (fmt @0x142bda858) into the wrapper. The id path runs 0x140e8d550 -> 0x140e8d510, which
+///      CALLS through the qword at 0x143b48ff0 (STEAM_ID_ACCESSOR_CALL_SLOT_RVA) before reading
+///      the id, so that slot must be non-null or the call chain executes `CALL 0`.
 ///   2. SAVE_DIR_SETTER 0x14240a2a0(rcx=io20 path-DB, edx=slot=0, r8=raw char16_t*): stores
 ///      the directory into the path database (via 0x14240dce0 -> entry+0xb0, which COPIES
 ///      our buffer) -- exactly what the opcode-0x17/0x18 handler does. r8 is the RAW data
@@ -128,9 +129,34 @@ pub const SAVE_DIR_ALLOC_GETTER_RVA: usize = 0x1eba960;
 /// entry (find-or-create; idempotent post-setter). The setter writes the directory into
 /// `entry+0xb0`. Used for the post-setter readback.
 pub const SAVE_DIR_SLOT_LOOKUP_RVA: usize = 0x240c270;
-/// Steam-interface guard pointer (abs 0x143b48ff0): SAVE_DIR_BUILDER derefs the Steam
-/// interface to read the account id; if this is null the builder must be skipped.
-pub const STEAM_INTERFACE_GUARD_RVA: usize = 0x3b48ff0;
+/// The indirect-CALL slot inside the SteamID64 accessor (abs 0x143b48ff0). Renamed from
+/// `STEAM_INTERFACE_GUARD_RVA` on 2026-08-31; the old name said "Steam interface pointer the
+/// save-dir builder dereferences" and every clause of that was wrong, which mattered because
+/// there IS a real Steam interface in this same call chain (`SteamInternal_ContextInit(&
+/// s_GetSteamUser_CallbackCounterAndContext)` inside `STEAM_ID64_GETTER_RVA`) and the old name
+/// invited a future reader to treat this qword as that object and dereference it.
+///
+/// What it actually is, from the 1.16.2 dump. `getXrefsTo 0x143b48ff0` returns EXACTLY ONE
+/// reference in the whole image -- a READ at 0x140e8d52a -- and the instruction after it is
+/// `CALL RAX`:
+///
+///   0x140e8d510  PUSH RBX / SUB RSP,0x30 / LEA RCX,[RSP+0x40] / CALL 0x140e8ab40  (scope enter)
+///   0x140e8d52a  MOV RAX, qword ptr [0x143b48ff0]
+///   0x140e8d531  CALL RAX
+///                CALL 0x140e8d590   <- STEAM_ID64_GETTER_RVA, the real Steam interface path
+///                CALL 0x140e8abe0   (scope exit)
+///
+/// So it is a code pointer that is CALLED, not an object that is dereferenced, and its reader is
+/// `0x140e8d510`, not SAVE_DIR_BUILDER -- the builder reaches it two frames down, via
+/// `0x140e8d550` ("%I64d"-format the id into a `DLString<wchar_t>`). Its stored value is a
+/// five-byte `E9 rel32` thunk sitting 0xb0 past its reader's own entry (0x140e8d5c0 in 1.16.2,
+/// 0x140e8f3c0 in 1.17), jumping into Arxan rubble, and no code Ghidra found ever WRITES the
+/// slot.
+///
+/// The null check the two callers below perform is still exactly right, and now says what it
+/// means: a null here would make `0x140e8d510` execute `CALL 0`, so SAVE_DIR_BUILDER must not be
+/// called until the slot is populated.
+pub const STEAM_ID_ACCESSOR_CALL_SLOT_RVA: usize = 0x3b48ff0;
 /// Active SteamID64 getter (0x140e8d590): returns the current signed-in Steam account's full
 /// SteamID64 as a `u64`. Static-grounded from the SAVE_DIR_BUILDER chain; used to normalize staged
 /// foreign save bytes before native deserialize stores them in GameDataMan/ProfileSummary.

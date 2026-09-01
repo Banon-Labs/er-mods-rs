@@ -45,14 +45,14 @@ Confidence keys used below: **VERIFIED** = byte-checked by >=2 independent agent
 | `+0xb78` | requested save-slot **load** index (`-1` = none) | `GetRequestedSaveSlotLoad` `0x1406793c0`; reset `-1` by `0x140678720` |
 | `+0xb80` | **saveState FSM** (see dispute below) | 20 immediate-write sites image-wide; raw setter `0x14067ac90` |
 | `+0xb88 / +0xb90` | last **profile** save DLDateTime pair (also reused as buffer-ptr pair in one writer) | `0x14067b84a/0x14067b855`, read `0x14067f8ea` |
-| `+0xb98 / +0xba0` | last **game** save DLDateTime pair | read `0x14067a536` |
+| `+0xb98` | last **game** save `DLDateTime` -- ONE 16-byte object, not two fields: `FILETIME timeu64` at `+0xb98` and `TimeStructHighPartUnion packed_time` at `+0xba0` | read `0x14067a536`; written `mov [rbx],r14` / `and [rbx+8],r12` after `lea rbx,[rsi+0xb98]` at `0x1406761a3` (1.17 `0x140676ff3`), which is why a `this`-relative census is silent at `0xba0` |
 | `+0xbb8` | "save counted" byte, set on submit, consumed by the pump | `0x14067b8c4`-ish; consumed `0x14067953e` |
 | `+0xbbc / +0xbc0` | requested / completed save counters | `+0xbc0` incremented by `FUN_140679510` |
 | `+0xbc4` | **quit/lifecycle phase**: `1` requested -> `2` submitted -> `3` done | set 1 at `0x14067a404`; 1->2 at `0x14067b8a8`; 2->3 by `FUN_14067a980` |
 | `+0xd78 / +0xd80` | cached checksum-status blob (10 bytes, one byte per slot) | copied out by `GetSaveDataChecksumStatus` |
-| `+0xdf0` | own-buffer / pending-error pointer; non-null forces `b80 = 3` | `FUN_140679180` |
+| `+0xdf0` | **`DLString<wchar_t>` LENGTH** -- a character count -- inside the `FD4FilePathBase` at `+0xdd0`; non-zero (= a save path is set) forces `b80 = 3` | `FUN_140679180`, `FUN_14067b100`; both decompile the test as `(GLOBAL_GameMan->field479_0xdd0).string.length != 0` |
 
-**DISPUTE -- `+0xb80` state values.** The *job* surface maps `0` idle / `1` async **write** in flight / `2` async **read** armed / `3` read complete-resident / `7` boot-check lane, each backed by a named writer VA (`0x14067b200` writes 2, `0x140679180` writes 3, `0x14067b030` writes 7, `0x140677f40` clears the 7-lane). The *observer* surface maps `2` = "phase 2", `3` = "error latch". **The job surface is better evidenced** -- it names the writer of each value and matches the read-lane deserializer `FUN_14067b290`; the observer's "3 = error" derives only from `FUN_140679180` setting 3 when `+0xdf0 != 0`, which the job surface explains as the own-buffer fast path. For a save-disable DLL the only value that matters is **`1` = write in flight, `0` = idle**, and on that all six agents agree.
+**DISPUTE -- `+0xb80` state values.** The *job* surface maps `0` idle / `1` async **write** in flight / `2` async **read** armed / `3` read complete-resident / `7` boot-check lane, each backed by a named writer VA (`0x14067b200` writes 2, `0x140679180` writes 3, `0x14067b030` writes 7, `0x140677f40` clears the 7-lane). The *observer* surface maps `2` = "phase 2", `3` = "error latch". **The job surface is better evidenced** -- it names the writer of each value and matches the read-lane deserializer `FUN_14067b290`; the observer's "3 = error" derives only from `FUN_140679180` setting 3 when `+0xdf0 != 0`, which is the path-already-set fast path, not an error latch. For a save-disable DLL the only value that matters is **`1` = write in flight, `0` = idle**, and on that all six agents agree.
 
 ---
 

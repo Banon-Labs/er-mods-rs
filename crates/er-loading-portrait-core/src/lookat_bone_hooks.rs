@@ -156,7 +156,7 @@ pub fn install_lookat_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(UPDATE_BONE_MODEL_SPACE_RVA as u32) else {
+    let Ok(target) = game_rva_for_hook(UPDATE_BONE_MODEL_SPACE_RVA as u32) else {
         return;
     };
     match unsafe {
@@ -667,7 +667,6 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                         // starves the overlay. portrait_alpha0_clear + the GX RVAs stay for the
                         // next phase.)
                         let _ = crate::portrait_alpha0_clear;
-                        let _ = &PROFILE_ALPHA0_CLEARS;
                         if let Some(address) = portrait_fn(
                             PROFILE_MODEL_UPDATE_TASK_RVA,
                             "PROFILE_MODEL_UPDATE_TASK_RVA",
@@ -1050,6 +1049,25 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // frames AND the copy has never succeeded AND nothing published -- frame-exact, no grace fudge, and
     // it does NOT false-trip the boot window (whose copy succeeds the frame it drives). Anchoring on the
     // drive frame instead (proven 2026-07-06 run seamless-fastfail) tripped the healthy boot on frame 1.
+    //
+    // CURRENTLY UNREACHABLE, AND DELIBERATELY LEFT THAT WAY (run br-20260831-160354-2513). BOTH of
+    // its distinguishing arms read 0 unconditionally on this build:
+    //   * `PROFILE_DRIVE_FRAMES_WINDOW` only increments in the pose-drive block above, which sits
+    //     behind `off_resources_ready` -- shut for the entire run
+    //     (`oracle_portrait_pump_block_off_resource = 710`, and eleven `profile-drive-resource-skip`
+    //     lines at #1,#2,#3,#4,#8,#16,#32,#64,#128,#256,#512). So the trigger never arms.
+    //   * `PROFILE_RT_SRV_COPIES_WINDOW` read 0 at EVERY window close of that run, including the
+    //     two windows that published 181 and 268 clean portraits. So the "copy succeeded == the
+    //     render landed" premise this gate is built on does not hold here: publishing plainly does
+    //     not depend on that copy.
+    // Repointing the first arm at `PROFILE_RENDER_DRIVE_HITS` (the tick that really feeds publishes)
+    // WITHOUT first fixing the second would make this fire on tick 1 of every healthy window --
+    // exactly the frame-1 false trip the comment above records as already having been made once.
+    // The window-close BACKSTOP in `loading_portrait_window_reset` has been repointed instead: it is
+    // evaluated once, after the window, where `published == 0` is a settled fact rather than a
+    // not-yet. Re-arming this mid-window gate needs a live run that first establishes why
+    // `copy_offscreen_rt_to_srv` never reports success; the cumulative count is now printed on the
+    // window-reset line (`copies_total=`) so the next run answers it without new instrumentation.
     if PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.load(Ordering::SeqCst) == 0
         && PROFILE_PUBLISH_CLEAN_WINDOW.load(Ordering::SeqCst) == 0
         && PROFILE_DRIVE_FRAMES_WINDOW.load(Ordering::SeqCst) > PORTRAIT_PUBLISH_FAIL_GRACE_DRIVES

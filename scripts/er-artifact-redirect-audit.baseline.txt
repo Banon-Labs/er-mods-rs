@@ -1,0 +1,17 @@
+# LAUNCHERS THAT STILL LEAK A PER-RUN ARTIFACT INTO THE GAME DIRECTORY.
+#
+# This is a TO-DO LIST, not an approval. Every line is a run whose evidence the NEXT launch can
+# destroy -- a game-directory artifact is single-slot, and two launches lose the run before last.
+# It exists so the audit can fail on NEW drift while the known backlog stays written down and
+# counted instead of silently tolerated.
+#
+# To clear a line: set that env var, in that launcher, to a path inside the run's own artifact
+# directory, then delete the line (or re-run with --write-baseline).
+#
+# One `<launcher> <ENV_VAR>` per line. Regenerate with:
+#     python3 scripts/er-artifact-redirect-audit.py --write-baseline
+#
+# EMPTY SINCE 2026-08-31 -- 98 rows across 13 launchers, all closed. An empty file is not the same
+# as no gate: `--selftest` requires the STRICT audit (which ignores this file entirely) to agree
+# that nothing leaks, so emptiness has to be earned rather than assumed.
+

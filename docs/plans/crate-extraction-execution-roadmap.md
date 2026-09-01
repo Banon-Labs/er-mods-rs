@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,420 |
+| all `experiments/**` | 76 | 49,961 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -118,6 +118,54 @@ worth revisiting once the character-name work settles; it was not revisited now.
 
 No file on the list is a new module born in the shim, which is the leak the ratchet exists for: the
 file count is unchanged at 76 and every row already carried an ownership claim.
+
+### Ledger accepted, no extraction (2026-08-31, second entry): the work the previous ceiling refused to license
+
+The ceiling moves 49,420 -> 49,896 on committed state, +476 across 15 files and no new file
+(76 -> 76). It needs to be on the record because it is almost entirely the SAME code the entry
+above deliberately declined to measure.
+
+That entry set 49,420 as the clean committed number at `04b16f3a` and said so explicitly: a refresh
+on the dirty tree would have read 49,684 and "licensed growth on code nobody had committed
+(`save_swap_profile_table.rs` alone carried 148 such lines, `save_picker_menu.rs` 91)". Those two
+files are the top two rows of this move, at exactly +148 and +91. The code has since been committed
+-- as part of the dead-counter census closure, which could not be split from them because the
+counter gate refuses a declared counter with no writer and the writers live in those files -- so
+the number it was refusing to license is now a measurement of the committed tree rather than of
+somebody's in-flight edit.
+
+| file | +lines | landed in |
+|---|---:|---|
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 148 | dead-counter census |
+| `startup_hooks/quit_menu/save_picker_menu.rs` | 91 | dead-counter census |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 83 | dead-counter census |
+| `own_load/loaders/switch_reload.rs` | 54 | stale-RVA call-site closure |
+| `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 19 | stale-RVA call-site closure |
+| `own_load/drive.rs` | 17 | dead-counter census |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 16 | stale-RVA call-site closure |
+| `lifecycle/task_tick.rs` | 15 | dead-counter census |
+| `input_block.rs` | 10 | dead-counter census |
+| `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 8 | dead-counter census |
+| `trace/menu_trace_hooks.rs` | 6 | stale-RVA call-site closure |
+| `own_stepper/bootstrap_drive.rs` | 4 | stale-RVA call-site closure |
+| `continue_load/slot_resolution.rs` | 4 | stale-RVA call-site closure |
+| `trace/menu_constructor_capture.rs` | 1 | stale-RVA call-site closure |
+| `startup_hooks.rs` | 1 | dead-counter census |
+
+The rows sum to 477 against a net +476; one file elsewhere gave a line back.
+
+METHOD, and it is the same one the entry above insisted on: measured by
+`scripts/check-crate-extraction-roadmap.py` inside a throwaway worktree pinned to the committed tip
+`1ae8afde`, never against the working tree -- which at the time still held several other agents'
+uncommitted lines under `experiments/**` and would have licensed them too.
+
+`--refresh` was NOT used. It rewrites the whole ledger and silently drops hand-authored rows (bd
+`wholesale-refresh-deletes-hand-rows-silently-2026-08-30`); with the file count unchanged there was
+no new ownership claim to invent, so the reconciliation is the single ceiling number above and this
+entry. Nothing was extracted, and the case for extraction is unchanged: the open question named in
+the previous entry -- the `CS::ProfileSummary` snapshot/backout bookkeeping in
+`save_swap_profile_table.rs` and `save_picker_menu.rs` -- is now committed rather than in flight,
+which is what it was waiting on. It is still worth revisiting; it was still not revisited here.
 
 ## 2. R1 ownership rules
 

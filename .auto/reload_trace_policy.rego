@@ -58,6 +58,11 @@ deny contains message if {
 }
 
 deny contains message if {
+	input.raw_minhook_ffi_count > 0
+	message := "reload trace DLL must not call the raw MinHook FFI (MH_CreateHook/MH_EnableHook) directly; route every hook through er_hook::register_union_hook/register_shared_hook so cross-build address resolution and cross-DLL collision handling apply"
+}
+
+deny contains message if {
 	input.calls_original_trampolines != true
 	message := "reload trace hooks must call original trampolines and return their result"
 }

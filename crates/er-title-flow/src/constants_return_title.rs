@@ -106,9 +106,10 @@ pub const WORLD_CHR_MAN_WORLD_STABLE_VALUE: i32 = 2;
 /// Sem-traced to test whether the online flags re-enable during the reload's in-world window.
 pub const GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
 pub const GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
-/// b80 (== GameMan.save_state) FSM state names for the loading-bar / logs. See the
+/// `GameMan::saveState` (b80) state names for the loading-bar / logs, as the LOAD lane walks
+/// them; the SAVE lane shares the slot and stamps 1. See the
 /// `GAME_MAN_SAVE_STATE_*` / `FULLREAD_B80_RESIDENT` constants (constants::autoload_state).
-pub fn load_in_progress_b80_name(v: i32) -> &'static str {
+pub fn save_state_b80_name(v: i32) -> &'static str {
     match v {
         GAME_MAN_SAVE_STATE_IDLE => "IDLE",
         GAME_MAN_SAVE_STATE_OPENING => "OPENING",

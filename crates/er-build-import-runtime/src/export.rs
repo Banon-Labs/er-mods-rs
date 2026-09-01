@@ -25,7 +25,7 @@
 //! * [`Phase::Reading`] is claimed by the game-thread step, which runs every frame. A request that
 //!   is still `Reading` after the step has run [`STALE_TICKS`] times was not picked up and never
 //!   will be -- the tick's own counter is the witness, not a clock.
-//! * [`Phase::Opening`] belongs to a worker thread that increments [`WORKERS_ALIVE`] on entry and
+//! * [`Phase::Opening`] belongs to a worker thread that increments `WORKERS_ALIVE` on entry and
 //!   decrements it from a `Drop` guard, so a panicking worker still releases it. `Opening` with no
 //!   worker alive is a phase nobody owns.
 //!
@@ -193,16 +193,15 @@ pub fn request() -> Result<(), RequestError> {
 pub struct ExportReport {
     /// The character's name, as the link will carry it.
     pub character: String,
-    /// Armaments, armour pieces, talismans and memorised spells that made it in -- CARRIED, worn
-    /// ones included.
-    pub armaments: usize,
-    pub protectors: usize,
-    pub talismans: usize,
-    pub spells: usize,
+    /// Every category the link CARRIES, counted off the encoded document -- see
+    /// [`er_build_export::model::WrittenCategories`] for why it is not counted off the read.
+    pub written: er_build_export::model::WrittenCategories,
     /// Equipment slots holding an item whose id resolved to no name, so a short build says so.
     pub unnamed: usize,
-    /// Whether the link carries the character's appearance.
-    pub face_data: bool,
+    /// Carried items the export DELIBERATELY leaves out, so an omission by design is never
+    /// mistaken for one by accident. See `read_character::read_carried`.
+    pub skipped_goods: usize,
+    pub skipped_ammunition: usize,
     /// Characters in the finished URL.
     pub url_len: usize,
     /// Whether the URL reached the clipboard, and whether a browser accepted it.
@@ -212,14 +211,37 @@ pub struct ExportReport {
 
 impl ExportReport {
     /// One line for a menu help field or a log.
+    ///
+    /// # Every category is named, including the empty ones
+    ///
+    /// A summary that lists only what it found cannot distinguish a build with no quickbar from an
+    /// exporter that never wrote one -- which is the exact question "only the physick came
+    /// through" was, and it was answered on the website rather than in this line because the line
+    /// did not mention the quickbar, the pouch or the ammunition at all. So each is printed with
+    /// its count whether or not the count is zero, and the two categories that are skipped ON
+    /// PURPOSE are named as skipped rather than omitted.
     pub fn summary(&self) -> String {
+        let written = &self.written;
         format!(
-            "{} armaments, {} armour, {} talismans, {} spells{} -> {} char link{}{}",
-            self.armaments,
-            self.protectors,
-            self.talismans,
-            self.spells,
-            if self.face_data { ", face" } else { "" },
+            "wrote {} armaments, {} armour, {} talismans, {} spells, {} quickbar, {} pouch, \
+             {} ammo, {} physick{}{}; skipped {} carried goods and {} carried ammunition rows \
+             (not exported by design) -> {} char link{}{}",
+            written.armaments,
+            written.protectors,
+            written.talismans,
+            written.spells,
+            written.quickbar,
+            written.pouch,
+            written.ammo,
+            written.physick,
+            if written.great_rune {
+                ", great rune"
+            } else {
+                ""
+            },
+            if written.face_data { ", face" } else { "" },
+            self.skipped_goods,
+            self.skipped_ammunition,
             self.url_len,
             if self.clipboard { ", copied" } else { "" },
             if self.opened { ", opened" } else { "" },
@@ -290,8 +312,8 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
     };
     crate::log_line(&format!(
         "[build-export] read character={:?} class={:?} armaments={} armour={} talismans={} \
-         spells={} tears={} rune={:?} 2h={} flasks={}+{} upgrade={:?} unnamed={} \
-         whole_inventory={} ammunition_skipped={} \
+         spells={} quickbar={} pouch={} worn_ammo={} tears={} rune={:?} 2h={} flasks={}+{} \
+         upgrade={:?} unnamed={} whole_inventory={} ammunition_skipped={} \
          goods_carried_not_exported={}",
         read.name,
         read.character_class,
@@ -299,6 +321,9 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
         read.protectors.len(),
         read.talismans.len(),
         read.spells.len(),
+        read.quickbar.iter().flatten().count(),
+        read.pouch.iter().flatten().count(),
+        read.ammo.iter().flatten().count(),
         read.crystal_tears.iter().flatten().count(),
         read.great_rune,
         read.two_handing,
@@ -366,15 +391,36 @@ fn spawn_worker(read: CharacterRead, sinks: Sinks) {
 /// The encode, the clipboard and the browser. Runs on the worker; touches no game state.
 fn export_inner(read: CharacterRead, sinks: Sinks) {
     let doc = crate::export_doc::document_from(&read);
+    let written = doc.written_categories();
+    // THE DOCUMENT'S OWN ACCOUNT OF ITSELF, before it is encoded. Every category is named with
+    // its count -- zeros included -- and the two that are left out on purpose are named as left
+    // out, so a category that silently stopped being written shows up as a `0` in a log line
+    // instead of as a missing row on somebody else's website.
+    crate::log_line(&format!(
+        "[build-export] document WRITES armaments={} armour={} talismans={} spells={} \
+         quickbar={} pouch={} tools_unassigned={} ammo={} physick={} greatRune={} face={}; \
+         SKIPS BY DESIGN carried goods={} carried ammunition rows={}",
+        written.armaments,
+        written.protectors,
+        written.talismans,
+        written.spells,
+        written.quickbar,
+        written.pouch,
+        written.tools_unassigned,
+        written.ammo,
+        written.physick,
+        written.great_rune,
+        written.face_data,
+        read.carried_goods,
+        read.carried_ammunition,
+    ));
     let (url, stored) = share_link(&doc);
     let mut report = ExportReport {
         character: read.name.clone(),
-        armaments: read.armaments.len(),
-        protectors: read.protectors.len(),
-        talismans: read.talismans.len(),
-        spells: read.spells.len(),
+        written,
         unnamed: read.unnamed_slots,
-        face_data: read.face_data.is_some(),
+        skipped_goods: read.carried_goods,
+        skipped_ammunition: read.carried_ammunition,
         url_len: url.chars().count(),
         ..ExportReport::default()
     };

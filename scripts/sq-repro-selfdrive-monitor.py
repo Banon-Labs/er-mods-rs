@@ -23,9 +23,37 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-GAMEDIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-LOG = os.path.join(GAMEDIR, "er-quickload-autoload-debug.log")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import artifact_source_dirs, resolve_artifact  # noqa: E402
+
+# WHERE THIS RUN'S ARTIFACTS ACTUALLY ARE.
+#
+# Launchers redirect the DLL's per-run artifacts into the run's OWN directory (`ER_QUICKLOAD_*_PATH`)
+# because a game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames
+# `<name>` to `<name>.prev` on the first write of each process, so two launches lose the run before
+# last. A monitor pinned to the game directory therefore finds NOTHING for a redirected run and
+# reports a perfectly healthy run as silent -- a false negative indistinguishable from the very stall
+# this monitor exists to catch. `resolve_artifact` looks in the run directory first and falls back to
+# the game directory, by EXISTENCE, and the inotify watch below covers BOTH for the same reason.
+#
+# The `/mnt/c/SteamLibrary/...` default was WSL-era and does not exist on a native Linux Steam box:
+# every read against it came back empty, which reads as "the DLL wrote nothing".
+GAMEDIR = os.environ.get(
+    "ER_GAME_DIR",
+    os.path.join(os.path.expanduser("~"), ".local/share/Steam/steamapps/common/ELDEN RING/Game"),
+)
+
+
+def LOG():
+    return str(resolve_artifact("er-quickload-autoload-debug.log", GAMEDIR))
+
+
+def watch_dirs():
+    """Every directory the DLL might be writing into, for the inotify readiness primitive."""
+    return [str(d) for d in artifact_source_dirs(GAMEDIR) if os.path.isdir(d)] or [GAMEDIR]
+
 ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
 BUILT_DLL = "/home/choza/projects/er-mods-rs/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 DEPLOY_DIR_WSL = "/mnt/c/Users/choza/er-quickload-live"
@@ -59,11 +87,12 @@ try:
     _libc = ctypes.CDLL("libc.so.6", use_errno=True)
     _inotify_fd = _libc.inotify_init1(0)
     if _inotify_fd >= 0:
-        _libc.inotify_add_watch(
-            _inotify_fd,
-            GAMEDIR.encode("utf-8"),
-            _IN_MODIFY | _IN_CREATE | _IN_MOVED_TO | _IN_CLOSE_WRITE,
-        )
+        for _directory in watch_dirs():
+            _libc.inotify_add_watch(
+                _inotify_fd,
+                _directory.encode("utf-8"),
+                _IN_MODIFY | _IN_CREATE | _IN_MOVED_TO | _IN_CLOSE_WRITE,
+            )
 except OSError:
     _inotify_fd = -1
 
@@ -160,11 +189,11 @@ def main():
         if game_alive():
             game_seen = True
         try:
-            sz = os.path.getsize(LOG)
+            sz = os.path.getsize(LOG())
         except OSError:
             sz = offset
         if sz > offset:
-            with open(LOG, "rb") as f:
+            with open(LOG(), "rb") as f:
                 f.seek(offset)
                 data = f.read()
             offset = sz

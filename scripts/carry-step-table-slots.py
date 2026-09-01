@@ -49,6 +49,9 @@ import struct
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import function_extent  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
+
 BASE = 0x140000000
 # The TitleStep step table's initialiser. Two `lea`/`mov` pairs per slot, 0x10 bytes per slot,
 # starting at the table base -- `own_stepper` patches slot 6 (STEP_GameStepWait) and slot 10
@@ -96,12 +99,34 @@ def stores(md, image: bytes, init: int, span: int) -> dict[int, tuple[int, int]]
 
     The value is whatever the immediately preceding `lea rax, [rip+d]` loaded, which is how the
     slot's contents are recovered from an image where the table itself is still all zeroes.
+
+    THE INITIALISER'S OWN EXTENT BOUNDS THIS, `span` IS ONLY A CAP. Until 2026-08-31 `span` WAS
+    the window: `0x40 + slots * 0x40`, which for the default 16 slots is 0x440 read from a
+    function entry with no terminator stop of any kind. The TitleStep initialiser at 0xa4f50 is
+    0x16d bytes long in both images, so the decode ran 0x2d3 bytes past its `ret`, through the
+    de-Arxan'd gap where the deobfuscator's leftovers resynchronise into instructions nobody
+    assembled -- the same class that manufactured a phantom `jno` for the hook-target audit and
+    12 false DIVERGES for the verifier.
+
+    Measured before the change: zero phantom stores, in both images. The junk simply did not
+    happen to decode into a `lea rax,[rip+d]` / `mov [rip+d],rax` pair. That is luck, not a
+    property -- in instance 1 of this class a single leftover byte decided which image a correct
+    row failed on -- and a table of function pointers is the worst place to be lucky in: a wrong
+    slot writes our handler into an unrelated function-pointer table and stays silent until
+    something calls it.
     """
     from capstone import Cs, CS_ARCH_X86, CS_MODE_64  # noqa: F401  (md is already built)
 
     out: dict[int, tuple[int, int]] = {}
     pending: int | None = None
-    for insn in md.disasm(image[init : init + span], BASE + init):
+    stop = function_extent.body_slice_end(image, BASE + init, cap=span)
+    if stop is None:
+        # No declarable extent and no decodable leaf end. Fall back to the cap and SAY SO, rather
+        # than reporting an unbounded read as if it were a bounded one.
+        print(f"  WARNING: no extent for the initialiser at 0x{BASE + init:x}; "
+              f"reading the 0x{span:x}-byte cap, which may cross into the next function")
+        stop = init + span
+    for insn in md.disasm(image[init:stop], BASE + init):
         pos = insn.address - BASE - init
         if insn.disp_size != 4:
             pending = None if insn.mnemonic != "nop" else pending

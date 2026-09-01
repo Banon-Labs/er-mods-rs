@@ -315,14 +315,6 @@ const FUNCTION_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.needed.tsv";
 /// Each row is carried by the code that references it, and only rows where independent
 /// references agree are used; see the file's own header.
 const DATA_MAP: &str = "../../docs/recon/rva-map-1162-to-1170.data.tsv";
-/// Rows from the weaker maps that have ALSO passed the detour checks, and so may carry a hook.
-///
-/// A signature match says an address is the right one. It says nothing about whether MinHook may
-/// write five bytes there. `scripts/audit-1170-hook-targets.py --promote` supplies the second
-/// claim: the 1.17 destination is a real function entry by the image's own forward references,
-/// and its opening five bytes relocate. 187 of 277 candidates pass; the 90 that do not stay out,
-/// and their reasons are recorded in the file.
-const AUDITED_DETOURS: &str = "../../docs/recon/rva-1170-detour-audited.tsv";
 /// The needed map, put through the SAME byte comparison the verified map gets.
 ///
 /// This is what makes a detour promotable. `FUNCTION_MAP` says where a signature re-occurs, which
@@ -655,22 +647,23 @@ fn emit_address_map(root_dir: &str) {
     rows.retain(|(old, _)| !held_back.contains(old));
     rows.sort_unstable();
     rows.dedup_by_key(|(old, _)| *old);
-    // STILL NOT WIRED IN, and now superseded rather than merely distrusted.
+    // A FIFTH LEDGER USED TO BE DECLARED HERE AND PARKED UNDER `let _ = AUDITED_DETOURS;`.
     //
-    // `--promote` audits the 277 signature/reference-mapped rows and passes 187 on entry-and-
-    // prologue grounds: each destination is a real function entry by the image's own forward
-    // references. Feeding those into the detour table put the crash straight back. The reason is
-    // visible in one row: `HUD_WEAPON_SLOT_UPDATE` (0x8d2110) passed that audit and is paired
-    // with a 1.17 function sharing 18% of its instruction shape -- a safe place to land inside
-    // the wrong function.
+    // `docs/recon/rva-1170-detour-audited.tsv` was deleted on 2026-08-31, with the reason recorded
+    // rather than the file: 89 of the 448 rows it promoted rested on its "unwindless leaf" clause,
+    // and ALL 89 destinations are in NON-EXECUTABLE sections of the 1.17 image. `.pdata` declares
+    // no function containing a `.data` global for the same reason it declares none containing a
+    // leaf, so the clause could not tell the two apart and never once fired on real code. Four of
+    // those rows are 24 bytes of zeros in BOTH images, described as `6B relocatable`.
     //
-    // What replaced it answers both questions with better evidence for each. Semantic identity
-    // comes from the byte comparison in NEEDED_VERIFIED_MAP, which rejects that row. Entry
-    // evidence comes from the same file's last column, read out of each image's `.pdata` -- the
-    // linker's own record of where functions begin, rather than a count of forward references.
+    // Nothing read it -- this `let _` was the whole of its wiring -- so it had no consequence and
+    // no way to be caught being wrong. `scripts/check-ledger-section-kind.py` now enforces what it
+    // violated (a ledger whose rows license a hook may only name executable memory) and refuses
+    // the file's return, since `audit-1170-hook-targets.py --promote` can still write it.
     //
-    // The audited file stays only as a reading aid for the rows that remain refused.
-    let _ = AUDITED_DETOURS;
+    // What replaced it as EVIDENCE answers both questions better. Semantic identity comes from the
+    // byte comparison in NEEDED_VERIFIED_MAP; entry evidence comes from that same file's last
+    // column, read out of each image's `.pdata` rather than counted from forward references.
     let mut detour_rows = detour_safe;
     detour_rows.retain(|(old, _)| !held_back.contains(old));
     detour_rows.sort_unstable();

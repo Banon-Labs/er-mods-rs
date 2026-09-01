@@ -35,10 +35,25 @@ sweep that cannot say which build it measured is not evidence, and 18 verdicts h
 away. So the sweep now fingerprints every DLL at the start and ABORTS the moment one changes
 underneath it, rather than producing a result that looks fine and is not.
 
+EVERY RUN GETS ITS OWN ARTIFACT DIRECTORY
+-----------------------------------------
+er-artifact-redirect: this launches the game once per cdylib through `~/Elden/launch.sh`, and the
+audit's shell-name detector cannot see that -- the DLL under test is resolved from cargo metadata
+at runtime, so no `er_quickload.dll` literal appears anywhere in this file. This marker opts the
+sweep in explicitly rather than leaving it invisible, which reads exactly like a clean tree.
+
+It matters more here than anywhere else in the repo: `--all` is twenty-plus launches back to back.
+A game-directory artifact is SINGLE-SLOT (`er_game_base::log::begin_fresh_run` keeps one `.prev`),
+so an unredirected sweep destroys not only every other session's evidence but its OWN -- by the
+time it finishes, the only crash log left describes the last DLL it tested. Each run therefore gets
+`target/runtime-probe/sweep-1170/<crate>-<stamp>/`, and `crash_signature` reads THAT rather than
+the game directory.
+
 SAFETY / HOUSE RULES
   * launches only the approved `~/Elden/launch.sh` path -- never Steam, never the EAC launcher;
   * one game at a time, torn down between runs via `scripts/er-teardown.py`;
-  * profiles are written to `~/Elden/sweep-<dll>.me3` and name only the one DLL under test.
+  * profiles are written to `~/Elden/sweep-<dll>.me3` and name only the one DLL under test;
+  * nothing in the game directory is ever deleted -- it is somebody else's run.
 
 USAGE
     python3 scripts/sweep-dll-1170-runtime.py --list
@@ -54,7 +69,18 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# ONE TABLE, NOT A COPY PER LAUNCHER. `scripts/er_artifact_env.py` is the single place a launcher
+# learns where this run's artifacts go; the audit requires it to cover every knob the DLLs honour,
+# so a new artifact cannot quietly stay unredirected in here.
+from er_artifact_env import (  # noqa: E402 - path set above
+    ARTIFACT_ENV,
+    artifact_env,
+    artifact_source_dirs,
+)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS = os.path.join(REPO, "docs", "recon", "dll-1170-runtime-results.json")
@@ -143,28 +169,46 @@ def teardown() -> None:
     )
 
 
-def crash_signature(crate: str, since: float) -> str:
-    """The first fault line from any crash log this DLL touched during the run."""
+def run_dir(crate: str, started: float) -> str:
+    """This run's own artifact directory -- unique per (crate, launch), so nothing is shared."""
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(started))
+    return os.path.join(REPO, "target", "runtime-probe", "sweep-1170", f"{crate}-{stamp}")
+
+
+def crash_signature(crate: str, since: float, artifact_dir: str) -> str:
+    """The first fault line from any crash log this DLL touched during the run.
+
+    BOTH DIRECTORIES, redirect first. The redirects are put in the launcher's real environment
+    below, so they normally take -- but they still have to survive `launch.sh` -> me3 -> Proton,
+    and when they do not the DLL falls back to writing beside `eldenring.exe`. A reader that knows
+    only one of the two reports `no crash record` for a DLL that left a perfectly good one, which
+    in this script's output is indistinguishable from a clean death.
+
+    `since` stays load-bearing in either directory: the game directory is now never cleared (that
+    delete took two other runs' generations with it), so last week's crash log is still sitting
+    there with its final contents.
+    """
     best = ""
-    try:
-        names = os.listdir(GAME_DIR)
-    except OSError:
-        return best
-    for name in names:
-        if "crash" not in name or not name.endswith((".txt", ".log")):
-            continue
-        path = os.path.join(GAME_DIR, name)
+    for directory in artifact_source_dirs(GAME_DIR, prefer=artifact_dir):
         try:
-            if os.path.getmtime(path) < since:
-                continue
-            with open(path, encoding="utf-8", errors="replace") as handle:
-                for line in handle:
-                    if "access-violation" in line or "exception code" in line:
-                        match = re.search(r"(access-violation|exception code)[^;]{0,110}", line)
-                        if match:
-                            return f"{name}: {match.group(0).strip()}"
+            names = os.listdir(directory)
         except OSError:
             continue
+        for name in sorted(names):
+            if "crash" not in name or not name.endswith((".txt", ".log")):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                if os.path.getmtime(path) < since:
+                    continue
+                with open(path, encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        if "access-violation" in line or "exception code" in line:
+                            match = re.search(r"(access-violation|exception code)[^;]{0,110}", line)
+                            if match:
+                                return f"{name}: {match.group(0).strip()}"
+            except OSError:
+                continue
     return best
 
 
@@ -178,7 +222,13 @@ def run_one(crate: str, watch_seconds: float) -> str:
 
     teardown()
     started = time.time()
-    environment = dict(os.environ, ME3_PROFILE=profile)
+    artifact_dir = run_dir(crate, started)
+    os.makedirs(artifact_dir, exist_ok=True)
+    # Redirected at LAUNCH, not copied at teardown: by teardown this run has already clobbered the
+    # previous one's file, and a DLL that dies -- which is the whole point of this sweep -- never
+    # reaches a copy step at all. These go into the launcher's REAL environment (not an
+    # `env VAR=... cmd` prefix), so `crash_signature` above inherits them too.
+    environment = dict(os.environ, ME3_PROFILE=profile, **artifact_env(artifact_dir))
     subprocess.Popen(
         ["setsid", "nohup", "bash", LAUNCHER, "-s"],
         env=environment,
@@ -204,7 +254,7 @@ def run_one(crate: str, watch_seconds: float) -> str:
         if state is None or state == "Z":
             verdict = "dies"
             break
-    signature = crash_signature(crate, started)
+    signature = crash_signature(crate, started, artifact_dir)
     teardown()
     stamp = time.strftime("%Y-%m-%d")
     if verdict == "dies":
@@ -270,6 +320,41 @@ def selftest() -> int:
     stamps = fingerprint(cdylibs())
     if stamps and fingerprint(cdylibs()) != stamps:
         failures.append("fingerprint is not stable across two calls on an unchanged tree")
+
+    # THE REDIRECT, AND THE READER THAT HAS TO FOLLOW IT. A sweep whose runs all wrote to the game
+    # directory would end holding one crash log -- the last DLL's -- and would have destroyed
+    # everyone else's along the way. These two checks are what keep that from coming back.
+    import tempfile
+
+    env = artifact_env(run_dir("er-selftest", time.time()))
+    missing = sorted(set(ARTIFACT_ENV) - set(env))
+    if missing:
+        failures.append(f"artifact_env does not carry {', '.join(missing)}")
+    if not all(str(value).startswith(os.path.join(REPO, "target")) for value in env.values()):
+        failures.append("a redirect points outside this repo's target/ run directory")
+    with tempfile.TemporaryDirectory() as root:
+        game = os.path.join(root, "Game")
+        run = os.path.join(root, "run")
+        os.makedirs(game)
+        os.makedirs(run)
+        since = time.time()
+        stale = os.path.join(game, "er-quickload-crash-log.txt")
+        with open(stale, "w", encoding="utf-8") as handle:
+            handle.write("access-violation exception_addr=game+0xDEAD PREVIOUS RUN\n")
+        os.utime(stale, (since - 3600, since - 3600))
+        fresh = os.path.join(run, "er-loading-portrait-crash-log.txt")
+        with open(fresh, "w", encoding="utf-8") as handle:
+            handle.write("access-violation exception_addr=game+0xBEEF THIS RUN\n")
+        saved, globals()["GAME_DIR"] = GAME_DIR, game
+        try:
+            signature = crash_signature("er-selftest", since, run)
+        finally:
+            globals()["GAME_DIR"] = saved
+        if "0xBEEF" not in signature:
+            failures.append(f"crash_signature did not read the run directory (got {signature!r})")
+        if "0xDEAD" in signature:
+            failures.append("crash_signature bound to a crash log older than the launch")
+
     for line in failures:
         print(f"selftest FAIL {line}")
     print(f"selftest: {len(failures)} failure(s); {len(built)} built cdylib(s)")

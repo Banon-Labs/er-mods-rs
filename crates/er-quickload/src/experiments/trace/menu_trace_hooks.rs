@@ -26,7 +26,7 @@ use crate::{
     FILECAP_STATUS_88_OFFSET, FILECAP_STATUS_LOADED, FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET,
     GAME_MAN_C30_UNSET, GAME_MAN_ENDING_FLAG_B7C_OFFSET, GAME_MAN_ENDING_FLAG_B7D_OFFSET,
     GAME_MAN_FLAG_B73_PROBE_OFFSET, GAME_MAN_FLAG_B75_PROBE_OFFSET,
-    GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET, GAME_MAN_REQUESTED_SLOT_B78_OFFSET,
+    GAME_MAN_REQUESTED_SLOT_B78_OFFSET, GAME_MAN_SAVE_STATE_B80_OFFSET,
     GAME_MAN_SAVED_MAP_C30_OFFSET, GAME_MAN_WARP_REQUESTED_10_OFFSET, HOOK_ORIGINAL_UNSET,
     IN_WORLD_REACHED, IN_WORLD_REACHED_YES, INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET,
     INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET, INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET,
@@ -48,7 +48,7 @@ use crate::{
     MOVEMAPSTEP_WORLDRES_F0_OFFSET, NATIVE_SUBMIT_ORIG, NO_SAFE_INPUT_CONFIRM_FRAMES,
     OWN_STEPPER_CALL_INC, OWN_STEPPER_DESER_FIRED, OWN_STEPPER_DESER_FIRED_OK,
     OWN_STEPPER_MOUNT_C30, POPULATE_BLOCKS_LIST_INPUT_COUNT_10_OFFSET, POPULATE_BLOCKS_LISTS_RVA,
-    PROFILE_LOAD_SELECTOR_TICK_RVA, ProfileLoadMenuRva, REBUILD_ROWS_RVA, REQUEST_SAVE_ORIG,
+    PROFILE_LOAD_JOB_RUN_RVA, ProfileLoadMenuRva, REBUILD_ROWS_RVA, REQUEST_SAVE_ORIG,
     RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_BUILDER_RVA, RESULT_EVENT_HANDLER_ORIG,
     RESULT_EVENT_HANDLER_RVA, RESULT_EVENT_WRAPPER_BUILDER_ORIG, RESULT_EVENT_WRAPPER_BUILDER_RVA,
     SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ, SAVE_LOAD_STATE_INIT_ORIG,
@@ -64,7 +64,7 @@ use crate::{
     cap_menu_item_update_hook, cap_rebuild_rows_hook, cap_selector_tick_hook,
     cap_sequence_iter_hook, cap_setstate_hook, combined_load_hook, continue_load_hook,
     current_slot_load_hook, game_directory_path, game_man_ptr_or_null, game_module_base, game_rva,
-    map_load_hook, menu_window_job_ctor_hook, menu_window_job_idle_ctor_hook,
+    game_rva_for_hook, map_load_hook, menu_window_job_ctor_hook, menu_window_job_idle_ctor_hook,
     menu_window_job_native_ctor_b_hook, native_submit_hook, request_save_hook,
     result_action_builder_hook, result_event_handler_hook, result_event_wrapper_builder_hook,
     safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize, save_load_state_init_hook,
@@ -271,7 +271,13 @@ pub(crate) unsafe fn create_continue_trace_hook(
     hook_impl: *mut c_void,
     original: &'static AtomicUsize,
 ) {
-    let Ok(addr) = game_rva(rva) else {
+    // UNRESOLVED, so `register_union_hook` owns the single 1.16.2 -> 1.17 resolve. This was
+    // `game_rva`, which resolves too, and the double resolve was MEASURED wrong on 2026-08-30
+    // 18:42 for `native_submit_7ac890`: 0x1407ac890 -> 0x1407ad710 here, then 0x1407ad710 ->
+    // 0x1407ae590 inside the union -- a hot Scaleform function with 16 callers, unioned by
+    // mistake while the trace log said 0x1407ad710.
+    // `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    let Ok(addr) = game_rva_for_hook(rva) else {
         append_continue_trace(format_args!("hook {name}: failed to resolve rva=0x{rva:x}"));
         return;
     };
@@ -501,7 +507,7 @@ pub(crate) fn install_continue_trace_hooks() {
         const CAP_LOAD_ACTIVATE_RVA: u32 = 0x009a4670;
         const CAP_LOAD_ACTIVATE2_RVA: u32 = 0x009ac760;
         const CAP_BUILDER_RVA: u32 = 0x00826510;
-        const CAP_SELECTOR_TICK_RVA: u32 = PROFILE_LOAD_SELECTOR_TICK_RVA as u32;
+        const CAP_LOAD_JOB_RUN_RVA: u32 = PROFILE_LOAD_JOB_RUN_RVA as u32;
         const CAP_MENU_DESER_RVA: u32 = ProfileLoadMenuRva::MenuDeser as u32;
         const CAP_DIALOG_FACTORY_RVA: u32 = LIVE_DIALOG_FACTORY_RVA as u32;
         create_continue_trace_hook(
@@ -541,7 +547,7 @@ pub(crate) fn install_continue_trace_hooks() {
         create_continue_trace_hook(
             &mut hooks,
             "cap_selector_tick_826d50",
-            CAP_SELECTOR_TICK_RVA,
+            CAP_LOAD_JOB_RUN_RVA,
             cap_selector_tick_hook as *mut c_void,
             &CAP_SELECTOR_TICK_ORIG,
         );
@@ -1808,7 +1814,7 @@ pub(crate) fn b80_mount_trace_summary() -> String {
             TITLE_STATE_OWNER_GONE
         }
     };
-    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let b80 = read_gm(GAME_MAN_SAVE_STATE_B80_OFFSET);
     let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
     let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
     let b78 = read_gm(GAME_MAN_REQUESTED_SLOT_B78_OFFSET);

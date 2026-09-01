@@ -3,7 +3,10 @@
 # GENERATED WHOLESALE -- DO NOT HAND-EDIT A ROW INTO THIS FILE. --refresh rewrites every
 # line below from the two images. A row it cannot reproduce now STOPS the write and is
 # named, instead of being deleted at exit 0 with nothing to read afterwards but an address
-# that looks like it was never mapped. Hand knowledge belongs in SHAPE_RESCUED /
+# that looks like it was never mapped. A row it does not WANT is only dropped when
+# scripts/rva_symbols.py can PROVE nothing in crates/ declares the address; otherwise it is
+# carried forward under the PRESERVED banner at the foot of the file. Hand knowledge
+# belongs in SHAPE_RESCUED /
 # REFSITE_RESCUED inside that script, where the corroboration is re-derived from both
 # images on every refresh; a hand-derived pair for a FUNCTION belongs in
 # rva-map-1162-to-1170.verified.tsv, the curated ledger.
@@ -25,6 +28,12 @@
 # once per image, a table of code pointers that carry through the function map, or the
 # nearest independently-carried anchor on each side having moved by the same delta. All
 # three are recomputed from the two images on every refresh -- see REFSITE_RESCUED.
+# A `<file>:<line>` in the constant column is an address written as a BARE HEX LITERAL at
+# its use site, with no constant name anywhere -- admitted because the workspace hands it
+# to the address resolver, never because of how it is spelled or how large it is. Before
+# 2026-08-31 the harvest read only `const *RVA*: usize = 0x..`, so four such addresses were
+# in neither the body nor the UNUSED list: not verified and not reported unverified, which
+# reads afterwards exactly like an address nobody had gotten to yet.
 0x29c8e48	0x29cbe48	FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA	576/576
 0x29c8e48	0x29cbe48	FD4_TIME_FLOAT_VTABLE_RVA	576/576
 0x29c8e58	0x29cbe58	FD4_TIME_VTABLE_RVA	631/632
@@ -34,12 +43,13 @@
 0x2a93a60	0x2a96ae0	MENU_WINDOW_VTABLE_RVA	2/2
 0x2a94318	0x2a97398	MENU_WINDOW_PROXY_VTABLE_RVA	2/2
 0x2a94a70	0x2a97af0	SCENE_OBJ_PROXY_VTABLE_RVA	14/14
+0x2aa2958	0x2aa59d8	MENUJOB_IFELSE_VTABLE_DUMP_VA	1/1 rtti
 0x2aa97e8	0x2aac868	ITEM_VTABLE_RVA	6/6
 0x2aa97e8	0x2aac868	MENU_WINDOW_JOB_VTABLE_RVA	6/6
 0x2aaabf8	0x2aadc78	SAVE_RETRY_DIALOG_VTABLE_RVA	1/1 rtti
 0x2ac3ea8	0x2ac6f28	FUNCTOR_VTABLE_RVA	1/1 rtti
 0x2ac3ea8	0x2ac6f28	MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA	1/1 rtti
-0x2ac71e0	0x2aca260	SELECTOR_STEP_VTABLE_RVA	2/2
+0x2ac71e0	0x2aca260	MENUJOB_LOAD_CONTEXT_VTABLE_RVA	2/2
 0x2ac72a0	0x2aca320	TRACE_MENU_TASK_UPDATE_TABLE_RVA	0/0 fnptr+bracket
 0x2ac7f20	0x2acafa0	TITLE_FLOW_CONTEXT_VTABLE_RVA	2/2
 0x2ad5400	0x2ad8480	PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA	10/10
@@ -67,7 +77,9 @@
 0x3b37c98	0x3b3bca8	MENU_PUMP_KICK_PTR_RVA	1/1 bracket
 0x3b39470	0x3b3d480	PROFILE_ANIM_NULL_HANDLE_RVA	4/4
 0x3b39848	0x3b3d858	PROFILE_OFFSCREEN_SIZE_TABLE_RVA	1/1 bracket
-0x3b48ff0	0x3b4d050	STEAM_INTERFACE_GUARD_RVA	1/1 bracket
+0x3b48ff0	0x3b4d050	STEAM_ID_ACCESSOR_CALL_SLOT_RVA	1/1 bracket
+0x3d5b078	0x3d5f0d8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1245	12/12
+0x3d5b088	0x3d5f0e8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1248	0/0 bracket+shape
 0x3d5b0f8	0x3d5f158	CSFILE_SINGLETON_RVA	1246/1249
 0x3d5dea8	0x3d61f08	TITLE_MENU_TRANSITION_SINGLETON_RVA	82/82
 0x3d5df38	0x3d61f98	GAME_DATA_MAN_GLOBAL_RVA	642/643
@@ -88,7 +100,7 @@
 0x3d6b880	0x3d6f8f0	CSFEMAN_SINGLETON_RVA	125/125
 0x3d6c5e8	0x3d70658	RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA	1/1 shape
 0x3d6d8d0	0x3d71940	TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA	3/3
-0x3d6d8d0	0x3d71940	ACTIVE_SCREEN_ARRAY_RVA	3/3
+0x3d6d8d0	0x3d71940	PROFILE_MODEL_REND_TABLE_RVA	3/3
 0x3d6ea58	0x3d72ac8	GLOBAL_CSREMO_RVA	147/147
 0x3d70847	0x3d748b8	MOVEMAPSTEP_GLOBAL_DISABLE_RVA	6/6
 0x3d71580	0x3d755f0	INNER_TITLE_STATE_TABLE_RVA	3/3
@@ -127,13 +139,15 @@
 0x458b8a5	0x458f925	MOVIE_SKIP_FLAG_RVA	3/3
 0x4593250	0x45972d0	SCALEFORM_MEMORY_GLOBAL_RVA	3389/3389
 0x47ef360	0x47f33e0	GX_DRAW_CONTEXT_RVA	1178/1179
-0x47ef360	0x47f33e0	SESSION_SINGLETON_RVA	1178/1179
+0x47ef360	0x47f33e0	GX_DRAW_CONTEXT_SINGLETON_RVA	1178/1179
 0x4843038	0x48470b8	IO_WORKER_REGISTRY_RVA	7/7
 0x48464a8	0x484a528	DL_FILE_DEVICE_MANAGER_SINGLETON_RVA	6/6
 0x4852f88	0x4857098	SLSYSTEMIMPL_PTR_RVA	10/10
 0x4852f88	0x4857098	FD4_IO_WORKER_MANAGER_RVA	10/10
 0x4852f88	0x4857098	FD4_IO_WORKER_MGR_RVA	10/10
 0x4853048	0x4857158	FD4_IO_POOL_RVA	5/5
+0x485cbec	0x4860cfc	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1238	11/11
+0x485d0e8	0x48611f8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1242	40/40
 0x485dc18	0x4861d28	DLUID_SINGLETON_RVA	84/84
 0x485dc20	0x4861d30	FD4_PAD_MANAGER_RVA	152/153
 #

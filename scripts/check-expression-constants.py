@@ -39,6 +39,7 @@ import importlib.util
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +50,32 @@ import rva_role  # noqa: E402
 import rva_usage  # noqa: E402
 
 BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
+
+# THE COVERAGE FLOOR. Both populations are DERIVED -- one from a name filter plus the resolver call
+# sites, the other from the field-offset inventory's own classifier -- so a constant leaves them by
+# being edited somewhere else entirely, and until this file existed it left in silence. Only the 24
+# names in `UNRESOLVABLE` had any departure check at all, and the population TOTAL cannot stand in
+# for one: measured across the 22 minutes between d130b4ee and 4b4a9722 on 2026-08-31, 28 names left
+# the address population and 30 arrived, so the total moved by +2 and hid 28 departures behind 30
+# arrivals. (All 28 were the `er-build-import-runtime` rename to `*_RVA`, so nothing actually lost
+# coverage -- but nothing said so either, and a rename that dropped the `_RVA` instead would have
+# read exactly the same.) ARRIVALS ARE FREE, only departures are gated: more coverage never needs
+# permission, so a new constant does not touch this file and the churn is bounded to real removals.
+FLOOR = Path(__file__).resolve().parent / "expression-constants.floor.txt"
+FLOOR_HEADER = """\
+# Constants that WERE in the gated population of scripts/check-expression-constants.py.
+#
+# Every name here must still be gated. A name that disappears fails the gate: coverage left, and
+# a derived population loses members silently. Renames show up as one departure and one arrival --
+# check the new name is gated, then DELETE THAT ONE LINE here in the same commit. Arrivals need no
+# entry at all, so adding a constant never touches this file.
+#
+# Prefer the one-line delete. `--refresh-floor` rewrites the file wholesale from the tree it is run
+# in, so in a shared checkout it bakes in every other agent's uncommitted names; the gate then
+# fails for everyone who does not have that working tree. Run it only from a clean tree.
+#
+# Regenerate wholesale: python3 scripts/check-expression-constants.py --refresh-floor
+"""
 
 # THE DOCUMENTED EXCEPTIONS. Every entry is a constant in one of the two gated populations whose
 # value genuinely cannot be established from the sources this repo has, with the reason. Nothing
@@ -124,16 +151,28 @@ def address_population(repo: Path, constants: const_fold.Constants) -> dict[str,
     return out
 
 
-def unresolved(repo: Path) -> tuple[list[tuple[str, str, str]], dict[str, str], int]:
-    """`(failures, resolvable_names, population)`.
+def unresolved(repo: Path) -> tuple[list[tuple[str, str, str]], dict[str, str], dict[str, str], int]:
+    """`(failures, resolvable_names, pin_valued_names, population)`.
 
     `failures` is one row per constant with no value: `(name, site, why)`. `resolvable_names` is
     every gated constant that DID evaluate, which is what makes the reverse direction possible --
     a name in `UNRESOLVABLE` that appears there is a stale entry.
+
+    `pin_valued_names` IS THE THIRD STATE, and it is returned rather than dropped because dropping
+    it is what this gate went red on, 2026-08-31. A row the field-offset inventory resolves from a
+    `const _: () = assert!(NAME == 0xNN)` pin, or from hex read out of the constant's own name, is
+    deliberately NOT `resolvable` (see the comment at the branch below) -- but it is not a
+    `failure` either, because a number IS known. Returning only two of the three buckets meant
+    every consumer had to infer the third from an absence, and `report()` inferred it as "the
+    constant left the population": five live `CHR_ASM_*` offsets grew disassembly-derived pins and
+    the gate demanded their (correct, still-accurate) `UNRESOLVABLE` entries be deleted. Deleting
+    them would have removed documented exceptions for live constants and shrunk what the gate
+    watches, which is the exact failure the module docstring warns about, pointed the other way.
     """
     constants = const_fold.Constants.scan(repo)
     failures: list[tuple[str, str, str]] = []
     resolvable: dict[str, str] = {}
+    pin_valued: dict[str, str] = {}
     population = 0
 
     for name, decl in sorted(address_population(repo, constants).items()):
@@ -154,15 +193,45 @@ def unresolved(repo: Path) -> tuple[list[tuple[str, str, str]], dict[str, str], 
             why = row["unresolved"] or "offset_of! on a type whose layout is not modelled"
             failures.append((row["name"], site, why))
         elif "name-hint" not in row["kind"] and "pinned" not in row["kind"]:
+            resolvable[row["name"]] = f"{row['resolved']:#x}"
+        else:
             # A name-hint or a pin is NOT an evaluation -- one reads the constant's own name and
             # the other reads a hand-written assertion. Counting them as resolvable would let a
-            # listed exception look fixed because somebody renamed it.
-            resolvable[row["name"]] = f"{row['resolved']:#x}"
-    return failures, resolvable, population
+            # listed exception look fixed because somebody renamed it. They are named here instead
+            # of vanishing, so that "in the population" stays answerable without an inference.
+            pin_valued[row["name"]] = f"{row['resolved']:#x} ({row['kind']}) {site}"
+    return failures, resolvable, pin_valued, population
 
 
-def report(repo: Path, verbose: bool = True) -> list[str]:
-    failures, resolvable, population = unresolved(repo)
+def gated_names(
+    failures: list[tuple[str, str, str]], resolvable: dict[str, str], pin_valued: dict[str, str]
+) -> set[str]:
+    """Every constant the gate looked at, whatever came of it -- the three buckets are the whole."""
+    return {name for name, _site, _why in failures} | set(resolvable) | set(pin_valued)
+
+
+def read_floor(path: Path | None = None) -> tuple[set[str], str | None]:
+    """The coverage floor, or `(empty, why)` if it cannot be read.
+
+    Missing is a PROBLEM, not a skip: a departure check that quietly does not run is the same
+    invisibility the rest of this gate exists to end.
+    """
+    path = path or FLOOR
+    shown = path.name if path.is_absolute() and ROOT not in path.parents else path
+    if not path.exists():
+        return set(), f"{shown} is missing, so no departure is being detected"
+    names = {
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    if not names:
+        return set(), f"{shown} is empty, so no departure is being detected"
+    return names, None
+
+
+def report(repo: Path, verbose: bool = True, floor_path: Path | None = None) -> list[str]:
+    failures, resolvable, pin_valued, population = unresolved(repo)
     problems: list[str] = []
     if population < 500:
         problems.append(
@@ -179,11 +248,21 @@ def report(repo: Path, verbose: bool = True) -> list[str]:
                 f"UNRESOLVABLE lists {name} ({why}) but it now evaluates to {resolvable[name]} -- "
                 "a stale exception excuses a number nothing is checking; delete the entry"
             )
-    listed = {name for name, _site, _why in failures}
-    for name in sorted(set(UNRESOLVABLE) - listed - set(resolvable)):
+    present = gated_names(failures, resolvable, pin_valued)
+    for name in sorted(set(UNRESOLVABLE) - present):
         problems.append(
             f"UNRESOLVABLE lists {name}, which is no longer in either gated population -- "
             "the entry describes nothing; delete it"
+        )
+    floor, floor_problem = read_floor(floor_path)
+    if floor_problem:
+        problems.append(floor_problem)
+    for name in sorted(floor - present):
+        problems.append(
+            f"{name} was in the gated population and no longer is -- coverage LEFT silently. "
+            f"If it was renamed, check the NEW name is gated too, then delete this one line from "
+            f"{FLOOR.name} in the same commit and say why. (--refresh-floor rewrites the whole "
+            f"file and must be run from a clean tree; the one-line edit is safe in a shared one.)"
         )
     if verbose:
         print(
@@ -191,9 +270,26 @@ def report(repo: Path, verbose: bool = True) -> list[str]:
             f"field-offset populations"
         )
         print(f"  evaluate to a number         : {len(resolvable)}")
+        print(f"  value from a pin or name-hint: {len(pin_valued)} (a number, but not an "
+              "evaluation -- see unresolved())")
         print(f"  cannot be evaluated          : {len(failures)} "
               f"({len(UNRESOLVABLE)} listed in UNRESOLVABLE)")
+        print(f"  coverage floor               : {len(floor)} names must stay gated")
     return problems
+
+
+def refresh_floor(repo: Path) -> int:
+    """Re-record the floor from the tree as it stands, naming every name it drops."""
+    failures, resolvable, pin_valued, _population = unresolved(repo)
+    present = gated_names(failures, resolvable, pin_valued)
+    previous, _why = read_floor()
+    for name in sorted(previous - present):
+        print(f"  dropping {name} -- it is no longer in either gated population")
+    for name in sorted(present - previous):
+        print(f"  adding   {name}")
+    FLOOR.write_text(FLOOR_HEADER + "".join(f"{name}\n" for name in sorted(present)), "utf-8")
+    print(f"{FLOOR.relative_to(ROOT)}: {len(present)} names recorded")
+    return 0
 
 
 # ------------------------------------------------------------------------------------------------
@@ -206,6 +302,43 @@ pub const PLANTED_MUTANT_RVA: usize = some_extern_crate::TABLE.lookup();
 FIXTURE_FOLDABLE = """
 pub const PLANTED_CONTROL_RVA: usize = 0x142658c60 - 0x140000000;
 """
+# THE THIRD STATE, planted: an `offset_of!` on a type the layout modeller does not carry, whose only
+# number comes from a `const _: () = assert!` pin. The field-offset inventory files it
+# `offset_of(pinned)`, which is neither an evaluation nor a failure -- the shape that took this gate
+# red on 2026-08-31.
+FIXTURE_PINNED = """
+pub const PLANTED_PIN_MUTANT_OFFSET: usize = core::mem::offset_of!(NotModelled, member);
+const _: () = assert!(PLANTED_PIN_MUTANT_OFFSET == 0x40);
+"""
+
+
+def _sweep_orphaned_mutants(where: "Path") -> None:
+    """Delete `_expr_mutant_<pid>.rs` files whose planting process is gone.
+
+    The mutants below are planted into a REAL crate under try/finally, which covers an
+    exception but NOT a kill: SIGTERM is not catchable by default, so `timeout 28 python3
+    scripts/check-expression-constants.py --selftest` -- this gate's selftest is 9.5s and the
+    vacuity auditor runs it twice, so a 30s-capped agent shell hits that -- leaves the mutant
+    behind. Measured 2026-08-31: one orphan wedged BOTH halves of this gate red for every agent
+    in the shared tree, reporting `PLANTED_MUTANT_RVA ... has no value`, which reads as a real
+    finding about somebody's uncommitted work rather than as this tool's own litter.
+
+    The PID is in the filename precisely so a concurrent selftest's live mutant is not swept:
+    only a file whose owner no longer exists is removed.
+    """
+    for stale in where.glob("_expr_mutant_*.rs"):
+        try:
+            pid = int(stale.stem.rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            pass  # alive but not ours to signal -- leave it
 
 
 def selftest(repo: Path) -> int:
@@ -292,6 +425,63 @@ def selftest(repo: Path) -> int:
     finally:
         UNRESOLVABLE.pop("NO_SUCH_CONSTANT_ANYWHERE_OFFSET", None)
 
+    # --- MUTANT E: THE THIRD STATE MUST NOT READ AS A DEPARTURE. A constant the field-offset
+    # inventory can only value from a pin is deliberately not `resolvable`, and it is not a
+    # `failure` either; inferring "it left the population" from that double absence is what made
+    # this gate demand the deletion of five accurate `CHR_ASM_*` exceptions on 2026-08-31, the day
+    # somebody pinned those offsets against the ctor disassembly.
+    try:
+        planted.write_text(FIXTURE_PINNED, encoding="utf-8")
+        UNRESOLVABLE["PLANTED_PIN_MUTANT_OFFSET"] = "planted"
+        problems = report(repo, verbose=False)
+        for problem in problems:
+            if "PLANTED_PIN_MUTANT_OFFSET" not in problem:
+                continue
+            failures.append(
+                f"mutant E: a listed constant whose only value is a pin was reported -- {problem}"
+            )
+        _f, _r, pin_valued, _n = unresolved(repo)
+        if "PLANTED_PIN_MUTANT_OFFSET" not in pin_valued:
+            failures.append(
+                "mutant E: the planted pin-valued constant was not in the third bucket at all, so "
+                "the mutant proves nothing -- the field-offset inventory did not pick the file up"
+            )
+    finally:
+        UNRESOLVABLE.pop("PLANTED_PIN_MUTANT_OFFSET", None)
+        planted.unlink(missing_ok=True)
+
+    # --- MUTANT F: A DEPARTURE FROM THE COVERAGE FLOOR -> RED, and a name still gated -> not.
+    # `tempfile` rather than a planted file: a fixture that lands in the repo becomes another
+    # gate's finding when this process is killed, which is exactly what `_sweep_orphaned_mutants`
+    # exists to undo.
+    with tempfile.TemporaryDirectory(prefix="expr-const-floor-") as scratch:
+        fabricated = Path(scratch) / "floor.txt"
+        fabricated.write_text(
+            "# fabricated\nA_CONSTANT_THAT_LEFT_THE_POPULATION_RVA\n"
+            "ADD_DEFAULT_FILE_LOAD_PROCESS_RVA\n",
+            encoding="utf-8",
+        )
+        problems = report(repo, verbose=False, floor_path=fabricated)
+        if not any(
+            "A_CONSTANT_THAT_LEFT_THE_POPULATION_RVA" in p and "coverage LEFT silently" in p
+            for p in problems
+        ):
+            failures.append(
+                "mutant F: a floor name that is no longer gated was not reported -- constants can "
+                "leave the population in silence again"
+            )
+        if any("ADD_DEFAULT_FILE_LOAD_PROCESS_RVA" in p for p in problems):
+            failures.append(
+                "mutant F: a floor name that IS still gated was reported as departed; the "
+                "departure check is firing on presence"
+            )
+        _names, why = read_floor(Path(scratch) / "there-is-no-such-floor.txt")
+        if not why:
+            failures.append(
+                "mutant F: a MISSING floor read as clean -- a departure check that does not run "
+                "must be a problem, not a skip"
+            )
+
     # --- MUTANT D: BLIND THE FOLDER. This is the non-vacuity proof: with the evaluator refusing
     # everything, the gate must go red on constants it currently passes -- if it stays green, it is
     # not the folding that makes it green.
@@ -322,15 +512,29 @@ def main() -> int:
     ap.add_argument("--repo", type=Path, default=ROOT)
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--list", action="store_true", help="print every constant with no value")
+    ap.add_argument(
+        "--refresh-floor",
+        action="store_true",
+        help="re-record the coverage floor from this tree (run it on a CLEAN tree)",
+    )
     args = ap.parse_args()
+    # Before EITHER half reads the tree. The live gate never enters selftest(), and an orphan
+    # makes it red too -- naming a constant that is this tool's own litter as a finding about
+    # somebody's crate.
+    _sweep_orphaned_mutants(ROOT / "crates" / "er-game-base" / "src")
     if args.selftest:
         return selftest(args.repo)
+    if args.refresh_floor:
+        return refresh_floor(args.repo)
     problems = report(args.repo)
     if args.list:
-        failures, _resolvable, _n = unresolved(args.repo)
+        failures, _resolvable, pin_valued, _n = unresolved(args.repo)
         for name, site, why in sorted(failures):
             mark = "listed" if name in UNRESOLVABLE else "UNLISTED"
             print(f"  [{mark}] {name} ({site}): {why}")
+        for name, where in sorted(pin_valued.items()):
+            mark = "listed" if name in UNRESOLVABLE else "pin  "
+            print(f"  [{mark}] {name} = {where}")
     for problem in problems:
         print(f"check-expression-constants: {problem}")
     if problems:

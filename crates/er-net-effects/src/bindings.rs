@@ -49,6 +49,12 @@ pub(crate) enum SelectorAction {
     StackRemove,
     EffectToggle,
     ShowHide,
+    /// Expand the bar from its `[+]` button to the effect list, or minimize it back.
+    ///
+    /// Separate from [`SelectorAction::ShowHide`], which draws the bar or removes it entirely.
+    /// The `[+]` button also takes a left mouse click, but that click is unreachable while the
+    /// game holds the pointer -- see [`crate::selector_gate`].
+    ExpandCollapse,
 }
 
 /// A fixed slot index for every binding, so a bitmask of "which selector keys were down" means the
@@ -66,9 +72,13 @@ pub(crate) mod slot {
     /// Show/hide accepts several chords, so it owns a RANGE.
     pub(crate) const SHOW_HIDE_FIRST: usize = 7;
     pub(crate) const SHOW_HIDE_MAX: usize = 3;
+    /// Expand/collapse, placed AFTER the show/hide range so adding it renumbered no existing
+    /// slot. The indices feed a positional bitmask, so a renumber is a real hazard even though
+    /// nothing persists them.
+    pub(crate) const EXPAND_COLLAPSE: usize = SHOW_HIDE_FIRST + SHOW_HIDE_MAX;
     /// One past the last slot. Every mask in this crate is `usize`, so this must stay well under
     /// 64.
-    pub(crate) const COUNT: usize = SHOW_HIDE_FIRST + SHOW_HIDE_MAX;
+    pub(crate) const COUNT: usize = EXPAND_COLLAPSE + 1;
 }
 
 /// The mask of the four cursor slots -- the only keys this DLL TAKES from the game.
@@ -121,6 +131,12 @@ pub(crate) const SINGLE_BINDINGS: &[(&str, SelectorAction, usize, &str)] = &[
         slot::EFFECT_TOGGLE,
         "alt+quote",
     ),
+    (
+        "selector_expand_key",
+        SelectorAction::ExpandCollapse,
+        slot::EXPAND_COLLAPSE,
+        "alt+9",
+    ),
 ];
 
 /// The config key for the show/hide chords, and their shipped defaults.
@@ -171,6 +187,16 @@ selector_stack_remove_key = "kp_minus"
 # Apply or remove the highlighted effect. Fires whether the bar is expanded or not -- playing with
 # the bar minimized is what this DLL is for.
 selector_apply_key = "alt+quote"
+
+# Expand the bar from its ER NET EFFECTS [+] button to the full effect list, and minimize it back.
+#
+# THIS IS THE ONLY WAY IN WHILE YOU ARE PLAYING. The button also takes a left mouse click, and that
+# click works whenever the pointer is free -- but while the game has the mouse the Windows pointer
+# the overlay hit-tests against stops following your hand, so a button in the screen corner cannot
+# be reached. Measured: it was clicked ZERO times in 1,296,264 drawn frames. Before this key
+# existed a bar that ships minimized stayed minimized, and with it the four cursor keys above --
+# which require an expanded bar -- did nothing at all.
+selector_expand_key = "alt+9"
 
 # Show or hide the bar. Several chords, comma-separated, because this is the ONLY way back to a
 # hidden bar and a keyboard may not have all three of these keys.
@@ -287,7 +313,11 @@ pub(crate) fn parse_chord_list(value: &str) -> Result<Vec<Chord>, KeyParseError>
 }
 
 impl SelectorBindings {
-    /// Every bound key, in slot order.
+    /// Every bound key.
+    ///
+    /// The ORDER is not the slot order and never was -- `apply_show_hide` rebinds by
+    /// retain-and-append, so a rebound show/hide chord moves to the end. Read `BoundKey::slot`;
+    /// nothing here may depend on position in this slice.
     pub(crate) fn keys(&self) -> &[BoundKey] {
         &self.keys
     }
@@ -732,6 +762,27 @@ mod tests {
             seen |= key.bit();
         }
         assert_eq!(seen & CURSOR_SLOT_MASK, CURSOR_SLOT_MASK);
+    }
+
+    /// Every shipped default must be a key DirectInput can report.
+    ///
+    /// The DirectInput read is the STRONG path: `input_suppression::queue_dinput_selector_edges`
+    /// inspects the very 256-byte buffer the game itself polls, so a key with a scancode is seen
+    /// exactly when the game sees it, whatever the window is doing with messages. A key with none
+    /// can only reach the selector through the `WH_KEYBOARD_LL` hook -- a separate mechanism with
+    /// separate failure modes. Shipping a default that arrives only on the weaker path is how a
+    /// key ends up "not working" for reasons no log explains, which is the shape of bug this
+    /// whole module already carries scars from.
+    #[test]
+    fn every_shipped_default_is_a_key_directinput_can_report() {
+        let bindings = SelectorBindings::default();
+        for key in bindings.keys() {
+            assert!(
+                key.chord.dik.is_some(),
+                "{:?} ships bound to a key DirectInput cannot report",
+                key.action
+            );
+        }
     }
 
     /// Only the four cursor keys are ever taken from the game, so only their scancodes are

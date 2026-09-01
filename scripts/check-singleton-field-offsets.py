@@ -31,12 +31,19 @@ object, the set of field offsets 1.16.2 reads and the set 1.17 reads. An offset 
 reads and the new one never reads is a field that moved or vanished -- which is exactly the
 silent failure, made loud.
 
-Measured on the tracked objects today: NOT ONE of the 313 field offsets 1.16.2 reads through
-these globals has disappeared in 1.17 (GameMan 160, GameDataMan 53, CSMenuManImp 44,
+Measured on the tracked objects today: NOT ONE of the 312 field offsets 1.16.2 reads through
+these globals has disappeared in 1.17 (GameMan 159, GameDataMan 53, CSMenuManImp 44,
 WorldChrManImp 18, SessionManager 16, CSFlipperImp 7, PlayerGameData 15 -- every one of them read
-in both images). SessionManager gains one field in 1.17 and loses none. So the null result is a
-real null result, measured, not an empty set: see FROZEN_FIELD_COUNTS for why it cannot silently
+in both images), and neither image reads one the other does not. So the null result is a real
+null result, measured, not an empty set: see FROZEN_FIELD_COUNTS for why it cannot silently
 become one.
+
+This paragraph used to read "314 ... GameMan 160 ... SessionManager gains one field in 1.17", and
+that extra field was NOT A FIELD. `_follow` walked five instructions past the end of the function
+holding the singleton load and collected whatever the NEXT function did with the register; the
+1.17 SessionManager "+0x18" was a `lea edx, [rax + 0x18]` six bytes over the boundary. See
+`_follow` for the three artefacts and for why the correct bound is the function extent, never a
+byte or instruction count.
 
 WHAT IT STILL DOES NOT COVER, SAID PLAINLY. Only 65 of the workspace's ~900 named offset constants
 are cleared here. 713 have no owner this can establish, 112 have an owner no singleton reaches
@@ -97,6 +104,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
+
 # --- capstone bootstrap via uv (no persistent install needed) ------------------------------
 # capstone is provisioned at runtime by `uv run --with capstone`; it is NOT in the base
 # interpreter Pyright resolves against, so probe with find_spec (a bare import would be an
@@ -121,22 +131,27 @@ NEW_IMAGE = os.path.join(REPO, "eldenring-deobf-1.17.bin")
 DATA_MAP = os.path.join(REPO, "docs", "recon", "rva-map-1162-to-1170.data.tsv")
 
 # How many instructions after the singleton load may still be reading through it. The
-# register-clobber and branch stops in `_follow` are what actually bound the window; this is the
-# belt, and it is not a free parameter -- it was swept against both images:
+# register-clobber, branch and FUNCTION-END stops in `_follow` are what actually bound the window;
+# this is the belt. Swept against both images, with the function-end stop in place:
 #
-#   window |  fields witnessed per object          | offsets read in 1.16.2 and NOT in 1.17
+#   window |  fields witnessed per object          | asymmetric offsets (in one image only)
 #   -------|---------------------------------------|---------------------------------------
-#     3    | 152/52/44/16/16/7/10                   | GameMan +0x0
-#     5    | 160/53/44/18/16/7/15                   | none
-#     8    | 162/55/46/18/17/7/16                   | CSMenuManImp +0x3b, SessionManager +0x73
-#    12    | 163/55/47/18/17/7/17                   | + GameMan +0x8
+#     3    | 151/52/44/16/16/7/10                   | none
+#     5    | 159/53/44/18/16/7/15                   | none
+#     8    | 161/55/45/18/16/7/16                   | none
+#    12    | 161/55/45/18/16/7/17                   | none
 #
-# 3 is too tight: it misses the 1.17 site that reads `[GameMan+0]`, so the vftable slot reads as
-# LOST. Past 5 the window starts spanning a branch JOIN -- an address reached from elsewhere with
-# a different value in the register -- and single-witness junk displacements (0x3b, 0x73, both
-# unaligned, both witnessed once, both in one image only) enter the sets. That is the
-# false-positive signature, not a moved field. 5 is the widest window at which the two images
-# agree on every scanned object.
+# READ THAT LAST COLUMN AGAINST THE ONE THIS TABLE USED TO CARRY. Before the function-end stop
+# landed (2026-08-31) the sweep reported `GameMan +0x0` lost at 3, and `CSMenuManImp +0x3b` /
+# `SessionManager +0x73` gained at 8, and the tuning note blamed those on a branch JOIN -- an
+# address reached from elsewhere with a different value in the register. They were not joins.
+# They were the NEXT FUNCTION: every one of them decoded past a `ret`, out of the de-Arxan'd
+# image's leftover gap bytes, where the "register" holds whatever its real owner put there.
+# `GameMan +0x0`, the "vftable slot" that made 3 look too tight, is a phantom in BOTH images --
+# 1.17's two witnesses for it decode as `sar dword ptr [rax], 0x6f` and `and dword ptr [rax], esp`,
+# neither of which was ever assembled. With the real bound in place NOTHING is asymmetric at any
+# window, so this parameter is no longer load-bearing; 5 is kept because it is what the frozen
+# counts were re-measured at, not because anything now hinges on it.
 FOLLOW_INSNS = 5
 # Widest plausible struct. Anything past this is an array stride or a mask, not a field.
 FIELD_MAX = 0x20000
@@ -202,12 +217,17 @@ OFFSET_NAME = re.compile(r"(_OFFSET(_[A-Z0-9]+)?$|_OFF$|_OFFS$|_FIELD$|_DISP$|_D
 # Refresh deliberately with --refresh-frozen when the matcher is intentionally widened, and read
 # the diff.
 # ---------------------------------------------------------------------------------------------
+# Re-measured 2026-08-31 with the function-end stop in `_follow`. Two rows moved, and BOTH moved
+# because a phantom left: GameMan 160 -> 159 (the `+0x0` "vftable slot", read past the `ret` in
+# both images) and SessionManager (16, 17, 16) -> (16, 16, 16) (the 1.17 `+0x18` `lea`, six bytes
+# into the next function). The gate's old headline -- "SessionManager gains one field in 1.17 and
+# loses none" -- was an artefact of the over-read and is gone with it.
 FROZEN_FIELD_COUNTS = {
-    "CS::GameMan": (160, 160, 160),
+    "CS::GameMan": (159, 159, 159),
     "CS::GameDataMan": (53, 53, 53),
     "CS::CSMenuManImp": (44, 44, 44),
     "CS::WorldChrManImp": (18, 18, 18),
-    "SessionManager": (16, 17, 16),
+    "SessionManager": (16, 16, 16),
     "CS::CSFlipperImp": (7, 7, 7),
     "CS::PlayerGameData": (15, 15, 15),
 }
@@ -301,17 +321,49 @@ _R64_INDEX = {reg: i for i, reg in enumerate(_R64)}
 def _follow(image, off, reg_index, hops):
     """Field offsets read through the register loaded at `off`, after walking `hops`.
 
-    Returns a set of displacements. The window closes at the first of: FOLLOW_INSNS
-    instructions, a write to the register being tracked (after which it no longer holds the
-    singleton), a branch, or a decode failure.
+    Returns a set of displacements. The window closes at the first of: THE END OF THE FUNCTION
+    THE LOAD IS IN, FOLLOW_INSNS instructions, a write to the register being tracked (after which
+    it no longer holds the singleton), a branch, or a decode failure.
+
+    THE FUNCTION END IS THE ONE THAT WAS MISSING, AND IT INVENTED FIELDS. The premise of this
+    whole gate -- "the base register PROVABLY holds that singleton, the instruction two lines up
+    loaded it" -- is a statement about STRAIGHT-LINE CODE INSIDE ONE FUNCTION. Past the `ret` it
+    is simply false: control does not fall through, the register belongs to whoever comes next,
+    and in a de-Arxan'd image the bytes there are the deobfuscator's leftovers, which
+    RESYNCHRONISE into instructions nobody assembled. Three measured artefacts, all removed by
+    the `body_end` stop below (2026-08-31):
+
+      * SessionManager 1.17 `+0x18`. The load sits at 0x140257d0f inside a function ending at
+        0x140257d22; the "read" is `lea edx, [rax + 0x18]` at 0x140257d28, SIX BYTES into the
+        next function -- and a `lea` computing an address, not a field read, at that. It was the
+        SOLE evidence for this file's headline claim that SessionManager gains a field in 1.17.
+      * CS::GameMan `+0x0`, in BOTH images, from two sites each, every one past its function's
+        end. 1.17's decode as `sar dword ptr [rax], 0x6f` and `and dword ptr [rax], esp`. This
+        is the "vftable slot" the FOLLOW_INSNS table above used to cite as the reason a window of
+        3 was too tight.
+      * The `+0x3b` / `+0x73` junk the same table blamed on a branch JOIN at window 8. Also the
+        next function.
+
+    Being symmetric is no defence: `CS::PlayerGameData +0xe5` reads past the FIRST `.pdata` chunk
+    in both images and looks clean because both images agree. It survives here only because
+    `function_regions` MERGES CHUNK RUNS, so the read is genuinely inside the function -- which is
+    exactly why the extent comes from the shared primitive and not from a local `.pdata` walk. A
+    hand-rolled reader written for this fix dropped it, wrongly.
     """
     want = _R64[reg_index]
     found = set()
     remaining = list(hops)
     pos = off + 7
     seen = 0
+    # None means the extent cannot be told at all. There is no honest byte count to substitute,
+    # so the other stops (register clobber, branch, FOLLOW_INSNS) carry it, exactly as before --
+    # this arm is not a licence to over-read, it is the case where nothing better is known.
+    # Measured on the current images: 2 of the follow sites.
+    end = function_extent.body_end(image, BASE + off)
     for insn in _MD.disasm(bytes(image[pos : pos + 64]), BASE + pos):
         if seen >= FOLLOW_INSNS:
+            break
+        if end is not None and insn.address - BASE + insn.size > end:
             break
         seen += 1
         hop_taken = False
@@ -516,12 +568,21 @@ FUNC_SCAN_BYTES = 0x3000
 
 
 def _walk_function(image, va, arg_reg=cs_x86.X86_REG_RCX):
-    """Field offsets read through `arg_reg`, plus the vtable pointers stored at [reg+0]."""
+    """Field offsets read through `arg_reg`, plus the vtable pointers stored at [reg+0].
+
+    Bounded by the function's own extent, with FUNC_SCAN_BYTES surviving only as a cap on top of
+    it. The `ret` stop below is not a substitute: a function that ends in a TAIL CALL never
+    reaches one, and the walk then ran up to FUNC_SCAN_BYTES into its neighbours. See `_follow`
+    for the three field offsets that shape invented in the gate proper.
+    """
     held = {arg_reg}
     fields, calls, stored = set(), [], []
     lea_targets = {}
     off = va - BASE
-    for insn in _MD.disasm(bytes(image[off : off + FUNC_SCAN_BYTES]), va):
+    stop = function_extent.body_slice_end(image, va, cap=FUNC_SCAN_BYTES)
+    if stop is None:
+        stop = off + FUNC_SCAN_BYTES
+    for insn in _MD.disasm(bytes(image[off:stop]), va):
         if (
             insn.id == cs_x86.X86_INS_MOV
             and len(insn.operands) == 2
@@ -581,8 +642,13 @@ def _chain_call_targets(image, global_rva, hop, follow=12):
         if target != global_rva:
             continue
         want, hopped, seen = _R64[reg_index], False, 0
+        # Same function-end stop as `_follow`, for the same reason: a chain hop read out of the
+        # next function is not this singleton's field.
+        end = function_extent.body_end(image, BASE + off)
         for insn in _MD.disasm(bytes(image[off + 7 : off + 7 + 128]), BASE + off + 7):
             if seen >= follow:
+                break
+            if end is not None and insn.address - BASE + insn.size > end:
                 break
             seen += 1
             took = False

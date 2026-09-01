@@ -163,6 +163,30 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	done
 	echo "[check-rust-build] linked ${#me3_shells[@]} me3 shells + the product DLL"
 
+	# RE-ATTEST WHAT WE JUST RELINKED. This step overwrites the very artifacts every `.me3`
+	# profile's `[[natives]]` entries point at (they reference target/$target/release/*.dll
+	# directly -- there is no separate staging copy), so leaving their `.provenance.json`
+	# sidecars behind describing the PREVIOUS bytes turns `er-dll-provenance.py verify` into a
+	# liar in the safe direction: every DLL reads STALE/"ARTIFACT REPLACED" even though it was
+	# just built from this exact tree. Measured 2026-08-31: sidecars said built=17:23 while the
+	# binaries' PE stamps said 17:36, and all 26 shells verified STALE purely because the gate
+	# had relinked them. `er-run-branch.py` refuses to launch on that, so the gate was training
+	# everyone to distrust or bypass the freshness check that exists to stop a stale-DLL run.
+	# Writing provenance here is the same call `er-build-dlls.sh` makes after its own cargo
+	# invocation, for the same reason: provenance is a claim about the tree that was compiled,
+	# and only the builder knows that.
+	prov_status=0
+	for shell in "${me3_shells[@]}" "er-quickload:er_quickload"; do
+		python3 "$repo_root/scripts/er-dll-provenance.py" write \
+			--package "${shell%%:*}" \
+			--artifact "$repo_root/target/$target/release/${shell##*:}.dll" >/dev/null || prov_status=1
+	done
+	if [[ "$prov_status" != "0" ]]; then
+		echo "[check-rust-build] FAIL: could not record provenance for a relinked shell" >&2
+		exit 1
+	fi
+	echo "[check-rust-build] recorded provenance for $(( ${#me3_shells[@]} + 1 )) artifacts"
+
 	# LINT PARITY WITH ../fromsoftware-rs (2026-08-21). The parent project's entire
 	# strictness is `RUSTFLAGS=-Dwarnings` around `cargo clippy --all-targets`, and the
 	# user requires this workspace be AT LEAST as strict. The root `[workspace.lints]`
@@ -201,8 +225,38 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	# `-p` is explicit rather than relying on default-members (= er-quickload): the
 	# ProfileSummary crate's windows-only tests moved OUT of er-quickload, and a bare
 	# `--lib` would have quietly stopped running them.
+	# THE LIST IS THE GATE. `-p` is explicit rather than relying on default-members
+	# (= er-quickload), and every crate here is one whose tests CANNOT run on the host:
+	# they live under `#[cfg(windows)]`, so a host `cargo test` compiles them out of
+	# existence and then reports OK over the ones that remain. Measured 2026-08-31, before
+	# the six additions below -- each pair is (what the host runs / what actually exists):
+	#
+	#   er-quit-menu-core        43 / 73   -- 30 windows-only tests, none of them ever run
+	#   er-invasion-path         73 / 90   -- 17 behind a file-level `#![cfg(windows)]`
+	#   er-better-refills         0 /  3   -- host build was broken outright until today
+	#   er-build-import-runtime   0 /  2   -- whole lib.rs is `#![cfg(windows)]`
+	#   er-invasion-warp-core   283 / 284
+	#   er-loading-portrait-core 81 / 82
+	#
+	# er-quit-menu-core is the one that shows why crate-level bookkeeping is not enough:
+	# check.sh has run it on the host for weeks, printing "ok. 43 passed", while 30 tests
+	# next to them had never been built. scripts/check-test-target-coverage.py holds this
+	# list complete from here.
 	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
-		cargo xwin test --lib -p er-quickload -p er-profile-summary-core \
+		cargo xwin test --lib \
+		-p er-quickload -p er-profile-summary-core \
+		-p er-quit-menu-core -p er-invasion-path -p er-invasion-warp-core \
+		-p er-loading-portrait-core -p er-better-refills -p er-build-import-runtime \
+		--manifest-path "$repo_root/Cargo.toml" --target "$target"
+
+	# er-game-base's `pgd` module is `#[cfg(all(windows, feature = "game-types"))]`, and
+	# `game-types` is not a default feature -- so its 2 tests are invisible to every command
+	# in this repo: the host `cargo test -p er-game-base --lib` in check.sh compiles neither
+	# the windows half nor the feature, and the windows run above uses default features. A
+	# separate invocation because `--features` is not per-package when several `-p` are
+	# selected. Measured: 62 tests without the feature, 64 with it.
+	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
+		cargo xwin test --lib -p er-game-base --features game-types \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 else
 	echo "[check-rust-build] wine not found; skipping the windows-target unit-test RUN (compile check above still ran)" >&2

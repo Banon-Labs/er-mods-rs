@@ -252,13 +252,17 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // NOT `submit(slot)`: the argument is a flag the game always passes as 0, and the slot
         // was already set by `set_save_slot` above. See `B80_FULL_LOAD_SUBMIT_FLAG`.
         let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
         append_autoload_debug(format_args!(
             "native-fullread: SUBMIT slot={slot} b78={b78} (0x{:x} write) set_save_slot 0x{:x} ac0={ac0} submit 0x{:x} ret={sret} b80={b80} -> DRAIN",
             base,
-            base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA"
+            ),
             er_game_base::mem::game_data_addr(
                 base,
                 B80_FULL_LOAD_INITIATOR_RVA,
@@ -299,7 +303,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             )
         };
         let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
-        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let w = FULLREAD_DRAIN_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst) as u64;
         if w % FULLREAD_LOG_INTERVAL == NULL as u64 {
@@ -735,8 +739,7 @@ pub(crate) unsafe fn continue_drive_tick(_module_base: usize, slot: i32, tick: u
         return;
     }
     let real_done = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
-    let load_progress =
-        unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+    let load_progress = unsafe { *((game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) as *const u8) };
     let map14 = unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
     if real_done == GAME_MAN_REAL_LOAD_DONE_VALUE {
         if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
@@ -805,8 +808,7 @@ pub(crate) unsafe fn continue_drive_tick(_module_base: usize, slot: i32, tick: u
         || tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64
     {
         let real_after = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
-        let b80_after =
-            unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+        let b80_after = unsafe { *((game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) as *const u8) };
         let b73_after = unsafe { *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *const u8) };
         let map14_after =
             unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };

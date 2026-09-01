@@ -66,6 +66,98 @@ const INFUSIONS: &[(&str, u32)] = &[
 /// them and duplicating them corrupts the flask UI.
 const NEVER_GRANT: &[&str] = &["Flask of Crimson Tears", "Flask of Cerulean Tears"];
 
+/// The most of any ONE consumable a build import will hand out.
+///
+/// # Why a ceiling exists over the game's own maximum
+///
+/// [`Entry::max_stored`] is `EquipParamGoods.maxNum`, and that field has a tail this importer
+/// must not follow. Measured against the installed 1.17 `regulation.bin`, 21 ordinary consumables
+/// declare `maxNum = 999` -- Furlcalling Finger Remedy, Ruin Fragment, Roundrock -- and a build
+/// that merely LISTS one of those is not asking for nine hundred of it. Emptying that into the
+/// player's inventory is the unasked-for mutation, not the missing feature.
+///
+/// # Why this number and not a comfortable one
+///
+/// 99 is the engine's own ceiling, not one chosen here. It is the only literal in
+/// `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 `0x14024e570`, same address on 1.17),
+/// which returns it twice: once when a goods row declares no `maxNum` at all, and again for a
+/// pot-group item in a session that is not enforcing pot limits. Clamping to it costs nothing in
+/// any realistic case -- boluses declare exactly 99 and are untouched, a Fire Pot declares 10 --
+/// and removes only the absurd tail.
+const MAX_GRANTED_PER_CONSUMABLE: u32 = 99;
+
+/// How many of one consumable the build is asking for.
+///
+/// # The payload does not say, and the number still has to come from somewhere
+///
+/// A planner slot carries `{name, order, upgrade, infusion, weaponArt, equipIndex, equipSet}` and
+/// nothing else -- there is no count field anywhere in the document, on tools or on any other
+/// category. So the importer picks, and the only defensible pick is the item's OWN limit rather
+/// than a number invented here: [`Entry::max_stored`], clamped by
+/// [`MAX_GRANTED_PER_CONSUMABLE`].
+///
+/// # Why not one, which is what the planner's own exporter emits
+///
+/// The planner's Cheat Engine exporter hard-codes `quantity = 1`, and that was this function's
+/// behaviour by accident -- `max_stored` was declared, never populated, and `unwrap_or(1)` made
+/// every consumable a single item. One Fire Pot is not a build; the tools list is the character's
+/// pouch, and reproducing it with one of each reproduces the names and none of the loadout.
+///
+/// # Why the target is safe to set high
+///
+/// The grant path RECONCILES to this number rather than adding it: it grants the shortfall
+/// between what the character already holds and what is asked for, and grants nothing at all when
+/// the character is already at or over it. Re-importing the same build twice is therefore a
+/// no-op, not a doubled stack.
+fn consumable_quantity(entry: Option<Entry>) -> u32 {
+    entry
+        .and_then(|found| found.max_stored)
+        .unwrap_or(1)
+        .clamp(1, MAX_GRANTED_PER_CONSUMABLE)
+}
+
+/// How many arrows or bolts the build is asking for.
+///
+/// # A different field, because ammunition is not a consumable
+///
+/// Arrows and bolts are `EquipParamWeapon` rows, not `EquipParamGoods` -- which is why they equip
+/// into dedicated `ChrAsmSlot` positions instead of the quickbar -- so `maxNum`, the number behind
+/// [`consumable_quantity`], does not describe them and is not even read for them. The engine says
+/// so itself: `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 and 1.17 both `0x14024e570`)
+/// handles the goods category inline and tail-jumps every other category to `::GetMaxItemQuantity`
+/// (1.16.2 `0x140674680`, 1.17 `0x1406754d0`), whose weapon branch is:
+///
+/// ```text
+/// movzbl 0xe6(%rcx),%edx   ; EquipParamWeapon.weaponCategory
+/// cmp    $0xd,%dl          ; 13 -- arrows
+/// je     take_it
+/// cmp    $0xe,%dl          ; 14 -- bolts
+/// jne    return_1
+/// take_it:
+/// movzbl 0x235(%rcx),%eax  ; EquipParamWeapon.maxArrowQuantity
+/// ```
+///
+/// Any other weapon row falls through to `mov $0x1,%eax`, which is why every armament in this
+/// module is granted a literal 1: that is not a convention, it is the engine's answer.
+///
+/// # No ceiling of our own, and the histogram that says why one is not needed
+///
+/// [`MAX_GRANTED_PER_CONSUMABLE`] exists because `maxNum` has an absurd tail -- 21 goods rows
+/// declare 999. `maxArrowQuantity` has none. Measured over the 73 ammunition rows of the installed
+/// 1.17 `regulation.bin` (`scripts/regulation-ammo-census.py`): `{1: 2, 20: 5, 30: 8, 99: 58}`.
+/// The 20s are the five Ballista Bolts, the 30s the eight Great Arrows, and the 99s every ordinary
+/// arrow and bolt -- the game's own quiver limits, and 99 is the same ceiling the goods path caps
+/// at anyway. Clamping would be machinery guarding against a tail that does not exist.
+///
+/// The two rows declaring 1 are `47000000` and `47010000`, which the message repository does not
+/// name at all, so the catalog never resolves them and this never sees them.
+///
+/// A row that declares nothing gets ONE, exactly as [`consumable_quantity`] does: handing a player
+/// the engine's fallback for an item the game has no opinion about is the over-grant this avoids.
+fn ammo_quantity(entry: Option<Entry>) -> u32 {
+    entry.and_then(|found| found.max_stored).unwrap_or(1).max(1)
+}
+
 /// One item to hand to the player.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
@@ -103,6 +195,29 @@ pub struct Grant {
     pub weapon_skill: u32,
     /// What this grant is, for logs and for the user.
     pub label: String,
+    /// `EquipParamGoods.potGroupId` when the game POT-CAPS this item, else `None`.
+    ///
+    /// Carried from [`crate::catalog::Entry::pot_group`], which documents the mechanism. It is on
+    /// the grant because it changes what "grant five of these" MEANS: for a pot-capped item the
+    /// engine clamps the add to `potItemsCapacity[g] - potItemsCount[g]` without saying so, so a
+    /// grant path that wants to deliver the requested number has to free space in the group
+    /// first -- and the group id is what tells it which other carried items would free any.
+    pub pot_group: Option<u8>,
+    /// Whether this is an ARMAMENT -- the only kind that mints a per-instance gaitem.
+    ///
+    /// # Why the category nibble cannot answer this
+    ///
+    /// The runtime used to decide it arithmetically: `item_id & 0xF000_0000 == 0` means the weapon
+    /// category, and the weapon category means an armament. That was true only while ammunition
+    /// was unimplemented. Arrows and bolts are `EquipParamWeapon` rows and carry the SAME nibble,
+    /// so the test now answers "armament" for a quiver of Bone Arrows -- and answering it wrongly
+    /// is not cosmetic. The armament path mints one `GaItemHandle` through
+    /// `GetGaitemHandleWeaponWithGem`, writes an upgrade level into the instance and mounts a gem;
+    /// none of those exist for ammunition, and a stack of 99 arrows is not one instance.
+    ///
+    /// So the fact travels WITH the grant, decided where the catalog kind is still known, rather
+    /// than being re-derived from an id that no longer distinguishes the two.
+    pub armament: bool,
 }
 
 impl Grant {
@@ -413,6 +528,8 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
                     upgrade_is_character_default: true,
                     weapon_skill: NO_SKILL,
                     label: slot.name.clone(),
+                    pot_group: found.pot_group,
+                    armament: false,
                 });
             }
             None => out.unresolved.push(Unresolved {
@@ -434,10 +551,11 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
         {
             continue;
         }
-        let quantity = catalog
-            .lookup(Kind::Tool, &slot.name)
-            .and_then(|found| found.max_stored)
-            .unwrap_or(1);
+        // THE ONE CATEGORY THAT IS GRANTED IN NUMBERS. Everything else in this function passes a
+        // literal 1 because one is what the item MEANS: an armament, a piece of armour, a
+        // talisman and a great rune are each a single thing to wear, and a sorcery is a single
+        // thing to memorise. A consumable is the only kind whose point is the stack.
+        let quantity = consumable_quantity(catalog.lookup(Kind::Tool, &slot.name));
         push_simple(catalog, Kind::Tool, slot, quantity, &mut out);
     }
     // The great rune is a goods item like any other and has to be in the inventory before it
@@ -449,12 +567,29 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
         };
         push_simple(catalog, Kind::GreatRune, &slot, 1, &mut out);
     }
+    // A TEAR IS LOOKED UP AS A TOOL BUT IS NOT GRANTED LIKE ONE. It goes in the physick, which
+    // holds exactly two, and the game agrees: every crystal tear row declares `maxNum = 1`. The
+    // literal here and `consumable_quantity` would return the same number today; the literal says
+    // that one is the ANSWER rather than a value that happens to be one this patch.
     for tear in doc.items.crystal_tears.iter().flatten() {
         let slot = Slot {
             name: tear.clone(),
             ..Slot::default()
         };
         push_simple(catalog, Kind::Tool, &slot, 1, &mut out);
+    }
+    // AMMUNITION, WHICH IS GRANTED IN NUMBERS AND IS STILL NOT A CONSUMABLE. It is looked up in
+    // its own catalog because it is its own `EquipParamWeapon` subset (see
+    // `catalog::Kind::Ammo`), granted at the engine's own quiver limit rather than at one, and
+    // NOT flagged as an armament: it mints no instance, carries no ash and has no upgrade level.
+    for (_, name) in doc.items.ammo.positions() {
+        let Some(name) = name else { continue };
+        let slot = Slot {
+            name: name.to_owned(),
+            ..Slot::default()
+        };
+        let quantity = ammo_quantity(catalog.lookup(Kind::Ammo, name));
+        push_simple(catalog, Kind::Ammo, &slot, quantity, &mut out);
     }
 
     out
@@ -514,6 +649,8 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         upgrade_is_character_default,
         weapon_skill,
         label: slot.name.clone(),
+        pot_group: found.pot_group,
+        armament: true,
     });
 }
 
@@ -528,6 +665,8 @@ fn push_simple(catalog: &dyn Catalog, kind: Kind, slot: &Slot, quantity: u32, ou
             upgrade_is_character_default: true,
             weapon_skill: NO_SKILL,
             label: slot.name.clone(),
+            pot_group: found.pot_group,
+            armament: false,
         }),
         None => out.unresolved.push(Unresolved {
             kind,

@@ -61,10 +61,57 @@ const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
 )]
 const GAME_MAN_FIELD_B73_OFFSET: usize = 0xb73;
 const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
-const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
+/// `CS::GameMan::saveState` -- the one-slot arbiter over the SL device, stamped by BOTH the save
+/// lane (1) and the load lane (2), not a "load phase". Renamed 2026-08-31 from
+/// `GAME_MAN_LOAD_PHASE_B80_OFFSET`; the witnesses and the full value table are on the
+/// declaration in `er_title_flow::GAME_MAN_SAVE_STATE_B80_OFFSET`.
+const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
-const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
-const GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET: usize = 0xdf0;
+/// `CS::GameMan::stayInMultipleAreaBlockId` -- NOT "the current map", which is what this constant
+/// claimed until 2026-08-31. The map-move target is `moveMapStepBlockId` at **+0x14**, and
+/// `SetMoveMapStepBlockId` (`0x14067abd0`) writes it FROM this field via the getter
+/// `FUN_140679560`. So +0xc30 is the source of the next map move: seeded from slot body+0x04 by
+/// the deserializer `FUN_14067bd70` on load, and maintained by the stay-in-multiplay path
+/// (`FUN_14067afa0`, `FUN_14067aac0`) during play. See
+/// `er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET` for the complete access set.
+const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
+/// `GameMan + 0xdf0` -- the LENGTH of the `DLString<wchar_t>` inside the `FD4FilePathBase` that
+/// starts at `GameMan + 0xdd0`. It is NOT a "resident device" pointer; the old name was invented
+/// from the value's shape and nothing ever measured it.
+///
+/// The constructor hands the whole `0xdd0..0xe08` region off in one `lea` and never touches the
+/// interior through `this`, which is why a `this`-relative displacement census reports nothing at
+/// 0xdf0 -- the same silence that let `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` sit wrong for its
+/// whole life. The interior is written through that `lea`'s register instead:
+///
+/// ```text
+///   14067644b  lea  rdi, [rsi+0xdd0]      ; FD4FilePathBase, 1.17 0x14067729b
+///   140676456  lea  rbx, [rdi+8]          ; the DLString's allocator slot at 0xdd8
+///   140676461  call 0x140120390           ; DLString<wchar_t>* InitAllocator(DLString<wchar_t>*)
+///   140676466  mov  qword [rbx+0x20], 7   ; capacity  -> GameMan+0xdf8
+///   14067646e  lea  rax, [rbx+8]          ; the string proper at GameMan+0xde0
+///   140676472  mov  qword [rax+0x10], r14 ; LENGTH    -> GameMan+0xdf0   <-- this field
+///   140676476  cmp  qword [rax+0x18], 8   ; capacity vs the inline-buffer bound
+/// ```
+///
+/// Ghidra's 1.16.2 `GameMan` type agrees independently: `FD4FilePathBase` at `0xdd0`, spanning to
+/// `0xe08`. The whole GameMan constructor aligns 1296/1296 against 1.17 with zero moved offsets,
+/// and the `lea` that anchors this region is at the same `0xdd0` in both images.
+///
+/// WHAT READS IT, in the decompiler's own words -- a third witness, independent of both the type
+/// and the constructor, and the reason this is logged in DECIMAL. Both save gates spell the test
+/// as a string length, not as a handle:
+///
+/// ```text
+///   FUN_140679180: if ((GLOBAL_GameMan->field479_0xdd0).string.length != 0) { saveState = 3; return 0; }
+///   FUN_14067b100: if (saveState != 3) return 0;
+///                  if ((GLOBAL_GameMan->field479_0xdd0).string.length != 0) { saveState = 0; return 1; }
+/// ```
+///
+/// So the gate is "a file path is set", and the value it compares against is `0`. That is why
+/// this read must stay an `Option` rather than `unwrap_or(0)`: a failed read rendered as `0` is
+/// indistinguishable from an empty path, i.e. from the gate being open.
+const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
 // LOAD-SUBMIT gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
 // combined_load_67b940 -> submit 0x14067dc00 bails (0x14067e12f) unless these GameMan[0x143d69918]
 // flags are clear/set. Logging them at the finalize-advancer heartbeat (which fires for load2 in the
@@ -72,7 +119,16 @@ const GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET: usize = 0xdf0;
 // forcing state. cb1/cb2/bca/b5e are byte flags; the global at rva 0x3d68078 must be non-null.
 const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
 const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
-const GAME_MAN_SUBMIT_GATE_BCA_OFFSET: usize = 0xbca;
+/// `CS::GameMan::eventWorldType`, a byte. Renamed 2026-08-31 from
+/// `GAME_MAN_SUBMIT_GATE_BCA_OFFSET`: the submit path DOES read it (`FUN_14067dc00` branches on
+/// `GLOBAL_GameMan->eventWorldType != 0`), but naming a field after one consumer buried the fact
+/// that it is a named field with its own accessor pair -- `EventWorldType` (`0x140679820`,
+/// `movzx eax, byte ptr [rax+0xbca]`) and `SetWorldEventType` (`0x14067aeb0`,
+/// `mov byte ptr [rax+0xbca], cl`) -- and grouped it with cb1/cb2/b5e, which genuinely have no
+/// name in either the Ghidra type or `fromsoftware-rs`. `IsMyWorld` (`0x140679f90`) is the third
+/// reader and tests it against 0. `fromsoftware-rs` declares it as the enum
+/// `pub event_world_type: EventWorldType`.
+const GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET: usize = 0xbca;
 const GAME_MAN_SUBMIT_GATE_B5E_OFFSET: usize = 0xb5e;
 const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
@@ -169,7 +225,6 @@ static ORIG_CAP_DIALOG_FACTORY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNS
 static ORIG_MENU_WINDOW_JOB_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIG_MENU_WINDOW_JOB_IDLE_CTOR: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static ORIG_TITLE_NATIVE_READY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 
 struct HookSpec {
     name: &'static str,
@@ -210,16 +265,31 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+/// This run's trace path: the launcher's redirect, else `LOG_PATH` beside `eldenring.exe`.
+///
+/// THE BIGGEST PRODUCER IN THE REPO, AND UNTIL NOW THE LEAST MOVABLE. This trace runs at roughly
+/// 655 MB/hour, and it used to resolve as a bare CWD-relative name that no launcher could move, so
+/// every launch rotated the previous run's trace to `.prev` and the launch after that destroyed it
+/// outright. The redirect (and the game-directory fallback behind it) lives in
+/// `er_game_base::log`, shared with every other per-run artifact so there is ONE convention for
+/// where a run's evidence goes rather than one per crate.
+///
+/// This is an output PATH, not a runtime gate: nothing this DLL does changes with it, and the
+/// crate reads no environment itself — `.auto/reload_trace_policy.rego` still holds.
+fn log_path() -> std::path::PathBuf {
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_RELOAD_TRACE_PATH", LOG_PATH)
+}
+
 /// Cached appending handle onto a log this process freshened on its first write. The one-shot
 /// truncation lives in `er_game_base::log`, so the handle can be held for the whole run.
 fn open_log_file() -> Option<Mutex<File>> {
-    er_game_base::log::open_fresh_run_append(std::path::Path::new(LOG_PATH)).map(Mutex::new)
+    er_game_base::log::open_fresh_run_append(&log_path()).map(Mutex::new)
 }
 
 /// Start this run's trace clean at attach. Rotates the previous run's file to `.log.prev`
 /// rather than destroying it (this used to be a bare `File::create`).
 fn reset_log_file() {
-    er_game_base::log::begin_fresh_run(std::path::Path::new(LOG_PATH));
+    er_game_base::log::begin_fresh_run(&log_path());
 }
 
 fn log_line(args: fmt::Arguments<'_>) {
@@ -413,17 +483,20 @@ fn snapshot() -> String {
     };
 
     let b78 = unsafe { read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) };
-    let b80 = unsafe { read_i32(gm + GAME_MAN_LOAD_PHASE_B80_OFFSET) };
+    let b80 = unsafe { read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) };
     let ac0 = unsafe { read_i32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET) };
-    let c30 = unsafe { read_i32(gm + GAME_MAN_CURRENT_MAP_C30_OFFSET) };
-    let df0 = unsafe { read_usize(gm + GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET) }.unwrap_or(0);
+    let c30 = unsafe { read_i32(gm + GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET) };
+    // A COUNT OF CHARACTERS, kept as `Option` and printed in decimal. `.unwrap_or(0)` was wrong
+    // twice over: 0 is the value the two gates below TEST FOR, so an unreadable read printed as
+    // "the path is empty" -- the reading that makes both gates look open.
+    let path_len = unsafe { read_usize(gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) };
     let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
 
     // Load-submit gate fields (see the *_SUBMIT_GATE_* consts): diff load1 vs load2 to find the gate
     // that keeps load2's combined_load submit bailing so the world load never completes.
     let g_cb1 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB1_OFFSET) };
     let g_cb2 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB2_OFFSET) };
-    let g_bca = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_BCA_OFFSET) };
+    let g_bca = unsafe { read_u8(gm + GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET) };
     let g_b5e = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_B5E_OFFSET) };
     // RESOLVED: `SAVE_DATA_SUBSYSTEM_GATE_RVA` moved +0x4070 on 1.17 (0x3d68078 -> 0x3d6c0e8).
     // Read raw, this trace line prints the contents of an unrelated global as the submit gate --
@@ -439,11 +512,12 @@ fn snapshot() -> String {
     .unwrap_or(0);
 
     format!(
-        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} df0=0x{df0:x} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry={} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
+        "base=0x{base:x} gm=0x{gm:x} b78={} b80={} ac0={} c30={} path_len_df0={} gdm=0x{gdm:x} pgd=0x{pgd:x} mounted_registry={} submit[cb1={} cb2={} bca={} b5e={} glob=0x{g_glob:x}]",
         fmt_i32(b78),
         fmt_i32(b80),
         fmt_i32(ac0),
         fmt_c30(c30),
+        fmt_len(path_len),
         fmt_mounted(mounted),
         fmt_u8(g_cb1),
         fmt_u8(g_cb2),
@@ -461,6 +535,18 @@ fn fmt_c30(value: Option<i32>) -> String {
 }
 
 fn fmt_u8(value: Option<u8>) -> String {
+    value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
+}
+
+/// A `DLString` LENGTH, printed in decimal so no reader chases it as an address.
+///
+/// It was `df0=0x{:x}` for this line's whole life, under a constant named
+/// `GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET`, so the log said "pointer" in both the key and the
+/// formatting. A hex-rendered small integer beside `gm=0x...` and `pgd=0x...` is a number that
+/// looks like an address and is not one, and this repo has already lost runs to exactly that:
+/// an oracle reported `-95247096` -- the low half of a live `DLAllocator*` -- as a state enum
+/// for an unknown number of runs, because a wrong-but-readable value faults nothing.
+fn fmt_len(value: Option<usize>) -> String {
     value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
 }
 
@@ -662,11 +748,6 @@ define_trace_hook!(
     hook_menu_window_job_idle_ctor,
     ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
     "menu_window_job_idle_ctor_7acf80"
-);
-define_trace_hook!(
-    hook_title_native_ready,
-    ORIG_TITLE_NATIVE_READY,
-    "title_native_ready_733150"
 );
 
 static HOOKS: &[HookSpec] = &[
@@ -886,12 +967,32 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_menu_window_job_idle_ctor,
         original: &ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
     },
-    HookSpec {
-        name: "title_native_ready_733150",
-        rva: 0x733150,
-        detour: hook_title_native_ready,
-        original: &ORIG_TITLE_NATIVE_READY,
-    },
+    // title_native_ready_733150 REMOVED 2026-08-30. The address is real and unchanged (1.16.2
+    // `bool FUN_140733150(SceneObjProxy*)` -> `(scaleformValue.dataType & 0x8f) != 0`, "is this
+    // proxy bound to a real GFx display object"; BYTE-IDENTICAL at 1.17 0x733fa0). It was dropped
+    // because observing it HERE was duplicative and, co-loaded, actively misleading:
+    //
+    //   DUPLICATIVE. `er-quickload` detours the same prologue for the same purpose as
+    //   `cap_title_native_ready_733150` (its `experiments/trace/menu_trace_hooks.rs`, via
+    //   `er_title_flow::TITLE_NATIVE_READY_PREDICATE_RVA`), gated by `trace_continue_enabled()` =
+    //   `product_autoload_enabled()` -- i.e. ON in a default product run. Every profile that
+    //   carries this DLL also carries the product (`~/Elden/group-1170.me3`,
+    //   `main-all-dlls.me3`, `main-all-dlls-no-mushroom.me3`, `invasion-path-test.me3`), so the
+    //   observation was never actually lost by removing it here.
+    //
+    //   MISLEADING. `er-armament-icons` CALLS this predicate -- it does not detour it -- from
+    //   `hud_badge.rs` and four sites in its `lib.rs`, on the TilePopulate path (its own counters
+    //   heartbeat every 512 fires). `trace_hook` writes TWO unthrottled lines per call, each
+    //   embedding a `snapshot()` that reads GameMan, under the log file's mutex. In the profiles
+    //   above that meant every inventory tile emitting a pair of log lines labelled
+    //   `title_native_ready_733150` -- attributing another DLL's icon queries to the native title
+    //   flow, in a DLL whose entire product is a truthful trace.
+    //
+    // This is the ONE prologue this crate shared with a shell it had no union relationship to, and
+    // `scripts/check-shared-hook-rvas.py` is what surfaced it. Restoring the row is legitimate for
+    // a standalone title-flow investigation (`~/Elden/sweep-er-reload-trace.me3`, no product, no
+    // armament-icons); if you do, expect the gate to ask for a conflict-table entry naming
+    // er-armament-icons, and read that entry's reasoning before writing one.
     HookSpec {
         name: "finalize_advancer_afa6d0",
         rva: 0xafa6d0,

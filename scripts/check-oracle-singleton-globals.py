@@ -138,6 +138,37 @@ except ImportError as missing:
         "which is how another gate in this repo ended up with two of its three baseline rows "
         "being paragraphs about the hazard rather than instances of it."
     ) from missing
+try:  # the SHARED vocabulary this gate and check-stale-rva-calls.py must not answer differently
+    from module_base_arith import (
+        ADD_METHODS,
+        ADD_SITE_RE,
+        BASE_NAMES,
+        CORROBORATORS,
+        LET_CONSUMER_WINDOW,
+        MODULE_BASE_SOURCE_RE,
+        MODULE_BASE_SOURCES,
+        MODULE_SPAN_LIMIT,
+        PE_HEADER_LIMIT,
+        RESOLVING_CONSUMERS,
+        RUNTIME_DERIVED_MARKS,
+        SOURCE_EXEMPT,
+        _identifiers,
+        balanced_rhs as _balanced_rhs,
+        binders,
+        enclosing_call,
+        is_module_base,
+        is_resolver_fed,
+        names_module_base,
+        nearest_binder,
+    )
+except ImportError as missing:
+    raise ImportError(
+        "scripts/module_base_arith.py could not be imported. It holds the decisions this gate and "
+        "scripts/check-stale-rva-calls.py must agree on -- what counts as the module base, what "
+        "counts as reaching a resolver, and which VALUES are PE-header fields or image extents. "
+        "Two copies of those answers is exactly how 29 sites ended up owned by neither gate on "
+        "2026-08-31. Fix the import rather than restoring a local copy."
+    ) from missing
 
 IMAGE_BASE = 0x140000000
 IMAGE_1162 = Path(os.environ.get("ER_DEOBF_1162", REPO / "eldenring-deobf.bin"))
@@ -195,28 +226,14 @@ RAW_READ_RE = re.compile(
     r"([a-z_][a-z0-9_]*)\s*[,)]",
     re.S,
 )
-# What makes an identifier the MODULE base rather than any other pointer called `base`.
+# What makes an identifier the MODULE base rather than any other pointer called `base` now lives in
+# `scripts/module_base_arith.py` (`MODULE_BASE_SOURCE_RE`, `names_module_base`, `is_module_base`),
+# because `check-stale-rva-calls.py` has to answer the identical question and answering it twice is
+# what let 29 sites fall between the two gates. The reasoning is preserved there in full.
 #
-# Without this the matcher flags `safe_read_u32(base + offset)` in the hang watchdog, where `base`
-# is a heap `CS::LoadingScreenData` pointer and `offset` is a struct field -- a read that has
-# nothing to translate and no version to be wrong about. The name is not the evidence; the
-# BINDING is, so each hit walks back to the nearest `let <that name> = ...` and asks what it was
-# assigned from.
-#
-# MATCHED ON A WORD BOUNDARY, not as a substring. `ersc_module_base()` CONTAINS `module_base(`,
-# and reading it as one made `er-invasion-warp/src/local_invasion_filter.rs` -- whose `base` is
-# the Seamless Co-op DLL, resolved by a prologue byte-check against a shipped ersc build and
-# nothing to do with the game image -- look like a stale game address.
-MODULE_BASE_SOURCES = ("game_module_base", "game_base(", "module_base(", "GetModuleHandle")
-MODULE_BASE_SOURCE_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:game_module_base|game_base\s*\(|module_base\s*\(|GetModuleHandle)"
-)
-
-
-def names_module_base(initialiser: str) -> bool:
-    return MODULE_BASE_SOURCE_RE.search(initialiser) is not None
-
-
+# `binds_module_base` stays here: it is not the shared decision, it is the NARROW pre-2026-08-31
+# matcher, kept only so `--selftest` can prove each widening is load-bearing by showing the old
+# shape misses the control.
 def binds_module_base(text: str, name: str, before: int) -> bool:
     """Was `name` most recently bound from something that yields the game module base?"""
     binding = None
@@ -232,14 +249,6 @@ def binds_module_base(text: str, name: str, before: int) -> bool:
     end = text.find(";", binding.end())
     initialiser = text[binding.end() : end if end != -1 else len(text)]
     return names_module_base(initialiser)
-# `mem.rs` and `game_build.rs` are the resolver itself and the PE-header reader it is built on:
-# `game_data_addr` cannot resolve its way to its own implementation, and the version resource is
-# found by walking `.rsrc` offsets that are fixed by the PE format rather than by a 1.16.2 RVA.
-SOURCE_EXEMPT = {
-    "crates/er-game-base/src/mem.rs",
-    "crates/er-game-base/src/game_build.rs",
-    "crates/er-game-base/src/build_id.rs",
-}
 
 
 # ============================================================================================
@@ -270,80 +279,11 @@ SOURCE_EXEMPT = {
 # every OTHER right-hand side -- literal, local, parameter, field, index, closure binding -- plus
 # the one spelling a `+`-shaped pattern structurally cannot see, `base.wrapping_add(CONST)`.
 
-# `.text` starts at RVA 0x1000; below that is the DOS stub and the PE headers, whose layout the
-# PE format fixes and which therefore cannot move between game builds. Same reasoning, and the
-# same constant, as `check-stale-rva-calls.py`.
-PE_HEADER_LIMIT = 0x1000
-# At or above the image span a literal is a module EXTENT, not an address in it: `a < base +
-# 0x0800_0000` is a range test. `er-armament-icons` writes two of those and
-# `msb_invasion_points.rs` a third (`MAX_IMAGE_SPAN` = 0x1000_0000). Excluded by VALUE, never by
-# name, for the reason `check-stale-rva-calls.py` learned the hard way: a constant that cannot be
-# resolved must be KEPT, so "I could not read it" is never spelled the same as "I read it and it
-# is safe".
-MODULE_SPAN_LIMIT = 0x0800_0000
-
-ADD_METHODS = ("wrapping_add", "saturating_add", "checked_add")
-BASE_NAMES = r"(?:base|module_base|game_base|image_base|mod_base|img_base|exe_base)"
-# `<base> + ` and `<base>.wrapping_add(`. Both are additions; the second exists only because the
-# repo writes it, and it is invisible to every `+`-shaped pattern in the tree.
-ADD_SITE_RE = re.compile(
-    r"(?<![\w.:])(\$?)(" + BASE_NAMES + r")\s*(?:as\s+usize\s*)?"
-    r"(?:(\+)|\.\s*(" + "|".join(ADD_METHODS) + r")\s*\()\s*"
-)
-
-# The first parameter of each of these IS the game module base -- that is the whole signature.
-# A file that passes an identifier there has stated, in its own code, what that identifier is.
-# This is what lets a PARAMETER be recognised: `title_tick_cover.rs` takes `module_base: usize`
-# and `pad_inject.rs` takes `base: usize`, and `binds_module_base` answers False for both because
-# neither has a `let`. Corroboration is per FILE, so `er-save-loader/src/profile_summary.rs`
-# (whose `base` is an offset into a save record) is unaffected by a sibling module that does
-# resolve addresses.
-CORROBORATORS = (
-    "game_data_addr",
-    "game_data_addr_offset",
-    "read_global_ptr",
-    "read_global_u8",
-    "write_global_u8",
-)
-# Handing `base + rva` to one of these is CORRECT and is the documented shape: they perform the
-# single 1.16.2 -> 1.17 resolve themselves, and resolving before the call would translate twice --
-# which silently lands on a third, unrelated function whenever an address is both one row's
-# destination and another row's source. See `er_game_base::mem::game_rva_for_hook` and
-# `scripts/check-double-resolved-hook-targets.py`.
-RESOLVING_CONSUMERS = (
-    "resolve_game_address",
-    "resolve_game_address_fmt",
-    "resolve_detour_address",
-    "resolve_call_site_rva",
-    "game_data_addr",
-    "game_data_addr_offset",
-    "read_global_ptr",
-    "MhHook::new",
-    "MhHook::new_runtime_derived",
-    "new_runtime_derived",
-    "register_union_hook",
-    "register_union_hook_runtime_derived",
-    "register_shared_hook",
-)
-# An RVA the code READ OUT OF THE RUNNING IMAGE is already correct for the running build; there is
-# nothing to translate and translating it would be the bug. That is the same distinction
-# `MhHook::new_runtime_derived` draws, and it is what separates the PE-header walks in the crash
-# loggers (`base + e_lfanew`, `base + vaddr`, `base + size`) from a compiled-in 1.16.2 claim.
-RUNTIME_DERIVED_MARKS = (
-    "safe_read_",
-    "read_u32(",
-    "read_u16(",
-    "read_usize(",
-    "read_bytes(",
-    "resolve_",
-    "game_rva",
-    "trampoline",
-    "GetProcAddress",
-)
-# Bindings this many characters ahead may still be the consumer of a `let addr = base + rva;`.
-# `hud_badge.rs` hands `target` to `MhHook::new` on the next line; `er-reload-trace` passes
-# `requested` to a registrar about fifteen lines down.
-LET_CONSUMER_WINDOW = 1200
+# THE VALUE BOUNDS, THE ADDITION PATTERN, THE CORROBORATORS, THE RESOLVING CONSUMERS and the
+# RUNTIME-DERIVED MARKS all moved to `scripts/module_base_arith.py` on 2026-08-31 and are imported
+# at the top of this file. They are the vocabulary this gate and `check-stale-rva-calls.py` have to
+# share; keeping a second copy here is precisely how the two ended up disagreeing about which sites
+# each owned.
 
 
 DECLARATION_RE = re.compile(
@@ -375,105 +315,10 @@ def constant_values(root: Path) -> dict[str, int | None]:
     return _CONSTANT_VALUES
 
 
-def _identifiers(pattern_text: str) -> list[str]:
-    return re.findall(r"[a-z_][a-z0-9_]*", pattern_text)
-
-
-def binders(text: str) -> list[tuple[int, str, str, str]]:
-    """Every point where a lowercase name is BOUND, as `(pos, name, kind, initialiser)`.
-
-    Not just `let`. The two false positives this gate has to keep clear of are bound by other
-    means entirely: `title_tick_cover.rs` writes `for &(base, cnt) in GROUPS` -- a tuple of
-    STRUCT OFFSETS shadowing the module base -- and `pad_inject.rs` receives its base as a
-    function parameter. A binder walk that only knows `let` reads both wrong, in opposite
-    directions.
-    """
-    out: list[tuple[int, str, str, str]] = []
-    for match in re.finditer(r"\blet\s+(?:mut\s+)?([a-z_][a-z0-9_]*)\s*(?::[^=;]+)?=", text):
-        end = text.find(";", match.end())
-        out.append(
-            (match.start(), match.group(1), "let", text[match.end() : end if end != -1 else len(text)])
-        )
-    # `let (a, b) = ...` / `let Some(x) = ...` -- destructuring. The initialiser is shared.
-    for match in re.finditer(r"\blet\s+(?:mut\s+)?[\(\[][^;=\n]{0,120}?[\)\]]\s*(?::[^=;]+)?=", text):
-        end = text.find(";", match.end())
-        initialiser = text[match.end() : end if end != -1 else len(text)]
-        for name in _identifiers(match.group(0)):
-            if name not in ("let", "mut", "Some", "Ok"):
-                out.append((match.start(), name, "let", initialiser))
-    for match in re.finditer(r"\bfor\s+([^\n{]{0,80}?)\s+in\b", text):
-        for name in _identifiers(match.group(1)):
-            out.append((match.start(), name, "for", ""))
-    # A closure parameter. The RECEIVER matters and is kept as the "initialiser": `.map(|rva| ...)`
-    # on a resolver call yields a resolved RVA, while the same spelling on a const array yields a
-    # compiled-in one. Those are opposite facts and the only thing that separates them is what the
-    # closure is mapped over.
-    for match in re.finditer(r"\|\s*&?\s*([a-z_][a-z0-9_,:&\s]{0,60}?)\s*\|", text):
-        # The receiver is the CHAIN this closure is mapped over, and only when there is one.
-        # `.map(|rva| ...)` on a resolver call yields a resolved RVA; the identical spelling on a
-        # const array yields a compiled-in one. Taking "the 200 characters before the pipe"
-        # instead conflated the two -- it swept up any nearby mention of the base and declared
-        # every closure parameter runtime-derived, including the very closure this gate was
-        # written for (`let read_singleton = |rva: usize| ... base + rva`).
-        head = text[max(0, match.start() - 12) : match.start()]
-        chain = re.search(r"\.\s*[a-z_]+\s*\(\s*$", head)
-        receiver = text[max(0, match.start() - 260) : match.start()] if chain else ""
-        for name in _identifiers(match.group(1)):
-            if name not in ("usize", "u8", "u16", "u32", "u64", "i32", "mut", "move"):
-                out.append((match.start(), name, "closure", receiver))
-    for match in re.finditer(r"\bfn\s+[a-z_][a-z0-9_]*\s*(?:<[^>{(]*>)?\s*\(([^)]{0,600})\)", text):
-        for parameter in match.group(1).split(","):
-            name = re.match(r"\s*(?:mut\s+)?([a-z_][a-z0-9_]*)\s*:", parameter)
-            if name:
-                out.append((match.start(), name.group(1), "param", ""))
-    out.sort()
-    return out
-
-
-def nearest_binder(bound: list[tuple[int, str, str, str]], name: str, before: int):
-    hit = None
-    for position, bound_name, kind, initialiser in bound:
-        if position >= before:
-            break
-        if bound_name == name:
-            hit = (kind, initialiser)
-    return hit
-
-
-def is_module_base(text: str, bound, name: str, before: int) -> bool:
-    """Is `name`, at this point in this file, the GAME MODULE base?
-
-    Decided from the BINDING, never from the identifier -- the rule the original gate established
-    when `er-crash-logging-core/src/hang.rs` turned out to call a heap `CS::LoadingScreenData`
-    pointer `base`. Widened only to answer the question for a name a `let` never bound.
-    """
-    hit = nearest_binder(bound, name, before)
-    if hit is not None and hit[0] == "let":
-        return names_module_base(hit[1])
-    if hit is not None and hit[0] in ("for", "closure"):
-        # Shadowed by an iteration or a closure over something that is not the module base.
-        return False
-    # A parameter, or no binder at all. The file itself has to say so.
-    return any(
-        re.search(rf"\b{corroborator}\s*\(\s*{re.escape(name)}\s*,", text)
-        for corroborator in CORROBORATORS
-    )
-
-
-def _balanced_rhs(text: str, start: int, limit: int = 120) -> str:
-    """The addition's right-hand side, stopping at the first top-level separator."""
-    depth = 0
-    for index in range(start, min(len(text), start + limit)):
-        char = text[index]
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            if depth == 0:
-                return text[start:index]
-            depth -= 1
-        elif depth == 0 and char in ",;\n":
-            return text[start:index]
-    return text[start : start + limit]
+# `_identifiers`, `binders`, `nearest_binder`, `is_module_base` and `_balanced_rhs` moved to
+# `scripts/module_base_arith.py` on 2026-08-31 and are imported at the top of this file. Only
+# `rhs_is_compiled_in` stays: it is the question this gate asks and the sibling does not --
+# whether a right-hand side that is NOT a named constant is a compiled-in 1.16.2 claim.
 
 
 def rhs_is_compiled_in(text: str, bound, rhs: str, base_name: str, before: int) -> bool:
@@ -514,65 +359,10 @@ def rhs_is_compiled_in(text: str, bound, rhs: str, base_name: str, before: int) 
     return True
 
 
-def enclosing_call(text: str, position: int) -> str:
-    """The callee of the innermost call this position sits inside, or `''`."""
-    depth = 0
-    index = position - 1
-    while index > 0 and position - index < 400:
-        char = text[index]
-        if char == ")":
-            depth += 1
-        elif char == "(":
-            if depth == 0:
-                end = index - 1
-                while end >= 0 and text[end] in " \n\t":
-                    end -= 1
-                start = end
-                while start >= 0 and (text[start].isalnum() or text[start] in "_:"):
-                    start -= 1
-                return text[start + 1 : end + 1]
-            depth -= 1
-        elif char in ";{}":
-            break
-        index -= 1
-    return ""
-
-
-def is_resolver_fed(text: str, position: int, expression: str | None) -> bool:
-    """Does this addition reach a resolver rather than being used raw?
-
-    Three ways, all of them shapes the tree actually writes:
-
-      * it IS the argument -- `resolve_detour_address(base + seam.rva, seam.name)`;
-      * the SAME expression is the argument somewhere else in the file, which is how
-        `map_seams.rs` keeps `let stale = base + seam.rva` to name the address in its refusal
-        while `resolve_detour_address` gets the identical expression on the next line;
-      * it is bound with `let` and the binding is handed to a resolving API just below --
-        `let target = base + rva;` then `MhHook::new(target, ...)`.
-    """
-    if enclosing_call(text, position) in RESOLVING_CONSUMERS or any(
-        enclosing_call(text, position).endswith(consumer) for consumer in RESOLVING_CONSUMERS
-    ):
-        return True
-    normalised = re.sub(r"\s+", " ", expression).strip() if expression else ""
-    if normalised:
-        squeezed = re.sub(r"\s+", " ", text)
-        for consumer in RESOLVING_CONSUMERS:
-            if f"{consumer}({normalised}" in squeezed or f"{consumer}( {normalised}" in squeezed:
-                return True
-    # `let addr = (base + rva) as *mut c_void;` -- the parenthesis and the `unsafe {` are noise
-    # between the `=` and the addition, and skipping them is what lets `pad_inject.rs`'s hook
-    # installer be recognised as feeding `MhHook::new` two lines down.
-    binding = re.search(
-        r"\blet\s+(?:mut\s+)?([a-z_][a-z0-9_]*)\s*(?::[^=;]+)?=\s*(?:unsafe\s*\{\s*|[\(\s])*$",
-        text[max(0, position - 120) : position],
-    )
-    if binding:
-        window = text[position : position + LET_CONSUMER_WINDOW]
-        for consumer in RESOLVING_CONSUMERS:
-            if re.search(rf"{re.escape(consumer)}\s*\(\s*&?\s*{binding.group(1)}\b", window):
-                return True
-    return False
+# `enclosing_call` and `is_resolver_fed` moved to `scripts/module_base_arith.py` on 2026-08-31.
+# `check-stale-rva-calls.py` needs the identical answer once it stops looking at named constants
+# in only three syntactic contexts, and two copies of "does this reach a resolver" is the same
+# drift that opened the seam in the first place.
 
 
 def source_offenders(root: Path) -> list[str]:
@@ -601,12 +391,14 @@ SOURCE_BASELINE_HEADER = """\
 # (file, addition), so ordinary edits do not churn it and two identical sites in one file
 # collapse to one row. This set may SHRINK; growth is refused.
 #
-# The sibling ratchet docs/recon/stale-rva-call-sites.txt owns `base + NAMED_CONSTANT`. This one
-# owns every OTHER right-hand side -- a literal, a local, a parameter, a struct field, an array
-# element, a closure binding -- plus `base.wrapping_add(CONST)`, which no `+`-shaped pattern can
-# see. Those are the spellings a name-keyed gate is structurally blind to, which is exactly why
-# the four telemetry pointer oracles read garbage for two entire runs while three gates reported
-# clean.
+# The sibling ratchet docs/recon/stale-rva-call-sites.txt owns `base + NAMED_CONSTANT` IN ANY
+# CONTEXT -- it was three syntactic contexts until 2026-08-31, and the 37 sites that fell through
+# that gap were reported by neither gate. This one owns every OTHER right-hand side -- a literal, a
+# local, a parameter, a struct field, an array element, a closure binding -- plus
+# `base.wrapping_add(CONST)`, which no `+`-shaped pattern can see. Those are the spellings a
+# name-keyed gate is structurally blind to, which is exactly why the four telemetry pointer oracles
+# read garbage for two entire runs while three gates reported clean. Both gates decide "is this the
+# module base" and "does this reach a resolver" in scripts/module_base_arith.py, once.
 #
 # Fix a row by resolving through er_game_base::mem::game_data_addr (reads and comparisons) or
 # game_rva / game_rva_for_hook (calls and detours -- note they consult DIFFERENT tables), screen
@@ -665,26 +457,26 @@ def offenders_in(text: str, relative: str) -> list[str]:
             # duplicating it here would put the same site in two baselines that drift apart. The
             # METHOD forms below are NOT duplicated: no `+`-shaped pattern can see them.
             #
-            # THE DELEGATION IS NOT AIRTIGHT, AND SAYING SO HERE IS CHEAPER THAN SOMEONE MEASURING
-            # IT AGAIN. The two gates are usually described as a partition -- that one owns
-            # `base + NAMED_CONSTANT`, this one owns every other right-hand side. They are not.
-            # The sibling recognises a named constant only in three SYNTACTIC contexts:
-            # `transmute(base + C)`, `safe_read_*(base + C)`, and `== base + C`. Anywhere else --
-            # inside a `format_args!`, as an element of a hook table, as an argument to a read
-            # wrapper that is not spelled `safe_read_*` -- it matches nothing, and this `continue`
-            # has already handed the site away.
+            # THE DELEGATION IS NOW AIRTIGHT, AND IT WAS NOT UNTIL 2026-08-31. This `continue`
+            # hands the site to a sibling that, until then, recognised a named constant in only
+            # three SYNTACTIC contexts -- `transmute(base + C)`, `safe_read_*(base + C)` and
+            # `== base + C`. Anywhere else it matched nothing, so the pair described as a partition
+            # of the class had a hole in the middle of it.
             #
-            # MEASURED 2026-08-31, not asserted: 29 sites reach this `continue`, and
-            # `check-stale-rva-calls.py` reports 0 findings across the whole tree, so every one of
-            # them is currently reported by NEITHER gate. Most are log lines naming a 1.16.2
-            # address in debug output -- the same shape the sweep converted at
-            # `product_autoload_gates.rs:942` and `title_scaleform_msgbox.rs:707` -- and
-            # `title_scaleform_msgbox.rs:361` writes one directly ABOVE a correctly resolved
-            # `game_data_addr` call in the same `format_args!`. That is misattribution in a log
-            # rather than a wrong read, which is why closing the seam was not folded into this
-            # repair: the fix belongs in the sibling's context patterns, and admitting 29 rows here
-            # would rebuild the contaminated baseline this repo has already been bitten by twice.
-            # Tracked in bd `two-gate-partition-seam-named-const-outside-three-contexts-2026-08-31`.
+            # MEASURED, not asserted: 37 sites reached this `continue` while
+            # `check-stale-rva-calls.py` reported 0 findings tree-wide, so every one of them was
+            # reported by NEITHER gate. Twenty-two were `format_args!` log lines naming a 1.16.2
+            # address -- `title_scaleform_msgbox.rs:361` printed one directly ABOVE a correctly
+            # resolved `game_data_addr` call in the SAME `format_args!` -- and the other fifteen
+            # were correct code (resolver arguments, install-table rows, image extents). All
+            # twenty-two are converted and the sibling now matches the addition in ANY context,
+            # with the module-base and resolver-fed questions it needed the moment it stopped
+            # relying on a syntactic frame. Those questions, and this gate's, are the SAME code:
+            # `scripts/module_base_arith.py`. A fourth-context site planted in a real file is
+            # caught by the sibling and still delegated away here, which is the shape a partition
+            # is supposed to have.
+            #
+            # bd `two-gate-partition-seam-named-const-outside-three-contexts-2026-08-31`.
             continue
         if not plus:
             # A named constant reached by `.wrapping_add`. It is a real address unless its VALUE

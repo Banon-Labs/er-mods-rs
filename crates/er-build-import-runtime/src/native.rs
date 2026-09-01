@@ -98,3 +98,19 @@ pub fn resolve_all<const N: usize>(
         Err(missing)
     }
 }
+
+/// The natives already reported inert on this build, in the order they were first refused.
+///
+/// Exists so a run that applied nothing can NAME what was missing instead of printing zeroes.
+/// Before 2026-08-30 the importer answered a fully-refused run with
+/// `import complete: 0/0 items, 0/0 gear, 0/0 spells, RL0` and a telemetry block reading
+/// `failed_count=0, refused_count=0` -- the counters were truthful about what was ATTEMPTED and
+/// silent about the fact that nothing could be, which is the most expensive way to be right.
+/// A poisoned lock yields an empty list: the caller's message degrades to "no names available",
+/// which is still a failure report.
+pub fn inert() -> Vec<&'static str> {
+    REPORTED
+        .lock()
+        .map(|names| names.clone())
+        .unwrap_or_default()
+}

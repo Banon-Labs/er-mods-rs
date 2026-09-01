@@ -223,15 +223,38 @@ def test_short_mode_does_not_require_world_ready_specific_oracles() -> None:
 
 
 def test_require_handoff_alias_uses_world_stable_target() -> None:
+    # This asserts the smoke script's ARGUMENT PARSING -- that `--require-handoff` is a true
+    # alias for `--require-world-ready`, and that either one moves the watch target to
+    # world-stable. It has nothing to say about the launcher itself, so PRODUCT_LAUNCHER is
+    # pointed at a fixture rather than inherited.
+    #
+    # It USED to inherit it, and that made this test unrunnable anywhere but the developer's
+    # own machine: the script's preflight() calls `require_file "$PRODUCT_LAUNCHER"` BEFORE its
+    # `if (( DRY_RUN )); then return 0; fi`, and PRODUCT_LAUNCHER defaults to
+    # $HOME/Elden/launch.sh -- the user's real ME3 launcher, which no CI runner has. So the
+    # subprocess exited 2 out of fatal() and `check=True` raised CalledProcessError. Measured on
+    # run 33468994945, where this was one of five red gates in the first CI run that executed
+    # the whole suite.
+    #
+    # docs/ci-gate-portability.tsv classified this gate `portable`, and the classification was
+    # produced by re-running each step in a `git clone` of the repo -- which relocates the REPO
+    # root and leaves $HOME alone, so a dependency on the developer's home directory is exactly
+    # the kind this measurement cannot see. That blind spot is now recorded in the ledger header.
     script = REPO_ROOT / "scripts" / "run-windows-proof-render-smoke.sh"
     for flag in ["--require-world-ready", "--require-handoff"]:
         with tempfile.TemporaryDirectory() as tmp:
             artifact = Path(tmp) / "artifact"
+            launcher = Path(tmp) / "launch.sh"
+            launcher.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             subprocess.run(
                 ["bash", str(script), "--dry-run", flag],
                 check=True,
                 cwd=REPO_ROOT,
-                env={**os.environ, "ARTIFACT_DIR": str(artifact)},
+                env={
+                    **os.environ,
+                    "ARTIFACT_DIR": str(artifact),
+                    "PRODUCT_LAUNCHER": str(launcher),
+                },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

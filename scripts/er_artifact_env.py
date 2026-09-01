@@ -58,6 +58,15 @@ ARTIFACT_ENV: dict[str, str] = {
     # One knob each, because that smoke reads them for different verdicts.
     "ER_QUICKLOAD_LOADING_PORTRAIT_PATH": "er-loading-portrait.log",
     "ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH": "er-loading-portrait-crash-log.txt",
+    # The save-census shell's run log and its telemetry -- the last two artifacts in the repo with
+    # no knob. The telemetry is the worse of the pair and the more valuable: it is the RUN-STOPPING
+    # ORACLE for a save-suppression proof (`escaped_write_sites` must be empty), and it publishes
+    # with a write-tmp-then-rename, so it keeps ZERO previous generations -- the last run's verdict
+    # is gone the instant this run installs, with no `.prev` to fall back on. Both are read back by
+    # `run-save-census-probe.sh`, which also used to `rm -f` them out of the game directory before
+    # launching, taking the `.prev` behind the live file with them.
+    "ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH": "er-save-disable.log",
+    "ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH": "er-save-disable-telemetry.json",
 }
 
 # The name a watcher reads to find this run's artifacts. A reader still on the fixed game-directory

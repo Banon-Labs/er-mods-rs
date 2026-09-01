@@ -51,8 +51,11 @@ def main() -> int:
                 except Exception as exc:  # transient socket/daemon contention
                     if attempt == 3:
                         raise
+                    # Retry immediately. The old backoff slept 2/5/8s, but a sleep here
+                    # synchronised nothing: the daemon either answers this page or it does not,
+                    # and its own 120s request timeout is what actually bounds a stalled call.
+                    # Waiting only delayed the next identical attempt.
                     print(f"retry offset={off} attempt={attempt}: {exc}", flush=True)
-                    time.sleep(2 + 3 * attempt)
             res = r.get("result")
             if res is None:
                 print("ERROR: " + str(r), flush=True)

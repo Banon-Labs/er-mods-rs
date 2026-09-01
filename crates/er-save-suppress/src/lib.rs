@@ -1163,7 +1163,7 @@ pub fn settle_observer_installed() -> bool {
 }
 
 /// Suppression counters as (name, value) pairs, for hosts that serialize by iteration.
-pub fn counters() -> [(&'static str, u64); 42] {
+pub fn counters() -> [(&'static str, u64); 44] {
     [
         (
             "suppress_submits_swallowed",
@@ -1349,6 +1349,19 @@ pub fn counters() -> [(&'static str, u64); 42] {
         (
             "save_orphan_poll_unavailable",
             SAVE_ORPHAN_POLL_UNAVAILABLE_COUNT.load(Ordering::SeqCst),
+        ),
+        // THE LOAD LANE'S HALF OF THE SAME SHARED DEVICE. `refusals` counts the times a load
+        // submit was about to be offered a device that would have refused it -- the state that
+        // arms an unsatisfiable drain -- and `repairs` counts the times the game's own poll
+        // opened it again. refusals > 0 with repairs == 0 is a load the device blocked and
+        // nothing could unblock.
+        (
+            "load_gate_refusals",
+            LOAD_GATE_REFUSALS.load(Ordering::SeqCst),
+        ),
+        (
+            "load_gate_repairs",
+            LOAD_GATE_REPAIRS.load(Ordering::SeqCst),
         ),
     ]
 }

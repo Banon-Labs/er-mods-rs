@@ -373,10 +373,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         OWN_STEPPER_SLOT_NONE
     };
     let b80 = if gm != null {
-        ri32(
-            gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET,
-            OWN_STEPPER_B80_IDLE,
-        )
+        ri32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET, OWN_STEPPER_B80_IDLE)
     } else {
         OWN_STEPPER_B80_IDLE
     };
@@ -584,7 +581,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         // menu_deser/mount. The cold helper remains for the older non-selector diagnostic paths.
         let native_selector_path = live_dialog_enabled() || product_autoload_enabled();
         if native_selector_path {
-            const SELECTOR_TICK_RVA: usize = PROFILE_LOAD_SELECTOR_TICK_RVA;
+            const LOAD_JOB_RUN_RVA: usize = PROFILE_LOAD_JOB_RUN_RVA;
             #[repr(C)]
             struct SelectorTickResultLayout {
                 qwords: [usize; 4],
@@ -597,8 +594,8 @@ pub(crate) unsafe fn own_stepper_stage2(
                 let tick: unsafe extern "system" fn(usize, usize, usize, usize) -> usize = unsafe {
                     std::mem::transmute(
                         match crate::experiments::gated_game_fn(
-                            SELECTOR_TICK_RVA,
-                            "SELECTOR_TICK_RVA",
+                            LOAD_JOB_RUN_RVA,
+                            "LOAD_JOB_RUN_RVA",
                         ) {
                             Some(address) => address,
                             None => return,

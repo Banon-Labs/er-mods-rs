@@ -46,6 +46,38 @@ import struct
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import function_extent  # noqa: E402  (needs the sys.path line above)
+# THE ONE PLACE IN THIS FILE THAT DELETES.
+#
+# `refresh()` rewrites the data map WHOLESALE. A row it does not reproduce is either a STRAY, which
+# stops the write, or RETIRED, which is dropped -- and "retired" was decided by asking whether the
+# `CONST`/`ALIAS` scan below still produced the address. That scan is name-filtered (`*RVA*`),
+# typed (`usize|u32|u64`), and knows exactly two shapes; it has no bare `rva: 0x..` table-field
+# form and no `pub use .. as ..` form. An address written in any spelling it does not know was
+# classed `retired (nothing declares 0x%x any more)` and deleted from a tracked ledger at exit 0.
+#
+# What that costs: the row's absence afterwards reads as an address that was never mapped, not as
+# one that was deleted, and the code holding that address then reads a 1.16.2 value on 1.17 with no
+# refusal line and no fault. This file's own header calls that failure "quiet and then fatal".
+#
+# So the drop is now gated on `rva_symbols`, which resolves VALUES rather than spellings and
+# reports `proven_unclaimed` as a fact separate from `found_nothing`. Only the former may delete.
+try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
+    import const_fold
+    import rva_symbols
+    # The population's fourth declaration form: a bare hex literal handed to the address resolver
+    # with no constant name anywhere. Four such addresses held no row in any ledger until
+    # 2026-08-31 -- neither verified nor reported as unverified.
+    import rva_usage
+except ImportError as missing:  # a resolver that cannot load must stop the delete, not degrade
+    raise ImportError(
+        "scripts/rva_symbols.py could not be imported, so this script cannot tell whether an "
+        "address is still declared anywhere -- and it DELETES rows from a tracked ledger on that "
+        "answer. Fix the import rather than restoring a local name-filtered scan."
+    ) from missing
+
 BASE = 0x140000000
 CS_OP_IMM_TYPE: tuple = ()
 CHUNK = 1 << 22
@@ -305,7 +337,14 @@ def call_index(md, image: Image, func: int, rel_at: int, target: int) -> int | N
 
 def call_target_of(md, image: Image, func: int, index: int) -> int | None:
     """Where instruction `index` of `func` branches to, as an RVA."""
-    window = image.data[func : func + 0x800]
+    # `index` was counted in the OTHER image. A 1.17 function shorter than its 1.16.2
+    # counterpart supplies that index out of its NEIGHBOUR, and this returns a branch target
+    # that was never assembled. Bound by the extent and refuse when it runs out, rather than
+    # decoding a byte budget into whatever follows. Found by check-decode-extent-bounds.py.
+    end = function_extent.body_slice_end(image.data, BASE + func, 0x800)
+    if end is None:
+        return None
+    window = image.data[func:end]
     for n, insn in enumerate(md.disasm(window, BASE + func)):
         if n == index:
             if insn.mnemonic not in ("call", "jmp"):
@@ -425,13 +464,20 @@ def displacement_of(md, image: Image, func: int, index: int, at_offset: int | No
     # end is harmless because only an instruction that STARTS exactly at `at_offset` is consumed.
     limit = max(0x400, (at_offset + 0x20) if at_offset is not None else 0)
     window = image.data[func : func + limit]
+    # The sentence above is true of the `at_offset` arm ONLY: that arm consumes an instruction
+    # that STARTS exactly at a known offset, so a wide window cannot invent one. The `n == index`
+    # fallback below CAN match an instruction past the function end, where the decoder has
+    # resynchronised on padding. Bound that arm by the extent; refuse it when the extent is
+    # unknown rather than falling back to the byte budget. Found by check-decode-extent-bounds.py.
+    body_end = function_extent.body_slice_end(image.data, BASE + func)
     by_index = None
     for n, insn in enumerate(md.disasm(window, BASE + func)):
         pos = insn.address - BASE - func
         if at_offset is not None and pos == at_offset and insn.disp_size == 4:
             return insn.address - BASE + insn.size + insn.disp
         if n == index and insn.disp_size == 4:
-            by_index = insn.address - BASE + insn.size + insn.disp
+            if body_end is not None and (func + pos) < body_end:
+                by_index = insn.address - BASE + insn.size + insn.disp
     return by_index
 
 
@@ -506,7 +552,9 @@ def rtti_class_name(image: bytes, vtable_rva: int, image_base: int = 0x140000000
 # is `...@?A0x7c8d539b@@...` in 1.16.2 and `...@?A0x8fca6706@@...` in 1.17. Comparing the raw
 # names therefore makes an anonymous-namespace vtable structurally unable to rescue itself here --
 # and it declines SILENTLY, as "not the same class", which is indistinguishable from a genuinely
-# wrong candidate. Measured 2026-08-30 on `SELECTOR_STEP_VTABLE_RVA` (0x2ac71e0 -> 0x2aca260):
+# wrong candidate. Measured 2026-08-30 on `MenuJobLoadContextVtable` (0x2ac71e0 -> 0x2aca260,
+# renamed 2026-08-30 from `SELECTOR_STEP_VTABLE_RVA`; RTTI-confirmed a MenuJob vtable, not a
+# "SelectorStep" one -- see scripts/rva-alias-allowlist.txt 0x2ac71e0):
 # `MenuJobWithContext<LoadJobContext@?A0x...,lambda_1af212c9...>` differs between the images in the
 # namespace tag and NOTHING else -- the LAMBDA hash is stable across builds. That row happened to
 # have two agreeing references and never needed the rescue; the next one may not.
@@ -567,6 +615,9 @@ CONST = re.compile(
     r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*([^;]+);"
 )
 LITERAL_ARITHMETIC = re.compile(r"\A\s*0x[0-9a-fA-F_]+(?:\s*[-+]\s*0x[0-9a-fA-F_]+)*\s*\Z")
+# Empty: `LITERAL_ARITHMETIC` above has already established there is nothing to look up, so the
+# evaluator needs no declaration index and this costs no scan.
+_CONSTANTS = const_fold.Constants(root=Path(__file__).resolve().parent.parent)
 
 
 def const_value(initialiser: str) -> int | None:
@@ -575,18 +626,18 @@ def const_value(initialiser: str) -> int | None:
     Only `0x..`, `0x.. - 0x..` and `0x.. + 0x..` chains evaluate. Anything else -- an alias to
     another constant, an `as` cast, a decimal, a call -- returns None and is reported by the
     caller, because a partial read is how a subtrahend became an address.
+
+    The arithmetic now runs in `scripts/const_fold.py`, which is the same evaluator
+    `select-needed-1170-rows.py` and `detect-struct-field-drift.py` use. `LITERAL_ARITHMETIC`
+    stays in front of it deliberately: the shared folder resolves named constants and enum
+    variants too, and admitting those here would widen THIS map's population as a side effect of
+    a refactor. Measured over all 732 `*_RVA` initialisers in the workspace, the delegated form
+    and the hand-rolled loop it replaced disagree on ZERO.
     """
     if not LITERAL_ARITHMETIC.match(initialiser):
         return None
-    total, sign = 0, 1
-    for token in re.findall(r"[-+]|0x[0-9a-fA-F_]+", initialiser):
-        if token == "+":
-            sign = 1
-        elif token == "-":
-            sign = -1
-        else:
-            total += sign * int(token.replace("_", ""), 16)
-    return total if total >= 0 else None
+    folded = _CONSTANTS.fold(initialiser)
+    return folded.value if folded.hex_rooted and folded.value >= 0 else None
 # `pub const FOO_RVA: usize = SomeEnum::Variant as usize;` -- the value lives on the enum, so a
 # literal scan never sees it. SESSION_SINGLETON_144588E98_RVA is written this way, wrapped across
 # two lines, and its absence from this map stalled the 1.17 autoload at `session=0x0`: the title
@@ -599,6 +650,48 @@ ALIAS = re.compile(
 VARIANT = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9a-fA-F_]+)\s*,", re.M)
 BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 DATA_MAP = "docs/recon/rva-map-1162-to-1170.data.tsv"
+# The banner the preserved rows sit under. Matched as a PREFIX when the file is re-read, so the
+# rest of the wording can change without orphaning the rows it introduces.
+PRESERVED_BANNER = "# PRESERVED"
+
+
+def retirement_verdict(rva: int, claims, root: str = ""):
+    """`(retire?, why)` -- `True` ONLY on a proof that nothing in `crates/` declares `rva`.
+
+    Split out of `refresh()` so the decision that DELETES a ledger row can be asserted directly.
+    `claims is None` means the resolver could not run, which is not evidence of anything and must
+    never read like a clean scan.
+    """
+    if claims is None:
+        return False, "the crates/ resolver could not run; nothing is known"
+    if claims.declarations or claims.literals:
+        names = sorted({decl.qualified for decl in claims.declarations})
+        where = [decl.where(root) for decl in claims.declarations][:2]
+        where += [lit.where(root) for lit in claims.literals][:2]
+        return False, (
+            f"STILL DECLARED by {', '.join(names) or 'a bare literal'} "
+            f"({', '.join(where[:3])}); the scan above cannot spell it"
+        )
+    if claims.proven_unclaimed:
+        return True, "PROVEN unclaimed"
+    return False, (
+        f"NOT PROVEN: no declaration or literal FOUND, but {len(claims.residue)} of "
+        f"{claims.universe} address-capable declarations could not be evaluated "
+        f"(python3 scripts/rva_symbols.py --residue 0x{rva:x})"
+    )
+
+
+def claims_for(repo: Path, rva: int):
+    """Who declares this address anywhere in `crates/`, resolved by VALUE. None if the walk broke.
+
+    A broken walk must never read like a clean one: the caller preserves the row on None rather
+    than treating the silence as "nothing declares it".
+    """
+    try:
+        return rva_symbols.index(repo / "crates").claims(rva)
+    except (OSError, RecursionError) as failure:
+        print(f"  (could not resolve crates/ symbols for 0x{rva:x}: {failure})", file=sys.stderr)
+        return None
 
 # BRACKET-AND-SHAPE RESCUE: globals whose only reference lives in the dearxan'd image's trampoline
 # rubble, where the enclosing `.pdata` entry maps to nine places or none and reference voting has
@@ -674,8 +767,11 @@ REFSITE_RESCUED = {
     # +0x1250 -- the same delta as the referencing function itself.
     0x3B37C98: (0x3B3BCA8, "MENU_PUMP_KICK_PTR_RVA", "bracket"),
     0x3B39848: (0x3B3D858, "PROFILE_OFFSCREEN_SIZE_TABLE_RVA", "bracket"),
-    # The stored thunk sits 0xb0 past its referencing function in BOTH images.
-    0x3B48FF0: (0x3B4D050, "STEAM_INTERFACE_GUARD_RVA", "bracket"),
+    # The stored thunk sits 0xb0 past its referencing function in BOTH images. Renamed from
+    # STEAM_INTERFACE_GUARD_RVA 2026-08-31: it is an indirect-CALL slot in the SteamID64 accessor
+    # (`MOV RAX,[0x143b48ff0]; CALL RAX` at 0x140e8d52a, its ONLY reference), not a Steam interface
+    # object, and not read by the save-dir builder at all.
+    0x3B48FF0: (0x3B4D050, "STEAM_ID_ACCESSOR_CALL_SLOT_RVA", "bracket"),
     0x3D61DC0: (0x3D65E20, "NAV_COST_TABLE_RVA", "bracket"),
     # Slots 6 and 10 of the `TitleStep` step table, which `own_stepper_patch_once` writes our
     # handler into. Each has exactly one reference -- the store that fills it -- so the vote alone
@@ -693,6 +789,39 @@ REFSITE_RESCUED = {
     #   python3 scripts/carry-step-table-slots.py
     0x3D715E0: (0x3D75650, "TITLE_STEP_IDX6_SLOT_RVA", "bracket"),
     0x3D71620: (0x3D75690, "TITLE_STEP_IDX10_SLOT_RVA", "bracket"),
+    # THE LAZY `CSEblFileManager` SLOT, and the only one of the menu tracer's five bare literals
+    # the vote cannot carry. Its four references sit at file offsets 0x7e1d7, 0x1eed3b, 0x1efbdc
+    # and 0x1efbf3 -- the SAME four offsets in both images, each re-reading the candidate -- but
+    # none of the enclosing functions is in the function map, so `carry` has nothing to vote with
+    # and reports "no usable reference". Both corroborations here are independent of that:
+    #   BRACKET -- 0x3d5b078 and 0x3d5b0f4 both move +0x4060, and so do 105 anchors within +-0x400.
+    #   SHAPE   -- the masked referencing instruction reaches the source 10 times in 1.16.2 and
+    #              the candidate 10 times in 1.17.
+    # `None` for the name means "whatever the tree calls it today". It is written as a bare
+    # literal with no constant name at all, so the harvest keys it `<file>:<line>`; freezing that
+    # key here would rot on the next edit above line 1248, and freezing an invented CONSTANT name
+    # would put a name in a tracked ledger that nothing in crates/ declares. If the literal ever
+    # leaves the tree this entry produces no row, which is the right answer rather than a stale one.
+    #   python3 scripts/map-data-rvas-1162-to-1170.py 0x3d5b088 --confirm 0x3d5f0e8
+    0x3D5B088: (0x3D5F0E8, None, "bracket+shape"),
+    # THE DIAGNOSTIC-ONLY VTABLE, GIVEN A ROW ON PURPOSE. `MENUJOB_IFELSE_VTABLE_DUMP_VA` is
+    # declared `= 0x142aa2958` in `er-quickload/src/constants/gaitem_restore.rs` and its every use
+    # is a format argument: the install path logs "expect IfElseJob dump 0x..." beside the vtable
+    # it actually read. Nothing resolves it, so it cannot be wrong at runtime -- and that is
+    # exactly the argument that let `FIRST_SECTION_RVA` into `DETOUR_SAFE_1162_TO_1170`, where it
+    # was also inert until it would not have been.
+    #
+    # It is NOT a candidate for `rva_role.NOT_AN_ADDRESS`: that list is for values PROVEN to be
+    # bounds, and this one is provably the opposite -- RTTI reads `.?AVIfElseJob@MenuJobSequence@CS@@`
+    # at the source in 1.16.2 and at the candidate in 1.17. Calling a real vtable "not an address"
+    # is the expensive direction, and its twin on the same log line
+    # (`MENUJOB_LOADGAME_VTABLE_DUMP_VA`, RVA 0x2ac71e0) is already carried under another name, so
+    # leaving this half out means one log line mixes a watched number with an unwatched one.
+    #
+    # It reaches the ledger through this table rather than through the harvest because neither of
+    # the harvest's two questions can see it: its NAME carries no `RVA`, and its VALUE is a full VA
+    # rather than an RVA. Widening either test to admit it would admit far more than it.
+    0x2AA2958: (0x2AA59D8, "MENUJOB_IFELSE_VTABLE_DUMP_VA", "rtti"),
 }
 
 
@@ -773,6 +902,27 @@ def rescue_confirms(md, old: Image, new: Image, fmap, src: int, dst: int, kind: 
             ok, why = fnptr_table_confirms(old.data, new.data, fmap, src, dst)
         elif part == "bracket":
             ok, why = bracket_confirms(md, old, new, fmap, src, dst)
+        elif part == "shape":
+            # The same test the `SHAPE_RESCUED` loop runs, reachable from `REFSITE_RESCUED` too:
+            # the masked referencing instruction reaches the candidate in 1.17 exactly as often as
+            # it reached the source in 1.16.2. Weak alone (a `mov rax, [rip]` shape reaches
+            # hundreds of addresses image-wide), which is why it only ever appears beside another
+            # part -- it confirms an address the bracket or the content already selected.
+            shapes = reference_shapes(md, old, src)
+            src_sites = len(shape_sites(old, shapes).get(src, [])) if shapes else 0
+            dst_sites = len(shape_sites(new, shapes).get(dst, [])) if shapes else 0
+            ok = bool(src_sites) and src_sites == dst_sites
+            why = f"{src_sites} source vs {dst_sites} target site(s) of the referencing shape"
+        elif part == "rtti":
+            # The strongest anchor this file has, and the only one that involves no matching at
+            # all: the vtable carries its own mangled class name, the same name sits at the source
+            # in 1.16.2 and at the candidate in 1.17, and at neither crossed position -- so a
+            # region that happens not to have moved cannot pass by accident. Already used to
+            # rescue a weak VOTE inside `refresh`; reachable here for a vtable the harvest never
+            # produced a target for at all.
+            confirmed = rtti_confirms(old.data, new.data, src, dst)
+            ok = confirmed is not None
+            why = confirmed if ok else "the mangled class name does not carry from source to candidate"
         else:
             ok, why = False, f"unknown corroboration {part!r}"
         if not ok:
@@ -811,6 +961,10 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             enum_variants.setdefault(variant, int(value.replace("_", ""), 16))
 
     unevaluated: dict[str, str] = {}
+    # A GAME ADDRESS DOES NOT NEED A NAME. Collected across the whole tree first and merged after
+    # the named loop, because the merge asks whether any CONSTANT already claims the value -- and
+    # the constant and the bare literal are routinely in different files.
+    bare: dict[str, int] = {}
     for path in sorted(repo.glob("crates/**/*.rs")):
         source = path.read_text(encoding="utf-8", errors="replace")
         literals = []
@@ -853,6 +1007,43 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             if text_va <= rva < text_va + text_size:
                 continue
             targets.setdefault(name, rva)
+        # BARE LITERALS HANDED TO THE ADDRESS RESOLVER. See `rva_usage.bare_resolver_addresses`:
+        # decided from the ARGUMENT POSITION, never from the value or the spelling, so the
+        # thousands of offsets/flags/sanity bounds in these same files are not admitted. Test
+        # scopes are skipped for the reason the named loop skips them: a test may name an address
+        # precisely to assert the workspace does NOT use it.
+        tests = rva_usage.test_module_spans(source)
+        line_offsets = None
+        for line_no, rva in rva_usage.bare_resolver_addresses(source):
+            if line_offsets is None:
+                line_offsets, cursor = [0], source.find("\n")
+                while cursor >= 0:
+                    line_offsets.append(cursor + 1)
+                    cursor = source.find("\n", cursor + 1)
+            offset = line_offsets[line_no - 1] if line_no - 1 < len(line_offsets) else 0
+            if rva_usage.in_any_span(offset, tests):
+                continue
+            bare.setdefault(f"{path.relative_to(repo).as_posix()}:{line_no}", rva)
+
+    # THE MERGE, AND THE ONE THING IT MUST NOT DO. A synthetic `<file>:<line>` key is fragile by
+    # construction -- every edit above the line renames the row -- so it is used ONLY where nothing
+    # else names the address. `0x3d5b0f8` is written both as `CSFILE_SINGLETON_RVA` and as a bare
+    # literal three lines below its four unnamed siblings; carrying it twice would put a
+    # line-number-churning duplicate beside a stable row for no gain.
+    #
+    # `.text` is reported rather than skipped. The named loop can drop a `.text` address in
+    # silence because a constant that names one is visible to `select-needed-1170-rows.py`; a bare
+    # literal is visible to nothing, so dropping it here would put it back in the third state this
+    # whole harvest exists to end -- neither carried nor reported.
+    named_values = set(targets.values())
+    text_bare: list[tuple[str, int]] = []
+    for name, rva in sorted(bare.items(), key=lambda kv: kv[1]):
+        if rva in named_values or rva in done:
+            continue
+        if text_va <= rva < text_va + text_size:
+            text_bare.append((name, rva))
+            continue
+        targets.setdefault(name, rva)
 
     # The declared constants are not the whole population; the running game is the authority on
     # what is actually reached. See scripts/record-1170-refusals.py.
@@ -923,6 +1114,17 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
     for rva, (moved, name, kind) in sorted(REFSITE_RESCUED.items()):
         if any(row[1] == rva for row in rows):
             continue
+        if name is None:
+            # The address has no constant name in the tree, so the row takes the harvest's
+            # `<file>:<line>` key rather than a frozen invention. No key means nothing writes the
+            # address any more and the entry retires itself instead of carrying a stale row.
+            name = next((key for key, value in sorted(bare.items()) if value == rva), None)
+            if name is None:
+                print(
+                    f"  refsite rescue 0x{rva:x}: nothing in crates/ writes this address any more, "
+                    "so the entry produced no row. Delete it from REFSITE_RESCUED."
+                )
+                continue
         voted, _note, votes = carry(md, old, new, fmap, rva)
         if voted is not None and voted != moved:
             # A contradiction, not weak evidence. The table says one address and the code that
@@ -949,7 +1151,10 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         "# GENERATED WHOLESALE -- DO NOT HAND-EDIT A ROW INTO THIS FILE. --refresh rewrites every",
         "# line below from the two images. A row it cannot reproduce now STOPS the write and is",
         "# named, instead of being deleted at exit 0 with nothing to read afterwards but an address",
-        "# that looks like it was never mapped. Hand knowledge belongs in SHAPE_RESCUED /",
+        "# that looks like it was never mapped. A row it does not WANT is only dropped when",
+        "# scripts/rva_symbols.py can PROVE nothing in crates/ declares the address; otherwise it is",
+        "# carried forward under the PRESERVED banner at the foot of the file. Hand knowledge",
+        "# belongs in SHAPE_RESCUED /",
         "# REFSITE_RESCUED inside that script, where the corroboration is re-derived from both",
         "# images on every refresh; a hand-derived pair for a FUNCTION belongs in",
         "# rva-map-1162-to-1170.verified.tsv, the curated ledger.",
@@ -971,6 +1176,12 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         "# once per image, a table of code pointers that carry through the function map, or the",
         "# nearest independently-carried anchor on each side having moved by the same delta. All",
         "# three are recomputed from the two images on every refresh -- see REFSITE_RESCUED.",
+        "# A `<file>:<line>` in the constant column is an address written as a BARE HEX LITERAL at",
+        "# its use site, with no constant name anywhere -- admitted because the workspace hands it",
+        "# to the address resolver, never because of how it is spelled or how large it is. Before",
+        "# 2026-08-31 the harvest read only `const *RVA*: usize = 0x..`, so four such addresses were",
+        "# in neither the body nor the UNUSED list: not verified and not reported unverified, which",
+        "# reads afterwards exactly like an address nobody had gotten to yet.",
     ]
     rescued_names = {name for name, _rva, _moved, _cls in rtti_rescued}
     shape_names = {name for name, _rva, _moved, _kind, _n in shape_rescued}
@@ -1002,9 +1213,18 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
     # instead, names the addresses, and points at the two tables where hand knowledge belongs --
     # `SHAPE_RESCUED` and `REFSITE_RESCUED`, which are re-checked against the images on every
     # refresh, which is exactly the property a hand-typed TSV row does not have.
+    #
+    # THAT IS THE STRAY CLASS, AND IT IS UNCHANGED. The class below it is different and was the
+    # dangerous one: a row this run does not produce AND does not want. It was dropped outright,
+    # and "does not want" was decided by the name-filtered scan above, so an address written in a
+    # spelling that scan cannot read was deleted from a tracked ledger at exit 0. Since 2026-08-30
+    # that drop needs a PROOF from `rva_symbols` -- values, not spellings -- and everything short
+    # of a proof is carried forward under `PRESERVED_BANNER`, which is the `select-needed-*.py`
+    # behaviour after all, for the class where it is right.
     produced = {rva: moved for _name, rva, moved, _best, _total in rows}
     withheld = {rva: note for _name, rva, note in weak}
-    strays, retired = [], []
+    strays, retired, preserved = [], [], []
+    seen_rows = set()
     for line in (repo / DATA_MAP).read_text(encoding="utf-8", errors="replace").splitlines():
         if line.startswith("#") or not line.strip():
             continue
@@ -1028,12 +1248,38 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             # override the vote, or the row used to carry and no longer does. Both are worth a
             # human; neither is worth a silent delete.
             strays.append((rva, line, f"this refresh WITHHELD it: {withheld[rva]}"))
+        elif (rva, moved) in seen_rows:
+            continue
         else:
-            # Nothing wants it any more -- the constant left `crates/`, or a stronger map now
-            # answers it. Dropping is right, but it is still named.
-            retired.append((rva, line))
+            # NOT PRODUCED BY THIS RUN, AND NOT WANTED BY IT EITHER. Before 2026-08-30 that was the
+            # whole test and the row was deleted: "nothing declares it any more" meant "the
+            # name-filtered `CONST`/`ALIAS` scan above did not produce it", which is a fact about a
+            # regex, not about the tree. The scan has no bare `rva: 0x..` table-field form, no
+            # `pub use .. as ..` form, and no way to see an address that only ever appears as an
+            # element of a const array or inside a `Range` band -- all four spellings are in use in
+            # `crates/` today.
+            #
+            # So the question is now put to `rva_symbols`, which resolves values, and only its
+            # PROVEN answer may delete. Everything else is carried forward under `PRESERVED_BANNER`
+            # and named on stdout, because a row that turns out to be wanted is a feature and a row
+            # that turns out to be stale is a line a human deletes in a second.
+            seen_rows.add((rva, moved))
+            drop, why = retirement_verdict(rva, claims_for(repo, rva), str(repo))
+            if drop:
+                retired.append((rva, line))
+            else:
+                preserved.append((rva, line, why))
     for rva, line in sorted(retired):
-        print(f"  retired (nothing declares 0x{rva:x} any more): {line}")
+        print(f"  retired (PROVEN unclaimed, dropped): {line}")
+    for rva, line, why in sorted(preserved):
+        print(f"  preserved 0x{rva:x}: {why}")
+    if preserved:
+        print(
+            f"  {len(preserved)} row(s) this refresh did not produce were KEPT under "
+            f"'{PRESERVED_BANNER}' rather than dropped. Only an address PROVEN unclaimed by "
+            f"scripts/rva_symbols.py is retired; the rest are a human's call. Delete a line there "
+            f"to drop it -- --refresh will not put it back."
+        )
     if strays:
         for rva, line, why in sorted(strays):
             print(f"UNREPRODUCED: 0x{rva:x}  {line}   -- {why}")
@@ -1046,7 +1292,29 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         )
         return 1
 
-    (repo / DATA_MAP).write_text("\n".join(head + body + tail) + "\n", encoding="utf-8")
+    kept_block = []
+    if preserved:
+        kept_block = [
+            "#",
+            f"{PRESERVED_BANNER} -- {len(preserved)} row(s) this refresh did not produce and could",
+            "# NOT prove nothing wants. Kept, not dropped. Before 2026-08-30 a row here was deleted",
+            "# at exit 0 because a name-filtered `*RVA*` regex had not produced it -- which is a",
+            "# fact about the regex, not about the tree, and the loss reads afterwards as an",
+            "# address that was never mapped rather than one that was deleted. The code holding it",
+            "# then reads a 1.16.2 address on 1.17 with no refusal line and no fault.",
+            "# A row leaves this block in one of three ways: the refresh reproduces it (it moves",
+            "# back up into the body); the refresh produces a DIFFERENT pair for it (that is a",
+            "# stray and the write stops); or a human deletes the line. --refresh never restores a",
+            "# deleted one. The per-row reason is printed on every run, not stored here, so it is",
+            "# re-derived from the current tree instead of ageing in place.",
+            "# Only an address PROVEN unclaimed by scripts/rva_symbols.py -- every address-capable",
+            "# declaration in crates/ evaluated, none of them this address, no bare literal of it",
+            "# in code -- is retired and dropped.",
+        ]
+        kept_block += [line for _rva, line, _why in sorted(preserved)]
+    (repo / DATA_MAP).write_text(
+        "\n".join(head + body + kept_block + tail) + "\n", encoding="utf-8"
+    )
     for name, rva, moved, cls in rtti_rescued:
         print(f"  rtti rescue: {name} 0x{rva:x} -> 0x{moved:x}  {cls[:90]}")
     for name, rva, moved, kind, sites in shape_rescued:
@@ -1055,9 +1323,23 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         print(f"  {kind} rescue: {name} 0x{rva:x} -> 0x{moved:x}  {why}")
     for name, initialiser in sorted(unevaluated.items()):
         print(f"  not a literal address, skipped: {name} = {initialiser}")
+    for name, rva in text_bare:
+        print(
+            f"  EXCLUDED (bare literal in .text, not this map's population): 0x{rva:x} {name} -- "
+            "a .text address belongs to rva-map-1162-to-1170.functions.tsv; this map is calibrated "
+            "on .data globals only. Reported rather than dropped so it cannot be invisible."
+        )
+    if bare:
+        carried = sum(1 for name in bare if name in targets)
+        print(
+            f"  bare literals handed to the address resolver: {len(bare)} found, {carried} carried "
+            f"under a <file>:<line> key, {len(text_bare)} excluded (.text), "
+            f"{len(bare) - carried - len(text_bare)} already claimed by a named constant"
+        )
     print(
         f"wrote {DATA_MAP}: {len(rows)} usable row(s) "
-        f"({len(rtti_rescued)} carried by RTTI), {len(weak)} withheld"
+        f"({len(rtti_rescued)} carried by RTTI), {len(weak)} withheld, "
+        f"{len(preserved)} preserved, {len(retired)} retired (PROVEN unclaimed)"
     )
     return 0
 
@@ -1300,21 +1582,175 @@ def selftest_const_parser() -> int:
     return bad
 
 
+# --------------------------------------------------------------------------------------------
+# The positive control for the one code path that deletes
+# --------------------------------------------------------------------------------------------
+
+# THE PRE-2026-08-30 SCAN, FROZEN AS LITERALS. `refresh()` decided a row was `retired` -- and
+# deleted it -- when this scan no longer produced the address. These are its patterns, SPELLED OUT
+# rather than composed from the live `CONST` / `ALIAS` / `VARIANT` / `BOUND` / `LITERAL_ARITHMETIC`
+# objects above.
+#
+# Composing them would destroy the proof. A control assembled from the live pieces widens whenever
+# they widen, so "the old scan could not see this spelling" quietly becomes "the new one cannot see
+# it either" -- the opposite claim, asserted in the same words. That nearly happened to
+# `check-stale-rva-calls.py`, whose controls were built from its live pattern.
+LEGACY_CONST = re.compile(
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*(?:usize|u32|u64)\s*=\s*([^;]+);"
+)
+LEGACY_ALIAS = re.compile(
+    r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*(?:usize|u32|u64)\s*=\s*(\w+)::(\w+)\s+as\s+"
+    r"(?:usize|u32|u64)"
+)
+LEGACY_VARIANT = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9a-fA-F_]+)\s*,", re.M)
+LEGACY_BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
+LEGACY_LITERAL_ARITHMETIC = re.compile(
+    r"\A\s*0x[0-9a-fA-F_]+(?:\s*[-+]\s*0x[0-9a-fA-F_]+)*\s*\Z"
+)
+
+
+def legacy_declared(text: str) -> set[int]:
+    """Every address the PRE-FIX scan produced, over one blob of source."""
+    out: set[int] = set()
+    variants: dict[str, int] = {}
+    for variant, value in LEGACY_VARIANT.findall(text):
+        variants.setdefault(variant, int(value.replace("_", ""), 16))
+    for name, initialiser in LEGACY_CONST.findall(text):
+        if LEGACY_BOUND.search(name) or not LEGACY_LITERAL_ARITHMETIC.match(initialiser.strip()):
+            continue
+        total, sign = 0, 1
+        for token in re.findall(r"[-+]|0x[0-9a-fA-F_]+", initialiser):
+            if token == "+":
+                sign = 1
+            elif token == "-":
+                sign = -1
+            else:
+                total += sign * int(token.replace("_", ""), 16)
+        if total >= 0:
+            out.add(total)
+    for name, _enum, variant in LEGACY_ALIAS.findall(text):
+        if LEGACY_BOUND.search(name):
+            continue
+        value = variants.get(variant)
+        if value is not None:
+            out.add(value)
+    return out
+
+
+# FOUR ADDRESSES AND THE SPELLING EACH ONE IS WRITTEN IN. Frozen source, so the control keeps
+# meaning what it means after the tree moves on:
+#
+#   0x111000  an ordinary `const *_RVA: usize = 0x..`   -- BOTH scans see it. Present only to prove
+#             the frozen legacy scan still WORKS; a control set the old scan finds nothing in makes
+#             every "the old one missed it" assertion vacuous.
+#   0x222000  a `_MAX`-suffixed name, removed by `BOUND`. This is the real
+#             GX_CMD_QUEUE_WRAPPER_RVA_MAX spelling; the sibling ledger carries a container row for
+#             it that read "delete the line" until this fix.
+#   0xb0d400  an enum discriminant used INLINE, with no aliasing constant -- the real
+#             `MenuTraceRva::MenuJobWait`, three live use sites on the autoload path.
+#   0x333000  a bare `rva: 0x..` field in a HookSpec table, with no constant NAME at all. 53 of
+#             these exist in crates/ (39 in er-reload-trace alone) and the scan has no rule for the
+#             shape, so every one of them looked retired.
+CONTROL_SOURCE = """
+pub const NAV_COST_TABLE_RVA: usize = 0x111000;
+pub const GX_CMD_QUEUE_WRAPPER_RVA_MAX: usize = 0x222000;
+#[repr(u32)]
+pub enum MenuTraceRva {
+    TaskEnqueue = 0x007a7b60,
+    MenuJobWait = 0x00b0d400,
+}
+pub fn drive(base: usize) -> usize {
+    base + MenuTraceRva::MenuJobWait as usize
+}
+pub const SPECS: &[HookSpec] = &[HookSpec { rva: 0x333000, name: "trace" }];
+"""
+
+
+def selftest_retirement_gate() -> int:
+    """The `retired` drop fires ONLY on a proof, and the proof is not the old regex's silence."""
+    import tempfile
+
+    failures = []
+    scratch = Path(tempfile.mkdtemp()) / "crates" / "a" / "src"
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "lib.rs").write_text(CONTROL_SOURCE, encoding="utf-8")
+    fixture = rva_symbols.Index.build(root=str(scratch.parent.parent.parent))
+
+    # NON-VACUITY FIRST, BEFORE ANY CLAIM ABOUT CONTENTS. An empty set makes every `not in` below
+    # true and every assertion pass for the wrong reason.
+    old_sees = legacy_declared(CONTROL_SOURCE)
+    if old_sees != {0x111000}:
+        failures.append(
+            f"the frozen legacy scan is broken, so 'the old one missed it' proves nothing: it "
+            f"found {sorted(hex(v) for v in old_sees)}, expected exactly ['0x111000']"
+        )
+    if fixture.files_read < 1 or fixture.universe_size() < 4:
+        failures.append(
+            f"the control fixture did not parse: {fixture.files_read} file(s), "
+            f"{fixture.universe_size()} address-capable declaration(s)"
+        )
+
+    for address, spelling in (
+        (0x222000, "a _MAX-suffixed constant"),
+        (0xB0D400, "an inline enum discriminant"),
+        (0x333000, "a bare `rva:` table field with no constant name"),
+    ):
+        if address in old_sees:
+            failures.append(
+                f"control is worthless: the OLD scan already produced 0x{address:x} ({spelling})"
+            )
+        drop, why = retirement_verdict(address, fixture.claims(address))
+        if drop:
+            failures.append(f"0x{address:x} ({spelling}) is STILL dropped as retired: {why}")
+
+    # ...and retirement must remain REACHABLE, or the fix has merely disabled the mechanism. In a
+    # tree the resolver understands completely, an address nothing declares is PROVEN unclaimed.
+    drop, why = retirement_verdict(0x999000, fixture.claims(0x999000))
+    if not drop:
+        failures.append(
+            f"an address nothing declares is no longer retired in a fully-resolved tree ({why}); "
+            "the gate can never delete anything, which is a different bug"
+        )
+    # A BROKEN WALK IS NOT A CLEAN WALK.
+    if retirement_verdict(0x111000, None)[0]:
+        failures.append("a row is dropped when the resolver could not run at all")
+
+    # THE LIVE TREE. A resolver that only ever runs against its own fixture is a fixture.
+    repo = Path(__file__).resolve().parent.parent
+    live = claims_for(repo, 0xB0D400)
+    if live is None or live.files_read < 200:
+        failures.append("the live resolver did not read the real tree")
+    elif retirement_verdict(0xB0D400, live, str(repo))[0]:
+        failures.append("0xb0d400 is retired against the LIVE tree; three use sites reach it")
+    if live is not None:
+        print(
+            f"  retirement gate: live resolver read {live.files_read} sources, "
+            f"{live.universe} address-capable declarations, {len(live.residue)} unevaluated and "
+            f"wide enough to hold a .text RVA."
+            + (
+                ""
+                if not live.residue
+                else " While that is non-zero NO address can be PROVEN unclaimed, so no row can be"
+                " retired from this ledger at all and every unreproduced row is preserved."
+            )
+        )
+    for line in failures:
+        print(f"SELFTEST FAIL: {line}")
+    print(f"  retirement gate: {len(failures)} failure(s)")
+    return len(failures)
+
+
 def main() -> int:
-    _ensure("capstone")
-    _ensure("numpy")
-    from capstone import CS_ARCH_X86, CS_MODE_64, Cs
-    from capstone.x86 import X86_OP_IMM
-
-    global CS_OP_IMM_TYPE
-    CS_OP_IMM_TYPE = (X86_OP_IMM,)
-
     repo = Path(__file__).resolve().parent.parent
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("rvas", nargs="*", help="1.16.2 data RVAs or VAs (hex)")
-    ap.add_argument("--old", type=Path, default=repo / "eldenring-deobf.bin")
-    ap.add_argument("--new", type=Path, default=repo / "eldenring-deobf-1.17.bin")
-    ap.add_argument("--map", type=Path, default=repo / "docs/recon/rva-map-1162-to-1170.functions.tsv")
+    # `--refresh` REWRITES A TRACKED LEDGER. Without a way to point it at a scratch tree the only
+    # way to exercise that path is to run it on the real one, which is how a destructive tool gets
+    # shipped untested. Everything else defaults relative to whatever `--repo` names.
+    ap.add_argument("--repo", type=Path, default=repo, help="tree to read crates/ and docs/ from")
+    ap.add_argument("--old", type=Path, default=None)
+    ap.add_argument("--new", type=Path, default=None)
+    ap.add_argument("--map", type=Path, default=None)
     ap.add_argument("--refresh", action="store_true", help="rewrite the tracked data map")
     ap.add_argument(
         "--explain",
@@ -1339,12 +1775,44 @@ def main() -> int:
         "body-signature mapper can identify",
     )
     ap.add_argument("--selftest", action="store_true")
+    # THE SOURCE CONTRACTS, RUNNABLE WITH NOTHING INSTALLED. The const parser and the retirement
+    # gate read `crates/` and nothing else; making them need capstone (and therefore uv, and
+    # therefore the network) is what kept them out of `scripts/check.sh`, and a selftest no gate
+    # runs is a selftest that rots. `--selftest` still continues into the image calibration.
+    ap.add_argument(
+        "--selftest-source",
+        action="store_true",
+        help="run only the source-parsing contracts (no capstone, no images)",
+    )
     args = ap.parse_args()
+    repo = args.repo
+    if args.selftest or args.selftest_source:
+        # BEFORE `_ensure`, FOR BOTH FLAGS. These two read `crates/` and nothing else, so running
+        # them first means a checkout with no capstone still fails on a regressed scraper or on a
+        # retirement gate that has gone back to deleting rows on a regex's silence.
+        #
+        # It also keeps the tool MEASURABLE by `scripts/audit-selftest-vacuity.py`, which runs
+        # gates in-process with `re` neutered: `_ensure` re-execs under uv, and the re-exec threw
+        # the blinding away with the process, so the sweep could only report UNMEASURED for the one
+        # tool in this repo that deletes ledger rows.
+        broken = selftest_const_parser() + selftest_retirement_gate()
+        if args.selftest_source:
+            return 1 if broken else 0
+        if broken:
+            return 1
 
-    # Runs before the images are even looked for: it is a pure source-parsing contract, and a
-    # checkout without the two binaries must still be able to fail on a regressed scraper.
-    if args.selftest and selftest_const_parser():
-        return 1
+    # Everything past this point decodes instructions.
+    _ensure("capstone")
+    _ensure("numpy")
+    from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+    from capstone.x86 import X86_OP_IMM
+
+    global CS_OP_IMM_TYPE
+    CS_OP_IMM_TYPE = (X86_OP_IMM,)
+
+    args.old = args.old or repo / "eldenring-deobf.bin"
+    args.new = args.new or repo / "eldenring-deobf-1.17.bin"
+    args.map = args.map or repo / "docs/recon/rva-map-1162-to-1170.functions.tsv"
 
     for path in (args.old, args.new, args.map):
         if not path.is_file():

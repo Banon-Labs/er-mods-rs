@@ -50,6 +50,107 @@ pub const fn packed_maps_disagree(ours: i32, live: i32) -> bool {
     packed_map_is_plausible(ours) && packed_map_is_plausible(live) && ours != live
 }
 
+/// Why a live `CS::ProfileSummary` record is, or is not, a CHARACTER.
+///
+/// The loading-screen stats panel reads its name and Rune Level straight out of the slot's record,
+/// and until 2026-08-30 it trusted whatever bytes were there. Those bytes are not always a
+/// character: the in-game save picker deliberately writes its browse-row LABELS into the same
+/// records (`save_picker_write_row_records` zeroes each 0x2a0-byte record and copies the row label
+/// into the name field), and until the restore was fixed they could still be there when a loading
+/// screen came up. The user saw the result on their own loading screens -- `[..] EldenRing` (the
+/// picker's parent-directory row) and `[ new ]` (`PICKER_NEW_FILE_LABEL`) rendered as character
+/// names beside `RL 0`.
+///
+/// So the panel asks this question first and draws NOTHING when the answer is no, exactly as the
+/// portrait already refuses to publish a head it cannot attribute. A blank panel is a visible,
+/// diagnosable absence; a confidently wrong one is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordCharacterVerdict {
+    /// Name and level both present and self-consistent -- safe to render.
+    Character,
+    /// The name field is empty (or whitespace). A zeroed record reads exactly like this.
+    EmptyName,
+    /// `level <= 0`. THE LOAD-BEARING TERM: every record the picker stages is memset to zero
+    /// before the label is copied in, so its level is 0 and no browse-row label can pass here.
+    NoLevel,
+    /// The name has the SHAPE of one of the picker's own row labels. Belt-and-braces only --
+    /// [`Self::NoLevel`] already rejects every staged row -- but it costs one `starts_with` and it
+    /// is the term that would still catch a label written over a record that kept its level.
+    PickerRowLabel,
+    /// The record's map word is populated but is not a packed `BlockId`, so the record is neither a
+    /// character nor a zeroed slot: it is garbage. A brand-new character's `DEFAULT_MAP_C30` and a
+    /// zero word are deliberately NOT refutations -- both are legitimate states of a real record,
+    /// and rejecting the sentinel would blank the panel for a character who has not left the
+    /// tutorial cave.
+    ImplausibleMap,
+}
+
+impl RecordCharacterVerdict {
+    /// True only for [`Self::Character`], so a caller can gate without matching every arm.
+    #[must_use]
+    pub const fn is_character(self) -> bool {
+        matches!(self, Self::Character)
+    }
+
+    /// Short stable tag for logs and telemetry.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Character => "character",
+            Self::EmptyName => "empty-name",
+            Self::NoLevel => "no-level",
+            Self::PickerRowLabel => "picker-row-label",
+            Self::ImplausibleMap => "implausible-map",
+        }
+    }
+}
+
+/// Does this live `CS::ProfileSummary` record describe a real character?
+///
+/// `name` / `level` / `map` are the record's name field, `+0x24` level and `+0x30` packed map, read
+/// by the caller. Nothing here touches game memory, so the rule is host-testable -- which is the
+/// point: this is the rule a wrong-stats bug hides in.
+#[must_use]
+pub fn profile_record_character_verdict(
+    name: &str,
+    level: i32,
+    map: i32,
+) -> RecordCharacterVerdict {
+    if name.trim().is_empty() {
+        return RecordCharacterVerdict::EmptyName;
+    }
+    if level <= 0 {
+        return RecordCharacterVerdict::NoLevel;
+    }
+    if name_looks_like_picker_row_label(name) {
+        return RecordCharacterVerdict::PickerRowLabel;
+    }
+    if map != 0 && map != DEFAULT_MAP_C30 && !packed_map_is_plausible(map) {
+        return RecordCharacterVerdict::ImplausibleMap;
+    }
+    RecordCharacterVerdict::Character
+}
+
+/// True when `name` has the SHAPE of one of the save picker's browse-row labels rather than a
+/// character name.
+///
+/// Matches what `SavePickerModel::row_label_utf16` can produce: every CONTROL row is bracketed
+/// (`[..] <dir>`, `[ new ]`, `[ root ]`, `[ .. up ]`, `[ SCROLL ^ ]`, `[ SCROLL v ]`, and the drive
+/// strip's `[C:]`-style label), and every DIRECTORY row ends in a separator (`dir_display_name`
+/// appends `/`, or renders a drive root such as `Z:\`). A FILE row's label is a bare filename and
+/// is deliberately NOT matched here -- `ER0000.sl2` is indistinguishable in shape from a legal
+/// character name, and inventing a rule that rejects names containing a dot would blank the panel
+/// for real characters. The level term is what rejects file rows.
+///
+/// The predicate is intentionally shape-only and lives here rather than importing
+/// `er-save-picker-core`: this crate must stay free of the picker's dependency graph, and a
+/// duplicated 3-line shape check is cheaper than the coupling.
+#[must_use]
+pub fn name_looks_like_picker_row_label(name: &str) -> bool {
+    let trimmed = name.trim();
+    trimmed.starts_with('[') || trimmed.ends_with('/') || trimmed.ends_with('\\')
+}
+
 /// What the published loading-screen portrait was compared against the character that loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishedIdentity {
@@ -120,10 +221,87 @@ pub fn portrait_target_slot_from_sources(
     save_slot: Option<i32>,
     slot_count: i32,
 ) -> Option<i32> {
+    portrait_target_slot_attributed(picker_slot, request_slot, save_slot, slot_count)
+        .map(|(slot, _)| slot)
+}
+
+/// WHICH source named a portrait target, ordered weakest evidence first.
+///
+/// The ordering is the whole point. [`portrait_target_slot_from_sources`] throws the winning
+/// source away and returns a bare slot, so a target read off `save_slot` — a register both the
+/// game's own selector and our loader write for reasons unrelated to "which character is
+/// loading" — was indistinguishable from one the user explicitly clicked. The window latch then
+/// defended both equally, and a stale `save_slot` outranked the load request that superseded it
+/// for the whole window (bd `er-effects-rs-fmy6`: latched slot 0 from `ac0=0` at +56125ms, `b78`
+/// and `ac0` both read the real slot 1 at +60296ms, retarget suppressed, wrong face on screen).
+///
+/// A CONFIGURED HINT IS DELIBERATELY NOT A VARIANT HERE. The autoload's `slot=` setting is not a
+/// measurement of anything — it says what a config file asked for, not what the game is doing —
+/// and giving it a rank would let it commit a window exactly the way the `.or_else` hint fallback
+/// used to (run br-20260831-014208-b1d6: latched slot 0 at +1184ms with `picker=None b78=None
+/// ac0=-1`, i.e. from the hint alone, then refused the real `ac0=2` 3371 times).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PortraitSlotSource {
+    /// `GameMan.save_slot` (ac0). Weakest: written for reasons unrelated to the question.
+    SaveSlot,
+    /// `GameMan+0xb78`, the native load-REQUEST register. A load for it is in flight, so
+    /// `save_slot` is stale by definition.
+    RequestSlot,
+    /// The user's explicit on-screen pick. Nothing the game infers outranks it.
+    UserPick,
+}
+
+impl PortraitSlotSource {
+    /// Wire form for the `PORTRAIT_WINDOW_TARGET_SOURCE` atomic. `0` means "no latch"; the ranks
+    /// are 1-based so the unset atomic cannot be mistaken for the weakest real source.
+    #[must_use]
+    pub const fn rank(self) -> usize {
+        match self {
+            Self::SaveSlot => 1,
+            Self::RequestSlot => 2,
+            Self::UserPick => 3,
+        }
+    }
+
+    /// Inverse of [`Self::rank`]. `None` for `0` and for any value that is not a known rank.
+    #[must_use]
+    pub const fn from_rank(rank: usize) -> Option<Self> {
+        match rank {
+            1 => Some(Self::SaveSlot),
+            2 => Some(Self::RequestSlot),
+            3 => Some(Self::UserPick),
+            _ => None,
+        }
+    }
+
+    /// Short label for the debug/crash log lines. The provenance of a latch is what the
+    /// br-20260831-014208-b1d6 diagnosis had to recover by hand from a line 12,000 lines away.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SaveSlot => "ac0",
+            Self::RequestSlot => "b78",
+            Self::UserPick => "pick",
+        }
+    }
+}
+
+/// [`portrait_target_slot_from_sources`], keeping the source that won.
+///
+/// Same precedence, same validity filter; the only difference is that the answer says where it
+/// came from, so the window latch can tell a measured fact from a weaker measured fact.
+#[must_use]
+pub fn portrait_target_slot_attributed(
+    picker_slot: Option<i32>,
+    request_slot: Option<i32>,
+    save_slot: Option<i32>,
+    slot_count: i32,
+) -> Option<(i32, PortraitSlotSource)> {
     let valid = |s: Option<i32>| s.filter(|v| (0..slot_count).contains(v));
     valid(picker_slot)
-        .or_else(|| valid(request_slot))
-        .or(valid(save_slot))
+        .map(|slot| (slot, PortraitSlotSource::UserPick))
+        .or_else(|| valid(request_slot).map(|slot| (slot, PortraitSlotSource::RequestSlot)))
+        .or_else(|| valid(save_slot).map(|slot| (slot, PortraitSlotSource::SaveSlot)))
 }
 
 /// Which source names the slot whose character the loading-screen STATS panel describes.
@@ -211,6 +389,11 @@ pub struct PortraitWindowTarget {
     /// True when the commit REPLACED a latch that had been adopted from a guess, because the user
     /// has now explicitly picked. Counted as `PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS`.
     pub promoted_by_pick: bool,
+    /// The evidence the window's target now rests on. The caller must store this EVERY call, not
+    /// only when `latching`: a resolution that agrees with the held slot but comes from a stronger
+    /// source tightens the latch without changing the face, and forgetting that upgrade would let
+    /// an already-confirmed target be moved again later.
+    pub source: Option<PortraitSlotSource>,
 }
 
 impl PortraitWindowTarget {
@@ -249,6 +432,12 @@ impl PortraitWindowTarget {
 /// yields EXACTLY ONCE, and only to the user's own pick. A latch that came from the pick never
 /// yields -- so the 2026-08-02 repro this whole mechanism exists for (picked slot 0, precedence
 /// later fell through to `save_slot = 9`, window retargeted mid-load) still cannot happen.
+///
+/// SUPERSEDED BY [`portrait_window_target_slot_by_evidence`], which this now delegates to. The
+/// two-boolean form can only say "pick" or "not pick", and that turned out to be too coarse: it
+/// files a target read off `save_slot` and a target read off the load-REQUEST register under the
+/// same word, so the yield could not fire when the stronger of two MEASURED sources arrived late.
+/// Kept because its behaviour is what the existing callers and repro tests are written against.
 #[must_use]
 pub fn portrait_window_target_slot_authoritative(
     latched: Option<i32>,
@@ -256,32 +445,107 @@ pub fn portrait_window_target_slot_authoritative(
     resolved: Option<i32>,
     resolved_from_pick: bool,
 ) -> PortraitWindowTarget {
+    let as_source = |from_pick: bool| {
+        if from_pick {
+            PortraitSlotSource::UserPick
+        } else {
+            PortraitSlotSource::SaveSlot
+        }
+    };
+    portrait_window_target_slot_by_evidence(
+        latched,
+        latched.map(|_| as_source(latched_from_pick)),
+        resolved.map(|slot| (slot, as_source(resolved_from_pick))),
+    )
+}
+
+/// STABILITY over freshness, **except against strictly better evidence**.
+///
+/// This is [`portrait_window_target_slot_authoritative`] with the pick/not-pick boolean replaced
+/// by the actual [`PortraitSlotSource`], and the rule generalised to the thing that boolean was
+/// approximating: **a committed target yields only to a source that outranks the one it was
+/// committed from, and only when the slot actually differs.** Equal or weaker evidence never
+/// moves a window, so the mid-load face change the latch exists to prevent (2026-08-02: picked
+/// slot 0, `save_slot` later read 9, window retargeted at +20998ms) is still impossible — a pick
+/// is the top rank and nothing outranks it.
+///
+/// What the boolean form could not express, and what this fixes (bd `er-effects-rs-fmy6`): on a
+/// System->Quit->Load switch ACROSS SAVE FILES the redirect swap leaves the slot registers
+/// momentarily stale, so the window latched slot 0 off `ac0=0` — a real read, just an obsolete
+/// one. 4.2s later the load-REQUEST register named the real slot 1 and the retarget was refused,
+/// because "latched from ac0" and "latched from the pick" were the same value. Under the rank
+/// rule `RequestSlot > SaveSlot`, so the window follows the request exactly once and the face
+/// matches the character that loads.
+///
+/// Rank is monotonic within a window (it only ever increases, and resets on window close), so
+/// there are at most two retargets per window and each one is a strict improvement in evidence.
+///
+/// `latched_source` is what the caller stored from the previous call's [`PortraitWindowTarget`];
+/// `None` alongside `Some(slot)` is read as the weakest rank, so a caller that has not recorded a
+/// source yet cannot accidentally make its latch unassailable.
+#[must_use]
+pub fn portrait_window_target_slot_by_evidence(
+    latched: Option<i32>,
+    latched_source: Option<PortraitSlotSource>,
+    resolved: Option<(i32, PortraitSlotSource)>,
+) -> PortraitWindowTarget {
+    // THE RULE, IN ONE LINE: a window defends its commitment only against evidence of EQUAL OR
+    // LOWER rank; strictly better evidence always wins.
+    //
+    // That single sentence is what collapses two separately-filed defects into one. b1d6 latched a
+    // CONFIG HINT (rank: none at all -- it is not evidence, which is why the caller no longer
+    // offers it) and refused the first real `ac0`. fmy6 latched a real-but-STALE `ac0` and refused
+    // the `b78` that superseded it. Both were "a weak commitment outranking a stronger fact", and
+    // the old pick/not-pick boolean could express neither, because it filed an obsolete register
+    // read and a deliberate human click under the same word.
     match (latched, resolved) {
-        // A guessed latch yields to the user's explicit pick, once.
-        (Some(held), Some(fresh)) if !latched_from_pick && resolved_from_pick && held != fresh => {
-            PortraitWindowTarget {
-                slot: Some(fresh),
-                latching: true,
-                promoted_by_pick: true,
+        (Some(held), Some((fresh, fresh_source))) => {
+            let held_source = latched_source.unwrap_or(PortraitSlotSource::SaveSlot);
+            if held != fresh && fresh_source > held_source {
+                // Strictly better evidence, and it names a different character: follow it.
+                PortraitWindowTarget {
+                    slot: Some(fresh),
+                    latching: true,
+                    promoted_by_pick: fresh_source == PortraitSlotSource::UserPick,
+                    source: Some(fresh_source),
+                }
+            } else {
+                // Same slot, or evidence that is no better: the window keeps what it committed
+                // to. The recorded source still rises to the best that has agreed with it, so a
+                // target the user has now confirmed stops being movable.
+                PortraitWindowTarget {
+                    slot: Some(held),
+                    latching: false,
+                    promoted_by_pick: false,
+                    source: Some(if held == fresh {
+                        held_source.max(fresh_source)
+                    } else {
+                        held_source
+                    }),
+                }
             }
         }
-        // Window already committed: keep it, whatever the sources say now.
-        (Some(held), _) => PortraitWindowTarget {
+        // Window already committed and nothing names a slot right now: keep it, and keep its
+        // provenance -- a momentarily-invalid register must not demote an established latch.
+        (Some(held), None) => PortraitWindowTarget {
             slot: Some(held),
             latching: false,
             promoted_by_pick: false,
+            source: latched_source,
         },
         // First resolution of this window: adopt it.
-        (None, Some(fresh)) => PortraitWindowTarget {
+        (None, Some((fresh, fresh_source))) => PortraitWindowTarget {
             slot: Some(fresh),
             latching: true,
             promoted_by_pick: false,
+            source: Some(fresh_source),
         },
         // Nothing named a slot yet; stay uncommitted rather than inventing one.
         (None, None) => PortraitWindowTarget {
             slot: None,
             latching: false,
             promoted_by_pick: false,
+            source: None,
         },
     }
 }
@@ -394,493 +658,4 @@ impl BridgeHoldVerdict {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The defect the sign gate caused: a garbage word with bit31 set read as "not a real map" and
-    /// turned the comparison OFF instead of failing it (2 of 6 logged FAILs). Both of these are
-    /// real `CSRandXorshift` dwords lifted from one corpus slot's body+0x10..0x20 block.
-    #[test]
-    fn a_negative_word_is_rejected_as_implausible_not_treated_as_absent_evidence() {
-        assert!(!packed_map_is_plausible(0xd139_52aau32 as i32)); // areaId 0xd1
-        assert!(!packed_map_is_plausible(0xa504_8cb5u32 as i32)); // areaId 0xa5
-        // A POSITIVE piece of garbage must be rejected too -- the old `> 0` gate passed it.
-        assert!(!packed_map_is_plausible(0x3e20_457cu32 as i32)); // areaId 0x3e, one past the max
-    }
-
-    /// HONEST LIMIT of the area predicate: it is a shape check, not an identity check. One in
-    /// roughly eleven random dwords lands in the valid area range (measured: 68 of 726 corpus
-    /// body+0x14 words), so garbage CAN pass. That is precisely why the map term must also be
-    /// gated on the record being one WE wrote -- the predicate alone cannot carry the comparison.
-    #[test]
-    fn a_random_word_can_still_land_inside_the_area_range() {
-        assert!(packed_map_is_plausible(0x0e6d_7b38u32 as i32)); // areaId 0x0e -- pure luck
-    }
-
-    #[test]
-    fn real_corpus_area_ids_are_plausible() {
-        // Every distinct areaId observed across 726 active corpus slots.
-        for area in [
-            0x0au8, 0x0b, 0x0c, 0x0d, 0x0e, 0x10, 0x14, 0x15, 0x1c, 0x20, 0x22, 0x23, 0x3c, 0x3d,
-        ] {
-            // Low word 0x0002_0000 keeps area 0x0a off the new-game sentinel (0x0a01_0000).
-            let map = ((u32::from(area) << 24) | 0x0002_0000) as i32;
-            assert!(
-                packed_map_is_plausible(map),
-                "areaId 0x{area:02x} (map 0x{map:08x}) must be plausible"
-            );
-        }
-        // The real corpus values themselves, verbatim.
-        for map in [0x0c01_0000u32, 0x1c00_0000, 0x0e00_0000, 0x3d00_0000] {
-            assert!(packed_map_is_plausible(map as i32), "map 0x{map:08x}");
-        }
-    }
-
-    #[test]
-    fn the_new_game_sentinel_is_never_plausible() {
-        assert!(!packed_map_is_plausible(DEFAULT_MAP_C30));
-        assert_eq!(packed_map_area_id(DEFAULT_MAP_C30), 0x0a);
-    }
-
-    #[test]
-    fn implausible_values_yield_no_map_evidence_rather_than_a_mismatch() {
-        let real_a = 0x0c01_0000u32 as i32;
-        let real_b = 0x1c00_0000u32 as i32;
-        let garbage = 0x3e20_457cu32 as i32;
-        assert!(packed_maps_disagree(real_a, real_b));
-        assert!(!packed_maps_disagree(real_a, garbage));
-        assert!(!packed_maps_disagree(garbage, real_a));
-        assert!(!packed_maps_disagree(real_a, real_a));
-        assert!(!packed_maps_disagree(real_a, DEFAULT_MAP_C30));
-    }
-
-    /// The measured failure: published slot 9 while slot 5 loaded. The wire tag is slot+1.
-    #[test]
-    fn the_2026_08_02_wrong_face_window_is_a_slot_mismatch() {
-        assert_eq!(
-            published_identity_verdict(9 + 1, Some(5)),
-            PublishedIdentity::SlotMismatch {
-                published: 9,
-                loaded: 5
-            }
-        );
-        assert!(published_identity_verdict(9 + 1, Some(5)).is_mismatch());
-    }
-
-    /// Slot 0 must be distinguishable from "never published", or every boot either false-fires or
-    /// hides a real mismatch.
-    #[test]
-    fn slot_zero_is_not_confused_with_nothing_published() {
-        assert_eq!(
-            published_identity_verdict(0, Some(0)),
-            PublishedIdentity::NothingPublished
-        );
-        assert_eq!(
-            published_identity_verdict(1, Some(0)),
-            PublishedIdentity::Match
-        );
-        assert_eq!(
-            published_identity_verdict(1, Some(3)),
-            PublishedIdentity::SlotMismatch {
-                published: 0,
-                loaded: 3
-            }
-        );
-        assert!(!published_identity_verdict(0, Some(0)).is_mismatch());
-    }
-
-    #[test]
-    fn with_no_completed_load_there_is_nothing_to_compare() {
-        assert_eq!(
-            published_identity_verdict(5, None),
-            PublishedIdentity::NoLoadedSlot
-        );
-        assert!(!published_identity_verdict(5, None).is_mismatch());
-    }
-
-    /// The precedence change (bd er-effects-rs-91zb): the user's on-screen pick outranks the
-    /// request register, which outranks the stale `save_slot`.
-    #[test]
-    fn the_users_pick_outranks_every_inferred_slot() {
-        assert_eq!(
-            portrait_target_slot_from_sources(Some(5), Some(7), Some(9), 10),
-            Some(5)
-        );
-    }
-
-    /// The measured boot window: picker had not recorded a pick at that instant, b78 held the
-    /// correct 5, ac0 had been dragged to 9 by the game's own selector.
-    #[test]
-    fn the_request_register_beats_a_stale_save_slot() {
-        assert_eq!(
-            portrait_target_slot_from_sources(None, Some(5), Some(9), 10),
-            Some(5)
-        );
-    }
-
-    #[test]
-    fn the_no_request_sentinel_falls_through_to_save_slot() {
-        assert_eq!(
-            portrait_target_slot_from_sources(None, Some(-1), Some(9), 10),
-            Some(9)
-        );
-        assert_eq!(
-            portrait_target_slot_from_sources(None, None, Some(9), 10),
-            Some(9)
-        );
-        assert_eq!(
-            portrait_target_slot_from_sources(None, Some(10), Some(9), 10),
-            Some(9),
-            "an out-of-range request must not win"
-        );
-    }
-
-    /// With nothing valid the answer is None, never slot 0. Collapsing to 0 is what built and
-    /// published a slot-0 portrait for a non-slot-0 character.
-    #[test]
-    fn no_valid_source_yields_none_not_slot_zero() {
-        assert_eq!(
-            portrait_target_slot_from_sources(None, None, None, 10),
-            None
-        );
-        assert_eq!(
-            portrait_target_slot_from_sources(Some(-1), Some(-1), Some(-1), 10),
-            None
-        );
-    }
-
-    /// THE 2026-08-02 21:05 REGRESSION, replayed with that run's literal values. The user picked
-    /// slot 0; the pipeline latched and published slot 0; then the picker term expired and the
-    /// sources started naming slot 9 (`save_slot` = ac0 = 9, `request_slot` = b78 = -1). Before
-    /// the latch, kick #2 retargeted the live window to 9 and the face changed on screen.
-    #[test]
-    fn a_window_that_committed_to_the_picked_slot_never_retargets_mid_load() {
-        // Kick #1: picker still names slot 0.
-        let resolved = portrait_target_slot_from_sources(Some(0), Some(-1), Some(0), 10);
-        assert_eq!(resolved, Some(0));
-        let (target, latching) = portrait_window_target_slot(None, resolved);
-        assert_eq!(target, Some(0));
-        assert!(latching, "the first resolution of a window must latch");
-
-        // Kick #2, same window: picker spent, b78 disarmed, ac0 now 9. The SOURCES flip...
-        let resolved_later = portrait_target_slot_from_sources(None, Some(-1), Some(9), 10);
-        assert_eq!(
-            resolved_later,
-            Some(9),
-            "precedence really does name slot 9 once the picker term is spent -- this is the input that caused the bug"
-        );
-        // ...but the WINDOW does not.
-        let (target_later, latching_later) = portrait_window_target_slot(target, resolved_later);
-        assert_eq!(
-            target_later,
-            Some(0),
-            "the window must keep the character the user clicked"
-        );
-        assert!(!latching_later);
-    }
-
-    /// The latch must not become a permanent pin: window close clears it, and the NEXT load is
-    /// free to target a different character. Without this a System->Quit->Load switch would show
-    /// the boot character's face forever -- the same defect in the opposite direction.
-    #[test]
-    fn a_new_window_is_free_to_target_a_different_character() {
-        let (first, _) = portrait_window_target_slot(None, Some(0));
-        assert_eq!(first, Some(0));
-        // Window closes -> caller resets the latch to None.
-        let (second, latching) = portrait_window_target_slot(None, Some(9));
-        assert_eq!(second, Some(9));
-        assert!(latching);
-    }
-
-    /// THE 2026-08-26 REGRESSION, replayed with that run's literal values: a boot window that
-    /// latched a GUESS must yield to the user's pick.
-    ///
-    /// At +1061ms every source was invalid (`picker=None b78=None ac0=-1`), so the latch came from
-    /// the autoload's default hint -- slot 0, i.e. from nothing. At +1084597ms the user picked slot
-    /// 1 and the latch refused it, so the loading screen showed slot 0's character (`angrE RL 100`)
-    /// while slot 1 (level 90) was the one loading.
-    #[test]
-    fn a_guessed_window_latch_yields_to_the_users_pick() {
-        // +1061ms: nothing names a slot. Precedence returns None; the caller's autoload-hint
-        // fallback supplies slot 0.
-        assert_eq!(
-            portrait_target_slot_from_sources(None, None, Some(-1), 10),
-            None,
-            "picker=None b78=None ac0=-1 names no slot -- slot 0 here is a guess, not a choice"
-        );
-        let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
-        assert_eq!(boot.slot, Some(0));
-        assert!(boot.latching);
-        assert!(!boot.promoted_by_pick);
-
-        // +1084597ms: the user picks slot 1. Precedence now names it, from the picker term.
-        let resolved = portrait_target_slot_from_sources(Some(1), Some(-1), Some(-1), 10);
-        assert_eq!(resolved, Some(1));
-
-        let picked = portrait_window_target_slot_authoritative(boot.slot, false, resolved, true);
-        assert_eq!(
-            picked.slot,
-            Some(1),
-            "the pick must replace a latch that was adopted from a guess"
-        );
-        assert!(picked.latching);
-        assert!(picked.promoted_by_pick);
-
-        // And the promotion is spent: the window is now committed FROM the pick and holds.
-        let after = portrait_window_target_slot_authoritative(picked.slot, true, Some(9), false);
-        assert_eq!(after.slot, Some(1));
-        assert!(!after.latching);
-        assert!(!after.promoted_by_pick);
-    }
-
-    /// The exception must not reopen the 2026-08-02 defect: a latch that came FROM the pick never
-    /// yields, not even to another pick-shaped resolution.
-    #[test]
-    fn a_picked_window_latch_never_yields() {
-        let picked = portrait_window_target_slot_authoritative(None, false, Some(0), true);
-        assert_eq!(picked.slot, Some(0));
-        assert!(picked.latching);
-
-        for (resolved, from_pick) in [(Some(9), false), (Some(9), true), (None, false)] {
-            let held =
-                portrait_window_target_slot_authoritative(picked.slot, true, resolved, from_pick);
-            assert_eq!(
-                held.slot,
-                Some(0),
-                "a window committed from the user's pick keeps it (resolved={resolved:?} from_pick={from_pick})"
-            );
-            assert!(!held.latching);
-            assert!(!held.promoted_by_pick);
-        }
-    }
-
-    /// A pick that AGREES with the guessed latch is not a promotion -- nothing changed, so nothing
-    /// should be counted or re-latched.
-    #[test]
-    fn a_pick_matching_the_guess_is_not_a_promotion() {
-        let boot = portrait_window_target_slot_authoritative(None, false, Some(4), false);
-        assert_eq!(boot.slot, Some(4));
-        let same = portrait_window_target_slot_authoritative(boot.slot, false, Some(4), true);
-        assert_eq!(same.slot, Some(4));
-        assert!(!same.latching);
-        assert!(!same.promoted_by_pick);
-    }
-
-    /// A guessed latch still refuses every NON-pick source, which is the whole reason the latch
-    /// exists: only the user outranks it.
-    #[test]
-    fn a_guessed_window_latch_still_refuses_game_inferred_retargets() {
-        let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
-        for resolved in [Some(9), Some(1), None] {
-            let held = portrait_window_target_slot_authoritative(boot.slot, false, resolved, false);
-            assert_eq!(
-                held.slot,
-                Some(0),
-                "ac0/b78 must never move a committed window (resolved={resolved:?})"
-            );
-            assert!(!held.latching);
-        }
-    }
-
-    /// The legacy two-argument form keeps its exact old behaviour, so callers that do not track
-    /// latch authority are unchanged.
-    #[test]
-    fn the_legacy_pair_form_is_unchanged() {
-        assert_eq!(portrait_window_target_slot(None, Some(3)), (Some(3), true));
-        assert_eq!(
-            portrait_window_target_slot(Some(0), Some(1)),
-            (Some(0), false)
-        );
-        assert_eq!(portrait_window_target_slot(None, None), (None, false));
-    }
-
-    /// THE PARENT-REQUESTED GATE: a picked slot N != 0 must produce slot N's stats.
-    ///
-    /// Composed end to end from the 2026-08-26 run's literal values so it fails on the real bug:
-    /// boot window latches the autoload's guessed slot 0, the user picks slot 1, and the stats
-    /// panel must follow the pick. Before the latch-authority fix the last assertion read `0`, and
-    /// the loading screen showed `angrE RL 100` (slot 0) while slot 1 (level 90) was loading.
-    #[test]
-    fn a_picked_slot_other_than_zero_drives_the_stats_panel() {
-        const SLOTS: i32 = 10;
-        // `SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT` is unset on a boot autoload -- the run reported
-        // 18446744073709551615 -- so the switch term must not claim the answer.
-        const SWITCH_UNSET: usize = usize::MAX;
-        assert_eq!(
-            loading_screen_stats_slot_source(SWITCH_UNSET, None, SLOTS),
-            StatsSlotSource::BestActiveFallback
-        );
-
-        // +1061ms: boot window latches slot 0 from the autoload hint (no source named a slot).
-        let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
-        assert_eq!(
-            loading_screen_stats_slot_source(SWITCH_UNSET, boot.slot, SLOTS),
-            StatsSlotSource::PortraitWindow(0)
-        );
-
-        // +1084597ms: the user picks slot 1.
-        let resolved = portrait_target_slot_from_sources(Some(1), Some(-1), Some(-1), SLOTS);
-        let picked = portrait_window_target_slot_authoritative(boot.slot, false, resolved, true);
-        assert!(picked.promoted_by_pick);
-        assert_eq!(
-            loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, SLOTS),
-            StatsSlotSource::PortraitWindow(1),
-            "the stats panel must describe the character the user picked, not the boot guess"
-        );
-
-        // Every non-zero slot behaves the same -- slot 1 is not a special case.
-        for slot in 1..SLOTS {
-            let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
-            let picked =
-                portrait_window_target_slot_authoritative(boot.slot, false, Some(slot), true);
-            assert_eq!(
-                loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, SLOTS),
-                StatsSlotSource::PortraitWindow(slot)
-            );
-        }
-    }
-
-    /// A System->Quit switch selection still outranks the window target, and its unset/out-of-range
-    /// wire forms must not be mistaken for slot 0 -- `usize::MAX as i32` is -1, not a slot.
-    #[test]
-    fn the_switch_selection_outranks_the_window_and_its_sentinels_do_not() {
-        const SLOTS: i32 = 10;
-        assert_eq!(
-            loading_screen_stats_slot_source(3, Some(7), SLOTS),
-            StatsSlotSource::SwitchSelection(3)
-        );
-        for sentinel in [
-            usize::MAX,
-            usize::MAX - 1,
-            SLOTS as usize,
-            i32::MAX as usize,
-        ] {
-            assert_eq!(
-                loading_screen_stats_slot_source(sentinel, Some(7), SLOTS),
-                StatsSlotSource::PortraitWindow(7),
-                "sentinel {sentinel} must fall through, never resolve to a slot"
-            );
-        }
-        // An out-of-range window target is not a slot either.
-        assert_eq!(
-            loading_screen_stats_slot_source(usize::MAX, Some(SLOTS), SLOTS),
-            StatsSlotSource::BestActiveFallback
-        );
-        assert_eq!(
-            loading_screen_stats_slot_source(usize::MAX, Some(-1), SLOTS),
-            StatsSlotSource::BestActiveFallback
-        );
-    }
-
-    /// A window that has not resolved any slot yet must stay uncommitted rather than latch a
-    /// placeholder -- latching `0` here would reintroduce the `unwrap_or(0)` lie the rest of this
-    /// module exists to remove.
-    #[test]
-    fn an_unresolved_window_latches_nothing() {
-        assert_eq!(portrait_window_target_slot(None, None), (None, false));
-        // ...and a later real resolution still latches normally.
-        assert_eq!(portrait_window_target_slot(None, Some(3)), (Some(3), true));
-    }
-
-    /// Literal values from run br-20260822-040913-f0f4, window #3.
-    const RUN_HELD_NAME_HASH: usize = 0x909a_2595_c413_a1b3;
-    const RUN_RECORD_FACE_HASH: usize = 0xbbd2_ad40_6f84_9c65;
-    const RUN_PREVIEW_FACE_HASH: usize = 0xc6af_b8c3_7ec7_b617;
-
-    /// THE DEFECT, stated as a test: on a same-slot repeat the hold predicate agrees with itself.
-    ///
-    /// Both hashes are slot 0's ProfileSummary record read at two different times, so re-selecting
-    /// the same slot makes them equal by construction -- even in the measured run where that record
-    /// said `Maddened Bean` and slot 0's own deserialize produced `Ordinary Bean`. This test is not
-    /// asserting desirable behaviour; it pins the blind spot that makes the hold provisional.
-    #[test]
-    fn the_same_slot_repeat_hold_matches_even_when_the_record_is_wrong() {
-        assert!(
-            same_identity_bridge_hold(true, 1, RUN_HELD_NAME_HASH, 1, RUN_HELD_NAME_HASH),
-            "a same-slot reselect always matches: this predicate compares one record with itself"
-        );
-    }
-
-    /// The cases it still decides correctly, which is why it survives as the first filter.
-    #[test]
-    fn a_changed_name_or_slot_or_missing_head_still_clears() {
-        // Different character in the same slot -- the record's name DID change.
-        assert!(!same_identity_bridge_hold(true, 1, 0xaaaa, 1, 0xbbbb));
-        // Different slot entirely.
-        assert!(!same_identity_bridge_hold(true, 2, 0xaaaa, 1, 0xaaaa));
-        // Nothing published to hold on to.
-        assert!(!same_identity_bridge_hold(false, 1, 0xaaaa, 1, 0xaaaa));
-        // Unknown name on either side is never agreement.
-        assert!(!same_identity_bridge_hold(true, 1, 0, 1, 0));
-        // No incoming slot.
-        assert!(!same_identity_bridge_hold(true, 0, 0xaaaa, 0, 0xaaaa));
-    }
-
-    /// The revocation, replayed with the run's literal hashes: the hold was taken on slot 0 at
-    /// +107006ms, and the first build kick for slot 0 at +108385ms found a record whose face was
-    /// not the one the preview fingerprinted. That is the falsification the hold could not produce
-    /// for itself.
-    #[test]
-    fn the_2026_08_22_face_mismatch_revokes_the_held_head() {
-        let verdict = bridge_hold_face_verdict(1, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH);
-        assert_eq!(verdict, BridgeHoldVerdict::Revoke);
-        assert!(verdict.revokes());
-    }
-
-    /// MAKE-BEFORE-BREAK MUST SURVIVE. Windows 1/2/4 of the same run held and then published
-    /// 259-281 frames each; an intact record hands back `Unrefuted`, which drops nothing. A fix
-    /// that revoked here would turn every legitimate same-character reload back into a flash of
-    /// empty loading screen.
-    #[test]
-    fn an_intact_record_does_not_revoke_a_legitimate_hold() {
-        let verdict = bridge_hold_face_verdict(1, 0, RUN_PREVIEW_FACE_HASH, RUN_PREVIEW_FACE_HASH);
-        assert_eq!(verdict, BridgeHoldVerdict::Unrefuted);
-        assert!(!verdict.revokes());
-    }
-
-    /// The three arms that must never revoke: no hold outstanding, a kick for another slot, and a
-    /// slot with no fingerprint to compare against. Absence of evidence is not refutation -- but it
-    /// is not agreement either, which is why `NoEvidence` is its own answer rather than `Unrefuted`.
-    #[test]
-    fn absent_or_unrelated_evidence_never_revokes() {
-        assert_eq!(
-            bridge_hold_face_verdict(0, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
-            BridgeHoldVerdict::NoHold
-        );
-        assert_eq!(
-            bridge_hold_face_verdict(1, 4, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
-            BridgeHoldVerdict::OtherSlot
-        );
-        assert_eq!(
-            bridge_hold_face_verdict(1, -1, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
-            BridgeHoldVerdict::OtherSlot
-        );
-        assert_eq!(
-            bridge_hold_face_verdict(1, 0, RUN_RECORD_FACE_HASH, 0),
-            BridgeHoldVerdict::NoEvidence
-        );
-        for verdict in [
-            BridgeHoldVerdict::NoHold,
-            BridgeHoldVerdict::OtherSlot,
-            BridgeHoldVerdict::NoEvidence,
-        ] {
-            assert!(!verdict.revokes());
-        }
-    }
-
-    /// Slot 0 must be distinguishable from "no hold", the same +1 biasing trap the published-slot
-    /// tag has: without it a hold on slot 0 would be unrevokable.
-    #[test]
-    fn a_hold_on_slot_zero_is_not_read_as_no_hold() {
-        // Tag 1 IS slot 0. The whole measured failure sat on slot 0.
-        assert_eq!(
-            bridge_hold_face_verdict(1, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
-            BridgeHoldVerdict::Revoke
-        );
-        assert_eq!(
-            bridge_hold_face_verdict(0, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
-            BridgeHoldVerdict::NoHold,
-            "tag 0 is 'no hold', never slot 0"
-        );
-    }
-}
+mod tests;

@@ -234,7 +234,7 @@ NEEDLE_SCANS = [
         "source": "crates/er-telemetry-core/src/read/title_binding.rs",
         "needles": [("TITLE_OWNER_VTABLE_RVA", 0x2B63BB0), ("INNER_TITLE_STATE_TABLE_RVA", 0x3D71580)],
         "guard": r"want_vtable\s*==\s*0|want_vtable\s*<\s*HEAP_LO",
-        "guarded": False,
+        "guarded": True,
         "consumes": "owner pointer cached forever; fields at +0x48/+0xe0/+0x130 read and reported "
         "as title-binding telemetry",
     },
@@ -243,7 +243,7 @@ NEEDLE_SCANS = [
         "source": "crates/er-input-harness/src/title_scan.rs",
         "needles": [("TITLE_OWNER_VTABLE_RVA", 0x2B63BB0), ("INNER_TITLE_STATE_TABLE_RVA", 0x3D71580)],
         "guard": r"want_vtable\s*==\s*0|want_vtable\s*<\s*HEAP_LO",
-        "guarded": False,
+        "guarded": True,
         "consumes": "title_state()/title_dialog_a40() gate the harness's menu drive",
     },
     {
@@ -251,7 +251,7 @@ NEEDLE_SCANS = [
         "source": "crates/er-title-flow/src/profile_select_flow.rs",
         "needles": [("TITLE_OWNER_VTABLE_RVA", 0x2B63BB0), ("INNER_TITLE_STATE_TABLE_RVA", 0x3D71580)],
         "guard": r"target_vtable\s*==\s*0|target_vtable\s*<\s*HEAP_LO",
-        "guarded": False,
+        "guarded": True,
         "consumes": "the title owner the product's own title/load stepper drives; TITLE_OWNER_MIN_STATE "
         "is 0, so a zeroed block passes the state cross-check too",
     },

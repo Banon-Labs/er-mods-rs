@@ -33,6 +33,7 @@ pub(crate) use er_quit_menu_core::save_flow_boxes::{
 };
 pub(crate) use er_telemetry_core::counters::BOOT_SAVE_CONTAINER_MATCHES_RUNTIME;
 pub(crate) use er_telemetry_core::counters::CORRUPTED_SAVE_SEEN_COUNT;
+pub(crate) use er_telemetry_core::counters::MSGBOX_BUILDS_AT_SWITCH_ARM;
 pub(crate) use er_telemetry_core::counters::NETWORK_CHECK_SHORTCIRCUIT_COUNT;
 pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_BAD_FRAMES;
 pub(crate) use er_telemetry_core::counters::PORTRAIT_EQUIP_BAD_FRAMES_TOTAL;

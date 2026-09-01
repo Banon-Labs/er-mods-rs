@@ -27,24 +27,44 @@ static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static PHASES_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// This run's harness log: the launcher's redirect, else `LOG_PATH` beside `eldenring.exe`.
+///
+/// Both files used to resolve as bare CWD-relative names no launcher could move, so each launch
+/// rotated the run before it to `.prev` and the launch after that destroyed it. The redirect and
+/// its game-directory fallback live in `er_game_base::log`, shared with every other per-run
+/// artifact so a run's evidence has ONE convention for where it goes.
+fn log_path() -> std::path::PathBuf {
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH", LOG_PATH)
+}
+
+/// Same for the per-phase JSONL, which gets its OWN knob rather than following the log's: the
+/// oracle reads the two files separately, and one knob for both would silently drop whichever the
+/// launcher did not name.
+fn phases_path() -> std::path::PathBuf {
+    er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH",
+        PHASES_PATH,
+    )
+}
+
 fn open_log_file() -> Option<Mutex<File>> {
-    er_game_base::log::open_fresh_run_append(std::path::Path::new(LOG_PATH)).map(Mutex::new)
+    er_game_base::log::open_fresh_run_append(&log_path()).map(Mutex::new)
 }
 
 fn open_phases_file() -> Option<Mutex<File>> {
-    er_game_base::log::open_fresh_run_append(std::path::Path::new(PHASES_PATH)).map(Mutex::new)
+    er_game_base::log::open_fresh_run_append(&phases_path()).map(Mutex::new)
 }
 
 /// Start this run's log clean at attach. Rotates the previous run's file to `.prev` rather
 /// than destroying it (this used to be a bare `File::create`).
 pub fn reset_log_file() {
-    er_game_base::log::begin_fresh_run(std::path::Path::new(LOG_PATH));
+    er_game_base::log::begin_fresh_run(&log_path());
 }
 
 /// Same for the per-phase JSONL: the run oracle diffs phase counts, so a file carrying two
 /// runs' phases would report a doubled count as one run's behaviour.
 pub fn reset_phases_file() {
-    er_game_base::log::begin_fresh_run(std::path::Path::new(PHASES_PATH));
+    er_game_base::log::begin_fresh_run(&phases_path());
 }
 
 /// Append one already-formatted JSON line to the per-phase telemetry file (no seq/tick prefix -- the

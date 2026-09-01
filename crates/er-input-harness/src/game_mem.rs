@@ -131,25 +131,34 @@ pub fn world_simulating() -> bool {
     streak >= RISING_STREAK
 }
 
-// LOAD-STARTED semaphores (ground truth from the product constant tree): the load FSM GameMan+0xb80
-// (0 IDLE -> non-0 loading/resident) and the NowLoading latch. A driven Continue "took effect" once one
-// of these trips within the frame budget -- else the harness is derailed (bd HARNESS-drive-semaphore-
-// gated-teardown-on-miss). GameMan singleton RVA 0x3d69918 (profile_rows_system_quit_menu.rs), b80 =
-// GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET; NowLoading singleton 0x3d60ec8, flag +0xED (CSNowLoadingHelperImp.load_done).
+// SL-DEVICE-BUSY semaphores (ground truth from the product constant tree): `GameMan::saveState`
+// at +0xb80 (0 IDLE -> non-0 busy) and the NowLoading latch. A driven Continue "took effect" once
+// one of these trips within the frame budget -- else the harness is derailed (bd HARNESS-drive-
+// semaphore-gated-teardown-on-miss). GameMan singleton RVA 0x3d69918
+// (profile_rows_system_quit_menu.rs), b80 = GAME_MAN_SAVE_STATE_B80_OFFSET; NowLoading singleton
+// 0x3d60ec8, flag +0xED (CSNowLoadingHelperImp.load_done).
+//
+// This was called `GAME_MAN_LOAD_FSM_B80_OFFSET` / `load_fsm()` until 2026-08-31. The field is
+// NOT load-only: the SAVE lane stamps it too (see the value table on the declaration in
+// er-title-flow's `constants_moved.rs`), so `> 0` here means "the SL device is busy", which is
+// what both call sites in `drive.rs` actually want.
 const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
-const GAME_MAN_LOAD_FSM_B80_OFFSET: usize = 0xb80;
+const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 const NOW_LOADING_SINGLETON_RVA: usize = 0x3d60ec8;
 const NOW_LOADING_FLAG_ED_OFFSET: usize = 0xed;
 
-/// Load FSM byte (GameMan+0xb80): 0 = idle, non-zero = a load is opening/reading/resident.
-pub fn load_fsm() -> i32 {
+/// `GameMan::saveState` (+0xb80), low byte: 0 = the SL device is idle, non-zero = a save, a
+/// preview read or a load owns it. Named by the game's own predicates `IsSaveState1` (1.16.2
+/// `0x14067a010`) and `IsSaveState2` (`0x140679ff0`), each a two-instruction
+/// `cmp dword ptr [rax+0xb80], N` off the GameMan singleton.
+pub fn save_state() -> i32 {
     let Some(base) = game_base() else {
         return -1;
     };
     let Some(gm) = deref_singleton(base, GAME_MAN_SINGLETON_RVA, "GAME_MAN_SINGLETON_RVA") else {
         return -1;
     };
-    unsafe { read_usize(gm + GAME_MAN_LOAD_FSM_B80_OFFSET) }.map_or(-1, |v| (v & 0xff) as i32)
+    unsafe { read_usize(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.map_or(-1, |v| (v & 0xff) as i32)
 }
 
 /// NowLoading latch (deref base+0x3d60ec8 -> +0xED): set while/after a load screen; a load-activity

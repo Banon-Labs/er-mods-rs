@@ -1534,16 +1534,20 @@ fn boot_view_starting_up_submilestone() -> (&'static str, usize, usize) {
 /// CS::CSSystemStep. Its `current_state` (states 0..20 of CSSystemStepState) names the exact
 /// subsystem the boot thread is constructing / waiting on -- this IS the singleton + manager
 /// construction sequence this phase covers, so the sublabel tracks the real substep instead of a
-/// single placeholder. One guaranteed-ordered RAM read: base + global -> +0x40 (u32 low dword).
+/// single placeholder. One guaranteed-ordered RAM read: base + global -> current_state (u32 low
+/// dword), at the offset owned by `er_game_base::rva`.
 /// The global staying null very early, or an out-of-range value, falls back to the coarse label so a
-/// state number is never fabricated. RVA/offset/state names from the Ghidra 1.16.2 dump (CSSystemStep
-/// ctor @0x140dec7c0, singleton @base+0x3d85680, current_state @+0x40) cross-checked against the
-/// existing `oracle_system_step_label` telemetry; the Wait* states map to the ctor child steps
+/// state number is never fabricated. RVA/state names from the Ghidra 1.16.2 dump (CSSystemStep
+/// ctor @0x140dec7c0, singleton @base+0x3d85680) and the game's own 21-entry StepperFn table
+/// (initializer 0x1400b16f0); the offset is MEASURED, see
+/// `er_game_base::rva::CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` -- it was 0x40 here until 2026-08-31,
+/// which read a pointer field and pinned this sub-progression to its fallback label.
+/// The Wait* states map to the ctor child steps
 /// (res/file/pad/sound/graphics). InitBoot/WaitBoot pairs are the early core-boot sub-phases (each
 /// InitBootN kicks the work, the paired WaitBootN blocks on it) -- named generically because their
 /// per-index subsystem was not statically pinned. Labels are 5x7 font-safe (uppercase + digits).
 const BOOT_SYS_STEP_GLOBAL_RVA: usize = er_game_base::rva::CS_SYSTEM_STEP_GLOBAL_RVA;
-const BOOT_SYS_STEP_STATE_OFFSET: usize = 0x40;
+const BOOT_SYS_STEP_STATE_OFFSET: usize = er_game_base::rva::CS_SYSTEM_STEP_CURRENT_STATE_OFFSET;
 const BOOT_SYS_STEP_STATE_COUNT: usize = 21;
 const BOOT_SYS_STEP_SUBLABELS: [&str; BOOT_SYS_STEP_STATE_COUNT] = [
     "SYSTEM INIT",     // 0  Init
@@ -1992,7 +1996,7 @@ fn boot_view_rasterize(
             | er_loading_bar_core::LoadPhase::EnteringWorld
     );
     let load_suffix = if b80 > 0 {
-        format!(" - SAVE {}", load_in_progress_b80_name(b80))
+        format!(" - SAVE {}", save_state_b80_name(b80))
     } else if !world_phase {
         String::new()
     } else if finalize >= 0 {

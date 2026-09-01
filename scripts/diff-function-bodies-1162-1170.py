@@ -48,6 +48,9 @@ import struct
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import function_extent  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
+
 ROOT = Path(__file__).resolve().parent.parent
 BASE = 0x140000000
 IMAGES = {
@@ -111,17 +114,28 @@ class Image:
         if not gap:
             raise SystemExit(
                 f"{va:#x} is not a .pdata function entry in {self.path.name}; "
-                "pass --bytes N, or --gap to run to the next .pdata start"
+                "pass --bytes N, or --gap to decode the leaf's own extent"
             )
-        # A leaf or a linker thunk carries no unwind record. Running to the NEXT .pdata start is
-        # the same fallback `detect-struct-field-drift.py` uses -- and it is a HEURISTIC: the two
-        # builds can put a different neighbour next, which manufactures an instruction-count
-        # difference out of nothing. The caller is told which extent it got for exactly that reason.
-        starts = sorted(self.function_ends())
-        index = __import__("bisect").bisect_right(starts, rva)
-        following = starts[index] if index < len(starts) else rva + 0x200
-        end = min(following, rva + 0x400)
-        return self.data[rva:end], f"NO .pdata record -- ran to next start, {end - rva:#x} bytes"
+        # A leaf or a linker thunk carries no unwind record, so its end is DECODED by the shared
+        # `leaf_extent` watermark rule (via `function_extent.body_end`).
+        #
+        # This arm used to run to the NEXT `.pdata` start, capped at 0x400 -- the retired guess
+        # that `pair-leaf-functions-1162-1170.py` keeps as its `--mutate extent` control precisely
+        # because it walks through inter-function padding whose bytes differ between builds, so
+        # everything after the first pad compares unequal. Measured on the pair
+        # `verify-thunk-rva-1170.py` exists for, 0x14090a0a0 -> 0x14090b240 (two 23-byte
+        # `CS::KnowledgeLoadingScreen` `_Func_impl` thunks, identical but for a moved `.rdata`
+        # label and a moved callee): the old arm read 0x60 bytes on both sides, decoded 24 vs 25
+        # instructions and printed `0.6122 similarity, 3 differing region(s)`. Every one of those
+        # differences was past byte 23 and belonged to the NEXT thunk.
+        end = function_extent.body_end(self.data, va)
+        if end is None:
+            raise SystemExit(
+                f"{va:#x} has no .pdata record in {self.path.name} and no decodable leaf end "
+                "either -- pass --bytes N if you want a fixed window, and read the result knowing "
+                "it may cross a function boundary"
+            )
+        return self.data[rva:end], f"decoded leaf extent, {end - rva:#x} bytes"
 
 
 _RIP = re.compile(r"\[rip \+ (0x[0-9a-f]+|\d+)\]")

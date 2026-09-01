@@ -31,6 +31,7 @@ faulting cleanly, and none of which needs the game to run:
 """
 
 import argparse
+import importlib.util
 import os
 import re
 import struct
@@ -43,6 +44,7 @@ except ImportError:  # provisioned ephemerally; there is no system pip here
     os.execvp("uv", ["uv", "run", "--with", "capstone", "python3", *sys.argv])
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent  # noqa: E402 - repo-local; see the sys.path line above
 import rva_admission  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -270,18 +272,13 @@ def pdata_entry_starts(blob):
     return pdata_functions(blob)[0]
 
 
-def _inside_declared_function(rva, spans):
-    """The `(begin, end)` of a declared function that STRICTLY contains `rva`, or None."""
-    lo, hi = 0, len(spans)
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if spans[mid][0] <= rva:
-            lo = mid + 1
-        else:
-            hi = mid
-    if lo and spans[lo - 1][0] < rva < spans[lo - 1][1]:
-        return spans[lo - 1]
-    return None
+# The extent rules live in `scripts/function_extent.py` -- ONE implementation for the whole repo,
+# because a second one is the next divergence bug. They were written here and moved out when four
+# more tools needed the same answer; these names stay so this file's own call sites and docstrings
+# keep reading the way the incident reports that produced them do.
+_inside_declared_function = function_extent.inside_declared_function
+declared_functions = function_extent.declared_functions
+verify_rules = function_extent.verify_rules
 
 
 def entry_verdict(hit, pdata_starts=None, va=None, pdata_spans=None):
@@ -482,6 +479,36 @@ def trampoline_walk(blob, va):
     return True, relocated, patched_above, ""
 
 
+def body_end(blob, va):
+    """The RVA one past the last byte of the function at `va`, or None if it cannot be told.
+
+    `scripts/function_extent.body_end`, with this file's own scan cap. Kept as a named local so
+    the reason it exists stays next to the code that needed it.
+
+    WITHOUT THIS THE BRANCH SCAN READS THE NEXT FUNCTION, AND NOT EVEN IN PHASE. `patch_safe`
+    used to decode a flat `BRANCH_SCAN_BYTES` from the entry, which for a 14-byte leaf is 0x3f2
+    bytes of somebody else's code entered at an arbitrary offset. The de-Arxan'd images make that
+    worse than a plain over-read: the gaps between functions hold the deobfuscator's LEFTOVER
+    BYTES rather than a uniform `cc`/`90` run, so the decode desynchronises on the way out and
+    manufactures instructions that were never assembled -- including branches.
+
+    Measured, and the whole reason this exists (2026-08-31). 1.16.2 `0x14067ac90`
+    (`GameMan::SetSaveState`: `mov rax,[rip+0x36eec81] / mov [rax+0xb80],ecx / ret`, 14 bytes) is
+    followed by `90 83` before the next leaf at `0x14067aca0`. Decoding through that pair yielded
+    `or dword ptr [rax - 0x75], 5` at 0x14067ac9f and then a PHANTOM `jno 0x14067ac91` at
+    0x14067aca3 -- a branch into the patch operand, conjured out of two bytes of padding -- and
+    the gate went red on a row four independent derivations had just confirmed. Its 1.17
+    counterpart `0x14067bae0` is the same fourteen bytes; its junk pad byte happens to be `28`
+    instead of `83`, so it desynchronised into a harmless `sub` and that side stayed green. Which
+    image a correct row failed on was decided by one leftover byte.
+
+    Measured over the 425 rows both detour ledgers admit: 359 declared, 0 enclosed, 66 decoded
+    leaves, 0 unknown -- in BOTH images. The None arm is a fallback nothing in the current tables
+    takes.
+    """
+    return function_extent.body_end(blob, va, limit=BRANCH_SCAN_BYTES)
+
+
 def patch_safe(blob, va):
     """Will MinHook build a trampoline here, and does anything jump INTO the patched bytes?
 
@@ -491,6 +518,11 @@ def patch_safe(blob, va):
     a branch from later in the function landing on bytes 1..4 of the prologue -- which after the
     patch are the operand of a JMP. That control transfer faults into an address in no module,
     with no unwind. It is checked here because nothing else checks it.
+
+    THE SCAN STOPS AT THE END OF THE FUNCTION. Only this function's own branches can be read as
+    evidence about this function's prologue; bytes past its end belong to someone else, and in
+    these images the decode does not even arrive at them in phase. See `body_end` for the row that
+    proved it and `_unbounded_branch_scan` for the shape this replaced.
     """
     off = va - BASE
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
@@ -506,7 +538,12 @@ def patch_safe(blob, va):
     # and flagged those; on the current tables that difference is one address, 1.17 0x14067b010,
     # where a `jrcxz` at +0x4e targets +6.
     hot = range(va + 1, va + JMP_REL_SIZE)
-    body = blob[off : off + BRANCH_SCAN_BYTES]
+    end = body_end(blob, va)
+    # BRANCH_SCAN_BYTES survives as a CAP, not as the window: a body longer than it is read only
+    # that far (a branch to a prologue from 1KB away has never been seen), and an extent that
+    # cannot be determined at all falls back to it rather than to nothing.
+    limit = off + BRANCH_SCAN_BYTES if end is None else min(end, off + BRANCH_SCAN_BYTES)
+    body = blob[off : max(limit, off)]
     for insn in md.disasm(body, va):
         if capstone.CS_GRP_JUMP not in insn.groups:
             continue
@@ -518,105 +555,34 @@ def patch_safe(blob, va):
     return True, f"{relocated}B relocatable"
 
 
-def wider_rows():
-    """Every pair the build knows, from all three sources, as (va_1162, va_1170).
-
-    The 27 byte-verified rows are already detour-safe. These are the rest: the whole-image
-    signature pairs and the code-reference carries, which are known to be the right ADDRESS
-    and not known to be a safe place to write five bytes. Auditing them is how a row earns
-    the second claim.
-    """
-    out, seen = [], set()
-    for name in ("rva-map-1162-to-1170.needed.tsv", "rva-map-1162-to-1170.data.tsv"):
-        path = os.path.join(ROOT, "docs", "recon", name)
-        if not os.path.exists(path):
-            continue
-        for line in open(path, encoding="utf-8"):
-            if line.startswith("#") or not line.strip():
-                continue
-            f = line.split("\t")
-            if len(f) < 2:
-                continue
-            try:
-                a, b = int(f[0], 16), int(f[1], 16)
-            except ValueError:
-                continue
-            a = a if a >= BASE else a + BASE
-            b = b if b >= BASE else b + BASE
-            if a in seen:
-                continue
-            seen.add(a)
-            out.append((a, b))
-    return out
-
-
-def promote(pairs):
-    """Audit `pairs` and write the ones that pass to the tracked detour-safe list."""
-    blob = open(IMAGE_1170, "rb").read()
-    hits = xref_targets(blob, {b for _a, b in pairs})
-    # BOTH halves of the .pdata answer, and hoisted out of the loop.
-    #
-    # Passing only `starts` is what made this file call 85 UNWINDLESS LEAVES "mid-function
-    # (nothing references it and .pdata declares no entry)" -- the exact conflation
-    # `entry_verdict`'s own docstring warns about, and the reason its third argument exists.
-    # A leaf has no entry AND no enclosing function; a mid-function landing has no entry and IS
-    # inside one, and only the second is fatal. `audit()` has always passed both; `promote()`
-    # did not, so the artefact it writes disagreed with the gate that reads the same function.
-    # (It also re-parsed the whole `.pdata` table once per candidate row, which is why a 409-row
-    # run took minutes.)
-    starts, spans = pdata_functions(blob)
-    passed, failed = [], []
-    previous = None
-    for a, b in sorted(pairs, key=lambda p: p[1]):
-        entry_ok, entry_why = entry_verdict(hits[b], starts, b, spans)
-        patch_ok, patch_why = patch_safe(blob, b)
-        overlap = previous is not None and b - previous < OVERLAP_BYTES
-        previous = b
-        if entry_ok and patch_ok and not overlap:
-            passed.append((a, b, entry_why, patch_why))
-        else:
-            reason = []
-            if not entry_ok:
-                reason.append(f"mid-function ({entry_why})")
-            if not patch_ok:
-                reason.append(f"patch-unsafe ({patch_why})")
-            if overlap:
-                reason.append("overlaps the previous target")
-            failed.append((a, b, "; ".join(reason)))
-    head = [
-        "# 1.16.2 VA\t1.17 VA\tentry evidence\tprologue",
-        "# Generated by scripts/audit-1170-hook-targets.py --promote.",
-        "#",
-        "# Rows from the signature and code-reference maps that ALSO pass the detour checks:",
-        "# the 1.17 destination is a real function ENTRY -- by the image's own forward references,",
-        "# by .pdata declaring a function start there, or by .pdata declaring no function that",
-        "# CONTAINS it (an unwindless leaf) -- and its first five bytes relocate. Those two facts",
-        "# are what a MinHook detour needs and what a signature match does not supply.",
-        "#",
-        "# THIS FILE IS NOT WIRED INTO THE BUILD, and must not be. er-game-base/build.rs reads it",
-        "# as AUDITED_DETOURS and then writes `let _ = AUDITED_DETOURS;`, because entry-and-prologue",
-        "# is not SEMANTIC identity: HUD_WEAPON_SLOT_UPDATE (0x8d2110) passes every check here and",
-        "# is paired with a 1.17 function sharing 18% of its instruction shape. Feeding these rows",
-        "# to the detour table put the 2026-08-29 crash straight back. The detour licence comes from",
-        "# the byte comparison in rva-map-1162-to-1170.needed-verified.tsv; this is a reading aid",
-        "# for the rows that remain refused.",
-        "#",
-        "# It also audits addresses carried from rva-map-1162-to-1170.data.tsv, which are GLOBALS.",
-        "# A detour verdict on a global is meaningless -- nothing hooks a datum -- so read a row",
-        "# here as `the entry/prologue checks say this much`, never as `this may carry a hook`.",
-        "#",
-        "# This exists because allowing un-audited rows to carry detours cost a boot: on",
-        "# 2026-08-29 er-armament-icons installed five of them and the game died at the first",
-        "# overlay draw, having lived when the same hooks were refused as unmapped.",
-    ]
-    body = [f"0x{a:x}\t0x{b:x}\t{ew}\t{pw}" for a, b, ew, pw in passed]
-    tail = ["#", "# NOT promoted:"] + [f"# 0x{a:x} -> 0x{b:x}\t{why}" for a, b, why in failed]
-    out = os.path.join(ROOT, "docs", "recon", "rva-1170-detour-audited.tsv")
-    with open(out, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(head + body + tail) + "\n")
-    print(f"audited {len(pairs)} candidate(s): {len(passed)} promoted, {len(failed)} withheld")
-    print(f"wrote {os.path.relpath(out, ROOT)}")
-    return 0
+# `--promote` AND ITS TWO HELPERS WERE DELETED ON 2026-08-31, WITH THE FILE THEY WROTE.
+#
+# `wider_rows()` fed this audit `docs/recon/rva-map-1162-to-1170.needed.tsv` AND
+# `docs/recon/rva-map-1162-to-1170.data.tsv` -- the GLOBALS table -- and `promote()` wrote the
+# survivors to `docs/recon/rva-1170-detour-audited.tsv` with prologue verdicts like `6B
+# relocatable` beside them. That was not a caveat about the output; it was a category error in
+# the input, and it produced the most extreme instance of the decode-past-the-end class this
+# repo has found:
+#
+#   * Of the 85 rows promoted on the UNWINDLESS-LEAF clause, all 85 named NON-EXECUTABLE memory.
+#     The clause could never have fired on a real leaf and could never have missed a global,
+#     because `.pdata` declares no enclosing function for a `.data` address for exactly the same
+#     reason it declares none for an unwindless leaf. Handed the globals table, `entry_verdict`
+#     reads every global as a leaf, by construction.
+#   * 87 of the 444 rows named non-executable destinations (`.data` 61, `.rdata` 26).
+#   * The four "leaf functions" it would have newly promoted are 24 bytes of `00` in both images
+#     -- the `.data` virtual tail past its raw size. `00 00` decodes as `add byte ptr [rax], al`;
+#     three of those is the `6B`.
+#   * The single `loopne` refusal was right by accident: `0x142aa5a35`'s `0xe0` is the low byte
+#     of a stored pointer (`0x140745be0`) in an `.rdata` vtable. Its NEIGHBOUR in the same table
+#     stores `0x140735100`, low byte `0x00`, and was promoted. Adjacent slots of one vtable,
+#     opposite detour verdicts, decided by the low byte of the address stored there.
+#
+# The lesson is now enforcement in two places rather than prose here: `function_extent.body_end`
+# refuses a VA outside an executable section before it will resolve any extent, and
+# `scripts/check-ledger-section-kind.py` holds every ledger to the section kind its consumer
+# assumes. The tombstone rule (R3) that guarded against `--promote` regenerating the file was
+# deleted with this command, because a rule guarding against nothing is worse than no rule.
 
 
 def audit(image_path, pairs, column, label):
@@ -701,6 +667,45 @@ PATCH_SAFE_CASES = (
 )
 
 
+def _unbounded_branch_scan(blob, va):
+    """The BUGGY branch scan `patch_safe` shipped until 2026-08-31, kept as a fixture.
+
+    A flat `BRANCH_SCAN_BYTES` from the entry with no notion of where the function ends. It is
+    preserved for exactly the reason `_unbounded_walk` is: a case only earns a place in
+    `BRANCH_SCAN_CASES` as a DISCRIMINATOR if this thing gets it wrong, so "the bound matters" is
+    measured on every run instead of asserted once in a comment. Reverting `patch_safe` to this
+    shape makes the selftest fail.
+    """
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    md.detail = True
+    off = va - BASE
+    hot = range(va + 1, va + JMP_REL_SIZE)
+    for insn in md.disasm(blob[off : off + BRANCH_SCAN_BYTES], va):
+        if capstone.CS_GRP_JUMP not in insn.groups:
+            continue
+        for op in insn.operands:
+            if op.type == capstone.x86.X86_OP_IMM and op.imm in hot:
+                return False, f"{insn.mnemonic} at 0x{insn.address:x} targets 0x{op.imm:x}"
+    return True, "no branch into the patched bytes"
+
+
+# The branch-scan half of `patch_safe`, on addresses whose answer the bytes already settle.
+# `discriminating` marks the ones the unbounded scan got WRONG, and the pair of leaves below is
+# the point: it is the SAME function in the two builds, and the unbounded scan refused one of them
+# and passed the other on the strength of a byte that is padding in both.
+BRANCH_SCAN_CASES = (
+    ("1.16.2", 0x14067AC90, True, True,
+     "GameMan::SetSaveState, a 14-byte leaf: the junk byte `83` after its `ret` desynchronises an"
+     " unbounded decode into a phantom `jno 0x14067ac91` -- a branch into the patch operand that"
+     " was never assembled"),
+    ("1.17", 0x14067BAE0, True, False,
+     "the SAME function in 1.17, whose junk byte is `28` and desynchronises into a harmless `sub`."
+     " One leftover byte decided which build the row failed on"),
+    ("1.17", 0x1407AE8C0, True, False,
+     "a real 802-byte prologue: the bound must not turn the scan into a rubber stamp"),
+)
+
+
 def selftest():
     """Calibrate on input whose answer is already known, then assert the deliberate negatives.
 
@@ -776,6 +781,48 @@ def selftest():
     assert discriminators >= 3, "too few cases actually exercise the new bound"
     print(f"patch_safe: {len(PATCH_SAFE_CASES)} byte-dictated cases agree, {discriminators} of "
           "them wrong under the walk this replaced")
+
+    # The BRANCH SCAN's own bound, held to the same standard, against the same kept fixture.
+    for build, va, want, discriminating, why in BRANCH_SCAN_CASES:
+        got, detail = patch_safe(images[build], va)
+        assert got == want, (
+            f"{build} 0x{va:x} ({why}): patch_safe returned {got} [{detail}], expected {want}"
+        )
+        old, old_detail = _unbounded_branch_scan(images[build], va)
+        assert (old != want) == discriminating, (
+            f"{build} 0x{va:x} ({why}): the pre-2026-08-31 scan said {old} [{old_detail}], so this "
+            f"case is {'not ' if discriminating else ''}discriminating -- fix the flag or the case"
+        )
+    assert any(case[3] for case in BRANCH_SCAN_CASES), (
+        "no BRANCH_SCAN_CASES row is wrong under the unbounded scan, so none of them exercises "
+        "the bound"
+    )
+
+    # ...AND THE BOUND MUST NOT HAVE MADE THE ARM TOOTHLESS. Narrowing a scan can only ever make
+    # it accept more, so accepting the two leaves above proves nothing on its own. There is no
+    # natural specimen to point at -- no row in either ledger has a genuine branch into its own
+    # patch window, which is why the only ones the old scan ever "found" were desync artefacts --
+    # so one is MADE: take an address the audit accepts and write a short jump into the middle of
+    # its body, aimed at entry+2. In phase, same length, inside the declared extent.
+    donor = 0x1407AE8C0
+    site = donor + 0x2A  # `33 f6` (xor esi, esi), two bytes, and within rel8 range of the entry
+    planted_body = bytearray(images["1.17"])
+    displacement = (donor + 2) - (site + 2)
+    planted_body[site - BASE : site - BASE + 2] = bytes([0xEB, displacement & 0xFF])
+    planted = bytes(planted_body)
+    ok, why = patch_safe(planted, donor)
+    assert not ok and f"0x{site:x}" in why and f"0x{donor + 2:x}" in why, (
+        f"POSITIVE CONTROL FAILED: a `jmp 0x{donor + 2:x}` planted at 0x{site:x} lands on the "
+        f"second byte of the JMP MinHook writes over 0x{donor:x}, and patch_safe returned "
+        f"{ok} [{why}]. The bound has turned the branch scan into a rubber stamp."
+    )
+    assert patch_safe(images["1.17"], donor)[0], (
+        "the control is inert: the UNPLANTED donor must be accepted, or the refusal above is "
+        "about something other than the planted branch"
+    )
+    print(f"branch scan: {len(BRANCH_SCAN_CASES)} byte-dictated cases agree, and a planted "
+          f"`jmp` into 0x{donor:x}'s patch window is still refused")
+
     bad = audit(IMAGE_1162, pairs, 0, "1.16.2")
     assert not bad, (
         f"{len(bad)} row(s) the verified table admits as DETOURABLE cannot carry a detour:\n"
@@ -864,11 +911,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument(
-        "--promote",
-        action="store_true",
-        help="audit the signature/reference-mapped rows and record those safe to detour",
-    )
-    parser.add_argument(
         "--calibrate",
         action="store_true",
         help="run the same checks on the 1.16.2 source addresses, which are known-good",
@@ -876,8 +918,6 @@ def main():
     args = parser.parse_args()
     if args.selftest:
         return selftest()
-    if args.promote:
-        return promote(wider_rows())
     if args.calibrate:
         return 1 if audit(IMAGE_1162, rows(), 0, "1.16.2") else 0
     return 1 if audit(IMAGE_1170, rows(), 1, "1.17") else 0

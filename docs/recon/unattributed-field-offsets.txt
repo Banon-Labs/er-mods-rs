@@ -159,7 +159,6 @@ CS_MSB_POINT_SHAPE_DATA_OFFSET	crates/er-invasion-warp-core/src/msb_invasion_poi
 DEALLOCATE_VTABLE_OFFSET	crates/er-invasion-path/src/navpath.rs	0x68
 DELAY_DELETE_MAN_PENDING_COUNT_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x40
 DELAY_DELETE_MAN_PENDING_HIGHWATER_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x44
-DF0_OFFSET	crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs	0xdf0
 DIALOG_CTX_PARENT_50_OFFSET	crates/er-title-flow/src/constants_own_load_pump.rs	0x50
 DIALOG_GRID_CONTROL_A38_OFFSET	crates/er-quit-menu-core/src/quit_dialog_layout.rs	0xa38
 DIALOG_GRID_CONTROL_A38_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0xa38
@@ -380,7 +379,6 @@ OPTIONSETTING_TAB_VIEW_OFFSET	crates/er-title-flow/src/constants_autoload_state.
 OPTION_SETTING_ROOT_PROXY_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x188
 OUTER_STEP_INGAMESTEP_OFFSET	crates/er-quickload/src/constants/system_quit.rs	0xc0
 OUTER_STEP_MAP_OVERRIDE_130_OFFSET	crates/er-quickload/src/constants/system_quit.rs	0x130
-OWNER_DF0_OFFSET	crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs	0xdf0
 OWNER_HANDLE_CONTAINER_OFFSET	crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs	0x0
 OWNER_HANDLE_H10_OFFSET	crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs	0x10
 PAB_JOB_KEYCODE_180_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x180

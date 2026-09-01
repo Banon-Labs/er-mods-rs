@@ -43,8 +43,10 @@ pub const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
 pub static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::NOW_LOADING_HELPER_CTOR_HITS;
+pub use er_telemetry_core::counters::NOW_LOADING_HELPER_CTOR_HOOK_INSTALLED;
 pub use er_telemetry_core::counters::NOW_LOADING_HELPER_HOOKS_INSTALLED;
 pub use er_telemetry_core::counters::NOW_LOADING_HELPER_UPDATE_HITS;
+pub use er_telemetry_core::counters::NOW_LOADING_HELPER_UPDATE_HOOK_INSTALLED;
 pub static NOW_LOADING_HELPER_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub static NOW_LOADING_HELPER_LAST_MENU_INDEX: AtomicUsize =
@@ -72,6 +74,7 @@ pub use er_telemetry_core::counters::LOADING_SCREEN_UPDATE_LAST_MS;
 /// did not fire on the user-launch product path.
 pub const SCALEFORM_LABEL_GOTO_RVA: usize = 0x7499e0;
 pub static SCALEFORM_LABEL_GOTO_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub use er_telemetry_core::counters::SCALEFORM_LABEL_GOTO_HOOK_INSTALLED;
 pub const LOADING_SCREEN_GFX_FADEOUT_RVA: usize = 0x90a0a0;
 pub static LOADING_SCREEN_GFX_FADEOUT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_FIRST_MS;

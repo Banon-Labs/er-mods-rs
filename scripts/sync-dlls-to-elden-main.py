@@ -15,26 +15,47 @@ A deploy is a side effect that must be asked for explicitly.
 """
 
 import hashlib
+import importlib.util
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
 
-# DLL filename -> workspace package that builds it. Extend when a new game DLL crate lands.
-DLLS = {
-    "amd_ags_x64.dll": "er-ags-stub",
-    "er_armament_icons.dll": "er-armament-icons",
-    "er_better_refills.dll": "er-better-refills",
-    "er_quickload.dll": "er-quickload",
-    "er_input_harness.dll": "er-input-harness",
-    "er_inventory_sort.dll": "er-inventory-sort",
-    "er_invasion_warp.dll": "er-invasion-warp",
-    "er_net_effects.dll": "er-net-effects",
-    "er_reload_trace.dll": "er-reload-trace",
-    "er_telemetry.dll": "er-telemetry",
-    "mushroom_man.dll": "mushroom-man-runtime",
-}
+SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
+
+# Crates that ship a loadable DLL but are NOT me3 natives, so they are absent from the
+# me3_shells array `me3-dll-list.py` reads. Exactly the EXEMPT set in
+# check-me3-shell-coverage.py that still produces a file the game maps -- currently one:
+# the AMD AGS shim, which the game loads by name rather than through an [[natives]] entry.
+NON_NATIVE_DLLS = {"amd_ags_x64.dll": "er-ags-stub"}
+
+
+def _dll_map() -> dict[str, str]:
+    """DLL filename -> package, derived from the single source of truth.
+
+    This was a hand-maintained dict of eleven entries while the workspace shipped
+    twenty-six shells, so a `sync` deployed eleven DLLs and said nothing about the
+    fifteen it left behind at whatever revision they happened to be -- the same silent
+    partial-update that `default-members` produces at build time, repeated at deploy
+    time. A staging step that can quietly skip a DLL will eventually stage a run whose
+    evidence describes code that is not under test, which is indistinguishable from the
+    feature not working. Deriving the list means a new shell is covered the moment it
+    joins the array in check-rust-build.sh, with no second place to remember.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "me3_dll_list", SCRIPTS_DIR / "me3-dll-list.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    mapping = {f"{artifact}.dll": package for package, artifact in module.dll_pairs()}
+    mapping.update(NON_NATIVE_DLLS)
+    return mapping
+
+
+DLLS = _dll_map()
 
 
 def main() -> int:

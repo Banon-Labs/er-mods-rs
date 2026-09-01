@@ -4,6 +4,53 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
+# THE GATE MUST NOT DAMAGE THE THING IT GATES, AND ON 2026-08-31 IT DID -- TWICE.
+#
+# Route, reproduced end to end (bd hooks-selftest-under-git-hook-blanks-the-live-config-2026-08-31):
+# a push FROM A LINKED WORKTREE runs this script from its pre-push hook, and git exports GIT_DIR to
+# a linked worktree's hooks -- measured on git 2.55 by scripts/measure-git-hook-env.sh, which also
+# measures that a MAIN checkout's hooks get no GIT_DIR at all, which is why this looked unreachable
+# for a day. `git -C <fixture>` does NOT override GIT_DIR, so every fixture command in a downstream
+# script lands on the SHARED config instead: `git init` saw a git dir not named `.git`, wrote
+# core.bare = true, and every later `git status` in the main checkout died with "fatal: this
+# operation must be run in a work tree"; `git config --unset core.hooksPath` disarmed the hooks for
+# ninety minutes and a push reached origin ungated.
+#
+# scripts/check-git-hooks-installed.sh now scrubs its own environment, which closes the one script
+# that was caught. This closes the CLASS: any gate below, today's or tomorrow's, that builds a git
+# fixture without scrubbing gets caught here instead of in the next person's checkout.
+#
+# Scoped to the two keys the damage lands on, deliberately. Comparing the whole file would go red
+# on an unrelated `[branch]` write from one of the other agents working in this tree, and a gate
+# that cries wolf gets its check deleted. Read through an explicit --git-dir, which outranks an
+# inherited GIT_DIR, and which keeps working after core.bare has already gone true -- the state in
+# which most other git commands stop working.
+gate_common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+gate_key() { [[ -z "$gate_common_dir" ]] || git --git-dir="$gate_common_dir" config --get "$1" || true; }
+gate_bare_before=$(gate_key core.bare)
+gate_hookspath_before=$(gate_key core.hooksPath)
+gate_config_unchanged() {
+	local rc=$? bare_after hookspath_after
+	[[ -n "$gate_common_dir" ]] || exit "$rc"
+	bare_after=$(gate_key core.bare)
+	hookspath_after=$(gate_key core.hooksPath)
+	if [[ "$gate_bare_before" != "$bare_after" || "$gate_hookspath_before" != "$hookspath_after" ]]; then
+		echo "[ci-local-check] FAIL: this gate CHANGED the repository configuration it was checking." >&2
+		echo "  $gate_common_dir/config" >&2
+		echo "    core.bare      ${gate_bare_before:-<unset>} -> ${bare_after:-<unset>}" >&2
+		echo "    core.hooksPath ${gate_hookspath_before:-<unset>} -> ${hookspath_after:-<unset>}" >&2
+		echo "  A gate below built a git fixture without scrubbing its environment first. If this ran" >&2
+		echo "  from a LINKED WORKTREE, its hooks inherit GIT_DIR and 'git -C <fixture>' does not" >&2
+		echo "  override it, so fixture-only work lands on the shared config. Confirm with:" >&2
+		echo "      bash scripts/measure-git-hook-env.sh" >&2
+		echo "  Fix the offending script with: unset \$(git rev-parse --local-env-vars)" >&2
+		echo "  Repair this checkout with: git config core.bare false && bash scripts/install-git-hooks.sh" >&2
+		exit 1
+	fi
+	exit "$rc"
+}
+trap gate_config_unchanged EXIT
+
 # SELF-HEAL THE WORKTREE CASE INSTEAD OF MAKING EVERY AGENT DO IT BY HAND. `vendor/` is
 # gitignored, so a `git worktree` checkout (an agent sandbox under `.claude/worktrees/`, a
 # `.worktrees/` lab) starts without MinHook while the MAIN checkout it was created from already has
@@ -43,6 +90,10 @@ fi
 # own say-so.
 bash scripts/check-git-hooks-installed.sh --selftest
 bash scripts/check-git-hooks-installed.sh
+# ...and that the trap at the top of THIS file still catches a gate that rewrites the shared
+# config, which is how the checkout was damaged twice on 2026-08-31. Both directions, because a
+# guard wedged green protects nothing and a guard wedged red gets deleted.
+bash scripts/test-ci-local-check-config-guard.sh
 python3 scripts/check-no-lossy-utf8.py
 python3 scripts/check-no-timeouts.py
 python3 scripts/test-no-timeouts.py

@@ -66,12 +66,39 @@ env:
   # Windows CRT/SDK that cargo-xwin downloads (defaults such as the bundled
   # xwin manifest version only move when this version moves).
   CARGO_XWIN_VERSION: 0.23.0
+  # ShellCheck release to install, and it is a PIN rather than a preference:
+  # `shellcheck` findings are version-dependent, so an unpinned linter is a gate
+  # whose verdict drifts with whatever the runner image happens to ship. Measured
+  # on run 33468994945: ubuntu-latest's apt ships 0.9.0, the developer tree runs
+  # 0.11.0, and three of the 25 shellcheck steps were red in CI and clean locally
+  # -- scripts/run-product-continue-direct-probe.sh, scripts/check-git-hooks-installed.sh
+  # and scripts/test-er-stale-run-sentinel-e2e.sh. Every finding was SC2317
+  # ("command appears to be unreachable") pointed at the body of a function that is
+  # reached through a `trap`, plus one SC2015 note; 0.9.0's SC2317 does not model
+  # trap-invoked reachability, later releases do. So the disagreement was the
+  # linter's, not the scripts', and the fix is to run the same linter in both
+  # places rather than to sprinkle `# shellcheck disable=` at an old version's
+  # false positives. Bump this when the developer tree bumps.
+  SHELLCHECK_VERSION: v0.11.0
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    # NO `timeout-minutes` HERE, and that is enforced, not a preference: scripts/check-no-timeouts.py
+    # rejects any YAML `timeout-minutes` above its 30-second cap, on the grounds that a wall-clock
+    # bound is not a synchronisation primitive. The job's real bound is internal -- every gate is
+    # itself time-bounded, and check.sh reports a killed step as INCONCLUSIVE rather than as a pass.
     steps:
+      # fetch-depth: 0, NOT the default 1. Two gates need real history, not just the tip:
+      # scripts/er-dll-closure.py --selftest calls `git merge-base origin/main HEAD`, which on a
+      # shallow clone fails outright -- three of its --with/--without cases then report FAIL rather
+      # than skip, because the error is raised before the validation they are testing --  and
+      # scripts/check-no-local-main-commits.sh exits 2 without refs/remotes/origin/main to diff
+      # against. Fetching a ref alone is not enough; the merge base has to exist. Measured: this
+      # repo's whole history is 53 MB over 1812 commits, so full depth costs a few seconds.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Check out fromsoftware-rs as sibling
         run: |
@@ -85,10 +112,51 @@ jobs:
         run: |
           # Runner apt lists are usually fresh enough to install without an
           # `apt-get update` (~20-60 s); fall back to updating only on a miss.
+          #
+          # THE THREE `lib*-dev` PACKAGES ARE THE er-shader-viewer GATE. check.sh ends with
+          # `cargo check -p er-shader-viewer`, a host-native Bevy 0.19 GUI, and on 2026-09-01
+          # that step was the one red gate in the first run that executed the whole suite: it
+          # died in wayland-sys's build script with "Package wayland-client was not found in
+          # the pkg-config search path".
+          #
+          # The set is MEASURED, not guessed from that one error. Two independent probes agree:
+          # `cargo tree -p er-shader-viewer -e normal,build --invert pkg-config` shows the
+          # `pkg-config` crate is a build-dependency of exactly three crates in the entire tree
+          # -- wayland-sys (via winit/smithay), alsa-sys (via bevy_audio/rodio/cpal) and
+          # libudev-sys (via bevy_gilrs) -- and a `cargo check --keep-going` with pkg-config
+          # blinded (PKG_CONFIG_LIBDIR pointed at an empty directory) fails in those same three
+          # build scripts and no others, probing `wayland-client`, `alsa` and `libudev`.
+          #
+          # Bevy's own docs/linux_dependencies.md additionally lists libx11-dev and
+          # libxkbcommon-dev; both are deliberately NOT here. This gate is a `cargo check`, so
+          # nothing is ever dlopen'd, and x11-dl / xkbcommon-dl / ash resolve their libraries at
+          # RUN time -- the blinded probe proves they need nothing at build time. Adding them
+          # would be padding for a gate that never opens a window.
+          #
+          # shellcheck is NOT installed from apt: see SHELLCHECK_VERSION above. apt ships 0.9.0,
+          # whose SC2317 false-positives on trap handlers made three gates red here and clean on
+          # the developer tree, so the pinned upstream release is fetched in the step below.
           sudo apt-get install -y --no-install-recommends clang lld llvm wine \
-            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine; }
+              libwayland-dev libasound2-dev libudev-dev \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
+              libwayland-dev libasound2-dev libudev-dev; }
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
+
+      # PINNED shellcheck, replacing the apt one. scripts/check.sh runs 25 shellcheck steps and
+      # its `shellcheck()` wrapper SKIPS them when the tool is absent, so a runner image that
+      # stopped shipping it would quietly cost 25 gates -- and one that ships a DIFFERENT version
+      # costs correctness instead, which is worse because it is invisible. Both failure modes are
+      # closed by fetching one known build. Upstream ships a static binary, so this is a curl and
+      # a move, the same shape as the OPA step below; measured at a couple of seconds.
+      - name: Install shellcheck (pinned)
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C /tmp
+          sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          # Fail loudly here rather than let 25 gates silently lint under the wrong version.
+          shellcheck --version
+          shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION#v}"
 
       # Prebuilt release binary; replaces a ~1 min `cargo install cargo-xwin`.
       - name: Install cargo-xwin
@@ -128,6 +196,17 @@ jobs:
         if: steps.cache-cupcake.outputs.cache-hit != 'true'
         run: cargo install --git https://github.com/eqtylab/cupcake.git --rev "$CUPCAKE_REV" cupcake-cli --locked
 
+      # uv provisions capstone. There is no system pip here on purpose (AGENTS.md), and three
+      # gates re-exec themselves through `uv run --with capstone`: check-singleton-field-offsets.py
+      # (both halves) and verify-prologue-masks-1170.py --selftest. Measured with uv off PATH, they
+      # do not print a skip -- they raise FileNotFoundError out of os.execvp before their first
+      # assertion, which reads like a real failure. The ledger marks uv `!`-fatal for them so a
+      # runner without uv gets a loud SKIP instead; installing it means they actually run.
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - uses: Swatinem/rust-cache@v2
 
       # DOES THE COMMITTED STATE COMPILE? Deliberately the FIRST Rust step: it is the most basic
@@ -150,61 +229,68 @@ jobs:
       # --keep-going so one broken crate does not hide the state of the rest: without it the run
       # stops at the first failure and the report understates the damage.
       #
-      # NO WORKTREE HERE, unlike scripts/check-committed-compiles.sh, which does the same job
-      # locally. That script exists because a developer's working tree still holds the uncommitted
-      # producer and therefore disagrees with the commit; actions/checkout has put the pushed
-      # commit's tree on this runner and nothing else, so the distinction cannot arise.
+      # KEPT SEPARATE FROM check.sh BELOW, which asks the same question through
+      # scripts/check-committed-compiles.sh -- in a temp worktree, and ~1400 lines in. This step
+      # answers it in 100 s at the top, so a branch that does not compile says so immediately
+      # instead of after the whole suite.
       - name: Does the committed state compile (whole workspace, windows target)
         run: cargo xwin check --workspace --all-targets --keep-going --target x86_64-pc-windows-msvc
 
-      - name: Lint - no lossy UTF-8
-        run: python3 scripts/check-no-lossy-utf8.py
+      # THE WHOLE SUITE, NOT A HAND-COPIED SUBSET OF IT.
+      #
+      # This step replaces nine hand-named gate steps. Those nine were the entire CI surface while
+      # scripts/check.sh ran 224 -- so ~215 gates existed, passed locally, and were invisible here.
+      # That gap was not an oversight anyone could have noticed: the step list was written by hand,
+      # so it drifted silently every time a gate was added, and CI going green said only that nine
+      # named things were fine. The same disease was found the same day inside check.sh itself,
+      # whose shellcheck coverage is also a hand list and had silently dropped scripts/opa-query.sh.
+      #
+      # Running check.sh instead makes the CI set DERIVED: a gate appended to check.sh runs here
+      # from the moment it lands, with nothing to remember to update. Coverage now goes:
+      #
+      #   226 steps -- 203 run here, 23 SKIPPED for inputs a runner cannot hold.
+      #   Of the 226: 166 invoke a repo gate script and are classified in the ledger; 60 are
+      #   toolchain steps (cargo/shellcheck/rustfmt/opa/cupcake) whose only dependency is the tool
+      #   being installed, which check.sh resolves at run time rather than from a list.
+      #   Of the 166 ledgered: 131 portable, 8 partial (run, and say which half they lost),
+      #   27 blocked. The 23 skipped above are the blocked rows whose input is absent HERE --
+      #   fewer than 27 because this workflow installs uv and clones minhook.
+      #
+      # WHAT IT CANNOT RUN, AND WHY THAT IS SAFE. Two inputs are impossible on a runner: the
+      # de-Arxan'd game images (eldenring-deobf{,-1.17}.bin -- gitignored, ~100 MB, derived from
+      # the user's install) and things derived from them. A gate whose input is absent is SKIPPED,
+      # out loud, and check.sh's summary gives it its own state -- never `passed`. Before this
+      # change that failure mode was live and silent: measured in a runner-equivalent checkout,
+      # FOURTEEN gates printed a single line saying their input was absent and EXITED 0 -- so the
+      # summary wrote `passed` beside a gate that had asserted nothing at all -- and three more
+      # died with a raw FileNotFoundError out of os.execvp because uv was not there to fetch
+      # capstone, which reads like a real failure rather than a missing tool. The classification is
+      # docs/ci-gate-portability.tsv, measured rather than guessed, and enforced by
+      # ci-gate-portability.py --check, which is itself one of the steps below -- so a new gate
+      # cannot land without someone answering "does this run without the game image?".
+      #
+      # check.sh exits 0 with skips present, by design: a runner must not be permanently red for
+      # not holding a 100 MB game asset. It never says "all steps ran" in that case, and the step
+      # after this one puts the skip inventory in the run summary where it cannot rot unseen.
+      #
+      # NOT `set -e`. check.sh accumulates failures and prints a per-step table, so one red gate
+      # does not erase the verdict of the ~200 behind it.
+      - name: Run the whole gate suite (scripts/check.sh)
+        run: bash scripts/check.sh
 
-      - name: Lint - no timeout/sleep control flow
+      # THE SKIP INVENTORY, ON THE RUN PAGE. `if: always()` because the interesting case is the run
+      # that went red: "which gates had nothing to say here" is exactly the question a red run
+      # provokes, and it must not require reading 224 lines of log to answer.
+      - name: What this runner could not check
+        if: always()
         run: |
-          python3 scripts/check-no-timeouts.py
-          python3 scripts/test-no-timeouts.py
-          cupcake validate --log-level error
-          python3 scripts/test-cupcake-policies.py
-          # The delivered-shape gate, which test-cupcake-policies.py used to shell out to and no
-          # longer does (see the comment at the top of that file). This job does not run
-          # scripts/check.sh, so without these two lines CI would have no delivered-shape coverage
-          # at all. --selftest and the live run are different runs: the first proves the gate
-          # rejects a fictional fixture, the second checks the real contract.
-          python3 scripts/test-cupcake-delivered-shape.py --selftest
-          python3 scripts/test-cupcake-delivered-shape.py
-
-      # Both halves of the refactor/move DLL byte-identity gate
-      # (.github/workflows/refactor-byte-identical.yml): the trigger that decides
-      # which PRs it applies to, and the comparator that decides what counts as a
-      # difference. Neither is exercised by that workflow's own runs on ordinary
-      # PRs, so they are tested here instead of rotting until the day one fires.
-      - name: Test the DLL byte-identity gate
-        run: |
-          bash scripts/test-pr-refactor-scope.sh
-          python3 scripts/test-dll-byte-identical.py
-
-      - name: Test public DLL-release workflow
-        run: python3 scripts/test-release-workflow.py
-
-      - name: rustfmt
-        run: cargo fmt --all -- --check
-
-      # Parity with the parent project's lint strictness. Asserts the CONFIGURATION here;
-      # the code itself is linted by scripts/check-rust-build.sh below. This step reads the
-      # ../fromsoftware-rs checkout made above, so it also fails when upstream adds a lint
-      # knob we have not adopted.
-      - name: Lint parity with fromsoftware-rs
-        run: |
-          python3 scripts/check-lint-parity.py --selftest
-          python3 scripts/check-lint-parity.py
-
-      - name: Test host-buildable crates
-        run: cargo test -p er-soulsformats -p er-param-inspect
-
-      # Full link of the DLL needs the MSVC linker; cargo-xwin provides the
-      # Windows SDK import libraries needed for Linux-hosted type-checks. Use
-      # the same script as scripts/check.sh so CI also compiles cfg(test) code
-      # and runs the Windows-target lib tests through Wine.
-      - name: Check DLL crate (windows target)
-        run: bash scripts/check-rust-build.sh
+          {
+            echo '## Gates this runner cannot execute'
+            echo
+            echo 'Derived from `docs/ci-gate-portability.tsv` (measured, not guessed) --'
+            echo 'not from a hand-written list in this workflow.'
+            echo
+            echo '```'
+            python3 scripts/ci-gate-portability.py --probe
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

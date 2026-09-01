@@ -60,9 +60,17 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
-for d in "$PRODUCT_DLL" "$TRACE_DLL" "$HARNESS_DLL" "$TELEM_DLL"; do
-	[[ -f "$d" ]] || fail "DLL not built: $d (cargo xwin build --release --target x86_64-pc-windows-msvc)"
-done
+# FRESHNESS, NOT EXISTENCE. The loop here used to assert only that four files exist -- but the
+# profile below points me3 straight at target/.../release, so existence says nothing about which
+# code loads. This run produces the VANILLA BASELINE that oracle-steadystate-diff.py subtracts
+# from every later product run; a baseline captured against a stale harness or telemetry DLL
+# poisons every comparison drawn from it afterwards, silently and for as long as the file is kept.
+# All four are checked: the product is present here even in telemetry-only mode.
+# shellcheck source=scripts/er-dll-freshness.sh
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/er-dll-freshness.sh"
+require_fresh_dlls "$PRODUCT_DLL" "$TRACE_DLL" "$HARNESS_DLL" "$TELEM_DLL" ||
+	fail "refusing to launch against DLLs that are not this source tree (see above)"
 if tasklist.exe 2>/dev/null | grep -qiE 'eldenring\.exe|start_protected_game\.exe'; then
 	fail "An Elden Ring process is already running. Tear it down before launching (never a blanket kill)."
 fi
@@ -82,7 +90,32 @@ cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
 cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
-rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl"
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last, and
+# several sessions launch concurrently here. A copy after the run cannot fix it -- by then this run
+# clobbered the previous one's file -- and a crashed run never reaches the copy at all. This line used
+# to `rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl"`, which was ANOTHER run's evidence.
+LAUNCH_ENV_VARS=(
+	"ER_QUICKLOAD_TELEMETRY_PATH=$ARTIFACT_DIR/er-quickload-telemetry.json"
+	"ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-quickload-autoload-debug.log"
+	"ER_QUICKLOAD_CRASH_LOG_PATH=$ARTIFACT_DIR/er-quickload-crash-log.txt"
+	"ER_QUICKLOAD_TRACE_CONTINUE_PATH=$ARTIFACT_DIR/er-quickload-continue-trace.log"
+	"ER_QUICKLOAD_INPUT_TRACE_PATH=$ARTIFACT_DIR/er-quickload-input-trace.jsonl"
+	"ER_QUICKLOAD_BOOTSTRAP_PATH=$ARTIFACT_DIR/er-quickload-bootstrap.jsonl"
+	"ER_QUICKLOAD_BOOTSTRAP_STATE_PATH=$ARTIFACT_DIR/er-quickload-bootstrap-state.json"
+	"ER_QUICKLOAD_PROFILE_PATH=$ARTIFACT_DIR/er-quickload-profile.jsonl"
+	"ER_QUICKLOAD_RELOAD_TRACE_PATH=$ARTIFACT_DIR/er-reload-trace.log"
+	"ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH=$ARTIFACT_DIR/er-input-harness.log"
+	"ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH=$ARTIFACT_DIR/er-input-harness-phases.jsonl"
+	"ER_QUICKLOAD_DIAG_HARNESS_PATH=$ARTIFACT_DIR/er-diag-harness.log"
+	"ER_QUICKLOAD_TIMESERIES_PATH=$ARTIFACT_DIR/er-telemetry-timeseries.jsonl"
+	"ER_QUICKLOAD_CPU_PROFILE_PATH=$ARTIFACT_DIR/er-cpu-profile.txt"
+	"ER_QUICKLOAD_ARMAMENT_ICONS_PATH=$ARTIFACT_DIR/er-armament-icons.log"
+	"ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH=$ARTIFACT_DIR/er-save-disable.log"
+	"ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH=$ARTIFACT_DIR/er-save-disable-telemetry.json"
+	"ER_QUICKLOAD_LOADING_PORTRAIT_PATH=$ARTIFACT_DIR/er-loading-portrait.log"
+	"ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH=$ARTIFACT_DIR/er-loading-portrait-crash-log.txt"
+)
 
 PROFILE="$ARTIFACT_DIR/vanilla-reload-agentdriven.me3"
 # NOTE: the old RENDERDOC=1 me3-native path (stage renderdoc.dll as the first native so it hooks ER's
@@ -151,9 +184,11 @@ fi
 rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-system-quit-load-switch.txt \
 	"$GAME_DIR"/er-quickload-switch-slot.txt "$GAME_DIR"/er-quickload-switch-save-file.txt \
 	"$GAME_DIR"/er-quickload-prove-movement.txt 2>/dev/null
-rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-input-harness.log \
-	"$GAME_DIR"/er-quickload-telemetry.json "$GAME_DIR"/er-quickload-input-trace.jsonl* 2>/dev/null
-
+# THE GAME_DIR LOG SWEEP IS GONE ON PURPOSE. It used to clear er-quickload-*.log, er-reload-trace.log,
+# er-input-harness.log and the telemetry json out of the game directory, which destroyed TWO
+# generations of somebody ELSE's run at a time: `begin_fresh_run` removes `<name>.prev`
+# unconditionally when the live file is absent. Every log this run writes is redirected into a fresh
+# per-run ARTIFACT_DIR, so the clean slate is free.
 # SAFETY (bd never-blanket-kill-eldenring): only tear down the PIDs THIS run spawns.
 win_pids_for() {
 	tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
@@ -162,7 +197,8 @@ win_pids_for() {
 PRE_ER_PIDS=" $(win_pids_for eldenring.exe) "
 PRE_ME3_PIDS=" $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe) "
 
-# shellcheck disable=SC2317
+# Invoked only through the EXIT trap below, which shellcheck cannot see.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
 	local pid
 	for pid in $(win_pids_for eldenring.exe); do
@@ -205,10 +241,11 @@ if [[ "${RDC_CAPTURE:-0}" == "1" ]]; then
 	[[ -f "$GAME_DIR/er-quickload-rdoc-slow-ms.txt" ]] || echo -n "15" >"$GAME_DIR/er-quickload-rdoc-slow-ms.txt"
 	"$RDCMD" capture --opt-hook-children \
 		--capture-file 'C:\SteamLibrary\steamapps\common\ELDEN RING\Game\er_cap_frame' \
+		env "${LAUNCH_ENV_VARS[@]}" \
 		"$(wslpath -w "$ME3")" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" \
 		>"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 else
-	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+	env "${LAUNCH_ENV_VARS[@]}" "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 fi
 
 if [[ "${TEARDOWN_ON_TITLE_REBUILD:-0}" == "1" ]]; then
@@ -240,8 +277,12 @@ else
 	RC=$?
 fi
 
-[[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"
-[[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"
+# FALLBACK ONLY -- both are redirected into ARTIFACT_DIR at launch. These cover the case where the
+# env did not survive me3 -> Proton and the DLL fell back to the game directory.
+[[ -f "$ARTIFACT_DIR/er-input-harness.log" ]] ||
+	{ [[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"; }
+[[ -f "$ARTIFACT_DIR/er-reload-trace.log" ]] ||
+	{ [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"; }
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
 	for d in er_quickload.dll er_reload_trace.dll er_input_harness.dll er_telemetry.dll; do

@@ -360,7 +360,12 @@ def scan_contract() -> list[Finding]:
             "loading-screen-portrait-screenshot.jpg",
             "loading-screen-portrait-screenshot-analysis.json",
             "telemetry_loading_screen_portrait_capture_ready",
-            "oracle_title_portrait_visible_surface_bound",
+            # Was "oracle_title_portrait_visible_surface_bound" until 2026-08-31. That oracle was
+            # removed because no code ever wrote the counter behind it, and this requirement would
+            # then have been satisfied by the COMMENT recording its removal -- a contract check
+            # passing on a mention of the thing it wants. `oracle_portrait_onto_draw_hits` is the
+            # capture predicate's actual primary gate and is genuinely written.
+            "oracle_portrait_onto_draw_hits",
             "capture-er-window.py",
             "analyze-loading-screen-portrait-screenshot.py",
         ]

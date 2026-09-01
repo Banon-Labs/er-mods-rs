@@ -12,15 +12,37 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
         ));
         return 0;
     }
-    let mut st = system_quit_save_swap_lock();
-    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
-        st.summary_ptr = summary;
-        st.summary_snapshot = unsafe {
-            core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+    // THE SNAPSHOT IS TAKEN FRESH ON EVERY PREVIEW, NEVER REUSED.
+    //
+    // This used to short-circuit on `!summary_snapshot.is_empty() && summary_ptr == summary`, which
+    // made the snapshot a process-lifetime latch: the ProfileSummary allocation is reused across
+    // save containers, so a snapshot taken minutes and one container earlier was kept and would
+    // have been written back as "the user's real rows" -- the previous character's stats, which is
+    // the remaining half of `er-effects-rs-fmy6`. Re-reading costs one memcpy per pick.
+    //
+    // WHERE the pre-call records live is the subtlety. The save picker may have its browse-row
+    // LABELS in the live allocation right now (a pick arrives while the picker still owns the
+    // window), and `write_profile_summary_records_from_save_bytes` uses this image as the
+    // structural template for slots it cannot source -- so reading the live allocation blind would
+    // seed the preview from `[ new ]`. The picker's own snapshot IS the game's records, so prefer
+    // it whenever one is live for this same allocation.
+    let summary_snapshot = {
+        let mut st = system_quit_save_swap_lock();
+        let from_rows = st.rows_staged
+            && st.rows_summary_ptr == summary
+            && st.rows_snapshot.len() == PROFILE_SUMMARY_TOTAL_BYTES;
+        let snapshot = if from_rows {
+            st.rows_snapshot.clone()
+        } else {
+            unsafe {
+                core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES)
+                    .to_vec()
+            }
         };
-    }
-    let summary_snapshot = st.summary_snapshot.clone();
-    drop(st);
+        st.summary_ptr = summary;
+        st.summary_snapshot = snapshot.clone();
+        snapshot
+    };
 
     let (mask, preview_stats) = unsafe {
         write_profile_summary_records_from_save_bytes(base, summary, &summary_snapshot, bytes)
@@ -31,6 +53,15 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             st.candidate_slot_mask = mask;
             st.candidate_stats_utf16 = preview_stats;
             st.preview_applied = true;
+            // OWNERSHIP HANDOFF, and only now that the preview actually took. The browse rows are
+            // gone from the allocation (the writer above zeroes all ten records first) and this
+            // preview's snapshot carries the same game records the staging snapshot did, so the
+            // preview owns the backout from here. Transferring only on success matters: a preview
+            // that found no readable slot leaves the picker on screen, and the rows restore below
+            // is what puts its listing back.
+            st.rows_staged = false;
+            st.rows_summary_ptr = 0;
+            st.rows_snapshot = Vec::new();
         }
         // THE ROWS ABOUT TO BE DRAWN DESCRIBE **THIS** SAVE, SO OUR CACHES MUST TOO. The native
         // ProfileSummary above now holds the previewed save's records, but the name and the whole
@@ -70,6 +101,14 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             )
         };
         unsafe { refresh() };
+    } else {
+        // NOTHING PREVIEWED, BUT THE RECORDS ARE ALREADY DESTROYED.
+        // `write_profile_summary_records_from_save_bytes` zeroes all ten records and their
+        // occupancy bytes BEFORE it discovers whether the container has a readable slot, so a
+        // refused pick leaves the live summary blank. The caller keeps the picker open so the user
+        // can choose another file -- which needs its rows back. (The old comment at that call site
+        // claimed "our browse rows were untouched"; they never were.)
+        unsafe { save_picker_restore_staged_row_records("preview-found-no-slots") };
     }
     mask
 }
@@ -111,10 +150,119 @@ pub(crate) fn system_quit_save_swap_restore_original_file(
 /// "Maddened Bean, RL 100" where RL 100, the attributes and the location were all angrE's.
 pub(crate) fn system_quit_foreign_preview_active() -> bool {
     let st = system_quit_save_swap_lock();
-    st.preview_applied && !st.committed
+    // The question this answers is "do the live ProfileSummary records describe something OTHER
+    // than the loaded character", and the save picker's staged browse rows are as much "something
+    // other" as a foreign save's records. It used to read `preview_applied` alone, which was true
+    // during row staging only because staging set that flag -- an accident of the conflation the
+    // `rows_staged` split removed. Naming the staging explicitly keeps the row presentation
+    // behaving exactly as it did while the restore concerns stay separate.
+    st.rows_staged || (st.preview_applied && !st.committed)
+}
+
+/// Put the game's own `CS::ProfileSummary` records back after the in-game save picker wrote its
+/// browse-row labels over them. Returns true when a restore was actually performed.
+///
+/// UNCONDITIONAL BY DESIGN -- IT IS NOT GATED ON `committed`, AND MUST NOT BE.
+///
+/// The defect this exists to close (live run 2026-08-29): a save-DESTINATION picker staged four row
+/// records at +313751ms; `committed` had been set at +118359ms by an unrelated cross-file load, and
+/// the only thing that ever clears it sits PAST the guard that reads it, so it is sticky for the
+/// life of the process. Every restore after that point silently no-op'd -- zero
+/// `restored live ProfileSummary snapshot` lines in a 600 MB log -- and the picker's labels stayed
+/// in the records. The user's next three loading screens rendered `[..] EldenRing` and `[ new ]`
+/// as character names beside `RL 0`, and the loading portrait drew nothing because the record it
+/// had to build from was a zeroed row.
+///
+/// A committed foreign PREVIEW genuinely must survive (its records are what the game is about to
+/// load). Browse-row labels never must: they are UI, they describe no character, and there is no
+/// state in which leaving them in a game-owned structure is correct.
+///
+/// # Safety
+///
+/// Writes `PROFILE_SUMMARY_TOTAL_BYTES` through a raw pointer, so it writes ONLY when the live
+/// summary pointer still equals the allocation the snapshot came from -- a stricter check than the
+/// preview restore's bare `>= 0x10000`, because a container reallocation between staging and
+/// restore would otherwise be a use-after-free. Menu/game-thread only, like every other writer of
+/// these records.
+pub(crate) unsafe fn save_picker_restore_staged_row_records(reason: &str) -> bool {
+    let mut st = system_quit_save_swap_lock();
+    if !st.rows_staged {
+        return false;
+    }
+    let live = unsafe { system_quit_profile_summary_ptr() };
+    let target = st.rows_summary_ptr;
+    let snapshot_len = st.rows_snapshot.len();
+    // "CANNOT READ THE SUMMARY RIGHT NOW" IS NOT "THE SUMMARY IS GONE". `GameDataMan+0x78` reads as
+    // 0 through the whole clean-title window, and consuming the latch on that reading would throw
+    // away the only copy of the user's records over a pointer that is about to come back. Keep it
+    // armed and let the per-frame sweep retry; the log is rate-limited because that sweep runs every
+    // frame.
+    if live < 0x10000 {
+        let n = SAVE_PICKER_ROW_RECORDS_RESTORE_DEFERRED.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 2 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "save-picker: DEFERRED the staged-row restore for {reason} -- the live ProfileSummary is unreadable (0x{live:x}) #{n}; the snapshot stays armed and the per-frame sweep retries"
+            ));
+        }
+        return false;
+    }
+    let writable =
+        target >= 0x10000 && target == live && snapshot_len == PROFILE_SUMMARY_TOTAL_BYTES;
+    if writable {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                st.rows_snapshot.as_ptr(),
+                target as *mut u8,
+                snapshot_len,
+            );
+        }
+    }
+    // Consume the latch now, written or not. `live` is readable and is NOT the allocation we
+    // snapshotted, so that allocation is gone: there is nothing left to put back, and keeping its
+    // image armed would only make a later restore write a dead container's records into whatever
+    // now occupies the address.
+    st.rows_staged = false;
+    st.rows_summary_ptr = 0;
+    st.rows_snapshot = Vec::new();
+    drop(st);
+    // The staging zeroed these per slot; the restored records are the game's own, whose faces this
+    // preview-only fingerprint array says nothing about.
+    for face_hash in PROFILE_PREVIEW_FACE_HASH
+        .iter()
+        .take(TITLE_PROFILE_SLOT_COUNT)
+    {
+        face_hash.store(0, Ordering::SeqCst);
+    }
+    if writable
+        && game_module_base().is_ok()
+        && let Some(address) = crate::experiments::gated_game_fn(
+            PROFILE_RENDERER_REFRESH_RVA,
+            "PROFILE_RENDERER_REFRESH_RVA",
+        )
+    {
+        let refresh: unsafe extern "system" fn() = unsafe { std::mem::transmute(address) };
+        unsafe { refresh() };
+    }
+    SAVE_PICKER_ROW_RECORDS_RESTORED.fetch_add(1, Ordering::SeqCst);
+    if !writable {
+        SAVE_PICKER_ROW_RECORDS_RESTORE_UNWRITABLE.fetch_add(1, Ordering::SeqCst);
+    }
+    SAVE_PICKER_STAGED_ROW_COUNT.store(0, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-picker: restored the game's live ProfileSummary records over the staged browse rows for {reason} summary=0x{target:x} live=0x{live:x} bytes={snapshot_len} written={writable}"
+    ));
+    true
 }
 
 pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
+    // TWO INDEPENDENT RESTORES, IN ORDER. The picker's browse rows come back unconditionally; the
+    // foreign-save preview's backout keeps its `committed` suppression, because a committed preview
+    // is the save the game is about to load. Splitting them is the fix for the sticky-`committed`
+    // defect described on `save_picker_restore_staged_row_records`. They are mutually exclusive in
+    // practice (a successful preview takes ownership of the summary from the staging), and where
+    // both were somehow live the two snapshots hold the same game records, so the order is safe
+    // either way.
+    unsafe { save_picker_restore_staged_row_records(reason) };
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
         return;

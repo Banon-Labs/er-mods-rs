@@ -26,7 +26,6 @@
 
 use std::{
     fmt,
-    path::PathBuf,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
@@ -245,9 +244,19 @@ fn diag_override(env_name: &str, file_name: &str) -> Option<String> {
 }
 
 pub(crate) fn log_message(args: fmt::Arguments<'_>) {
-    let path = game_directory_path()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(LOG_FILE_NAME);
+    // REDIRECTABLE, because the game-directory copy is SINGLE-SLOT and was being destroyed twice
+    // over. `er_game_base::log::begin_fresh_run` keeps exactly one previous generation, so two
+    // launches lose the run before last -- and `scripts/run-armament-icons-{live,smoke}.sh` each ran
+    // an `rm -f` of this file from the game directory BEFORE launching, which also drops the stale
+    // `.prev` (that removal is unconditional when the live file is absent). Two prior runs' evidence,
+    // neither of them the deleting run's, and several sessions launch concurrently here.
+    //
+    // The resolver is the shared one, so this artifact answers "where does this go" exactly like
+    // every other: the launcher's redirect, else beside `eldenring.exe`.
+    let path = er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_ARMAMENT_ICONS_PATH",
+        LOG_FILE_NAME,
+    );
     let seq = LOG_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
     append_line(&path, format_args!("[{seq:06}] {args}"));
 }

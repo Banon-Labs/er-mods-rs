@@ -47,7 +47,8 @@ Install/use:
    to itself, so the folder is relocatable.
 2. Copy the desired `er-quickload-*.txt.example` files next to `eldenring.exe` and
    remove `.example`.
-3. Edit `er-quickload-autoload.txt` if you need a slot other than `slot=0`.
+3. Set `slot = N` in the game-directory `er-quickload.toml` if you need a slot other
+   than `0`. **Not** in `er-quickload-autoload.txt` -- see the table below.
 4. Launch with me3:
 
 <!-- md-test: bash-run -->
@@ -134,11 +135,11 @@ Common quick-load files/config:
 
 | File | Purpose |
 | --- | --- |
-| `er-quickload-autoload.txt` | Selects the requested quick-load slot, e.g. `slot=0`. |
+| `er-quickload-autoload.txt` | **Probe/diagnostic channel, not a product config.** Its `slot=` is IGNORED unless `ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1`; set your slot in `er-quickload.toml` instead. Its `own_load`/`own_stepper`/`cold_char_mount` probe levers still work. |
 | `er-quickload-native-continue.txt` | Enables the supported native Continue path. |
 | `er-quickload-pab-advance.txt` | Enables zero-input press-any-button/menu-open advance. |
 | `er-quickload-splash-skip.txt` | Enables built-in splash skip when not already implied by quick load. |
-| `er-quickload.toml` | Game-directory config file; can provide `save_file`, `build_url`, `boot_background_image`, and `persist_boot_background_to_loading_screen`. |
+| `er-quickload.toml` | Game-directory config file, and the ONLY product channel for the autoload slot; provides `save_file`, `slot`, `build_url`, `boot_background_image`, and `persist_boot_background_to_loading_screen`. |
 | `er-quickload-boot-background.rgba` | Game-directory developer/power-user predecoded screenshot override; not required for production local Steam screenshot discovery. |
 
 Important experimental/probe files exist too (`er-quickload-force-profile-render.txt`,
@@ -176,8 +177,9 @@ outcome, including a fetch that failed after the press, lands in
 
 The **Generate Build Link** row on the same tab is the inverse: it reads the live
 character -- the whole inventory of armaments with their affinities, ashes of war and
-upgrade levels, all the armour and talismans being carried, memorised spells, flask
-allocation, physick, great rune, class and attributes -- encodes all of it into a
+upgrade levels, all the armour and talismans being carried, memorised spells, the
+quickbar and pouch as you have them assigned, the arrows and bolts you have equipped,
+flask allocation, physick, great rune, class and attributes -- encodes all of it into a
 self-contained `?i=` planner link, copies that link to the clipboard and opens it in a
 browser. Nothing is uploaded and no account is created: the `?i=` form carries the whole
 build in the URL itself.
@@ -191,14 +193,20 @@ account for this installation, kept in `er-build-planner-session.json` beside th
 every later link reuses it, and a build small enough for `?i=` never touches the network
 at all.
 
-What the link leaves out, it leaves out for a reason: **ammunition** (arrows and bolts
-are `EquipParamWeapon` rows, so they arrive with the armaments, but the planner keeps
-ammo in its own list and a full quiver is most of an inventory), **consumables and
-crafting materials**, and **duplicate copies** of an item the character holds more than
-once. All three are counted in `er-build-import.log`, so nothing is dropped silently.
-The reason is length: the link has to fit in a URL, and an inventory that has been
-imported into a few times reached 978 armaments and a 24,000-character link that no
-browser would open.
+What the link leaves out, it leaves out for a reason: **the carried quiver** (every spare
+arrow and bolt in the backpack -- the four you have *equipped* do go in the link),
+**consumables and crafting materials you have not put on the quickbar or in the pouch**,
+and **duplicate copies** of an item the character holds more than once. All three are
+counted in `er-build-import.log`, so nothing is dropped silently. The reason is length:
+the link has to fit in a URL, and an inventory that has been imported into a few times
+reached 978 armaments and a 24,000-character link that no browser would open.
+
+The line in `er-build-import.log` that begins `document WRITES` names **every** category
+with its count -- zeros included -- and then the two it skips on purpose. That is the
+place to look when something you expected is not on the shared page: a category that
+silently stopped being written reads as a `0` there rather than as a missing row on the
+website. It is counted off the finished document, not off the read, so it cannot report
+an item the link does not actually carry.
 
 Three things about what the link carries are worth knowing.
 
@@ -263,6 +271,16 @@ character overrides it. A configured slot names only a target inside a resolved
 source; it is not proof that the default save exists, that its slot is occupied,
 or that it was loaded in a prior run.
 
+**`er-quickload.toml` (or its per-run sidecar) is the only place a slot comes from.**
+`er-quickload-autoload.txt` is a probe channel written by the smoke scripts in
+`scripts/`; the DLL never creates it, and it ignores that file's `slot=` unless
+`ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1` is set for a deliberate probe run.
+A stale copy of it left behind by a probe -- `method=both / slot=0`, nine days old --
+is what put the wrong character's face on the loading screen in run
+br-20260831-014208-b1d6 while the container's own last-used slot loaded correctly. Every
+refusal is named in `er-quickload-autoload-debug.log`, so an ignored slot is visible
+rather than silent.
+
 There is no environment-variable route. `ER_QUICKLOAD_SAVE_FILE` and
 `ER_QUICKLOAD_AUTOLOAD_SLOT` were **removed**, not deprecated: they were a second
 way to name the same thing, sitting in front of the config file, and
@@ -288,9 +306,53 @@ came from is not diagnosable.
 An overlay can set a key but not unset one, so `save_file_default = true` clears
 any inherited `save_file` and selects the active Steam user's own container.
 
-`scripts/er-run-branch.py` writes this sidecar automatically. The distinct
-filename matters: stale `er-quickload.toml` files are strewn through `target/` and
-worktree build dirs, and reusing that name would silently arm them.
+`scripts/er-run-branch.py` writes this sidecar automatically (through
+`scripts/er-gen-me3-profile.py`), and a detached reaper removes it when that run's
+game exits. Nothing in the build writes it: `cargo` never produces a `.toml` beside
+the DLL, so a sidecar found under `target/` is a launcher artifact, not a build
+output. The distinct filename matters: stale `er-quickload.toml` files are strewn
+through `target/` and worktree build dirs, and reusing that name would silently arm
+them.
+
+**The sidecar outranks your game-directory config, and that is deliberate** -- a
+launcher that stages one build for one run has to be able to say what that run
+loads. But note where it lives. `~/Elden/quicksave.me3` loads the DLL straight out
+of `target/x86_64-pc-windows-msvc/release/`, which is the same directory the branch
+launcher stages its sidecar into, so a sidecar that outlives its run (killed game,
+reaper that never fired) is read by *your* next launch too. If a launch ignores the
+`save_file` you configured, that is the first file to look at:
+
+    target/x86_64-pc-windows-msvc/release/er_quickload.toml
+
+The log says so outright rather than leaving you to guess. A run whose configured
+`save_file` was cleared this way reports the override, not an absence:
+
+    save-override: DEFAULT-USER-SAVE -- save_file = '<your path>' (slot = 0) IS
+    configured in '<game dir>/er-quickload.toml', but the per-run sidecar
+    '<...>/er_quickload.toml' set save_file_default = true, which CLEARS it -- this
+    run was ASKED for the active Steam user's own container, so the configured save
+    is being ignored ON PURPOSE; using active SteamID64 ... default save '...'
+
+When no file configured a save at all, the same line names the config that is
+silent instead: `'<game dir>/er-quickload.toml' names no save_file`.
+
+### A configured save that is unreachable is not a missing save
+
+Three outcomes, kept distinct because they have different fixes:
+
+* **Absent** -- the path names nothing. `REJECTED save source '<path>' -- the path
+  does not exist, or does not name a file`. Fix the path.
+* **Unreachable** -- the path is fine and the storage behind it is not: a dropped or
+  stale network mount, an unmounted drive, a permission denial. `REJECTED save source
+  '<path>' -- the path could NOT BE REACHED (os error 19: No such device). This is NOT
+  a missing file ...`. Fix the mount; the config line is already correct.
+* **Overridden** -- the sidecar cleared it, as above. Nothing is broken.
+
+Absent and unreachable both used to report as "missing or is not a file", which sent
+you to edit a config line that was never wrong. In neither case does the game quietly
+load a different character: a configured-but-unusable `save_file` arms the
+missing-save picker, it does not fall through to the default container. Only the
+sidecar override reaches the default container, and it now says so by name.
 
 There is **no** `require_save_picker` setting. `os_native_save_picker = true`
 only chooses the OS dialog instead of the in-game browser *after* the picker

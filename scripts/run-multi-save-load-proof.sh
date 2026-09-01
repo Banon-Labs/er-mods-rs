@@ -142,10 +142,35 @@ json.dump(snap, open('$SRC_SNAP','w'))
 print(f'read-only baseline: {len(snap)} source saves snapshotted')
 "
 
-# --- 6. record debug-log start offset (shared append-log), launch via Windows me3.exe, monitor GAME_DIR ---
-OFFSET="$(stat -c%s "$GAME_DIR/er-quickload-autoload-debug.log" 2>/dev/null || echo 0)"
+# --- 6. launch via Windows me3.exe, monitor THIS RUN'S artifact dir ---
+# EVERY per-run artifact is redirected into ARTIFACT_DIR. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last, and
+# several sessions launch concurrently here. The `--debug-log-offset` machinery below existed because
+# the debug log was SHARED across runs and had to be sliced by byte offset; with a per-run directory
+# the file starts empty, so the offset is 0 by construction and the slice is the whole file.
+OFFSET="$(stat -c%s "$ARTIFACT_DIR/er-quickload-autoload-debug.log" 2>/dev/null || echo 0)"
 echo "launching ER via Windows me3.exe (offline) ..."
-"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" > "$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+env \
+  ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+  ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+  ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+  ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+  ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+  ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+  "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" > "$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 LAUNCH_PID=$!
 
 # CAPTURE MODE (CAPTURE_SLOTS="s1,s2"): diagnostic load1->2->3 sequence capture + diff (the render
@@ -154,7 +179,7 @@ LAUNCH_PID=$!
 if [[ -n "${CAPTURE_SLOTS:-}" ]]; then
   echo "CAPTURE mode: load-sequence diff (slots=$CAPTURE_SLOTS) ..."
   python3 "$REPO_ROOT/scripts/capture-load-sequence.py" \
-    --artifact-dir "$GAME_DIR" \
+    --artifact-dir "$ARTIFACT_DIR" \
     --switch-slot-file "$SWITCH_SLOT_FILE" \
     --switch-file-override "$SWITCH_FILE_OVERRIDE" \
     --slots "$CAPTURE_SLOTS" \
@@ -168,7 +193,7 @@ else
   DRIVE_ARGS=()
   [[ "${DRIVE_MODE:-programmatic}" != "autopilot" ]] && DRIVE_ARGS=(--drive-slot-file "$SWITCH_SLOT_FILE" --drive-file-override "$SWITCH_FILE_OVERRIDE")
   python3 "$REPO_ROOT/scripts/multi-load-proof-monitor.py" \
-    --artifact-dir "$GAME_DIR" \
+    --artifact-dir "$ARTIFACT_DIR" \
     --targets "$TARGETS_JSON" \
     --report "$ARTIFACT_DIR/proof-report.md" \
     --debug-log-offset "$OFFSET" \
@@ -178,11 +203,17 @@ else
   RC=$?
 fi
 
-# capture my-run artifacts before teardown clears markers
-cp -f "$GAME_DIR/er-quickload-telemetry.json" "$ARTIFACT_DIR/er-quickload-telemetry.json" 2>/dev/null
+# FALLBACK ONLY: both files are redirected into ARTIFACT_DIR at launch. These two lines cover the
+# case where the env did not survive me3 -> Proton and the DLL fell back to the game directory.
+[[ -e "$ARTIFACT_DIR/er-quickload-telemetry.json" ]] ||
+  cp -f "$GAME_DIR/er-quickload-telemetry.json" "$ARTIFACT_DIR/er-quickload-telemetry.json" 2>/dev/null
 python3 -c "
+import os
 off=$OFFSET
-with open('$GAME_DIR/er-quickload-autoload-debug.log','rb') as f: f.seek(off); d=f.read()
+src='$ARTIFACT_DIR/er-quickload-autoload-debug.log'
+if not os.path.exists(src):
+    src='$GAME_DIR/er-quickload-autoload-debug.log'
+with open(src,'rb') as f: f.seek(off); d=f.read()
 open('$ARTIFACT_DIR/my-run-debug.log','wb').write(d)
 " 2>/dev/null
 # --- read-only invariant assertion (acceptance SS5): every source save's mtime+size must be unchanged ---

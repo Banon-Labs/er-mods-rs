@@ -80,6 +80,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CRATES = os.path.join(ROOT, "crates")
 IMAGE_BASE = 0x140000000
 
+# The sibling `fromsoftware-rs` checkout this repo's Cargo.toml path-deps actually point at
+# (`../../../fromsoftware-rs/crates/eldenring`, `.../shared`, verified against
+# `crates/er-death-persist/Cargo.toml` and `crates/er-loading-portrait-core/Cargo.toml`). Read
+# ONLY for struct/enum/bitfield LAYOUT and macro-sourced associated-const VALUES -- never as a
+# source of address declarations. Files here are never added to `files_read`, `decls`, `text` or
+# the address universe: this repo's own `crates/` tree is the only thing "who claims this
+# address" is ever asked about, and widening that scope would make the universe/residue counts
+# describe a tree nobody asked about. Scoped to `eldenring` + `shared` because those are the only
+# two fromsoftware-rs crates any `crates/*/Cargo.toml` path-depends on (checked 2026-08-30); a repo
+# missing the sibling checkout (or a future removal of these deps) degrades gracefully -- every
+# reader below is a no-op over an empty/absent tree, not a crash.
+FROMSOFT_TYPE_ROOTS = [
+    os.path.normpath(os.path.join(ROOT, "..", "fromsoftware-rs", "crates", "eldenring")),
+    os.path.normpath(os.path.join(ROOT, "..", "fromsoftware-rs", "crates", "shared")),
+]
+
 
 # --------------------------------------------------------------------------------------------
 # Source text
@@ -320,6 +336,21 @@ WIDTH = {
     "u64": 64, "i64": 63, "u128": 128, "i128": 127, "usize": 64, "isize": 63,
 }
 
+# (size, align) in bytes, x86_64-pc-windows-msvc -- the one target this repo cross-compiles the
+# game DLLs for (`cargo xwin build --release --target x86_64-pc-windows-msvc`), so `usize`/`isize`
+# are pinned at 8 rather than left target-generic. Used ONLY to compute `offset_of!`/`size_of!` /
+# `align_of!` calls that reach a REAL Rust type -- never to guess a value, so an unlisted type
+# (a generic, a smart pointer, a `#[repr(Rust)]` struct with no field list we trust) simply misses
+# this table and the caller falls back to "unresolved", the same as before this table existed.
+PRIMITIVE_SIZE_ALIGN = {
+    "u8": (1, 1), "i8": (1, 1), "bool": (1, 1),
+    "u16": (2, 2), "i16": (2, 2),
+    "u32": (4, 4), "i32": (4, 4), "f32": (4, 4), "char": (4, 4),
+    "u64": (8, 8), "i64": (8, 8), "f64": (8, 8),
+    "usize": (8, 8), "isize": (8, 8),
+    "u128": (16, 16), "i128": (16, 16),
+}
+
 
 def _can_hold(type_text, value):
     """Could a declaration of this type hold `value`? Unknown type -> yes, and stays residue."""
@@ -366,6 +397,104 @@ def _strip_layout_calls(expr):
             i += 1
         expr = expr[: found.start()] + "0" + expr[i + 1 :]
         removed += 1
+
+
+# --------------------------------------------------------------------------------------------
+# Rust type layout -- EVALUATED, not just recognised. `_strip_layout_calls` above answers "is this
+# expression built only from layout intrinsics" (for the residue exclusion); the functions below
+# answer "what NUMBER does this layout intrinsic actually compute", by reading the real
+# `#[repr(C)]` struct/enum/bitfield-wrapper definitions this tree and its `fromsoftware-rs` sibling
+# declare. This is what turns `CHR_ASM_UNKD4_OFFSET`/`CHR_ASM_UNKD8_OFFSET` from "excluded by
+# pattern" into "resolved to 0xd4 / 0xd8" -- the actual documented values in
+# `chr_asm_layout.rs`, independently confirmed there against the ctor disassembly
+# (`movq $-1,0xd4(%rsi)`). Every step below fails closed: an unrecognised type, an ambiguous name,
+# or a struct without `#[repr(C...)]` returns None and the caller is left unresolved exactly as it
+# was before this existed -- nothing here can manufacture a wrong value, only a missing one.
+REPR_C = re.compile(r"repr\s*\(\s*C\b")
+# A permissive sibling of `ENUM_HEAD` (used for address DISCRIMINANTS) for LAYOUT purposes only:
+# `ChrAsmArmStyle` carries `#[repr(u32)]` followed by a `#[derive(..)]` before `enum`, which
+# `ENUM_HEAD`'s single-optional-attribute shape does not admit. Kept separate rather than loosening
+# `ENUM_HEAD` itself, so this change cannot alter which enum VARIANTS the address-claim scanner
+# sees -- it only widens what this module can compute a SIZE for.
+ENUM_TYPE_HEAD = re.compile(
+    r"#\s*\[\s*repr\s*\(\s*([A-Za-z0-9_]+)\s*\)\s*\]\s*"
+    r"(?:#\s*\[[^\[\]]*\]\s*)*"
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?enum\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>{]*>\s*)?\{"
+)
+STRUCT_HEAD = re.compile(
+    r"((?:#\s*\[[^\[\]]*\]\s*)+)(?:pub(?:\s*\([^)]*\))?\s+)?struct\s+([A-Za-z_]\w*)\b"
+)
+FIELD_RE = re.compile(
+    r"^(?:#\s*\[[^\[\]]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?([A-Za-z_]\w*)\s*:\s*(.+)$", re.S
+)
+# `bitfield! { ... pub struct GaitemHandle(u32); ... }` -- a primitive-wrapping newtype whose size
+# is its inner primitive's size. Only the struct LINE inside the macro body is matched; the bit
+# accessor methods around it are irrelevant to layout.
+BITFIELD_MACRO = re.compile(r"\bbitfield!\s*\{")
+BITFIELD_STRUCT_LINE = re.compile(r"\bstruct\s+([A-Za-z_]\w*)\s*\(\s*([A-Za-z_][\w:]*)\s*\)\s*;")
+# `solo_params!( (SpEffectParam, SP_EFFECT_PARAM_ST, 15), .. )` in fromsoftware-rs's
+# `solo_param_repository.rs` macro-generates `impl SoloParam for SpEffectParam { const INDEX: u32
+# = 15; .. }` -- a param-table row index, not an address, and the macro invocation is the only
+# place its value is spelled out (the `impl` body itself only ever contains the macro's `$Index`
+# placeholder). Matched generically by shape, not hard-coded to `SpEffectParam` specifically, so
+# any other row added to the same macro resolves the same way.
+SOLO_PARAMS_CALL = re.compile(r"\bsolo_params!\s*\(")
+SOLO_PARAM_TUPLE = re.compile(
+    r"^\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_][\w:<>]*)\s*,\s*(.+?)\s*\)$", re.S
+)
+# `core::mem::offset_of!(ChrAsm, equipment_param_ids)`, `core::mem::size_of::<i32>()`,
+# `align_of::<T>()`. These substitute a NUMBER into the expression text before the ordinary
+# arithmetic evaluator runs, so downstream arithmetic (`OFFSET + COUNT * size_of::<i32>()`) needs
+# no special-casing at all once the intrinsic itself is a plain digit string.
+OFFSET_OF_RE = re.compile(
+    r"(?:[A-Za-z_]\w*\s*::\s*)*offset_of\s*!\s*\(\s*([A-Za-z_][\w:]*)\s*,\s*([A-Za-z_][\w.]*)\s*\)"
+)
+SIZE_OF_TURBOFISH = re.compile(
+    r"(?:[A-Za-z_]\w*\s*::\s*)*size_of\s*::\s*<\s*([^<>]+?)\s*>\s*\(\s*\)"
+)
+ALIGN_OF_TURBOFISH = re.compile(
+    r"(?:[A-Za-z_]\w*\s*::\s*)*align_of\s*::\s*<\s*([^<>]+?)\s*>\s*\(\s*\)"
+)
+
+
+def _scan_balanced(text, open_index, open_char, close_char):
+    """Index of the `close_char` matching the `open_char` AT `open_index`, or None."""
+    depth, i, n = 0, open_index, len(text)
+    while i < n:
+        if text[i] == open_char:
+            depth += 1
+        elif text[i] == close_char:
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _skip_to_struct_open(text, start):
+    """`(index, char)` of the first top-level `{`/`(`/`;` at/after `start`, `<...>` skipped.
+
+    A generic struct's `<T>` parameter list can itself contain `{`/`(`; without tracking angle
+    depth a bound like `struct Foo<T: Fn() -> X>` would stop on the closure-arg `(` instead of the
+    real body opener.
+    """
+    i, n, angle = start, len(text), 0
+    while i < n:
+        c = text[i]
+        if c == "<":
+            angle += 1
+        elif c == ">":
+            angle = max(0, angle - 1)
+        elif angle == 0 and c in "{(;":
+            return i, c
+        i += 1
+    return None, None
+
+
+def _round_up(value, align):
+    if align <= 1:
+        return value
+    return (value + align - 1) // align * align
 
 
 class Decl:
@@ -504,6 +633,14 @@ class Index:
         self.literals = []
         self.files_read = 0
         self.text = {}  # path -> comment/string-stripped source
+        # Type LAYOUT, not address declarations -- see the module docstring above `REPR_C`. Keyed
+        # by simple type name; a list because the same name can be declared more than once (only
+        # `len(..) == 1` is trusted, same "ambiguous is unresolved" rule as everywhere else here).
+        self.structs = {}  # name -> [(path, [(field_name, type_text), ..]), ..]
+        self.enum_sizes = {}  # name -> [size_bytes, ..]  (fieldless #[repr(uN)] enums only)
+        self.bitfield_inner = {}  # name -> [inner_type_text, ..]
+        self.external_consts = {}  # "Type::CONST" -> {value, ..} (fromsoftware-rs macro consts)
+        self._layout_cache = {}  # struct name -> resolved layout dict, or None if unresolvable
 
     # -- building ----------------------------------------------------------------------------
 
@@ -522,8 +659,30 @@ class Index:
             index._read_enums(path, text)
             index._read_uses(path, text)
             index._read_literals(path, text)
+            index._read_type_defs(path, text)
+        index._read_external()
         index._resolve_all()
         return index
+
+    def _read_external(self):
+        """`fromsoftware-rs` sibling: type LAYOUT + macro-sourced consts, VALUE SOURCE ONLY.
+
+        Deliberately does not touch `files_read`, `decls`, `text`, `by_simple`/`by_qualified`, or
+        `literals` -- those define "who in crates/ claims this address", and this tree is not
+        `crates/`. See the `FROMSOFT_TYPE_ROOTS` comment for why this scope is safe to widen (it
+        can only ADD resolving power, never remove an address from the claims universe).
+        """
+        for root_dir in FROMSOFT_TYPE_ROOTS:
+            if not os.path.isdir(root_dir):
+                continue
+            for path in rust_sources(root_dir):
+                try:
+                    raw = open(path, encoding="utf-8", errors="replace").read()
+                except OSError:
+                    continue
+                text = code_only(raw)
+                self._read_type_defs(path, text)
+                self._read_solo_params(path, text)
 
     def _add(self, decl):
         self.decls.append(decl)
@@ -615,6 +774,201 @@ class Index:
                 continue
             line = text.count("\n", 0, match.start()) + 1
             self.literals.append(Literal(path, line, token, value))
+
+    # -- type layout (structs/enums/bitfield wrappers), VALUE SOURCE ONLY ---------------------
+
+    def _read_type_defs(self, path, text):
+        self._read_structs(path, text)
+        self._read_enum_sizes(path, text)
+        self._read_bitfields(path, text)
+
+    def _read_structs(self, path, text):
+        """Named-field `#[repr(C)]` structs -> ordered `(field_name, type_text)` lists.
+
+        A struct with NO `#[repr(C)]` in its attribute cluster is skipped outright: Rust's default
+        repr has unspecified field order, so guessing a layout for one would not be evaluation, it
+        would be fabrication wearing the same shape.
+        """
+        for match in STRUCT_HEAD.finditer(text):
+            attrs, name = match.group(1), match.group(2)
+            if not REPR_C.search(attrs):
+                continue
+            open_index, kind = _skip_to_struct_open(text, match.end(2))
+            if open_index is None or kind != "{":
+                continue  # tuple/unit structs carry no named field to offset_of! against
+            close_index = _scan_balanced(text, open_index, "{", "}")
+            if close_index is None:
+                continue
+            fields = []
+            for entry in _split_top(text[open_index + 1 : close_index], [","]):
+                entry = entry.strip()
+                if not entry:
+                    continue
+                found = FIELD_RE.match(entry)
+                if found:
+                    fields.append((found.group(1), found.group(2).strip()))
+            if fields:
+                self.structs.setdefault(name, []).append((path, fields))
+
+    def _read_enum_sizes(self, path, text):
+        """Fieldless `#[repr(uN)]` enums -> their discriminant's byte size (== its align)."""
+        for head in ENUM_TYPE_HEAD.finditer(text):
+            repr_type, name = head.group(1), head.group(2)
+            body, _ = self._enum_body(text, head.end() - 1)
+            if body is None:
+                continue
+            fieldless = True
+            for member in _split_top(body, [","]):
+                member = member.strip()
+                if not member or member.startswith("#"):
+                    continue
+                head_part = member.split("=", 1)[0]
+                if "(" in head_part or "{" in head_part:
+                    fieldless = False
+                    break
+            if not fieldless:
+                continue
+            size_align = PRIMITIVE_SIZE_ALIGN.get(repr_type.strip().lower())
+            if size_align is not None:
+                self.enum_sizes.setdefault(name, []).append(size_align[0])
+
+    def _read_bitfields(self, path, text):
+        """`bitfield! { pub struct Name(u32); .. }` -> `Name`'s inner primitive type text."""
+        for match in BITFIELD_MACRO.finditer(text):
+            close_index = _scan_balanced(text, match.end() - 1, "{", "}")
+            if close_index is None:
+                continue
+            body = text[match.end() : close_index]
+            for found in BITFIELD_STRUCT_LINE.finditer(body):
+                self.bitfield_inner.setdefault(found.group(1), []).append(found.group(2))
+
+    def _read_solo_params(self, path, text):
+        """`solo_params!( (Type, StructType, Index), .. )` -> `Type::INDEX = Index`.
+
+        The macro's own body only ever contains `const INDEX: u32 = $Index;` -- the placeholder,
+        never a number -- so the invocation's tuple list is the ONLY place the real value is
+        written down at all.
+        """
+        for match in SOLO_PARAMS_CALL.finditer(text):
+            close_index = _scan_balanced(text, match.end() - 1, "(", ")")
+            if close_index is None:
+                continue
+            body = text[match.end() : close_index]
+            for entry in _split_top(body, [","]):
+                entry = entry.strip()
+                if not entry:
+                    continue
+                found = SOLO_PARAM_TUPLE.match(entry)
+                if not found:
+                    continue
+                type_name, index_expr = found.group(1), found.group(3)
+                try:
+                    value = int(index_expr.strip(), 0)
+                except ValueError:
+                    continue
+                self.external_consts.setdefault(f"{type_name}::INDEX", set()).add(value)
+
+    # -- type layout evaluation ----------------------------------------------------------------
+
+    def _type_size_align(self, type_text, seen=None):
+        """`(size, align)` in bytes for a Rust type TEXT, or None if it cannot be computed.
+
+        Fails closed at every branch: a type this cannot classify (a generic, a smart pointer, an
+        ambiguous or undeclared struct/enum/bitfield name) returns None rather than a guess.
+        """
+        seen = set() if seen is None else seen
+        t = " ".join(type_text.split())
+        if t.startswith("&"):
+            return (8, 8)  # a reference is pointer-sized regardless of what it points at
+        if t.startswith("*const ") or t.startswith("*mut "):
+            return (8, 8)
+        array = re.fullmatch(r"\[\s*(.+?)\s*;\s*(.+?)\s*\]", t)
+        if array:
+            element = self._type_size_align(array.group(1), seen)
+            if element is None:
+                return None
+            try:
+                count = int(array.group(2).strip(), 0)
+            except ValueError:
+                return None
+            return (element[0] * count, element[1])
+        last = t.split("::")[-1].split("<", 1)[0].strip()
+        if not last:
+            return None
+        primitive = PRIMITIVE_SIZE_ALIGN.get(last)
+        if primitive is not None:
+            return primitive
+        if last in seen:
+            return None  # recursion guard; unreachable for valid by-value Rust layouts
+        nested = seen | {last}
+        layout = self._struct_layout(last, nested)
+        if layout is not None:
+            return (layout["size"], layout["align"])
+        enum_size = self._enum_size(last)
+        if enum_size is not None:
+            return (enum_size, enum_size)
+        inner = self._bitfield_inner_type(last)
+        if inner is not None:
+            return self._type_size_align(inner, nested)
+        return None
+
+    def _struct_layout(self, name, seen=None):
+        """Sequential `#[repr(C)]` layout for `name`: `{size, align, offsets, field_types}`."""
+        if name in self._layout_cache:
+            return self._layout_cache[name]
+        candidates = self.structs.get(name, [])
+        if len(candidates) != 1:
+            self._layout_cache[name] = None  # unknown, or declared >1 way -- ambiguous
+            return None
+        _, fields = candidates[0]
+        seen = set() if seen is None else seen
+        offset, max_align, offsets, field_types = 0, 1, {}, {}
+        for field_name, field_type in fields:
+            size_align = self._type_size_align(field_type, seen)
+            if size_align is None:
+                self._layout_cache[name] = None
+                return None
+            size, align = size_align
+            offset = _round_up(offset, align)
+            offsets[field_name] = offset
+            field_types[field_name] = field_type
+            offset += size
+            max_align = max(max_align, align)
+        result = {
+            "size": _round_up(offset, max_align),
+            "align": max_align,
+            "offsets": offsets,
+            "field_types": field_types,
+        }
+        self._layout_cache[name] = result
+        return result
+
+    def _enum_size(self, name):
+        sizes = set(self.enum_sizes.get(name, []))
+        return next(iter(sizes)) if len(sizes) == 1 else None
+
+    def _bitfield_inner_type(self, name):
+        inner = set(self.bitfield_inner.get(name, []))
+        return next(iter(inner)) if len(inner) == 1 else None
+
+    def _offset_of(self, struct_name, field_path):
+        """Byte offset of `field_path` (dot-separated for nested fields) within `struct_name`."""
+        current = self._struct_layout(struct_name.split("::")[-1])
+        if current is None:
+            return None
+        total = 0
+        fields = field_path.split(".")
+        for i, field in enumerate(fields):
+            if field not in current["offsets"]:
+                return None
+            total += current["offsets"][field]
+            if i == len(fields) - 1:
+                return total
+            next_name = current["field_types"][field].split("::")[-1].split("<", 1)[0].strip()
+            current = self._struct_layout(next_name)
+            if current is None:
+                return None
+        return total
 
     # -- evaluation --------------------------------------------------------------------------
 
@@ -710,6 +1064,38 @@ class Index:
 
     def _scalar(self, expr, seen, scope=None):
         expr = expr.strip()
+        # `core::mem::offset_of!(ChrAsm, equipment_param_ids)`, `size_of::<i32>()`,
+        # `align_of::<T>()` -- substituted with the ACTUAL computed number (via `_offset_of` /
+        # `_type_size_align`, which read real `#[repr(C)]` layouts) before anything else runs, so
+        # downstream arithmetic needs no special-casing at all: `OFFSET + COUNT *
+        # size_of::<i32>()` becomes an ordinary digit expression once the intrinsic is a digit.
+        # Each loop `break`s (never substitutes a partial answer) the moment ONE occurrence can't
+        # be computed, so a call this cannot resolve is left verbatim and falls through to the
+        # ordinary "not an arithmetic expression" rejection below, exactly as before this existed.
+        while True:
+            found = OFFSET_OF_RE.search(expr)
+            if not found:
+                break
+            value = self._offset_of(found.group(1), found.group(2))
+            if value is None:
+                break
+            expr = expr[: found.start()] + str(value) + expr[found.end() :]
+        while True:
+            found = SIZE_OF_TURBOFISH.search(expr)
+            if not found:
+                break
+            size_align = self._type_size_align(found.group(1))
+            if size_align is None:
+                break
+            expr = expr[: found.start()] + str(size_align[0]) + expr[found.end() :]
+        while True:
+            found = ALIGN_OF_TURBOFISH.search(expr)
+            if not found:
+                break
+            size_align = self._type_size_align(found.group(1))
+            if size_align is None:
+                break
+            expr = expr[: found.start()] + str(size_align[1]) + expr[found.end() :]
         # `const STARTING_CLASS_COUNT: usize = STARTING_CLASSES.len();` -- the length of a literal
         # table is known at parse time, and leaving it unresolved put a plain row count in the
         # residue that blocks every unclaimed proof.
@@ -806,6 +1192,15 @@ class Index:
                 return through
         if pool:
             return self._first_value(pool, seen)
+        # No declaration in `crates/` names this -- the last resort is a fromsoftware-rs macro
+        # const (`SpEffectParam::INDEX`, from `solo_params!`; see `_read_solo_params`). Checked
+        # LAST, after every local possibility, for the same reason `scope`-local decls win above:
+        # this repo's own declarations are the authority on its own names.
+        if len(segments) >= 2:
+            qualified = "::".join(segments[-2:])
+            values = self.external_consts.get(qualified)
+            if values is not None and len(values) == 1:
+                return set(values)
         return None
 
     def _first_value(self, decls, seen):
@@ -1192,6 +1587,123 @@ def selftest():
         ["MenuTraceRva::MenuJobWait", "TITLE_MENU_JOB_WAIT_RVA"],
     )
     check("...and it has live use sites", sum(len(u) for u in real.uses.values()) > 0, True)
+
+    # THE FOUR THAT BLOCKED `proven_unclaimed` FOR EVERY `.text` ADDRESS, 2026-08-30. Frozen
+    # expected values, hand-derived independently of this resolver (never by calling it and
+    # asserting the result equals itself, which would let a widened matcher grade its own
+    # homework):
+    #   * SP_EFFECT_PARAM_INDEX -- `solo_params!` in fromsoftware-rs's `solo_param_repository.rs`
+    #     lists `(SpEffectParam, SP_EFFECT_PARAM_ST, 15)`: row 15, read by source inspection.
+    #   * CHR_ASM_UNKD4_OFFSET / CHR_ASM_UNKD8_OFFSET -- `chr_asm_layout.rs`'s OWN doc comments
+    #     name +0xd4/+0xd8 from the ctor's `movq $-1,0xd4(%rsi)` (deobf 0x1403be208), independent
+    #     disassembly evidence that predates this fix and does not depend on it.
+    #   * CHR_ASM_ENTRY_COUNT -- the same file's `CHR_ASM_EQUIPMENT_ENTRY_COUNT` is independently
+    #     pinned to 22 by the ctor's `mov $0x16,%ecx` (deobf 0x1403be213), and 0x16 == 22.
+    frozen_values = {
+        "SP_EFFECT_PARAM_INDEX": 15,
+        "CHR_ASM_UNKD4_OFFSET": 0xD4,
+        "CHR_ASM_UNKD8_OFFSET": 0xD8,
+        "CHR_ASM_ENTRY_COUNT": 22,
+    }
+    for name, expected in frozen_values.items():
+        decls = live.by_simple.get(name, [])
+        check(f"{name} is declared exactly once in the real tree", len(decls), 1)
+        if len(decls) == 1:
+            check(f"{name} EVALUATES to its real (frozen) value", decls[0].value, {expected})
+
+    # PROOF, NOT SILENCE -- ON THE REAL TREE. Before this fix, `proven_unclaimed` was False for
+    # EVERY `.text`-scale address (all four sat in every query's residue, wide enough to hold
+    # anything). An address nothing declares must now PROVE unclaimed...
+    check(
+        "an undeclared .text-scale address is now PROVEN unclaimed on the real tree",
+        live.claims(0x6F6F6F6F).proven_unclaimed,
+        True,
+    )
+    # ...while a REAL address this fix's own new machinery resolved (CHR_ASM_UNKD4_OFFSET's own
+    # computed value, reached only through offset_of!/size_of! evaluation -- a non-literal path)
+    # correctly still reports CLAIMED, not unclaimed. The fix must not make its own targets look
+    # free.
+    unkd4_claims = live.claims(0xD4)
+    check(
+        "...while an address claimed through the NEW offset_of!-evaluation path stays CLAIMED",
+        any(d.qualified == "CHR_ASM_UNKD4_OFFSET" for d in unkd4_claims.declarations),
+        True,
+    )
+    check("...so THAT address is not proven unclaimed", unkd4_claims.proven_unclaimed, False)
+
+    # THE MECHANISM, ON A FIXTURE -- so this control does not depend on fromsoftware-rs's CURRENT
+    # content, which can drift independently of this test. Mirrors the shape that blocked the real
+    # CHR_ASM offsets: offset_of! through a nested #[repr(C)] struct, an array of a bitfield-
+    # wrapped primitive newtype, and a fieldless #[repr(u32)] enum field. Expected offsets are
+    # hand-computed C layout (sequential fields, each aligned to its own alignment), not obtained
+    # by calling the resolver and comparing it to itself:
+    #   unk0:i32 @0 (+4) -> style:u32(enum) @4, slots:[u32;3] @8(+12)=Equip size 16 -> equip @4
+    #   (+16=20) -> handles:[Handle(bitfield u32);5] @20(+20=40) -> ids:[i32;5] @40(+20=60) ->
+    #   unkd4:u32 @60. So IDS_OFFSET=40 (0x28), UNKD4_OFFSET=40+5*4=60 (0x3c).
+    layout_fixture = tree(
+        {
+            "crates/a/src/lib.rs": (
+                "#[repr(u32)]\n"
+                "pub enum ArmStyle { EmptyHanded = 0, OneHanded = 1 }\n"
+                "#[repr(C)]\n"
+                "pub struct Equip {\n"
+                "    pub style: ArmStyle,\n"
+                "    pub slots: [u32; 3],\n"
+                "}\n"
+                "bitfield! {\n"
+                "    pub struct Handle(u32);\n"
+                "    impl Debug;\n"
+                "    pub index, _: 15, 0;\n"
+                "}\n"
+                "#[repr(C)]\n"
+                "pub struct Asm {\n"
+                "    unk0: i32,\n"
+                "    pub equip: Equip,\n"
+                "    pub handles: [Handle; 5],\n"
+                "    pub ids: [i32; 5],\n"
+                "    unkd4: u32,\n"
+                "}\n"
+                "pub const IDS_OFFSET: usize = core::mem::offset_of!(Asm, ids);\n"
+                "pub const UNKD4_OFFSET: usize = IDS_OFFSET"
+                " + 5 * core::mem::size_of::<i32>();\n"
+            )
+        }
+    )
+    check(
+        "offset_of! through struct/array/bitfield/enum chain EVALUATES on a fixture",
+        layout_fixture.claims(0x28).proven_unclaimed,  # 40 decimal
+        False,
+    )
+    check(
+        "...to the hand-computed offset, not a guess",
+        {d.qualified for d in layout_fixture.claims(0x28).declarations},
+        {"IDS_OFFSET"},
+    )
+    check(
+        "...and the arithmetic built on it (offset + count * size_of) is ALSO evaluated",
+        {d.qualified for d in layout_fixture.claims(0x3C).declarations},  # 60 decimal
+        {"UNKD4_OFFSET"},
+    )
+
+    # THE MACRO PATH, DIRECTLY -- `solo_params!` is only read from the fromsoftware-rs sibling
+    # (`_read_external`), which a `tree()` fixture's synthetic root does not stand in for. Exercise
+    # `_read_solo_params` on its own fixture text instead: still evaluation of REAL source shape,
+    # just not routed through the sibling-directory walk for this control.
+    solo_probe = Index()
+    solo_probe._read_solo_params(
+        "<fixture>",
+        "solo_params!(\n    (Alpha, ALPHA_ST, 3),\n    (Beta, BETA_ST, 7),\n);\n",
+    )
+    check(
+        "solo_params! tuple -> Type::INDEX, read from the macro invocation's own arguments",
+        solo_probe.external_consts.get("Alpha::INDEX"),
+        {3},
+    )
+    check(
+        "...every row in the same invocation, not just the first",
+        solo_probe.external_consts.get("Beta::INDEX"),
+        {7},
+    )
 
     for failure in failures:
         print(f"rva_symbols selftest FAILED -- {failure}", file=sys.stderr)

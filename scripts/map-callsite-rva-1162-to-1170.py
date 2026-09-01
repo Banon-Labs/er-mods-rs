@@ -35,6 +35,9 @@ import os
 import struct
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OLD_IMAGE = os.path.join(ROOT, "eldenring-deobf.bin")
 NEW_IMAGE = os.path.join(ROOT, "eldenring-deobf-1.17.bin")
@@ -117,8 +120,41 @@ def carry(old_image, new_image, old_extents, new_extents, function_map, target_r
     new_entry = function_map.get(old_entry)
     if new_entry is None:
         return None, f"the containing function {old_entry + BASE:#x} has no 1.17 counterpart in the function map"
-    old_body = decode(old_image, old_entry, old_extents[old_entry])
-    new_body = decode(new_image, new_entry, new_extents.get(new_entry, new_entry + (old_extents[old_entry] - old_entry) + 0x40))
+    # ONE extent source for both sides. `old_extents[old_entry]` is the raw `.pdata` end and
+    # `body_end` is the chunk-run-MERGED one, so mixing them would measure the two images with two
+    # different rulers -- the divergence a single shared primitive exists to prevent.
+    old_end = function_extent.body_end(old_image, old_entry + BASE)
+    if old_end is None:
+        return None, f"the 1.16.2 function {old_entry + BASE:#x} has no determinable extent"
+    old_body = decode(old_image, old_entry, old_end)
+    # THE 1.17 SIDE GETS AN EXTENT OR IT GETS A REFUSAL. This used to read
+    #
+    #     new_extents.get(new_entry, new_entry + (old_extents[old_entry] - old_entry) + 0x40)
+    #
+    # -- when 1.17's `.pdata` declared nothing at the entry it decoded the 1.16.2 function's
+    # LENGTH plus 0x40 bytes, from a function entry, into whatever followed. That contradicts this
+    # file's own stated contract ("both functions must be declared by their image's own
+    # `.pdata`") and it fails in the PERMISSIVE direction: a 1.17 function SHORTER than its 1.16.2
+    # counterpart gets its instruction list padded out of the neighbour, `index >= len(new_body)`
+    # then does not fire, and the tool returns a confidently wrong mid-function address instead of
+    # UNRESOLVED. A wrong address here is a mid-function detour.
+    #
+    # It is also the class that produced instance 1 of 2026-08-31 and the 12 false DIVERGES and 31
+    # false SHAPE-DIFFs of 2026-08-30: in a de-Arxan'd image the bytes past a `ret` are the
+    # deobfuscator's leftovers, and a linear decode resynchronises into instructions nobody wrote.
+    #
+    # Measured before the change: 0 of the 128,602 rows in the function map have a 1.17 target
+    # `.pdata` does not declare, so the fallback was unreachable TODAY and no output moves. It is
+    # reachable the moment a LEAF pair enters the map -- which is exactly what
+    # `pair-leaf-functions-1162-1170.py` produces, leaves having no `.pdata` entry by definition.
+    new_end = function_extent.body_end(new_image, new_entry + BASE)
+    if new_end is None:
+        return None, (
+            f"the 1.17 function {new_entry + BASE:#x} has no determinable extent -- neither a "
+            ".pdata entry, nor an enclosing one, nor a decodable leaf end. Refusing rather than "
+            "decoding a byte count into its neighbour."
+        )
+    new_body = decode(new_image, new_entry, new_end)
     index = next((i for i, (rva, _, _) in enumerate(old_body) if rva == target_rva), None)
     if index is None:
         return None, f"{target_rva + BASE:#x} is not an instruction boundary in {old_entry + BASE:#x}"
