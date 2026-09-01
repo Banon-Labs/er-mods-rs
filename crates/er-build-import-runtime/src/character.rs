@@ -47,6 +47,10 @@ const MAGIC_SLOT_ENTRIES: usize = 14;
 const EMPTY_MAGIC_SLOT: i32 = -1;
 
 /// `GameDataMan + 0x08 -> PlayerGameData*`.
+///
+/// Measured: `GetMainPlayerGameData` (`0x140e9fc30`) is a twelve-byte leaf reading exactly this
+/// slot, and the `GameDataMan` constructor pairs 351/351 with zero moved offsets across
+/// 1.16.2/1.17. Full witness in `storage::GAME_DATA_MAN_PLAYER_OFFSET`.
 const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
 /// `EquipGameData::equipMagicData`, a pointer.
 const EQUIP_GAME_DATA_MAGIC_OFFSET: usize = 0x280;

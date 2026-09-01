@@ -64,7 +64,29 @@ const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
 const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
 const GAME_MAN_CURRENT_MAP_C30_OFFSET: usize = 0xc30;
-const GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET: usize = 0xdf0;
+/// `GameMan + 0xdf0` -- the LENGTH of the `DLString<wchar_t>` inside the `FD4FilePathBase` that
+/// starts at `GameMan + 0xdd0`. It is NOT a "resident device" pointer; the old name was invented
+/// from the value's shape and nothing ever measured it.
+///
+/// The constructor hands the whole `0xdd0..0xe08` region off in one `lea` and never touches the
+/// interior through `this`, which is why a `this`-relative displacement census reports nothing at
+/// 0xdf0 -- the same silence that let `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` sit wrong for its
+/// whole life. The interior is written through that `lea`'s register instead:
+///
+/// ```text
+///   14067644b  lea  rdi, [rsi+0xdd0]      ; FD4FilePathBase, 1.17 0x14067729b
+///   140676456  lea  rbx, [rdi+8]          ; the DLString's allocator slot at 0xdd8
+///   140676461  call 0x140120390           ; DLString<wchar_t>* InitAllocator(DLString<wchar_t>*)
+///   140676466  mov  qword [rbx+0x20], 7   ; capacity  -> GameMan+0xdf8
+///   14067646e  lea  rax, [rbx+8]          ; the string proper at GameMan+0xde0
+///   140676472  mov  qword [rax+0x10], r14 ; LENGTH    -> GameMan+0xdf0   <-- this field
+///   140676476  cmp  qword [rax+0x18], 8   ; capacity vs the inline-buffer bound
+/// ```
+///
+/// Ghidra's 1.16.2 `GameMan` type agrees independently: `FD4FilePathBase` at `0xdd0`, spanning to
+/// `0xe08`. The whole GameMan constructor aligns 1296/1296 against 1.17 with zero moved offsets,
+/// and the `lea` that anchors this region is at the same `0xdd0` in both images.
+const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
 // LOAD-SUBMIT gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
 // combined_load_67b940 -> submit 0x14067dc00 bails (0x14067e12f) unless these GameMan[0x143d69918]
 // flags are clear/set. Logging them at the finalize-advancer heartbeat (which fires for load2 in the
@@ -430,7 +452,7 @@ fn snapshot() -> String {
     let b80 = unsafe { read_i32(gm + GAME_MAN_LOAD_PHASE_B80_OFFSET) };
     let ac0 = unsafe { read_i32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET) };
     let c30 = unsafe { read_i32(gm + GAME_MAN_CURRENT_MAP_C30_OFFSET) };
-    let df0 = unsafe { read_usize(gm + GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET) }.unwrap_or(0);
+    let df0 = unsafe { read_usize(gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) }.unwrap_or(0);
     let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
 
     // Load-submit gate fields (see the *_SUBMIT_GATE_* consts): diff load1 vs load2 to find the gate

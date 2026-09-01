@@ -847,6 +847,41 @@ def _expression_constants():
         rc, out = run(g)
         expect("expression-constants", "spec/foldable-literal", rc, out, False)
 
+    # THE DEPARTURE ARM (added 2026-08-31 with the coverage floor). The other way this gate goes
+    # quiet is a declaration LEAVING the census, which until the floor existed printed nothing at
+    # all: measured across the 22 minutes between d130b4ee and 4b4a9722, 28 names left the address
+    # population and 30 arrived, so the total moved by +2 and said nothing about the 28.
+    # `DLSTRING_WCHAR_SUBSTR_RVA` occurs exactly once in crates/ -- its own declaration -- so
+    # renaming it away from `*_RVA` takes it out of the population with no other site to fix.
+    departed = "DLSTRING_WCHAR_SUBSTR_RVA"
+    with edit_file(
+        "crates/er-quickload/src/constants/anti_debug.rs",
+        lambda text: text.replace(departed, "DLSTRING_WCHAR_SUBSTR_PC_PROBE_GONE"),
+    ):
+        rc, out = run(g)
+        expect("expression-constants", "sens/coverage-departure", rc, out, True,
+               [departed, "coverage LEFT silently"])
+
+    # THE THIRD-STATE ARM. A field offset whose only number comes from a `const _: () = assert!`
+    # pin is deliberately not counted as EVALUATED -- and it is not a failure either. Reading that
+    # double absence as "the constant left the population" is what took this gate red on
+    # 2026-08-31, demanding the deletion of five accurate `CHR_ASM_*` exceptions the day somebody
+    # pinned those offsets against the ctor disassembly. Listed + pin-valued must stay GREEN.
+    pin_probe = "crates/er-game-base/src/_pc_probe_pin.rs"
+    pinned = (
+        "pub const PC_PROBE_PIN_OFFSET: usize = core::mem::offset_of!(NotModelled, member);\n"
+        "const _: () = assert!(PC_PROBE_PIN_OFFSET == 0x40);\n"
+    )
+    listed = 'UNRESOLVABLE: dict[str, str] = {\n'
+    with new_file(pin_probe, pinned), edit_file(
+        "scripts/check-expression-constants.py",
+        lambda text: text.replace(
+            listed, listed + '    "PC_PROBE_PIN_OFFSET": "planted by prove-gate-positive-controls",\n', 1
+        ),
+    ):
+        rc, out = run(g)
+        expect("expression-constants", "spec/pin-valued-listed", rc, out, False)
+
 
 @control("object-field-offsets",
          baseline=["python3", "scripts/check-object-field-offsets-1170.py"])
@@ -895,6 +930,415 @@ def _object_field_offsets():
     with new_file(dup, "pub const PC_PROBE_UNRELATED_OFFSET: usize = 0x40;\n"):
         rc, out = run(g)
         expect("object-field-offsets", "spec/unrelated-constant-same-value", rc, out, False)
+
+
+@control("offset-census-kinds",
+         baseline=["python3", "scripts/audit-name-derived-offsets.py", "--selftest"])
+def _offset_census_kinds():
+    """The census's kinds table: does `--selftest` notice when an exclusion stops being true?
+
+    The census demotes rows out of its headline number using `scripts/offset-census-kinds.tsv`.
+    That is the number's weakest joint: an exclusion nobody re-checks is how a real game-object
+    offset gets quietly reclassified as a Windows struct and stops being counted. Two ways for
+    the table to go wrong, and the selftest must catch both.
+    """
+    g = ["python3", "scripts/audit-name-derived-offsets.py", "--selftest"]
+    tsv = "scripts/offset-census-kinds.tsv"
+
+    # SENSITIVITY 1: a GHOST row. The named constant no longer exists, so the exclusion is
+    # excusing nothing and the table has started to rot into a list of dead names.
+    with edit_file(tsv, lambda t: t + "PC_PROBE_GHOST_OFFSET\tOS-ABI\tinvented = 0x10\n"):
+        rc, out = run(g)
+        expect("offset-census-kinds", "sens/ghost-row", rc, out, True, ["PC_PROBE_GHOST_OFFSET"])
+
+    # SENSITIVITY 2: a constant that no longer matches the published layout its row cites. An
+    # OS-ABI row is only an excuse while the value is the documented one; if someone edits the
+    # literal, the row must stop covering for it.
+    with edit_file("crates/er-telemetry-core/src/lib.rs",
+                   lambda t: t.replace("CTX_RIP_OFF: usize = 0xf8", "CTX_RIP_OFF: usize = 0xf0", 1)):
+        rc, out = run(g)
+        expect("offset-census-kinds", "sens/value-vs-published-layout", rc, out, True,
+               ["CTX_RIP_OFF", "0xf8"])
+
+    # SPECIFICITY 1: a comment change that does not touch a value. The table must not go red on
+    # prose, or nobody will keep the reasons readable.
+    with edit_file(tsv, lambda t: t.replace("# ---- Input APIs.",
+                                            "# ---- Input APIs. (touched by a positive control)", 1)):
+        rc, out = run(g)
+        expect("offset-census-kinds", "spec/comment-edit", rc, out, False)
+
+    # SPECIFICITY 2: a NEW unprovenanced game offset. It belongs in the counted population, not
+    # in a failure: the census is a report, and a growing number is its normal output.
+    with new_file("crates/er-game-base/src/_pc_probe_census.rs",
+                  "pub const PC_PROBE_SOME_OBJECT_OFFSET: usize = 0x38;\n"):
+        rc, out = run(g)
+        expect("offset-census-kinds", "spec/new-unprovenanced-offset", rc, out, False)
+
+
+@control("name-derived-offsets",
+         baseline=["python3", "scripts/check-object-field-offsets-1170.py"])
+def _name_derived_offsets():
+    """The 2026-08-31 sweep's rows: offsets whose only provenance had been a NAME.
+
+    A separate control from `object-field-offsets` because it proves a different property. That
+    one proves the gate catches a WRONG number. These prove it catches a number that is currently
+    RIGHT but unmeasured -- which is the state every constant in the sweep was in, and the state
+    0x40 was in for months before anyone noticed the value was also wrong.
+
+    Two of the three sensitivity arms perturb something that is not an offset at all: a MULTIPLIER
+    inside a layout walk, and an `assert!` that is a constant's only literal. Both are the ways a
+    name-derived value moves in practice -- nobody edits `0xd4`, they edit the array length or the
+    binding above it -- so a control that only ever flipped a hex digit would prove the gate
+    catches the one edit nobody makes.
+    """
+    g = ["python3", "scripts/check-object-field-offsets-1170.py"]
+    chr_asm = "crates/er-loading-portrait-core/src/chr_asm_layout.rs"
+    msb = "crates/er-invasion-warp-core/src/msb_invasion_points.rs"
+    probe = "crates/er-game-base/src/_pc_probe_namederived.rs"
+
+    # SENSITIVITY 1: the layout walk's MULTIPLIER. `CHR_ASM_UNKD4_OFFSET` is
+    # `equipment_param_ids + ENTRY_COUNT * 4`, so an off-by-one in the count -- the exact shape of
+    # a miscounted `#[repr(C)]` walk -- silently moves the override field onto its neighbour.
+    with edit_file(chr_asm, lambda t: t.replace(
+            "pub const CHR_ASM_EQUIPMENT_ENTRY_COUNT: usize = 22;",
+            "pub const CHR_ASM_EQUIPMENT_ENTRY_COUNT: usize = 21;", 1)):
+        rc, out = run(g)
+        expect("name-derived-offsets", "sens/layout-walk-multiplier", rc, out, True,
+               ["CHR_ASM_EQUIPMENT_ENTRY_COUNT"])
+
+    # SENSITIVITY 2: an `offset_of!` constant has no literal at its definition, so its
+    # `const _: () = assert!(..)` IS the pin. Move the pin and the gate must notice, otherwise the
+    # whole compiler-derived half of this layout sits unwatched behind an expression.
+    with edit_file(chr_asm, lambda t: t.replace(
+            "const _: () = assert!(CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET == 0x7c);",
+            "const _: () = assert!(CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET == 0x78);", 1)):
+        rc, out = run(g)
+        expect("name-derived-offsets", "sens/offset-of-pin-moved", rc, out, True,
+               ["CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET", "0x7c"])
+
+    # SENSITIVITY 3: the `unkNN` walk itself. `WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET` was derived by
+    # counting members down the upstream declaration (`unk3c`, `unk40`, `unk41[7]` -> 0x48). 0x50
+    # is not an arbitrary wrong number: it is the ADJACENT witnessed field, i.e. where that walk
+    # lands if one member is mis-sized.
+    with edit_file(msb, lambda t: t.replace(
+            "pub const WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET: usize = 0x48;",
+            "pub const WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET: usize = 0x50;", 1)):
+        rc, out = run(g)
+        expect("name-derived-offsets", "sens/unk-walk-off-by-one-member", rc, out, True,
+               ["WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET", "0x48"])
+
+    # SPECIFICITY 1: an unrelated constant holding one of the pinned NUMBERS. The gate pins names
+    # to measured fields and has no opinion about 0xd4 appearing anywhere else.
+    with new_file(probe, "pub const PC_PROBE_UNRELATED_D4_OFFSET: usize = 0xd4;\n"):
+        rc, out = run(g)
+        expect("name-derived-offsets", "spec/unrelated-constant-same-value", rc, out, False)
+
+    # SPECIFICITY 2: a deliberate AGREEING duplicate of a swept constant. Four crates already
+    # spell `GAME_DATA_MAN_PLAYER_OFFSET` by hand; a gate that punished the second copy would be
+    # punishing how this tree ships independent DLLs.
+    with new_file(probe, "pub const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;\n"):
+        rc, out = run(g)
+        expect("name-derived-offsets", "spec/agreeing-duplicate", rc, out, False)
+
+    # SENSITIVITY 4, the same duplicate DRIFTED -- the reason specificity 2 cannot simply be
+    # "ignore extra definitions".
+    with new_file(probe, "pub const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x10;\n"):
+        rc, out = run(g)
+        expect("name-derived-offsets", "sens/drifted-duplicate", rc, out, True,
+               ["GAME_DATA_MAN_PLAYER_OFFSET", "_pc_probe_namederived.rs"])
+
+
+@control("git-hooks-content", baseline=["bash", "scripts/check-git-hooks-installed.sh"])
+def _hooks_content():
+    """Is the hook git will actually run OURS, or merely PRESENT?
+
+    The defect is measured, not imagined: `bd hooks install` HONOURS an existing
+    `core.hooksPath` and writes its own shims into that directory. In this repo that
+    directory is `scripts/hooks`, which is version-controlled -- so one `bd hooks install`
+    replaces the tracked pre-commit and pre-push, and every "is a hook installed" assertion
+    stays green afterwards, because a hook is still there and still executable.
+
+    WHY THIS ONE RUNS AGAINST AN ISOLATED ROOT rather than the live tree, unlike most
+    controls here. The file under mutation would be the PUSH GATE ITSELF. Every other
+    control's mutant is inert for the duration of one subprocess; this one would disarm the
+    gate for every agent sharing this checkout during its window, and a concurrent push is
+    exactly the event it exists to stop. `check-git-hooks-installed.sh <root>` takes the
+    repository to inspect as an argument for this reason, so the real gate is still the
+    thing being run -- only the tree it judges is a fixture, built here rather than by the
+    gate's own selftest so the two cannot agree by construction.
+    """
+    g = "scripts/check-git-hooks-installed.sh"
+    real_hook = (
+        "#!/usr/bin/env bash\n"
+        "# fixture stand-in; the real hook runs these three:\n"
+        "bash scripts/git-pre-push-block-main.sh\n"
+        "bash scripts/check-committed-compiles.sh\n"
+        "exec bash scripts/ci-local-check.sh\n"
+    )
+    beads_shim = "#!/bin/sh\n# beads git hook (managed by bd)\nexec bd hooks run pre-push \"$@\"\n"
+
+    def git(repo, *args):
+        return run(["git", "-C", str(repo), *args], cwd=repo)
+
+    def write(path: Path, text: str, mode: int = 0o755):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        path.chmod(mode)
+
+    def commit_hook(repo: Path):
+        """Commit scripts/hooks/pre-push with plumbing -- this repo forbids `git add`."""
+        rc, blob = git(repo, "hash-object", "-w", "--", "./scripts/hooks/pre-push")
+        if rc:
+            return False
+        git(repo, "update-index", "--add", "--cacheinfo",
+            f"100755,{blob.strip()},scripts/hooks/pre-push")
+        rc, tree = git(repo, "write-tree")
+        if rc:
+            return False
+        rc, commit = git(repo, "-c", "user.name=pc-probe", "-c", "user.email=pc@invalid",
+                         "commit-tree", tree.strip(), "-m", "fixture")
+        if rc:
+            return False
+        return git(repo, "update-ref", "HEAD", commit.strip())[0] == 0
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        repo.mkdir()
+        if git(repo, "init", "-q", ".")[0] != 0:
+            inconclusive("git-hooks-content", "fixture", "could not init the fixture repository")
+            return
+        write(repo / "scripts/hooks/pre-push", real_hook)
+        # the fallback half of the gate: the shim template, plus its copy in .git/hooks
+        shim = (ROOT / "scripts/hooks-fallback-shim").read_text(encoding="utf-8")
+        write(repo / "scripts/hooks-fallback-shim", shim)
+        write(repo / ".git/hooks/pre-push", shim)
+        git(repo, "config", "core.hooksPath", "scripts/hooks")
+        if not commit_hook(repo):
+            inconclusive("git-hooks-content", "fixture", "could not build the fixture commit")
+            return
+
+        # SPECIFICITY 1: the fixture as installed correctly. Everything below is read off this.
+        rc, out = run(["bash", g, str(repo)])
+        if not expect("git-hooks-content", "spec/correctly-installed", rc, out, False):
+            return
+
+        # SENSITIVITY 1: THE HAZARD. The tracked hook overwritten where it stands.
+        write(repo / "scripts/hooks/pre-push", beads_shim)
+        rc, out = run(["bash", g, str(repo)])
+        expect("git-hooks-content", "sens/hook-overwritten-in-place", rc, out, True, ["pre-push"])
+
+        # SENSITIVITY 2: the same shim, COMMITTED, so the blob comparison agrees with it and only
+        # the required-invocation floor is left. This is the state the hazard reaches as soon as
+        # the next agent commits the overwrite as an ordinary file change.
+        commit_hook(repo)
+        rc, out = run(["bash", g, str(repo)])
+        expect("git-hooks-content", "sens/overwrite-committed", rc, out, True,
+               ["no longer invokes"])
+
+        # SENSITIVITY 3: an edit that keeps every invocation and is NOT committed. Invisible to
+        # the floor; only the committed blob can see it.
+        write(repo / "scripts/hooks/pre-push", real_hook)
+        commit_hook(repo)
+        write(repo / "scripts/hooks/pre-push", real_hook + "# quietly appended\n")
+        rc, out = run(["bash", g, str(repo)])
+        expect("git-hooks-content", "sens/uncommitted-edit", rc, out, True, ["HEAD"])
+
+        # SENSITIVITY 4: core.hooksPath REDIRECTED. The tracked hook is untouched and simply
+        # stops being the file git runs -- the shape beads writes when the key is absent.
+        write(repo / "scripts/hooks/pre-push", real_hook)
+        commit_hook(repo)
+        write(repo / ".beads/hooks/pre-push", beads_shim)
+        git(repo, "config", "core.hooksPath", ".beads/hooks")
+        rc, out = run(["bash", g, str(repo)])
+        expect("git-hooks-content", "sens/hookspath-redirected", rc, out, True, [".beads/hooks"])
+
+        # SPECIFICITY 2: the same relocation carrying the FORWARDING SHIM. That wrapper execs the
+        # tracked hook instead of replacing it, so it must stay green -- a gate red on every
+        # wrapper is a gate people route around.
+        write(repo / ".beads/hooks/pre-push", shim)
+        rc, out = run(["bash", g, str(repo)])
+        expect("git-hooks-content", "spec/relocated-forwarding-shim", rc, out, False)
+
+        # SPECIFICITY 3: the OTHER wrapper this repo really ships. `.githooks/pre-push` is a
+        # three-line forwarder kept because clones exist configured for that directory; its bytes
+        # MUST differ from the hook's, so content identity is not assertable for it at all.
+        write(repo / ".githooks/pre-push",
+              '#!/usr/bin/env bash\nexec bash scripts/hooks/pre-push "$@"\n')
+        git(repo, "config", "core.hooksPath", ".githooks")
+        rc, out = run(["bash", g, str(repo)])
+        expect("git-hooks-content", "spec/legacy-githooks-forwarder", rc, out, False)
+
+        # SENSITIVITY 5: ...and the weaker property that replaces content identity there. A
+        # wrapper that stops naming scripts/hooks/ has quietly become a SECOND implementation of
+        # the gate, which is how a five-week-old stub happens.
+        write(repo / ".githooks/pre-push",
+              "#!/usr/bin/env bash\n# no longer forwards anywhere\nexit 0\n")
+        rc, out = run(["bash", g, str(repo)])
+        expect("git-hooks-content", "sens/wrapper-stopped-forwarding", rc, out, True,
+               ["forward"])
+
+
+@control("ledger-section-kind")
+def _ledger_section_kind():
+    """The gate that decides whether a ledger is talking about CODE at all.
+
+    Its rules fail in opposite directions and both are planted. R1 going blind hands a hook
+    licence to `.data`; R2 going blind files a code address as a global, which is how a `read`
+    becomes a call. Both were live in `docs/recon/rva-1170-detour-audited.tsv` until it was
+    deleted on 2026-08-31 -- 87 of its 444 rows named non-executable memory while carrying
+    prologue verdicts like `6B relocatable` -- and nothing in the tree could see it.
+
+    The specificity arm is against the REAL ledgers, not the selftest's synthetic ones: a
+    correctly-placed `.text` row added to a code ledger must change no verdict. It is reported
+    INCONCLUSIVE rather than PASS when the gitignored 1.17 image is absent, because the gate
+    then skips R1/R2 and its green says nothing about the tree.
+    """
+    f = "scripts/check-ledger-section-kind.py"
+    g = ["python3", f, "--selftest"]
+
+    # SENSITIVITY 1: the section comparison itself, disabled. Every planted wrong-kind row is
+    # then accepted, and the selftest's four sensitivity cases must notice.
+    with edit_file(f, lambda t: t.replace(
+            "            if executable != want_executable:\n",
+            "            if False:  # pc_probe: section comparison disabled\n", 1)):
+        rc, out = run(g)
+        expect("ledger-section-kind", "sens/kind-comparison-off", rc, out, True)
+
+    # SENSITIVITY 2: R3's tombstone removed, so the deleted ledger may come back unseen. This is
+    # the arm that matters most while `audit-1170-hook-targets.py --promote` still writes it.
+    with edit_file(f, lambda t: t.replace(
+            "    if os.path.exists(retired):\n",
+            "    if False and os.path.exists(retired):  # pc_probe: tombstone removed\n", 1)):
+        rc, out = run(g)
+        expect("ledger-section-kind", "sens/tombstone-removed", rc, out, True)
+
+    # SENSITIVITY 3: an unclassified ledger skipped instead of refused -- a partial view is this
+    # defect class wearing a green tick, so the selftest asserts the refusal.
+    with edit_file(f, lambda t: t.replace(
+            "            unknown.append(f\"{const_name} -> {relative}\")\n",
+            "            continue  # pc_probe: unclassified ledger skipped\n", 1)):
+        rc, out = run(g)
+        expect("ledger-section-kind", "sens/unclassified-ledger-skipped", rc, out, True)
+
+    # SPECIFICITY: a legitimately-placed row in a real code ledger must stay green.
+    real = "docs/recon/rva-map-1162-to-1170.needed.tsv"
+    with edit_file(real, lambda t: t.rstrip("\n") + "\n0x116c70\t0x116c70\tpc_probe\n"):
+        rc, out = run(["python3", f])
+        if "SKIPPED R1/R2" in out:
+            inconclusive("ledger-section-kind", "spec/legitimate-text-row",
+                         "the gitignored 1.17 image is absent, so R1/R2 did not run")
+        else:
+            expect("ledger-section-kind", "spec/legitimate-text-row", rc, out, False)
+
+
+@control("decode-extent-bounds",
+         baseline=["python3", "scripts/check-decode-extent-bounds.py"])
+def _decode_extent_bounds():
+    """The gate that keeps instance SIX of the decode-past-the-end class from being written.
+
+    Five instances so far, and the reason a gate exists rather than a note: each one produced a
+    verdict, not a crash. A phantom `jno` conjured out of two padding bytes failed a correct hook
+    target; 12 false DIVERGES deleted working addresses from the CALL map; a field-offset gate's
+    window had been TUNED to keep a read that decodes as `sar dword ptr [rax], 0x6f` out of a
+    NEIGHBOURING function, and that phantom was its headline finding.
+
+    Narrowing a scan can only ever make a check ACCEPT MORE, so the sensitivity arms plant the
+    defect rather than removing a rule: a new file with a byte-budget decode, the real instance 1
+    put back into `audit-1170-hook-targets.py`, an objdump span, and an allowlist row pointing at
+    nothing. The specificity arms are the three legitimate shapes the gate must not touch --
+    caller-supplied extent, site-anchored upper bound, and the prescribed `body_end` fix -- because
+    a gate red on every disassembly is one people delete the line for.
+    """
+    f = "scripts/check-decode-extent-bounds.py"
+    g = ["python3", f]
+
+    # SENSITIVITY 1: a NEW byte-budget decode, exactly the shape of instance 1. This is the case
+    # the gate exists for -- an agent adding a sixth instance tomorrow.
+    probe = "scripts/_pc_probe_decode_span.py"
+    with new_file(probe, "def scan(blob, va):\n"
+                         "    off = va - 0x140000000\n"
+                         "    for insn in md.disasm(blob[off : off + 0x400], va):\n"
+                         "        yield insn\n"):
+        rc, out = run(g)
+        # `ast.unparse` normalises the literal, so the span reads `off + 1024`, not `off + 0x400`.
+        expect("decode-extent-bounds", "sens/new-byte-budget", rc, out, True,
+               ["_pc_probe_decode_span.py", "off : off + 1024"])
+
+    # SENSITIVITY 2: the same defect reached through a local binding, which is how it is usually
+    # written -- `body = blob[off : off + N]` and then `md.disasm(body, va)`. A scan that only
+    # looked at the call's own argument would miss every real occurrence.
+    with new_file(probe, "def scan(blob, va):\n"
+                         "    off = va - 0x140000000\n"
+                         "    body = bytes(blob[off : off + BRANCH_SCAN_BYTES])\n"
+                         "    for insn in md.disasm(body, va):\n"
+                         "        yield insn\n"):
+        rc, out = run(g)
+        expect("decode-extent-bounds", "sens/byte-budget-via-binding", rc, out, True,
+               ["_pc_probe_decode_span.py", "off + BRANCH_SCAN_BYTES"])
+
+    # SENSITIVITY 3: THE REAL INSTANCE 1, put back. `patch_safe` is reverted to the flat
+    # BRANCH_SCAN_BYTES scan that manufactured a `jno` out of a padding byte on 2026-08-31. This
+    # is the arm that proves the gate would have caught the incident it was written for, rather
+    # than only catching a toy.
+    with edit_file("scripts/audit-1170-hook-targets.py", lambda t: t.replace(
+            "    body = blob[off : max(limit, off)]\n",
+            "    body = blob[off : off + BRANCH_SCAN_BYTES]  # pc_probe: instance 1 replanted\n",
+            1)):
+        rc, out = run(g)
+        expect("decode-extent-bounds", "sens/instance-1-replanted", rc, out, True,
+               ["audit-1170-hook-targets.py", "patch_safe"])
+
+    # SENSITIVITY 4: the OTHER disassembler. objdump takes its span as a start plus a count in a
+    # subprocess argument, invisible to the AST scan, so it has its own matcher and its own arm.
+    shell = "scripts/_pc_probe_decode_span.sh"
+    # The flag is spelled in two pieces so that THIS harness's own source does not read as an
+    # objdump invocation to the gate it is testing -- the gate matches by text, deliberately, and
+    # a control that turns its subject red just by existing proves nothing about the subject.
+    stop_flag = "--stop-" + "address"
+    with new_file(shell, "#!/usr/bin/env bash\n"
+                         "objdump -D -b binary -m i386:x86-64 \\\n"
+                         f"  --start-address=$1 {stop_flag}=$(($1 + 0x400)) image.bin\n"):
+        rc, out = run(g)
+        expect("decode-extent-bounds", "sens/objdump-span", rc, out, True,
+               ["_pc_probe_decode_span.sh"])
+
+    # SENSITIVITY 5: an allowlist row that justifies nothing. A row whose key drifts out of date
+    # is how this gate would go quiet on a whole file -- the site becomes unjustified AND the row
+    # becomes stale, and only the second is visible if the site was also removed.
+    with edit_file("scripts/decode-extent-allowlist.tsv", lambda t: t.replace(
+            "scripts/verify-thunk-rva-1170.py\tbody\t",
+            "scripts/verify-thunk-rva-1170.py\tpc_probe_renamed\t", 1)):
+        rc, out = run(g)
+        expect("decode-extent-bounds", "sens/stale-allowlist-row", rc, out, True,
+               ["match no live site", "pc_probe_renamed"])
+
+    # SPECIFICITY 1: an extent handed in by the caller. The commonest correct shape in the tree
+    # (31 of the 69 sites), and a gate that reddened on it would be deleted within the week.
+    with new_file(probe, "def scan(blob, va, end):\n"
+                         "    for insn in md.disasm(blob[va - 0x140000000 : end], va):\n"
+                         "        yield insn\n"):
+        rc, out = run(g)
+        expect("decode-extent-bounds", "spec/caller-supplied-extent", rc, out, False)
+
+    # SPECIFICITY 2: an upper bound anchored on the SITE being looked for rather than on the
+    # decode start (`image[func : disp_at + 16]`). It is an addition, and it is not a budget.
+    with new_file(probe, "def scan(blob, func, disp_at):\n"
+                         "    for insn in md.disasm(blob[func : disp_at + 16], func):\n"
+                         "        yield insn\n"):
+        rc, out = run(g)
+        expect("decode-extent-bounds", "spec/site-anchored-upper-bound", rc, out, False)
+
+    # SPECIFICITY 3: the PRESCRIBED FIX. If the gate reddened on `function_extent.body_end` it
+    # would be telling authors to do the one thing it refuses, which is worse than no gate.
+    with new_file(probe, "def scan(blob, va):\n"
+                         "    off = va - 0x140000000\n"
+                         "    end = function_extent.body_end(blob, va)\n"
+                         "    if end is None:\n"
+                         "        return\n"
+                         "    for insn in md.disasm(blob[off:end], va):\n"
+                         "        yield insn\n"):
+        rc, out = run(g)
+        expect("decode-extent-bounds", "spec/body-end-is-the-fix", rc, out, False)
 
 
 # ==========================================================================

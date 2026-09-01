@@ -5,6 +5,22 @@
 //! namespace is unchanged. Every offset is derived from the typed `fromsoftware-rs` layout
 //! rather than hard-coded, so struct drift upstream fails the build instead of reading a
 //! neighbouring field at runtime.
+//!
+//! DERIVED FROM A LAYOUT IS NOT THE SAME AS MEASURED, which is why every one of them now also
+//! carries a `const _: () = assert!(.. == 0xNN)` against a number taken from the game's own
+//! instructions. `offset_of!` asks the compiler, and the compiler only knows what the sibling
+//! binding declares; the binding is a hand-written 1.16.2 model and its `unkNN` member names are
+//! not reliable -- `FD4StepTemplateBase::unk48` is at 0x50, and back-solving a neighbour's offset
+//! off that name is what put `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` at 0x40 for its whole life
+//! (the field is 0x48; 0x40 is a live `DLAllocator*`, so the wrong read never faulted). Without a
+//! pin, a layout edit upstream moves these silently and the only symptom is a portrait that
+//! renders the wrong outfit.
+//!
+//! THE MEASUREMENT the pins freeze: `CS::ChrAsm::ChrAsm` (1.16.2 0x1403be1b0, 1.17 0x1403be1c0,
+//! 161 bytes) aligns 38/38 instructions across the two de-Arxan'd images with SIX field offsets
+//! -- 0x0, 0x4, 0x24, 0x7c, 0xd4, 0xdc -- every one HELD and none moved. Reproduce with
+//! `scripts/pair-object-field-drift.py --pair 0x1403be1b0:161 0x1403be1c0:161 --base rcx
+//! --base rsi`; the same rows are frozen in `scripts/check-object-field-offsets-1170.py`.
 
 use eldenring::cs::ChrAsm;
 
@@ -16,6 +32,25 @@ pub const CHR_ASM_EQUIPMENT_OFFSET: usize = core::mem::offset_of!(ChrAsm, equipm
 pub const CHR_ASM_GAITEM_HANDLES_OFFSET: usize = core::mem::offset_of!(ChrAsm, gaitem_handles);
 pub const CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET: usize =
     core::mem::offset_of!(ChrAsm, equipment_param_ids);
+// The three above are what the BINDING says; these are what the GAME does. `CS::ChrAsm::ChrAsm`
+// (deobf 0x1403be1b0) constructs the object front to back and every one of them is a store or a
+// callee's `this`, not an inference:
+//
+//   0x00  `movl $-1,(%rcx)`                                       unk0
+//   0x04  `mov %ebx,0x4(%rcx)`   (ebx = 0)                        unk4
+//   0x08  `add $0x8,%rcx ; call 0x1404c4b30`   -> `CS::ChrAsmEquipment::ChrAsmEquipment`
+//   0x24  `lea 0x24(%rsi),%rcx` with edx=4, r8d=0x16              array ctor, 22 x 4 bytes
+//   0xd4  `movq $-1,0xd4(%rsi)`                                   EIGHT bytes: unkd4 AND unkd8
+//   0x7c  `lea 0x7c(%rsi),%rdi ; mov $0x16,%ecx ; rep stos %eax`  22 dwords of -1
+//   0xdc  `lea 0xdc(%rsi),%rax` + a 12-iteration byte loop        boltLoadedStates, ends at 0xe8
+//
+// The NAMED callee at 0x8 is what makes `equipment` an identification rather than a bracket, and
+// the two independent `0x16`s are what make ENTRY_COUNT 22 rather than assumed. Ghidra's 1.16.2
+// type agrees throughout (`equipment` 0x8, `equipmentGaItemHandles` 0x24, `equipmentParamIds`
+// 0x7c, object size 0xe8), and 1.17 aligns 38/38 with zero moved offsets.
+const _: () = assert!(CHR_ASM_EQUIPMENT_OFFSET == 0x08);
+const _: () = assert!(CHR_ASM_GAITEM_HANDLES_OFFSET == 0x24);
+const _: () = assert!(CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET == 0x7c);
 /// Index of `ProtectorHead` within `ChrAsm::gaitem_handles` / `ChrAsm::equipment_param_ids`; the four
 /// armor slots are head/chest/hands/legs at `+0..+3`. Grounded in the disassembly, not assumed:
 /// `CS::ChrAsm::EquipProtectorOrAccessory` (deobf 0x1403bf490) is literally `add $0xc,%edx; jmp
@@ -34,14 +69,21 @@ pub const CHR_ASM_EQUIPMENT_ENTRY_COUNT: usize = 22;
 /// offset is spelled out here rather than taken from `offset_of!`; the ctor writes it first
 /// (`movl $0xffffffff,(%rcx)` at deobf 0x1403be1d0), which is what pins it to +0.
 pub const CHR_ASM_UNK0_OFFSET: usize = 0x00;
-/// `ChrAsm::unkd4` (+0xd4) -- the HEAD whole-outfit override. Derived from the typed layout rather
-/// than hard-coded: the param-id array is the last public field, so `unkd4` is exactly one array past
-/// it. The ctor's `movq $-1,0xd4(%rsi)` (deobf 0x1403be208) is the independent confirmation, and it
-/// writes EIGHT bytes -- so that one instruction sets both `unkd4` and `unkd8`.
+/// `ChrAsm::unkd4` (+0xd4) -- the HEAD whole-outfit override.
+///
+/// The EXPRESSION is a layout walk (the param-id array is the last public field, so `unkd4` is one
+/// array past it) because the member is private upstream and cannot be reached by `offset_of!`.
+/// A layout walk is a NAME argument, not a measurement, and the same shape is what put
+/// `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` at 0x40 -- so the number itself comes from the ctor:
+/// `movq $-1,0xd4(%rsi)` at deobf 0x1403be208, an EIGHT-byte store, so that one instruction sets
+/// both `unkd4` and `unkd8`. 0xdc (`boltLoadedStates`) is the next witnessed field, which brackets
+/// the pair from above and leaves exactly two dwords in between.
 pub const CHR_ASM_UNKD4_OFFSET: usize = CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
     + CHR_ASM_EQUIPMENT_ENTRY_COUNT * core::mem::size_of::<i32>();
 /// `ChrAsm::unkd8` (+0xd8) -- the CHEST/HANDS/LEGS whole-outfit override.
 pub const CHR_ASM_UNKD8_OFFSET: usize = CHR_ASM_UNKD4_OFFSET + core::mem::size_of::<i32>();
+const _: () = assert!(CHR_ASM_UNKD4_OFFSET == 0xd4);
+const _: () = assert!(CHR_ASM_UNKD8_OFFSET == 0xd8);
 /// The value `unk0`/`unkd4`/`unkd8` must hold for the renderer to dress a character from its per-slot
 /// `equipment_param_ids`. These three fields are read with SIGNED tests by the model-resource request
 /// `FUN_1409e6fb0` (deobf 0x1409e7553..0x1409e75b6, every branch a `js`), and a NON-NEGATIVE value in

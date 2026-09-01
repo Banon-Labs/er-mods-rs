@@ -90,6 +90,11 @@ use crate::gaitem::GaitemLookupResult;
 ///
 /// The typed upstream field is an `OwnedPtr`, which asserts non-null; before a character is
 /// loaded this slot really is null, so it is read as a plain pointer and checked.
+///
+/// The offset itself is measured, not read off that declaration: `GetMainPlayerGameData`
+/// (`0x140e9fc30`) is `mov rax,[rip+GLOBAL_GameDataMan] ; mov rax,[rax+0x8] ; ret`, and the
+/// `GameDataMan` constructor pairs 351/351 with zero moved offsets across 1.16.2/1.17. Full
+/// witness in `storage::GAME_DATA_MAN_PLAYER_OFFSET`.
 const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
 /// `PlayerGameData::equipGameData`, held by value.
 const PLAYER_GAME_DATA_EQUIP_OFFSET: usize = 0x2b0;

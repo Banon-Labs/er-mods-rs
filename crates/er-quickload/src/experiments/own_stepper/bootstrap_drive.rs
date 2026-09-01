@@ -792,8 +792,19 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             // NOT a "warm load kick": 0x67b4e0 blanks the whole save container. See
             // BLANK_SAVE_CONTAINER_REQUEST_RVA. Only referenced below to suppress an unused warning.
             const WARM_LOAD_KICK_RVA: usize = BLANK_SAVE_CONTAINER_REQUEST_RVA;
-            const GAME_MAN_LOAD_HANDLE_B98_OFFSET: usize = 0xb98;
-            const GAME_MAN_LOAD_HANDLE_BA0_OFFSET: usize = 0xba0;
+            // NOT a load handle pair. `GameMan + 0xb98` is a `DLDateTime` and 0xba0 is its
+            // upper half; a second `DLDateTime` follows at 0xba8. The constructor writes both
+            // halves through a register, not through `this` --
+            //   1406761a3  lea   rbx, [rsi+0xb98]     ; 1.17 0x140676ff3
+            //   1406761aa  mov   qword [rbx], r14     ; GameMan+0xb98
+            //   1406761ad  and   qword [rbx+8], r12   ; GameMan+0xba0
+            //   1406761d7  lea   rbx, [rsi+0xba8]     ; the second DLDateTime
+            // -- so a `this`-relative census sees 0xb98 and 0xba8 and is silent at 0xba0, which
+            // is how a wrong meaning survives a drift check. Ghidra's 1.16.2 `GameMan` type names
+            // both members `DLDateTime`, and the ctor pairs 1296/1296 with zero moved offsets.
+            // Nothing here reads them; they are kept as the measured RE fact.
+            const GAME_MAN_DLDATETIME_B98_OFFSET: usize = 0xb98;
+            const GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET: usize = 0xba0;
             // RUNTIME-PROVEN cold gate (bd b80-WARM-kick-runtime-0x140e6ec80-returns0-cold): the
             // worker-builder 0x140e6ec80 (inside the kick) returns al=0 unless BOTH [owner+0x10]==0
             // (worker) AND [owner+0x20]==0 (node) -- it only builds when nothing exists yet. In the
@@ -835,8 +846,8 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             };
             let _ = (
                 WARM_LOAD_KICK_RVA,
-                GAME_MAN_LOAD_HANDLE_B98_OFFSET,
-                GAME_MAN_LOAD_HANDLE_BA0_OFFSET,
+                GAME_MAN_DLDATETIME_B98_OFFSET,
+                GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET,
                 o10_pre,
                 o20_pre,
                 o20_post,

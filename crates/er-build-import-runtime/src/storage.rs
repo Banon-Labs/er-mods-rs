@@ -63,6 +63,15 @@ use er_game_base::rva::{
 /// `GameDataMan::main_player_game_data`, read as a raw pointer rather than the typed `OwnedPtr`
 /// upstream declares, because before a character is loaded the slot really is null.
 ///
+/// MEASURED, not taken from that declaration. `CS::GameDataMan::GetMainPlayerGameData`
+/// (`0x140e9fc30`) is a twelve-byte leaf whose whole body is
+/// `mov rax,[rip+GLOBAL_GameDataMan] ; mov rax,[rax+0x8] ; ret` -- the field's identity in one
+/// instruction. It has not moved: `CS::GameData::GameData(GameDataMan*)`, the constructor
+/// (`0x140254680`, 1.17 `0x140254650`), aligns 351/351 instructions across the two de-Arxan'd
+/// images with 45 `this`-relative offsets and ZERO moved, `0x8` among them; `~GameDataMan`
+/// (`0x140254d40`, 1.17 `0x140254d10`) aligns 359/359 and agrees. Re-measured every run by
+/// `scripts/check-object-field-offsets-1170.py`.
+///
 /// Same value and same reason as `grant::GAME_DATA_MAN_PLAYER_OFFSET`; it is repeated here rather
 /// than shared because this module's use of it is a NULL CHECK on the engine's behalf --
 /// `GetMainPlayerStorageBoxInventory` dereferences the slot without checking it -- not a walk to

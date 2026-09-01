@@ -140,6 +140,37 @@ That is a second failure mode, not a variant of the first, and the fix for it is
 measurement pointed at a different question: the row freezes 0x48 -> 0x48 (HELD) AND the source
 half pins the repo constant to 0x48, so a constant that was never measured now cannot be
 introduced -- pinning it requires producing a witness function whose two bodies agree on it.
+
+THE SWEEP FOR SIBLINGS OF THAT BUG (2026-08-31), AND ITS CLEAN NEGATIVE
+-----------------------------------------------------------------------
+0x40 was not a typo. It was an ARGUMENT: the sibling `fromsoftware-rs` binding declares `unk48`
+after `requested_state`, so `current_state` "must" be 0x40. That is a whole reasoning style, and
+it leaves a recognisable trace in a comment -- a member name, an `unkNN`, a `#[repr(C)]` walk, an
+`offset_of!`, "matches the layout in ...". So the tree was swept for that trace rather than for
+wrong numbers, since a wrong number cannot be recognised by reading source.
+
+Six constructors and 15 constants later: EVERY name-derived offset in this tree measures correct.
+That is a real result and the rows below are what makes it a durable one, because "right" and
+"measured" were two different states and only the second survives an edit. The three things the
+sweep also settled, each of which had been a way to be wrong:
+
+  * ABSENCE FROM A DISPLACEMENT SET IS NOT ABSENCE OF A FIELD. `GameMan+0xbc9` never appears as a
+    displacement in `GameMan::GameMan` -- the ctor initialises it with a DWORD store at 0xbc8 --
+    yet it is a real `bool` with its own byte-width getter, `IsServerConnectionEnabled`. Only a
+    byte-COVERAGE question (does anything WIDER cover this byte) separates the two cases, which is
+    what `scripts/audit-name-derived-offsets.py --cover` exists for. What made 0x40's absence
+    meaningful was that NOTHING covered it, in a constructor that accounts for its whole object.
+  * A CONSTRUCTOR IS ONLY A WHOLE-OBJECT WITNESS IF IT CONSTRUCTS THE WHOLE OBJECT.
+    `CSMenuManImp::CSMenuManImp` is 552 bytes for a 0x8a0 object and never touches 0x13c, which
+    Ghidra names `disableSaveMenu`. Its silence about an offset means nothing.
+  * THE BASE-REGISTER FILTER IS PART OF THE MEASUREMENT, NOT A CONVENIENCE. Reading `FieldArea`'s
+    ctor with rbx and rdi admitted reported 101 offsets; those two registers hold constructor
+    ARGUMENTS, and three of the extra offsets belonged to other objects. `~GameDataMan` is worse:
+    its second instruction is `mov (%rcx),%rcx`, so rcx stops being `this` immediately.
+
+The audit that produced the sweep is reproducible: `scripts/audit-name-derived-offsets.py` buckets
+every field-offset constant in the tree by the provenance its own comment claims (MEASURED / NAME
+/ NONE). It is a report, not a gate; the findings live here.
 """
 
 from __future__ import annotations
@@ -196,6 +227,47 @@ FD4_PAD_BUILDER_A = dict(
 # 0x143d89700).
 CS_SYSTEM_STEP_TEMPLATE_CTOR = dict(
     va16=0x140DEC6D0, len16=226, va17=0x140DEE4D0, len17=226, bases=("rsi", "rcx")
+)
+# ---- the NAME-PROVENANCE SWEEP of 2026-08-31 ------------------------------------------------
+# Six more constructors, added because the constants they settle had a NAME for provenance rather
+# than a measurement -- the shape that produced the 0x40 error below. Each 1.17 pair comes from
+# `docs/recon/rva-map-1162-to-1170.functions.tsv` and is corroborated by identical body length and
+# a full instruction alignment.
+#
+# `CS::ChrAsm::ChrAsm`. `this` is rcx, then rsi after `mov %rcx,%rsi`. It constructs the whole
+# object front to back, so its offset set IS the layout: 0x0, 0x4, 0x24, 0x7c, 0xd4, 0xdc, ending
+# at 0xe8 = size_of::<ChrAsm>().
+CHR_ASM_CTOR = dict(va16=0x1403BE1B0, len16=161, va17=0x1403BE1C0, len17=161, bases=("rcx", "rsi"))
+# `CS::FieldArea::FieldArea`. `this` is rcx, then rsi after `mov %rcx,%rsi`. The base filter is
+# load-bearing here: rbx and rdi hold CONSTRUCTOR ARGUMENTS, and counting them manufactures
+# "held" readings for foreign objects -- it reported 101 offsets instead of the true 98, three of
+# which were nested members' own fields.
+FIELD_AREA_CTOR = dict(
+    va16=0x140618BF0, len16=1566, va17=0x140619A40, len17=1566, bases=("rsi", "rcx")
+)
+# `CS::CSMenuManImp::CSMenuManImp`. `this` is rcx, then rbx after `mov %rcx,%rbx`. NOTE it is 552
+# bytes for a 0x8a0 object, so it does NOT touch every field: `disableSaveMenu` at 0x13c is a real
+# member of Ghidra's type and has no access here at all. Absence from THIS witness's offset set is
+# therefore not evidence that a byte is not a field -- unlike the step-template ctor above, which
+# accounts for its whole base sub-object and is why 0x40's absence there meant something.
+CS_MENU_MAN_IMP_CTOR = dict(
+    va16=0x1407650A0, len16=552, va17=0x140765EF0, len17=552, bases=("rcx", "rbx")
+)
+# `CS::GameMan::GameMan`. `this` is rcx, then rsi. 1296 instructions, 142 field offsets, zero
+# moved -- the largest object in this table and the one with the most repo constants on it.
+GAME_MAN_CTOR = dict(
+    va16=0x140675EA0, len16=6895, va17=0x140676CF0, len17=6895, bases=("rsi", "rcx")
+)
+# `CS::GameDataMan::~GameDataMan`. The DESTRUCTOR rather than the constructor, because that is
+# what Ghidra has a symbol for on this class; it releases each owned sub-object through `this`, so
+# the pointer members are all witnessed. `this` is rbx ONLY: the second instruction is
+# `mov (%rcx),%rcx`, which rebinds rcx to the first member, so admitting rcx as a base would count
+# a foreign object's fields from that point on.
+GAME_DATA_MAN_DTOR = dict(va16=0x140254D40, len16=1103, va17=0x140254D10, len17=1103, bases=("rbx",))
+# `CS::WorldBlockInfo::WorldBlockInfo`. `this` is rcx, then rbx; rdx is the `BlockId*` argument.
+# Another whole-object ctor: 28 offsets from 0x0 to 0xd4 in a 0xe0-byte object.
+WORLD_BLOCK_INFO_CTOR = dict(
+    va16=0x1406610E0, len16=244, va17=0x140661F30, len17=244, bases=("rcx", "rbx")
 )
 
 WITNESSES = (
@@ -401,6 +473,311 @@ WITNESSES = (
         CS_SYSTEM_STEP_TEMPLATE_CTOR,
         'step-template constructor stores L"NotExecuting" here; the highest witnessed field, so it '
         "is what bounds this object's SAFE_REGIONS entry",
+    ),
+    # ---- THE NAME-PROVENANCE SWEEP (2026-08-31) ---------------------------------------------
+    # Every row below settles a constant whose stated provenance was a NAME: a sibling-crate
+    # member, an `offset_of!` the compiler evaluated against that binding, or a hand walk down a
+    # `#[repr(C)]` declaration counting `unkNN` members. All of them turned out RIGHT. They are
+    # frozen anyway, because "right" and "measured" were two different states until now, and the
+    # gap between them is exactly where 0x40 lived for months.
+    #
+    # ---- CS::ChrAsm -------------------------------------------------------------------------
+    # `CHR_ASM_UNKD4_OFFSET` is computed as `equipment_param_ids + 22 * 4` because the member is
+    # private upstream and cannot be reached by `offset_of!` -- a layout walk, the same argument
+    # shape that produced 0x40. The number is right; the ARGUMENT was never evidence.
+    (
+        "ChrAsm",
+        "unk4 (0x4) -- the lower bracket for CHR_ASM_EQUIPMENT_OFFSET",
+        0x04,
+        0x04,
+        CHR_ASM_CTOR,
+        "`mov %ebx,0x4(%rcx)` with ebx = 0. `equipment` itself has NO displacement to freeze -- "
+        "the ctor reaches it as `add $0x8,%rcx ; call CS::ChrAsmEquipment::ChrAsmEquipment`, so "
+        "the member is identified by a NAMED callee taking this+8 as its `this` rather than by a "
+        "field access. What this row can freeze is the bracket, and the bracket here is exact: "
+        "0x4 below, 0x24 above, and size_of::<ChrAsmEquipment>() = 0x1c fills 0x8..0x24 with "
+        "nothing left over. The 0x8 literal is pinned in the SOURCE half regardless",
+    ),
+    (
+        "ChrAsm",
+        "gaitem_handles (CHR_ASM_GAITEM_HANDLES_OFFSET)",
+        0x24,
+        0x24,
+        CHR_ASM_CTOR,
+        "`lea 0x24(%rsi),%rcx` with edx=4 and r8d=0x16 into the array-ctor iterator: 22 elements "
+        "of 4 bytes, which is also the second independent witness for ENTRY_COUNT = 22",
+    ),
+    (
+        "ChrAsm",
+        "equipment_param_ids (CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET)",
+        0x7C,
+        0x7C,
+        CHR_ASM_CTOR,
+        "`lea 0x7c(%rsi),%rdi ; mov $0x16,%ecx ; rep stos %eax` with eax = -1",
+    ),
+    (
+        "ChrAsm",
+        "unkd4 + unkd8 (CHR_ASM_UNKD4_OFFSET, CHR_ASM_UNKD8_OFFSET)",
+        0xD4,
+        0xD4,
+        CHR_ASM_CTOR,
+        "`movq $-1,0xd4(%rsi)` -- EIGHT bytes, so the one instruction sets both dwords; 0xd8 has "
+        "no displacement of its own and is witnessed only as the upper half of this store",
+    ),
+    (
+        "ChrAsm",
+        "bolt_loaded_states (0xdc) -- the frozen negative that brackets unkd8 from above",
+        0xDC,
+        0xDC,
+        CHR_ASM_CTOR,
+        "`lea 0xdc(%rsi),%rax` + a 12-iteration byte loop ending at 0xe8 = size_of::<ChrAsm>(); a "
+        "layout walk that mis-sized the param-id array would land here instead of on 0xd4",
+    ),
+    # ---- CS::FieldArea ----------------------------------------------------------------------
+    # `FIELD_AREA_WORLD_INFO_OWNER_OFFSET`'s comment said "both the CI-pinned and local binding
+    # layouts pin this field at the same offset" -- two copies of one declaration agreeing with
+    # each other, which is not a measurement. 0x10 and 0x18 are each other's frozen negative: they
+    # are adjacent `WorldInfoOwner*` members and are NOT interchangeable (the native block lookups
+    # take the second).
+    (
+        "FieldArea",
+        "world_info_owner (FIELD_AREA_WORLD_INFO_OWNER_OFFSET)",
+        0x10,
+        0x10,
+        FIELD_AREA_CTOR,
+        "FieldArea constructor, 311/311 aligned with 98 offsets and zero moved; Ghidra's 1.16.2 "
+        "type names it `worldInfoOwner` at 0x10",
+    ),
+    (
+        "FieldArea",
+        "world_info_owner2 (FIELD_AREA_WORLD_INFO_OWNER2_OFFSET)",
+        0x18,
+        0x18,
+        FIELD_AREA_CTOR,
+        "FieldArea constructor; the adjacent `worldInfoOwner2`, and the frozen negative for the "
+        "row above -- a matcher confusing the two would fail here",
+    ),
+    # ---- CS::WorldBlockInfo -----------------------------------------------------------------
+    # The most literal instance of the failure shape the sweep found: the comment DERIVES 0x48 by
+    # walking the upstream `#[repr(C)]` and counting members -- `unk3c 0x3c`, `unk40 0x40`,
+    # `unk41[7] 0x41` -> `msb_res_cap 0x48`. That chain is only as good as the `unkNN` names in it.
+    (
+        "WorldBlockInfo",
+        "msb_res_cap (WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET)",
+        0x48,
+        0x48,
+        WORLD_BLOCK_INFO_CTOR,
+        "WorldBlockInfo constructor, 55/55 aligned with zero moved offsets; Ghidra's 1.16.2 type "
+        "names it `msbResCap` at 0x48 and `CS::WorldAreaInfo::GetBlockInfoByMsbResCap` "
+        "(0x14062f010) compares that member against its argument",
+    ),
+    (
+        "WorldBlockInfo",
+        "held below msb_res_cap (0x40) -- the frozen negative for the layout walk",
+        0x40,
+        0x40,
+        WORLD_BLOCK_INFO_CTOR,
+        "WorldBlockInfo constructor; a walk that mis-sized `unk41[7]` by one member lands on 0x40 "
+        "or 0x50 rather than 0x48, so pinning the neighbour is what makes the walk refutable",
+    ),
+    # ---- CS::GameDataMan --------------------------------------------------------------------
+    # `GAME_DATA_MAN_PLAYER_OFFSET` is a bare 0x08 in three crates, and the same field is reached
+    # a fourth time as `offset_of!(GameDataMan, main_player_game_data)`. Four homes, one of them
+    # the compiler's answer to the same 1.16.2 binding, and no measurement behind any of them.
+    (
+        "GameDataMan",
+        "main_player_game_data (GAME_DATA_MAN_PLAYER_OFFSET)",
+        0x08,
+        0x08,
+        GAME_DATA_MAN_DTOR,
+        "~GameDataMan, 359/359 aligned with 17 offsets and zero moved; Ghidra's 1.16.2 type names "
+        "it `mainPlayerGameData` at 0x8",
+    ),
+    (
+        "GameDataMan",
+        "menu_system_save_load (0x60) -- frozen negative",
+        0x60,
+        0x60,
+        GAME_DATA_MAN_DTOR,
+        "~GameDataMan; keeps the pointer-member spacing honest, since a whole-object shift would "
+        "move 0x8 and 0x60 together and neither did",
+    ),
+    # ---- CS::GameMan ------------------------------------------------------------------------
+    # `GAME_MAN_SAVE_STATE_B80_OFFSET` cited `offset_of!(GameMan, save_state)` in the Ghidra type
+    # plus "the same +0xb80 store in every 1.17 wrapper body" -- half a measurement, with no
+    # address attached to it. Here is the address.
+    (
+        "GameMan",
+        "save_state (GAME_MAN_SAVE_STATE_B80_OFFSET)",
+        0xB80,
+        0xB80,
+        GAME_MAN_CTOR,
+        "GameMan constructor, 1296/1296 aligned with 142 offsets and zero moved; the store is "
+        "`mov %r14d,0xb80(%rsi)` at 0x14067616f (1.17 0x140676fbf)",
+    ),
+    (
+        "GameMan",
+        "is_in_online_mode (0xbc8); server_connection_enabled is the BYTE above it at 0xbc9",
+        0xBC8,
+        0xBC8,
+        GAME_MAN_CTOR,
+        "the ctor writes `mov $1,0xbc8(%rsi)` as a DWORD, so 0xbc9 has no displacement of its own "
+        "and the ctor alone cannot separate the two bools -- absence from a displacement set is "
+        "not absence of a field when something WIDER covers the byte. The separator is "
+        "`IsServerConnectionEnabled` (0x14067a190) = `mov 0x143d69918(%rip),%rax ; movzbl "
+        "0xbc9(%rax),%eax ; ret`, a byte-width read at 0xbc9 off the GameMan singleton that is "
+        "unique in the image; Ghidra names the field `serverConnectionEnabled` there",
+    ),
+    # THE REST OF `CS::GameMan` (2026-08-31). Seventeen more GameMan offsets were spelled by hand
+    # across six crates with no provenance at all. All seventeen are accounted for by the one
+    # constructor pairing below and none of them moved. Seven are not displacements of their own:
+    # a wider store covers them, which is the distinction `--cover` exists to make and the reason
+    # each row below names the byte its store covers.
+    (
+        "GameMan",
+        "warp_requested (GAME_MAN_WARP_REQUESTED_10_OFFSET)",
+        0x10,
+        0x10,
+        GAME_MAN_CTOR,
+        "`mov $0,0x10(%rcx)` at 0x140675ee5 (1.17 0x140676d35), a BYTE store in the prologue "
+        "before the ctor switches to %rsi",
+    ),
+    (
+        "GameMan",
+        "save_slot (GAME_MAN_SAVE_SLOT_AC0_OFFSET)",
+        0xAC0,
+        0xAC0,
+        GAME_MAN_CTOR,
+        "`mov %r15d,0xac0(%rsi)` at 0x140676049 (1.17 0x140676e99)",
+    ),
+    (
+        "GameMan",
+        "load_target_map_id (GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET)",
+        0xAC8,
+        0xAC8,
+        GAME_MAN_CTOR,
+        "`movl $-1,0xac8(%rsi)` at 0x140676057 (1.17 0x140676ea7) -- a map id initialised to the "
+        "no-map sentinel, which is the shape the constant's consumer expects",
+    ),
+    (
+        "GameMan",
+        "0xb5c, the dword covering GAME_MAN_SUBMIT_GATE_B5E_OFFSET (0xb5e)",
+        0xB5C,
+        0xB5C,
+        GAME_MAN_CTOR,
+        "`movl $0,0xb5c(%rsi)` at 0x140676134 (1.17 0x140676f84); 0xb5e is the third byte of that "
+        "dword and has no displacement of its own",
+    ),
+    (
+        "GameMan",
+        "0xb70, the dword covering the save-request bytes at 0xb72 and 0xb73",
+        0xB70,
+        0xB70,
+        GAME_MAN_CTOR,
+        "`movl $0,0xb70(%rsi)` at 0x14067614c (1.17 0x140676f9c). Five constants in three crates "
+        "name bytes inside this one store: GAME_MAN_SAVE_REQUEST_B72/B73_OFFSET, "
+        "GAME_MAN_SAVE_REQUESTED_B72_OFFSET, GAME_MAN_FIELD_B73_OFFSET and "
+        "GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET",
+    ),
+    (
+        "GameMan",
+        "requested_slot (GAME_MAN_REQUESTED_SLOT_B78_OFFSET)",
+        0xB78,
+        0xB78,
+        GAME_MAN_CTOR,
+        "`mov %r15d,0xb78(%rsi)` at 0x14067615f (1.17 0x140676faf); it is the dword immediately "
+        "below save_state at 0xb80, so a walk that mis-sized either lands on the other",
+    ),
+    (
+        "GameMan",
+        "0xb7c, the word covering GAME_MAN_ENDING_FLAG_B7D_OFFSET (0xb7d)",
+        0xB7C,
+        0xB7C,
+        GAME_MAN_CTOR,
+        "`movw $0,0xb7c(%rsi)` at 0x140676166 (1.17 0x140676fb6) -- a TWO-byte store, so it "
+        "covers 0xb7d and nothing wider does",
+    ),
+    (
+        "GameMan",
+        "DLDateTime at 0xb98 (GAME_MAN_DLDATETIME_B98_OFFSET and its upper half at 0xba0)",
+        0xB98,
+        0xB98,
+        GAME_MAN_CTOR,
+        "`lea 0xb98(%rsi),%rbx` at 0x1406761a3 (1.17 0x140676ff3), then `mov %r14,(%rbx)` and "
+        "`and %r12,0x8(%rbx)` -- 0xba0 is written through %rbx, never through `this`, so the "
+        "displacement set is silent there. Ghidra's 1.16.2 GameMan type names 0xb98 and 0xba8 "
+        "`DLDateTime`; the pair was called a `LOAD_HANDLE` in this repo until it was measured",
+    ),
+    (
+        "GameMan",
+        "quit_phase (GAME_MAN_QUIT_PHASE_OFFSET, GAME_MAN_QUIT_PHASE_BC4_OFFSET)",
+        0xBC4,
+        0xBC4,
+        GAME_MAN_CTOR,
+        "`mov %r14d,0xbc4(%rsi)` at 0x140676213 (1.17 0x140677063), the dword directly below the "
+        "online-mode pair at 0xbc8",
+    ),
+    (
+        "GameMan",
+        "0xbc8 again, as the dword covering GAME_MAN_SUBMIT_GATE_BCA_OFFSET (0xbca)",
+        0xBC8,
+        0xBC8,
+        GAME_MAN_CTOR,
+        "`movl $1,0xbc8(%rsi)` at 0x14067621a (1.17 0x14067706a) spans 0xbc8..0xbcc, so it covers "
+        "0xbca as well as the two bools the row above separates",
+    ),
+    (
+        "GameMan",
+        "current_map (GAME_MAN_CURRENT_MAP_C30_OFFSET)",
+        0xC30,
+        0xC30,
+        GAME_MAN_CTOR,
+        "`movl $-1,0xc30(%rsi)` at 0x14067628d (1.17 0x1406770dd)",
+    ),
+    (
+        "GameMan",
+        "0xcb0, the dword covering GAME_MAN_SUBMIT_GATE_CB1_OFFSET and _CB2_OFFSET",
+        0xCB0,
+        0xCB0,
+        GAME_MAN_CTOR,
+        "`mov %eax,0xcb0(%rsi)` at 0x14067630e (1.17 0x14067715e); 0xcb1 and 0xcb2 are bytes two "
+        "and three of it",
+    ),
+    (
+        "GameMan",
+        "FD4FilePathBase at 0xdd0, whose DLString length is GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET",
+        0xDD0,
+        0xDD0,
+        GAME_MAN_CTOR,
+        "`lea 0xdd0(%rsi),%rdi` at 0x14067644b (1.17 0x14067729b) hands the whole 0xdd0..0xe08 "
+        "region to `DLString<wchar_t>* InitAllocator` (0x140120390) and `CopyFromU16Array` "
+        "(0x14011b190); the length store is `mov %r14,0x10(%rax)` with %rax = %rsi+0xde0, i.e. "
+        "GameMan+0xdf0. The ctor never touches 0xdf0 through `this`, so a displacement census is "
+        "silent there -- this repo called it RESIDENT_DEVICE until it was measured. Ghidra's "
+        "1.16.2 GameMan type independently names 0xdd0 `FD4FilePathBase`, ending at 0xe08",
+    ),
+    # ---- CS::CSMenuManImp -------------------------------------------------------------------
+    # `CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET`'s comment says the field is "unnamed in
+    # fromsoftware-rs `unk748`" -- its provenance is that a filler array SPANS the byte, which
+    # says nothing about where a member starts.
+    (
+        "CSMenuManImp",
+        "in_game_menu_job (CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET)",
+        0x798,
+        0x798,
+        CS_MENU_MAN_IMP_CTOR,
+        "CSMenuManImp constructor, 121/121 aligned with 30 offsets and zero moved, and 0x790 and 0x7a0 are both witnessed too, so the member is bracketed on both sides; `lea "
+        "0x798(%rbx),%rax` at 0x14076517b. That establishes 0x798 as a member BOUNDARY in both "
+        "builds. It does NOT establish that the member is a `MenuJob*`, which is a separate claim "
+        "this gate deliberately does not make",
+    ),
+    (
+        "CSMenuManImp",
+        "menu_data (CS_MENU_MAN_MENU_DATA_OFFSET) -- four crates hold their own copy of it",
+        0x08,
+        0x08,
+        CS_MENU_MAN_IMP_CTOR,
+        "CSMenuManImp constructor, `mov %rdi,0x8(%rcx)`; Ghidra names it `menuData` at 0x8",
     ),
 )
 
@@ -803,6 +1180,62 @@ PINNED_CONSTANTS = (
     # to nothing else in that four-class family, which is what the sweep's vtable test enforces.
     ("PAD_STICK_LY_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x8A0, "DLUID::PadDevice"),
     ("PAD_STICK_LX_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x89C, "DLUID::PadDevice"),
+    # ---- THE NAME-PROVENANCE SWEEP (2026-08-31) ---------------------------------------------
+    # Constants whose only stated provenance was a NAME. The sweep measured all of them and all of
+    # them were right, so nothing here is a correction -- these rows exist so that the NEXT edit
+    # to one of them has to produce a witness instead of a declaration. Four of the ChrAsm names
+    # have no literal at their definition (`offset_of!` / a layout-walk expression), so their pin
+    # is the `const _: () = assert!(NAME == 0x..)` this sweep added beside them, which this gate
+    # reads as a definition in its own right.
+    ("CHR_ASM_EQUIPMENT_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0x08, "CS::ChrAsm"),
+    ("CHR_ASM_GAITEM_HANDLES_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0x24, "CS::ChrAsm"),
+    ("CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0x7C, "CS::ChrAsm"),
+    ("CHR_ASM_UNK0_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0x00, "CS::ChrAsm"),
+    ("CHR_ASM_UNKD4_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0xD4, "CS::ChrAsm"),
+    ("CHR_ASM_UNKD8_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0xD8, "CS::ChrAsm"),
+    # Not an offset but the multiplier INSIDE the unkd4 layout walk: 22 is what turns
+    # `equipment_param_ids` into 0xd4, so leaving it unpinned would leave the walk free to move.
+    ("CHR_ASM_EQUIPMENT_ENTRY_COUNT", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 22, "CS::ChrAsm"),
+    ("FIELD_AREA_WORLD_INFO_OWNER_OFFSET", "crates/er-invasion-warp-core/src/msb_invasion_points.rs", 0x10, "CS::FieldArea"),
+    ("FIELD_AREA_WORLD_INFO_OWNER2_OFFSET", "crates/er-invasion-warp-core/src/msb_invasion_points.rs", 0x18, "CS::FieldArea"),
+    ("WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET", "crates/er-invasion-warp-core/src/msb_invasion_points.rs", 0x48, "CS::WorldBlockInfo"),
+    # Three crates spell this 0x08 by hand and a fourth reaches the same field through
+    # `offset_of!(GameDataMan, main_player_game_data)`; the gate looks the name up tree-wide, so
+    # every copy is checked and a drifted one fails even if the others are right.
+    ("GAME_DATA_MAN_PLAYER_OFFSET", "crates/er-build-import-runtime/src/grant.rs", 0x08, "CS::GameDataMan"),
+    ("GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET", "crates/er-game-base/src/rva.rs", 0x08, "CS::GameDataMan"),
+    ("GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET", "crates/er-title-flow/src/constants_own_load_pump.rs", 0x60, "CS::GameDataMan"),
+    ("GAME_MAN_SAVE_STATE_B80_OFFSET", "crates/er-save-suppress/src/save_state_device.rs", 0xB80, "CS::GameMan"),
+    ("CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0x798, "CS::CSMenuManImp"),
+    ("CS_MENU_MAN_MENU_DATA_OFFSET", "crates/er-game-base/src/rva.rs", 0x08, "CS::CSMenuManImp"),
+    # ---- THE UNPROVENANCED-OFFSET SWEEP (2026-08-31) ----------------------------------------
+    # `CS::GameMan` carried more hand-spelled offsets with NO stated provenance than any other
+    # object in the tree -- seventeen, across six crates. The witness rows above measured all of
+    # them against the same constructor pairing; these pins stop the literals drifting away from
+    # that measurement, wherever in the tree they are spelled.
+    ("GAME_MAN_WARP_REQUESTED_10_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0x10, "CS::GameMan"),
+    ("GAME_MAN_SAVE_SLOT_AC0_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xAC0, "CS::GameMan"),
+    ("GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET", "crates/er-title-flow/src/constants_return_title.rs", 0xAC8, "CS::GameMan"),
+    ("GAME_MAN_SUBMIT_GATE_B5E_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB5E, "CS::GameMan"),
+    ("GAME_MAN_SAVE_REQUEST_B72_OFFSET", "crates/er-quickload/build.rs", 0xB72, "CS::GameMan"),
+    ("GAME_MAN_SAVE_REQUESTED_B72_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB72, "CS::GameMan"),
+    ("GAME_MAN_SAVE_REQUEST_B73_OFFSET", "crates/er-quickload/build.rs", 0xB73, "CS::GameMan"),
+    ("GAME_MAN_FIELD_B73_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB73, "CS::GameMan"),
+    ("GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0xB73, "CS::GameMan"),
+    ("GAME_MAN_REQUESTED_SLOT_B78_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB78, "CS::GameMan"),
+    ("GAME_MAN_ENDING_FLAG_B7D_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0xB7D, "CS::GameMan"),
+    ("GAME_MAN_LOAD_PHASE_B80_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB80, "CS::GameMan"),
+    ("GAME_MAN_LOAD_FSM_B80_OFFSET", "crates/er-input-harness/src/game_mem.rs", 0xB80, "CS::GameMan"),
+    ("GAME_MAN_DLDATETIME_B98_OFFSET", "crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs", 0xB98, "CS::GameMan"),
+    ("GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET", "crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs", 0xBA0, "CS::GameMan"),
+    ("GAME_MAN_QUIT_PHASE_OFFSET", "crates/er-save-suppress/build.rs", 0xBC4, "CS::GameMan"),
+    ("GAME_MAN_QUIT_PHASE_BC4_OFFSET", "crates/er-save-suppress/src/lib.rs", 0xBC4, "CS::GameMan"),
+    ("GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET", "crates/er-title-flow/src/constants_return_title.rs", 0xBC9, "CS::GameMan"),
+    ("GAME_MAN_SUBMIT_GATE_BCA_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xBCA, "CS::GameMan"),
+    ("GAME_MAN_CURRENT_MAP_C30_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xC30, "CS::GameMan"),
+    ("GAME_MAN_SUBMIT_GATE_CB1_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xCB1, "CS::GameMan"),
+    ("GAME_MAN_SUBMIT_GATE_CB2_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xCB2, "CS::GameMan"),
+    ("GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xDF0, "CS::GameMan"),
 )
 
 # Every `PlayerGameData` field this workspace reaches through `offset_of!`, with the offset the
