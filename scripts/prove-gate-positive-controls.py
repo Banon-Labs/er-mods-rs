@@ -536,6 +536,62 @@ def _signals():
                 expect(test[:-3], label, rc, out, True)
 
 
+@control("unexecuted-promise-openers",
+         baseline=["python3", "scripts/test-unexecuted-promise-signal.py"])
+def _promise_openers():
+    """TWO holes let one sentence through; each fix must be load-bearing ON ITS OWN.
+
+    The production failure (2026-09-01) was the turn-ending "I'm closing it rather than pushing an
+    empty merge commit to make an empty PR green". Nothing ran `gh pr close`, the PR stayed open, and
+    the user had to notice and ask. It needed BOTH: OPENER_RE had no bare present continuous, AND
+    `close` was missing from the concrete-action allowlist -- so fixing only the opener would have
+    left the sentence with no verb to commit to, and the regression case would have stayed green
+    while the reported failure was still live. One arm per hole, reverted independently, because a
+    single combined control cannot tell which half is actually doing the work.
+
+    The generic `cupcake-signal-tests` control stubs the whole signal out; these two mutate the exact
+    lines instead, which is the sharper question for a matcher that grew a case.
+    """
+    g = ["python3", "scripts/test-unexecuted-promise-signal.py"]
+    s = ".cupcake/signals/last_assistant_unexecuted_promise.sh"
+    # Each arm must fail THIS case -- the verbatim production sentence -- not merely fail somewhere.
+    # A control that goes red for an unrelated reason proves nothing about the reported failure.
+    FROZEN_CASE = "true-positive-the-present-continuous-instance"
+
+    # SENSITIVITY 1: the opener set back to what it was -- no bare present continuous.
+    with edit_file(s, lambda t: t.replace(
+            '    r"|i[\'\u2019]?m|i\\s+am)\\b",\n',
+            '    r")\\b",\n', 1)):
+        rc, out = run(g)
+        expect("unexecuted-promise-openers", "sens/opener-lacks-present-continuous", rc, out, True,
+               [FROZEN_CASE])
+
+    # SENSITIVITY 2: the opener kept, `close` removed from ACTIONS. The sentence still has no verb.
+    with edit_file(s, lambda t: t.replace(
+            '    "close", "archive", "retire", "withdraw", "abandon",\n', "", 1)):
+        rc, out = run(g)
+        expect("unexecuted-promise-openers", "sens/close-not-an-action", rc, out, True,
+               [FROZEN_CASE])
+
+    # SENSITIVITY 3: de-gerunding removed. The opener matches and `close` is listed, but "closing"
+    # never resolves to it -- the third way this same sentence goes quiet.
+    with edit_file(s, lambda t: t.replace(
+            "        base = base_of_gerund(word)\n        if base:\n            return base\n",
+            "        base = None\n", 1)):
+        rc, out = run(g)
+        expect("unexecuted-promise-openers", "sens/no-de-gerunding", rc, out, True,
+               [FROZEN_CASE])
+
+    # SPECIFICITY: a legitimate future broadening of the allowlist. The suite is behavioural, not a
+    # checksum over the verb list, so adding a verb no case exercises must leave it GREEN. A gate
+    # that reddened here would make every later verb addition look like a regression.
+    with edit_file(s, lambda t: t.replace(
+            '    "close", "archive", "retire", "withdraw", "abandon",\n',
+            '    "close", "archive", "retire", "withdraw", "abandon", "pcprobeverb",\n', 1)):
+        rc, out = run(g)
+        expect("unexecuted-promise-openers", "spec/new-verb-added", rc, out, False)
+
+
 @control("cupcake-hook-shim", fast=False)
 def _hook_shim():
     with edit_file("scripts/cupcake-hook.sh", lambda t: "#!/usr/bin/env bash\nexit 0\n"):
