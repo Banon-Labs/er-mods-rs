@@ -86,8 +86,12 @@ fn read_save_state() -> Option<u32> {
 fn save_state_ptr() -> Option<*mut u32> {
     use er_game_base::{mem::safe_read_usize, rva::GAME_MAN_SINGLETON_RVA};
 
-    /// `GameMan::saveState`. `offset_of!(GameMan, save_state)` in the 1.16.2 Ghidra type, and the
-    /// same `+0xb80` store in every 1.17 wrapper body.
+    /// `GameMan::saveState`. The Ghidra type name and "the same `+0xb80` store in every 1.17
+    /// wrapper body" were this constant's whole provenance, which is a type declaration plus an
+    /// observation with no address attached. Both are now backed by one: `CS::GameMan::GameMan`
+    /// (1.16.2 0x140675ea0, 1.17 0x140676cf0) aligns 1296/1296 instructions with 142 field
+    /// offsets and zero moved, and writes `mov %r14d,0xb80(%rsi)` at 0x14067616f (1.17
+    /// 0x140676fbf). Frozen in `scripts/check-object-field-offsets-1170.py`.
     const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 
     let base = er_game_base::mem::game_module_base().ok()?;

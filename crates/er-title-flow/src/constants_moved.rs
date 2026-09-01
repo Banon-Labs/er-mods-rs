@@ -860,9 +860,16 @@ pub const TITLE_STEP_IN_GAME_STEP_2E8_OFFSET: usize = 0x2e8;
 /// stable in-world idle (see block comment above).
 pub const IN_GAME_STEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
 
-/// In-game menu job pointer at CSMenuMan+0x798 (unnamed in fromsoftware-rs `unk748`); nonzero while
-/// the in-game session's menu job lives. STEP_RequestWait ends the session when it reads 0 at
-/// request code 2.
+/// In-game menu job pointer at CSMenuMan+0x798; nonzero while the in-game session's menu job
+/// lives. STEP_RequestWait ends the session when it reads 0 at request code 2.
+///
+/// "Unnamed in fromsoftware-rs `unk748`" is what this comment used to offer as provenance, and it
+/// is not one: that a filler array SPANS a byte says nothing about where a member starts. The
+/// offset is now measured -- `CS::CSMenuManImp::CSMenuManImp` (1.16.2 0x1407650a0, 1.17
+/// 0x140765ef0) aligns 121/121 instructions with 30 field offsets, zero moved, and does
+/// `lea 0x798(%rbx),%rax` at 0x14076517b with 0x790 and 0x7a0 witnessed on either side. Frozen in
+/// `scripts/check-object-field-offsets-1170.py`. That fixes the BOUNDARY; that the member is a
+/// `MenuJob*` is a separate claim resting on STEP_RequestWait's own read, not on this alignment.
 pub const CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET: usize = 0x798;
 
 /// Loading-screen active bit written by `CS::InGameStep::STEP_MoveMap_Finish` before common finalize

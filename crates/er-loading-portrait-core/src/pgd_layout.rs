@@ -17,6 +17,16 @@ use eldenring::cs::{GameDataMan, PlayerGameData};
 /// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
 pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
+/// `offset_of!` asks the COMPILER, and the compiler only knows what the sibling binding declares.
+/// That binding is a hand-written 1.16.2 model whose `unkNN` names have already been wrong once
+/// (`FD4StepTemplateBase::unk48` is at 0x50, and back-solving off it put
+/// `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` at 0x40 for its whole life), so the value is also pinned
+/// to a number the game's own instructions produce: `CS::GameDataMan::~GameDataMan` (1.16.2
+/// 0x140254d40, 1.17 0x140254d10, 1103 bytes) aligns 359/359 with 0x8 among its HELD offsets, and
+/// Ghidra's 1.16.2 type names it `mainPlayerGameData` there. This is the sibling of PlayerGameData
+/// that `check-object-field-offsets-1170.py`'s `offset_of!` guard does NOT cover, because that
+/// guard matches on `PlayerGameData` alone.
+const _: () = assert!(GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET == 0x08);
 
 pub const PGD_CURRENT_MAX_HP_14_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_max_hp);
