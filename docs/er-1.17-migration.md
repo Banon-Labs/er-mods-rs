@@ -13,7 +13,7 @@ blocked on. Update it as items close rather than starting a second list somewher
 | Seamless Co-op v1.9.9, via `er-ersc-sigshim` | Two AOB landmarks rebuilt; game reaches the title screen and ersc detours the relocated function. |
 | The build gate (`er-hook` + `er-game-base::game_build`) | 51 game-image detours refuse with a logged reason instead of corrupting the image; boot survives. |
 | Win32 / DirectInput detours | Resolved through `GetProcAddress`, never version-sensitive. 15 install normally. |
-| `eldenring-deobf-1.17.bin` | Generated offline by dearxan (1597 stubs, 1371 decrypted regions); byte-identical to live memory at three independently known sites. |
+| `eldenring-deobf-1.17.bin` | Generated offline by dearxan (1597 stubs, 1371 decrypted regions). Bit-reproducible from the installed `eldenring.exe`, and 99.909% of it is byte-identical to that executable -- every one of the 89,309 changed bytes lies inside a region dearxan declared, and no byte outside one moved. See "Did 1.17 add a new obfuscation technique" below. |
 | `docs/recon/rva-map-1162-to-1170.tsv` | 32 of the 51 refused addresses carried forward with evidence; the other 19 are named, not guessed. |
 | 27 translated detour targets | Three independent passes agree: signature re-occurrence, normalised instruction comparison, and `scripts/audit-1170-hook-targets.py`, which finds every one is a real function entry carrying the SAME reference profile it had in 1.16.2 (same call count, same kind). The control is decisive -- 24 of the 27 STALE addresses have zero references in the 1.17 image. |
 
@@ -724,3 +724,163 @@ Several are adjacent-sibling SWAPS, where `functions.tsv` crossed two same-shape
 onto `0x141ec7de0`/`0x141ec7e30`). Masked signature identity cannot separate those; a caller
 set can. Apply such a pair as a pair or not at all -- half a swap leaves one address
 pointing at the other's function.
+
+## Did 1.17 add a new obfuscation technique? No (2026-08-31)
+
+Everything this workspace does on 1.17 rests on `eldenring-deobf-1.17.bin` being a faithful
+de-Arxan'd rendering of the installed game. Until now the only evidence for that was one
+sentence -- "byte-identical to live memory at three independently known sites" -- which is a spot
+check across a 43 MB `.text`, not coverage. A new protection technique living anywhere those three
+samples did not fall would leave the image quietly wrong there, and every address, ledger row and
+hook target derived from those bytes would inherit the error without anything going red.
+
+**The verdict: no new technique.** The two builds' Arxan profiles are identical in every structural
+count, the deobfuscated image is bit-reproducible from the shipped executable, and a
+whole-image scan finds no undecrypted code. What that measurement can and cannot see is spelled
+out at the end, because it is the part worth remembering.
+
+### The profile comparison
+
+`scripts/dearxan-profile.rs` (built as a dearxan example, the same way
+`scripts/dearxan-deobfuscate.rs` is) reports the stub population broken down by KIND at every
+stage of dearxan's pipeline, so a new technique shows up as a new SHAPE rather than as a count
+moving. dearxan models three ciphers -- `Tea`, `Rmx`, `Sub` -- and a fourth would surface either as
+an analysis error bucket or as a region list whose "plaintext" is noise.
+
+The 1.16.2 `eldenring.exe` no longer exists on this machine (the game updated over it), so the two
+builds are compared in the form both still exist in: the DEOBFUSCATED flat image. That is a valid
+comparison because Arxan's stubs are never themselves encrypted, so stub discovery and region
+DECLARATION read identically from either form -- proven by running both forms of 1.17 and getting
+the same declared table.
+
+| measured from the deobfuscated flat image | 1.16.2 | 1.17 |
+| --- | --- | --- |
+| raw `test rsp, 15` candidates | 1619 | 1619 |
+| stubs analyzed | 1614 | 1614 |
+| analyzed ok / analysis errors | 1614 / **0** | 1614 / **0** |
+| stubs declaring encrypted regions | 169 | 169 |
+| inert stubs (checksum / anti-tamper / CFG) | 1445 | 1445 |
+| `Tea` region lists | 83 | 83 |
+| `Rmx` region lists | 39 | 39 |
+| `Sub` region lists | 47 | 47 |
+| `Tea` regions / plaintext bytes | 2781 / 280,452 | 2864 / 284,861 |
+| `Rmx` regions / plaintext bytes | 11,038 / 1,664,629 | 10,957 / 1,658,733 |
+| `Sub` regions / plaintext bytes | 14,165 / 2,619,834 | 14,159 / 2,626,737 |
+| lists whose plaintext is ALREADY in the image | 129 (39 Rmx, 47 Sub, 43 Tea) | 129 (39 Rmx, 47 Sub, 43 Tea) |
+| `.pdata` RUNTIME_FUNCTION entries | 235,862 | 235,904 |
+| Shannon entropy `.text` / Arxan `.text` / `.interpr` | 6.582 / 7.279 / 6.458 | 6.582 / 7.281 / 6.464 |
+
+Every structural count is the same number. Only the per-kind region and byte totals move, by under
+0.5%, which is what a build with 11 KB more code looks like. `.text` entropy is unchanged to three
+decimals -- a new encryption layer over any meaningful span would raise it.
+
+Measured instead from the installed 1.17 `.exe` (the ciphertext form, which is the only form the
+older build can no longer be read in): 1602 raw candidates, 1597 stubs, 1597 ok, 0 errors, 169
+declaring regions, 1428 inert, and the identical declared per-kind table. The +17 stub difference
+between the two forms is fully accounted for: decryption introduces 17 new `48 f7 c4 0f 00 00 00`
+byte sequences in Arxan's own `.text` (883 candidates there before, 900 after), and all 17 analyze
+as inert. So the exe-form count for 1.16.2 would have been 1597/1428 too -- which is exactly what
+`bd deobfuscated-er-image-tooling-2026` recorded for the run that produced `eldenring-deobf.bin`.
+
+**Only `Tea` is ever applied.** All 39 `Rmx` and all 47 `Sub` lists decrypt to bytes that are
+already at their RVAs -- they are self-verifying integrity data, not at-rest encryption -- and the
+resolver eliminates them on the entropy comparison. That holds identically in both builds. Of the
+83 `Tea` lists, 3 are likewise already-present and 40 are applied; the remaining 43 are the paired
+re-encryption stubs whose "plaintext" is the random filler that hides the code again.
+
+That subtraction is also how the 1.16.2 applied numbers survive without the executable. On 1.17,
+lists-present-in-the-deobf-image minus lists-present-in-the-cipher-image is
+`43/1493/195,552 - 3/122/106,243 = 40/1371/89,309`, which IS the applied set. The 1.16.2 deobf
+image gives `43/1451/193,088` for the first term; combined with the recorded 1330 regions / 87,364
+bytes applied, its second term must have been 121 regions / 105,724 bytes -- one region and 519
+bytes away from 1.17's. Internally consistent, so the old figure is corroborated rather than
+merely quoted.
+
+### The byte-identity evidence, widened from three sites to the whole image
+
+1. **Bit-reproducible.** Re-running `deobfuscate` on the currently installed `eldenring.exe`
+   produces sha256 `bc1daf4838d3dc2757719fb69855b1aa95f88825165636529b137e27888c1a76`, identical to
+   the `eldenring-deobf-1.17.bin` already on disk. The image is the tool's output for the build
+   that is installed right now -- not a stale artefact of some earlier copy, and not hand-touched.
+2. **Exhaustive diff against the shipped executable.** Mapping the installed `.exe` with dearxan's
+   own mapping rule and comparing all 98,604,544 bytes: exactly **1344 differing runs, 89,309
+   bytes**. The union of the 1371 applied regions is exactly those 1344 disjoint intervals and
+   exactly those 89,309 bytes. **Zero changed bytes fall outside a declared applied region, and
+   zero bytes inside one were left unchanged.** So 98,515,235 bytes -- 99.909% of the image,
+   including all of `.rdata`, `.data`, `.pdata` and `.reloc` -- are the shipped bytes untouched,
+   and the deobfuscator's entire footprint is accounted for region by region.
+3. **Residual-ciphertext scan** (`scripts/arxan-residual-scan.py`), the 2026-07-01 completeness
+   scan re-run against 1.17 and widened. Function entries come from `.pdata` (175,227 merged
+   extents) UNIONED with the 1.17 Ghidra dump's 366,189 functions -- which matters, because
+   `.pdata` is blind to unwindless leaves across 146,715 holes. Ghidra covers all but one of the
+   `.pdata` starts, so the union is 366,190 and 338,454 of them are long enough to judge.
+   **392 flagged as not-code (0.1158%), and 0 of them inside a region dearxan decrypted.**
+4. **The same scan on 1.16.2**: 338,688 scanned, **384 flagged (0.1134%)**, same species, same
+   clustering. The rate moves by 0.0024 percentage points between builds.
+
+The 392 are not defects and not missed decryptions. 365 begin `E9` (`jmp rel32`) and 12 begin `EB`
+(`jmp rel8`) -- 96% are Arxan control-flow trampolines whose declared extent runs past the jump
+into filler. The other 15 open with clean prologues or Arxan's `lea rsp,[rsp+8]; jmp [rsp-8]`
+return gadget. That is the same conclusion the 2026-07-01 scan reached on the previous build, and
+it still holds: the residue is Arxan CONTROL-FLOW obfuscation, a separate layer that is out of
+dearxan's decryption scope and is present in a runtime dump too. Arxan's own `.text` section
+(14,856 Ghidra functions in 1.17, 14,883 in 1.16.2) was scanned as well and flagged **zero** in
+either build.
+
+The scan's thresholds were calibrated, not chosen. 1.17 supplies a labelled dataset for free: the
+same 1371 spans exist as ciphertext in the `.exe` and as plaintext in the deobfuscated image. Over
+the 831 spans of at least 32 bytes the rule flags **88.2% of ciphertext, 0.0% of plaintext**, and
+0.225% of 4000 random control functions. Sensitivity is per function; a missed region covers a run
+of them, and three consecutive escapes have probability 0.0017.
+
+### Two premises corrected along the way
+
+* **The two `.text` sections are not a 1.17 asymmetry.** Both builds carry eleven sections with the
+  same names in the same order, including two executable `.text`: the game's at RVA `0x1000`, and
+  Arxan's at `0x4c0e000` (1.16.2) / `0x4c13000` (1.17). Arxan's grew by `0x2e00` bytes, in
+  proportion with the game's `0x2c00`. Nothing about the section layout changed.
+* **`find-deobf-bytes.py` does search the second `.text`** -- it scans the whole flat file. Its
+  blind spot is `MAX_HITS = 64`: results come out in ascending address order, so a pattern common
+  in the game's `.text` fills the budget in the first half-megabyte and the tool returns before
+  reaching Arxan's section. `4883ec28` reports 64 hits, all below `0x14007b000`. That is a
+  truncation to be aware of when reading a negative result, not a section restriction.
+* `eldenring-deobf.bin` is **2.6.2.0** -- confirmed from its own `VS_VERSIONINFO`, against
+  2.7.0.0 for both the installed `.exe` and `eldenring-deobf-1.17.bin`. The bd memory that recorded
+  its generation labels the run "1.16.1"; the label is wrong, the image is 1.16.2, and its
+  1597-stub / 1330-region figures are therefore the 1.16.2 baseline.
+
+### What this measurement would have missed
+
+The most useful sentence here, because a clean negative is only worth what its blind spots allow.
+
+* **Anything that does not change bytes at rest.** A runtime-only integrity check, a new anti-debug
+  or timing probe, a stub that decrypts and re-encrypts within a single call -- all of them leave
+  the static image identical to a build that has none of them. Every number above is a statement
+  about the file on disk. Nothing here reads the running game.
+* **A cipher whose stub does not open with `test rsp, 15`.** That one 7-byte sequence is dearxan's
+  entire discovery seed, so a protection introduced with a different stub prologue is invisible to
+  the profiler AND to dearxan itself. The residual scan is the backstop for exactly that case --
+  it sees the EFFECT (code that is not code) without needing to find the cause -- but only at 88%
+  per function, and only where a function is declared.
+* **Encrypted DATA that no function declares.** The scan is function-entry driven, so an encrypted
+  `.rdata` blob or vtable with no `.pdata` entry and no Ghidra function would not be examined.
+* **The 27,736 functions (7.6%) shorter than 8 bytes**, where there is not enough signal to judge.
+* **Live memory is still three sites.** Comparing the static image against the running process
+  would need a game launch, and none was made. If Arxan's runtime behaviour diverges from its
+  at-rest layout by design, that divergence is invisible offline by construction.
+
+### Reproducing it, cheaply, at the next game update
+
+```bash
+cp -f scripts/dearxan-profile.rs ../dearxan/examples/profile.rs
+cd ../dearxan && cargo build --release --example profile --no-default-features --features rayon
+./target/release/examples/profile "<game>/eldenring.exe" --regions /tmp/regions.tsv
+./target/release/examples/profile <old-deobf>.bin --mapped     # the previous build's baseline
+python3 scripts/dump-ghidra-function-list.py --port 8767 --out /tmp/funcs.tsv
+uv run --with capstone python3 scripts/arxan-residual-scan.py \
+    --image eldenring-deobf-<ver>.bin --functions /tmp/funcs.tsv --regions /tmp/regions.tsv
+uv run --with capstone python3 scripts/arxan-residual-scan.py --selftest
+```
+
+Each profile run takes 0.3s and the residual scan a few minutes. Compare against the 1.16.2 and
+1.17 columns above; a new technique is a new row shape, not a moved count.
