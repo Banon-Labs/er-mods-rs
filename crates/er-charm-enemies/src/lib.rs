@@ -81,6 +81,19 @@ fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
     er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
 }
 
+/// Put the toggle into force, from wherever it moved -- a keypress or the config file.
+///
+/// `remove_on_disable` is passed in rather than read here because both callers already hold, or
+/// have just released, the config lock; taking it again inside would be one nested lock away from
+/// a deadlock for no benefit.
+#[cfg(windows)]
+fn apply_enabled_state(enabled: bool, remove_on_disable: bool) {
+    ENABLED.store(enabled, Ordering::SeqCst);
+    // Turning it on cancels a strip sweep that has not run yet; turning it off schedules one, but
+    // only if the player asked for the charm to be taken back off rather than left to lapse.
+    DISABLE_SWEEP_PENDING.store(!enabled && remove_on_disable, Ordering::SeqCst);
+}
+
 /// Consume the presses the hook queued. An even number is a press and a release of the toggle, so
 /// only the parity matters.
 #[cfg(windows)]
@@ -91,15 +104,34 @@ fn consume_hotkey_presses() {
         return;
     }
     let enabled = !ENABLED.fetch_xor(true, Ordering::SeqCst);
-    if enabled {
-        DISABLE_SWEEP_PENDING.store(false, Ordering::SeqCst);
-    } else {
-        DISABLE_SWEEP_PENDING.store(config::config().remove_on_disable, Ordering::SeqCst);
+
+    // WRITE IT BACK. Without this the toggle is a per-session thing and every launch starts off,
+    // which for a feature you turn on and leave on is the same as not remembering it at all. The
+    // write re-reads the file first, so it also picks up an edit made since the last poll.
+    let outcome = config::persist_enabled(enabled);
+    let config = config::config();
+    apply_enabled_state(enabled, config.remove_on_disable);
+
+    match &outcome.error {
+        None => charm_log(format_args!(
+            "hotkey: charm-all-enemies toggled {}; wrote enabled={enabled} to {}",
+            if enabled { "ON" } else { "OFF" },
+            config.config_path.display()
+        )),
+        Some(error) => charm_log(format_args!(
+            "hotkey: charm-all-enemies toggled {}; FAILED to write {} ({error}) -- the toggle is \
+             live but will not survive a relaunch",
+            if enabled { "ON" } else { "OFF" },
+            config.config_path.display()
+        )),
     }
-    charm_log(format_args!(
-        "hotkey: charm-all-enemies toggled {}",
-        if enabled { "ON" } else { "OFF" }
-    ));
+
+    // The read-back can carry an edit the player made in the last second. It is in force already;
+    // this names it and resets the key edge state if the hotkey itself is what moved.
+    config::log_update(&outcome.update);
+    if outcome.update.hotkey_moved.is_some() {
+        hotkey::rebind(config::live_hotkey());
+    }
 }
 
 /// Re-read `er-charm-enemies.toml` and adopt anything that moved.
@@ -116,6 +148,11 @@ fn poll_config_reload() {
     config::log_update(&update);
     if update.hotkey_moved.is_some() {
         hotkey::rebind(config::live_hotkey());
+    }
+    // Editing `enabled` by hand is a second way to work the toggle, and it has to do everything
+    // the keypress does -- including scheduling the strip sweep when it goes off.
+    if let Some((_, enabled)) = update.enabled_moved {
+        apply_enabled_state(enabled, config::config().remove_on_disable);
     }
 }
 
@@ -171,9 +208,13 @@ fn tick() {
         // Count even when the toggle is off, so the log shows whether the enemy walk is finding
         // anything without needing the feature turned on to find out.
         let counts = charm::sweep(config.effect_id, SweepMode::Count);
+        let (persist_writes, persist_failures) = config::persist_tallies();
         charm_log(format_args!(
-            "status: enabled={} hotkey={} hook={} loaded_enemies={} charmed_now={} charmable={} speffect_rows={} keyboard_reads={} non_keyboard_reads={} suppressed_trigger_reads={} applied_total={} removed_total={}",
+            "status: enabled={} persisted_enabled={} persist_writes={} persist_failures={} hotkey={} hook={} loaded_enemies={} charmed_now={} charmable={} speffect_rows={} keyboard_reads={} non_keyboard_reads={} suppressed_trigger_reads={} applied_total={} removed_total={}",
             enabled,
+            config.enabled,
+            persist_writes,
+            persist_failures,
             er_hotkey_config::chord_name(config.hotkey()),
             hotkey::hook_installed(),
             counts.enemies,
@@ -213,9 +254,20 @@ fn spawn_game_task() {
 fn install() {
     log::reset_log_file();
     let config = config::init_config();
+    // RESTORE. `enabled` is written back on every toggle, so whatever the player left it as is
+    // what the file says now; starting from the built-in `false` regardless would make the
+    // write-back pointless.
+    //
+    // The store is direct rather than through `apply_enabled_state` because that one also
+    // SCHEDULES the strip sweep when the state is off, and at attach there is nothing charmed to
+    // strip -- it would spend the first frame walking the world to remove an effect from nobody
+    // and say so in the log.
+    ENABLED.store(config.enabled, Ordering::SeqCst);
     charm_log(format_args!(
-        "er-charm-enemies attach: hotkey={:?} ({}) effect_id={} remove_on_disable={} config={} \
+        "er-charm-enemies attach: enabled={} (restored from the config) hotkey={:?} ({}) \
+         effect_id={} remove_on_disable={} config={} \
          -- edits to that file take effect while the game runs, no restart",
+        config.enabled,
         config.hotkey_text,
         er_hotkey_config::chord_name(config.hotkey()),
         config.effect_id,
