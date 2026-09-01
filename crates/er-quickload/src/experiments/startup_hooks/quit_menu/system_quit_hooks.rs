@@ -13,7 +13,7 @@ pub(crate) fn install_system_quit_continue_confirm_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(CONTINUE_CONFIRM_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(CONTINUE_CONFIRM_RVA as u32) else {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve continue_confirm rva 0x{CONTINUE_CONFIRM_RVA:x}"
         ));
@@ -103,7 +103,7 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
+    let Ok(addr) = game_rva_for_hook(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
         append_autoload_debug(format_args!(
             "child-finish-request: failed to resolve rva 0x{EZ_CHILD_STEP_REQUEST_FINISH_RVA:x}"
         ));
@@ -457,12 +457,41 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     if warp_clear_is_disarmed_for_epoch(epoch) {
         return;
     }
-    let ss_off = core::mem::offset_of!(eldenring::cs::GameMan, save_state);
+    // THE saveState HALF OF THIS CLEAR IS GONE, AND IT WAS THE SAVE WEDGE (2026-08-31).
+    //
+    // It used to read `if saveState > 0 { saveState = 0 }`, every frame, for the whole
+    // pre-finalize window. `> 0` does not mean "idle residue", which is what the comment above
+    // calls it: saveState == 1 means the NATIVE SAVE LANE OWNS THE SL DEVICE AND IS MID-WRITE.
+    // Clearing it there disarms `DoSaveStuff`'s `IsSaveState1` arm, so the completion is never
+    // polled natively, the device keeps the finished job latched on `iodev+0x10`/`+0x20`, and
+    // every later save is declined for the rest of the session.
+    //
+    // Witnessed, not inferred: a hardware write watchpoint on `GameMan+0xb80` (run
+    // `wedge-watchpoint-20260831-q`, via `scripts/er-winedbg-watchpoint.py`) caught the pair
+    // twice on the game task thread -- the game's own `movl $1,0xb80(%rcx)` at `0x14067ca24`,
+    // then 226 ms / 113 ms later `mov byte ptr [rdi],0` at `er_quickload.dll+0x78a28`, which is
+    // THIS statement. Five earlier investigations found no native writer because there is none:
+    // the game-image writer set is byte-complete and was correctly silent.
+    //
+    // Nothing is lost by removing it. `cVar10` -- the ending-request flag this whole block
+    // exists to hold at 0 -- is assigned in `FUN_140afa6d0` from `menuData->field_0x5d`,
+    // `GameManIsWarpRequested()` (`GameMan+0x10`), `FUN_140679430` (`+0xb7c`), `FUN_140679440`
+    // (`+0xb7d`), `FUN_140e62aa0() == 8`, and the bot/pad/session bools. `+0xb80` is not among
+    // them, and `MoveMapStep::_CheckEndingRequest` does not read it either -- it CALLS
+    // `RequestSave(false)`, i.e. it is what causes `saveState = 1` in the first place. So the
+    // clear could never have held `cVar10` down; it only stole the mutex. The `GameMan+0x10`
+    // clear below is the load-bearing half and is untouched.
+    //
+    // Measured same-commit A/B (`scripts/run-samechar-3x-threedll.sh`, char Menace RL9 slot 0):
+    // baseline `wedge-baseline-20260831-u` declines=1 latched_declines=1 orphan_detections=1;
+    // with this removed, `wedge-fix-20260831-r` and `-s` both 0/0/0, and load2 reaches
+    // loading-bar step 500 instead of stalling at step 1.
+    //
+    // Do not reintroduce a saveState write here in any form. If a future load genuinely needs
+    // the device idle, WAIT for the native owner to release it (the save's own drain finishes in
+    // ~100-250 ms) instead of taking it away mid-write.
     if let Ok(gm) = unsafe { eldenring::cs::GameMan::instance() } {
         let gm_addr = gm as *const _ as usize;
-        if unsafe { safe_read_u8(gm_addr + ss_off) }.unwrap_or(0) > 0 {
-            unsafe { *((gm_addr + ss_off) as *mut u8) = 0 };
-        }
         let warp_off = crate::constants::GAME_MAN_WARP_REQUESTED_10_OFFSET;
         let warp = unsafe { safe_read_u8(gm_addr + warp_off) }.unwrap_or(0);
         if warp != 0 {
@@ -629,7 +658,7 @@ pub(crate) fn mh_install_hook_once(
 }
 
 pub(crate) fn install_system_quit_profile_load_activate_hook() {
-    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog activation rva 0x{SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA:x}"
         ));
@@ -647,7 +676,7 @@ pub(crate) fn install_system_quit_profile_load_activate_hook() {
 }
 
 pub(crate) fn install_system_quit_profile_load_confirmed_hook() {
-    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog confirmed-load rva 0x{SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA:x}"
         ));
@@ -665,7 +694,7 @@ pub(crate) fn install_system_quit_profile_load_confirmed_hook() {
 }
 
 pub(crate) fn install_system_quit_profile_load_job_run_hook() {
-    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog load-job Run rva 0x{SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA:x}"
         ));

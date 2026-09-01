@@ -345,6 +345,32 @@ pub(crate) const PLAYER_GAME_DATA_NAME_GETTER_RVA: usize = 0x25f8e0;
 pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// SOMEONE HAS ALREADY ATTEMPTED `install_profile_row_populate_hook` -- claimed with a `swap`,
+/// before any work, exactly as [`TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED`] is.
+///
+/// Same two-owner shape as that one, and found in the same sweep: `install_title_visual_startup_hooks`
+/// calls the installer synchronously (`experiments/lifecycle/title_visual_startup.rs:31`, so the
+/// name getter is live before the first row populate) and then AGAIN from the thread it spawns two
+/// lines later (`:37`). Only sequencing has kept it from firing -- the spawn happens after the
+/// synchronous call returns -- and sequencing is not a guarantee: a scheduler that runs the new
+/// thread while the parent is still inside the installer reproduces the measured named-child race
+/// verbatim, four detours at a time.
+///
+/// The four per-row `_INSTALLED` latches below it cannot stand in for this. Each is stored only
+/// after its own `MH_ApplyQueued` succeeds, so a check-then-act READ of one is exactly the window
+/// two threads walk through together; and each covers one row, whereas the race is over the whole
+/// installer. Kept separate from those latches for the same reason the named-child claim is: they
+/// answer "is this hook live", which must stay honest about a failed install, and a claim answers
+/// "has anyone tried", which must be true even when the try failed.
+///
+/// A claim rather than a retry latch because every failure reachable inside the installer is
+/// permanent: `MH_ERROR_ALREADY_CREATED` (MinHook holds the registration for the life of the
+/// process), a refused address (`MhHook::new` -> `resolve_target` has no verified mapping for this
+/// build, and will not grow one at runtime), and `MH_Initialize` failing for anything other than
+/// `ALREADY_INITIALIZED`. None of them can succeed on a second attempt. `game_rva_for_hook` is the
+/// only step that could in principle be transient, and it is not: it is `GetModuleHandleA(NULL)`
+/// plus an add, which cannot fail once the DLL is loaded into the process.
+pub(crate) static PROFILE_ROW_POPULATE_CLAIMED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.

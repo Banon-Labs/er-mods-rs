@@ -1,16 +1,15 @@
 use super::*;
 use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64};
 
-/// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
+/// Install the row-populate hook (`FUN_1408758d0`). Runs at most once per process -- the claim is
+/// the first statement -- and mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
-    let current_row_installed =
-        PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
-    let player_name_getter_installed =
-        PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) != 0;
-    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0
-        && current_row_installed
-        && player_name_getter_installed
-    {
+    // ONE CLAIM, not a check-then-act read of the success latches -- this installer has TWO owners
+    // (`title_visual_startup.rs:31` synchronously, then `:37` on the thread that call spawns), and
+    // every latch it could consult instead is stored only after its own apply succeeds. See
+    // `PROFILE_ROW_POPULATE_CLAIMED`, and `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED` for the
+    // sibling that was measured racing rather than merely able to.
+    if PROFILE_ROW_POPULATE_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
     match unsafe { MH_Initialize() } {
@@ -31,7 +30,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         if PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) != 0 {
             break 'name_getter;
         }
-        let Ok(addr) = game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
+        let Ok(addr) = game_rva_for_hook(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
             append_autoload_debug(format_args!(
                 "stats-text: REFUSED player-name getter -- rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
@@ -74,7 +73,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
             break 'row_populate;
         }
-        let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
+        let Ok(addr) = game_rva_for_hook(PROFILE_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
                 "stats-text: REFUSED row-populate -- rva 0x{PROFILE_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
@@ -120,7 +119,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) != 0 {
             break 'row_model_build;
         }
-        let Ok(addr) = game_rva(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
+        let Ok(addr) = game_rva_for_hook(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
             append_autoload_debug(format_args!(
                 "stats-text: REFUSED row-model-build -- rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
@@ -159,10 +158,10 @@ pub(crate) fn install_profile_row_populate_hook() {
         }
     }
     'current_row: {
-        if current_row_installed {
+        if PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET {
             break 'current_row;
         }
-        let Ok(addr) = game_rva(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
+        let Ok(addr) = game_rva_for_hook(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
                 "stats-text: REFUSED title-load row-populate -- rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
             ));
@@ -263,7 +262,7 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_GFX_VALUE_SET_VISIBLE_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_GFX_VALUE_SET_VISIBLE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve GFx visibility setter rva 0x{TITLE_GFX_VALUE_SET_VISIBLE_RVA:x}"
         ));
@@ -400,7 +399,7 @@ pub(crate) fn install_title_logo_start_login_hide_hook() {
             return;
         }
     }
-    let Ok(start_login_addr) = game_rva(TITLE_TOP_START_LOGIN_RVA as u32) else {
+    let Ok(start_login_addr) = game_rva_for_hook(TITLE_TOP_START_LOGIN_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve TitleTopDialog start-login rva 0x{TITLE_TOP_START_LOGIN_RVA:x}"
         ));
@@ -455,7 +454,7 @@ pub(crate) fn install_title_pab_information_visual_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA as u32) else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve PAB/TitleInformation wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA:x}"
         ));
@@ -509,7 +508,8 @@ pub(crate) fn install_title_native_menu_visual_suppression_hook() {
             return;
         }
     }
-    let Ok(begin_title_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA as u32) else {
+    let Ok(begin_title_addr) = game_rva_for_hook(TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA as u32)
+    else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve BeginTitle visual wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA:x}"
         ));
@@ -567,7 +567,8 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
             return;
         }
     }
-    let Ok(fadein_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA as u32) else {
+    let Ok(fadein_addr) = game_rva_for_hook(TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA as u32)
+    else {
         append_autoload_debug(format_args!(
             "title-cover-part-a: failed to resolve MenuWindowJob FadeIn helper rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA:x}"
         ));
@@ -1177,37 +1178,28 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
             )),
         }
     }
-    let Ok(builder_addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: direct return-title chain abort source={source} -- builder rva 0x{SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA:x} unresolved"
-        ));
-        return false;
-    };
-    let Ok(submit_addr) = game_rva(MENU_JOB_SUBMIT_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: direct return-title chain abort source={source} -- submit rva 0x{MENU_JOB_SUBMIT_RVA:x} unresolved"
-        ));
-        return false;
-    };
-    let builder: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(builder_addr) };
-    let submit: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(submit_addr) };
-    let mut job_slot: usize = 0;
-    let job_slot_ptr = (&raw mut job_slot) as usize;
-    unsafe { builder(job_slot_ptr, list) };
-    let job = job_slot;
-    if job < HEAP_LO {
-        append_autoload_debug(format_args!(
-            "system-quit-quickload: direct return-title chain builder produced no plausible job source={source} dialog=0x{system_dialog:x} list=0x{list:x} job=0x{job:x}"
-        ));
-        return false;
-    }
+    // NO NATIVE CONFIRM CHAIN IS SUBMITTED (P0 fix, run br-20260831-160354-2513).
+    // `SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA` (1.16.2 0x79d700 == 1.17 0x79e580) builds a
+    // FixOrderJobSequence of FIVE jobs whose HEAD is a MessageBox job (FUN_1407b73d0) carrying
+    // `GetGR_Dialogues(110000)` -- engus "Save the game and return to title menu?", anchor
+    // L"\u{6c7a}\u{5b9a}" -- the vanilla Quit-Game confirm. Submitting it is the sole reason a
+    // `CS::MessageBoxDialog` was ever built on the switch path (`msgbox-skip #0
+    // scope=switch-active`; game callers 0x1407b1347 = the dialog factory FUN_1407b1270,
+    // 0x1407ae13c = CS::MenuWindowJob::Run, 0x1407ab13b = FixOrderJobSequence::Run).
+    // The box's only semantic side effect is the user's yes/no gate on advancing that sequence to
+    // its FINAL job, FUN_14079f690 == `SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA` -- which we
+    // already build and submit ourselves, without UI, from the bc4==READY path (that path also owns
+    // `system_quit_save_swap_recommit_after_return_title_save`, so it must stay where it is).
+    // With the head suppressed its factory returns null, and `MenuWindowJob::Run`'s
+    // `owningMenuWindow == 0` path sets MenuJobResult Failed -- terminal after ONE Run (hence
+    // exactly one msgbox-skip, never a #1), so the sequence aborts and jobs 2..5 never execute. The
+    // submit was pure overhead whose one observable effect was a MessageBoxDialog build, plus a job
+    // that held the queue not-ready and delayed the real final functor. Bump the counter that path
+    // gates on and submit nothing.
     SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "system-quit-quickload: direct return-title chain SUBMIT source={source} builder=0x{builder_addr:x} submit=0x{submit_addr:x} dialog=0x{system_dialog:x} queue=0x{queue:x} list=0x{list:x} job=0x{job:x}; waiting for real title menu rebuild before Continue fallback"
+        "system-quit-quickload: direct return-title chain ARMED source={source} dialog=0x{system_dialog:x} queue=0x{queue:x} list=0x{list:x} -- native confirm chain 0x{SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA:x} deliberately NOT submitted (its head is the GR_Dialogues(110000) return-to-title MessageBox); the final functor fires from the bc4==READY path"
     ));
-    unsafe { submit(queue, job_slot_ptr) };
     true
 }
 

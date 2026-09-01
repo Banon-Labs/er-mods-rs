@@ -743,7 +743,20 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
 /// player present), skip the deserialize+warp and report success -- so `DoSaveStuff` completes (clears
 /// its pending slot) and ProfileSelect closes, but nothing loads into the live world. At a clean title
 /// (player absent, or phase past the transition) it forwards to the real load so the autoload works.
-pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i32) -> usize {
+///
+/// UNION-SHAPED, not `fn(i32)` (2026-08-31). The native takes ONE integer in ECX and touches no
+/// XMM register (checked on the 1.17 image at `0x14067c0e0`: 112 instructions, zero XMM), so the
+/// union's four-integer signature fits it -- `b`/`c`/`d` are whatever the caller happened to leave
+/// in RDX/R8/R9 and are forwarded untouched. The shape matters because `orig` may be the NEXT
+/// HANDLER in the chain rather than the game trampoline, and a next handler must be called through
+/// the four-argument signature.
+pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
+    slot_arg: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = slot_arg as u32 as i32;
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     let in_transition = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
@@ -763,8 +776,8 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
     if orig == HOOK_ORIGINAL_UNSET {
         return 0;
     }
-    let original: unsafe extern "system" fn(i32) -> usize = unsafe { std::mem::transmute(orig) };
-    let ret = unsafe { original(slot) };
+    let original: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { original(slot_arg, b, c, d) };
     let selected = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
     if ret != 0 && selected < TITLE_PROFILE_SLOT_COUNT && slot == selected as i32 {
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
@@ -790,56 +803,40 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
     ret
 }
 
+/// THIS GUARD REGISTERS THROUGH THE UNION, and until 2026-08-31 it did not -- so it did not exist.
+///
+/// A bare `MhHook::new` here lost the address to the product's OWN menu-trace observer
+/// (`b80_deserialize_67b290`, `experiments/trace/menu_trace_hooks.rs`), which unions
+/// `DESERIALIZE_SLOT_RVA` -- the same `0x67b290` -- at boot. Measured in run
+/// `br-20260831-160354-2513`: `register_union_hook` translated it to `0x14067c0e0` at +1288ms, this
+/// installer arrived later, `MH_CreateHook` answered `MH_ERROR_ALREADY_CREATED`, and the guard was
+/// simply absent for the rest of the session (`system_quit_inworld_load_skip_count = 0`). Nothing
+/// crashed; the picked slot was free to deserialize into the still-live world.
+///
+/// `mh_install_hook_once` is the right primitive rather than a permanent `*_CLAIMED.swap(1)`,
+/// because this installer is LAZY and REPEATED: `system_quit_arm_quickload_autoload` calls it every
+/// time a switch arms, and a failure there (module base not yet readable, a refused address) must
+/// leave the next arm free to retry. The permanent-claim idiom is for installers whose every
+/// reachable failure is permanent.
 pub(crate) fn install_system_quit_inworld_load_guard() {
-    if SYSTEM_QUIT_INWORLD_LOAD_INSTALLED.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-quickload: MH_Initialize for in-world load guard failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let Ok(addr) = game_rva(SYSTEM_QUIT_INWORLD_LOAD_RVA) else {
+    // UNRESOLVED on purpose: `register_union_hook` inside `mh_install_hook_once` owns the single
+    // 1.16.2 -> 1.17 resolve. `game_rva` here would be the double-resolve shape
+    // `scripts/check-double-resolved-hook-targets.py` refuses.
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_INWORLD_LOAD_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve in-world load rva 0x{SYSTEM_QUIT_INWORLD_LOAD_RVA:x}"
         ));
         return;
     };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_inworld_load_skip_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_INWORLD_LOAD_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: queue_enable in-world load guard failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    SYSTEM_QUIT_INWORLD_LOAD_INSTALLED.store(1, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "system-quit-quickload: hooked in-world load routine 0x{addr:x}; picked-slot deserialize skipped while old world up, forwarded at clean title"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-quickload: MH_ApplyQueued in-world load guard failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-quickload: MhHook::new in-world load guard failed: {status:?}"
-        )),
-    }
+    mh_install_hook_once(
+        &SYSTEM_QUIT_INWORLD_LOAD_INSTALLED,
+        SYSTEM_QUIT_INWORLD_LOAD_NOT_INSTALLED,
+        SYSTEM_QUIT_INWORLD_LOAD_INSTALLED_YES,
+        addr,
+        system_quit_inworld_load_skip_hook as *mut c_void,
+        &SYSTEM_QUIT_INWORLD_LOAD_ORIG,
+        "in-world load guard",
+    );
 }
 
 /// Guard on the native in-world load REQUEST `CS::GameMan::RequestLoadSlot(slot)` (FUN_14067b2f0, live
@@ -854,7 +851,17 @@ pub(crate) fn install_system_quit_inworld_load_guard() {
 /// clean-title autoload and any normal load work. The boot/Continue autoload uses the distinct sentinel
 /// variants (FUN_14067b290 slot 10 / FUN_14067b570 slot 0xb), which this hook does not touch. See bd
 /// system-quit-loadjob-success-commits-phantom-load-2026-07-01.
-pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(slot: u32) -> usize {
+///
+/// UNION-SHAPED for the same reason as its in-world-load sibling: one integer in ECX, zero XMM in
+/// the whole body (checked on the 1.17 image at `0x14067c050`: 40 instructions), and `orig` may be
+/// the next chained handler rather than the game trampoline.
+pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(
+    slot_arg: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let slot = slot_arg as u32;
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     // Range-gate like the sibling system_quit_inworld_load_skip_hook (NOT `!= IDLE`): the clean-title
     // reload runs at AUTOLOAD_HANDOFF and re-creates a present player, so a `!= IDLE` gate would
@@ -881,60 +888,32 @@ pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(slot: u3
     if orig == HOOK_ORIGINAL_UNSET {
         return 0;
     }
-    let original: unsafe extern "system" fn(u32) -> usize = unsafe { std::mem::transmute(orig) };
-    unsafe { original(slot) }
+    let original: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };
+    unsafe { original(slot_arg, b, c, d) }
 }
 
+/// Registers through the union, for the reason spelled out on
+/// [`install_system_quit_inworld_load_guard`]. This one lost `0x67b200` to the menu trace's
+/// `b80_loadsavedata_67b200` observer, translated to `0x14067c050` at +1172ms in run
+/// `br-20260831-160354-2513`, leaving `system_quit_request_load_slot_block_count` and
+/// `..._allow_count` both at zero -- the guard was never in the process.
 pub(crate) fn install_system_quit_request_load_slot_guard() {
-    if SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-quickload: MH_Initialize for RequestLoadSlot guard failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let Ok(addr) = game_rva(SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA) else {
+    // UNRESOLVED on purpose -- see the sibling installer.
+    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve RequestLoadSlot rva 0x{SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA:x}"
         ));
         return;
     };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_request_load_slot_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: queue_enable RequestLoadSlot guard failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED.store(1, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "system-quit-quickload: hooked in-world load request RequestLoadSlot 0x{addr:x}; saveState/b80=2 arm neutralized while old world up, forwarded at clean title"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-quickload: MH_ApplyQueued RequestLoadSlot guard failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-quickload: MhHook::new RequestLoadSlot guard failed: {status:?}"
-        )),
-    }
+    mh_install_hook_once(
+        &SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED,
+        SYSTEM_QUIT_REQUEST_LOAD_SLOT_NOT_INSTALLED,
+        SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED_YES,
+        addr,
+        system_quit_request_load_slot_hook as *mut c_void,
+        &SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG,
+        "RequestLoadSlot guard",
+    );
 }
 
 /// Guard on the native title Continue confirm `0x140b0e180` (rcx = the {[+8]=owner} shim; reads
