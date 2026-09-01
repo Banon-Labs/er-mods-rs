@@ -95,9 +95,14 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
    teardown) become dead -- update the script logic, don't leave dead branches.
    `y22i-windows-ab-probe.py` is A-only -- delete it. Do NOT touch
    `check-runtime-probe-contract.py` / `check-autoload-happy-path.py` unless
-   an oracle they read is actually removed; if `oracle_title_portrait_visible_surface_bound`
-   is removed with the title-cover portrait bits, change the contract checker
-   and `test-runtime-probe-contract.py` together in one commit.
+   an oracle they read is actually removed. DONE 2026-08-31 for
+   `oracle_title_portrait_visible_surface_bound`: it was removed (its counter had
+   no write site anywhere), and `check-runtime-probe-contract.py` +
+   `test-runtime-probe-contract.py` were repointed at
+   `oracle_portrait_onto_draw_hits` -- the capture predicate's real gate -- in the
+   same commit. Note the trap that instruction only half-covers: leaving the dead
+   name in a REMOVAL COMMENT still satisfies a substring contract check, so the
+   requirement has to move, not just the code.
 5. A-only deps to drop from the root crate if verified dead after deletion:
    `er-tpf` (forge-only per map), `Win32_Graphics_Direct3D_Fxc` (A's HLSL
    compile).
