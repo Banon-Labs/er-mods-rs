@@ -144,13 +144,33 @@ impl Edges {
     }
 }
 
-/// Read controller 0's `wButtons`. Zero when no pad is connected or XInput is absent.
-///
-/// Resolved through `GetModuleHandle`, never `LoadLibrary`: the game loads XInput for its own
-/// gamepad support, so if none of the three names is present the session is keyboard-only and the
-/// pad binding is simply unavailable -- not an error worth logging sixty times a second.
 #[cfg(windows)]
-pub(crate) fn read_pad_buttons() -> u16 {
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct XInputGamepadRaw {
+    buttons: u16,
+    left_trigger: u8,
+    right_trigger: u8,
+    thumb_lx: i16,
+    thumb_ly: i16,
+    thumb_rx: i16,
+    thumb_ry: i16,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct XInputStateRaw {
+    packet: u32,
+    gamepad: XInputGamepadRaw,
+}
+
+/// Sample controller 0 and hand the state to `use_state`, or do nothing when there is no pad.
+///
+/// One resolution of `XInputGetState`, shared by the two readers, so the DLL search happens once
+/// per process rather than once per consumer.
+#[cfg(windows)]
+fn with_pad_state(use_state: impl FnOnce(&XInputStateRaw)) {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use windows::{
@@ -161,28 +181,11 @@ pub(crate) fn read_pad_buttons() -> u16 {
     static XINPUT_GET_STATE: AtomicUsize = AtomicUsize::new(0);
     const PROC_ABSENT: usize = usize::MAX;
 
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct XInputGamepadRaw {
-        buttons: u16,
-        left_trigger: u8,
-        right_trigger: u8,
-        thumb_lx: i16,
-        thumb_ly: i16,
-        thumb_rx: i16,
-        thumb_ry: i16,
-    }
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct XInputStateRaw {
-        packet: u32,
-        gamepad: XInputGamepadRaw,
-    }
     type XInputGetStateFn = unsafe extern "system" fn(u32, *mut XInputStateRaw) -> u32;
 
     let cached = XINPUT_GET_STATE.load(Ordering::SeqCst);
     if cached == PROC_ABSENT {
-        return 0;
+        return;
     }
     let proc: XInputGetStateFn = if cached == 0 {
         let mut found = 0usize;
@@ -199,7 +202,7 @@ pub(crate) fn read_pad_buttons() -> u16 {
         }
         if found == 0 {
             XINPUT_GET_STATE.store(PROC_ABSENT, Ordering::SeqCst);
-            return 0;
+            return;
         }
         XINPUT_GET_STATE.store(found, Ordering::SeqCst);
         unsafe { std::mem::transmute::<usize, XInputGetStateFn>(found) }
@@ -210,15 +213,48 @@ pub(crate) fn read_pad_buttons() -> u16 {
     let mut state = XInputStateRaw::default();
     // ERROR_SUCCESS(0) == connected. Any other result means no pad in slot 0.
     if unsafe { proc(0, &raw mut state) } == 0 {
-        state.gamepad.buttons
-    } else {
-        0
+        use_state(&state);
     }
+}
+
+/// Read controller 0's `wButtons`. Zero when no pad is connected or XInput is absent.
+///
+/// Resolved through `GetModuleHandle`, never `LoadLibrary`: the game loads XInput for its own
+/// gamepad support, so if none of the three names is present the session is keyboard-only and the
+/// pad binding is simply unavailable -- not an error worth logging sixty times a second.
+#[cfg(windows)]
+pub(crate) fn read_pad_buttons() -> u16 {
+    let mut buttons = 0;
+    with_pad_state(|state| buttons = state.gamepad.buttons);
+    buttons
 }
 
 #[cfg(not(windows))]
 pub(crate) const fn read_pad_buttons() -> u16 {
     0
+}
+
+/// Controller 0's LEFT thumbstick, raw. `None` when no pad is connected.
+///
+/// A second `XInputGetState` call rather than widening [`read_pad_buttons`]'s return, because the
+/// two have different lifetimes in the frame: the buttons are sampled BEFORE the config reload so
+/// a rebind can seed its latch from them, and the stick is read much later and only while
+/// something is possessed. Threading a tuple from the first call down to the second consumer would
+/// tie an ordering constraint that exists for the latches onto a reader that does not have one.
+///
+/// Deadzone and normalisation are NOT applied here -- they belong to
+/// [`crate::possess::intent::Stick`], where they are testable on the host. This function is the
+/// one untestable line.
+#[cfg(windows)]
+pub(crate) fn read_left_stick() -> Option<(i16, i16)> {
+    let mut out = None;
+    with_pad_state(|state| out = Some((state.gamepad.thumb_lx, state.gamepad.thumb_ly)));
+    out
+}
+
+#[cfg(not(windows))]
+pub(crate) const fn read_left_stick() -> Option<(i16, i16)> {
+    None
 }
 
 /// One keyboard edge for the optional chord.

@@ -1,27 +1,30 @@
-//! `er_npc_possess.dll` -- stack layer 1 of the "become an NPC" mod.
+//! `er_npc_possess.dll` -- the "become an NPC" mod.
 //!
-//! # What this layer is, and what it deliberately is not
+//! # What it does
 //!
-//! It is the whole player-facing surface of the mod with the possession itself left out: a
-//! hot-reloadable config file in the game directory, a keyboard hotkey and a controller hotkey
-//! bound from it, and a seam where the possession engine plugs in. Press the key in-game and a
-//! structured line lands in `er-npc-possess.log` saying the press was seen, which device it came
-//! from, and what the engine did with it -- which today is nothing, because there is no engine.
+//! Press the hotkey and you are the character you are looking at. `possess` is the engine; this
+//! file is the shell around it -- a hot-reloadable config in the game directory, a keyboard hotkey
+//! and a controller hotkey bound from it, a `FrameBegin` task that drives both, and a structured
+//! line in `er-npc-possess.log` for every press saying what was requested and what happened to it.
 //!
-//! That split is on purpose. Everything above the seam (config schema, hot reload, edge detection,
-//! rejection handling, the not-live `[target]` rule) is decidable now and provable on the host with
-//! `cargo test`. Everything below it needs reverse engineering that has not been done: which
-//! `ChrIns` field the AI reads its input out of, how to drive a `TimeAct` from outside the
-//! behaviour graph, where the camera's follow target lives. Inventing a mechanism for those now
-//! would mean unpicking it later, so this crate ships the shape and refuses to guess at the
-//! contents. See [`engine`] for the seam and who calls it.
+//! Layer 1 shipped everything except the possession and left [`engine`] as the seam; layer 2
+//! filled that seam in and nothing above it had to change, which is the only real evidence that
+//! the seam was cut in the right place.
 //!
 //! # What it touches in the game
 //!
-//! One recurring `FrameBegin` task, and two Win32 input reads inside it. It installs NO detour,
-//! patches no param, writes no game memory and claims no prologue -- so it is co-loadable with
-//! every other shell in this profile. See `input` for why polling rather than hooking is the
-//! smaller claim rather than the lazier one.
+//! One recurring `FrameBegin` task and two Win32 input reads inside it, plus -- only while
+//! something is possessed -- a handful of struct-field writes on two `ChrIns`. It installs **NO
+//! detour**, resolves **no game function address**, patches no param and claims no prologue, so it
+//! stays co-loadable with every other shell in this profile and cannot be broken by the
+//! 1.16.2 -> 1.17 address migration. See `input` for why polling rather than hooking is the
+//! smaller claim rather than the lazier one, and [`possess::game`] for why the engine needed no
+//! addresses at all.
+//!
+//! The one thing it does that IS dangerous is write `ChrCtrl+0x3b0`, because `ChrCtrl::Unref`
+//! DLPanics on a non-null value there. Every path that can end a possession -- the hotkey, the
+//! creature dying, the creature despawning, and `DLL_PROCESS_DETACH` below -- goes through
+//! `possess::teardown`, which clears it whatever else failed.
 
 // The config, settings, engine and edge-state modules are ungated on purpose: they are pure logic,
 // so their tests run on the host where the windows-only game bindings do not exist.
@@ -29,6 +32,7 @@ mod config;
 mod engine;
 mod input;
 mod log;
+mod possess;
 mod settings;
 mod toml;
 
@@ -48,7 +52,10 @@ use er_hotkey_config::{chord_name, pad::pad_chord_name};
 #[cfg(windows)]
 use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 #[cfg(windows)]
-use windows::Win32::{Foundation::HINSTANCE, System::SystemServices::DLL_PROCESS_ATTACH};
+use windows::Win32::{
+    Foundation::HINSTANCE,
+    System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH},
+};
 
 #[cfg(windows)]
 use crate::{input::Edges, log::possess_log};
@@ -162,6 +169,11 @@ fn tick() {
         possess_log(format_args!("{}", report.line(&binding)));
     }
 
+    // THE POSSESSION ITSELF, one frame of it. After the hotkey edge, so a press and its first
+    // frame land in that order; unconditional, because the engine has to notice a possessed
+    // character dying or despawning on a frame nobody pressed anything.
+    engine::tick_engine();
+
     if ticks.is_multiple_of(STATUS_LOG_TICKS) {
         let (state, presses) = engine::snapshot();
         possess_log(format_args!(
@@ -228,12 +240,22 @@ fn install() {
          produces it lands later, and your edits to it will win over its verdicts when it does",
         config::DERIVED_CONFIG_FILE_NAME
     ));
-    // SAY IT ONCE, PLAINLY. A mod whose hotkey works and whose feature does not is the exact shape
-    // of a bug report nobody can act on; the log has to make the distinction before anyone presses
-    // anything.
+    // STACK LAYER 2. The seam is filled: pressing the key now writes a forwarding thunk into the
+    // target's `ChrCtrl+0x3b0`, points `WorldChrManDbg+0xb8` at it, and co-locates the player's
+    // own (invisible, silent, invincible, non-attacking) body with it every frame.
+    let installed = engine::install_engine(Box::new(possess::NpcPossessionEngine::new()));
     possess_log(format_args!(
-        "possession engine: NOT INSTALLED (stack layer 1). The hotkeys are live and every press is \
-         logged, but nothing is possessed yet -- a later layer calls engine::install_engine"
+        "possession engine: {} -- build={} | NOT in this layer: attacks (the W_Event/W_Attack \
+         animation-prefix question is unresolved and a wrong prefix silently no-ops) and \
+         untargetable (IsLockOnDisabled reads the SpEffect-accumulated modifier block, so it needs \
+         a SpEffect row rather than a field write)",
+        if installed {
+            "INSTALLED"
+        } else {
+            "REFUSED -- one was already installed, and two engines writing one ChrIns is not \
+             something to resolve by install order"
+        },
+        er_game_base::game_build::describe_build()
     ));
     spawn_game_task();
 }
@@ -261,6 +283,13 @@ pub unsafe extern "system" fn DllMain(
                 .name("er-npc-possess-install".to_owned())
                 .spawn(install);
         });
+    }
+    // THE ONE TEARDOWN THAT IS NOT OPTIONAL. A possession leaves a pointer to OUR memory in the
+    // possessed character's `ChrCtrl+0x3b0`, and `ChrCtrl::Unref` DLPanics on a non-null slot -- so
+    // a DLL that unloads without clearing it arms a crash for whenever that character is next torn
+    // down, in a process where our code is no longer present to explain it.
+    if reason == DLL_PROCESS_DETACH {
+        engine::shutdown_engine();
     }
     DLL_MAIN_SUCCESS
 }

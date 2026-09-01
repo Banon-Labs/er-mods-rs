@@ -3053,6 +3053,7 @@ dependencies = [
  "eldenring",
  "er-game-base",
  "er-hotkey-config",
+ "er-invasion-warp-core",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]

@@ -44,7 +44,7 @@ use er_hotkey_config::{
 use crate::{
     engine::PossessionRequest,
     log::possess_log,
-    settings::{Rejections, Tables, TargetSettings},
+    settings::{MovementSettings, Rejections, Tables, TargetSettings},
     toml::Document,
 };
 
@@ -66,12 +66,20 @@ const DEFAULT_CONFIG_TOML: &str = r##"# er-npc-possess.toml -- the standalone "b
 # need to restart, and the log names the old value and the new one each time one moves. The one
 # exception is the whole [target] table, which is explained at that table.
 #
-# WHAT WORKS TODAY. This is stack layer 1 of the mod: the settings below are read, validated and
-# hot-reloaded, and both hotkeys are bound and edge-detected in-game. NOTHING IS POSSESSED YET --
-# there is no possession engine installed, so a press writes a line to er-npc-possess.log and
-# flips an internal state. Every setting marked RESERVED is parsed, validated and reported in
-# that log, and consumed by nobody. They are written here anyway so the file you tune now is the
-# file the later layers read, rather than one you have to migrate.
+# WHAT WORKS TODAY. Press the hotkey and you BECOME the character [target] selects: the camera and
+# lock-on move to it, your own body goes invisible, silent, invincible and unable to attack, and it
+# is carried along with the creature every frame so other players see you standing where it stands
+# and releasing drops you exactly there. The left stick walks the creature. Press again -- or let
+# it die -- to get out.
+#
+# WHAT IS NOT WIRED YET, so you can tell a missing feature from a broken one:
+#   * ATTACKS. The possessed character will not attack. Everything under [mapping] and [buttons],
+#     and the `radial` binding, is parsed, validated and reported in the log, and consumed by
+#     nobody. They are written here anyway so the file you tune now is the file the later layer
+#     reads, rather than one you have to migrate.
+#   * Your own body stays LOCK-ON-ABLE while you are away from it. It cannot be hurt and cannot be
+#     seen, so this is an oddity rather than a hazard.
+#   * turn_deadzone_deg, heading_converge and root_motion_only are RESERVED. speed_scale is live.
 #
 # A value this file does not understand is REPORTED AND IGNORED, and the last value that worked
 # stays in force. A typo never leaves you with no hotkey and never silently resets a setting.
@@ -107,7 +115,7 @@ gamepad_hotkey = "ls+rs"
 # mapping layer lands.
 radial = "DPadDown"
 
-# RESERVED, AND THE ONLY TABLE HERE THAT IS NOT LIVE.
+# THE ONLY TABLE HERE THAT IS NOT LIVE.
 #
 # It decides who you are about to become. Changing it mid-possession would leave the mapping, the
 # camera and the moveset belonging to a different character than the body on screen, so an edit
@@ -116,7 +124,10 @@ radial = "DPadDown"
 [target]
 # lock_on   -- whatever you are locked on to
 # nearest   -- the closest character that passes the selection filter
-# crosshair -- whatever the middle of the screen is pointed at
+# crosshair -- whatever the middle of the screen is pointed at. NOT IMPLEMENTED YET: it currently
+#              behaves exactly like "nearest", because aiming by camera needs the camera's forward
+#              vector and that is not reversed. The spelling is kept so this file does not have to
+#              change when it lands.
 # chr_id    -- the literal chr_id below, ignoring where you are looking
 mode = "lock_on"
 # Used only when mode = "chr_id", e.g. 45000.
@@ -124,8 +135,8 @@ chr_id = 0
 # Hand the body back when it dies, instead of staying inside a corpse.
 release_on_death = true
 
-# RESERVED. How one input turns into one of the possessed character's attacks. LIVE: an edit
-# here applies on the next reload without re-possessing.
+# RESERVED -- attacks are not wired yet. How one input will turn into one of the possessed
+# character's attacks. The values are read and reported now so the file does not have to change.
 [mapping]
 # context -- range band plus combo rank picks the attack. The default, and the only model that
 #            still means something on a character with thirty attacks and four buttons.
@@ -152,14 +163,20 @@ r2 = "heavy"
 l1 = "ranged"
 l2 = "movement"
 
-# RESERVED. How the possessed body moves.
+# How the possessed body moves. LIVE -- an edit applies within a second, mid-possession.
 [movement]
-# Turn toward the stick over time instead of snapping to it.
+# RESERVED. Turn toward the stick over time instead of snapping to it. The body currently turns
+# toward wherever it has been told to walk, at the rate its own NpcParam gives it.
 heading_converge = true
-# Stick deflection inside this cone counts as "no turn asked for". 0..180.
+# RESERVED. Stick deflection inside this cone counts as "no turn asked for". 0..180.
 turn_deadzone_deg = 20.0
-# Move only by the animation's own root motion, never by writing a velocity.
+# RESERVED. Move only by the animation's own root motion, never by writing a velocity. This is
+# already how it works -- the mod asks the character's own AI to walk somewhere and the engine's
+# locomotion does the rest -- so there is nothing yet for the "false" setting to mean.
 root_motion_only = true
+# LIVE. How far ahead of itself the possessed character is told to walk, as a multiplier. Higher
+# is a longer stride between re-aims and a body that runs on further after you let go; lower is
+# twitchier and stops sooner.
 speed_scale = 1.0
 
 # RESERVED. Per-character overrides, one table per chr id, added as you need them. The DLL reads
@@ -512,6 +529,17 @@ pub(crate) fn take_request() -> (PossessionRequest, Option<(String, String)>) {
     let mut guard = state();
     let adopted = guard.config.adopt_staged_target();
     (guard.config.request(), adopted)
+}
+
+/// The `[movement]` table IN FORCE, read fresh.
+///
+/// A per-frame accessor rather than a field on [`PossessionRequest`], because `[movement]` is a
+/// LIVE table: `speed_scale` is the one setting a player tunes by saving the file and watching
+/// what changes, and snapshotting it at possession start would make it the one setting that
+/// mysteriously needs a re-possess. `[target]` is snapshotted for the opposite reason -- see
+/// [`PossessConfig::adopt_staged_target`].
+pub(crate) fn movement() -> MovementSettings {
+    state().config.tables.movement
 }
 
 /// Re-read the file if it changed, and report what moved.

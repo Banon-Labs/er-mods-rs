@@ -17,6 +17,12 @@ crate-type = ["cdylib"]
 # possession state machine and the engine seam are all `cargo test`-able on Linux.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+# The `repr(C, align(16))` FloatVector4 and its alignment test. Shared rather than redeclared: the
+# alignment is not decoration -- `CSChrPhysicsModule::ForceSetPosition`, which the co-location
+# proxy drain calls, loads its argument with MOVAPS and #GPs on an unaligned address -- and a
+# duplicated `repr` whose whole point is an invariant nobody would notice was missing is exactly
+# the kind of copy that goes wrong silently.
+er-invasion-warp-core = { path = "../er-invasion-warp-core" }
 # Key names, the reload decision, and the pad-chord type. Host-buildable, so the config and
 # binding logic stay covered by `cargo test`.
 er-hotkey-config = { path = "../er-hotkey-config" }
