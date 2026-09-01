@@ -1518,7 +1518,7 @@ python3 "$repo_root/scripts/check-test-target-coverage.py"
 # 11 + 10 + 2 + 8 + 53, matching the per-crate host-lib counts the coverage gate had been
 # printing at nobody for a day.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
-	-p er-quickload-data -p er-build-watermark-core -p er-charm-enemies \
+	-p er-quickload-data -p er-build-watermark-core -p er-enemynpc-effects \
 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
 	-p er-better-refills -p er-inventory-sort -p er-loading-bar \

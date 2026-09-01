@@ -195,7 +195,7 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
 
     // ...but "documented" is not "verified for a session Seamless is running". This workspace's
     // own enemy sweep already hedges that a co-op session may put other players in a set that is
-    // not `player_chr_set` (`er-charm-enemies`), and a roster that trusts one set and finds
+    // not `player_chr_set` (`er-enemynpc-effects`), and a roster that trusts one set and finds
     // nobody looks exactly like a navmesh that found no route. So when the player set comes back
     // empty, walk every ChrSet the world holds and pick characters by KIND instead.
     //
@@ -219,7 +219,7 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
             walked.push(address);
             census.sets += 1;
             // SAFETY: an address the world itself stores in `chr_sets`, typed as the game types
-            // it. This is the same walk `er-charm-enemies` performs every sweep.
+            // it. This is the same walk `er-enemynpc-effects` performs every sweep.
             let chr_set = unsafe { &*(address as *const ChrSet<ChrIns>) };
             for chr_ins in chr_set.characters() {
                 collect(

@@ -41,7 +41,7 @@
 //! when it is not -- so no handler can ever be silently dropped, here or in another mod.
 //!
 //! Per-frame work does not need a hook at all: it runs from a `CSTaskImp` `FrameBegin` task, the
-//! same way `er-charm-enemies` drives its sweep. That is also the thread `GetAsyncKeyState`
+//! same way `er-enemynpc-effects` drives its sweep. That is also the thread `GetAsyncKeyState`
 //! actually reports the user's keys on under Wine/Proton.
 
 use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};

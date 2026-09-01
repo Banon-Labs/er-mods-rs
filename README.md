@@ -54,7 +54,7 @@ anything else here unless the notes say so.
 | `er_invasion_warp.dll` | World-map warp targets at the real invasion spawn points, read out of the `CSAutoInvadePoint` table. |
 | `er_player_name_filter.dll` | Filters remote player names, hooking `CS::SessionManagerPlayerEntryBase::Copy`. |
 | `er_seamless_bugfixes.dll` | Crash guards for faults only Seamless Co-op's networking mode reaches. Every guard is a null-container intercept on a vanilla function. |
-| `er_charm_enemies.dll` | Hotkey toggle that keeps every loaded enemy under the Charming Branch SpEffect. |
+| `er_enemynpc_effects.dll` | Hotkey toggle that keeps every loaded enemy under a configured SpEffect (`effect_id`, default Charming Branch). |
 
 ### Diagnostics
 

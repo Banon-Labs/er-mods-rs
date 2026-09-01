@@ -160,7 +160,7 @@ calls `operator_delete(this, 0x3190)` — so construction and destruction really
 | scalar-deleting destructor | `0x1408d6430` | `(this, u64 flags) -> this` | vtable slot 1, this class only |
 
 Per-frame work needs no hook at all: it runs from a `CSTaskImp` `FrameBegin` task, the same way
-`er-charm-enemies` drives its sweep — which is also the thread `GetAsyncKeyState` actually reports
+`er-enemynpc-effects` drives its sweep — which is also the thread `GetAsyncKeyState` actually reports
 the user's keys on under Wine/Proton.
 
 ### Why not the shared `MenuWindow::Update` (the first version, and why it was replaced)

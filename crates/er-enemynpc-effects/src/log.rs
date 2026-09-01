@@ -10,7 +10,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const LOG_FILE_NAME: &str = "er-charm-enemies.log";
+const LOG_FILE_NAME: &str = "er-enemynpc-effects.log";
 static START_MS: OnceLock<u128> = OnceLock::new();
 
 fn now_ms() -> u128 {

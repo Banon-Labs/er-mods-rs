@@ -120,7 +120,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-armament-icons:er_armament_icons
 		er-better-refills:er_better_refills
 		er-build-import:er_build_import
-		er-charm-enemies:er_charm_enemies
+		er-enemynpc-effects:er_enemynpc_effects
 		er-crash-logging:er_crash_logging
 		er-death-persist:er_death_persist
 		er-diag-harness:er_diag_harness
