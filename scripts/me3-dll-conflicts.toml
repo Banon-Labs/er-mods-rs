@@ -88,13 +88,13 @@ evidence = """crates/er-quickload/src/input_blocker.rs:271 `register_union_hook(
 dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
 crates/er-net-effects/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
 dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
-crates/er-charm-enemies/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+crates/er-enemynpc-effects/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
 get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
 `with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
 
 [[shared]]
 a = "er-quickload"
-b = "er-charm-enemies"
+b = "er-enemynpc-effects"
 target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
 mechanism = "hook-union"
 handler_a = "dinput_kb_get_state_hook"
@@ -120,13 +120,13 @@ evidence = """crates/er-quickload/src/input_blocker.rs:271 `register_union_hook(
 dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
 crates/er-net-effects/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
 dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
-crates/er-charm-enemies/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+crates/er-enemynpc-effects/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
 get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
 `with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
 
 [[shared]]
 a = "er-net-effects"
-b = "er-charm-enemies"
+b = "er-enemynpc-effects"
 target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
 mechanism = "hook-union"
 handler_a = "dinput_kb_get_state_hook"
@@ -152,7 +152,7 @@ evidence = """crates/er-quickload/src/input_blocker.rs:271 `register_union_hook(
 dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
 crates/er-net-effects/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
 dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
-crates/er-charm-enemies/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+crates/er-enemynpc-effects/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
 get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
 `with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
 
@@ -408,7 +408,7 @@ once per frame, and both DLLs pin the same hudhook so the `ui` pointer crossing 
 is the type both were built against (OVERLAY_ABI_TAG refuses the pair if that stops being true). \
 Load order no longer decides who is visible."""
 "er-better-refills" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
-"er-charm-enemies" = """Co-loadable with the product. It detours exactly one address -- \
+"er-enemynpc-effects" = """Co-loadable with the product. It detours exactly one address -- \
 the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_shared_hook`, so the \
 product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \

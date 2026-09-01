@@ -165,7 +165,7 @@ run_one() {
 # touched. The result is a dangling commit object; `git gc` reaps it.
 synth_broken_rev() {
 	local base=$1 tmp_index src_path blob tree orig
-	src_path=crates/er-charm-enemies/src/lib.rs
+	src_path=crates/er-enemynpc-effects/src/lib.rs
 	tmp_index=$(mktemp "${TMPDIR:-/tmp}/er-committed-compiles-index.XXXXXX")
 	rm -f -- "$tmp_index"
 	GIT_INDEX_FILE="$tmp_index" git -C "$repo_root" read-tree "$base^{tree}"

@@ -118,7 +118,7 @@ exactly two strings: `"2.6.2.0"` and `"2.6.2.1"`. The installed game is
 
 That one line of data was the whole 1.17 boot death. **Eight** product DLLs --
 er-quickload, er-invasion-warp, er-inventory-sort, er-refill-all,
-er-charm-enemies, er-telemetry, er-invasion-path, er-net-effects -- each threw
+er-enemynpc-effects, er-telemetry, er-invasion-path, er-net-effects -- each threw
 a `rust_panic` within five milliseconds of each other at
 `ms_since_install=869..898`, each on its own thread, each with an identical
 frame shape. The panic happens inside a `LazyLock`, on whichever thread first

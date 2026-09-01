@@ -431,6 +431,18 @@ python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # `unresolved import eldenring::cs::MsgRepositoryImp`. This is the cheap text check for that.
 python3 "$repo_root/scripts/check-fromsoftware-symbols.py" --selftest
 python3 "$repo_root/scripts/check-fromsoftware-symbols.py"
+
+# ...AND THAT EVERY WORKFLOW AGREES ON *BOTH HALVES* OF THAT PIN. The gate above reads
+# FROMSOFTWARE_RS_REV out of check.yml alone. Three workflows clone the sibling, and two of
+# them carried the comment "Keep in lockstep with check.yml" while copying only the REV --
+# not the FROMSOFTWARE_RS_REMOTE naming the remote that rev exists on. The pin lives only on
+# the fork, so those two cloned upstream and died at `git checkout` with `fatal: unable to
+# read tree`, at step 2 of ~15, with every Rust check below reporting NOTHING -- not pass,
+# not fail. That is what took `release` red on main at b9109a30 while `check` stayed green.
+# Positive control against the break itself: run this gate's audit over the three workflow
+# files as of b9109a30 and it returns 4 problems naming both files and both rules.
+python3 "$repo_root/scripts/check-sibling-pin-lockstep.py" --selftest
+python3 "$repo_root/scripts/check-sibling-pin-lockstep.py"
 python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
 # DOES A LAUNCH DESTROY THE PREVIOUS RUN'S EVIDENCE? (wired 2026-08-31.) A game-directory artifact
 # is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames `<name>` to `<name>.prev` and
@@ -1533,7 +1545,7 @@ python3 "$repo_root/scripts/check-test-target-coverage.py"
 # 11 + 10 + 2 + 8 + 53, matching the per-crate host-lib counts the coverage gate had been
 # printing at nobody for a day.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
-	-p er-quickload-data -p er-build-watermark-core -p er-charm-enemies \
+	-p er-quickload-data -p er-build-watermark-core -p er-enemynpc-effects \
 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
 	-p er-better-refills -p er-inventory-sort -p er-loading-bar \

@@ -823,7 +823,7 @@ class Scanner:
         Only a field NAMED as an address counts, and a blind hex sweep of the record is
         deliberately not the fallback. The first cut had one, and it promptly invented a detour on
         `0x1a58` -- a struct offset sitting in an unrelated record, reported against
-        er-scaleform-hooks and er-charm-enemies. An address mined out of a literal has no name
+        er-scaleform-hooks and er-enemynpc-effects. An address mined out of a literal has no name
         vouching for it, so the FIELD name has to do that job or nothing does.
         """
         last = name.split("::")[-1]

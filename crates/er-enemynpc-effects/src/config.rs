@@ -1,4 +1,4 @@
-//! `er-charm-enemies.toml`, re-read while the game runs.
+//! `er-enemynpc-effects.toml`, re-read while the game runs.
 //!
 //! Hand-parsed rather than pulled through a TOML crate: four scalar settings do not justify a
 //! dependency in a DLL that is cross-compiled into the game process.
@@ -63,7 +63,7 @@ use crate::{
     log::charm_log,
 };
 
-const CONFIG_FILE_NAME: &str = "er-charm-enemies.toml";
+const CONFIG_FILE_NAME: &str = "er-enemynpc-effects.toml";
 
 /// SpEffect 20503350, `[Item] Charming Branch` in `SpEffectParam`.
 ///
@@ -95,7 +95,7 @@ const ENABLED_COMMENT: &str = "\
 static PERSIST_WRITES: AtomicUsize = AtomicUsize::new(0);
 static PERSIST_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
-const DEFAULT_CONFIG_TOML: &str = r#"# er-charm-enemies standalone DLL configuration.
+const DEFAULT_CONFIG_TOML: &str = r#"# er-enemynpc-effects standalone DLL configuration.
 #
 # Press the hotkey in-game to toggle "charm every loaded enemy" on and off. While it is on the
 # DLL re-applies the effect to any loaded enemy that is not currently under it, so newly spawned
@@ -615,7 +615,7 @@ mod tests {
     /// build that predates `enabled`, hand-edited since, carrying a commented-out alternative and
     /// a trailing note on the live value. Every persistence test below runs against THIS rather
     /// than against the shipped default, because the shipped default is the easy case.
-    const USER_CONFIG: &str = r#"# er-charm-enemies standalone DLL configuration.
+    const USER_CONFIG: &str = r#"# er-enemynpc-effects standalone DLL configuration.
 #
 # Press the hotkey in-game to toggle "charm every loaded enemy" on and off. While it is on the
 # DLL re-applies the effect to any loaded enemy that is not currently under it, so newly spawned
@@ -765,7 +765,10 @@ remove_on_disable = true
     /// default over it would turn "could not read your config" into "destroyed your config".
     #[test]
     fn an_unreadable_file_refuses_the_write_instead_of_defaulting_over_it() {
-        let dir = std::env::temp_dir().join(format!("er-charm-readable-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "er-enemynpc-effects-readable-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
 

@@ -37,9 +37,9 @@ members = [
   "crates/er-refill-all",
   "crates/er-armament-icons",
   "crates/er-net-effects",
-  # Hotkey toggle that keeps every loaded enemy under the Charming Branch SpEffect. Standalone
+  # Hotkey toggle that keeps every loaded enemy under a configured SpEffect. Standalone
   # shell with no product dependency: a DirectInput keyboard read and a FrameBegin sweep.
-  "crates/er-charm-enemies",
+  "crates/er-enemynpc-effects",
   "crates/er-player-name-filter",
   "crates/er-save-disable",
   "crates/er-save-suppress",

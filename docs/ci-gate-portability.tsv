@@ -60,6 +60,8 @@ partial	image-1162,image-1170	check-oracle-singleton-globals.py --selftest	sourc
 partial	image-1162,image-1170	check-oracle-singleton-globals.py	still audits ungated module-base arithmetic; the IMAGE half prints that it was skipped
 portable	-	check-fromsoftware-symbols.py --selftest	source/AST/text analysis only
 portable	-	check-fromsoftware-symbols.py	source/AST/text analysis only
+portable	-	check-sibling-pin-lockstep.py --selftest	source/AST/text analysis only
+portable	-	check-sibling-pin-lockstep.py	reads .github/workflows/*.yml only
 portable	-	check-launch-guardrails.py --audit	source/AST/text analysis only
 portable	-	er-artifact-redirect-audit.py --selftest	source/AST/text analysis only
 portable	-	er-artifact-redirect-audit.py	source/AST/text analysis only

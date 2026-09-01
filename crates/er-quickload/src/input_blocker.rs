@@ -261,7 +261,7 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         })
     };
 
-    // THROUGH THE UNION, NEVER A BARE `MhHook`. `er-net-effects` and `er-charm-enemies`
+    // THROUGH THE UNION, NEVER A BARE `MhHook`. `er-net-effects` and `er-enemynpc-effects`
     // detour this same `GetDeviceState` slot, and each links its own MinHook instance -- two
     // instances on one prologue overwrite each other's trampolines and the loser silently never
     // runs. Owning it in the union is also what lets those DLLs chain in through this DLL's

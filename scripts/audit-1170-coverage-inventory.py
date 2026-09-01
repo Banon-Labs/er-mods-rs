@@ -677,7 +677,7 @@ PROFILE_LOADS = {
     "er-quit-menu": 7, "er-save-picker": 7, "er-net-effects": 7, "er-better-refills": 7,
     "er-ersc-sigshim": 6, "er-armament-icons": 6, "er-player-name-filter": 6,
     "er-seamless-bugfixes": 6, "er-inventory-sort": 5, "er-reload-trace": 4,
-    "er-charm-enemies": 3, "er-loading-bar": 3, "er-save-disable": 3, "er-invasion-path": 3,
+    "er-enemynpc-effects": 3, "er-loading-bar": 3, "er-save-disable": 3, "er-invasion-path": 3,
     "er-refill-all": 3, "er-input-harness": 3, "er-build-import": 2, "er-loading-portrait": 2,
     "er-build-watermark": 2, "er-death-persist": 1, "er-diag-harness": 1,
     "mushroom-man-runtime": 1, "er-ags-stub": 0,
@@ -719,7 +719,7 @@ FEATURE_OF_PATH = [
     ("er-input-harness", "input harness"),
     ("er-seamless-bugfixes", "seamless bugfixes"),
     ("er-diag-harness", "diag harness"),
-    ("er-charm-enemies", "charm enemies"),
+    ("er-enemynpc-effects", "enemy NPC effects"),
 ]
 
 
