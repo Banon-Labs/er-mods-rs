@@ -145,6 +145,7 @@ portable	-	check-decode-extent-bounds.py --selftest	source/AST/text analysis onl
 portable	-	check-decode-extent-bounds.py	source/AST/text analysis only
 blocked	uv	verify-prologue-masks-1170.py --selftest	re-derives every mask with capstone; os.execvp('uv') raises before the first assertion
 portable	-	verify-aob-patterns-1170.py --selftest	source/AST/text analysis only
+portable	-	verify-prologue-coverage-1170.py --selftest	source/AST/text analysis only
 portable	-	verify-prologue-coverage-1170.py --section	source/AST/text analysis only
 partial	image-1162,image-1170	classify-1170-entry-kind.py --selftest	synthetic half reports '0 failure(s)'; the image-backed half prints SKIPPED
 blocked	image-1162,image-1170	classify-1170-entry-kind.py --fail-on-mid	one line: 'entry-kind classification skipped'. Nothing is classified

@@ -870,6 +870,12 @@ python3 "$repo_root/scripts/verify-aob-patterns-1170.py" --selftest
 # `--section coverage` SPECIFICALLY, measured: 4.1s. The tool's other section re-reads both 98 MB
 # images and is reporting-only -- it never affects the exit code -- so wiring the whole tool would
 # buy that fixed cost for output nothing gates on.
+# Wired 2026-09-01 (bd er-effects-rs-zivc). The selftest was left out when the gate above it
+# went in, and audit-selftest-vacuity.py sweeps check.sh: a gate with no --selftest LINE in
+# this file is one the vacuity auditor never judges, so the gate that catches an unswept
+# build.rs had nothing checking that IT still catches anything. Measured with an audit hook:
+# 690 files opened, every one a tracked repo source -- no image, no subprocess, no uv.
+python3 "$repo_root/scripts/verify-prologue-coverage-1170.py" --selftest
 python3 "$repo_root/scripts/verify-prologue-coverage-1170.py" --section coverage
 # THE MID-FUNCTION GATE. `NEITHER-ENTRY` in a verdict table is TWO verdicts wearing one name: a
 # leaf function the x64 ABI let omit unwind data (safe to hook), and an address INSIDE another
