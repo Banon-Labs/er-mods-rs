@@ -2554,11 +2554,11 @@ mod tests {
 
     #[test]
     fn live_font_size_injects_into_existing_colored_stats_fonts_without_outer_font_wrap() {
-        let body = "<font color=\"#8f887a\">VIG</font> <font color=\"#e0736b\"><b>50</b></font>";
+        let body = "<font color=\"#8f887a\">VIG</font><font color=\"#e0736b\"><b>50</b></font>";
         let sized = scaleform_html_size_existing_font_tags(body, 20);
         assert_eq!(
             sized,
-            "<font size=\"20\" color=\"#8f887a\">VIG</font> <font size=\"20\" color=\"#e0736b\"><b>50</b></font>"
+            "<font size=\"20\" color=\"#8f887a\">VIG</font><font size=\"20\" color=\"#e0736b\"><b>50</b></font>"
         );
         assert!(
             !sized.contains("<font size=\"20\"><font"),
