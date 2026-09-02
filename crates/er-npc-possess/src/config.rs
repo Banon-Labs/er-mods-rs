@@ -319,12 +319,19 @@ speed_scale = 1.0
 # How the camera frames the creature you are wearing. LIVE -- save the file and the framing moves
 # about a second later, mid-possession, without letting go.
 #
-# Vanilla's follow camera is tuned for a 1.8 m Tarnished, so wearing an Ancient Dragon puts the
-# camera inside the model. The mod reads the creature's OWN physics capsule height and writes
-# three numbers -- distance, pivot height and how far the camera may pitch down -- into a
-# LockCamParam row nothing else in the game references, for the length of the possession. Every
-# byte goes back on release. At player size the numbers it derives ARE the vanilla ones, so
-# possessing something human-sized looks like nothing happened.
+# Vanilla's follow camera is tuned for a 1.5 m capsule, so wearing an Ancient Dragon puts the
+# camera inside the model. The mod reads the creature's OWN physics capsule height and writes two
+# numbers -- how far back the camera sits and how high it aims -- into a LockCamParam row nothing
+# else in the game references, for the length of the possession. Every byte goes back on release.
+#
+# The two numbers are solved, not tuned: they are the ones that put the top of the creature in the
+# same place on your screen, with the same gap above it in proportion to its own size, that your
+# own character gets. At player size they ARE the vanilla numbers, so possessing something
+# human-sized looks like nothing happened.
+#
+# er-npc-possess.derived.toml prints where the creature actually landed (head_screen_y and
+# headroom_heights) next to your own character's +0.0296 and 1.09, so you can see rather than
+# guess whether the framing came out right.
 #
 # er-npc-possess.derived.toml records what it read, what it wrote, and -- if it did not -- why.
 [camera]
@@ -342,12 +349,16 @@ param_row = 1000
 # what used to clip them off the top of the screen; 0 pins the camera at your own distance whatever
 # you are wearing. Above 1 backs off faster than size, for a wider establishing shot. 0..2.
 distance_exponent = 1.0
-# Metres. A ceiling on the formula above -- but NOT on the clearance the camera keeps over the
-# creature's own collision radius, because a camera far away is a bad shot and a camera inside the
-# model is no shot at all. 120 is deliberately well above the tallest real creature (a Fire Giant
-# wants about 73 m): this is a guard against a nonsense height from a modded NpcParam, not a limit
-# on legitimate framing. Lower it and the big ones get cropped again.
-distance_max = 120.0
+# Metres. A ceiling on the formula above, for anyone who wants their camera closer than the framing
+# asks -- but NOT on the clearance the camera keeps over the creature's own collision radius,
+# because a camera far away is a bad shot and a camera inside the model is no shot at all.
+#
+# The default sits above the distance the formula asks for at the largest height the mod will
+# accept, so it cannot crop anything real. Every previous value here did: 40 cropped everything
+# above 3.8 m tall, and even 120 cropped the Walking Mausoleum (59 m, which wants 149.5 m). Lower it
+# and the shot gets tighter on the big ones -- their heads stay in frame, because the aim point
+# follows whatever distance comes out, but the room above them shrinks.
+distance_max = 512.0
 
 # The HP / FP / stamina bars in the corner. LIVE -- an edit applies within a second, and turning
 # it off mid-possession hands the bars straight back to your own character.

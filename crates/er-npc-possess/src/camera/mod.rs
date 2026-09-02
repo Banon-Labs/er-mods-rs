@@ -4,14 +4,15 @@
 //!
 //! Layer 2's seam (`WorldChrManDbg+0xb8 camOverrideChrIns`) already makes the camera and lock-on
 //! follow the possessed creature for free. What it does not do is change the camera's SHAPE: the
-//! follow camera's distance, pivot height and pitch limits come from a `LockCamParam` row sized
-//! for a 1.8 m Tarnished, so wearing an Ancient Dragon puts the camera inside the model. This
-//! layer adapts those numbers to the body actually being worn.
+//! follow camera's distance and pivot height come from a `LockCamParam` row sized for a 1.5 m
+//! capsule, so wearing an Ancient Dragon puts the camera inside the model. This layer solves those
+//! two numbers for the body actually being worn -- see [`geometry`], which derives them rather
+//! than tuning them, from the framing the vanilla row gives the player.
 //!
 //! # How, in one paragraph
 //!
 //! At possession start it reads the creature's own physics capsule -- `CSChrPhysicsModule+0x340
-//! hitHeight`, the value `CS::ChrIns::GetPhysicsHitHeight` returns -- turns it into three camera
+//! hitHeight`, the value `CS::ChrIns::GetPhysicsHitHeight` returns -- turns it into two camera
 //! numbers ([`geometry`]), writes them into a `LockCamParam` row nothing else references, and puts
 //! that row's id in `ChrExFollowCam+0x468`, which is the highest-precedence input to the engine's
 //! own per-frame `ApplyZoomLerp` and which nothing in the game ever writes. On release the row's
@@ -36,10 +37,19 @@
 //!   on itself. Guarding that needs `CS::ChrIns::ChrHasDmypolyId`, which is a game address this
 //!   layer would otherwise not spend. The `chrOrgOffset_Y` path costs neither, and the two are
 //!   alternatives rather than additions -- the offset cancels out on the dummy path.
-//! * **The pitch MAXIMUM.** `ChrExFollowCam+0x2d4 verticalAngleLimit` is 60 degrees, fixed at
-//!   construction with no other writer, and raising it for a large subject is a one-line change.
-//!   It is left alone because it is a field of the camera rather than of the row, so it would need
-//!   its own save/restore for a benefit nobody has measured.
+//! * **Either pitch limit.** `ChrExFollowCam.anglesEuler.x` is clamped in `applyControlMovement`
+//!   (1.16.2 `0x1403b7be0`) between `+0x258`, which `ApplyZoomLerp` fills from the row's
+//!   `rotRangeMinX` (-40 degrees for the player), and `+0x25c`, which the constructor fixes at
+//!   `0x3f9c61aa` = +70 degrees and which nothing else in the image writes. Positive is the camera
+//!   ABOVE the subject looking down -- see [`geometry`] for how that sign was established -- so
+//!   `+0x25c` is the overhead limit and `rotRangeMinX` is the limit on dropping BELOW.
+//!
+//!   Neither is touched. The framing this layer holds is pitch-invariant (similarity preserves
+//!   angles), so no amount of subject size makes 70 degrees of overhead insufficient; and writing
+//!   `rotRangeMinX` would override a narrowing some map region asked for, in exchange for nothing.
+//!   `+0x2d4 verticalAngleLimit` (60 degrees, also ctor-fixed) is a THIRD field and is not the
+//!   pitch clamp at all -- `applyControlMovement` uses `cos(it)` as a threshold on a normalised
+//!   direction, in the auto-rotation branch.
 //! * **The mount blend.** `ApplyZoomLerp` has a second branch, taken when
 //!   `ChrExFollowCam+0x488` is set, which ADDS the delta between two `LockCamParamLookupResult`s
 //!   the CONSTRUCTOR cached (`+0x478`/`+0x480` against `lockCamParam`) to every value it just

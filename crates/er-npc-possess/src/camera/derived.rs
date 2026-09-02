@@ -10,15 +10,16 @@
 //! nobody measured, the creature's `hitHeight` is zero, the row the player picked is referenced by
 //! their regulation -- and from the chair they are indistinguishable. Every one of them is a
 //! [`Refusal`] with a sentence next to it here. When it DID change, the block prints the height it
-//! read, the row it patched, the row it copied the untouched fields from, and the three numbers it
-//! wrote, so a player who thinks the framing is wrong can see which number to argue with.
+//! read, the row it patched, the row it copied the untouched fields from, the two numbers it
+//! wrote, and -- the part a player can actually check against what they can see -- where that puts
+//! the top of the creature on screen and how much room is above it.
 
 // Pure text generation; ungated so `cargo test` proves it on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use std::fmt::Write as _;
 
-use crate::camera::geometry::Report;
+use crate::camera::geometry::{self, Report};
 
 /// Rendered into `er-npc-possess.derived.toml`, after the moveset block.
 pub(crate) fn render(chr_id: u32, report: &Report) -> String {
@@ -62,7 +63,24 @@ pub(crate) fn render(chr_id: u32, report: &Report) -> String {
             }
             let _ = writeln!(out, "cam_dist_target = {}", shape.distance);
             let _ = writeln!(out, "chr_org_offset_y = {}", shape.pivot_height);
-            let _ = writeln!(out, "rot_range_min_x = {}", shape.pitch_min_deg);
+            // WHERE THAT PUTS THE CREATURE. Two metres and a pivot height are not something
+            // anybody can check against what they can see; "the top of your body sits here on
+            // screen" is. The player's own body sits at +0.0296 with 1.0946 body-heights of sky
+            // above it, and anything at or past 1.0 is cropped off the top edge.
+            if let Some(height) = report.hit_height {
+                let framing = geometry::framing(shape, height, 0.0);
+                let _ = writeln!(out, "head_screen_y = {:.4}", framing.head_screen_y);
+                let _ = writeln!(out, "headroom_heights = {:.4}", framing.headroom_heights);
+                let _ = writeln!(
+                    out,
+                    "# the top of the body, in half-screen-heights above the centre of the\n\
+                     # screen (1.0 is the top edge; the player gets +0.0296), and the gap above\n\
+                     # it in body-heights (the player gets 1.0946). Both should be the player's.\n\
+                     # A difference means the framing law was overridden -- by the clearance\n\
+                     # floor over hit_radius_m, by [camera].distance_max, or by the\n\
+                     # distance_scale above."
+                );
+            }
         }
         None => {
             let refusal = report.refusal;
@@ -94,9 +112,8 @@ mod tests {
             base_row: Some(0),
             distance_scale: 1.0,
             applied: Some(Shape {
-                distance: 16.3,
-                pivot_height: 7.8,
-                pitch_min_deg: -15.0,
+                distance: 30.4,
+                pivot_height: 11.6,
             }),
             refusal: None,
         }
@@ -108,9 +125,12 @@ mod tests {
         assert!(text.contains("[camera.c4500]"), "{text}");
         assert!(text.contains("hit_height_m = 12"), "{text}");
         assert!(text.contains("patched_row = 1000"), "{text}");
-        assert!(text.contains("cam_dist_target = 16.3"), "{text}");
-        assert!(text.contains("chr_org_offset_y = 7.8"), "{text}");
-        assert!(text.contains("rot_range_min_x = -15"), "{text}");
+        assert!(text.contains("cam_dist_target = 30.4"), "{text}");
+        assert!(text.contains("chr_org_offset_y = 11.6"), "{text}");
+        // ...and where that puts the creature, which is the form a player can check. This shape
+        // is the law's own answer for a 12 m subject, so it must read back as the player's.
+        assert!(text.contains("head_screen_y = 0.0296"), "{text}");
+        assert!(text.contains("headroom_heights = 1.0946"), "{text}");
         assert!(text.contains("row 0"), "the base row is named: {text}");
     }
 
@@ -156,7 +176,7 @@ mod tests {
     fn the_rendered_block_parses_as_toml() {
         let doc = crate::toml::Document::parse(&render(4500, &applied()));
         assert_eq!(doc.scalar("camera.c4500", "patched_row"), Some("1000"));
-        assert_eq!(doc.scalar("camera.c4500", "cam_dist_target"), Some("16.3"));
+        assert_eq!(doc.scalar("camera.c4500", "cam_dist_target"), Some("30.4"));
         let refused = render(4500, &Report::refused(1000, 1.0, Refusal::Disabled));
         let doc = crate::toml::Document::parse(&refused);
         assert_eq!(doc.scalar("camera.c4500", "adapted"), Some("no: disabled"));
