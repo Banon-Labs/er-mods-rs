@@ -22,7 +22,7 @@
 
 use std::fmt::Write as _;
 
-use crate::moveset::table::{Denial, Moveset};
+use crate::moveset::table::{Denial, Moveset, Throw};
 use crate::settings::Bucket;
 
 /// Rendered into the game directory beside `er-npc-possess.toml`.
@@ -91,7 +91,20 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
                         }
                     })
                     .collect();
-                format!(" GRAB, throws {}", victims.join(" or "))
+                // AND WHETHER IT CAN ACTUALLY COMPLETE. A grab whose only victim is the player
+                // is refused for as long as the possession lasts: the neuter sets
+                // `chrFlags1c5 & 0x10` on the player's body and `IsImmuneToAttack` reads exactly
+                // that bit BEFORE the hit that would start the throw ever reaches `ApplyDamage`.
+                // Saying "throws the player" and stopping there would send somebody hunting for a
+                // bug in their own config. A row that also names a creature is not refused, so
+                // the note is only added when every row is the player's.
+                let refused = if entry.throws.iter().all(Throw::victim_is_player) {
+                    " -- REFUSED while you are possessing, because your own body is the only \
+                     victim it has and possession makes it invincible; the swing still plays"
+                } else {
+                    ""
+                };
+                format!(" GRAB, throws {}{refused}", victims.join(" or "))
             } else {
                 String::new()
             };
@@ -228,6 +241,25 @@ mod tests {
             text.contains("the player within 10.0m or c3300 within 5.5m"),
             "{text}"
         );
+    }
+
+    /// A player-only grab CANNOT complete while the possession is running -- the neuter's
+    /// invincibility bit is the same one `IsImmuneToAttack` reads, and it drops the hit before
+    /// `ApplyDamage` can hand `throwTypeId` to the throw system. Saying "throws the player" and
+    /// stopping there sends somebody hunting for a bug in their own config.
+    #[test]
+    fn a_player_only_grab_says_it_is_refused_while_possessing() {
+        let text = render(2120, &moveset("2120 3022g0,100:0:0:1"), "summary");
+        assert!(text.contains("REFUSED while you are possessing"), "{text}");
+        assert!(text.contains("invincible"), "{text}");
+    }
+
+    /// ...but a grab that also names a CREATURE victim is not refused, so it must not carry the
+    /// note. Getting this backwards would tell the player their working grab is broken.
+    #[test]
+    fn a_grab_that_can_take_a_creature_victim_is_not_marked_refused() {
+        let text = render(4280, &moveset("4280 3006g0,100+3300,55:0:0:1"), "summary");
+        assert!(!text.contains("REFUSED"), "{text}");
     }
 
     /// The 4000-band clips are the thing players go looking for by name, so their denial has to

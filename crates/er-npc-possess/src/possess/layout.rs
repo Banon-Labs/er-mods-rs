@@ -57,6 +57,20 @@ pub(crate) mod chr_ins {
     /// `chrFlags1c5 = (chrFlags1c5 & 0xef) | (state << 4)`. See [`INVINCIBLE`].
     pub(crate) const CHR_FLAGS_1C5: usize = 0x1c5;
     /// The invincibility bit inside [`CHR_FLAGS_1C5`].
+    ///
+    /// **IT IS ALSO THE GRAB GATE, and that is settled rather than suspected.**
+    /// `ChrIns::IsImmuneToAttack` (ChrIns vtable `+0x1D8`; 1.16.2 `0x1403f3b90`, 1.17
+    /// `0x1403f3dc0` -- both read `+0x1c5 & 0x10` verbatim) answers "immune" on this bit unless
+    /// the landed `AtkParam` row sets `isDisableNoDamage`. Every route into a throw is behind it:
+    /// `ApplyDamage` is the only caller of `InitThrow`, `HitChr` is the only caller of
+    /// `ApplyDamage`, and the two hit-resolution routines that reach `HitChr` with a real
+    /// attacker (`FUN_14044a910` melee, `FUN_14038b2f0` bullet; 1.17 `0x14044ae70` /
+    /// `0x14038b300`) both call it only after `FUN_1404443e0` -> `IsImmuneToAttack` has cleared
+    /// the victim. So while this bit is set the possessing player's own body -- which
+    /// `ThrowParam.DefChrId` makes the only legal victim for 189 of the game's 190 creature rows
+    /// -- refuses the grab, and the initiator plays as a swing that misses. There is no
+    /// per-attacker exemption to find: the predicate's only attacker-dependent term
+    /// (`actionModifiersFlags` bit 5) makes it MORE immune to a non-player attacker, never less.
     pub(crate) const INVINCIBLE: u8 = 0x10;
     /// `ChrIns.tintAlphaMultiplier`. 0.0 is invisible, 1.0 is opaque. Cross-checked.
     pub(crate) const TINT_ALPHA_MULTIPLIER: usize = 0x240;

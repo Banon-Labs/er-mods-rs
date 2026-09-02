@@ -114,6 +114,25 @@ impl NpcPossessionEngine {
     /// the alpha has a per-frame decay modifier the engine drives, the mute is cleared by four
     /// (re)spawn/teleport paths, and `debugFlags` is cheap enough that checking whether it drifted
     /// costs more than writing it.
+    ///
+    /// **THE INVINCIBILITY IS ALSO WHY THE POSSESSED CREATURE'S GRABS NEVER LAND, and that is
+    /// kept deliberately.** `layout::chr_ins::INVINCIBLE` carries the trace: every route into the
+    /// throw system is behind `IsImmuneToAttack`, which reads exactly this bit, and the only
+    /// legal victim for 189 of the 190 creature `ThrowParam` rows is the player's own body. The
+    /// two shapes the fix could take were both checked and both refused. Dropping the bit for a
+    /// grab window makes the body damageable by EVERYTHING for that window and lets the creature
+    /// the player is wearing throw, hurt and kill them -- a state this crate's teardown does not
+    /// model, since `release_on_death` watches the CREATURE. Keeping it unhittable by everything
+    /// except the possessed creature is not expressible: the predicate has no per-attacker
+    /// exemption, and the game's one throw entry that skips it (`RequestThrow_AllChr`, driven
+    /// from `ChrCtrl` for a non-DEFAULT manipulator) builds its `ThrowData` with `throwTypeId`
+    /// zero, so it can only ever match a backstab/riposte row and never a creature grab.
+    ///
+    /// The co-location is an independent second refusal even if the bit were dropped:
+    /// [`Self::tick_active`]'s `request_move` keeps the body at the creature's own root, so the
+    /// attacker-to-defender vector `ThrowPoseChecks` builds is ~zero, `NormalizeVector` answers
+    /// the zero vector, and the `DiffAngMyToDef` cone test compares a dot product of zero against
+    /// `cos(angle)` -- failing for every row under 90 degrees.
     fn neuter(state: &Possessing, first_frame: bool) {
         state.player.set_invincible(true);
         state.player.set_alpha(ALPHA_INVISIBLE);
