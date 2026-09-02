@@ -206,12 +206,18 @@ impl Session {
             return refuse(Refusal::RowInUse(user));
         }
 
-        // The fields the size law does NOT decide -- FOV, the lock vertical offset, the chase
-        // rate, the lock-on radii -- come from whatever row the camera resolved a frame ago rather
-        // than from the target row's own values, which belong to some unrelated creature. Row 1000
-        // ships `camFovY = 54.5` and `chrTransChaseRateForNormal = 0.2` against the player row's
-        // 48.0 and -1.0, so leaving them alone would silently widen the FOV and override the chase
-        // rate the moment anything was possessed.
+        // The fields the size law does NOT decide -- FOV, the PITCH MINIMUM, the lock vertical
+        // offset, the chase rate, the lock-on radii -- come from whatever row the camera resolved
+        // a frame ago rather than from the target row's own values, which belong to some unrelated
+        // creature. Row 1000 ships `camFovY = 54.5` and `chrTransChaseRateForNormal = 0.2` against
+        // the player row's 48.0 and -1.0, so leaving them alone would silently widen the FOV and
+        // override the chase rate the moment anything was possessed.
+        //
+        // `rotRangeMinX` is on that list deliberately. It used to be written, lerped towards -15
+        // degrees for a large subject on the theory that a tall creature needs more overhead --
+        // but it is the limit on how far BELOW the subject the camera may drop, not above (see
+        // `crate::camera::geometry`), so that bought nothing and cost a shot. Copying it means a
+        // map region that narrowed the pitch range keeps its narrowing through a possession.
         let base_row = base_override
             .filter(|base| *base != row)
             .unwrap_or_else(|| base_row(follow_cam, offsets, row));
@@ -220,7 +226,6 @@ impl Session {
         };
         patched.set_cam_dist_target(shape.distance);
         patched.set_chr_org_offset_y(shape.pivot_height);
-        patched.set_rot_range_min_x(shape.pitch_min_deg);
 
         let Some(target) = repo.get_mut::<LockCamParam>(row) else {
             return refuse(Refusal::RowMissing(row));
@@ -315,15 +320,21 @@ impl Session {
     /// One line for `er-npc-possess.log`, said once at possession start.
     pub(crate) fn log_line(&self) -> String {
         match (self.report.applied, self.report.refusal) {
-            (Some(shape), _) => format!(
-                "camera: hitHeight {:.2} m -> LockCamParam row {} patched (dist {:.2} m, pivot \
-                 {:.2} m, pitch min {:.0} deg) and ChrExFollowCam+0x468 pointed at it",
-                self.report.hit_height.unwrap_or_default(),
-                self.report.row,
-                shape.distance,
-                shape.pivot_height,
-                shape.pitch_min_deg,
-            ),
+            (Some(shape), _) => {
+                let height = self.report.hit_height.unwrap_or_default();
+                let framing = crate::camera::geometry::framing(shape, height, 0.0);
+                format!(
+                    "camera: hitHeight {height:.2} m -> LockCamParam row {} patched (dist \
+                     {:.2} m, pivot {:.2} m) and ChrExFollowCam+0x468 pointed at it. That frames \
+                     the top of the body at {:+.4} half-screen-heights with {:.2} body-heights \
+                     above it; the player's own is +0.0296 / 1.09.",
+                    self.report.row,
+                    shape.distance,
+                    shape.pivot_height,
+                    framing.head_screen_y,
+                    framing.headroom_heights,
+                )
+            }
             (None, Some(reason)) => format!(
                 "camera: NOT adapted -- {}. The creature is framed with the parameters your own \
                  body would have used, which on anything large puts the camera inside the model. \

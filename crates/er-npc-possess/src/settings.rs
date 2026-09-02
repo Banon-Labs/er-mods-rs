@@ -756,12 +756,17 @@ pub(crate) struct CameraSettings {
     /// Which `LockCamParam` row to patch in memory. It must exist and nothing in the regulation
     /// may reference it; both are checked against the LIVE param tables at possession start.
     pub(crate) param_row: u32,
-    /// How hard the camera distance follows size: `3.8 * (H / 1.5) ^ exponent`. `0.0` pins the
-    /// distance at the player's own, `1.0` scales it linearly with height (which puts a Fire
-    /// Giant's camera 73 m out).
+    /// A TASTE KNOB over the framing law, not the law: `3.8 * (H / 1.5) ^ exponent`. `1.0` is
+    /// the law -- distance scaling with height, which is what holds the player's framing at every
+    /// size -- and is the default for that reason rather than as a preference. `0.0` pins the
+    /// distance at the player's own; anything below `1.0` is a deliberately tighter shot on big
+    /// creatures. Whatever it is set to, the pivot is solved against the distance it produces, so
+    /// a tight shot loses headroom rather than cropping the head.
     pub(crate) distance_exponent: f32,
-    /// Ceiling on the size law, in metres. The clearance floor over the creature's own physics
-    /// radius still wins over this -- see [`crate::camera::geometry`].
+    /// Ceiling on the framing distance, in metres, for anyone who wants their camera closer than
+    /// the framing asks. The clearance floor over the creature's own physics radius still wins
+    /// over this, and the pivot follows whatever distance comes out -- see
+    /// [`crate::camera::geometry`].
     pub(crate) distance_max: f32,
 }
 
@@ -787,14 +792,16 @@ impl Default for CameraSettings {
             // screen" while big avatars "get clipped by the camera because it doesn't travel far
             // enough away from the target".
             distance_exponent: 1.0,
-            // 120 m, up from 40. The 40 was chosen alongside the 0.7 and inherits its reasoning:
-            // the shipped comment rejected a linear law because it "puts a Fire Giant's camera
-            // 73 m out". But 73 m IS the correctly framed distance for a ~29 m subject -- it only
-            // sounds absurd next to a human's 3.8 m, and a ceiling below it does not tame the
-            // camera, it crops the creature. The ceiling stays as a guard against a nonsense
-            // height (a modded `NpcParam`, a `hitHeight` that is not a height) rather than as a
-            // limit on legitimate framing, so it sits well above the tallest real subject.
-            distance_max: 120.0,
+            // DERIVED, not picked -- see `camera::geometry::MAX_FRAMING_DISTANCE`. Every ceiling
+            // this setting has had was chosen first and then cropped a real creature: 40 m cropped
+            // everything above 3.8 m tall, and the 120 m that replaced it still cropped the 59 m
+            // Walking Mausoleum (`c4450`), whose framing distance is 149.5 m. A nonsense height
+            // from a modded `NpcParam` is already caught one step earlier and better, by clamping
+            // the HEIGHT -- which keeps the distance and the pivot consistent with each other,
+            // where clamping only the distance breaks the composition. So the default is the
+            // distance the law asks for at that height clamp, and cannot fire on its own. It is
+            // still a real knob for anyone who wants their camera closer than the framing wants.
+            distance_max: crate::camera::geometry::MAX_FRAMING_DISTANCE,
         }
     }
 }
@@ -1306,7 +1313,10 @@ enabled = false
         assert!(camera.enabled);
         assert_eq!(camera.param_row, 1000);
         assert_eq!(camera.distance_exponent, 1.0);
-        assert_eq!(camera.distance_max, 120.0);
+        assert_eq!(
+            camera.distance_max,
+            crate::camera::geometry::MAX_FRAMING_DISTANCE
+        );
 
         // THE PROPERTY THE NUMBER IS FOR. Doubling the subject's height must double the framing
         // distance, or the headroom above its head shrinks as it grows. `powf` is the law in
@@ -1321,10 +1331,12 @@ enabled = false
             "and it must not decay with size"
         );
 
-        // The ceiling must not be what decides the shot for a real creature. The tallest shipped
-        // subjects are around 29 m, which linear framing puts near 73 m -- comfortably inside 120,
-        // so the clamp only ever catches a nonsense height.
-        let tallest_real_m: f32 = 29.0;
+        // The ceiling must not be what decides the shot for a real creature. The tallest
+        // possessable subject is NOT the 29 m Fire Giant -- it is `c4450`, the Walking Mausoleum,
+        // at 59 m, which linear framing puts 149.5 m out. The 120 m ceiling that first replaced
+        // the 40 m one still cropped it, which is why this asserts against the real maximum rather
+        // than against the biggest creature anyone happened to name.
+        let tallest_real_m: f32 = 59.0;
         let wanted = 3.8 * at(tallest_real_m / 1.5);
         assert!(
             wanted < camera.distance_max,
