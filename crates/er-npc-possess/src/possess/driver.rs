@@ -247,9 +247,25 @@ impl NpcPossessionEngine {
         // A press that lands while a spawn is still coming up cancels it. Handled before the
         // active state because the two are mutually exclusive and this one has its own teardown.
         if let Some(pending) = self.pending.take() {
-            // `Reason::Shutdown` runs on `DllMain`'s thread, which is not the game thread; see
-            // `Step::DespawnCreature` in the release below for why a game call is refused there.
-            Self::cancel_pending(pending, reason, reason != Reason::Shutdown);
+            // A HOTKEY PRESS INSIDE THE READINESS WINDOW IS IGNORED, not treated as a cancel.
+            // A spawn takes up to `[spawn].readiness_ms` to become drivable and NOTHING ON SCREEN
+            // says one is in flight, so a player who taps twice -- or holds the key a beat too
+            // long -- used to create a creature and delete it 166 ms later, which is
+            // indistinguishable from the key doing nothing at all. Measured live 2026-09-02:
+            // `spawn: cancelled c2110 in roster slot 6 after 166 ms (reason=hotkey)`. The
+            // deadline is what ends a spawn that will never arrive; a second press is not.
+            // Shutdown still cancels, because there is no later frame to arrive in.
+            if reason != Reason::Shutdown {
+                possess_log(format_args!(
+                    "possess-hotkey: IGNORED -- a spawn has been coming up for {} ms. A press \
+                     while one is in flight is not a cancel; wait for it, or let \
+                     [spawn].readiness_ms end it",
+                    pending.started.elapsed().as_millis(),
+                ));
+                self.pending = Some(pending);
+                return PossessionOutcome::Accepted;
+            }
+            Self::cancel_pending(pending, reason, false);
             return PossessionOutcome::Accepted;
         }
         // `mut` because the camera restore below mutates the saved state as it unwinds it.
@@ -277,7 +293,14 @@ impl NpcPossessionEngine {
             Step::MovePlayer => state.player.request_move(release_point, None),
             Step::RestoreCameraSize => state.camera.restore(),
             Step::ClearCameraOverride => game::set_camera_override(None),
+            // The AI move request is cancelled BEFORE the override is cleared, because after it
+            // the creature is the AI's again and our last order is a run command it did not
+            // issue. `stop_move_intent` writes exactly what `CS::AiIns::ClearMoveRequest` writes,
+            // so what the AI wakes up to is a state its own code produces. Its failure is not
+            // this step's failure: the override clear is THE step that must happen, and a
+            // creature that jogs for one frame is not a reason to report the release broken.
             Step::ClearManipulatorOverride => {
+                state.creature.stop_move_intent();
                 state.creature.clear_manipulator_override(thunk_address)
             }
             // AFTER the override clear, always; see `Step::DespawnCreature`, whose discriminant is
@@ -374,7 +397,12 @@ impl NpcPossessionEngine {
     /// and the press is spent on a frame that could not have fired anyway. Firing first would
     /// leave the new request overwritten by the idle a line later, which reads to the player as a
     /// button that sometimes does nothing.
-    fn tick_moveset(state: &mut Possessing, stick_active: bool) {
+    ///
+    /// `moving` is whether this frame actually ASKED the creature to move -- the gait written into
+    /// `AiIns.walkType`, not whether a stick was touched. The two differ on exactly the frames
+    /// where the request was refused (an unreadable heading, a junk `speed_scale`), and on those
+    /// the body is standing still, so offering it a running attack would be wrong.
+    fn tick_moveset(state: &mut Possessing, moving: bool) {
         let Some(dispatcher) = state.moveset.as_mut() else {
             return;
         };
@@ -442,7 +470,7 @@ impl NpcPossessionEngine {
         };
         let context = Context {
             distance_m: game::nearest_hostile_distance(state.creature),
-            locomotion: if stick_active {
+            locomotion: if moving {
                 Locomotion::Moving
             } else {
                 Locomotion::Neutral
@@ -638,21 +666,21 @@ impl NpcPossessionEngine {
             .request_move(state.last_position, state.creature.yaw());
 
         let movement = crate::config::movement();
-        let stick = game::read_move_stick();
+        let stick = game::read_move_stick(&movement);
         let write = intent::intent(
             state.last_position,
             state.creature.yaw().unwrap_or(0.0),
             stick,
             movement.speed_scale,
+            movement.turn_deadzone_deg,
         );
-        Self::tick_moveset(state, stick.is_some());
+        Self::tick_moveset(state, write.moving());
         if !state.creature.write_move_intent(write) && first_frame {
             // Said once, on the frame it is first known, rather than sixty times a second.
             possess_log(format_args!(
                 "movement: the AiIns layout canary did not pass, so no movement intent is being \
                  written -- the character is possessed and camera-followed but will not walk. \
-                 AiIns field offsets come from the 1.16.2 dump and the 1.17 sweep did not cover \
-                 that struct"
+                 The AiIns offsets are byte-proven on 1.16.2 and 1.17, so this is a THIRD build"
             ));
         }
     }

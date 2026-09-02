@@ -257,6 +257,30 @@ pub(crate) const fn read_left_stick() -> Option<(i16, i16)> {
     None
 }
 
+/// The keyboard standing in for the left stick: four held keys as one unit-scaled axis pair.
+///
+/// Returns `None` when nothing is held, which is the same answer a resting stick gives, so the
+/// caller cannot tell a keyboard from a pad and does not have to. A diagonal is NOT normalised
+/// here: `Stick::from_axes` clamps a magnitude over 1, so W+D arrives as (1, 1) and leaves as a
+/// unit vector pointing where the two keys point.
+pub(crate) fn read_move_keys(
+    forward: Option<Chord>,
+    back: Option<Chord>,
+    left: Option<Chord>,
+    right: Option<Chord>,
+) -> Option<(f32, f32)> {
+    let axis = |positive: Option<Chord>, negative: Option<Chord>| {
+        let held = |chord: Option<Chord>| chord.is_some_and(chord_held);
+        f32::from(i8::from(held(positive)) - i8::from(held(negative)))
+    };
+    let x = axis(right, left);
+    let y = axis(forward, back);
+    if x == 0.0 && y == 0.0 {
+        return None;
+    }
+    Some((x, y))
+}
+
 /// XInput `wButtons` masks for the two shoulder buttons.
 const PAD_LEFT_SHOULDER: u16 = 0x0100;
 const PAD_RIGHT_SHOULDER: u16 = 0x0200;
@@ -432,6 +456,19 @@ mod tests {
             gamepad: parse_pad_chord(gamepad).expect("gamepad chord"),
             radial: parse_pad_chord(radial).expect("radial chord"),
         }
+    }
+
+    /// Nothing held reads as a resting stick, so the caller cannot tell a keyboard from a pad.
+    /// On the host `chord_held` is a const `false`, which is exactly the "nothing held" case.
+    #[test]
+    fn no_movement_key_held_is_the_same_answer_a_resting_stick_gives() {
+        let chord = |s: &str| er_hotkey_config::keys::parse_chord(s).ok();
+        assert_eq!(
+            read_move_keys(chord("W"), chord("S"), chord("A"), chord("D")),
+            None
+        );
+        // ...and an entirely unbound set cannot fire either, which is what an emptied value means.
+        assert_eq!(read_move_keys(None, None, None, None), None);
     }
 
     #[test]

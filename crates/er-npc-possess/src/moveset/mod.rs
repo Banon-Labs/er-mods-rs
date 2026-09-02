@@ -20,6 +20,31 @@
 //! had to be reimplemented, which is the entire reason this design drives ANIMATION ids rather
 //! than behaviour ids.
 //!
+//! ## What is established about that root motion, and what is not
+//!
+//! The sentence above used to assert the displacement without anyone having watched it, so here
+//! is the line between the two:
+//!
+//! * **This crate cannot be eating it.** The only thing possession writes anywhere near a
+//!   character's own displacement is the co-location request, and that is written to the PLAYER:
+//!   `driver.rs` calls `state.player.request_move(...)`, `state.player` is `game::main_player()`,
+//!   and `request_move` resolves `self.chr_ctrl()` -- the player's. The creature's `ChrCtrl` proxy
+//!   fields and flags are never touched, so the drain that snaps a body and zeroes its delta only
+//!   ever reaches the one that is supposed to be dragged along.
+//! * **It is the same mechanism walking rides on.** `crate::possess::intent` writes an AI move
+//!   REQUEST; `[vt+0x50]` turns that into a normalised direction and hands it to
+//!   `CSChrActionRequestModule`, the player's own request module, and the behaviour graph answers
+//!   with locomotion clips. Nothing on that path takes a velocity. So attack root motion and walk
+//!   displacement are one mechanism, not two, and they stand or fall together.
+//! * **Nobody has measured a lunge.** [`watchdog::Sample::root_motion_squared`] is the semaphore
+//!   that would say -- `CSChrBehaviorModule+0x30`, now byte-verified on 1.17, so it is reading the
+//!   right field on the installed build. What it reports for a known-displacing attack has not
+//!   been captured, and the watchdog's own conjunction hides it: an attack is fired by a press, so
+//!   `input_consumed` is true and the "going nowhere" arm is never reached on the frames that
+//!   would answer the question. Capturing it needs a live run.
+//!
+//! [`watchdog::Sample::root_motion_squared`]: crate::moveset::watchdog::Sample::root_motion_squared
+//!
 //! # The one thing that cannot be checked at runtime
 //!
 //! An animation id the creature's behaviour graph has no transition for resolves cleanly and then
