@@ -1056,26 +1056,26 @@ impl NpcPossessionEngine {
             movement.turn_deadzone_deg,
         );
         Self::tick_moveset(state, write.moving());
-        // THE WRITE THAT ACTUALLY MOVES THE BODY, and it is deliberately not the AI one.
+        // THE MANUAL STAGE IS GONE, and its removal is the fix rather than a simplification.
         //
-        // `walkType` is owned by the goal state machine -- six sites zero it, all of them goal
-        // lifecycle -- and possession no-ops goal selection, so that machine churns and clears our
-        // gate at roughly frame cadence. Read-back telemetry measured exactly that. This stages
-        // the move vector where `[vt+0x50]` stages its own, one step downstream of the whole
-        // argument; see `game::Chr::write_manipulator_move`.
+        // It was written when the vtable override starved the locomotion consumers: `[vt+0x50]`
+        // published into the real manipulator and `FUN_1403cbff0` read the override's zeroes, so
+        // nothing the engine computed ever reached the body and staging the vector ourselves was
+        // the only way to move it. The swizzle removed that starvation -- one object, so the
+        // publish and the consume are the same field -- and the workaround outlived its reason.
         //
-        // The AI write below is kept because it is what TURNS the body: `FUN_1402c9410`'s
-        // `TARGET_SELF` branch derives the facing from `walkType` and `wantToMoveTo`, so on the
-        // frames it survives the body also aims where it is going. Movement no longer depends on
-        // it surviving.
-        let direction = [
-            write.target[0] - state.last_position[0],
-            0.0,
-            write.target[2] - state.last_position[2],
-        ];
-        let staged = state
-            .creature
-            .write_manipulator_move(direction, write.gait_scale());
+        // Leaving it in is what made the movement unnatural, and the user named the symptom
+        // exactly: "literally every animation causes the player to move the exact same way in the
+        // same direction". A staged vector translates the body itself, so the clip playing over
+        // the top is decorative and the body slides identically whatever it is. It also bypasses
+        // the TURN: `[vt+0x50]` derives the facing inside `AiIns::UpdateMovement` ->
+        // `FUN_1402c9410`, from `walkType` and `wantToMoveTo`, and a body moved by a staged vector
+        // is never asked to rotate at all.
+        //
+        // So the AI write below is now the whole mechanism, which is what the native path was
+        // always supposed to be: we fill the move REQUEST, and the engine computes the direction,
+        // the gait scaling, the facing and the clip selection from it -- the same code that drives
+        // every unpossessed creature in the game.
         if first_frame {
             // ONCE per possession, not sixty times a second. The read-back is taken immediately
             // after the AI write and is expected to disagree with it -- that disagreement is the
@@ -1086,13 +1086,13 @@ impl NpcPossessionEngine {
                 .read_move_intent()
                 .map_or((i32::MIN, f32::NAN), |pair| pair);
             possess_log(format_args!(
-                "movement: staged={staged} gait={} dir=({:.2}, {:.2}) | AI read-back after our \
+                "movement: gait={} | AI read-back after our \
                  own write: walkType={walk} wantToMoveTo.x={target_x:.2} (ours was {:.2}). A \
-                 disagreement here is EXPECTED -- six goal-lifecycle sites zero walkType and \
-                 possession no-ops goal selection, so the AI move request is contested every \
-                 frame. Movement is staged at ComManipulator+0x140 instead, which nothing else \
-                 writes; the AI fields are kept only because they are what TURNS the body",
-                write.walk_type, direction[0], direction[2], write.target[0],
+                 disagreement here means the goal machine still zeroes walkType from one of its \
+                 six lifecycle sites. It now MATTERS: with the manual stage removed, this request \
+                 is the whole mechanism -- the engine derives the direction, the gait, the facing \
+                 and the clip from it, the same way it does for every unpossessed creature",
+                write.walk_type, write.target[0],
             ));
         }
         // THE INSTRUMENT, because three movement fixes have now shipped without one.
@@ -1119,17 +1119,21 @@ impl NpcPossessionEngine {
         if stick.is_some() && telemetry_due {
             state.last_movement_log = Some(state.frames);
             possess_log(format_args!(
-                "movement: input READ -- gait={} target=({:.2}, {:.2}, {:.2}) turn={:.1} deg | \
+                "movement: input READ -- gait={} target=({:.2}, {:.2}, {:.2}) turnTarget={} | \
                  creature at ({:.2}, {:.2}, {:.2}) yaw={:.3} | field read-back: walk_type={:?} \
                  want_to_move_to={:?} | staged={:?} published={:?} proxyFlags={:?} \
-                 rootMotion2={:?} posNow={:?} anim={:?}. THE READ. published \
-                 non-zero says [vt+0x50] ran and published; ZERO on the next line does not \
-                 contradict it, because the publish is one frame behind the staging. rootMotion2 \
-                 NON-ZERO WITH posNow CONSTANT is the signature that matters: a clip is playing \
-                 and something is holding the body -- read anim to tell a locomotion clip from an \
-                 idle sway, because only the first makes that a held body. rootMotion2 zero with \
-                 published non-zero is the other case: the vector reaches the manipulator and \
-                 never becomes a clip. proxyFlags is a control, not a suspect: it reads 0",
+                 rootMotion2={:?} posNow={:?} anim={:?} gaitScale={:.2}. THE READ, and this \
+                 crate now WRITES none of staged/published -- both are the engine's own work, \
+                 derived from the walkType/wantToMoveTo request above. staged non-zero means \
+                 [vt+0x50] computed a move vector of its own, which is the whole mechanism now \
+                 that the manual stage is gone; staged ZERO with walk_type 2 means the request \
+                 reached the field and the engine still declined it. Their FOURTH component is \
+                 dot(direction, modelMatrix.row4) -- row4 is the TRANSLATION row, so w tracks the \
+                 creature's position and is SUPPOSED to; [vt+0x50] computes the same value, and \
+                 it was invisible until now only because this line printed three. rootMotion2 is \
+                 the body's own displacement: NON-ZERO with posNow constant is a clip playing \
+                 against something that holds the body. proxyFlags is a control, not a suspect: \
+                 it reads 0",
                 write.walk_type,
                 write.target[0],
                 write.target[1],
@@ -1154,6 +1158,7 @@ impl NpcPossessionEngine {
                     .creature
                     .current_anim_frame()
                     .map(|frame| (frame.animation, frame.local_time)),
+                write.gait_scale(),
             ));
         }
         if !state.creature.write_move_intent(write) && first_frame {
