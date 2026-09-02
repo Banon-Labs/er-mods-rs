@@ -80,6 +80,18 @@ DEP_PROBES = {
     "build-artifact": lambda root: any(
         (root / "target/x86_64-pc-windows-msvc/release").glob("*.dll")
     ),
+    # THE ONE ARTIFACT A GATE NAMES BY FILE, and it needs its own probe because
+    # `build-artifact` is an ANY-dll test and that is not the same question.
+    # `er-dll-freshness.sh --selftest` attests er_crash_logging.dll specifically (the smallest
+    # forward closure of the shipped shells, so the cheapest source hash to recompute), and it
+    # exits 1 with "no built DLL at ..." when that file is absent. Measured 2026-09-01 in a fresh
+    # worktree: check.sh linked 25 shells LATER in the file than this gate runs, some other run
+    # had left other DLLs behind, so `build-artifact` was true, the gate ran, and it went red
+    # about a missing build rather than about a stale attestation. A gate that cannot run should
+    # be skipped by the ledger, not fail with build advice.
+    "crash-logging-dll": lambda root: (
+        root / "target/x86_64-pc-windows-msvc/release/er_crash_logging.dll"
+    ).exists(),
     # er-game-base's build.rs output, `address_map_1170.rs`, under target/**/out/. Any `cargo
     # check` of the workspace produces it; a bare checkout has it nowhere. This is DISTINCT from
     # build-artifact (a linked release .dll): a `cargo check` makes the first and not the second.
