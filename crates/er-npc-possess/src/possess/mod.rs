@@ -27,7 +27,10 @@
 //!   which lives in the SpEffect-accumulated modifier block and is re-derived every frame. A raw
 //!   write is undone before it is read; the supported route is a SpEffect row, which this layer
 //!   does not have. The player's body is invisible, silent and invincible, so a hostile that locks
-//!   onto it is a cosmetic oddity rather than a hazard.
+//!   onto it is a cosmetic oddity rather than a hazard -- and since the body is also what the
+//!   POSSESSING player's own lock-on finds (it is the nearest legal target, the creature having
+//!   become the subject), [`body_size`] makes sure the reticle at least lands on the creature's
+//!   body rather than under its feet.
 //! * **Save suppression.** [`teardown::Step::LiftSaveSuppression`] exists and runs last, and it
 //!   it lifts nothing, because nothing is suppressed: co-location means the real `PlayerIns` is
 //!   genuinely standing where the creature is, so `UpdateSafePosition` writing the save's respawn
@@ -37,6 +40,7 @@
 // The offset table, the thunk emitter, the teardown ordering and the movement math are pure and
 // stay ungated, so `cargo test` proves them on the host with no game running. `game` and the
 // engine that drives them touch live memory through the windows-only `eldenring` bindings.
+pub(crate) mod body_size;
 pub(crate) mod intent;
 pub(crate) mod layout;
 pub(crate) mod teardown;

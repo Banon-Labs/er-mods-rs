@@ -100,7 +100,11 @@ const DEFAULT_CONFIG_TOML: &str = r##"# er-npc-possess.toml -- the standalone "b
 #     the creature you are wearing throw and kill you. er-npc-possess.derived.toml marks each
 #     affected move REFUSED so you can tell this apart from a move that is simply missing.
 #   * Your own body stays LOCK-ON-ABLE while you are away from it. It cannot be hurt and cannot be
-#     seen, so this is an oddity rather than a hazard.
+#     seen, so this is an oddity rather than a hazard -- and it is also what YOUR OWN lock-on
+#     finds, because the creature has become the one doing the locking rather than a target. The
+#     reticle therefore lands on your body, so possession scales that (invisible) body to the
+#     creature's size and the marker sits on the creature instead of at its feet. The log line
+#     starting "lock-on anchor:" says what was done or why it was not.
 #   * A creature whose own NpcParam says it does not move -- a turret, something rooted in place --
 #     still will not, however hard you push. That gate is the game's, not the mod's.
 #

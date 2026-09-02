@@ -738,6 +738,57 @@ impl Chr {
         unsafe { safe_read_f32(at) }.filter(|v| v.is_finite())
     }
 
+    /// The capsule HEIGHT, `CSChrPhysicsModule+0x340` -- what `ChrIns::GetPhysicsHitHeight`
+    /// returns.
+    ///
+    /// Named in [`crate::camera::layout`] alongside the radius above, for the same reason: the
+    /// two are one pair of numbers with one proof, and this crate keeps exactly one copy of them.
+    /// The camera layer reads it to size the framing; [`crate::possess::body_size`] reads it on
+    /// BOTH characters, because what it needs is the ratio.
+    pub(crate) fn hit_height(self) -> Option<f32> {
+        let at = self.physics()? + crate::camera::layout::chr_physics_module::HIT_HEIGHT;
+        unsafe { safe_read_f32(at) }.filter(|v| v.is_finite())
+    }
+
+    /// The render scale on this character's `ChrCtrl`, `{X, Y, Z}`.
+    ///
+    /// Read at possession start so release can put back what was actually there rather than
+    /// assuming `1.0`. That is the constructor's value and what a stock body carries, but it is
+    /// not what a body some other mod has already scaled carries.
+    pub(crate) fn body_scale(self) -> Option<[f32; 3]> {
+        read_vec3(self.chr_ctrl()? + chr_ctrl::SCALE_SIZE)
+    }
+
+    /// Set the render scale, writing BOTH copies the way `ChrCtrl::SetScaleSize` does.
+    ///
+    /// **Nothing is called**, and that is the same trade this crate makes everywhere else: the
+    /// function's entire body is two three-float stores, one into `ChrCtrl` and one into the
+    /// `CSChrDataModule` it reaches through `owner->modules[0]`, so writing the fields IS calling
+    /// it -- and the crate spends no game address for it. The byte proof, including that both
+    /// displacements are identical on 1.16.2 and 1.17, is on
+    /// [`super::layout::chr_ctrl::SCALE_SIZE`].
+    ///
+    /// This is the RENDER transform only. It does not move the physics capsule, so the body's
+    /// collision and hurtbox stay exactly where they were -- see [`crate::possess::body_size`].
+    pub(crate) fn set_body_scale(self, scale: [f32; 3]) -> bool {
+        if !scale.iter().all(|v| v.is_finite() && *v > 0.0) {
+            return false;
+        }
+        let Some(ctrl) = self.chr_ctrl() else {
+            return false;
+        };
+        let Some(data) = self.module(modules::DATA) else {
+            return false;
+        };
+        let mut wrote = true;
+        for (index, value) in scale.iter().enumerate() {
+            let step = index * size_of::<f32>();
+            wrote &= write_f32(ctrl + chr_ctrl::SCALE_SIZE + step, *value);
+            wrote &= write_f32(data + chr_data_module::SCALE_SIZE + step, *value);
+        }
+        wrote
+    }
+
     /// Tell the engine this character was last standing HERE.
     ///
     /// **THIS IS A FALL-DEATH SAFETY WRITE AND NOT A COSMETIC ONE.** `CSChrFallModule`'s landing
