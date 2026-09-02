@@ -68,6 +68,21 @@ def shipped_moves():
     return out
 
 
+def _normalize_chr(value):
+    """Accept `3704`, `c3704`, `C3704` or `0003704` alike -- all mean the same creature.
+
+    The shipped table and every corpus dir key on the zero-padded `cNNNN` form (see
+    `shipped_moves()` above), so a bare digit id silently misses every entry and prints
+    `taeId(s)=[] anims=0` -- indistinguishable from a genuine corpus gap. That exact
+    confusion cost a session two rounds guessing at a "missing" c3704 that was never
+    missing; see bd `er-tae-idspace-sweep-chr-arg-bare-digits-look-like-corpus-gap-2026-09-02`.
+    """
+    digits = value[1:] if value[:1] in ('c', 'C') else value
+    if digits.isdigit():
+        return f'c{int(digits):04d}'
+    return value
+
+
 def _one(args):
     chr_id, paths = args
     ids = set()
@@ -136,7 +151,8 @@ def selftest():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', default=GEN.CORPUS_ROOT)
-    parser.add_argument('--chr')
+    parser.add_argument('--chr', type=_normalize_chr,
+                        help='accepts 3704, c3704 or C3704 -- all normalize to c3704')
     parser.add_argument('--json')
     parser.add_argument('--jobs', type=int, default=10)
     parser.add_argument('--selftest', action='store_true',
