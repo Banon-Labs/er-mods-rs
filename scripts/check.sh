@@ -1546,6 +1546,19 @@ python3 "$repo_root/scripts/check-test-target-coverage.py"
 python3 "$repo_root/scripts/check-moveset-table.py" --selftest
 python3 "$repo_root/scripts/check-moveset-table.py"
 
+# ...AND THAT THE TABLE ACTUALLY GIVES CREATURES THEIR ATTACKS. The regeneration diff above proves
+# the shipped file is what the generator produces; it says nothing about whether the generator is
+# producing the right answer, and for a third of the roster it was not. The generator joined the
+# behaviour graph against `<chr>.tae` by chr id on BOTH sides, and 133 creatures do not own their
+# TimeAct -- c4351 Godrick Knight's anibnd is a skeleton and nothing else, because the whole 435x
+# family plays out of c4350.tae. Every attack those creatures can fire was denied
+# `no-damage-window` and then trimmed by the in-span rule, so they shipped as twelve W_Step walk
+# clips with `denied=0`, which reads as "this creature has no attacks" everywhere it is reported.
+# This gate opens the TimeAct that describes each attackless creature and fails when it finds
+# attack-band animations the table is not offering. Corpus-gated and SKIPS loudly, like the above.
+python3 "$repo_root/scripts/er-moveset-coverage.py" --selftest
+python3 "$repo_root/scripts/er-moveset-coverage.py" --check
+
 # EVERY REMAINING HOST-TESTABLE CRATE, IN TWO BATCHES. Up to this line the crates above were
 # added one at a time, each by somebody who tripped over the fact that theirs had never run --
 # `default-members = ["crates/er-quickload"]` means a bare `cargo test` selects ONE of 64

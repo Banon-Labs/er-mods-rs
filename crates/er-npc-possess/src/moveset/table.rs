@@ -377,7 +377,7 @@ pub(crate) struct Move {
     /// this creature with a victim. Landing it is what starts a grab. See [`Throw`] for the
     /// mechanism and [`Denial::ThrowResultClip`] for the 4000-band clips that are NOT this.
     ///
-    /// 153 of the 6921 shipped moves across 78 creatures, every one of them in the 3000 band.
+    /// 153 of the 9426 shipped moves across 78 creatures, every one of them in the 3000 band.
     /// (169 counting `(animation, throwTypeId)` pairs -- a few attacks carry two.)
     pub(crate) throws: Throws,
     /// Which event-name spelling reaches this animation on this creature. See [`Prefix`]; it
@@ -1167,6 +1167,52 @@ mod tests {
     /// The floor is what makes this a gate. If the generator ever reads FlagType 4 (the PLAYER
     /// combo flag, 0.3% of creature attack animations) instead of 86, or the wrong param index,
     /// the table still parses and every attack silently becomes uncancellable.
+    /// A CREATURE WITH NO ATTACKS IS THE FAILURE THIS TABLE IS MOST LIKELY TO SHIP SILENTLY.
+    ///
+    /// It shipped exactly that way once. The generator joined the behaviour graph (what a creature
+    /// can FIRE) against `<chr>.tae` (what the animation DOES) by chr id on both sides, and a
+    /// third of the roster does not own its TimeAct: c4351 Godrick Knight's `.anibnd` is a
+    /// skeleton and nothing else, because the whole 435x knight family plays out of `c4350.tae`.
+    /// Those 133 creatures reached the classifier with an empty TimeAct, had every attack denied
+    /// `no-damage-window`, and shipped as twelve `W_Step` walk clips with `denied=0` -- which
+    /// reads, in the derived report and in the log, as a creature that simply has no attacks.
+    /// Nothing went red. See `scripts/er-moveset-tae-owner.py` for the join that fixed it.
+    ///
+    /// So the counts are asserted. 25 creatures genuinely have no attack animations (Balloon
+    /// Dummy, Talk Dummy, Ranni, the Two Fingers, an owl), 20 more have nothing fireable at all,
+    /// and the numbers below leave room for a handful either way rather than pinning an exact
+    /// figure a legitimate corpus change would break. What they will not survive is the join
+    /// regressing: that puts a hundred and thirty creatures back in the attackless column at once.
+    #[test]
+    fn only_a_handful_of_creatures_in_the_shipped_table_have_no_attacks_at_all() {
+        let mut attackless = Vec::new();
+        let mut attacks = 0;
+        for chr in chr_ids() {
+            let Some(moveset) = lookup(chr) else { continue };
+            let mine = moveset
+                .moves
+                .iter()
+                .filter(|entry| entry.bucket != Bucket::Movement)
+                .count();
+            attacks += mine;
+            if mine == 0 {
+                attackless.push(chr);
+            }
+        }
+        assert!(
+            attackless.len() <= 45,
+            "{} creatures in the shipped table classify zero attacks: {attackless:?}. Above about \
+             forty-five this is the TimeAct join failing, not the roster -- run \
+             `scripts/er-moveset-coverage.py --check`, which names the cause per creature.",
+            attackless.len()
+        );
+        assert!(
+            attacks > 7000,
+            "only {attacks} attacks in the whole table; the chr-id TimeAct join used to give 4669 \
+             and the family-base join gives 7174"
+        );
+    }
+
     #[test]
     fn nearly_every_attack_in_the_shipped_table_carries_a_real_chain_window() {
         let mut attacks = 0;

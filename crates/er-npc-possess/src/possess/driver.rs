@@ -15,7 +15,9 @@ use crate::hud;
 use crate::input::FaceEdges;
 use crate::log::possess_log;
 use crate::moveset::chain::{Availability, Held, Playing};
-use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion, NoMove, Press, Released};
+use crate::moveset::dispatch::{
+    Context, Dispatcher, Hand, Input, Locomotion, NoMove, PageTurn, Press, Released,
+};
 use crate::moveset::table::{self, Denial};
 use crate::moveset::watchdog::{Sample, Verdict, Watchdog};
 use crate::moveset::{derived, table as moveset_table};
@@ -118,12 +120,16 @@ struct Possessing {
     frames: u64,
     /// THE MOVESET, or `None` when this creature is not in the shipped table.
     ///
-    /// `None` is a real and ordinary state -- 163 of the 408 creatures the generator looked at
-    /// have nothing fireable of their own -- so it is an `Option` rather than an empty dispatcher
-    /// that would silently swallow every press.
+    /// `None` is a real and ordinary state -- 20 of the 408 creatures the generator looked at have
+    /// nothing fireable of their own -- so it is an `Option` rather than an empty dispatcher that
+    /// would silently swallow every press. (It said 163 until the TimeAct join was fixed; the other
+    /// 143 were creatures whose animations the generator was reading under the wrong chr id.)
     moveset: Option<Dispatcher>,
     /// Rising-edge detector for the four face inputs.
     face: FaceEdges,
+    /// The two attack-set page keys, as rising edges. Same latch as [`Self::face`]; see
+    /// [`crate::input::read_page_inputs`].
+    pages: FaceEdges,
     /// THE CAMERA, sized to this creature. Present even when nothing was adapted, because it also
     /// carries the reason -- see [`crate::camera`].
     camera: camera::Session,
@@ -149,6 +155,8 @@ struct Possessing {
     /// and closes the file per line, and this is the state a player mashing through a long
     /// animation is in on every one of sixty frames a second.
     reported_buffered_press: bool,
+    /// Whether the "this hand has one page" line has been said, per hand.
+    reported_one_page: [bool; 2],
 }
 
 impl Possessing {
@@ -472,7 +480,59 @@ impl NpcPossessionEngine {
         let Some(dispatcher) = state.moveset.as_mut() else {
             return;
         };
-        let pressed = state.face.feed(crate::input::read_face_inputs());
+        // THE PAGE KEYS ARE HANDLED FIRST AND OUTSIDE EVERY EARLY RETURN BELOW. Turning a page
+        // fires nothing, so it is not subject to the one-request-per-frame rule, to what the
+        // creature is currently playing, or to the "nothing pressed" shortcut -- a player who taps
+        // right arrow mid-swing means it for the NEXT press, and dropping it there would make the
+        // key feel unreliable in exactly the moment it is most useful.
+        //
+        // ONE pad read answers both questions -- see [`crate::input::read_moveset_inputs`] -- so
+        // the face levels are sampled here and spent a few lines below rather than re-read.
+        let (face_held, page_held) = crate::input::read_moveset_inputs(dispatcher.buttons());
+        let page_pressed = state.pages.feed(page_held);
+        for hand in Hand::ALL {
+            if page_pressed & (1 << hand.index()) == 0 {
+                continue;
+            }
+            match dispatcher.turn_page(hand) {
+                PageTurn::Turned { page, pages } => {
+                    let leads = |input: Input| match dispatcher.leads_with(input) {
+                        Some(entry) => format!("{} {}", input.name(), entry.fire),
+                        None => format!("{} nothing", input.name()),
+                    };
+                    let [first, second] = hand.inputs();
+                    possess_log(format_args!(
+                        "moveset: {} attack set {page}/{pages} -- {}, {}",
+                        hand.name(),
+                        leads(first),
+                        leads(second),
+                    ));
+                    // The report is rewritten so the page the player is on, and what is on it, can
+                    // be read rather than remembered. Cheap: a few kilobytes, only on a key press.
+                    Self::write_derived(
+                        state.chr_id,
+                        &state.camera,
+                        state.creature,
+                        Some(dispatcher),
+                    );
+                }
+                PageTurn::OnePage => {
+                    // Once per hand per possession. The log opens and closes the file per line and
+                    // a player who has discovered the key does press it more than once.
+                    if !state.reported_one_page[hand.index()] {
+                        state.reported_one_page[hand.index()] = true;
+                        possess_log(format_args!(
+                            "moveset: c{:04} has only one {} attack set, so that page key does \
+                             nothing here",
+                            state.chr_id,
+                            hand.name(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        let pressed = state.face.feed(face_held);
         // CONSUMED, not held. See [`Sample::input_consumed`]: a press that fired nothing is
         // evidence of being stuck, not evidence against it, so a player mashing at a softlock must
         // not be able to hold the watchdog off indefinitely.
@@ -714,7 +774,9 @@ impl NpcPossessionEngine {
     ) {
         let mut text = match dispatcher {
             Some(dispatcher) => {
-                derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary())
+                let mut text = derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary());
+                text.push_str(&derived::pages_block(dispatcher));
+                text
             }
             // WRITTEN ANYWAY for a creature with no shipped moveset, because it still gets a
             // camera and still gets the HUD block -- and skipping the write would leave the
@@ -1119,12 +1181,14 @@ impl NpcPossessionEngine {
             ),
             moveset,
             face: FaceEdges::default(),
+            pages: FaceEdges::default(),
             elapsed_ms: 0,
             started: std::time::Instant::now(),
             chr_id,
             reported_dead_input: [false; 4],
             fired_last_frame: false,
             reported_buffered_press: false,
+            reported_one_page: [false; 2],
         };
         Self::write_derived(chr_id, &state.camera, creature, state.moveset.as_ref());
         match state.moveset.as_ref() {
@@ -1133,11 +1197,42 @@ impl NpcPossessionEngine {
                     "moveset: c{chr_id:04} {}",
                     dispatcher.summary()
                 ));
+                // THE COUNTS ARE NOT A SENTENCE. `light=0 heavy=0 ranged=0 movement=12` is the
+                // whole answer to "why do none of my attacks work", and a player reads it as
+                // noise: they press the four attack buttons, get a step animation or nothing, and
+                // conclude the mod is broken. 25 of the 408 creatures in the shipped table really
+                // do have no attack animations -- a Balloon Dummy is one -- so this is a fact
+                // about the creature that has to be SAID, not a failure to be hidden.
+                if dispatcher.attack_count() == 0 {
+                    possess_log(format_args!(
+                        "moveset: c{chr_id:04} HAS NO ATTACK ANIMATIONS -- every move it has is \
+                         locomotion, so r1/r2/l1 have nothing of their own to fire. With \
+                         [mapping] unbound_inputs = \"promote\" they borrow a step from the \
+                         movement list; with \"deny\" they do nothing. This is a property of the \
+                         creature, not a failure: 25 of the 408 in the shipped table are like \
+                         this. Movement, the camera, the HUD and release all still work."
+                    ));
+                }
+                for hand in Hand::ALL {
+                    let pages = dispatcher.pages(hand);
+                    if pages > 1 {
+                        possess_log(format_args!(
+                            "moveset: {} attack set 1/{pages} -- the {} arrow pages {}/{} through \
+                             the rest ([buttons] page_{}). er-npc-possess.derived.toml lists what \
+                             each page leads with.",
+                            hand.name(),
+                            hand.name(),
+                            hand.inputs()[0].name(),
+                            hand.inputs()[1].name(),
+                            hand.name(),
+                        ));
+                    }
+                }
             }
             None => possess_log(format_args!(
                 "moveset: c{chr_id:04} is not in the shipped table, so this character has no \
                  attacks. That is expected for a variant that owns a model but no animations of \
-                 its own -- 163 of the 408 the offline sweep looked at are like that. Movement, \
+                 its own -- 20 of the 408 the offline sweep looked at are like that. Movement, \
                  camera, the HUD and release all still work."
             )),
         }

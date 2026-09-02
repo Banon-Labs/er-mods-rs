@@ -81,10 +81,47 @@
 //! and range the throw system will demand, `allow_grabs` finally withholds something, and a grab
 //! that needs a creature victim is not offered when there is none in range.
 //!
+//! # THE CHR-ID JOIN THAT COST A THIRD OF THE ROSTER ITS ATTACKS
+//!
+//! The generator joins five offline sources per creature, and for two of them it used the chr id as
+//! the key on both sides: the behaviour graph (what can be FIRED) out of `<chr>.behbnd.dcx`, and
+//! the TimeAct (what the animation DOES, and when it may be cancelled) out of `<chr>.anibnd.dcx`.
+//! The first key is right. The second is wrong for 133 of the 408 creatures, because **a creature's
+//! animations do not have to live under its own id**.
+//!
+//! c4351 Godrick Knight is the worked example. Its behaviour graph declares 72 in-band event names
+//! and can fire all 72. Its `.anibnd` contains `skeleton.hkx` and nothing else -- no clips, no
+//! `.tae` -- because the whole 435x knight family plays out of `c4350.anibnd.dcx`, whose
+//! `INTERROOT_win64/chr/c4350/tae/c4350.tae` is a megabyte of TimeAct covering all six of them. So
+//! c4351 reached [`table`]'s classifier with an EMPTY TimeAct: no damage window on any of those 72,
+//! every one denied `no-damage-window`, and then the in-span denial trim -- which keeps only
+//! denials sitting among ids that DID make it -- threw the whole list away, because the only
+//! survivors were the twelve `W_Step` walk clips.
+//!
+//! The shipped row was therefore `4351 6000:3:0:0:2 6001:3:1:0:2 ...`: twelve moves, `denied=0`,
+//! and not one attack. Identical rows for Battlemage, Cemetery Shade, Wolf, Troll Knight, Decaying
+//! Ekzykes, every Godrick/Leyndell/Radahn soldier and knight, Lichdragon Fortissax. Nothing went
+//! red anywhere, because "this creature has no attacks" is a legitimate answer -- a Balloon Dummy
+//! really has none -- and the table could not tell the two cases apart.
+//!
+//! What names the owner is `NpcParam.behaviorVariationId`, which is `<family> * 100 + <variant>`:
+//! 43500 is family 435 and ships under `c4350`; 41600 is family 416 and ships under `c4160`, which
+//! is itself, which is why 270 creatures joined correctly and nobody noticed. The generator now
+//! falls back to the family base's TimeAct when a creature has none of its own
+//! (`tae_paths_for_chr`), and the shipped table went from 4,669 attacks to 7,174 across 128 changed
+//! rows. Five creatures are still stranded -- c3020, c4250, c5194, c5261, c5560 have no `.tae`
+//! under either id in the current extraction, which is a corpus gap rather than a join failure.
+//!
+//! Two gates hold it: `scripts/er-moveset-coverage.py --check` opens the TimeAct behind every
+//! attackless creature and fails if it describes attacks the table is not offering, and
+//! `only_a_handful_of_creatures_in_the_shipped_table_have_no_attacks_at_all` in [`table`] caps the
+//! attackless count from inside `cargo test`.
+//!
 //! # The four parts
 //!
 //! * [`table`] -- what each creature can do, decided offline. Integers only.
-//! * [`dispatch`] -- four fixed buttons onto 8-60 attacks, by distance band and rank cycling.
+//! * [`dispatch`] -- four fixed buttons onto 8-60 attacks, by distance band and rank cycling, and
+//!   the per-hand attack-set PAGE the left and right arrow keys move.
 //! * [`chain`] -- WHEN a press is allowed to happen: chain, wait, or fire. Never interrupt.
 //! * [`watchdog`] -- forces idle when an animation strands the creature, and denies it afterwards.
 //! * [`derived`] -- writes every decision, and every denial's reason, where the player can read it.
