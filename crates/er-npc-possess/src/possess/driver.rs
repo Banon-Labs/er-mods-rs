@@ -14,14 +14,14 @@ use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
 use crate::hud;
 use crate::input::FaceEdges;
 use crate::log::possess_log;
-use crate::moveset::chain::{Availability, Held, Playing};
+use crate::moveset::chain::{Availability, Held, Playing, Reading, Source};
 use crate::moveset::dispatch::{
     Context, Dispatcher, Hand, Input, Locomotion, NoMove, PageTurn, Press, Released,
 };
 use crate::moveset::table::{self, Denial};
 use crate::moveset::watchdog::{Sample, Verdict, Watchdog};
 use crate::moveset::{derived, table as moveset_table};
-use crate::possess::game::{self, Chr};
+use crate::possess::game::{self, AnimFrame, Chr};
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
 use crate::possess::{body_size, intent, layout};
@@ -164,9 +164,8 @@ struct Possessing {
     /// log opens and closes the file per line, so an unguarded one on a held button would cost
     /// sixty opens a second.
     reported_dead_input: [bool; 4],
-    /// Did a request actually land on the previous frame? Read one frame late because the
-    /// watchdog runs before the firing does, and consumed on read.
-    fired_last_frame: bool,
+    /// The last availability state reported, so the log carries one line per CHANGE.
+    reported_availability: Option<(Availability, Source)>,
     /// Has the "your press is waiting rather than cancelling" line been said this possession?
     ///
     /// Once, not per press, for the same reason as [`Self::reported_dead_input`]: the log opens
@@ -563,29 +562,40 @@ impl NpcPossessionEngine {
         }
 
         let pressed = state.face.feed(face_held);
-        // CONSUMED, not held. See [`Sample::input_consumed`]: a press that fired nothing is
-        // evidence of being stuck, not evidence against it, so a player mashing at a softlock must
-        // not be able to hold the watchdog off indefinitely.
-        let consumed = core::mem::take(&mut state.fired_last_frame);
+        // CONSUMED, not held, and now the ENGINE's answer rather than ours. See
+        // [`Sample::input_consumed`]: a press that fired nothing is evidence of being stuck, not
+        // evidence against it, so a player mashing at a softlock must not be able to hold the
+        // watchdog off indefinitely. This used to be "we wrote the request field last frame",
+        // which is not the same claim -- `CSChrEventModule::Update` has four gates in front of
+        // the dispatch and drops a refused request silently. `+0x24` bit 0 is what it sets when
+        // the request really did become a graph event.
+        let consumed = state.creature.animation_request_dispatched();
         // What the creature is doing, and whether it is willing to be left. Read ONCE per frame
         // and shared by the release and the press, so a buffered press and a fresh one on the
-        // same frame cannot disagree about what is playing.
-        let playing = state.creature.current_animation().map(|animation| Playing {
-            animation,
-            elapsed_s: state.creature.current_animation_elapsed(),
+        // same frame cannot disagree about what is playing. `None` means the creature is
+        // animating nothing -- see `Chr::current_anim_frame`, which refuses to hand back a stale
+        // queue entry.
+        let frame = state.creature.current_anim_frame();
+        let playing = frame.map(|frame| Playing {
+            animation: frame.animation,
+            elapsed_s: frame.local_time,
+            length_s: frame.anim_length,
             cancel_allowed: state.creature.attack_cancel_allowed(),
         });
+        let reading = dispatcher.reading(playing);
+        Self::report_availability(&mut state.reported_availability, frame, playing, reading);
         // `mut` because a release that fires spends the frame's one request slot, which makes
         // anything else pressed this frame mid-animation by definition -- see below.
-        let mut availability = dispatcher.availability(playing);
+        let mut availability = reading.availability;
 
-        if let Some(current) = playing {
+        {
+            // The watchdog runs on EVERY frame, including the ones with nothing playing. That is
+            // what makes `ReturnedToNeutral` fire when a creature stops animating rather than only
+            // when it animates something neutral -- and a cursor that never resets is a combo that
+            // never starts again.
             let sample = Sample {
-                animation: current.animation,
-                // An unreadable root motion is treated as MOVING, i.e. not stuck. Failing the
-                // other way would force idle out of a perfectly good attack whenever the module
-                // pointer happened not to read.
-                root_motion_squared: state.creature.root_motion_squared().unwrap_or(f32::MAX),
+                animation: frame.map_or(IDLE_ANIMATION, |frame| frame.animation),
+                local_time: frame.and_then(|frame| frame.local_time),
                 input_consumed: consumed,
                 now_ms: state.elapsed_ms,
             };
@@ -610,11 +620,11 @@ impl NpcPossessionEngine {
                     // `Verdict::ForceIdle`; until it is, this says what it actually knows. How
                     // long it was stuck is `[mapping].watchdog_seconds`, by construction.
                     possess_log(format_args!(
-                        "moveset: animation {blame} stopped producing root motion and was forced \
-                         back to idle {} ms into this possession, after the full \
-                         [mapping].watchdog_seconds -- denied for the rest of this session. It is \
-                         in {} as unusable-at-runtime; copy it into er-npc-possess.toml under \
-                         [chr.c{:04}] to keep it denied.",
+                        "moveset: animation {blame} stopped ADVANCING -- its playhead did not \
+                         move for the full [mapping].watchdog_seconds while nothing was asked of \
+                         it -- and was forced back to idle {} ms into this possession, denied for \
+                         the rest of this session. It is in {} as unusable-at-runtime; copy it \
+                         into er-npc-possess.toml under [chr.c{:04}] to keep it denied.",
                         state.elapsed_ms,
                         crate::config::DERIVED_CONFIG_FILE_NAME,
                         state.chr_id,
@@ -659,12 +669,7 @@ impl NpcPossessionEngine {
         match dispatcher.release(context, availability) {
             Released::Nothing => {}
             Released::Fire(_, chosen) => {
-                Self::fire_chosen(
-                    state.creature,
-                    &mut state.watchdog,
-                    &mut state.fired_last_frame,
-                    chosen,
-                );
+                Self::fire_chosen(state.creature, &mut state.watchdog, chosen);
                 // The frame's one request slot is now spent on an attack that has just started,
                 // so anything ALSO pressed this frame is by definition arriving mid-animation.
                 // Saying so rather than returning is what keeps it: it buffers instead of being
@@ -693,12 +698,7 @@ impl NpcPossessionEngine {
             return;
         };
         match dispatcher.press(input, context, availability) {
-            Press::Fire(chosen) => Self::fire_chosen(
-                state.creature,
-                &mut state.watchdog,
-                &mut state.fired_last_frame,
-                chosen,
-            ),
+            Press::Fire(chosen) => Self::fire_chosen(state.creature, &mut state.watchdog, chosen),
             Press::Waiting(held) => {
                 // Once per possession, not per press. The point is to tell a player who expected
                 // a cancel that the press was KEPT rather than eaten; repeating it sixty times a
@@ -724,19 +724,60 @@ impl NpcPossessionEngine {
         }
     }
 
+    /// Say what the availability oracle READ and which branch it took, once per change.
+    ///
+    /// This exists because the 2026-09-02 run could not be diagnosed from its own log. Four lines
+    /// said presses were being held and dropped; nothing said what the resolver had looked at, so
+    /// which of three possible causes it was had to be settled by reading the binary afterwards.
+    /// A line per frame would be sixty file opens a second, and a line per possession would miss
+    /// the transition that matters -- so it is a line per CHANGE of the resolved state, which for
+    /// a creature being played is a handful per attack and exactly zero while nothing happens.
+    ///
+    /// Takes the one field it mutates rather than `&mut Possessing`, because the caller is
+    /// holding a mutable borrow of the sibling `moveset` field.
+    fn report_availability(
+        reported: &mut Option<(Availability, Source)>,
+        frame: Option<AnimFrame>,
+        playing: Option<Playing>,
+        reading: Reading,
+    ) {
+        let now = (reading.availability, reading.source);
+        if *reported == Some(now) {
+            return;
+        }
+        *reported = Some(now);
+        let clock = |value: Option<f32>| match value {
+            Some(value) => format!("{value:.3}"),
+            None => "unread".to_owned(),
+        };
+        possess_log(format_args!(
+            "moveset: availability={} via {} -- anim={} playhead={}/{} taeCancels={}",
+            match reading.availability {
+                Availability::Idle => "idle",
+                Availability::Chainable => "chainable",
+                Availability::Committed => "committed",
+            },
+            reading.source.name(),
+            // "none" is the answer that matters most here: it is the engine saying this creature
+            // drove no animation this frame, which is what "idle" is made of.
+            frame.map_or("none".to_owned(), |frame| frame.animation.to_string()),
+            clock(frame.and_then(|frame| frame.local_time)),
+            clock(frame.and_then(|frame| frame.anim_length)),
+            match playing.and_then(|playing| playing.cancel_allowed) {
+                Some(true) => "cancel-allowed",
+                Some(false) => "cancel-denied",
+                None => "unread",
+            },
+        ));
+    }
+
     /// Fire a chosen move and record that the frame spent its one request on it.
     ///
     /// Takes the three fields it touches rather than `&mut Possessing`, because every caller is
     /// holding a mutable borrow of the sibling `moveset` field while it calls this.
-    fn fire_chosen(
-        creature: Chr,
-        watchdog: &mut Watchdog,
-        fired_last_frame: &mut bool,
-        chosen: table::Move,
-    ) {
+    fn fire_chosen(creature: Chr, watchdog: &mut Watchdog, chosen: table::Move) {
         if Self::fire(creature, chosen) {
             watchdog.armed_with(chosen.fire);
-            *fired_last_frame = true;
         }
     }
 
@@ -1288,7 +1329,7 @@ impl NpcPossessionEngine {
             started: std::time::Instant::now(),
             chr_id,
             reported_dead_input: [false; 4],
-            fired_last_frame: false,
+            reported_availability: None,
             reported_buffered_press: false,
             reported_one_page: [false; 2],
         };

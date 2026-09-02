@@ -36,14 +36,12 @@
 //!   `CSChrActionRequestModule`, the player's own request module, and the behaviour graph answers
 //!   with locomotion clips. Nothing on that path takes a velocity. So attack root motion and walk
 //!   displacement are one mechanism, not two, and they stand or fall together.
-//! * **Nobody has measured a lunge.** [`watchdog::Sample::root_motion_squared`] is the semaphore
-//!   that would say -- `CSChrBehaviorModule+0x30`, now byte-verified on 1.17, so it is reading the
-//!   right field on the installed build. What it reports for a known-displacing attack has not
-//!   been captured, and the watchdog's own conjunction hides it: an attack is fired by a press, so
-//!   `input_consumed` is true and the "going nowhere" arm is never reached on the frames that
-//!   would answer the question. Capturing it needs a live run.
-//!
-//! [`watchdog::Sample::root_motion_squared`]: crate::moveset::watchdog::Sample::root_motion_squared
+//! * **Nobody has measured a lunge.** `CSChrBehaviorModule+0x30` is the field that would say, and
+//!   it is byte-verified on 1.17, so a reader would be reading the right field on the installed
+//!   build. What it reports for a known-displacing attack has still not been captured. The
+//!   watchdog no longer consults it at all -- see [`watchdog`], which now asks whether the
+//!   PLAYHEAD advanced rather than whether the BODY moved -- so answering this needs a live run
+//!   and a reader written for the purpose.
 //!
 //! # The one thing that cannot be checked at runtime
 //!

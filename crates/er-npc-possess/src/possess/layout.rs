@@ -540,6 +540,11 @@ pub(crate) mod chr_action_request_module {
 /// and `field_0x70 == 0`. A request that fails them is dropped silently; nothing here can observe
 /// that, which is part of why the watchdog exists.
 pub(crate) mod chr_event_module {
+    /// `field5_0x24` -- the flags word `Update` reports itself through. RE-ONLY.
+    pub(crate) const DISPATCH_FLAGS: usize = 0x24;
+    /// Bit 0 of [`DISPATCH_FLAGS`]: the request reached the behaviour world this frame.
+    /// Cleared at the top of `Update` and set only on the branch that dispatches.
+    pub(crate) const DISPATCHED: u32 = 1;
     /// `requestAnimationId`, `i32`. -1 means "nothing pending". Cross-checked.
     pub(crate) const REQUEST_ANIMATION_ID: usize = 0x18;
 }
@@ -560,6 +565,11 @@ pub(crate) mod chr_time_act_module {
     pub(crate) const ANIM_QUEUE: usize = 0x20;
     /// Size of one queue entry: `animId`, `prevLocalTime`, `localTime`, `animLength`.
     pub(crate) const ANIM_STRIDE: usize = 0x10;
+    /// `animLength` within a queue entry, `f32` -- how long the clip runs.
+    ///
+    /// The bound on how long "committed" can possibly last. Without it, an oracle that cannot
+    /// answer leaves a press waiting forever; with it, it waits at most one clip.
+    pub(crate) const ANIM_LENGTH: usize = 0x0c;
     /// `localTime` within a queue entry, `f32` -- seconds into the clip THIS frame.
     ///
     /// `prevLocalTime` at +0x4 is the same measurement one frame earlier, which is what the pair
@@ -569,8 +579,23 @@ pub(crate) mod chr_time_act_module {
     pub(crate) const ANIM_LOCAL_TIME: usize = 0x08;
     /// Entries in the ring.
     pub(crate) const ANIM_QUEUE_LEN: u32 = 10;
-    /// `readIdx`, `u32` -- the index of the animation last played or updated, i.e. the current
-    /// one. Cross-checked.
+    /// `writeIdx`, `u32` -- where the NEXT push lands. Cross-checked.
+    ///
+    /// It is here for one reason: `readIdx == writeIdx` is the only way to tell that the entry
+    /// `readIdx` points at is STALE. See [`READ_IDX`].
+    pub(crate) const WRITE_IDX: usize = 0xc0;
+    /// `readIdx`, `u32` -- where the animations driven THIS FRAME begin.
+    ///
+    /// Not "the current animation", which is what this constant's old comment claimed and what
+    /// cost the moveset five minutes of dead buttons in the 2026-09-02 run.
+    /// `CS::CSChrTimeActModule::ResetAnimQueque` (1.16.2 `0x1404304d0`, 1.17 `0x140430a20`, whole
+    /// body `readIdx = writeIdx`) runs once per frame from `CS::ChrIns::PreBehaviorSafe`, and
+    /// `CS::CSChrTimeActModule::RunTaeAndUpdateAnimQueue` (`0x140430960`, called from
+    /// `TAE_Callback`) then pushes one entry per animation actually driven and advances
+    /// `writeIdx` modulo ten. So `animQueue[readIdx..writeIdx)` is this frame's animations and
+    /// **`readIdx == writeIdx` means nothing was driven at all** -- the entry still sitting at
+    /// `readIdx` is then a leftover from up to ten pushes ago, and reading it says the creature is
+    /// mid-swing long after the swing ended. Cross-checked.
     pub(crate) const READ_IDX: usize = 0xc4;
 }
 

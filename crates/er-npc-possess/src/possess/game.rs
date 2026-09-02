@@ -52,6 +52,21 @@ use crate::possess::layout::{
 };
 use crate::settings::{TargetMode, TargetSettings};
 
+/// One frame of the creature's TimeAct queue: what it is animating, and where in the clip.
+///
+/// Only ever built from an entry the engine pushed THIS frame -- see
+/// [`Chr::current_anim_frame`], which answers `None` rather than handing back a stale one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AnimFrame {
+    /// `animQueue[readIdx].animId`.
+    pub(crate) animation: i32,
+    /// `localTime`, seconds into the clip. `None` when it did not read or was not finite.
+    pub(crate) local_time: Option<f32>,
+    /// `animLength`, how long the clip runs. `None` when it did not read, was not finite, or was
+    /// not positive -- a zero length would make every clip look finished.
+    pub(crate) anim_length: Option<f32>,
+}
+
 /// COMPILE-TIME CROSS-CHECK of two independently derived layouts.
 ///
 /// The left side is this crate's reverse engineering; the right is `fromsoftware-rs`'s model of
@@ -99,6 +114,11 @@ const _: () = {
         core::mem::offset_of!(CSChrTimeActModule, anim_queue) == chr_time_act_module::ANIM_QUEUE
     );
     assert!(core::mem::offset_of!(CSChrTimeActModule, read_idx) == chr_time_act_module::READ_IDX);
+    assert!(core::mem::offset_of!(CSChrTimeActModule, write_idx) == chr_time_act_module::WRITE_IDX);
+    assert!(
+        core::mem::offset_of!(CSChrTimeActModuleAnim, anim_length)
+            == chr_time_act_module::ANIM_LENGTH
+    );
     assert!(core::mem::size_of::<CSChrTimeActModuleAnim>() == chr_time_act_module::ANIM_STRIDE);
     // `localTime` is the THIRD field, and upstream keeps it private under the name `play_time2`
     // -- so it cannot be reached by `offset_of!` and is pinned by arithmetic against the two
@@ -107,8 +127,7 @@ const _: () = {
     // repacks the entry, this stops matching and says so at compile time rather than reading a
     // float out of the wrong quarter of the record.
     assert!(
-        core::mem::offset_of!(CSChrTimeActModuleAnim, anim_length)
-            == chr_time_act_module::ANIM_LOCAL_TIME + size_of::<f32>()
+        chr_time_act_module::ANIM_LENGTH == chr_time_act_module::ANIM_LOCAL_TIME + size_of::<f32>()
     );
     assert!(
         core::mem::offset_of!(CSChrBehaviorModule, root_motion) == chr_behavior_module::ROOT_MOTION
@@ -351,10 +370,27 @@ impl Chr {
             .is_some_and(|pending| pending != -1)
     }
 
-    /// The TimeAct queue entry the read cursor points at -- i.e. what is playing right now.
-    fn current_anim_entry(self) -> Option<usize> {
+    /// What the creature is animating THIS FRAME, or `None` when it is animating nothing.
+    ///
+    /// `None` is a real answer and not a failure. `CS::ChrIns::PreBehaviorSafe` calls
+    /// `ResetAnimQueque` (`readIdx = writeIdx`) once per frame and `RunTaeAndUpdateAnimQueue`
+    /// pushes one entry per animation actually driven, advancing `writeIdx`; so an equal pair
+    /// means nothing was driven and the entry sitting at `readIdx` belongs to an earlier frame.
+    ///
+    /// Reading it anyway is the bug this function was rewritten to remove. In the 2026-09-02 run
+    /// a possessed c4604 kept answering "3000" long after that swing had ended, so every press for
+    /// five and a half minutes was buffered as mid-attack and dropped. The stale value does not
+    /// fail open; it fails permanently closed, which is indistinguishable from the mod not
+    /// working.
+    pub(crate) fn current_anim_frame(self) -> Option<AnimFrame> {
         let time_act = self.module(modules::TIME_ACT)?;
         let read = unsafe { safe_read_i32(time_act + chr_time_act_module::READ_IDX) }?;
+        let write = unsafe { safe_read_i32(time_act + chr_time_act_module::WRITE_IDX) }?;
+        if read == write {
+            // Nothing was driven this frame. Not an error, and not "still playing whatever was
+            // there before" -- the creature is animating nothing.
+            return None;
+        }
         let index = u32::try_from(read).ok()?;
         if index >= chr_time_act_module::ANIM_QUEUE_LEN {
             // The cursor is a `u32` the engine wraps itself, so an out-of-range value means the
@@ -362,16 +398,34 @@ impl Chr {
             // whatever follows it.
             return None;
         }
-        Some(
-            time_act
-                + chr_time_act_module::ANIM_QUEUE
-                + (index as usize) * chr_time_act_module::ANIM_STRIDE,
-        )
+        let entry = time_act
+            + chr_time_act_module::ANIM_QUEUE
+            + (index as usize) * chr_time_act_module::ANIM_STRIDE;
+        Some(AnimFrame {
+            animation: unsafe { safe_read_i32(entry) }?,
+            local_time: unsafe { safe_read_f32(entry + chr_time_act_module::ANIM_LOCAL_TIME) }
+                .filter(|value| value.is_finite()),
+            anim_length: unsafe { safe_read_f32(entry + chr_time_act_module::ANIM_LENGTH) }
+                .filter(|value| value.is_finite() && *value > 0.0),
+        })
     }
 
-    /// The animation playing right now, from the TimeAct ring buffer's read cursor.
-    pub(crate) fn current_animation(self) -> Option<i32> {
-        unsafe { safe_read_i32(self.current_anim_entry()?) }
+    /// Did the animation request this crate wrote actually get dispatched?
+    ///
+    /// The engine's own answer rather than "we wrote the field last frame".
+    /// `CS::CSChrEventModule::Update` clears bit 0 of `+0x24` at entry
+    /// (`and dword [rcx+0x24], 0xfffffffe`, 1.16.2 `0x14043a597`) and sets it only on the branch
+    /// that actually reaches the behaviour world (`or dword [rdi+0x24], 1`, unique in
+    /// `eldenring-deobf.bin` at `0x14043a688` and in `eldenring-deobf-1.17.bin` at `0x14043abe8`).
+    /// So a set bit means the request became a graph event, and a clear bit after a write means
+    /// one of `Update`'s four gates dropped it silently -- which nothing in this crate could see
+    /// before.
+    pub(crate) fn animation_request_dispatched(self) -> bool {
+        let Some(event) = self.module(modules::EVENT) else {
+            return false;
+        };
+        unsafe { safe_read_i32(event + chr_event_module::DISPATCH_FLAGS) }
+            .is_some_and(|flags| flags as u32 & chr_event_module::DISPATCHED != 0)
     }
 
     /// May the animation being played be cancelled into another attack right now?
@@ -395,21 +449,6 @@ impl Chr {
             flags & chr_action_request_module::CANCEL_ATTACK != 0
                 && flags & chr_action_request_module::CANCEL_DISABLE == 0,
         )
-    }
-
-    /// How far into that animation the creature is, in its own seconds.
-    ///
-    /// `animQueue[readIdx].localTime`. This is the whole basis of the cancel discipline -- see
-    /// [`crate::moveset::chain`] -- and it is a plain field read inside a structure this crate had
-    /// already resolved, so it costs no game address.
-    pub(crate) fn current_animation_elapsed(self) -> Option<f32> {
-        let elapsed = unsafe {
-            safe_read_i32(self.current_anim_entry()? + chr_time_act_module::ANIM_LOCAL_TIME)
-        }?;
-        // A negative or absurd reading means the entry is not what it should be; `chain` treats a
-        // non-finite value as unmeasured and waits, which is the safe direction.
-        let elapsed = f32::from_bits(elapsed as u32);
-        elapsed.is_finite().then_some(elapsed)
     }
 
     /// The creature's `hkbCharacter`, by two loads.
@@ -480,17 +519,6 @@ impl Chr {
         let at = self.0 + core::mem::offset_of!(CsChrIns, npc_param_id);
         let row = unsafe { safe_read_i32(at) }?;
         u32::try_from(row).ok().map(|row| row / 10_000)
-    }
-
-    /// Squared magnitude of the engine's own per-frame root motion for this character.
-    ///
-    /// Squared because the watchdog only compares it against a threshold, and because the
-    /// alternative -- differencing positions between frames -- is useless here: co-location moves
-    /// the player every frame whether or not the creature is going anywhere.
-    pub(crate) fn root_motion_squared(self) -> Option<f32> {
-        let behavior = self.module(modules::BEHAVIOR)?;
-        let [x, y, z] = read_vec3(behavior + chr_behavior_module::ROOT_MOTION)?;
-        Some(z.mul_add(z, x.mul_add(x, y * y)))
     }
 
     /// `CS::ChrIns::IsDead` -- `chrCtrl->ctrlModifier->ChrCtrlModifierData._1cFlags & 1`.

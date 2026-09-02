@@ -9,18 +9,27 @@
 //! turned off, because `[vt+0x48] UpdateAi` is no-oped. A state like that leaves the player stuck
 //! in a pose with no way out, which ends the session rather than merely disappointing them.
 //!
-//! So the classifier is allowed to be wrong, and this catches it: non-neutral, no root motion, no
-//! input consumed, for long enough that nothing else explains it. The animation is then forced
+//! So the classifier is allowed to be wrong, and this catches it: non-neutral, the playhead not
+//! advancing, no input consumed, for long enough that nothing else explains it. The animation is then forced
 //! back to idle and written into `er-npc-possess.derived.toml` as `unusable`, so the SAME move
 //! cannot cost the player a second session. The classifier heals from its own failures rather than
 //! needing a corpus change.
 //!
 //! # Why all three conditions, and not just the timer
 //!
-//! Each one alone has a legitimate long case. A slow wind-up is non-neutral for seconds. A stance
-//! or a charge has no root motion by design. A player who put the pad down is consuming no input.
-//! Only the conjunction -- animating, going nowhere, and nobody asking for anything -- has no
-//! innocent reading.
+//! Each one alone has a legitimate long case. A slow wind-up is non-neutral for seconds. A clip
+//! can be paused by the engine for a frame. A player who put the pad down is consuming no input.
+//! Only the conjunction -- non-neutral, the playhead frozen, and nobody asking for anything -- has
+//! no innocent reading.
+//!
+//! # It asks whether the ANIMATION advanced, not whether the BODY moved
+//!
+//! It used to ask the second, and that was wrong in a way that got worse the longer a possession
+//! lasted. A stance, a charge and a wind-up all animate correctly while translating nothing; more
+//! damagingly, while locomotion is broken EVERY attack translates nothing, so the watchdog would
+//! deny one animation every four seconds until the creature's moveset was empty. Denials are
+//! permanent for the session, so that is unrecoverable without releasing. The playhead --
+//! `animQueue[readIdx].localTime` -- answers the question actually being asked.
 
 // Pure state machine over observations; ungated so `cargo test` proves it on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -29,9 +38,11 @@
 /// input again. The attack band starts at 3000 and the generator ships nothing below it.
 pub(crate) const NEUTRAL_ANIMATION_CEILING: i32 = 3000;
 
-/// Root-motion magnitude squared under which the creature counts as going nowhere. Squared to
-/// avoid a square root on a per-frame path; `0.01` is a tenth of a unit per frame.
-const STILL_ROOT_MOTION_SQUARED: f32 = 0.01;
+/// How far the playhead must move between two frames to count as advancing.
+///
+/// A sixtieth of a second is one frame at 60 Hz; a tenth of that is under any real advance and
+/// over the float noise of re-reading the same value.
+const ADVANCED_SECONDS: f32 = 1.0 / 600.0;
 
 /// What the driver saw this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,8 +50,20 @@ pub(crate) struct Sample {
     /// The animation the TimeAct queue says is playing, from
     /// `CSChrTimeActModule::anim_queue[read_idx].anim_id`.
     pub(crate) animation: i32,
-    /// `CSChrBehaviorModule::root_motion`, squared magnitude.
-    pub(crate) root_motion_squared: f32,
+    /// `animQueue[readIdx].localTime` -- how far into the clip the playhead is.
+    ///
+    /// THIS IS THE LIVENESS TEST, and it replaced root motion on 2026-09-02 because root motion
+    /// was measuring the wrong thing. The question is whether the ANIMATION is progressing; the
+    /// old test asked whether the BODY was translating, and those come apart badly. A stance, a
+    /// charge and a wind-up all animate perfectly while going nowhere -- and, decisively, while
+    /// locomotion is broken every attack in the game goes nowhere, so the watchdog would work its
+    /// way through the moveset denying one animation per four seconds until the creature had
+    /// nothing left. That is a mod that gets worse the longer you wear it, and it is exactly what
+    /// the live run showed.
+    ///
+    /// `None` when the field did not read, which is treated as advancing -- failing the other way
+    /// would force idle out of a healthy attack whenever a pointer chain missed.
+    pub(crate) local_time: Option<f32>,
     /// Did the engine ACT on the player's input this frame -- did a request actually land?
     ///
     /// CONSUMED, not held, and the distinction is the whole value of this field. Reading it as
@@ -57,8 +80,12 @@ impl Sample {
         self.animation < NEUTRAL_ANIMATION_CEILING
     }
 
-    fn is_going_nowhere(self) -> bool {
-        self.root_motion_squared.is_finite() && self.root_motion_squared < STILL_ROOT_MOTION_SQUARED
+    /// Did the playhead move since `previous`? An unreadable clock counts as advancing.
+    fn advanced_since(self, previous: Option<f32>) -> bool {
+        match (self.local_time, previous) {
+            (Some(now), Some(before)) => (now - before).abs() >= ADVANCED_SECONDS,
+            _ => true,
+        }
     }
 }
 
@@ -99,6 +126,8 @@ struct Armed {
     fired: i32,
     /// The first moment all three stuck conditions held. Cleared the moment any of them stops.
     suspect_since_ms: Option<u64>,
+    /// The playhead at the previous sample, to tell an advancing clip from a frozen one.
+    last_local_time: Option<f32>,
 }
 
 impl Watchdog {
@@ -116,6 +145,7 @@ impl Watchdog {
         self.armed = Some(Armed {
             fired,
             suspect_since_ms: None,
+            last_local_time: None,
         });
         self.was_busy = true;
     }
@@ -145,7 +175,9 @@ impl Watchdog {
             // would be a worse bug than the one this guards against.
             return Verdict::Fine;
         };
-        if !sample.is_going_nowhere() || sample.input_consumed {
+        let advanced = sample.advanced_since(armed.last_local_time);
+        armed.last_local_time = sample.local_time;
+        if advanced || sample.input_consumed {
             armed.suspect_since_ms = None;
             return Verdict::Fine;
         }
@@ -169,10 +201,11 @@ mod tests {
     const THRESHOLD_MS: u64 = 4000;
     const IDLE: i32 = 0;
 
+    /// A frozen playhead: same `local_time` every frame.
     const fn stuck(now_ms: u64) -> Sample {
         Sample {
             animation: 3005,
-            root_motion_squared: 0.0,
+            local_time: Some(1.0),
             input_consumed: false,
             now_ms,
         }
@@ -187,10 +220,14 @@ mod tests {
     #[test]
     fn a_frozen_animation_is_forced_back_to_idle_and_blamed() {
         let mut dog = watchdog();
+        // TWO samples before the clock can start, and that is not slack: one reading cannot tell
+        // a frozen playhead from a moving one. The first establishes the baseline, and suspicion
+        // begins at the first frame that fails to advance PAST it.
         assert_eq!(dog.observe(stuck(0)), Verdict::Fine);
-        assert_eq!(dog.observe(stuck(THRESHOLD_MS - 1)), Verdict::Fine);
+        assert_eq!(dog.observe(stuck(1)), Verdict::Fine);
+        assert_eq!(dog.observe(stuck(THRESHOLD_MS)), Verdict::Fine);
         assert_eq!(
-            dog.observe(stuck(THRESHOLD_MS)),
+            dog.observe(stuck(THRESHOLD_MS + 1)),
             Verdict::ForceIdle {
                 idle: IDLE,
                 blame: 3005
@@ -200,19 +237,21 @@ mod tests {
     }
 
     #[test]
-    fn root_motion_alone_is_enough_to_clear_the_suspicion() {
+    fn the_playhead_advancing_alone_is_enough_to_clear_the_suspicion() {
         let mut dog = watchdog();
         assert_eq!(dog.observe(stuck(0)), Verdict::Fine);
+        assert_eq!(dog.observe(stuck(1)), Verdict::Fine);
         let moving = Sample {
-            root_motion_squared: 1.0,
+            local_time: Some(2.0),
             ..stuck(1000)
         };
         assert_eq!(dog.observe(moving), Verdict::Fine);
         // The clock restarts from the next suspect frame, not from arming.
         assert_eq!(dog.observe(stuck(2000)), Verdict::Fine);
-        assert_eq!(dog.observe(stuck(2000 + THRESHOLD_MS - 1)), Verdict::Fine);
+        assert_eq!(dog.observe(stuck(2001)), Verdict::Fine);
+        assert_eq!(dog.observe(stuck(2000 + THRESHOLD_MS)), Verdict::Fine);
         assert_eq!(
-            dog.observe(stuck(2000 + THRESHOLD_MS)),
+            dog.observe(stuck(2001 + THRESHOLD_MS)),
             Verdict::ForceIdle {
                 idle: IDLE,
                 blame: 3005
@@ -259,14 +298,56 @@ mod tests {
     }
 
     #[test]
-    fn a_long_but_moving_animation_is_never_forced() {
+    fn a_long_but_advancing_animation_is_never_forced() {
         let mut dog = watchdog();
         for step in 0..100 {
             let moving = Sample {
-                root_motion_squared: 0.5,
+                local_time: Some(step as f32),
                 ..stuck(step * 1000)
             };
             assert_eq!(dog.observe(moving), Verdict::Fine);
+        }
+    }
+
+    /// THE REGRESSION THIS TEST EXISTS FOR. An attack that animates correctly while the body goes
+    /// nowhere is a stance, a charge, a wind-up -- or ANY attack at all while locomotion is
+    /// broken. The old root-motion test denied all of them, one every four seconds, permanently
+    /// for the session. The playhead advancing is what says the animation is healthy.
+    #[test]
+    fn an_animation_that_advances_without_moving_the_body_is_never_denied() {
+        let mut dog = watchdog();
+        // A hundred seconds of a clip that plays perfectly and translates the creature zero
+        // distance. Root motion is not consulted at all any more, so there is nothing to set.
+        for step in 0..100u64 {
+            let sample = Sample {
+                animation: 3005,
+                local_time: Some(step as f32 * 0.016),
+                input_consumed: false,
+                now_ms: step * 1000,
+            };
+            assert_eq!(
+                dog.observe(sample),
+                Verdict::Fine,
+                "an advancing clip was denied at step {step}"
+            );
+        }
+        assert!(dog.is_armed(), "and it is still being watched");
+    }
+
+    /// ...but a clock that cannot be read must not become a licence to never fire. It counts as
+    /// advancing, which is the safe direction for a healthy animation; the guard is that the
+    /// watchdog was always a backstop and never the primary exit.
+    #[test]
+    fn an_unreadable_playhead_counts_as_advancing() {
+        let mut dog = watchdog();
+        for step in 0..10u64 {
+            let sample = Sample {
+                animation: 3005,
+                local_time: None,
+                input_consumed: false,
+                now_ms: step * THRESHOLD_MS,
+            };
+            assert_eq!(dog.observe(sample), Verdict::Fine);
         }
     }
 

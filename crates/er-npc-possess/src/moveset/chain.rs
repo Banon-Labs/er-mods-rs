@@ -54,6 +54,29 @@
 //! so a press during it waits for the animation to end rather than guessing. That is the
 //! least-bad rule and it is never an interrupt.
 //!
+//! # What "its whole length" has to mean, and what it meant on 2026-09-02
+//!
+//! It has to mean the clip's length. It used to mean forever, and that is the bug the first live
+//! run found: a possessed c4604 spent five and a half minutes standing still while every press
+//! was held as "mid-attack" and dropped. Two things were wrong and both are fixed here.
+//!
+//! The first is that the creature was not animating at all and this layer could not tell.
+//! `CSChrTimeActModule::animQueue[readIdx]` is only meaningful when `readIdx != writeIdx` --
+//! `PreBehaviorSafe` sets them equal every frame and each animation actually driven pushes one
+//! entry -- so an equal pair means nothing was driven and the entry is a leftover. Reading it
+//! anyway reported the attack from minutes ago, forever. `Chr::current_anim_frame` now answers
+//! `None` there, and `None` is [`Availability::Idle`]: a creature animating nothing has no swing
+//! to protect, so the press fires.
+//!
+//! The second is that every `Committed` answer below rests on evidence with no expiry of its own
+//! -- an engine bit that may never read, a window that was never measured -- so "unknown" could
+//! outlive the animation it was describing. The clip's own `animLength` is now checked FIRST, and
+//! nothing may hold a press past it. The worst case is one clip, not one session.
+//!
+//! Both are the same mistake in different clothes: a fail-closed default on an oracle that cannot
+//! read is indistinguishable, from the player's chair, from the mod not working. Which is why
+//! [`Source`] exists and every branch says on whose authority it answered.
+//!
 //! The fallback is slightly more permissive than the engine, and only in one direction. The
 //! table carries the window's START and not its END, so once the offline window has opened this
 //! layer treats the rest of the clip as chainable, while the live bit goes false again when the
@@ -93,6 +116,10 @@ pub(crate) struct Playing {
     /// `animQueue[readIdx].localTime`, seconds into the clip. `None` when the field could not be
     /// read, which is the same answer a missing module pointer gives.
     pub(crate) elapsed_s: Option<f32>,
+    /// `animQueue[readIdx].animLength`, how long the clip runs. The bound on how long any answer
+    /// here can hold a press: once the playhead is past the end, the clip is over whatever the
+    /// other two sources say.
+    pub(crate) length_s: Option<f32>,
     /// `CSChrActionRequestModule::taeCancels`, resolved through the engine's own predicate.
     /// `Some(true)` is the game saying a chain is allowed right now. `None` is "did not read",
     /// which is why this is not a `bool`.
@@ -122,6 +149,48 @@ impl Availability {
     }
 }
 
+/// Which source decided, so a run can say what the oracle READ and not only what it concluded.
+///
+/// The 2026-09-02 run had to be diagnosed from four log lines and a hypothesis, because the
+/// resolver said "committed" without ever saying on whose authority. Every branch below names
+/// itself now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Source {
+    /// The TimeAct queue held nothing driven this frame: the creature is animating nothing.
+    NotAnimating,
+    /// A fresh entry, below the attack band -- idle, locomotion or a turn.
+    Neutral,
+    /// The playhead is at or past the clip's own length.
+    ClipFinished,
+    /// `CSChrActionRequestModule::taeCancels` answered.
+    Engine,
+    /// The engine did not answer; the shipped table's offline window did.
+    Table,
+    /// Neither answered. Committed until the clip ends, which is bounded but is a guess about
+    /// nothing rather than a measurement.
+    Unmeasured,
+}
+
+impl Source {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::NotAnimating => "not-animating",
+            Self::Neutral => "neutral-anim",
+            Self::ClipFinished => "clip-finished",
+            Self::Engine => "engine-taecancels",
+            Self::Table => "table-window",
+            Self::Unmeasured => "unmeasured",
+        }
+    }
+}
+
+/// What the resolver decided and who decided it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Reading {
+    pub(crate) availability: Availability,
+    pub(crate) source: Source,
+}
+
 /// Resolve what the creature will accept, from what the engine says and what the table measured.
 ///
 /// The engine wins when it answers. `cancel_allowed` is the same predicate the game's own AI is
@@ -138,27 +207,45 @@ impl Availability {
 /// existed; answering [`Availability::Committed`] there would buffer every press behind a reading
 /// that is never going to arrive and leave the buttons dead. A creature that is genuinely stuck is
 /// [`crate::moveset::watchdog`]'s problem and always was.
-pub(crate) fn availability(playing: Option<Playing>, chain_from_s: Option<f32>) -> Availability {
+pub(crate) fn resolve(playing: Option<Playing>, chain_from_s: Option<f32>) -> Reading {
+    let read = |availability, source| Reading {
+        availability,
+        source,
+    };
     let Some(playing) = playing else {
-        return Availability::Idle;
+        return read(Availability::Idle, Source::NotAnimating);
     };
     if playing.animation < NEUTRAL_ANIMATION_CEILING {
-        return Availability::Idle;
+        return read(Availability::Idle, Source::Neutral);
+    }
+    // The clip is over. Nothing below may hold a press past this, and that is the difference
+    // between "wait for this swing to finish" and "wait forever": every other branch here can
+    // answer `Committed` on evidence that has no expiry of its own, so the expiry is imposed
+    // here, from the clip's own length.
+    if let (Some(elapsed), Some(length)) = (playing.elapsed_s, playing.length_s)
+        && elapsed.is_finite()
+        && elapsed >= length
+    {
+        return read(Availability::Chainable, Source::ClipFinished);
     }
     if let Some(allowed) = playing.cancel_allowed {
-        return if allowed {
-            Availability::Chainable
-        } else {
-            Availability::Committed
-        };
+        return read(
+            if allowed {
+                Availability::Chainable
+            } else {
+                Availability::Committed
+            },
+            Source::Engine,
+        );
     }
     match (chain_from_s, playing.elapsed_s) {
         // `>=` and not `>`: the window opening on the exact frame a press lands should let it
         // through, the same inclusive reading the combo window uses.
         (Some(from), Some(elapsed)) if elapsed.is_finite() && elapsed >= from => {
-            Availability::Chainable
+            read(Availability::Chainable, Source::Table)
         }
-        _ => Availability::Committed,
+        (Some(_), Some(_)) => read(Availability::Committed, Source::Table),
+        _ => read(Availability::Committed, Source::Unmeasured),
     }
 }
 
@@ -245,10 +332,12 @@ mod tests {
     use super::*;
 
     /// A creature whose `taeCancels` did not read, so only the offline window can answer.
+    /// Long enough that the clip-length bound never fires by accident in these cases.
     const fn playing(animation: i32, elapsed_s: f32) -> Option<Playing> {
         Some(Playing {
             animation,
             elapsed_s: Some(elapsed_s),
+            length_s: Some(9_999.0),
             cancel_allowed: None,
         })
     }
@@ -258,6 +347,7 @@ mod tests {
         Some(Playing {
             animation,
             elapsed_s: Some(elapsed_s),
+            length_s: Some(9_999.0),
             cancel_allowed: Some(allowed),
         })
     }
@@ -267,48 +357,54 @@ mod tests {
         // Table says "not yet" (0.4 of 0.5), engine says the window is open. The engine is
         // evaluating the very TimeAct event the table read offline, on this frame, so it wins.
         assert_eq!(
-            availability(asked(3000, 0.4, true), Some(0.5)),
+            resolve(asked(3000, 0.4, true), Some(0.5)).availability,
             Availability::Chainable
         );
         // ...and the other way. Table says open, engine says no.
         assert_eq!(
-            availability(asked(3000, 5.0, true), None),
+            resolve(asked(3000, 5.0, true), None).availability,
             Availability::Chainable
         );
         assert_eq!(
-            availability(asked(3000, 5.0, false), Some(0.5)),
+            resolve(asked(3000, 5.0, false), Some(0.5)).availability,
             Availability::Committed
         );
     }
 
     #[test]
     fn the_engine_cannot_make_a_neutral_animation_cancellable_because_there_is_nothing_to_cancel() {
-        assert_eq!(availability(asked(0, 0.0, true), None), Availability::Idle);
+        assert_eq!(
+            resolve(asked(0, 0.0, true), None).availability,
+            Availability::Idle
+        );
     }
 
     #[test]
     fn a_neutral_animation_is_idle_however_the_window_reads() {
         // Below the attack band: idle, locomotion or a turn. Nothing to cancel.
         assert_eq!(
-            availability(playing(2999, 0.0), Some(9.0)),
+            resolve(playing(2999, 0.0), Some(9.0)).availability,
             Availability::Idle
         );
-        assert_eq!(availability(playing(0, 0.0), None), Availability::Idle);
+        assert_eq!(
+            resolve(playing(0, 0.0), None).availability,
+            Availability::Idle
+        );
     }
 
     #[test]
     fn an_attack_is_committed_until_its_window_opens_and_chainable_after() {
         assert_eq!(
-            availability(playing(3000, 0.4), Some(0.5)),
+            resolve(playing(3000, 0.4), Some(0.5)).availability,
             Availability::Committed
         );
         assert_eq!(
-            availability(playing(3000, 0.5), Some(0.5)),
+            resolve(playing(3000, 0.5), Some(0.5)).availability,
             Availability::Chainable,
             "the window is inclusive on the frame it opens"
         );
         assert_eq!(
-            availability(playing(3000, 5.0), Some(0.5)),
+            resolve(playing(3000, 5.0), Some(0.5)).availability,
             Availability::Chainable
         );
     }
@@ -318,29 +414,31 @@ mod tests {
         // The honest answer for a move the generator could not measure: never interrupt it, wait
         // for it to end. `Chainable` here would be a guess dressed as a measurement.
         assert_eq!(
-            availability(playing(3000, 0.0), None),
+            resolve(playing(3000, 0.0), None).availability,
             Availability::Committed
         );
         assert_eq!(
-            availability(playing(3000, 600.0), None),
+            resolve(playing(3000, 600.0), None).availability,
             Availability::Committed
         );
     }
 
     #[test]
     fn an_unreadable_clock_fails_open_rather_than_deadening_every_button() {
-        assert_eq!(availability(None, Some(0.5)), Availability::Idle);
+        assert_eq!(resolve(None, Some(0.5)).availability, Availability::Idle);
         // The id read but the time did not: still committed, because the window cannot be
         // evaluated -- but the animation is known to be playing, so waiting is right.
         assert_eq!(
-            availability(
+            resolve(
                 Some(Playing {
                     animation: 3000,
                     elapsed_s: None,
+                    length_s: None,
                     cancel_allowed: None,
                 }),
                 Some(0.5)
-            ),
+            )
+            .availability,
             Availability::Committed
         );
     }
@@ -348,13 +446,70 @@ mod tests {
     #[test]
     fn a_nan_clock_is_treated_as_unmeasured() {
         assert_eq!(
-            availability(playing(3000, f32::NAN), Some(0.5)),
+            resolve(playing(3000, f32::NAN), Some(0.5)).availability,
             Availability::Committed
         );
         assert_eq!(
-            availability(playing(3000, f32::INFINITY), Some(0.5)),
+            resolve(playing(3000, f32::INFINITY), Some(0.5)).availability,
             Availability::Committed
         );
+    }
+
+    /// THE 2026-09-02 REGRESSION. A creature that is animating nothing must resolve `Idle`, not
+    /// `Committed`. `None` reaches this function for two different reasons -- the module pointer
+    /// did not read, and the TimeAct queue held nothing driven this frame -- and both mean the
+    /// same thing to a player: there is no swing to protect, so the press must fire NOW.
+    #[test]
+    fn a_creature_animating_nothing_is_idle_and_says_which_of_the_two_reasons_it_was() {
+        let reading = resolve(None, Some(0.5));
+        assert_eq!(reading.availability, Availability::Idle);
+        assert_eq!(reading.source, Source::NotAnimating);
+    }
+
+    /// The bound that turns "wait forever" into "wait one clip". Every branch below the length
+    /// test can answer `Committed` on evidence with no expiry of its own -- an engine bit that
+    /// never reads, a window that was never measured -- so the clip's own length is what stops
+    /// the answer outliving the animation it describes.
+    #[test]
+    fn nothing_can_hold_a_press_past_the_end_of_the_clip_it_is_protecting() {
+        let past_the_end = |cancel_allowed| {
+            Some(Playing {
+                animation: 3000,
+                elapsed_s: Some(4.0),
+                length_s: Some(3.5),
+                cancel_allowed,
+            })
+        };
+        for cancel_allowed in [None, Some(false)] {
+            let reading = resolve(past_the_end(cancel_allowed), None);
+            assert_eq!(
+                reading.availability,
+                Availability::Chainable,
+                "cancel_allowed={cancel_allowed:?}"
+            );
+            assert_eq!(reading.source, Source::ClipFinished);
+        }
+        // ...and inside the clip the same unmeasured creature is still protected.
+        let inside = Some(Playing {
+            animation: 3000,
+            elapsed_s: Some(1.0),
+            length_s: Some(3.5),
+            cancel_allowed: None,
+        });
+        let reading = resolve(inside, None);
+        assert_eq!(reading.availability, Availability::Committed);
+        assert_eq!(reading.source, Source::Unmeasured);
+    }
+
+    /// Every branch names itself, because the last time this resolver was wrong it took a live
+    /// run plus a hypothesis to find out which one had fired.
+    #[test]
+    fn every_branch_reports_the_source_that_decided_it() {
+        assert_eq!(resolve(None, None).source, Source::NotAnimating);
+        assert_eq!(resolve(playing(0, 0.0), None).source, Source::Neutral);
+        assert_eq!(resolve(asked(3000, 0.1, true), None).source, Source::Engine);
+        assert_eq!(resolve(playing(3000, 1.0), Some(0.5)).source, Source::Table);
+        assert_eq!(resolve(playing(3000, 1.0), None).source, Source::Unmeasured);
     }
 
     #[test]
