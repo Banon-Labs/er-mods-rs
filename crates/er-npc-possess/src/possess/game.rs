@@ -905,6 +905,48 @@ impl Chr {
         Some(FloatVector4::new(local[0], local[1], local[2], local[3]))
     }
 
+    /// What we STAGED at [`manipulator::PENDING_MOVE_VECTOR`], read back.
+    ///
+    /// Half of the three-way discriminator below; see [`Self::published_move_vector`].
+    pub(crate) fn staged_move_vector(self) -> Option<[f32; 3]> {
+        read_vec3(self.real_manipulator()? + manipulator::PENDING_MOVE_VECTOR)
+    }
+
+    /// What the engine has PUBLISHED at `ChrManipulator+0x10`, read back.
+    ///
+    /// # The question this exists to answer, and why it takes two reads and not one
+    ///
+    /// Three hypotheses survive every static argument, and they are indistinguishable from the
+    /// write side because all three look like "we wrote it and the body did not move":
+    ///
+    /// 1. `[vt+0x50]` never runs, so nothing publishes. `CS::ChrCtrl::ShouldUpdateAi` gates it and
+    ///    returns FALSE when [`Self::chr_proxy_flags`] is non-zero -- a field this crate's own
+    ///    co-location writes. Signature: STAGED non-zero, PUBLISHED zero.
+    /// 2. It publishes and the behaviour graph never turns it into a locomotion clip. Signature:
+    ///    PUBLISHED non-zero, root motion zero.
+    /// 3. It publishes, a clip plays, and the body is physically held -- the co-located player
+    ///    capsule is the obvious candidate and the neuter does not disable collision. Signature:
+    ///    root motion NON-ZERO with the position constant.
+    ///
+    /// One read cannot separate those; the three together separate them completely, and each is
+    /// a read of a field the engine owns rather than another write.
+    pub(crate) fn published_move_vector(self) -> Option<[f32; 3]> {
+        read_vec3(self.real_manipulator()? + manipulator::PUBLISHED_MOVE_VECTOR)
+    }
+
+    /// `ChrCtrl.chrProxyFlags` -- and the reason it is worth logging is not the proxy drain.
+    ///
+    /// `CS::ChrCtrl::ShouldUpdateAi` reads it, and its whole return is
+    /// `!IsDead && (chrProxyFlags == 0 || ctrl[0x120] != 0) && !twoDebugFlags`. So a NON-ZERO
+    /// value here makes `[vt+0x50]` return before it runs `AiIns::UpdateMovement`, before it
+    /// builds any move vector, and -- the part that matters -- before it publishes the slot this
+    /// crate stages. That would starve the movement path completely while leaving every write
+    /// this crate performs reporting success.
+    pub(crate) fn chr_proxy_flags(self) -> Option<u32> {
+        let at = self.chr_ctrl()? + chr_ctrl::CHR_PROXY_FLAGS;
+        unsafe { safe_read_i32(at) }.map(|flags| flags as u32)
+    }
+
     /// Stop the creature, the way `CS::AiIns::ClearMoveRequest` stops one.
     ///
     /// Called on release rather than left to the AI. Goal selection comes back the moment

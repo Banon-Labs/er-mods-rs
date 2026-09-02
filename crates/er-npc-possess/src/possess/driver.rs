@@ -1002,9 +1002,16 @@ impl NpcPossessionEngine {
             possess_log(format_args!(
                 "movement: input READ -- gait={} target=({:.2}, {:.2}, {:.2}) turn={:.1} deg | \
                  creature at ({:.2}, {:.2}, {:.2}) yaw={:.3} | field read-back: walk_type={:?} \
-                 want_to_move_to={:?}. If gait is non-zero and the read-back matches but the \
-                 body does not move, the write is landing and the engine is refusing it -- that \
-                 is a different bug from the key not arriving",
+                 want_to_move_to={:?} | staged={:?} published={:?} proxyFlags={:?} \
+                 rootMotion2={:?}. THE THREE-WAY READ, and it decides between the three \
+                 hypotheses that survive every static argument. staged non-zero with published \
+                 ZERO means [vt+0x50] never ran -- check proxyFlags, because ShouldUpdateAi \
+                 returns false when it is non-zero and that is a field this mod's own \
+                 co-location writes. published non-zero with rootMotion2 ZERO means the vector \
+                 reaches the manipulator and the behaviour graph never turns it into a clip. \
+                 rootMotion2 NON-ZERO with the position constant means a clip is playing and \
+                 something physically holds the body -- the co-located player capsule is the \
+                 candidate, and the neuter does not disable collision",
                 write.walk_type,
                 write.target[0],
                 write.target[1],
@@ -1016,6 +1023,10 @@ impl NpcPossessionEngine {
                 state.creature.yaw().unwrap_or(f32::NAN),
                 state.creature.read_walk_type(),
                 state.creature.read_want_to_move_to(),
+                state.creature.staged_move_vector(),
+                state.creature.published_move_vector(),
+                state.creature.chr_proxy_flags(),
+                state.creature.root_motion_squared(),
             ));
         }
         if !state.creature.write_move_intent(write) && first_frame {
