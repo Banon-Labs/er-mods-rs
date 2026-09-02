@@ -530,6 +530,28 @@ impl Chr {
         u32::try_from(row).ok().map(|row| row / 10_000)
     }
 
+    /// `CSChrBehaviorModule+0x30 rootMotion`, squared magnitude -- telemetry only.
+    ///
+    /// RESTORED after being deleted as dead code. It was dead for one merge: the chaining layer
+    /// stopped using it when the watchdog's liveness test moved from "did the BODY move" to "did
+    /// the ANIMATION advance" -- which was the right change, because with locomotion broken every
+    /// attack translated nothing and the old test denied the whole moveset one clip at a time.
+    ///
+    /// The locomotion layer then needed the same field for a different question, and it is the
+    /// discriminator that separates the three surviving movement hypotheses. Read beside `staged`
+    /// and `published`: staged-but-not-published means `[vt+0x50]` never ran; published with zero
+    /// root motion means the vector never became a locomotion clip; published WITH root motion
+    /// while the position does not change means a clip is playing and something is holding the
+    /// body, which is the co-located player capsule the user suspected.
+    ///
+    /// Squared, because nothing here needs the magnitude itself and a square root would be a
+    /// wasted instruction sixty times a second in service of a log line.
+    pub(crate) fn root_motion_squared(self) -> Option<f32> {
+        let behavior = self.module(modules::BEHAVIOR)?;
+        let [x, y, z] = read_vec3(behavior + chr_behavior_module::ROOT_MOTION)?;
+        Some(z.mul_add(z, x.mul_add(x, y * y)))
+    }
+
     /// `CS::ChrIns::IsDead` -- `chrCtrl->ctrlModifier->ChrCtrlModifierData._1cFlags & 1`.
     pub(crate) fn is_dead_flag(self) -> Option<bool> {
         let ctrl = self.chr_ctrl()?;
