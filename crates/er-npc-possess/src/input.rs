@@ -375,6 +375,45 @@ pub(crate) const fn keyboard_edge(_chord: Chord, _was_down: &mut bool) -> bool {
     false
 }
 
+/// Is this chord held RIGHT NOW? A level read, not an edge.
+///
+/// The picker needs levels rather than edges because it auto-repeats: an edge detector cannot
+/// tell "held for forty frames" from "pressed once", and a 408-row list that steps once per
+/// keypress is one nobody reaches the end of. The repeat state machine lives in
+/// [`crate::picker::RepeatLatch`], where it is testable; this is the untestable line that feeds
+/// it.
+///
+/// ONLY THE HELD BIT IS READ, never `GetAsyncKeyState`'s low "pressed since the previous call"
+/// bit -- but calling this still CLEARS that bit for the key, because Windows clears it on read
+/// regardless of which bit the caller looked at. So a chord shared with the possess hotkey would
+/// have its taps stolen if this ran first, which is why `crate::picker::tick` is documented to
+/// run after the possess edge has been sampled.
+#[cfg(windows)]
+pub(crate) fn chord_held(chord: Chord) -> bool {
+    use er_hotkey_config::keys::{MODIFIER_CTRL, MODIFIER_SHIFT};
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+
+    const HELD: u16 = 0x8000;
+    const VK_CONTROL: i32 = 0x11;
+    const VK_MENU: i32 = 0x12;
+    const VK_SHIFT: i32 = 0x10;
+
+    // SAFETY: `GetAsyncKeyState` reads this thread's keyboard state and takes no pointer.
+    let held = |vk: i32| unsafe { GetAsyncKeyState(vk) } as u16 & HELD != 0;
+    if (chord.modifiers & MODIFIER_CTRL != 0 && !held(VK_CONTROL))
+        || (chord.needs_alt() && !held(VK_MENU))
+        || (chord.modifiers & MODIFIER_SHIFT != 0 && !held(VK_SHIFT))
+    {
+        return false;
+    }
+    held(chord.vk as i32)
+}
+
+#[cfg(not(windows))]
+pub(crate) const fn chord_held(_chord: Chord) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use er_hotkey_config::pad::parse_pad_chord;

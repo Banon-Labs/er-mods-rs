@@ -413,11 +413,19 @@ the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_sha
 product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
-"er-npc-possess" = """Co-loadable with every other shell here, because it installs NO DETOUR AT ALL. \
-It claims no prologue, resolves no game address, patches no param row (which is what breaks \
-Seamless invasions), runs no D3D12/Present or overlay hook, and writes no game memory. Its whole \
-game-side footprint is one recurring `FrameBegin` task that calls `GetAsyncKeyState` and \
-`XInputGetState` and writes a log line.
+"er-npc-possess" = """Co-loadable with every other shell here. It claims NO GAME PROLOGUE: no \
+detour on the game image, no param row patched (which is what breaks Seamless invasions), and \
+its whole game-side footprint is one recurring `FrameBegin` task that calls `GetAsyncKeyState` \
+and `XInputGetState`.
+
+THE ONE HOOK IT DOES INSTALL, and only if the player opens the in-game creature picker: hudhook's \
+DX12 `Present`, through `er_build_watermark_core::overlay_host` -- the same host-or-guest \
+arbitration er-build-watermark, er-net-effects and er-invasion-path go through, so the process \
+still has exactly one `Present` hook whoever loaded first. It is LAZY: pressing nothing means \
+installing nothing, and this line used to read "NO DETOUR AT ALL" on that basis. That was true \
+before the picker and is now only true of a session that never opens it, which is not a claim a \
+conflicts table should make. `Present` is a swapchain vtable slot rather than a game prologue, so \
+it needs no [[shared]] row -- the overlay host is the arbitration.
 
 THE ONE THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
 DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \
@@ -437,7 +445,10 @@ this one.
 HOTKEY DEFAULTS ARE NOT SHARED WITH ANOTHER SHELL. Keyboard F9 and pad LS+RS; er-refill-all ships \
 Select+Start with no keyboard default, er-enemynpc-effects ships ctrl+alt+c. All three are \
 re-bindable in their own TOML while the game runs, which is the whole reason er-hotkey-config \
-exists."""
+exists. The picker adds F10 plus the four arrow keys and ships every pad binding EMPTY, which is \
+the same no-suppression fact stated as a default: it can see those keys but cannot take them from \
+the game. Whether they collide is a judgement rather than a reading of Elden Ring's binding \
+table, which is why all five are rebindable while the game runs."""
 "er-net-effects" = """Keyboard-selected network SpEffects. Its DirectInput keyboard and mouse \
 `GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
 above); nothing else it installs is claimed by another shell."""

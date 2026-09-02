@@ -3051,10 +3051,12 @@ name = "er-npc-possess"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-build-watermark-core",
  "er-game-base",
  "er-hotkey-config",
  "er-invasion-warp-core",
  "fromsoftware-shared",
+ "hudhook",
  "windows 0.62.2",
 ]
 
