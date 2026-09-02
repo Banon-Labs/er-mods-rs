@@ -18,6 +18,34 @@
 //! Damage, animation and physics are not in the manipulator at all; they hang off
 //! `ChrIns::Update`, which is untouched.
 //!
+//! # THE DIVERGENCE THIS DESIGN CREATES, MEASURED 2026-09-02, AND STILL PRESENT
+//!
+//! The `rcx` swap below is what makes a 16-byte stub possible, and it is also why a possessed
+//! creature cannot walk. Swapping `rcx` means every forwarded slot RUNS ON the real
+//! `ComManipulator` and writes its fields there. But the engine does not only dispatch through
+//! `ChrCtrl+0x3b0` -- it also READS FIELDS off whatever that resolution returns, in fourteen
+//! places, all shaped `chrManipulator ?? manipulator`:
+//!
+//! ```text
+//! 0x1403c8fef  FUN_1403c8fd0   <- PreBehaviorSafe@140401bd0
+//! 0x1403cc060  FUN_1403cbff0   <- FUN_1403c8da0 <- FUN_1404016d0   (and again at 0x1403cc160)
+//! 0x1403c8c44  UpdateAiLogic@140400960
+//! 0x1403c8647  updatePos@1403c8610                                 (and twice more inside it)
+//! ...
+//! ```
+//!
+//! `FUN_1403cbff0` reads the published move vector at `ChrManipulator+0x70` (`0x1403cc0b9`) off
+//! exactly that pointer. `[vt+0x50]` publishes it into the REAL object; the consumer reads it out
+//! of the THUNK, which is zeroes. Runtime telemetry: `staged == published` on the real object,
+//! `rootMotion2 == 0`, body pinned to five decimals. The vector is perfect and nobody reads it.
+//!
+//! The object identity has to stop diverging, and the way to do that is to stop having two
+//! objects: swizzle the REAL `ComManipulator`'s vptr to a patched copy of its own vtable with
+//! `+0x48` no-oped, and leave `ChrCtrl+0x3b0` NULL. The `rcx` swap then has nothing to swap and
+//! the stubs become `jmp [origVtable + N]` with `rcx` untouched. **Hazard:** on the real object,
+//! `+0x08` must forward to the true destructor instead of returning `this` -- the engine really
+//! does destroy that object, and `ReturnThis` there would leak it.
+//!
 //! # How a forwarding stub can be sixteen bytes
 //!
 //! Every call site in the engine dispatches identically:
