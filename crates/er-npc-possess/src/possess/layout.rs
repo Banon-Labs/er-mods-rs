@@ -811,6 +811,14 @@ pub(crate) mod manipulator {
     /// [`super::super::intent::WALK_SPEED_SCALE`] for the walk gait. See
     /// [`super::super::game::Chr::write_manipulator_move`].
     pub(crate) const PENDING_MOVE_VECTOR: usize = 0x140;
+    /// `ChrManipulator`'s PUBLISHED move vector -- where `FUN_1403cdc20` copies
+    /// [`PENDING_MOVE_VECTOR`] on the next `[vt+0x50]`, and the field a reader would consume.
+    ///
+    /// `FUN_1403cdc20` writes the same value to `+0x10` and `+0x70`; this is the first of the
+    /// pair. Reading it is how "we staged it" is told apart from "the engine published it" -- see
+    /// [`super::super::game::Chr::published_move_vector`], which is the only reason this offset is
+    /// named rather than left inside the note above.
+    pub(crate) const PUBLISHED_MOVE_VECTOR: usize = 0x10;
     /// `ComManipulator.comThinkOwner` -- an **INLINE `CSComThinkOwner` member, not a pointer**.
     ///
     /// This is the fact that makes the canary exact rather than a plausibility screen.
