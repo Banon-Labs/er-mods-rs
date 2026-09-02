@@ -10,6 +10,7 @@
 use er_game_base::game_build::{describe_build, game_file_version};
 
 use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
+use crate::hud;
 use crate::input::FaceEdges;
 use crate::log::possess_log;
 use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion, NoMove};
@@ -146,6 +147,13 @@ impl NpcPossessionEngine {
         let thunk_address = state.thunk.object_address();
         let release_point = state.release_point();
         run.run(|step| match step {
+            // Infallible -- one atomic store -- so this always reports success. It is a step
+            // rather than a line at the top of this function because the ORDER is the thing the
+            // state machine exists to enforce: every step below reads through the creature.
+            Step::StopHudRetarget => {
+                hud::stop();
+                true
+            }
             Step::RestoreBody => Self::restore(&state),
             // Nothing to undo: the per-frame driver stops the moment `active` is `None`, which
             // happened at the `take()` above. The step exists so the ORDER is a thing the state
@@ -258,7 +266,7 @@ impl NpcPossessionEngine {
                         crate::config::DERIVED_CONFIG_FILE_NAME,
                         state.chr_id,
                     ));
-                    Self::write_derived(state.chr_id, dispatcher);
+                    Self::write_derived(state.chr_id, state.creature, Some(dispatcher));
                     return;
                 }
             }
@@ -354,9 +362,40 @@ impl NpcPossessionEngine {
     /// Best-effort by design: the game directory can be read-only, and a possession that works is
     /// worth more than a report about it. A failed write is silent because the only thing lost is
     /// a diagnostic, and a log line about failing to write a log-adjacent file is noise.
-    fn write_derived(chr_id: u32, dispatcher: &Dispatcher) {
-        let text = derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary());
+    fn write_derived(chr_id: u32, creature: Chr, dispatcher: Option<&Dispatcher>) {
+        let mut text = match dispatcher {
+            Some(dispatcher) => {
+                derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary())
+            }
+            // WRITTEN ANYWAY for a creature with no shipped moveset. Skipping the write would
+            // leave the PREVIOUS possession's file on disk, and a report describing a different
+            // character is worse than no report -- particularly now that it carries the `[hud]`
+            // block, whose whole job is to explain numbers the player is looking at right now.
+            None => format!(
+                "# er-npc-possess.derived.toml -- WRITTEN BY THE MOD ON EVERY POSSESSION.\n\
+                 # EDITS HERE ARE LOST; corrections go in er-npc-possess.toml.\n\n\
+                 [chr.c{chr_id:04}]\n\
+                 # This creature is not in the shipped moveset table, so it has no attacks. That is\n\
+                 # expected for a variant that owns a model but no animations of its own -- 163 of\n\
+                 # the 408 the offline sweep looked at are like that. Movement, camera, release and\n\
+                 # the HUD below all still work.\n"
+            ),
+        };
+        text.push_str(&Self::hud_block(chr_id, creature));
         let _ = std::fs::write(crate::config::DERIVED_CONFIG_FILE_NAME, text);
+    }
+
+    /// The `[hud]` block: which character the bars are reading, and why, for THIS creature.
+    fn hud_block(chr_id: u32, creature: Chr) -> String {
+        let decision = match hud::outcome().off_reason() {
+            Some(off) => hud::Decision::Off(off),
+            None if !crate::config::hud().enabled => hud::Decision::Off(hud::Off::Disabled),
+            None => match hud::read_source(creature.address()) {
+                Some(source) => hud::Decision::Driving(source),
+                None => hud::Decision::Off(hud::Off::Unreadable),
+            },
+        };
+        hud::render_derived(chr_id, &decision)
     }
 
     /// One frame of an active possession. Called from the FrameBegin task.
@@ -410,6 +449,15 @@ impl NpcPossessionEngine {
         // detached one in every other.
         if !game::camera_override_is(state.creature) {
             game::set_camera_override(Some(state.creature));
+        }
+
+        // Point the HUD at the creature, EVERY frame rather than once at possession start, so
+        // that toggling `[hud] enabled` in the config file takes effect mid-possession like every
+        // other live table. Two atomic loads and a store; the detour itself does the work.
+        if crate::config::hud().enabled {
+            hud::follow(state.creature.address());
+        } else {
+            hud::stop();
         }
 
         // Co-locate: the player's real body follows the creature, which is what keeps the net
@@ -515,11 +563,16 @@ impl PossessionEngine for NpcPossessionEngine {
                     "moveset: c{chr_id:04} {}",
                     dispatcher.summary()
                 ));
-                Self::write_derived(chr_id, dispatcher);
+                Self::write_derived(chr_id, creature, Some(dispatcher));
             }
-            None => possess_log(format_args!(
-                "moveset: c{chr_id:04} is not in the shipped table, so this character has no                  attacks. That is expected for a variant that owns a model but no animations of                  its own -- 163 of the 408 the offline sweep looked at are like that. Movement,                  camera and release all still work."
-            )),
+            None => {
+                // Written even with no moveset: skipping it would leave the PREVIOUS possession's
+                // report on disk, describing a different character.
+                Self::write_derived(chr_id, creature, None);
+                possess_log(format_args!(
+                    "moveset: c{chr_id:04} is not in the shipped table, so this character has no                  attacks. That is expected for a variant that owns a model but no animations of                  its own -- 163 of the 408 the offline sweep looked at are like that. Movement,                  camera and release all still work."
+                ));
+            }
         }
         possess_log(format_args!(
             "possession: ChrIns=0x{:x} com=0x{real_com:x} thunk=0x{:x} camera=override player=0x{:x} \

@@ -30,6 +30,7 @@ pub(crate) const TARGET_SECTION: &str = "target";
 pub(crate) const MAPPING_SECTION: &str = "mapping";
 pub(crate) const BUTTONS_SECTION: &str = "buttons";
 pub(crate) const MOVEMENT_SECTION: &str = "movement";
+pub(crate) const HUD_SECTION: &str = "hud";
 /// `[chr.c4500]`, `[chr.c2130]`, ... -- open-ended, one per character id.
 pub(crate) const CHR_SECTION_PREFIX: &str = "chr.";
 
@@ -516,6 +517,47 @@ impl MovementSettings {
     }
 }
 
+/// `[hud]`. Live.
+///
+/// One switch, deliberately. The retarget is either on or off; there is no per-bar toggle,
+/// because "show the creature's HP but the player's stamina" is not a thing anyone wants and
+/// every extra knob is another state nobody tests. What the FP and stamina bars do when the
+/// creature has no such pool is decided by evidence rather than by configuration -- see
+/// [`crate::hud::vitals`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HudSettings {
+    /// Point the HP / FP / stamina bars at the possessed creature.
+    ///
+    /// Defaults ON: it is the behaviour the feature exists for, and turning it off is the
+    /// unusual request. `false` installs nothing -- the detour is skipped entirely rather than
+    /// installed and left idle, so a player who does not want it does not carry five patched
+    /// bytes in the game image for the whole session.
+    pub(crate) enabled: bool,
+}
+
+impl Default for HudSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+impl HudSettings {
+    fn apply(&mut self, doc: &Document, rejections: &mut Rejections) {
+        take(
+            &mut self.enabled,
+            doc,
+            HUD_SECTION,
+            "enabled",
+            rejections,
+            parse_bool,
+        );
+    }
+
+    pub(crate) fn summary(&self) -> String {
+        format!("enabled={}", self.enabled)
+    }
+}
+
 /// One `[chr.cXXXX]` table. Live, and open-ended: the parser reports the ids the FILE contains
 /// rather than looking up a list this build was compiled knowing.
 ///
@@ -595,6 +637,7 @@ pub(crate) struct Tables {
     pub(crate) mapping: MappingSettings,
     pub(crate) buttons: ButtonSettings,
     pub(crate) movement: MovementSettings,
+    pub(crate) hud: HudSettings,
     pub(crate) chr_overrides: Vec<ChrOverride>,
 }
 
@@ -605,6 +648,7 @@ impl Tables {
         self.mapping.apply(doc, rejections);
         self.buttons.apply(doc, rejections);
         self.movement.apply(doc, rejections);
+        self.hud.apply(doc, rejections);
 
         // REPLACED, not merged. A `[chr.cXXXX]` table the player DELETED has to stop applying,
         // and merging into what is already in force would make deletion a no-op -- the one edit
@@ -619,10 +663,11 @@ impl Tables {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "[mapping] {} | [buttons] {} | [movement] {} | chr_overrides={}",
+            "[mapping] {} | [buttons] {} | [movement] {} | [hud] {} | chr_overrides={}",
             self.mapping.summary(),
             self.buttons.summary(),
             self.movement.summary(),
+            self.hud.summary(),
             self.chr_overrides.len()
         )
     }
@@ -677,6 +722,9 @@ heading_converge = false
 turn_deadzone_deg = 5.0
 root_motion_only = false
 speed_scale = 1.25
+
+[hud]
+enabled = false
 "#,
         );
         assert!(rejections.is_empty(), "{}", rejections.summary());
@@ -692,6 +740,31 @@ speed_scale = 1.25
         assert_eq!(tables.buttons.l2, Bucket::Ranged);
         assert!(!tables.movement.heading_converge);
         assert_eq!(tables.movement.speed_scale, 1.25);
+        assert!(!tables.hud.enabled);
+    }
+
+    /// The HUD retarget is ON unless the file says otherwise. It is the behaviour the layer
+    /// exists for, so defaulting it off would ship a feature nobody sees without editing a file
+    /// they have no reason to open.
+    #[test]
+    fn the_hud_retarget_defaults_on_and_only_the_file_turns_it_off() {
+        let (tables, _, rejections) = read("");
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+        assert!(tables.hud.enabled, "default ON");
+
+        let (tables, _, rejections) = read("[hud]\nenabled = false\n");
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+        assert!(!tables.hud.enabled);
+
+        // ...and a misspelling is a REJECTION, not an off switch -- the same rule as every other
+        // boolean here. "enabled = flase" reading as false is indistinguishable, from the
+        // player's chair, from the retarget being broken.
+        let doc = Document::parse("[hud]\nenabled = \"flase\"\n");
+        let mut hud = HudSettings::default();
+        let mut rejections = Rejections::default();
+        hud.apply(&doc, &mut rejections);
+        assert!(hud.enabled, "the value in force is kept");
+        assert_eq!(rejections.summary(), "hud.enabled=\"flase\"");
     }
 
     /// THE RULE. Junk keeps the value that was working and names itself, so the player can find

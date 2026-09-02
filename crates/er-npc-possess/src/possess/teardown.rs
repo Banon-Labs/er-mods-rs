@@ -5,9 +5,12 @@
 //!
 //! Release runs down three different paths -- the hotkey, the possessed creature dying, and
 //! `DLL_PROCESS_DETACH` -- and each one is a place where somebody can write the steps in a
-//! plausible order that is subtly the wrong one. Three of the six steps have a consequence if they
-//! move:
+//! plausible order that is subtly the wrong one. Four of the seven steps have a consequence if
+//! they move:
 //!
+//! * **The HUD is handed back FIRST.** The retarget post-pass reads the creature's
+//!   `CSChrDataModule` every frame until it is told to stop, and every step below it either reads
+//!   through that creature or is what makes it stop resolving.
 //! * **The camera must be cleared AFTER the player has been moved.** Clearing first gives a
 //!   visible frame of the old body standing wherever it was; moving first means the camera snaps
 //!   to a player already standing in the right place.
@@ -34,28 +37,37 @@
 /// sorted, so adding a step in the wrong place fails rather than reorders the release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Step {
+    /// Give the HP / FP / stamina bars back to the real player.
+    ///
+    /// FIRST, and for the same reason the camera is cleared before the player is moved: it is the
+    /// most externally visible lie the possession is telling, so it is the first one to stop.
+    /// It must also precede every step below on its own account -- all of them either read
+    /// through the creature or make it stop resolving, and the HUD post-pass reads the creature's
+    /// `CSChrDataModule` once a frame until it is told not to.
+    StopHudRetarget = 0,
     /// Invincibility off, alpha back to opaque, `debugFlags` cleared. The player's own body
     /// becomes an ordinary character again.
-    RestoreBody = 0,
+    RestoreBody = 1,
     /// Stop writing the player's proxy position every frame. Nothing to undo -- the last write
     /// already landed -- but the per-frame driver has to be told before the player is moved, or it
     /// would put them back on the creature next frame.
-    StopColocating = 1,
+    StopColocating = 2,
     /// Put the player on the resolved ground point. Usually a no-op in effect, because
     /// co-location already left them exactly there; it matters when the creature died airborne and
     /// the point resolves to its last grounded position instead.
-    MovePlayer = 2,
+    MovePlayer = 3,
     /// Clear `WorldChrManDbg+0xb8`. Camera and lock-on return to the real player.
-    ClearCameraOverride = 3,
+    ClearCameraOverride = 4,
     /// Clear `ChrCtrl+0x3b0` on the creature and give it its AI back. THE STEP THAT MUST HAPPEN.
-    ClearManipulatorOverride = 4,
+    ClearManipulatorOverride = 5,
     /// Whatever was holding the save off, released. Last, always.
-    LiftSaveSuppression = 5,
+    LiftSaveSuppression = 6,
 }
 
 impl Step {
     /// The release, in order.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
+        Self::StopHudRetarget,
         Self::RestoreBody,
         Self::StopColocating,
         Self::MovePlayer,
@@ -67,6 +79,7 @@ impl Step {
     /// For the log line.
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            Self::StopHudRetarget => "stop-hud-retarget",
             Self::RestoreBody => "restore-body",
             Self::StopColocating => "stop-colocating",
             Self::MovePlayer => "move-player",
@@ -154,7 +167,7 @@ impl Teardown {
         self.failed.iter().copied().any(Step::is_critical)
     }
 
-    /// `release: reason=hotkey steps=6/6 ok` -- or the same line naming what did not work.
+    /// `release: reason=hotkey steps=7/7 ok` -- or the same line naming what did not work.
     pub(crate) fn line(&self) -> String {
         let mut line = format!(
             "release: reason={} steps={}/{}",
@@ -195,7 +208,7 @@ mod tests {
         let mut sorted = Step::ALL;
         sorted.sort_unstable();
         assert_eq!(sorted, Step::ALL);
-        assert_eq!(Step::ALL[0], Step::RestoreBody);
+        assert_eq!(Step::ALL[0], Step::StopHudRetarget);
         assert_eq!(*Step::ALL.last().unwrap(), Step::LiftSaveSuppression);
     }
 
@@ -222,6 +235,22 @@ mod tests {
         }
     }
 
+    /// THE HUD GOES BACK FIRST. Every step after it either reads through the creature or is what
+    /// stops the creature resolving, and the retarget reads its `CSChrDataModule` once a frame
+    /// until this step runs.
+    #[test]
+    fn the_hud_is_handed_back_before_anything_else_touches_the_creature() {
+        for step in Step::ALL {
+            if step != Step::StopHudRetarget {
+                assert!(
+                    Step::StopHudRetarget < step,
+                    "{} must not precede the HUD hand-back",
+                    step.name()
+                );
+            }
+        }
+    }
+
     /// A clean run does every step once, in order.
     #[test]
     fn a_clean_run_performs_every_step_in_order() {
@@ -234,7 +263,7 @@ mod tests {
         assert_eq!(seen, Step::ALL.to_vec());
         assert!(teardown.is_clean());
         assert!(!teardown.has_critical_failure());
-        assert_eq!(teardown.line(), "release: reason=hotkey steps=6/6 ok");
+        assert_eq!(teardown.line(), "release: reason=hotkey steps=7/7 ok");
     }
 
     /// THE PROPERTY THAT MATTERS. A step failing must not stop the run -- in particular the
@@ -256,7 +285,7 @@ mod tests {
         );
         let line = teardown.line();
         assert!(line.contains("reason=creature-died"), "{line}");
-        assert!(line.contains("steps=2/6"), "{line}");
+        assert!(line.contains("steps=2/7"), "{line}");
         assert!(line.contains("restore-body"), "{line}");
         assert!(!line.contains("DLPanic"), "{line}");
     }
@@ -279,7 +308,7 @@ mod tests {
         let line = teardown.line();
         assert!(line.contains("ChrCtrl+0x3b0 IS STILL ARMED"), "{line}");
         assert!(line.contains("DLPanic"), "{line}");
-        assert!(line.contains("steps=5/6"), "{line}");
+        assert!(line.contains("steps=6/7"), "{line}");
     }
 
     /// Every reason spells itself for the log, so "it let go on its own" and "the player pressed

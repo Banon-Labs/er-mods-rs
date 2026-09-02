@@ -44,7 +44,7 @@ use er_hotkey_config::{
 use crate::{
     engine::PossessionRequest,
     log::possess_log,
-    settings::{ChrOverride, MovementSettings, Rejections, Tables, TargetSettings},
+    settings::{ChrOverride, HudSettings, MovementSettings, Rejections, Tables, TargetSettings},
     toml::Document,
 };
 
@@ -214,6 +214,23 @@ root_motion_only = true
 # is a longer stride between re-aims and a body that runs on further after you let go; lower is
 # twitchier and stops sooner.
 speed_scale = 1.0
+
+# The HP / FP / stamina bars in the corner. LIVE -- an edit applies within a second, and turning
+# it off mid-possession hands the bars straight back to your own character.
+[hud]
+# While something is possessed, the three bars read THAT CREATURE instead of your own character.
+#
+# Runes, equipment, the great rune and the memorised spells are NOT retargeted and keep showing
+# you. That is deliberate rather than unfinished: a creature has no PlayerGameData and no armament
+# slots, so pointing those at it would not show its equipment, it would empty the panel.
+#
+# Almost no creature has FP -- NpcParam.mp is 0 on 6,989 of the 7,045 shipped rows and on every
+# boss -- so the FP bar is normally drawn EMPTY while you are wearing something. That is the
+# param value, not a failure to read it; er-npc-possess.derived.toml prints the number. Stamina
+# is real on all but two rows, and it drains and recovers the way the creature's own does.
+#
+# false installs nothing at all: no detour is written into the game image.
+enabled = true
 
 # RESERVED. Per-character overrides, one table per chr id, added as you need them. The DLL reads
 # whatever ids this file happens to name -- there is no fixed list -- so a chr nobody has written
@@ -593,6 +610,12 @@ pub(crate) fn chr_override(chr_id: u32) -> Option<ChrOverride> {
 
 pub(crate) fn movement() -> MovementSettings {
     state().config.tables.movement
+}
+
+/// `[hud]`, read fresh so an edit to the file takes effect on the next frame like every other
+/// live table.
+pub(crate) fn hud() -> HudSettings {
+    state().config.tables.hud
 }
 
 /// Re-read the file if it changed, and report what moved.

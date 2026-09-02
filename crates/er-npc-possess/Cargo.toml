@@ -28,6 +28,11 @@ er-invasion-warp-core = { path = "../er-invasion-warp-core" }
 er-hotkey-config = { path = "../er-hotkey-config" }
 
 [target.'cfg(windows)'.dependencies]
+# The MinHook wrapper, for the crate's ONE detour: CSFeManImp::UpdatePlayerComponents, which is
+# what points the HP/FP/stamina bars at the possessed creature. Windows-only because it compiles
+# MinHook's C source; the HUD layer's offsets, arithmetic and report are host-testable siblings
+# that do not depend on it.
+er-hook = { path = "../er-hook" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 windows = { version = "0.62", features = [
