@@ -14,6 +14,7 @@ use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
 use crate::hud;
 use crate::input::FaceEdges;
 use crate::log::possess_log;
+use crate::moveset::banner;
 use crate::moveset::chain::{Availability, Held, Playing};
 use crate::moveset::dispatch::{
     Context, Dispatcher, Hand, Input, Locomotion, NoMove, PageTurn, Press, Released,
@@ -348,6 +349,15 @@ impl NpcPossessionEngine {
             // it unconditionally, and so does the state machine after a refusal.
             return PossessionOutcome::Accepted;
         };
+        // THE PANEL COMES DOWN HERE, ahead of the teardown and outside [`Step`]. Every way a
+        // possession can end -- the hotkey, death, despawn, a config reload, shutdown -- passes
+        // through this function after `active.take()` succeeded, so this is the one place that
+        // covers all of them. It is not a `Step` because the steps exist to pin an ORDER between
+        // things that read through the creature, and this reads through nothing: it stores `None`
+        // behind a mutex and clears an atomic. Leaving it up would put a panel describing four
+        // buttons on screen after those buttons stopped doing anything, which is worse than no
+        // panel.
+        banner::clear();
         let mut run = Teardown::new(reason);
         let thunk_address = state.thunk.object_address();
         let release_point = state.release_point();
@@ -537,6 +547,13 @@ impl NpcPossessionEngine {
                         leads(first),
                         leads(second),
                     ));
+                    // ON SCREEN, and this is the half the player actually sees. The two writes
+                    // below are both "say what the buttons do now" and they differ only in where
+                    // a player can read them from: the derived file needs an alt-tab, the banner
+                    // is in the corner of the game they are looking at. Publishing the hand that
+                    // moved makes the panel highlight it, which is what turns "the sets changed"
+                    // from an inference into an observation.
+                    Self::publish_banner(state.chr_id, dispatcher, Some(hand));
                     // The report is rewritten so the page the player is on, and what is on it, can
                     // be read rather than remembered. Cheap: a few kilobytes, only on a key press.
                     Self::write_derived(
@@ -785,6 +802,24 @@ impl NpcPossessionEngine {
             Input::L1 => 2,
             Input::L2 => 3,
         }
+    }
+
+    /// Put what the four buttons do onto the SCREEN, for the render thread to pick up.
+    ///
+    /// The counterpart of [`Self::write_derived`] and deliberately called beside it every time:
+    /// the derived file is the reference a player reads with the game paused or alt-tabbed, this
+    /// is the one they read WHILE playing. `flash` names the hand whose page key caused this
+    /// publish, which is what the panel highlights for a couple of seconds.
+    ///
+    /// Called on possession start and on every page turn -- never per frame. The name lookup
+    /// walks the 408-row catalogue and would be wasteful at 60 Hz; at a keypress it is free.
+    fn publish_banner(chr_id: u32, dispatcher: &Dispatcher, flash: Option<Hand>) {
+        banner::publish(banner::Banner::from_dispatcher(
+            chr_id,
+            crate::picker::catalog::name_of(chr_id),
+            dispatcher,
+            flash,
+        ));
     }
 
     /// Write `er-npc-possess.derived.toml`.
@@ -1295,6 +1330,12 @@ impl NpcPossessionEngine {
         Self::write_derived(chr_id, &state.camera, creature, state.moveset.as_ref());
         match state.moveset.as_ref() {
             Some(dispatcher) => {
+                // THE PANEL GOES UP WITH THE POSSESSION, not on the first page turn. A player who
+                // never presses a page key still needs to know what r1/r2/l1/l2 fire on the
+                // creature they just became -- and a panel that only appears once you have
+                // already used the feature is no help to somebody trying to find out that the
+                // feature exists. No flash: nothing has changed yet, this is the starting state.
+                Self::publish_banner(chr_id, dispatcher, None);
                 possess_log(format_args!(
                     "moveset: c{chr_id:04} {}",
                     dispatcher.summary()
@@ -1331,12 +1372,23 @@ impl NpcPossessionEngine {
                     }
                 }
             }
-            None => possess_log(format_args!(
-                "moveset: c{chr_id:04} is not in the shipped table, so this character has no \
-                 attacks. That is expected for a variant that owns a model but no animations of \
-                 its own -- 20 of the 408 the offline sweep looked at are like that. Movement, \
-                 camera, the HUD and release all still work."
-            )),
+            None => {
+                // A PANEL THAT SAYS "NOTHING" RATHER THAN NO PANEL. The log line below is the
+                // full explanation, but it is in a file; on screen, the difference between "this
+                // creature has no attacks" and "the panel is broken" has to be visible, and only
+                // a drawn panel can carry it.
+                banner::publish(banner::Banner::absent(
+                    chr_id,
+                    crate::picker::catalog::name_of(chr_id),
+                    request.buttons,
+                ));
+                possess_log(format_args!(
+                    "moveset: c{chr_id:04} is not in the shipped table, so this character has no \
+                     attacks. That is expected for a variant that owns a model but no animations \
+                     of its own -- 20 of the 408 the offline sweep looked at are like that. \
+                     Movement, camera, the HUD and release all still work."
+                ));
+            }
         }
         possess_log(format_args!(
             "possession: ChrIns=0x{:x} com=0x{real_com:x} thunk=0x{:x} camera=override player=0x{:x} \

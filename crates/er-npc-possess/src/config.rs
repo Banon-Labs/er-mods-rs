@@ -364,8 +364,8 @@ distance_exponent = 1.0
 # follows whatever distance comes out, but the room above them shrinks.
 distance_max = 512.0
 
-# The HP / FP / stamina bars in the corner. LIVE -- an edit applies within a second, and turning
-# it off mid-possession hands the bars straight back to your own character.
+# What possession puts on screen. LIVE -- an edit applies within a second, and turning either of
+# these off mid-possession takes effect on the next frame.
 [hud]
 # While something is possessed, the three bars read THAT CREATURE instead of your own character.
 #
@@ -380,6 +380,20 @@ distance_max = 512.0
 #
 # false installs nothing at all: no detour is written into the game image.
 enabled = true
+# The ATTACK-SET PANEL, in the top-right corner while you are wearing something. It says which
+# set each hand is on and out of how many -- `R 2/17`, `L 1/2` -- and what r1/r2/l1/l2 fire on
+# that set, so pressing the page keys is something you can WATCH rather than something you have
+# to remember.
+#
+# It exists because the page is a MODE and had no indicator: the keys worked from the day they
+# landed, wrote a line to er-npc-possess.log and a [pages] block to er-npc-possess.derived.toml,
+# and neither of those is visible from inside a full-screen game. The hand you just paged is
+# highlighted for a couple of seconds so the change itself is visible, not only its result.
+#
+# It appears when a possession starts and disappears when you release. The panel is drawn on the
+# same overlay the creature picker uses, so this costs no second hook; set it to false and no
+# panel is drawn, but the [pages] block in er-npc-possess.derived.toml still says the same thing.
+pages = true
 
 # Per-character overrides, one table per chr id, added as you need them. The DLL reads whatever ids
 # this file happens to name -- there is no fixed list -- so a chr nobody has written down yet works

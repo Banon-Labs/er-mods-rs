@@ -1,49 +1,42 @@
-//! Drawing the list, and joining whatever imgui already exists in the process.
+//! Drawing the creature list.
 //!
-//! This DLL never installs a second `Present` hook. If another module in this workspace is
-//! already hosting the overlay it registers as a GUEST and draws through it; if nobody is, it
-//! hosts and dispatches guests itself. Two `Hudhook::apply()` calls in one process double-hook
-//! `Present` and the second one silently renders nothing -- measured live on 2026-08-25, and the
-//! reason `er_build_watermark_core::overlay_host` exists.
+//! THE PRESENT HOOK IS NOT HERE. This module used to own the host-join as well, back when the
+//! picker was the only thing this DLL drew; that half moved to [`crate::overlay`] when the
+//! attack-set panel arrived, because two surfaces must share one `Present` hook and neither of
+//! them should own the other's install. What is left here is the panel itself: given a live imgui
+//! frame, paint the list if it is open.
 //!
-//! The install is LAZY: nothing here runs until the picker is opened for the first time. A
-//! session that never presses the picker hotkey ends with this DLL having hooked nothing at all,
-//! which is the property the crate's entry in `scripts/me3-dll-conflicts.toml` is about.
+//! # `PANEL_DRAWS` and the reading it exists to prevent
+//!
+//! [`draw`] is called on EVERY frame and returns immediately when the list is closed, which is
+//! almost all of them. The counter therefore has to be incremented AFTER that early return, or it
+//! measures the swapchain rather than the picker -- which is exactly the confusion that made a
+//! working picker look broken for a day. See the module docs of [`crate::overlay`] for the log
+//! evidence.
 
 #![cfg(windows)]
 
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_build_watermark_core::overlay_host::{OverlayFrame, adopt_frame, register_with_host};
-use hudhook::hooks::dx12::ImguiDx12Hooks;
-use hudhook::imgui::{Condition, Context, StyleColor, Ui};
-use hudhook::{ImguiRenderLoop, RenderContext};
+use hudhook::imgui::{Condition, StyleColor, Ui};
 
-use crate::log::possess_log;
+use crate::overlay::FONT_SCALE;
 use crate::picker::View;
 use crate::picker::catalog::LABEL_MAX_CHARS;
 
-/// Frames this module has drawn into. `0` while the picker has been opened means the overlay
-/// never reached the swapchain, which is a different problem from an empty list.
-static DRAWS: AtomicUsize = AtomicUsize::new(0);
+/// Frames the LIST ITSELF was built on -- not frames the overlay drew. Zero while the picker has
+/// been open is the fault worth chasing; zero while it is closed is the picker being closed.
+static PANEL_DRAWS: AtomicUsize = AtomicUsize::new(0);
 /// Rows painted on the most recent draw.
 static LAST_ROWS: AtomicUsize = AtomicUsize::new(0);
-/// Set once this module is either hosting or registered as a guest.
-static INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// The DLL's own module handle, stashed by [`arm`] so the lazy install has one to hand hudhook.
-static HMODULE: AtomicUsize = AtomicUsize::new(0);
 
 /// Where the panel sits, and how wide. First-use only -- the window is movable, so a player who
 /// drags it keeps it there.
 const PANEL_POSITION: [f32; 2] = [48.0, 96.0];
-/// Everything the panel draws is scaled by this. 1.5 because the list is read at a desk, from a
-/// game running full-screen at whatever resolution the monitor is, and imgui's default face is
-/// sized for a windowed tool rather than for that.
-const FONT_SCALE: f32 = 1.5;
-/// Widened by the same factor. The width is a fixed number of pixels rather than a text measure,
-/// so scaling the font without scaling this would clip every name at the same place it used to
-/// fit -- the failure would look like truncated data rather than like a layout constant.
+/// Widened by the same factor the font is scaled by. The width is a fixed number of pixels rather
+/// than a text measure, so scaling the font without scaling this would clip every name at the same
+/// place it used to fit -- the failure would look like truncated data rather than like a layout
+/// constant.
 const PANEL_WIDTH: f32 = 420.0 * FONT_SCALE;
 
 /// The stable half of the window label. imgui takes everything after `###` as the window's ID and
@@ -51,26 +44,16 @@ const PANEL_WIDTH: f32 = 420.0 * FONT_SCALE;
 /// making a new window on every keypress.
 const PANEL_ID: &str = "###er-npc-possess-picker";
 
-pub(crate) fn draws() -> usize {
-    DRAWS.load(Ordering::Relaxed)
+pub(crate) fn panel_draws() -> usize {
+    PANEL_DRAWS.load(Ordering::Relaxed)
 }
 
 pub(crate) fn last_rows() -> usize {
     LAST_ROWS.load(Ordering::Relaxed)
 }
 
-pub(crate) fn installed() -> bool {
-    INSTALLED.load(Ordering::Relaxed) != 0
-}
-
-/// Remember the module handle. Called from `DllMain`; installs nothing.
-pub(crate) fn arm(hmodule_raw: usize) {
-    HMODULE.store(hmodule_raw, Ordering::SeqCst);
-}
-
-/// Draw the current view onto a live imgui frame.
-fn draw(ui: &Ui) {
-    DRAWS.fetch_add(1, Ordering::Relaxed);
+/// Draw the current view onto a live imgui frame. A no-op while the list is closed.
+pub(crate) fn draw(ui: &Ui) {
     // LOCK-FREE FAST PATH, and this is the common one: once the overlay is installed this runs on
     // every `Present` for the rest of the process, and the list is closed for almost all of them.
     // Taking the picker mutex 60-144 times a second to be told "closed" would contend with the
@@ -83,6 +66,7 @@ fn draw(ui: &Ui) {
         LAST_ROWS.store(0, Ordering::Relaxed);
         return;
     };
+    PANEL_DRAWS.fetch_add(1, Ordering::Relaxed);
     LAST_ROWS.store(view.rows.len(), Ordering::Relaxed);
     // `###` PINS THE WINDOW ID, and it is not decoration. imgui derives a window's identity from
     // its label, and this label carries the cursor position -- so without the suffix every step
@@ -158,125 +142,4 @@ fn draw_rows(ui: &Ui, view: &View) {
         None => ui.text("no creatures -- the shipped moveset table is empty"),
     }
     ui.text("press your POSSESS hotkey to choose, the picker hotkey to close");
-}
-
-/// The guest entry point: adopt the host's imgui and draw.
-///
-/// # Safety
-///
-/// `frame` is the pointer the overlay host just passed, live for the duration of this call.
-unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
-    // Adopt the host's context and allocators BEFORE touching `ui`. imgui's current context is a
-    // per-DLL global, so this module's copy is null until this runs and `ui.io()` would fault.
-    // SAFETY: `frame` is the host's live pointer.
-    let Some(ui) = (unsafe { adopt_frame(frame) }) else {
-        return;
-    };
-    draw(ui);
-}
-
-/// This module's own render loop, used only when nothing else in the process hosts one.
-struct PickerOverlay;
-
-impl ImguiRenderLoop for PickerOverlay {
-    fn initialize<'a>(&'a mut self, _ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        possess_log(format_args!("picker overlay: render loop initialized"));
-    }
-
-    fn render(&mut self, ui: &mut Ui) {
-        // Guests FIRST and before any early return: this module hosts the only imgui context in
-        // the process, so returning early here draws nothing for every OTHER overlay too.
-        er_build_watermark_core::overlay_host::dispatch_guests(ui);
-        draw(ui);
-        // The watermark is NOT a guest -- it never registers one, because its loser path assumes
-        // whichever module hosts will carry its rows directly. See er-invasion-path's render loop,
-        // where omitting this left a whole session with no watermark at all.
-        er_build_watermark_core::draw_rows(ui, possess_log);
-    }
-}
-
-/// Join the process's overlay, hosting it if nobody else does. Idempotent.
-///
-/// Called the first time the picker opens rather than at load, so a session that never uses the
-/// picker never installs anything.
-pub(crate) fn install_once() {
-    if INSTALLED.swap(1, Ordering::SeqCst) != 0 {
-        return;
-    }
-    // ON ITS OWN THREAD, like every other shell here. `install()` below waits for the game's
-    // window (bounded, but tens of seconds), takes a named kernel mutex, walks every loaded
-    // module calling into their registrars, and may end in `Hudhook::apply()` -- which creates a
-    // D3D12 device and suspends every thread in the process to write its detours. Its caller is
-    // the recurring `FrameBegin` game task; doing any of that inline would stall the game, and
-    // `er-invasion-path`'s `DllMain` says the same thing about the loader lock.
-    let _ = std::thread::Builder::new()
-        .name("er-npc-possess-overlay".to_owned())
-        .spawn(install);
-}
-
-fn install() {
-    if register_with_host(guest_draw) {
-        possess_log(format_args!(
-            "picker overlay: another module hosts the imgui context; registered as a GUEST (no \
-             second Present hook)"
-        ));
-        return;
-    }
-    // The claim below waits for the game's window before touching the mutex, and every other
-    // would-be host waits on that same window. The probe above therefore ran before anyone could
-    // have designated themselves host, so losing the mutex here means one appeared in between --
-    // ask again rather than giving up on a stale answer.
-    match er_build_watermark_core::claim_overlay_ownership() {
-        er_build_watermark_core::OverlayClaim::Won => {}
-        er_build_watermark_core::OverlayClaim::LostToAnotherModule => {
-            if er_build_watermark_core::overlay_host::register_with_host_retrying(guest_draw) {
-                // INSTALLED stays set: this module is joined to an overlay and must not run the
-                // install path again.
-                possess_log(format_args!(
-                    "picker overlay: another module won the overlay while this one waited for \
-                     the window; registered as a GUEST (no second Present hook)"
-                ));
-            } else {
-                INSTALLED.store(0, Ordering::SeqCst);
-                possess_log(format_args!(
-                    "picker overlay: a module owns the overlay but would not accept a guest -- \
-                     the list cannot be drawn. The host speaks a different overlay ABI than this \
-                     DLL's {:#06x}; rebuild the whole profile from one tree.",
-                    er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG
-                ));
-            }
-            return;
-        }
-        er_build_watermark_core::OverlayClaim::NoWindow => {
-            INSTALLED.store(0, Ordering::SeqCst);
-            possess_log(format_args!(
-                "picker overlay: this process never got a sized top-level window, so there is \
-                 nothing to draw the list on and no host to join. Not an ABI problem."
-            ));
-            return;
-        }
-    }
-    let hmodule = hudhook::windows::Win32::Foundation::HINSTANCE(
-        HMODULE.load(Ordering::SeqCst) as *mut c_void
-    );
-    match hudhook::Hudhook::builder()
-        .with::<ImguiDx12Hooks>(PickerOverlay)
-        .with_hmodule(hmodule)
-        .build()
-        .apply()
-    {
-        Ok(()) => {
-            er_build_watermark_core::overlay_host::become_host();
-            possess_log(format_args!(
-                "picker overlay: hudhook dx12 overlay installed (this module HOSTS the imgui \
-                 context)"
-            ));
-        }
-        Err(error) => {
-            INSTALLED.store(0, Ordering::SeqCst);
-            possess_log(format_args!(
-                "picker overlay: hudhook dx12 install failed: {error:?}"
-            ));
-        }
-    }
 }

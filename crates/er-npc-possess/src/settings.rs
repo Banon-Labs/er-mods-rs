@@ -1090,11 +1090,15 @@ impl PickerSettings {
 
 /// `[hud]`. Live.
 ///
-/// One switch, deliberately. The retarget is either on or off; there is no per-bar toggle,
-/// because "show the creature's HP but the player's stamina" is not a thing anyone wants and
-/// every extra knob is another state nobody tests. What the FP and stamina bars do when the
-/// creature has no such pool is decided by evidence rather than by configuration -- see
-/// [`crate::hud::vitals`].
+/// TWO SWITCHES, and they are two rather than one because they are two SURFACES, not two tastes
+/// about one. [`Self::enabled`] retargets bars the game already draws; [`Self::pages`] adds a
+/// panel the game does not have. Neither implies the other -- a player who wants the creature's
+/// HP but not a second panel in the corner, or the panel but their own bars, is asking for a
+/// coherent thing in both directions. WITHIN each surface there is still deliberately no
+/// per-element knob, because "show the creature's HP but the player's stamina" is not a thing
+/// anyone wants and every extra knob is another state nobody tests. What the FP and stamina bars
+/// do when the creature has no such pool is decided by evidence rather than by configuration --
+/// see [`crate::hud::vitals`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HudSettings {
     /// Point the HP / FP / stamina bars at the possessed creature.
@@ -1104,11 +1108,27 @@ pub(crate) struct HudSettings {
     /// installed and left idle, so a player who does not want it does not carry five patched
     /// bytes in the game image for the whole session.
     pub(crate) enabled: bool,
+    /// Draw the attack-set panel while something is possessed.
+    ///
+    /// Defaults ON, and that default is not a preference: the attack-set page is a MODE with no
+    /// other indicator anywhere on screen, and a mode nobody can see is a mode nobody can use.
+    /// Shipping it off would recreate the exact defect it was written to close -- a live session
+    /// on 2026-09-02 paged the right hand through seventeen sets, logged every one of them, and
+    /// the player watching the screen reported "I still don't see any abilities to switch
+    /// between".
+    ///
+    /// `false` costs nothing at runtime beyond one atomic read per frame: the panel is skipped
+    /// before any lock is taken, and a session that possesses nothing never installs the overlay
+    /// at all.
+    pub(crate) pages: bool,
 }
 
 impl Default for HudSettings {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            pages: true,
+        }
     }
 }
 
@@ -1122,10 +1142,18 @@ impl HudSettings {
             rejections,
             parse_bool,
         );
+        take(
+            &mut self.pages,
+            doc,
+            HUD_SECTION,
+            "pages",
+            rejections,
+            parse_bool,
+        );
     }
 
     pub(crate) fn summary(&self) -> String {
-        format!("enabled={}", self.enabled)
+        format!("enabled={} pages={}", self.enabled, self.pages)
     }
 }
 
@@ -1140,7 +1168,7 @@ fn default_pad(spelling: &str) -> PadChord {
 
 /// One binding as the log prints it: both spellings, because a player who bound only the pad and a
 /// player who unbound both need to tell their situations apart.
-fn binding_text(chord: Option<Chord>, pad: PadChord) -> String {
+pub(crate) fn binding_text(chord: Option<Chord>, pad: PadChord) -> String {
     format!("{}/{}", chord_text(chord), pad_chord_name(pad))
 }
 
@@ -1532,6 +1560,42 @@ readiness_ms = 500
         hud.apply(&doc, &mut rejections);
         assert!(hud.enabled, "the value in force is kept");
         assert_eq!(rejections.summary(), "hud.enabled=\"flase\"");
+    }
+
+    /// The attack-set panel obeys the same three rules as the bar retarget beside it, and -- the
+    /// part worth a test rather than a reading -- the two keys are INDEPENDENT.
+    ///
+    /// One `[hud]` table holding two switches is exactly the shape where a copy-pasted `take`
+    /// silently points both at one field, and the symptom would be that turning off the bars also
+    /// removes the panel: two features lost to one edit, with nothing in the file to explain it.
+    #[test]
+    fn the_attack_set_panel_defaults_on_and_is_independent_of_the_bar_retarget() {
+        let (tables, _, rejections) = read("");
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+        assert!(tables.hud.pages, "default ON");
+
+        let (tables, _, rejections) = read("[hud]\npages = false\n");
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+        assert!(!tables.hud.pages);
+        assert!(
+            tables.hud.enabled,
+            "turning the panel off must not take the bar retarget with it"
+        );
+
+        let (tables, _, rejections) = read("[hud]\nenabled = false\n");
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+        assert!(
+            tables.hud.pages,
+            "...and turning the bar retarget off must not take the panel with it"
+        );
+
+        // A misspelling is a REJECTION, not an off switch. Same rule as every other boolean here.
+        let doc = Document::parse("[hud]\npages = \"of\"\n");
+        let mut hud = HudSettings::default();
+        let mut rejections = Rejections::default();
+        hud.apply(&doc, &mut rejections);
+        assert!(hud.pages, "the value in force is kept");
+        assert_eq!(rejections.summary(), "hud.pages=\"of\"");
     }
 
     /// THE RULE. Junk keeps the value that was working and names itself, so the player can find

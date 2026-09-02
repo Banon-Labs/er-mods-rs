@@ -261,6 +261,23 @@ pub(crate) fn index_of(chr_id: u32) -> Option<usize> {
     creatures().iter().position(|c| c.chr_id == chr_id)
 }
 
+/// What to CALL a chr id, or `""` when nothing here names it.
+///
+/// `""` rather than `"(unnamed)"` because the caller is not always a list row: the attack-set
+/// panel puts the name beside the id and drops it entirely when there is none, which reads better
+/// than `c4500 (unnamed)`. The picker keeps [`Creature::label`] for its own column, where a blank
+/// would leave a hole in a table.
+///
+/// Building the catalogue is a `OnceLock`, so the first call parses two embedded tables and every
+/// later one is a scan of 408 `u32`s. Both are cheap enough for the once-per-possession caller
+/// this exists for; do not put it on a per-frame path.
+pub(crate) fn name_of(chr_id: u32) -> &'static str {
+    creatures()
+        .iter()
+        .find(|creature| creature.chr_id == chr_id)
+        .map_or("", |creature| creature.name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

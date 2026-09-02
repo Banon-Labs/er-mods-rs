@@ -56,6 +56,8 @@ mod hud;
 mod input;
 mod log;
 mod moveset;
+#[cfg(windows)]
+mod overlay;
 mod picker;
 mod possess;
 mod settings;
@@ -179,9 +181,14 @@ fn tick() {
         // inside the picker because the install waits on the game's window, takes a named mutex
         // and may end in `Hudhook::apply()`; none of that may happen while the picker's own lock
         // is held. It spawns a thread and returns immediately.
-        #[cfg(windows)]
-        picker::render::install_once();
+        overlay::install_once();
     }
+
+    // `[hud] pages`, mirrored where the render thread can read it without the config lock. Every
+    // tick rather than once at possession start, so the switch is as live as every other key in
+    // the file -- a player who sets it to false while wearing something sees the panel go on the
+    // next frame, not on the next possession.
+    moveset::banner::set_enabled(config::hud().pages);
 
     if !bindings.enabled {
         return;
@@ -240,10 +247,27 @@ fn tick() {
     // character dying or despawning on a frame nobody pressed anything.
     engine::tick_engine();
 
+    // THE SECOND INSTALL TRIGGER, and it is not redundant with the picker's. A possession does
+    // not require the creature list -- `[target] mode = "lock_on"` is the default and never opens
+    // it -- so an attack-set panel gated on the picker's install would draw nothing at all in
+    // exactly the session that needs it. The live run of 2026-09-02 was that session:
+    // `picker_overlay=false` for its whole length while `state=active` wore a creature.
+    // Idempotent after the first call, which is one atomic swap.
+    if moveset::banner::showing() {
+        overlay::install_once();
+    }
+
     if ticks.is_multiple_of(STATUS_LOG_TICKS) {
         let (state, presses) = engine::snapshot();
+        // EVERY COUNTER HERE NAMES WHAT IT COUNTS, and that is a correction rather than a style
+        // choice. This line used to read `picker_overlay=true picker_draws=3747 picker_rows=0`,
+        // where `picker_draws` was Present frames (not picker frames) and `picker_rows` is 0
+        // whenever the list is closed -- so the honest reading of a CLOSED picker looked exactly
+        // like a picker that had rendered 3747 empty frames, and it was diagnosed as one. The
+        // counters are now split: `overlay_frames` is the swapchain, `picker_panel_draws` and
+        // `banner_draws` are the two panels, and each is zero for a reason its own name gives.
         possess_log(format_args!(
-            "status: enabled={} keyboard={} gamepad={} radial={} engine_installed={} state={} presses_seen={} presses_handled={} pad_buttons=0x{buttons:04x} picker_open={} picker_overlay={} picker_draws={} picker_rows={}",
+            "status: enabled={} keyboard={} gamepad={} radial={} engine_installed={} state={} presses_seen={} presses_handled={} pad_buttons=0x{buttons:04x} picker_open={} overlay_installed={} overlay_frames={} picker_panel_draws={} picker_rows={} banner_showing={} banner_draws={}",
             bindings.enabled,
             bindings
                 .keyboard
@@ -255,9 +279,12 @@ fn tick() {
             PRESSES_SEEN.load(Ordering::Relaxed),
             presses,
             picker::is_open(),
-            picker::render::installed(),
-            picker::render::draws(),
+            overlay::installed(),
+            overlay::frames(),
+            picker::render::panel_draws(),
             picker::render::last_rows(),
+            moveset::banner::showing(),
+            overlay::banner_draws(),
         ));
     }
 }
@@ -363,10 +390,10 @@ pub unsafe extern "system" fn DllMain(
     reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // Stashed, not used: the picker's overlay needs a module handle to hand hudhook, and it
-        // installs only when the list is first opened. A session that never presses the picker
-        // hotkey therefore still hooks nothing at all.
-        picker::render::arm(module.0 as usize);
+        // Stashed, not used: the overlay needs a module handle to hand hudhook, and it installs
+        // only when the creature list is first opened or the first possession publishes an
+        // attack-set panel. A session that does neither therefore still hooks nothing at all.
+        overlay::arm(module.0 as usize);
         // A `rust_panic` in a cdylib loaded into the game is otherwise anonymous: the message goes
         // to a stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and
         // nothing else. Every cdylib links its own copy of er-game-base, so this is per-DLL.

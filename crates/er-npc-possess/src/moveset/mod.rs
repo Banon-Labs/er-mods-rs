@@ -182,6 +182,7 @@
 //!   `ChrIns::npcId` 0, which a SECOND player in the session also has, and this crate makes only
 //!   the possessing player's own body immune. Nothing here has been runtime-tested.
 
+pub(crate) mod banner;
 pub(crate) mod chain;
 pub(crate) mod derived;
 pub(crate) mod dispatch;
