@@ -419,12 +419,17 @@ the per-frame HUD vitals pass, detoured so the HP/FP/stamina bars read the posse
 instead of the body the player walked in as. No other shell in this suite hooks that function or \
 its caller. Everything else it does happens from one recurring `FrameBegin` task.
 
-THE ONE OTHER HOOK, and only if the player opens the in-game creature picker: hudhook's DX12 \
+THE ONE OTHER HOOK, and only once the player asks for something to be DRAWN: hudhook's DX12 \
 `Present`, through `er_build_watermark_core::overlay_host` -- the same host-or-guest arbitration \
 er-build-watermark, er-net-effects and er-invasion-path go through, so the process still has \
-exactly one `Present` hook whoever loaded first. It is LAZY: pressing nothing means installing \
-nothing. `Present` is a swapchain vtable slot rather than a game prologue, so it needs no \
-[[shared]] row -- the overlay host is the arbitration.
+exactly one `Present` hook whoever loaded first. Two things ask, and both are still lazy: opening \
+the in-game creature picker, and starting a possession (which puts the attack-set panel in the \
+corner -- `[hud] pages`, on by default). Pressing nothing and possessing nothing means installing \
+nothing. Both panels draw from `crate::overlay`, which owns the single join; the second trigger \
+exists because `[target] mode = \"lock_on\"` is the default and never opens the picker, so a \
+possession-only session would otherwise have no overlay to draw the panel on. `Present` is a \
+swapchain vtable slot rather than a game prologue, so it needs no [[shared]] row -- the overlay \
+host is the arbitration.
 
 WHAT IT DOES FROM THAT TASK, kept current as the layers land -- the sentence above is the \
 co-loadability claim and the ones here are what it rests on, so they are not the same claim twice. \

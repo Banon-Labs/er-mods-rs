@@ -266,7 +266,7 @@ pub(crate) fn is_drawing() -> bool {
 ///
 /// Returns whether this frame OPENED the list, which is the caller's cue that the overlay now has
 /// to exist. The install is not done here because it must not happen under this module's lock --
-/// see [`crate::picker::render::install_once`].
+/// see [`crate::overlay::install_once`].
 #[must_use]
 pub(crate) fn tick(settings: PickerSettings, pad_buttons: u16) -> bool {
     // BOTH READ BEFORE THE LOCK, deliberately. Taking the config or engine lock while holding
