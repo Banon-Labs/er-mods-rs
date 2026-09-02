@@ -120,7 +120,7 @@ struct Possessing {
     body_scale: Option<BodyScale>,
     /// Kept alive for exactly as long as `ChrCtrl+0x3b0` points at it. Dropping it frees the page,
     /// so it must outlive the clear -- which is why teardown owns this whole struct and drops it
-    /// only after [`Step::ClearManipulatorOverride`] has run.
+    /// only after [`Step::RestoreManipulatorVtable`] has run.
     thunk: Thunk,
     /// `ChrIns.debugFlags` for the running build, or `None` on a build nobody has measured -- in
     /// which case the no-attack neuter is skipped rather than written eight bytes off target.
@@ -365,7 +365,11 @@ impl NpcPossessionEngine {
         // panel.
         banner::clear();
         let mut run = Teardown::new(reason);
-        let thunk_address = state.thunk.object_address();
+        let (swizzled_com, original_vptr, patched_vptr) = (
+            state.thunk.real_com(),
+            state.thunk.original_vptr(),
+            state.thunk.vtable_address(),
+        );
         let release_point = state.release_point();
         run.run(|step| match step {
             // Infallible -- one atomic store -- so this always reports success. It is a step
@@ -392,15 +396,16 @@ impl NpcPossessionEngine {
             }
             Step::RestoreCameraSize => state.camera.restore(),
             Step::ClearCameraOverride => game::set_camera_override(None),
-            // The AI move request is cancelled BEFORE the override is cleared, because after it
-            // the creature is the AI's again and our last order is a run command it did not
-            // issue. `stop_move_intent` writes exactly what `CS::AiIns::ClearMoveRequest` writes,
-            // so what the AI wakes up to is a state its own code produces. Its failure is not
-            // this step's failure: the override clear is THE step that must happen, and a
-            // creature that jogs for one frame is not a reason to report the release broken.
-            Step::ClearManipulatorOverride => {
+            // The AI move request is cancelled BEFORE the vtable goes back, because after it the
+            // creature is the AI's again and our last order is a run command it did not issue.
+            // `stop_move_intent` writes exactly what `CS::AiIns::ClearMoveRequest` writes, so what
+            // the AI wakes up to is a state its own code produces. Its failure is not this step's
+            // failure: the RESTORE is THE step that must happen -- our patched table lives in a
+            // page that is about to be freed -- and a creature that jogs for one frame is not a
+            // reason to report the release broken.
+            Step::RestoreManipulatorVtable => {
                 state.creature.stop_move_intent();
-                state.creature.clear_manipulator_override(thunk_address)
+                game::Chr::restore_manipulator_vtable(swizzled_com, original_vptr, patched_vptr)
             }
             // AFTER the override clear, always; see `Step::DespawnCreature`, whose discriminant is
             // that ordering and whose test fails if anyone moves it.
@@ -1117,15 +1122,14 @@ impl NpcPossessionEngine {
                 "movement: input READ -- gait={} target=({:.2}, {:.2}, {:.2}) turn={:.1} deg | \
                  creature at ({:.2}, {:.2}, {:.2}) yaw={:.3} | field read-back: walk_type={:?} \
                  want_to_move_to={:?} | staged={:?} published={:?} proxyFlags={:?} \
-                 rootMotion2={:?}. THE THREE-WAY READ, and it decides between the three \
-                 hypotheses that survive every static argument. staged non-zero with published \
-                 ZERO means [vt+0x50] never ran -- check proxyFlags, because ShouldUpdateAi \
-                 returns false when it is non-zero and that is a field this mod's own \
-                 co-location writes. published non-zero with rootMotion2 ZERO means the vector \
-                 reaches the manipulator and the behaviour graph never turns it into a clip. \
-                 rootMotion2 NON-ZERO with the position constant means a clip is playing and \
-                 something physically holds the body -- the co-located player capsule is the \
-                 candidate, and the neuter does not disable collision",
+                 rootMotion2={:?} posNow={:?} anim={:?}. THE READ. published \
+                 non-zero says [vt+0x50] ran and published; ZERO on the next line does not \
+                 contradict it, because the publish is one frame behind the staging. rootMotion2 \
+                 NON-ZERO WITH posNow CONSTANT is the signature that matters: a clip is playing \
+                 and something is holding the body -- read anim to tell a locomotion clip from an \
+                 idle sway, because only the first makes that a held body. rootMotion2 zero with \
+                 published non-zero is the other case: the vector reaches the manipulator and \
+                 never becomes a clip. proxyFlags is a control, not a suspect: it reads 0",
                 write.walk_type,
                 write.target[0],
                 write.target[1],
@@ -1141,6 +1145,15 @@ impl NpcPossessionEngine {
                 state.creature.published_move_vector(),
                 state.creature.chr_proxy_flags(),
                 state.creature.root_motion_squared(),
+                // Read HERE rather than reused from `state.last_position`, which was sampled
+                // earlier in the frame: "position constant while rootMotion is non-zero" is the
+                // whole distinction between a body that is HELD and a body that was never asked
+                // to move, and it is only a distinction if both halves are one instant apart.
+                state.creature.position(),
+                state
+                    .creature
+                    .current_anim_frame()
+                    .map(|frame| (frame.animation, frame.local_time)),
             ));
         }
         if !state.creature.write_move_intent(write) && first_frame {
@@ -1440,16 +1453,26 @@ impl NpcPossessionEngine {
         let Some(thunk) = Thunk::build(real_com) else {
             return PossessionOutcome::Refused("could not reserve the thunk page".to_owned());
         };
-        if !creature.install_manipulator_override(thunk.object_address()) {
-            // Either the slot was already occupied -- a second copy of this mod, or an assumption
-            // that has stopped holding -- or the write itself did not land. Both are worse to
-            // force than to decline.
-            return PossessionOutcome::Refused("ChrCtrl+0x3b0 was not free".to_owned());
+        if !creature.install_manipulator_vtable(
+            thunk.real_com(),
+            thunk.original_vptr(),
+            thunk.vtable_address(),
+        ) {
+            // Either the manipulator is no longer this creature's, or its vptr is not the one the
+            // copy was taken from -- a second copy of this mod, or an assumption that has stopped
+            // holding. Both are worse to force than to decline.
+            return PossessionOutcome::Refused(
+                "the creature's manipulator vtable was not the one we copied".to_owned(),
+            );
         }
         if !game::set_camera_override(Some(creature)) {
             // Roll the ONE thing that is already installed back before giving up, or the creature
             // is left brainless with nobody driving it.
-            creature.clear_manipulator_override(thunk.object_address());
+            game::Chr::restore_manipulator_vtable(
+                thunk.real_com(),
+                thunk.original_vptr(),
+                thunk.vtable_address(),
+            );
             return PossessionOutcome::Refused("could not move the camera".to_owned());
         }
 
@@ -1576,7 +1599,7 @@ impl NpcPossessionEngine {
              {provenance} spawned={} -- the body stays lock-on-able (that needs a SpEffect, not a \
              field write)",
             creature.address(),
-            state.thunk.object_address(),
+            state.thunk.vtable_address(),
             player.address(),
             match state.spawned {
                 None => "no (the map placed this one)",

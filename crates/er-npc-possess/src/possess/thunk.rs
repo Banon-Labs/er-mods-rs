@@ -1,75 +1,69 @@
-//! THE THUNK MANIPULATOR: a 55-slot `ChrManipulator` whose vtable forwards 53 slots to the
-//! creature's real `ComManipulator`, no-ops its AI brain, and refuses to destroy anything.
+//! THE VTABLE SWIZZLE: one slot of the creature's own `ComManipulator` vtable replaced, on a
+//! patched copy of that table, so its brain stops running and nothing else about it changes.
 //!
 //! # What it is for
 //!
-//! `ChrCtrl+0x3b0` is a manipulator OVERRIDE slot. Three dispatchers check it before falling back
-//! to `ChrCtrl+0x18` -- the think path (`ChrCtrl::UpdateAi`, `[vt+0x48]`), the per-frame tick
-//! dispatcher (`[vt+0x50]` or `[vt+0x40]`, then `[vt+0xf8]`), and a third at `[vt+0x68]`. Retail
-//! never writes the slot and never frees what is in it, so writing our own object there routes
-//! those dispatchers at us while everything else in the engine keeps finding the real manipulator
-//! through `ChrCtrl+0x18`.
+//! `[vt+0x48]` is `if (aiIns && ShouldUpdateAi) AiIns::Update(aiIns, dt)` and nothing else -- goal
+//! selection, target acquisition, path replanning, AI timers. `[vt+0x50]` is the per-frame tick
+//! that runs `AiIns::UpdateMovement` and turns `walkType`/`wantToMoveTo` into a published move
+//! vector. **Think** and **execute** live in two different slots, so no-oping one and leaving the
+//! other alone buys AI-free locomotion with no other change. Damage, animation and physics are not
+//! in the manipulator at all; they hang off `ChrIns::Update`, which is untouched.
 //!
-//! That split is the entire mechanism. **Think** and **execute** live in two different vtable
-//! slots, so no-oping one and forwarding the other buys AI-free locomotion with no other change:
-//! `+0x48` is `if (aiIns && ShouldUpdateAi) AiIns::Update(aiIns, dt)` and nothing else -- goal
-//! selection, target acquisition, path replanning, AI timers -- while `+0x50` runs
-//! `AiIns::UpdateMovement` and then consumes `walkType`/`wantToMoveTo` into actual movement.
-//! Damage, animation and physics are not in the manipulator at all; they hang off
-//! `ChrIns::Update`, which is untouched.
+//! Only slot `+0x48` differs from the creature's own table. Every other entry is copied verbatim,
+//! which is what makes the swizzle invisible to the rest of the engine.
 //!
-//! # How a forwarding stub can be sixteen bytes
+//! # WHY THIS REPLACED THE `ChrCtrl+0x3b0` OVERRIDE, MEASURED 2026-09-02
 //!
-//! Every call site in the engine dispatches identically:
+//! The previous design put a separate 55-slot object in `ChrCtrl+0x3b0` -- a manipulator OVERRIDE
+//! slot retail never writes -- whose stubs swapped `rcx` to the real `ComManipulator` and
+//! tail-jumped. Dispatch worked. The problem was that the engine does not only DISPATCH through
+//! that slot: fourteen sites resolve `chrManipulator ?? manipulator` and then use the answer as an
+//! OBJECT. Enumerate them with `find-deobf-field-access.py 0x3b0`.
+//!
+//! The publish and the consume are a matched pair, and the `rcx` swap put them on opposite sides:
 //!
 //! ```text
-//! mov rax, [rdi]      ; the object's vptr
-//! mov rcx, rdi        ; `this`
-//! call [rax+N]        ; the slot
+//! publish:  FUN_1403cdc20(manip, vec)   writes ChrManipulator +0x10 AND +0x70
+//! consume:  FUN_1403cd770(manip, out)   MOVUPS XMM0,[RCX+0x10] ; MOVAPS [RDX],XMM0 ; RET
+//! caller:   FUN_1403cbff0(ChrCtrl*)     resolves chrManipulator ?? manipulator,
+//!                                       then calls FUN_1403cd770 on the result
 //! ```
 //!
-//! so the ONLY thing the engine reads off our object before entering a slot is `[obj+0]`, and
-//! every forwarded body then dereferences its own `this`. A stub therefore only has to swap `rcx`
-//! for the real `ComManipulator` and tail-jump through the real vtable. Arguments in `rdx`/`r8`/
-//! `r9`/`xmm` are untouched, `rax` is a volatile scratch register in the Microsoft x64 ABI, and a
-//! `jmp` leaves the return address exactly where the caller put it -- so the real function returns
-//! straight to the engine and no frame of ours exists at all.
+//! So `[vt+0x50]` published into the REAL object while the consumer read the OVERRIDE's zeroes.
+//! `FUN_1403cd4c0`, called on the same pointer two lines later, reads `+0x20`..`+0x50` and was
+//! starved identically. Runtime telemetry: `staged == published` on the real object with the body
+//! frozen to five decimals.
 //!
-//! # THE TWO SLOTS THAT MUST NOT FORWARD
+//! One object cannot diverge from itself. Swizzling the real manipulator's vptr keeps every field
+//! read and every field write on the same object, and `ChrCtrl+0x3b0` is left NULL -- which also
+//! retires the `ChrCtrl::Unref` DLPanic that the old teardown had to sequence around.
 //!
-//! * **`+0x08`, the scalar deleting destructor.** `ComManipulator`'s calls
-//!   `operator delete(this, 0x170)`. With `rcx` swapped, that frees THE CREATURE'S REAL
-//!   MANIPULATOR out from under the engine. Ours returns `this` and does nothing, which is also
-//!   the correct lifetime answer: nothing in retail calls `[manip+8]` on the override slot, so the
-//!   object is ours to free and the engine never asks.
-//! * **`+0x48`, `UpdateAi`.** No-oped on purpose; that is the feature.
+//! # Why 55 slots
 //!
-//! # Why 55 slots and not the five that are demonstrably reached
+//! `0x1B8` bytes, agreed by three independent oracles: an `.rdata` COL-boundary scan measuring
+//! every one of the eight manipulator vtables at exactly `0x1b8`; Ghidra's curated
+//! `ChrManipulator_vtable` struct at 55 fields / 440 bytes; and both game images separately. The
+//! copy must be the full length or the engine reads past its end -- an under-sized table is not a
+//! smaller feature, it is a shipped crash on whichever slot nobody happened to exercise.
 //!
-//! 55 slots = `0x1B8` bytes, agreed by three independent oracles: an `.rdata` COL-boundary scan
-//! measuring every one of the eight manipulator vtables at exactly `0x1b8`; Ghidra's curated
-//! `ChrManipulator_vtable` struct at 55 fields / 440 bytes; and both game images separately. 36 of
-//! the 55 are demonstrably live on an override manipulator, and a global byte scan finds real
-//! `call`/`jmp [reg+N]` sites for ALL 55 -- so no offset can be ruled out by absence. An
-//! under-sized table is not a smaller feature, it is a shipped crash on whichever slot nobody
-//! happened to exercise.
+//! # Why the RTTI pointer is copied too
 //!
-//! # Why the object is `0x170` zeroed bytes
+//! MSVC puts the `CompleteObjectLocator` at `vptr[-1]`, and `dynamic_cast` and the
+//! `GetRuntimeClassMetadata` paths read it by walking BACKWARDS off the vtable pointer. A copy
+//! that started at slot 0 would leave those reads looking at whatever precedes our allocation, so
+//! the page holds that pointer first and the address we hand out is one slot past it.
 //!
-//! Field layout is irrelevant while `rcx` is swapped -- with ONE exception. The tick dispatcher
-//! does a DIRECT field read, `mov 0xb0(%rdi),%edx`, on the object it dispatched through. It is
-//! gated behind `[vt+0xf8]` returning true, and `ComManipulator`'s `+0xf8` is `xor al,al; ret`, so
-//! today it is unreachable. Sixteen bytes would work today and be one engine branch away from
-//! reading garbage. Mirroring the real `operator delete` size costs a third of a page.
+//! # The one ordering that is a crash
 //!
-//! The real-`ComManipulator` back-pointer therefore lives at `+0x170`, deliberately OUTSIDE
-//! anything the engine believes exists.
-
+//! The page is ours; the OBJECT is the game's. While the swizzle is installed the creature's
+//! manipulator holds a pointer INTO this page, so the original vptr must go back before the page
+//! is freed and before the creature is destroyed. `crate::possess::teardown` sequences that, and
+//! `Step::RestoreManipulatorVtable` is the step whose failure is treated as unrecoverable.
+//!
 // The emitter below is pure byte arithmetic and stays ungated so its tests run on the host; the
 // allocation and install half is `#[cfg(windows)]`.
 #![cfg_attr(not(windows), allow(dead_code))]
-
-use crate::possess::layout::manipulator::COM_SIZE;
 
 /// Slots in a `ChrManipulator` vtable. See the module docs for the three oracles.
 pub(crate) const SLOT_COUNT: usize = 55;
@@ -78,144 +72,85 @@ pub(crate) const SLOT_COUNT: usize = 55;
 /// oracles actually measured, and a test asserts the two agree.
 pub(crate) const VTABLE_BYTES: usize = 0x1b8;
 
-/// `[vt+0x08]` -- the scalar deleting destructor. MUST NOT FORWARD.
+/// `[vt+0x08]` -- the scalar deleting destructor.
+///
+/// It is COPIED VERBATIM, and that is a REVERSAL of the previous design. When the override object
+/// was a separate allocation this slot had to return `this` and do nothing, because forwarding it
+/// would have freed the creature's real manipulator. Now the object IS the creature's real
+/// manipulator, the engine owns its lifetime, and a slot that refused to destroy it would leak the
+/// object and leave a live vptr pointing into a page we free. Verbatim is the only correct answer.
 pub(crate) const SLOT_DESTRUCTOR: usize = 0x08;
 
-/// `[vt+0x48]` -- `UpdateAi`. The slot that is no-oped, and the reason the mod works.
+/// `[vt+0x48]` -- `UpdateAi`. The ONE slot that is replaced, and the reason the mod works.
 pub(crate) const SLOT_UPDATE_AI: usize = 0x48;
 
-/// Byte offset of the real-`ComManipulator` back-pointer inside our object.
+/// The slot we replace must not be the slot that destroys the object.
 ///
-/// Equal to [`COM_SIZE`] on purpose: the engine believes the object is that many bytes, so this is
-/// the first address past everything it can think it owns.
-pub(crate) const BACK_POINTER_OFFSET: usize = COM_SIZE;
+/// A `const` assertion rather than a test, because the consequence is not a wrong answer: a
+/// patched table whose destructor pointed at `xor eax,eax; ret` would leak the creature's
+/// manipulator and leave our freed page in its vptr. That should be a BUILD error.
+const _: () = assert!(SLOT_DESTRUCTOR != SLOT_UPDATE_AI);
 
-/// Bytes in the thunk object: the mirrored `ComManipulator` plus the back-pointer.
-pub(crate) const OBJECT_BYTES: usize = BACK_POINTER_OFFSET + core::mem::size_of::<usize>();
-
-/// Bytes reserved per stub. The longest stub emitted is 16; the rest are padded to the same
-/// stride so a slot's code address is `stubs_base + index * STUB_STRIDE` with no table lookup.
+/// Bytes reserved for the no-op stub, padded so a fall-through lands on a breakpoint.
 pub(crate) const STUB_STRIDE: usize = 16;
 
-/// `int3`. Pads every stub out to [`STUB_STRIDE`] so a fall-through off the end of one lands on a
-/// breakpoint rather than running headlong into the next slot's code.
+/// The MSVC RTTI `CompleteObjectLocator` pointer, which lives at `vptr[-1]`.
+///
+/// Part of the copy even though it is not a slot: `dynamic_cast` and the `GetRuntimeClassMetadata`
+/// paths read it by walking BACKWARDS off the vtable pointer, so a copy that starts at slot 0
+/// leaves those reads looking at whatever happens to precede our allocation.
+pub(crate) const RTTI_SLOT_BYTES: usize = core::mem::size_of::<usize>();
+
+/// `int3`. Pads the stub out to [`STUB_STRIDE`].
 const INT3: u8 = 0xcc;
 
-/// What one vtable slot does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SlotKind {
-    /// Swap `rcx` to the real `ComManipulator` and tail-jump through its vtable at the same
-    /// offset.
-    Forward,
-    /// `xor eax,eax; ret`. Used for `UpdateAi`: the callers treat it as `void`, and returning zero
-    /// is also the right answer for any of them that reads `al`.
-    NoOp,
-    /// `mov rax,rcx; ret`. The scalar deleting destructor contract is "return `this`", and doing
-    /// exactly that without deleting is what keeps the creature's real manipulator alive.
-    ReturnThis,
-}
-
-/// What slot at `offset` does. The whole policy, in one place, so the table and the tests read the
-/// same rule rather than agreeing by coincidence.
-#[must_use]
-pub(crate) const fn slot_kind(offset: usize) -> SlotKind {
-    match offset {
-        SLOT_DESTRUCTOR => SlotKind::ReturnThis,
-        SLOT_UPDATE_AI => SlotKind::NoOp,
-        _ => SlotKind::Forward,
-    }
-}
-
-/// The machine code for one slot, padded to [`STUB_STRIDE`].
+/// The no-op that replaces `UpdateAi`.
 ///
-/// `offset` is the slot's byte offset in the vtable, i.e. `index * 8`.
+/// `xor eax, eax; ret` -- the same body `ComManipulator`'s own `[vt+0xf8]` already has, so it is a
+/// shape the engine tolerates from a manipulator. `rcx` is untouched because with the vtable
+/// swizzled there is nothing to swap: `this` already IS the real `ComManipulator`.
 #[must_use]
-pub(crate) fn stub_bytes(offset: usize) -> [u8; STUB_STRIDE] {
+pub(crate) fn no_op_stub_bytes() -> [u8; STUB_STRIDE] {
     let mut out = [INT3; STUB_STRIDE];
-    let code: &[u8] = match slot_kind(offset) {
-        // 48 8b c1  mov rax, rcx
-        // c3        ret
-        SlotKind::ReturnThis => &[0x48, 0x8b, 0xc1, 0xc3],
-        // 31 c0     xor eax, eax
-        // c3        ret
-        SlotKind::NoOp => &[0x31, 0xc0, 0xc3],
-        SlotKind::Forward => {
-            // 48 8b 89 <disp32=BACK_POINTER_OFFSET>  mov rcx, [rcx + 0x170]   ; the real Com
-            // 48 8b 01                               mov rax, [rcx]           ; its vptr
-            // ff a0 <disp32=offset>                  jmp qword ptr [rax + N]  ; tail call
-            let back = (BACK_POINTER_OFFSET as u32).to_le_bytes();
-            let slot = (offset as u32).to_le_bytes();
-            out[0] = 0x48;
-            out[1] = 0x8b;
-            out[2] = 0x89;
-            out[3..7].copy_from_slice(&back);
-            out[7] = 0x48;
-            out[8] = 0x8b;
-            out[9] = 0x01;
-            out[10] = 0xff;
-            out[11] = 0xa0;
-            out[12..16].copy_from_slice(&slot);
-            return out;
-        }
-    };
-    out[..code.len()].copy_from_slice(code);
+    // 31 c0  xor eax, eax
+    // c3     ret
+    out[..3].copy_from_slice(&[0x31, 0xc0, 0xc3]);
     out
 }
 
-/// The whole stub block, one [`STUB_STRIDE`]-byte entry per slot, in vtable order.
+/// The patched vtable: the creature's own, with [`SLOT_UPDATE_AI`] pointed at the no-op.
+///
+/// Every other slot is the ORIGINAL function pointer, so there are no stubs, no `rcx` swap and no
+/// second object -- which is the whole point. The divergence the previous design created (the
+/// engine writing fields on one object while fourteen consumers read them off another) cannot
+/// exist when there is only one object.
 #[must_use]
-pub(crate) fn stub_block() -> Vec<u8> {
-    let mut out = Vec::with_capacity(SLOT_COUNT * STUB_STRIDE);
-    for index in 0..SLOT_COUNT {
-        out.extend_from_slice(&stub_bytes(index * core::mem::size_of::<usize>()));
+pub(crate) fn patched_vtable(original: &[usize], no_op_at: usize) -> Vec<usize> {
+    let mut out = original.to_vec();
+    if let Some(slot) = out.get_mut(SLOT_UPDATE_AI / core::mem::size_of::<usize>()) {
+        *slot = no_op_at;
     }
     out
 }
 
-/// The vtable, given the address the stub block will live at.
-///
-/// Separate from [`stub_block`] so both are testable without a `VirtualAlloc`: hand it any base
-/// and check the arithmetic.
-#[must_use]
-pub(crate) fn vtable_for(stubs_base: usize) -> Vec<usize> {
-    (0..SLOT_COUNT)
-        .map(|index| stubs_base + index * STUB_STRIDE)
-        .collect()
-}
-
-/// Where each piece sits inside the single page the thunk is built in.
-///
-/// One allocation for all three because they have the same lifetime and because a
-/// `PAGE_EXECUTE_READWRITE` page satisfies all three requirements at once: the object must be
-/// writable, the vtable readable, the stubs executable.
+/// Where each piece sits inside the single page.
 pub(crate) mod plan {
-    use super::{OBJECT_BYTES, SLOT_COUNT, STUB_STRIDE, VTABLE_BYTES};
+    use super::{RTTI_SLOT_BYTES, STUB_STRIDE, VTABLE_BYTES};
 
-    /// The thunk object, first, so its address IS the allocation's address.
-    pub(crate) const OBJECT_AT: usize = 0;
-    /// Bytes reserved for the object: [`OBJECT_BYTES`] (`0x178`) rounded up to 16.
-    ///
-    /// A LITERAL rather than `OBJECT_BYTES.next_multiple_of(16)`, and the assertions below are
-    /// what make that safe. The repo's `scripts/rva_symbols.py` resolver evaluates the constants
-    /// in this tree to decide whether a given address is claimed by any of them, and a constant it
-    /// CANNOT evaluate becomes wide residue -- it might be anything, so no address can be proven
-    /// unclaimed and the audits built on that lose the ability to say "nothing declares this".
-    /// `next_multiple_of` is a method call, which that resolver does not evaluate, and it made
-    /// three constants here unresolvable and the resolver's own selftest go red. The value is
-    /// pinned instead, and the two `const` assertions turn any drift into a build error.
-    pub(crate) const OBJECT_REGION_BYTES: usize = 0x180;
-    /// The vtable, 16-aligned past the object.
-    pub(crate) const VTABLE_AT: usize = OBJECT_AT + OBJECT_REGION_BYTES;
-    /// The stub block.
-    pub(crate) const STUBS_AT: usize = VTABLE_AT + VTABLE_BYTES;
+    /// The copied `vptr[-1]` RTTI pointer, first, so the vtable that follows is what we hand out.
+    pub(crate) const RTTI_AT: usize = 0;
+    /// The vtable proper. THIS address is what goes in the object's vptr.
+    pub(crate) const VTABLE_AT: usize = RTTI_AT + RTTI_SLOT_BYTES;
+    /// The single no-op stub.
+    pub(crate) const STUB_AT: usize = VTABLE_AT + VTABLE_BYTES;
     /// Total bytes to reserve.
-    pub(crate) const TOTAL_BYTES: usize = STUBS_AT + SLOT_COUNT * STUB_STRIDE;
+    pub(crate) const TOTAL_BYTES: usize = STUB_AT + STUB_STRIDE;
 
-    /// The object region must hold the whole object and leave the vtable 16-aligned.
-    const _: () = assert!(OBJECT_REGION_BYTES >= OBJECT_BYTES);
-    const _: () = assert!(OBJECT_REGION_BYTES.is_multiple_of(16));
-    /// ...and one rounding step is all it may be, or the layout has silently grown a hole.
-    const _: () = assert!(OBJECT_REGION_BYTES - OBJECT_BYTES < 16);
+    /// The vtable must stay 8-aligned, which it is because the RTTI slot is one pointer.
+    const _: () = assert!(VTABLE_AT.is_multiple_of(8));
+    /// ...and the whole thing must fit in one page, which is what makes a single `VirtualAlloc`
+    /// the right shape.
+    const _: () = assert!(TOTAL_BYTES <= 0x1000);
 }
 
 #[cfg(windows)]
@@ -223,8 +158,8 @@ pub(crate) use windows_impl::Thunk;
 
 #[cfg(windows)]
 mod windows_impl {
-    use super::{OBJECT_BYTES, SLOT_COUNT, plan, stub_block, vtable_for};
-    use crate::possess::layout::manipulator::COM_SIZE;
+    use super::{RTTI_SLOT_BYTES, SLOT_COUNT, no_op_stub_bytes, patched_vtable, plan};
+    use er_game_base::mem::{is_heap_aligned_ptr, safe_read_usize};
 
     unsafe extern "system" {
         fn VirtualAlloc(
@@ -241,29 +176,50 @@ mod windows_impl {
     const MEM_RELEASE: u32 = 0x8000;
     const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
-    /// A live thunk manipulator: one page holding the object, its vtable and its 55 stubs.
+    /// A patched vtable for ONE creature's real `ComManipulator`, plus the original vptr to put
+    /// back.
     ///
-    /// # Lifetime
+    /// # Lifetime, and the one ordering that is a crash
     ///
-    /// Owned by us and by nothing else -- retail never calls `[manip+8]` on the override slot, so
-    /// the engine will never try to delete it. Dropping this frees the page, and the ONLY safe
-    /// moment to do that is after `ChrCtrl+0x3b0` has been nulled; the teardown state machine in
-    /// [`crate::possess::teardown`] is what enforces that order.
+    /// The page is ours; the OBJECT is the game's. While the swizzle is installed the creature's
+    /// manipulator holds a pointer INTO this page, so freeing it before restoring the original
+    /// vptr leaves the engine dispatching through unmapped memory on its next tick. The restore
+    /// must therefore run before `Drop`, and the teardown state machine in
+    /// [`crate::possess::teardown`] is what enforces that order -- the same guarantee it used to
+    /// give the `ChrCtrl+0x3b0` write, for the same reason.
     #[derive(Debug)]
     pub(crate) struct Thunk {
         page: *mut u8,
+        real_com: usize,
+        original_vptr: usize,
     }
 
     // The page is reached only from the game task thread, and the raw pointer is the reason the
-    // compiler cannot see that. `PossessionEngine` requires `Send`, so say it explicitly rather
-    // than storing a `usize` and casting at every use.
+    // compiler cannot see that. `PossessionEngine` requires `Send`, so say it explicitly.
     unsafe impl Send for Thunk {}
 
     impl Thunk {
-        /// Build a thunk that forwards to `real_com`.
+        /// Copy `real_com`'s vtable, patch `UpdateAi` out of the copy, and keep the original.
         ///
-        /// Returns `None` when the page cannot be reserved, which is the only way this fails.
+        /// Nothing is installed here -- the swizzle is a separate step, so a failure to build
+        /// leaves the creature completely untouched.
+        ///
+        /// Returns `None` when the manipulator's vtable will not read or the page cannot be
+        /// reserved. Both are refusals, not partial states.
         pub(crate) fn build(real_com: usize) -> Option<Self> {
+            let original_vptr = unsafe { safe_read_usize(real_com) }?;
+            if !unsafe { is_heap_aligned_ptr(original_vptr) } {
+                return None;
+            }
+            // The whole table plus the RTTI pointer one slot BEFORE it, every read checked: a
+            // manipulator whose table is not fully mapped is one to decline, not one to copy
+            // garbage out of.
+            let rtti = unsafe { safe_read_usize(original_vptr.checked_sub(RTTI_SLOT_BYTES)?) }?;
+            let mut slots = Vec::with_capacity(SLOT_COUNT);
+            for index in 0..SLOT_COUNT {
+                slots.push(unsafe { safe_read_usize(original_vptr + index * 8) }?);
+            }
+
             let page = unsafe {
                 VirtualAlloc(
                     core::ptr::null_mut(),
@@ -276,52 +232,41 @@ mod windows_impl {
             if page.is_null() {
                 return None;
             }
-            // `MEM_COMMIT` pages arrive zeroed, which is exactly the `0x170` of zeroed object the
-            // design asks for. Written out anyway: the guarantee is the platform's, the
-            // requirement is ours, and one memset is cheaper than the reader having to know that.
             unsafe { core::ptr::write_bytes(page, 0, plan::TOTAL_BYTES) };
 
-            let stubs_base = page as usize + plan::STUBS_AT;
-            let stubs = stub_block();
+            let stub = no_op_stub_bytes();
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    stubs.as_ptr(),
-                    page.add(plan::STUBS_AT),
-                    stubs.len(),
-                )
-            };
-            let vtable = vtable_for(stubs_base);
+                core::ptr::copy_nonoverlapping(stub.as_ptr(), page.add(plan::STUB_AT), stub.len());
+            }
+            let table = patched_vtable(&slots, page as usize + plan::STUB_AT);
             unsafe {
+                page.add(plan::RTTI_AT).cast::<usize>().write(rtti);
                 core::ptr::copy_nonoverlapping(
-                    vtable.as_ptr(),
+                    table.as_ptr(),
                     page.add(plan::VTABLE_AT).cast::<usize>(),
                     SLOT_COUNT,
-                )
-            };
-            // The object: vptr at +0, the real Com at +0x170, zeroes in between.
-            let object = unsafe { page.add(plan::OBJECT_AT) };
-            unsafe {
-                object
-                    .cast::<usize>()
-                    .write(page as usize + plan::VTABLE_AT);
-                object.add(COM_SIZE).cast::<usize>().write(real_com);
+                );
             }
-            Some(Self { page })
+            Some(Self {
+                page,
+                real_com,
+                original_vptr,
+            })
         }
 
-        /// The address to write into `ChrCtrl+0x3b0`.
-        pub(crate) fn object_address(&self) -> usize {
-            self.page as usize + plan::OBJECT_AT
+        /// The vtable pointer this thunk hands the creature's manipulator.
+        pub(crate) fn vtable_address(&self) -> usize {
+            self.page as usize + plan::VTABLE_AT
         }
 
-        /// The real `ComManipulator` this thunk forwards to, read back out of the object.
+        /// The real `ComManipulator` whose vtable this patches.
         pub(crate) fn real_com(&self) -> usize {
-            unsafe {
-                self.page
-                    .add(plan::OBJECT_AT + COM_SIZE)
-                    .cast::<usize>()
-                    .read()
-            }
+            self.real_com
+        }
+
+        /// The vptr that was there before, and the value the restore puts back.
+        pub(crate) fn original_vptr(&self) -> usize {
+            self.original_vptr
         }
     }
 
@@ -332,21 +277,18 @@ mod windows_impl {
             unsafe { VirtualFree(self.page.cast(), 0, MEM_RELEASE) };
         }
     }
-
-    /// The object must mirror the real `ComManipulator` plus room for our back-pointer.
-    const _: () = assert!(OBJECT_BYTES == COM_SIZE + 8);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `[vt+0x10]` -- `GetManipulatorType`. Not a production constant, because production does
-    /// nothing special with it: the tick dispatcher calls it every frame and requires a nonzero
-    /// answer, and other sites compare it against 5 (`Com`) and 6 (`Ride`), all of which the
-    /// ORDINARY forwarding rule already delivers with no constant of ours to get wrong. It is
-    /// named here so the test below can state that as a property rather than leaving it to luck.
-    const SLOT_MANIPULATOR_TYPE: usize = 0x10;
+    /// A stand-in for a creature's real vtable: 55 distinct, recognisable pointers.
+    fn original_table() -> Vec<usize> {
+        (0..SLOT_COUNT)
+            .map(|index| 0x1_4000_0000 + index * 0x10)
+            .collect()
+    }
 
     /// THE SIZE THAT IS A CRASH IF IT IS WRONG. Three oracles say 55 slots / `0x1b8` bytes, and
     /// the engine reads past a shorter table.
@@ -355,137 +297,78 @@ mod tests {
         assert_eq!(SLOT_COUNT, 55);
         assert_eq!(VTABLE_BYTES, 0x1b8);
         assert_eq!(SLOT_COUNT * core::mem::size_of::<usize>(), VTABLE_BYTES);
-        assert_eq!(vtable_for(0x1000).len(), SLOT_COUNT);
     }
 
-    /// Every slot gets a stub, at a predictable stride, and the block is exactly that long.
+    /// EXACTLY ONE SLOT DIFFERS, and it is `UpdateAi`. Everything else is the creature's own
+    /// function pointer -- that is what makes the swizzle invisible to every consumer, and it is
+    /// the property the previous design could not have because it emitted 55 stubs of its own.
     #[test]
-    fn the_stub_block_holds_one_padded_stub_per_slot() {
-        let block = stub_block();
-        assert_eq!(block.len(), SLOT_COUNT * STUB_STRIDE);
+    fn the_patched_table_changes_update_ai_and_nothing_else() {
+        let original = original_table();
+        let patched = patched_vtable(&original, 0xdead_0000);
+        assert_eq!(patched.len(), SLOT_COUNT);
+        let update_ai = SLOT_UPDATE_AI / core::mem::size_of::<usize>();
         for index in 0..SLOT_COUNT {
-            let at = index * STUB_STRIDE;
-            assert_eq!(
-                &block[at..at + STUB_STRIDE],
-                &stub_bytes(index * 8)[..],
-                "slot {index} ({:#x})",
-                index * 8
-            );
-        }
-    }
-
-    /// THE SLOT THAT WOULD FREE THE CREATURE'S REAL MANIPULATOR. It returns `this` and touches
-    /// nothing -- in particular it must not contain the forwarding tail-jump.
-    #[test]
-    fn the_destructor_slot_returns_this_and_does_not_forward() {
-        assert_eq!(slot_kind(SLOT_DESTRUCTOR), SlotKind::ReturnThis);
-        let stub = stub_bytes(SLOT_DESTRUCTOR);
-        // mov rax, rcx ; ret
-        assert_eq!(&stub[..4], &[0x48, 0x8b, 0xc1, 0xc3]);
-        assert!(
-            !stub.windows(2).any(|w| w == [0xff, 0xa0]),
-            "no jmp [rax+N]"
-        );
-        assert!(stub[4..].iter().all(|&b| b == INT3));
-    }
-
-    /// THE SLOT THE WHOLE FEATURE IS. `UpdateAi` returns without calling the creature's brain.
-    #[test]
-    fn the_update_ai_slot_is_a_no_op() {
-        assert_eq!(slot_kind(SLOT_UPDATE_AI), SlotKind::NoOp);
-        let stub = stub_bytes(SLOT_UPDATE_AI);
-        // xor eax, eax ; ret
-        assert_eq!(&stub[..3], &[0x31, 0xc0, 0xc3]);
-        assert!(
-            !stub.windows(2).any(|w| w == [0xff, 0xa0]),
-            "no jmp [rax+N]"
-        );
-    }
-
-    /// The other 53 forward, and each targets ITS OWN offset -- a stub that jumped through the
-    /// wrong slot would run a plausible-looking wrong function.
-    #[test]
-    fn every_other_slot_forwards_through_its_own_offset() {
-        let mut forwarded = 0;
-        for index in 0..SLOT_COUNT {
-            let offset = index * 8;
-            if offset == SLOT_DESTRUCTOR || offset == SLOT_UPDATE_AI {
-                continue;
+            if index == update_ai {
+                assert_eq!(patched[index], 0xdead_0000, "the no-op");
+            } else {
+                assert_eq!(
+                    patched[index], original[index],
+                    "slot {index} must be verbatim"
+                );
             }
-            forwarded += 1;
-            let stub = stub_bytes(offset);
-            // mov rcx, [rcx + BACK_POINTER_OFFSET]
-            assert_eq!(&stub[..3], &[0x48, 0x8b, 0x89], "slot {offset:#x} prologue");
-            assert_eq!(
-                u32::from_le_bytes(stub[3..7].try_into().unwrap()),
-                BACK_POINTER_OFFSET as u32,
-                "slot {offset:#x} reads the back-pointer"
-            );
-            // mov rax, [rcx]
-            assert_eq!(&stub[7..10], &[0x48, 0x8b, 0x01], "slot {offset:#x} vptr");
-            // jmp qword ptr [rax + offset]
-            assert_eq!(&stub[10..12], &[0xff, 0xa0], "slot {offset:#x} tail jump");
-            assert_eq!(
-                u32::from_le_bytes(stub[12..16].try_into().unwrap()),
-                offset as u32,
-                "slot {offset:#x} jumps through its OWN slot"
-            );
         }
-        assert_eq!(forwarded, 53, "55 slots, two of which do not forward");
     }
 
-    /// `GetManipulatorType` is called every frame and must answer 5 (`Com`). Forwarding is what
-    /// delivers that, so it must not have been swept into the no-op list.
+    /// THE SLOT THAT REVERSED MEANING WITH THIS DESIGN, and the one that crashes if it is wrong.
+    ///
+    /// With a separate override object the destructor had to return `this`, because forwarding it
+    /// would free the creature's real manipulator. The object IS that manipulator now, so the
+    /// engine's own destructor is the only correct body: refusing it would leak the object and
+    /// leave our freed page in its vptr.
     #[test]
-    fn get_manipulator_type_forwards_so_the_answer_is_the_real_one() {
-        assert_eq!(slot_kind(SLOT_MANIPULATOR_TYPE), SlotKind::Forward);
+    fn the_destructor_slot_is_copied_verbatim_and_is_not_the_no_op() {
+        let original = original_table();
+        let patched = patched_vtable(&original, 0xdead_0000);
+        let destructor = SLOT_DESTRUCTOR / core::mem::size_of::<usize>();
+        assert_eq!(patched[destructor], original[destructor]);
+        assert_ne!(patched[destructor], 0xdead_0000);
+        // ...and it is a different slot from the one we do replace.
+        assert_ne!(SLOT_DESTRUCTOR, SLOT_UPDATE_AI);
     }
 
-    /// The back-pointer must live past everything the engine believes the object contains --
-    /// including the `mov 0xb0(%rdi),%edx` direct read the tick dispatcher makes.
+    /// The no-op returns false and touches nothing. `rcx` in particular is untouched, because
+    /// `this` is already the object the engine meant to call.
     #[test]
-    fn the_back_pointer_sits_outside_the_mirrored_com_manipulator() {
-        assert_eq!(BACK_POINTER_OFFSET, COM_SIZE);
-        assert_eq!(BACK_POINTER_OFFSET, 0x170);
-        const { assert!(BACK_POINTER_OFFSET > 0xb0, "past the direct field read") };
-        assert_eq!(OBJECT_BYTES, 0x178);
+    fn the_update_ai_stub_is_xor_eax_ret_and_padded_to_a_breakpoint() {
+        let stub = no_op_stub_bytes();
+        assert_eq!(&stub[..3], &[0x31, 0xc0, 0xc3]);
+        assert!(stub[3..].iter().all(|&byte| byte == INT3));
+        assert_eq!(stub.len(), STUB_STRIDE);
+        // No jump of any kind: a forwarding byte pair here would call the creature's brain.
+        assert!(!stub.windows(2).any(|pair| pair == [0xff, 0xa0]));
     }
 
-    /// The page layout must not overlap and must fit in a single 4 KiB page -- the object is
-    /// written through, the vtable is read as `usize`, and the stubs are executed.
+    /// The RTTI pointer is INSIDE the allocation and BEFORE the vtable, or `dynamic_cast` reads
+    /// whatever precedes our page.
     #[test]
-    fn the_page_plan_is_ordered_aligned_and_fits_one_page() {
-        assert_eq!(plan::OBJECT_AT, 0);
-        const { assert!(plan::VTABLE_AT >= plan::OBJECT_AT + OBJECT_BYTES) };
-        assert_eq!(plan::VTABLE_AT % 16, 0, "vtable is pointer-aligned");
-        assert_eq!(plan::STUBS_AT, plan::VTABLE_AT + VTABLE_BYTES);
-        assert_eq!(plan::TOTAL_BYTES, plan::STUBS_AT + SLOT_COUNT * STUB_STRIDE);
-        const { assert!(plan::TOTAL_BYTES <= 0x1000, "one page") };
+    fn the_rtti_slot_sits_one_pointer_before_the_vtable() {
+        assert_eq!(plan::VTABLE_AT - plan::RTTI_AT, RTTI_SLOT_BYTES);
+        assert_eq!(RTTI_SLOT_BYTES, core::mem::size_of::<usize>());
+        assert_eq!(plan::STUB_AT, plan::VTABLE_AT + VTABLE_BYTES);
+        assert_eq!(plan::TOTAL_BYTES, plan::STUB_AT + STUB_STRIDE);
     }
 
-    /// A vtable built at a base has each entry pointing at its own stub, which is the arithmetic
-    /// the `VirtualAlloc` path performs and the only part of it that can be checked on the host.
+    /// A short table must not be padded with invented slots, and the patch must not land off the
+    /// end of one -- both would be a call through zero.
     #[test]
-    fn the_vtable_entries_point_at_their_own_stubs() {
-        let base = 0x1_0000_0000_usize;
-        let vtable = vtable_for(base);
-        for (index, entry) in vtable.iter().enumerate() {
-            assert_eq!(*entry, base + index * STUB_STRIDE);
-        }
-        // ...and no two slots share a stub.
-        let mut sorted = vtable.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), SLOT_COUNT);
-    }
-
-    /// Padding is `int3`, not zero: `00 00` decodes as `add [rax],al` and would run on into the
-    /// next slot's code, which is the quietest possible way to execute the wrong function.
-    #[test]
-    fn short_stubs_are_padded_with_breakpoints() {
-        for offset in [SLOT_DESTRUCTOR, SLOT_UPDATE_AI] {
-            let stub = stub_bytes(offset);
-            assert_eq!(*stub.last().unwrap(), INT3, "slot {offset:#x}");
-        }
+    fn a_short_original_table_is_copied_as_far_as_it_goes_and_no_further() {
+        let short: Vec<usize> = vec![0x1234; 4];
+        let patched = patched_vtable(&short, 0xdead_0000);
+        assert_eq!(patched.len(), 4, "no invented slots");
+        assert!(
+            patched.iter().all(|&slot| slot == 0x1234),
+            "and no patch off the end"
+        );
     }
 }

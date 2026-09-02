@@ -760,9 +760,17 @@ pub(crate) mod chr_physics_module {
 
 /// `ComManipulator`, and the `AiIns` reached through it.
 pub(crate) mod manipulator {
-    /// `operator delete(this, 0x170)` in `ComManipulator`'s scalar deleting destructor. The thunk
-    /// mirrors exactly this many bytes so that a field read the engine performs on what it
-    /// believes is a `ComManipulator` lands on our zeroed memory rather than past the end of it.
+    /// `operator delete(this, 0x170)` in `ComManipulator`'s scalar deleting destructor.
+    ///
+    /// It used to size the thunk: the old design mirrored exactly this many zeroed bytes so a
+    /// field read the engine performed on what it believed was a `ComManipulator` landed inside
+    /// our object rather than past the end of it. That mirroring is what broke locomotion --
+    /// fourteen consumers read the mirror's zeroes while the engine wrote the real object -- and
+    /// the vtable swizzle that replaced it allocates no object at all.
+    ///
+    /// The constant stays as the BOUND on every field offset in this module: an offset at or past
+    /// it is not a field of this struct, and the assertion below is the only thing standing
+    /// between a typo'd offset and a write into the allocator's next block.
     pub(crate) const COM_SIZE: usize = 0x170;
     /// `ComManipulator.aiIns`.
     pub(crate) const AI_INS: usize = 0xc0;
@@ -819,6 +827,15 @@ pub(crate) mod manipulator {
     /// [`super::super::game::Chr::published_move_vector`], which is the only reason this offset is
     /// named rather than left inside the note above.
     pub(crate) const PUBLISHED_MOVE_VECTOR: usize = 0x10;
+
+    /// Every offset above names a field INSIDE the object the engine allocates. A build error is
+    /// the right answer for one that does not, because the writes in
+    /// [`crate::possess::game`] would land in whatever the allocator put next.
+    const _: () = assert!(PENDING_MOVE_VECTOR + 16 <= COM_SIZE);
+    const _: () = assert!(PUBLISHED_MOVE_VECTOR + 16 <= COM_SIZE);
+    const _: () = assert!(COM_THINK_OWNER < COM_SIZE);
+    const _: () = assert!(AI_INS < COM_SIZE);
+    const _: () = assert!(OWNING_CHR < COM_SIZE);
     /// `ComManipulator.comThinkOwner` -- an **INLINE `CSComThinkOwner` member, not a pointer**.
     ///
     /// This is the fact that makes the canary exact rather than a plausibility screen.

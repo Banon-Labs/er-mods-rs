@@ -53,7 +53,7 @@
 //! `ChrCtrl::Unref`, which DLPanics on a non-null `ChrCtrl+0x3b0`. So despawn must come AFTER the
 //! manipulator override is cleared, and that is not a comment: it is
 //! `crate::possess::teardown::Step::DespawnCreature`'s discriminant, sitting after
-//! `ClearManipulatorOverride`, with a test that fails if anyone reorders them.
+//! `RestoreManipulatorVtable`, with a test that fails if anyone reorders them.
 
 pub(crate) mod placement;
 pub(crate) mod readiness;
