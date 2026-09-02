@@ -92,11 +92,50 @@ import argparse
 import difflib
 import importlib.util
 import os
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OLD_IMAGE = os.path.join(ROOT, "eldenring-deobf.bin")
-NEW_IMAGE = os.path.join(ROOT, "eldenring-deobf-1.17.bin")
+def _deobf_image(env_var: str, filename: str) -> str:
+    """Where the flat de-Arxan'd image actually is, from ANY checkout of this repo.
+
+    Three answers in priority order, and the middle one is the reason this exists:
+
+    1. `$<env_var>`, for a copy kept somewhere else entirely.
+    2. Beside this checkout -- the developer case, and the only one the plain
+       `os.path.join(ROOT, ...)` this replaced could express.
+    3. Beside the MAIN checkout, when we are running from a `git worktree`. A worktree is a
+       separate directory with its own `scripts/`, so `ROOT` points at a tree where these
+       gitignored multi-hundred-MB artifacts were never copied. `--git-common-dir` names the
+       original checkout's `.git`, whose parent is the tree they DO live beside.
+       `scripts/disas-deobf.sh` has resolved them this way for a while; the Python gates did not,
+       so `check.sh` died with `FileNotFoundError` on a path that looks right the moment an agent
+       ran it from a worktree.
+
+    Falls back to the local path when every lookup misses, so the error message still names the
+    place a developer would expect the file to be.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    local = os.path.join(ROOT, filename)
+    if os.path.exists(local):
+        return local
+    try:
+        common = subprocess.run(
+            ["git", "-C", ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return local
+    shared = os.path.join(os.path.dirname(common), filename) if common else ""
+    return shared if shared and os.path.exists(shared) else local
+
+OLD_IMAGE = _deobf_image("ER_DEOBF_BIN", "eldenring-deobf.bin")
+NEW_IMAGE = _deobf_image("ER_DEOBF_BIN_1170", "eldenring-deobf-1.17.bin")
 MAP_TSV = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.tsv")
 BASE = 0x140000000
 # Instructions decoded per side. Long enough to run past a prologue into the body that actually

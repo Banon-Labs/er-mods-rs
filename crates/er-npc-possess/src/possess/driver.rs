@@ -11,6 +11,7 @@ use er_game_base::game_build::{describe_build, game_file_version};
 
 use crate::camera;
 use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
+use crate::hud;
 use crate::input::FaceEdges;
 use crate::log::possess_log;
 use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion};
@@ -242,6 +243,13 @@ impl NpcPossessionEngine {
         let thunk_address = state.thunk.object_address();
         let release_point = state.release_point();
         run.run(|step| match step {
+            // Infallible -- one atomic store -- so this always reports success. It is a step
+            // rather than a line at the top of this function because the ORDER is the thing the
+            // state machine exists to enforce: every step below reads through the creature.
+            Step::StopHudRetarget => {
+                hud::stop();
+                true
+            }
             Step::RestoreBody => Self::restore(&state),
             // Nothing to undo: the per-frame driver stops the moment `active` is `None`, which
             // happened at the `take()` above. The step exists so the ORDER is a thing the state
@@ -385,7 +393,12 @@ impl NpcPossessionEngine {
                         crate::config::DERIVED_CONFIG_FILE_NAME,
                         state.chr_id,
                     ));
-                    Self::write_derived(state.chr_id, &state.camera, Some(dispatcher));
+                    Self::write_derived(
+                        state.chr_id,
+                        &state.camera,
+                        state.creature,
+                        Some(dispatcher),
+                    );
                     return;
                 }
             }
@@ -478,16 +491,24 @@ impl NpcPossessionEngine {
     /// worth more than a report about it. A failed write is silent because the only thing lost is
     /// a diagnostic, and a log line about failing to write a log-adjacent file is noise.
     ///
-    /// The camera block is appended rather than interleaved so the two layers own separate halves
-    /// of one file; `camera` is taken as a plain reference rather than reached through `state`
-    /// because the moveset call site is holding a mutable borrow of a sibling field.
-    fn write_derived(chr_id: u32, camera: &camera::Session, dispatcher: Option<&Dispatcher>) {
+    /// The camera and HUD blocks are appended rather than interleaved, so each layer owns its own
+    /// stretch of one file. `camera` is taken as a plain reference rather than reached through
+    /// `state` because the moveset call site is holding a mutable borrow of a sibling field.
+    fn write_derived(
+        chr_id: u32,
+        camera: &camera::Session,
+        creature: Chr,
+        dispatcher: Option<&Dispatcher>,
+    ) {
         let mut text = match dispatcher {
             Some(dispatcher) => {
                 derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary())
             }
-            // A creature with no shipped moveset still gets a file, because it still gets a
-            // camera. `render` already has a block for a moveset that is empty.
+            // WRITTEN ANYWAY for a creature with no shipped moveset, because it still gets a
+            // camera and still gets the HUD block -- and skipping the write would leave the
+            // PREVIOUS possession's file on disk, describing a different character, which is
+            // worse than no report when its whole job is to explain numbers the player is
+            // looking at right now. `render` already has a block for a moveset that is empty.
             None => derived::render(
                 chr_id,
                 &moveset_table::Moveset::default(),
@@ -495,7 +516,21 @@ impl NpcPossessionEngine {
             ),
         };
         text.push_str(&camera.derived_block(chr_id));
+        text.push_str(&Self::hud_block(chr_id, creature));
         let _ = std::fs::write(crate::config::DERIVED_CONFIG_FILE_NAME, text);
+    }
+
+    /// The `[hud]` block: which character the bars are reading, and why, for THIS creature.
+    fn hud_block(chr_id: u32, creature: Chr) -> String {
+        let decision = match hud::outcome().off_reason() {
+            Some(off) => hud::Decision::Off(off),
+            None if !crate::config::hud().enabled => hud::Decision::Off(hud::Off::Disabled),
+            None => match hud::read_source(creature.address()) {
+                Some(source) => hud::Decision::Driving(source),
+                None => hud::Decision::Off(hud::Off::Unreadable),
+            },
+        };
+        hud::render_derived(chr_id, &decision)
     }
 
     /// One frame of an active possession. Called from the FrameBegin task.
@@ -562,6 +597,15 @@ impl NpcPossessionEngine {
             Self::write_derived(state.chr_id, &state.camera, state.moveset.as_ref());
         }
         state.camera.reassert();
+
+        // Point the HUD at the creature, EVERY frame rather than once at possession start, so
+        // that toggling `[hud] enabled` in the config file takes effect mid-possession like every
+        // other live table. Two atomic loads and a store; the detour itself does the work.
+        if crate::config::hud().enabled {
+            hud::follow(state.creature.address());
+        } else {
+            hud::stop();
+        }
 
         // Co-locate: the player's real body follows the creature, which is what keeps the net
         // position, the compass and the release point all correct with one mechanism.
@@ -855,7 +899,10 @@ impl NpcPossessionEngine {
                 ));
             }
             None => possess_log(format_args!(
-                "moveset: c{chr_id:04} is not in the shipped table, so this character has no                  attacks. That is expected for a variant that owns a model but no animations of                  its own -- 163 of the 408 the offline sweep looked at are like that. Movement,                  camera and release all still work."
+                "moveset: c{chr_id:04} is not in the shipped table, so this character has no \
+                 attacks. That is expected for a variant that owns a model but no animations of \
+                 its own -- 163 of the 408 the offline sweep looked at are like that. Movement, \
+                 camera, the HUD and release all still work."
             )),
         }
         possess_log(format_args!(

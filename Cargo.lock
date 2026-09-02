@@ -3052,6 +3052,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-game-base",
+ "er-hook",
  "er-hotkey-config",
  "er-invasion-warp-core",
  "fromsoftware-shared",

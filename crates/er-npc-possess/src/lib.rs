@@ -20,19 +20,22 @@
 //! # What it touches in the game
 //!
 //! One recurring `FrameBegin` task and two Win32 input reads inside it, plus -- only while
-//! something is possessed -- a handful of struct-field writes on two `ChrIns`. It installs **NO
-//! detour**, patches no param and claims no prologue, so it stays co-loadable with every other
-//! shell in this profile. See `input` for why polling rather than hooking is the smaller claim
-//! rather than the lazier one.
+//! something is possessed -- a handful of struct-field writes on two `ChrIns`. See `input` for
+//! why polling rather than hooking is the smaller claim rather than the lazier one, and
+//! [`possess::game`] for why the possession engine itself needed almost no addresses at all.
 //!
-//! It resolves **three** game function addresses, and it is worth knowing which three because the
-//! number was zero for two layers and every one of them is a thing that can break on a game patch.
-//! [`possess::game`] explains why the possession itself needed none (every lever turned out to be a
-//! field); [`moveset`] spends one on `PlayAnimationByBehaviorName`, without which no dodge in the
-//! game is reachable; [`spawn`] spends two, on creating and removing a character, which are the two
-//! things that cannot be done by writing a field. All three go through `game_rva_named`, so an
-//! unrecognised build refuses the feature rather than jumping into whatever now occupies those
-//! bytes.
+//! It resolves **three** game function addresses and claims **one prologue**, and both numbers are
+//! worth knowing because they were zero for two layers and every one of them is a thing that can
+//! break on a game patch. [`moveset`] spends one address on `PlayAnimationByBehaviorName`, without
+//! which no dodge in the game is reachable; [`spawn`] spends two, on creating and removing a
+//! character, which are the two things that cannot be done by writing a field. The prologue is
+//! `CS::CSFeManImp::UpdatePlayerComponents`, detoured by [`hud`] so the HP, FP and stamina bars
+//! read the possessed creature. All four go through `game_rva_named`, so on a build with no
+//! verified 1.16.2 -> 1.17 mapping the feature is REFUSED rather than jumping into whatever now
+//! occupies those bytes -- `er-hook` logs `HOOK REFUSED` and the bars keep showing your own
+//! character. That is the whole of this DLL's footprint in the game image; it is recorded in
+//! `scripts/me3-dll-conflicts.toml`, and no other shell in the suite hooks that function or its
+//! caller.
 //!
 //! The one thing it does that IS dangerous is write `ChrCtrl+0x3b0`, because `ChrCtrl::Unref`
 //! DLPanics on a non-null value there. Every path that can end a possession -- the hotkey, the
@@ -44,6 +47,7 @@
 mod camera;
 mod config;
 mod engine;
+mod hud;
 mod input;
 mod log;
 mod moveset;
@@ -269,6 +273,13 @@ fn install() {
         config.target().spawn.readiness_ms,
         config::DERIVED_CONFIG_FILE_NAME,
     ));
+
+    // THE HUD LAYER, AND THE CRATE'S ONLY DETOUR. Installed here rather than lazily on the first
+    // possession: patching the game image is a thing to do once, on our own install thread, not on
+    // a game task the first time somebody presses a key. `[hud] enabled = false` skips it
+    // entirely, so a player who does not want the feature carries no patched bytes at all.
+    hud::install(config.tables.hud.enabled);
+
     // STACK LAYERS 2, 3 AND 4. Pressing the key writes a forwarding thunk into the target's
     // `ChrCtrl+0x3b0`, points `WorldChrManDbg+0xb8` at it, and co-locates the player's own
     // (invisible, silent, invincible, non-attacking) body with it every frame; the four face
@@ -299,17 +310,22 @@ fn install() {
 pub unsafe extern "system" fn DllMain(
     _module: HINSTANCE,
     reason: u32,
-    _reserved: *mut core::ffi::c_void,
+    reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // A `rust_panic` in a cdylib loaded into the game is otherwise anonymous: the message goes
         // to a stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and
         // nothing else. Every cdylib links its own copy of er-game-base, so this is per-DLL.
         //
-        // There is deliberately no `er_hook::set_hook_logger` call beside it: this DLL installs no
-        // detour and resolves no game address, so it has no refusal to be silent about. If a later
-        // layer adds one, that call goes here.
         er_game_base::panic_report::report_panics_to("er-npc-possess", crate::possess_log);
+        // THE REFUSAL SINK, and it must be installed BEFORE anything resolves an address. Every
+        // cdylib statically links its own copy of `er-hook` and `er-game-base`, so the logger they
+        // call through is a per-DLL static and an uninstalled one is silent PER DLL. The two lines
+        // it carries are the ones that say a feature just went inert -- `HOOK REFUSED` and
+        // `ADDRESS REFUSED` -- and without it `MH_ERROR_UNSUPPORTED_FUNCTION` is ambiguous between
+        // "MinHook cannot hook this" and "the build gate refused the address", which are different
+        // problems with different fixes. One call installs both sinks.
+        er_hook::set_hook_logger(crate::possess_log);
         START.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-npc-possess-install".to_owned())
@@ -322,6 +338,14 @@ pub unsafe extern "system" fn DllMain(
     // down, in a process where our code is no longer present to explain it.
     if reason == DLL_PROCESS_DETACH {
         engine::shutdown_engine();
+        // ...AND THE DETOUR, which is the other pointer to our memory the game is holding. The
+        // release above disarmed the post-pass; this decides whether the five patched bytes come
+        // back out. `lpReserved` is how `DllMain` says which kind of detach this is: NULL means a
+        // real `FreeLibrary` -- the game keeps running with our code unmapped, so a detour still
+        // pointing into it would jump into nothing on the next frame and the bytes MUST be
+        // reverted. Non-NULL means the process is exiting, where MinHook's thread suspension under
+        // the loader lock is the bigger hazard and there is nothing left to protect.
+        hud::shutdown(!reserved.is_null());
     }
     DLL_MAIN_SUCCESS
 }
