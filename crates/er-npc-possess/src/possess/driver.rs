@@ -24,6 +24,7 @@ use crate::possess::thunk::Thunk;
 use crate::possess::{intent, layout};
 use crate::settings::TargetMode;
 use crate::spawn::game as spawn_game;
+use crate::spawn::placement;
 use crate::spawn::readiness::{Gate, Poll, Readiness};
 use crate::spawn::request::SpawnSpec;
 
@@ -66,10 +67,20 @@ struct Pending {
     /// `layout::ene_dat_cap_offsets` for the running build, resolved once at spawn rather than per
     /// frame. `None` makes the asset gate undecidable, which the readiness machine skips.
     caps: Option<(usize, usize)>,
-    /// Where the creature is put the instant it becomes placeable. Captured at spawn, from the
-    /// player's position THEN -- so a player who walks away while it loads does not drag the spawn
-    /// point with them.
+    /// Where the creature is put the instant it becomes placeable, at the CONFIGURED distance.
+    /// Captured at spawn, from the player's position THEN -- so a player who walks away while it
+    /// loads does not drag the spawn point with them.
+    ///
+    /// The fallback rather than the answer: [`Self::place_from`] and
+    /// [`Self::configured_distance_m`] are what the real placement is recomputed from once the
+    /// creature's own capsule can be read. This point is used when it cannot.
     place_at: [f32; 3],
+    /// The player's position at the press, so the placement can be re-derived at a different
+    /// distance without moving the spawn point to wherever the player has since walked.
+    place_from: [f32; 3],
+    /// `[spawn].distance_m`, kept because it is now a FLOOR rather than the whole answer. See
+    /// [`crate::spawn::placement`].
+    configured_distance_m: f32,
     place_yaw: f32,
     started: std::time::Instant,
     /// The last gate a line was written about, so progress is logged on CHANGE rather than sixty
@@ -167,10 +178,24 @@ impl NpcPossessionEngine {
 
     /// Everything that has to be true of the player's body while somebody else is being worn.
     ///
-    /// Re-applied every frame rather than set once, and each of the three has its own reason:
+    /// Re-applied every frame rather than set once, and each of the four has its own reason:
     /// the alpha has a per-frame decay modifier the engine drives, the mute is cleared by four
-    /// (re)spawn/teleport paths, and `debugFlags` is cheap enough that checking whether it drifted
-    /// costs more than writing it.
+    /// (re)spawn/teleport paths, `debugFlags` is cheap enough that checking whether it drifted
+    /// costs more than writing it, and `lastGroundedPosition` has to track the body every frame or
+    /// it is not tracking it at all.
+    ///
+    /// **THE INVINCIBILITY BIT IS NOT THE WHOLE OF BODY SAFETY, AND THAT IS THE CORRECTION THIS
+    /// COMMENT CARRIES.** `layout::chr_ins::INVINCIBLE` was re-verified on 1.17 rather than
+    /// assumed -- `ChrIns::IsImmuneToAttack` at `0x1403f3dc0` is `TESTB $0x10,0x1c5(%r9)`, the same
+    /// instruction 1.16.2 has at `0x1403f3c76`, and `+0x1c5` sits below the `+0x3b8` insertion that
+    /// grew `ChrIns` on this build, so it could not have moved. What the bit gates is HIT
+    /// RESOLUTION, and nothing else. `CSChrFallModule`'s landing handler charges for a fall of
+    /// `lastGroundedPosition.y - position.y` and dispatches a fall-death call above a threshold
+    /// WITHOUT ever asking whether the victim is immune -- and this engine teleports the player's
+    /// body to the creature's root every frame, through whatever arc a leaping creature takes.
+    /// [`game::Chr::pin_last_grounded`] carries the byte proof; it is here because a neuter that
+    /// only covers the hit path is a neuter that lets a Fallingstar Beast's leap kill the body it
+    /// is carrying.
     ///
     /// **THE INVINCIBILITY IS ALSO WHY THE POSSESSED CREATURE'S GRABS NEVER LAND, and that is
     /// kept deliberately.** `layout::chr_ins::INVINCIBLE` carries the trace: every route into the
@@ -198,6 +223,10 @@ impl NpcPossessionEngine {
         if let Some(offset) = state.debug_flags_offset {
             state.player.set_no_attack(offset, true);
         }
+        // The co-location target for THIS frame, which is where the body is about to be put. See
+        // the doc above for why the fall path needs this and the invincibility bit cannot supply
+        // it.
+        state.player.pin_last_grounded(state.last_position);
     }
 
     /// Undo [`Self::neuter`]. Returns whether every part of it took.
@@ -290,7 +319,16 @@ impl NpcPossessionEngine {
             // happened at the `take()` above. The step exists so the ORDER is a thing the state
             // machine enforces rather than a comment.
             Step::StopColocating => true,
-            Step::MovePlayer => state.player.request_move(release_point, None),
+            // PINNED BEFORE THE MOVE, not after: this is the last teleport the body takes and it
+            // is the one most likely to be DOWNWARD -- `release_point` falls back to the creature's
+            // `lastGroundedPosition` when it died airborne, which is by construction below where
+            // the body has been riding. Without this the very act of giving the body back reads to
+            // `CSChrFallModule` as a fall of exactly that height. See
+            // [`game::Chr::pin_last_grounded`].
+            Step::MovePlayer => {
+                state.player.pin_last_grounded(release_point);
+                state.player.request_move(release_point, None)
+            }
             Step::RestoreCameraSize => state.camera.restore(),
             Step::ClearCameraOverride => game::set_camera_override(None),
             Step::ClearManipulatorOverride => {
@@ -303,6 +341,27 @@ impl NpcPossessionEngine {
                 None => true,
                 // The player asked for it to stay. Nothing failed.
                 Some(body) if !body.despawn_on_release => true,
+                // THE GAME ALREADY REMOVED IT, which is the only thing `CreatureGone` can mean:
+                // `Chr::is_live` fails when `ChrCtrl.owner` no longer points back at the `ChrIns`,
+                // and that is a destroyed character rather than a transient read. `RemoveChrIns`
+                // hands its argument to `CSDelayDeleteMan`, so calling it on a character the game
+                // has already queued for destruction queues a freed `ChrIns` for a SECOND one --
+                // and `spawn_game::despawn`'s own guard cannot catch it, because it proves the
+                // first qword is mapped and freed heap still is.
+                //
+                // `crate::spawn::readiness::Poll::Vanished` already refuses this on the pending
+                // path with the same reasoning; the active path did not, and a release whose whole
+                // reason is "the creature is gone" is exactly where it bites. This is the release
+                // that ran, and did not finish, in the reference log.
+                Some(body) if reason == Reason::CreatureGone => {
+                    possess_log(format_args!(
+                        "spawn: the creature in roster slot {} was removed by the GAME, so \
+                         RemoveChrIns is NOT being called on it -- a second removal would queue an \
+                         already-freed ChrIns for a second destruction",
+                        body.spawned.slot
+                    ));
+                    true
+                }
                 // `DLL_PROCESS_DETACH` RUNS ON A THREAD THAT IS NOT THE GAME THREAD, under the
                 // loader lock, with the other threads possibly already gone. `RemoveChrIns` walks
                 // four singletons, calls a virtual on the character and DLPanics if any of them is
@@ -419,11 +478,18 @@ impl NpcPossessionEngine {
                         .moveset_mut()
                         .deny(blame, Denial::UnusableAtRuntime);
                     dispatcher.on_neutral();
+                    // THE NUMBER IS THE POSSESSION CLOCK, NOT THE STUCK DURATION, and the wording
+                    // used to say the opposite -- "stuck ... for {elapsed_ms} ms" reported a
+                    // 29,701 ms hang on a watchdog whose threshold is four seconds. The stuck
+                    // duration lives in `Watchdog::armed.suspect_since_ms` and is not on
+                    // `Verdict::ForceIdle`; until it is, this says what it actually knows. How
+                    // long it was stuck is `[mapping].watchdog_seconds`, by construction.
                     possess_log(format_args!(
-                        "moveset: animation {blame} left the creature stuck with no root motion \
-                         for {} ms -- forced back to idle and denied for the rest of this \
-                         session. It is in {} as unusable-at-runtime; copy it into \
-                         er-npc-possess.toml under [chr.c{:04}] to keep it denied.",
+                        "moveset: animation {blame} stopped producing root motion and was forced \
+                         back to idle {} ms into this possession, after the full \
+                         [mapping].watchdog_seconds -- denied for the rest of this session. It is \
+                         in {} as unusable-at-runtime; copy it into er-npc-possess.toml under \
+                         [chr.c{:04}] to keep it denied.",
                         state.elapsed_ms,
                         crate::config::DERIVED_CONFIG_FILE_NAME,
                         state.chr_id,
@@ -720,6 +786,8 @@ impl NpcPossessionEngine {
             readiness: Readiness::new(u64::from(settings.readiness_ms)),
             caps: layout::ene_dat_cap_offsets(game_file_version()),
             place_at,
+            place_from: position,
+            configured_distance_m: settings.distance_m,
             place_yaw: yaw,
             started: std::time::Instant::now(),
             reported: None,
@@ -798,18 +866,34 @@ impl NpcPossessionEngine {
         // the creature path of `CreateCharacter` at all -- `InitEnemyChrBaseData` supplies the base
         // data and the request's vectors are consumed only by the PlayerIns branch. So the request
         // says where it should be and this is what actually puts it there, through the same proxy
-        // drain co-location uses (which also means no fall damage on the way).
+        // drain co-location uses.
+        //
+        // ...AND IT IS ALSO THE FIRST MOMENT THE CREATURE'S OWN SIZE CAN BE READ, which is why the
+        // size-aware distance is derived here rather than at the press. `CSChrPhysicsModule` does
+        // not exist until `InitForEnemy` has run; by this point it does, and `hit_radius` is the
+        // real `NpcParam.hitRadius` rather than a guess. See `crate::spawn::placement` for why
+        // `[spawn].distance_m` is now a floor.
+        let placement = placement::place(
+            pending.configured_distance_m,
+            pending.spawned.creature.hit_radius(),
+            pending.player.hit_radius(),
+        );
+        let place_at = if placement.creature_radius_m.is_some() {
+            intent::ahead_of(pending.place_from, pending.place_yaw, placement.distance_m)
+        } else {
+            pending.place_at
+        };
         let placed = pending
             .spawned
             .creature
-            .request_move(pending.place_at, Some(pending.place_yaw));
+            .request_move(place_at, Some(pending.place_yaw));
         possess_log(format_args!(
             "spawn: c{:04} became drivable after {elapsed} ms; {}",
             pending.chr_id,
             if placed {
-                "placed in front of the player"
+                format!("placed in front of the player {}", placement.describe())
             } else {
-                "COULD NOT BE PLACED, so it is wherever InitEnemyChrBaseData left it"
+                "COULD NOT BE PLACED, so it is wherever InitEnemyChrBaseData left it".to_owned()
             }
         ));
         let body = SpawnedBody {

@@ -79,11 +79,17 @@ mod tests {
     /// The engine writes `ChrCtrl+0x100` and `+0x110`, and both must stay 16-aligned INSIDE a
     /// 16-aligned `ChrCtrl` -- an offset that is not a multiple of 16 would be unaligned however
     /// well the allocation itself is aligned.
+    ///
+    /// `CSChrPhysicsModule+0x150` is here for the same reason and it is not decoration: the body
+    /// neuter WRITES `lastGroundedPosition` through the same `FloatVector4` store, which is a
+    /// `MOVAPS` and `#GP`s on an unaligned address. The engine's own read of that field is a
+    /// `MOVUPS`, so nothing in the game would have caught it.
     #[test]
-    fn both_proxy_request_fields_sit_on_sixteen_byte_boundaries() {
+    fn every_vector_field_this_crate_writes_sits_on_a_sixteen_byte_boundary() {
         for offset in [
             super::layout::chr_ctrl::RAGDOLL_POSITION,
             super::layout::chr_ctrl::RAGDOLL_ROTATION,
+            super::layout::chr_physics_module::LAST_GROUNDED_POSITION,
         ] {
             assert_eq!(offset % 16, 0, "{offset:#x}");
         }

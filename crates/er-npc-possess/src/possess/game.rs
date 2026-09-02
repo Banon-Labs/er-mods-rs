@@ -626,6 +626,59 @@ impl Chr {
         let want = write_vec4(ai + ai_ins::WANT_TO_MOVE_TO, value);
         path && want
     }
+
+    /// The physics capsule's horizontal half-extent, in metres -- `CSChrPhysicsModule+0x344`.
+    ///
+    /// THE FIELD THAT DECIDES OVERLAP, which is why the spawn layer reads it and why the camera
+    /// layer (which cares how TALL the subject is) reads its neighbour instead. Both offsets are
+    /// the camera layer's, deliberately: they are one pair of numbers with one proof, and a second
+    /// copy here would be a second thing to be wrong about.
+    ///
+    /// Populated by `CSChrPhysicsModule::InitForEnemy` from `NpcParam.hitRadius`, so it does not
+    /// read until the character is built -- which is exactly why the spawn layer places the
+    /// creature after readiness rather than at creation.
+    pub(crate) fn hit_radius(self) -> Option<f32> {
+        let at = self.physics()? + crate::camera::layout::chr_physics_module::HIT_RADIUS;
+        unsafe { safe_read_f32(at) }.filter(|v| v.is_finite())
+    }
+
+    /// Tell the engine this character was last standing HERE.
+    ///
+    /// **THIS IS A FALL-DEATH SAFETY WRITE AND NOT A COSMETIC ONE.** `CSChrFallModule`'s landing
+    /// handler computes the fall it is about to charge for as
+    /// `lastGroundedPosition.y - GetPosition().y` -- byte-proven in both images, uniquely, at
+    /// 1.16.2 `0x14044dd1f` and 1.17 `0x14044e27f`:
+    ///
+    /// ```text
+    /// 48 8b 88 90 01 00 00   MOV RCX,[RAX+0x190]     ; ChrIns->modules
+    /// 48 8b 59 68            MOV RBX,[RCX+0x68]      ; ->physics
+    /// e8 ?? ?? ?? ??         CALL GetPosition
+    /// 0f 10 b3 50 01 00 00   MOVUPS XMM6,[RBX+0x150] ; lastGroundedPosition
+    /// 0f c6 f6 55            SHUFPS XMM6,XMM6,0x55   ; .y
+    /// f3 0f 5c 70 04         SUBSS  XMM6,[RAX+0x4]   ; - position.y
+    /// ```
+    ///
+    /// -- and when that exceeds a global threshold the handler dispatches the fall-death call
+    /// through the character's manipulator vtable. **None of it consults `IsImmuneToAttack`**, so
+    /// `chrFlags1c5 & 0x10` -- the whole of the possession's body neuter as far as damage goes --
+    /// does not cover it.
+    ///
+    /// [`Self::request_move`] snaps `position` and `prevUpdatePosition` and leaves this field
+    /// alone, so a body carried through a leaping creature's arc lands reading a fall it never
+    /// took. Writing it alongside the move is not a lie to the engine: the body IS being put here,
+    /// so here is where it last stood.
+    pub(crate) fn pin_last_grounded(self, position: [f32; 3]) -> bool {
+        let Some(physics) = self.physics() else {
+            return false;
+        };
+        if !position.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        write_vec4(
+            physics + chr_physics_module::LAST_GROUNDED_POSITION,
+            FloatVector4::new(position[0], position[1], position[2], 1.0),
+        )
+    }
 }
 
 /// The real local player, as a `ChrIns` address.

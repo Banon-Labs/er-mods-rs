@@ -181,8 +181,15 @@ npc_param_id = 0
 # The NpcThinkParam row. Rarely worth setting: an invalid one is not a failure, because the lookup
 # pre-initialises its result and the loader treats the resulting empty AI script as satisfied.
 npc_think_id = 0
-# How far in front of you it appears, in metres. 1 to 50. Not zero: a creature placed exactly on
-# you is one you are standing inside for the frame before possession takes.
+# The MINIMUM distance in front of you it appears, in metres. 1 to 50.
+#
+# THIS IS A FLOOR, NOT THE ANSWER. The creature is placed at whichever is larger: this number, or
+# far enough out that its own physics capsule clears yours (its hitRadius, plus yours, plus a metre
+# of gap). A Ballista lands exactly here; a Fallingstar Beast has a 4.00 m radius and is pushed out
+# to 5.45 m whatever this says, because 3.0 m put it around you rather than in front of you -- and
+# possession then keeps your body at that creature's root for as long as you wear it.
+#
+# The log line for each spawn says which of the two won and what the creature's radius was.
 distance_m = 3.0
 # How long to wait for it to become drivable before giving up and removing it. 1000 to 60000 ms.
 readiness_ms = 5000
