@@ -84,17 +84,21 @@
 //! * **Root-motion TRAVEL never made it into the table.** It is the documented fallback for reach
 //!   when there is no hit capsule, and getting it means deserialising the animation itself, which
 //!   the offline toolchain does not do.
-//! * **Whether a possessed creature's grab is ACCEPTED is unproven.** Firing the initiator is
-//!   settled; the throw system's own gates are not. `ThrowParam.DefChrId` is 0 -- the player -- for
-//!   189 of the 190 creature rows, and the possession neuters the player's body by setting
-//!   `chrFlags1c5 & 0x10`. `ChrIns::IsImmuneToAttack` reads exactly that bit and returns "immune"
-//!   unless the `AtkParam` row sets `isDisableNoDamage`, and 188 of the 206 `AtkParam_Npc`
-//!   rows with a non-zero `throwTypeId` leave it at 0. `ChrIns::IsImmuneToThrow` -- the adjacent
-//!   vtable slot, `+0x1E0` against `+0x1D8` -- does NOT read it, and the throw path's own
-//!   pre-check (`CSThrowNode` -> `FUN_140482910` ->
-//!   `FUN_140485be0`) goes through that one. Which predicate governs the hit that STARTS the throw
-//!   was not settled statically, so the honest answer is that this needs the game running. The
-//!   initiator plays either way; a grab that is refused is a swing that misses.
+//! * **A grab whose victim is the PLAYER is REFUSED while the possession is running.** Settled
+//!   statically on both builds, and not a limitation of this layer -- see
+//!   [`crate::possess::layout::chr_ins::INVINCIBLE`] for the trace and
+//!   `NpcPossessionEngine::neuter` for why it is kept. In short: `ApplyDamage` is the only caller
+//!   of `InitThrow`, `HitChr` the only caller of `ApplyDamage`, and both hit-resolution routines
+//!   that reach `HitChr` with a real attacker clear the victim through `IsImmuneToAttack` first --
+//!   which reads the `chrFlags1c5 & 0x10` the neuter sets. `IsImmuneToThrow`, the adjacent vtable
+//!   slot (`+0x1E0` against `+0x1D8`), does NOT read that bit, but it only guards the throw's own
+//!   downstream pre-check; it never gets reached, because the hit that would START the throw is
+//!   dropped first. The escape hatch in the predicate is `AtkParam.isDisableNoDamage`, which 188
+//!   of the 206 rows with a non-zero `throwTypeId` leave at 0. The initiator plays either way; a
+//!   grab that is refused is a swing that misses, and the derived file says so per move.
+//! * **What is still unproven about grabs** is the co-op case: `ThrowParam.DefChrId` 0 matches any
+//!   `ChrIns::npcId` 0, which a SECOND player in the session also has, and this crate makes only
+//!   the possessing player's own body immune. Nothing here has been runtime-tested.
 
 pub(crate) mod derived;
 pub(crate) mod dispatch;

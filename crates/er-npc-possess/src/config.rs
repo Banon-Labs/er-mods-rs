@@ -92,10 +92,13 @@ const DEFAULT_CONFIG_TOML: &str = r##"# er-npc-possess.toml -- the standalone "b
 # WHAT IS NOT WIRED YET, so you can tell a missing feature from a broken one:
 #   * The `radial` binding is parsed and reported and there is no wheel to open.
 #   * Range is measured to the nearest enemy, NOT to what you are locked on to.
-#   * GRABS LAND ON THE PLAYER'S BODY OR ON NOBODY. The grab itself fires -- see allow_grabs --
-#     but ThrowParam picks the victim by exact chr id, and that is the player for 189 of the
-#     game's 190 creature throw rows. Your body is standing where the creature is, invisible and
-#     invincible; whether an invincible body accepts a throw has not been tested in-game.
+#   * A GRAB SWINGS BUT DOES NOT GRAB. The grab itself fires -- see allow_grabs -- but ThrowParam
+#     picks the victim by exact chr id, and that is the player for 189 of the game's 190 creature
+#     throw rows. Your own body is the only thing the creature could grab, and possession makes it
+#     invincible, which is the same flag the game checks before it will start a throw. So the
+#     swing plays and nothing is caught. Dropping the invincibility is not the fix: it would let
+#     the creature you are wearing throw and kill you. er-npc-possess.derived.toml marks each
+#     affected move REFUSED so you can tell this apart from a move that is simply missing.
 #   * Your own body stays LOCK-ON-ABLE while you are away from it. It cannot be hurt and cannot be
 #     seen, so this is an oddity rather than a hazard.
 #   * turn_deadzone_deg, heading_converge and root_motion_only are RESERVED. speed_scale is live.
@@ -219,7 +222,9 @@ bands_m = [4.0, 12.0]
 # ordinary attack (hers is a3022); when it lands, the game hands the hit to the throw system.
 # er-npc-possess.derived.toml marks each one GRAB and says who it can be used on -- almost always
 # "the player", because ThrowParam.DefChrId is matched exactly and is 0 for 189 of the game's 190
-# creature throw rows.
+# creature throw rows. A grab whose only victim is the player is marked REFUSED there as well: it
+# swings, and the throw cannot be accepted while your body is invincible. Turning this off does
+# not fix that; it just gives you the creature's other attacks on those buttons.
 allow_grabs = true
 # promote -- an input whose bucket is empty borrows from another one rather than doing nothing.
 #            It drops the RANGE requirement first and only then changes bucket, so the button
