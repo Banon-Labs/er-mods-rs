@@ -77,8 +77,10 @@ pub(crate) fn version_in_image(bytes: &[u8]) -> Option<String> {
         end += 2;
     }
     let units: Vec<u16> = haystack[body_start..end]
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     let body = String::from_utf16(&units).ok()?;
     // "2.0.0 by Yui" -> "2.0.0". The author tail is not part of the identity.

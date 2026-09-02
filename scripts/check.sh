@@ -1404,6 +1404,18 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # BYTES are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
+# er-ersc-sigshim's build identification. This crate refuses to patch anything unless the installed
+# Seamless Co-op is the exact build its fixups were measured against, because the second fixup
+# writes ELDEN RING 1.16.2's Scadutree field offset into the game's own code and that is only
+# correct while v1.9.9 is the thing reading it -- a wrong rewrite changes another player's damage
+# numbers silently. That refusal is only as good as the parser deciding it, and the parser reads a
+# UTF-16 banner out of a pooled string table where the NEXT string starts two bytes after this
+# one's terminator. Over-reading it yields a version that is not a version, which is precisely how
+# a refusal turns into a patch. `crate-type = ["cdylib"]` plus `default-members` meant nothing ever
+# selected these 7 tests, so check-rust-build.sh linked the shell while the identity check it is
+# built on went unrun.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-ersc-sigshim --lib
+
 # er-hook's raw code-patch primitives. This crate is linked into 15 of the 23 cdylibs, the shipped
 # er_quickload.dll among them, so a defect in a byte-patch primitive here is a defect in all of
 # them at once -- and it is the crate LEAST able to report one: it carries a crate-level
