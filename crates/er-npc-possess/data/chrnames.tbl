@@ -1,0 +1,422 @@
+# er-npc-possess creature-name table -- GENERATED, do not hand-edit.
+# Regenerate: scripts/er-chr-names-gen.py --out crates/er-npc-possess/data/chrnames.tbl
+#
+# One line per creature:  <chrid> <tab> <name>
+# `-` means no source names this id; the picker shows cNNNN for those.
+#
+# The names are Paramdex/Smithbox PARAM ROW NAMES -- community-authored labels
+# for anonymous param rows -- not strings out of the game. The game's own
+# NpcName.fmg holds only bosses and named NPCs and reaches 73 of these 408; a
+# wolf has no displayable name because the game never shows one. See the
+# generator's docstring for the two files and the priority between them.
+#
+# 405 of 408 named: 256 from ChrModelParam, 149 from NpcParam, 3 from none
+v1
+100	BuddyStone
+110	Caravan Dummy
+120	Bullet Dummy
+130	Balloon Dummy
+1000	Talk Dummy
+2010	Blaidd
+2030	Rennala
+2031	Rennala
+2040	Juvenile Scholar
+2041	Larva of Rot
+2050	Ranni the Witch
+2060	The Two Fingers
+2100	Black Knife Assassin
+2110	Beast Clergyman
+2120	Malenia
+2130	Morgott
+2131	Morgott (Dead)
+2140	Omen
+2150	Lightning Ball
+2160	Finger Reader Crone
+2170	Finger Reader Crone
+2180	Melina
+2190	Radagon
+2200	Elden Beast
+2270	Giant Crab
+2271	Crab
+2272	Giant Black Crab
+2273	Black Crab
+2274	Giant Albinauric Crab
+2275	Albinauric Crab
+2276	Giant Death Crab
+2277	Death Crab
+2500	Crucible Knight
+3000	Exile Soldier
+3010	Banished Knight
+3020	Exile Soldier (Large)
+3050	Commander Niall/O'Neill
+3060	Giant Skeleton
+3061	Giant Beast Skeleton
+3070	Dominula Celebrant
+3080	Imp
+3100	Elemer of the Briar
+3150	Night's Cavalry
+3160	Funeral Steed
+3170	Albinauric Archer
+3171	Phillia, Towering Little Sister
+3180	Albinauric Archer's Wolf
+3181	Red Wolf of Radagon
+3200	Nomadic Merchant
+3201	Frenzied Nomad
+3210	Nomadic Merchant's Donkey
+3250	Draconic Tree Sentinel
+3251	Tree Sentinel
+3252	Loretta
+3300	Nox Swordstress/Monk/Nightmaiden
+3320	Silver Tear
+3330	Giant Silver Tear
+3350	Crystalian
+3360	Ancestral Follower
+3361	Putrid Ancestral Follower
+3370	Ancestral Follower Shaman
+3371	Putrid Ancestral Follower Shaman
+3400	Grave Warden Duelist
+3450	Misbegotten
+3451	Scaly Misbegotten
+3460	Leonine Misbegotten
+3470	Albinauric
+3471	Large Albinauric
+3500	Skeletal Militiaman/Bandit/Knight/Grave Warden
+3510	Catacomb Skeleton
+3550	Sanguine Noble
+3560	Godskin Apostle
+3570	Godskin Noble
+3600	Alabaster Lord
+3610	Oracle Envoy
+3620	Oracle Envoy (Large)
+3630	Oracle Envoy (Giant)
+3650	Guardian
+3660	Commoner
+3661	Putrid Corpse
+3662	Putrid Corpse (Large)
+3664	Cemetery Shade
+3665	Gostoc
+3666	The Noble Goldmask
+3670	Elder Albinauric
+3700	Depraved Perfumer
+3701	Perfumer
+3702	Glintstone Sorcerer
+3703	Page
+3704	Battlemage
+3710	Azur
+3720	Lusat
+3730	Graven School
+3750	Clayman
+3800	Cleanrot Knight
+3810	Kindred of Rot
+3850	Marionette Soldier
+3860	Avionette Soldier
+3900	Fire Monk
+3901	Blackflame Monk
+3910	Fire Prelate
+3950	Man-Serpent
+3970	Azula Beastman
+4000	Revenant Follower
+4020	Royal Revenant
+4040	Slug
+4050	Kaiden Sellsword
+4060	Kaiden Sellsword's Horse
+4070	Wolf
+4071	White Wolf
+4080	Rat
+4090	Giant Rat
+4100	Demi-Human
+4101	Demi-Human (Large)
+4110	Demi-Human Shaman
+4120	Demi-Human Chief
+4130	Demi-Human Queen
+4140	Snail
+4150	Basilisk
+4160	Stray (Large)
+4161	Stray
+4162	Farum Azula Stray (Large)
+4163	Farum Azula Stray
+4164	Bloodbane Stray (Large)
+4165	Bloodbane Stray
+4166	Rotten Stray (Large)
+4167	Rotten Stray
+4170	Putrid Flesh
+4171	Putrid Flesh (Large)
+4180	Spirit Jellyfish
+4190	Large Scarab
+4191	Scarab
+4192	Giant Scarab
+4200	Man-Bat
+4201	Operatic Bat
+4210	Warhawk
+4220	Land Octopus (Large)
+4230	Land Octopus (Small)
+4240	Fingercreeper
+4241	Fingercreeper (Large)
+4250	Fingercreeper (Small)
+4260	Erdtree Burial Watchdog
+4270	Elder Lion
+4280	Giant Ant
+4281	Giant Ant (Skull Plate)
+4290	Bloodhound Knight
+4300	Wandering Noble
+4311	Godrick Soldier
+4312	Raya Lucaria Soldier
+4313	Leyndell Soldier
+4314	Radahn Soldier
+4315	Mausoleum Soldier
+4316	Haligtree Soldier
+4321	Vulgar Militia
+4340	Mad Pumpkin Head
+4341	Mad Pumpkin Head (Thin)
+4351	Godrick Knight
+4352	Cuckoo Knight
+4353	Leyndell Knight
+4354	Redmane Kngiht
+4355	Mausoleum Knight
+4356	Haligtree Knight
+4361	Godrick Knight's Horse
+4362	Cuckoo Knight's Horse
+4363	Leyndell Knight's Horse
+4364	Redmane Knight's Horse
+4365	Mausoleum Knight's Horse
+4371	Godrick Foot Soldier
+4372	Raya Lucaria Foot Soldier
+4373	Leyndell Foot Soldier
+4374	Radahn Foot Soldier
+4375	Mausoleum Foot Soldier
+4376	Haligtree Foot Soldier
+4377	Highwayman
+4380	Starcaller
+4381	Guilty
+4382	Stonedigger
+4383	Glintstone Digger
+4384	Glintstone Digger - Small Sack
+4385	Disciple of Rot
+4420	Giant Crayfish
+4430	Watcher Stones
+4440	Land Squirt
+4441	Giant Land Squirt
+4442	Giant Rotten Land Squirt
+4450	Walking Mausoleum
+4460	Flame Chariot
+4470	Abductor Virgin
+4480	Miranda Blossom
+4481	Miranda Sprout
+4482	Rotten Miranda Blossom
+4483	Rotten Miranda Sprout
+4490	Living Jar Warrior
+4491	Living Jar
+4492	Greatjar
+4500	Flying Dragon
+4501	Decaying Ekzykes
+4502	Glintstone Dragon
+4503	Borealis the Freezing Fog
+4504	Elder Dragon Greyoll
+4505	Flying Dragon (Small)
+4510	Ancient Dragon
+4511	Lichdragon Fortissax
+4520	Dragonlord Placidusax
+4550	Giant Dog
+4560	Giant Crow
+4561	Giant Crow
+4570	Wormface
+4580	Large Wormface
+4600	Troll
+4601	Troll Knight
+4602	Snowfield Troll
+4603	Stonedigger Troll
+4604	War Counselor Iji
+4620	Astel, Naturalborn of the Void
+4630	Runebear
+4640	Ulcerated Tree Spirit
+4650	Dragonkin Soldier
+4660	Guardian Golem
+4670	Ancestor Spirit
+4680	Falling-star Beast
+4690	Grafted Scion
+4710	God-Devouring Serpent / Rykard, Lord of Blasphemy
+4711	Rykard's Corpse
+4720	Godfrey, First Elden Lord
+4721	Hoarah Loux, Warrior
+4730	Starscourge Radahn
+4750	Godrick the Grafted
+4751	Godrick's Corpse
+4760	Fire Giant
+4770	Valiant Gargoyle
+4800	Mohg, Lord of Blood
+4810	Erdtree Avatar
+4811	Putrid Avatar
+4820	Omenkiller
+4910	Magma Wyrm
+4911	Great Wyrm Theodorix
+4950	Tibia Mariner
+4960	Giant Skeleton Torso
+4980	Death Rite Bird
+5000	Commander Gaius
+5010	Golden Hippopotamus
+5011	Golden Hippopotamus (Golden Wings)
+5020	Putrescent Knight
+5030	Romina, Saint of the Bud
+5040	Curseblade
+5050	Midra - Human
+5051	Midra, Lord of Frenzied Flame
+5060	Lamprey
+5061	Lamprey (Large)
+5070	Death Knight
+5080	Bloodfiend
+5081	Chief Bloodfiend
+5090	Gravebird
+5110	Ghostly Worm
+5120	Bayle the Dread
+5130	Messmer the Impaler
+5140	Messmer: Base Serpent
+5141	Messmer: Base Serpent
+5160	Fire Knight
+5170	Furnace Golem
+5180	Dummy Entity
+5181	Dummy Entity
+5190	Spider Scorpion
+5192	Spider Scorpion
+5193	Spider Scorpion
+5194	-
+5200	Metyr, Mother of Fingers
+5210	Divine Beast Dancing Lion
+5220	Promised Consort Radahn
+5230	Scadutree Avatar
+5240	Commoner (Pot)
+5241	Commoner
+5250	Horned Warrior
+5251	Horned Shaman
+5260	Golem Smith
+5261	-
+5270	Jar Innards
+5271	Jar Innards
+5280	Winter-Lantern
+5300	Rellana, Twin Moon Knight
+5311	Inquisitor (Candles)
+5312	Inquisitor (Staff)
+5320	Fat Inquisitor
+5330	St. Trina
+5340	Dummy Entity
+5350	Basilisk Eyes
+5360	Giant Beast Skeleton
+5370	Ancient Dragon Senessax
+5380	Miranda Blossom
+5381	Miranda Sprout
+5390	Troll
+5391	Troll Knight
+5401	Eagle
+5410	Deer
+5421	Red Bear
+5430	Owl
+5440	Boar
+5450	Ram
+5460	Murre
+5470	Dragonfly
+5471	Yellow Dragonfly
+5472	Great Dragonfly
+5480	Turtle
+5490	Springhare
+5500	Living Magma
+5511	Shade
+5512	Shade
+5513	Cemetary Shade
+5520	Stray
+5521	Stray
+5522	Stray
+5523	Stray
+5524	Braided Stray
+5525	Braided Stray
+5526	Bloodbane Stray
+5527	Bloodbane Stray
+5530	Man-Bat
+5540	Wolf
+5541	Wolf
+5550	Fingercreeper
+5551	Fingercreeper (Large)
+5560	Fingercreeper (Small)
+5570	Marionette Soldier
+5580	Jagged Peak Drake
+5590	Putrid Flesh
+5591	Putrid Flesh (Large)
+5600	Catacomb Skeleton
+5620	Tibia Mariner
+5630	Giant Crayfish
+5640	Giant Crab
+5641	Crab
+5651	Messmer Foot Soldier
+5661	Shadow Militia
+5680	Wheeled Ballista
+5690	Dragon-faced Flamethrower
+5700	Demi-Human
+5701	Demi-Human (Large)
+5710	Demi-Human Shaman
+5720	Demi-Human Chief
+5730	Demi-Human Queen
+5740	Kindred of Rot
+5750	Living Jar Warrior
+5751	Living Jar
+5760	Rat
+5761	Giant Rat
+5780	Runebear
+5790	Guardian Golem
+5800	Crucible Knight Devonia
+5810	Demi-Human Swordmaster Onze
+5820	Great Red Bear
+5830	Messmer Soldier
+5840	Black Knight
+5850	Giant Ram
+5860	Ghostflame Dragon
+5870	Imp (Lion Head)
+5871	Imp (Dragon Head)
+5872	Imp (Dragon Head)
+5880	Catacombs Sorcerer
+5890	Black Knight Horse
+5900	Man-Fly
+5910	Hornsent Grandam
+5920	Magma Wyrm
+5930	Giant Skeleton
+5931	Giant Beast Skeleton
+5940	Watcher Stones
+5950	Leonine Misbegotten
+5960	Ulcerated Tree Spirit
+5970	Abductor Virgin
+5980	Omenkiller
+5990	Basilisk
+6001	Eagle
+6010	Deer
+6031	Bear
+6040	Owl
+6050	Boar
+6060	Goat
+6070	Murre
+6072	Carrier Pigeon
+6080	Dragonfly
+6081	Yellow Dragonfly
+6082	Great Dragonfly
+6090	Turtle
+6091	Miriel, Pastor of Vows
+6100	Springhare
+6201	Scarab
+6210	Albinauric Archer
+6220	Wolf
+6231	Perfumer
+6232	Glintstone Sorcerer
+6233	Page
+6240	-
+6251	Tree Sentinel
+6260	Death Rite Bird
+6270	Royal Revenant
+6290	Misbegotten
+6291	Scaly Misbegotten
+6300	Snail
+6310	Fallingstar Beast
+6320	Wandering Noble
+7000	Fallen Hawks Soldier
+7100	Ancient Hero
+8000	Torrent
+8100	Ballista
+8101	Trebuchet
+8110	Dragon-faced Flamethrower
+8120	Merciless Chariot
+9001	Human

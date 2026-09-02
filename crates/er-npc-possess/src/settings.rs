@@ -23,6 +23,9 @@
 // on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use er_hotkey_config::keys::{Chord, chord_name, parse_chord};
+use er_hotkey_config::pad::{PadChord, pad_chord_name, parse_pad_chord};
+
 use crate::toml::Document;
 
 /// Section names, spelled once.
@@ -33,6 +36,7 @@ pub(crate) const BUTTONS_SECTION: &str = "buttons";
 pub(crate) const MOVEMENT_SECTION: &str = "movement";
 pub(crate) const CAMERA_SECTION: &str = "camera";
 pub(crate) const HUD_SECTION: &str = "hud";
+pub(crate) const PICKER_SECTION: &str = "picker";
 /// `[chr.c4500]`, `[chr.c2130]`, ... -- open-ended, one per character id.
 pub(crate) const CHR_SECTION_PREFIX: &str = "chr.";
 
@@ -732,6 +736,103 @@ impl Default for CameraSettings {
     }
 }
 
+/// `[picker]`. LIVE -- the in-game creature list and the keys that drive it.
+///
+/// # Why the bindings live in a table instead of beside `hotkey`
+///
+/// The three top-level bindings (`hotkey`, `gamepad_hotkey`, `radial`) go through
+/// `config::PossessConfig`'s keep-the-last-working-value machinery, which exists so a typo in the
+/// key you possess with does not leave you unable to possess. These six are not load-bearing in
+/// that way: a typo in `next_group` costs you one direction of a list you can still step through,
+/// and the `[picker]` table is LIVE, so the fix is to correct the line and save. Routing them
+/// through six more `Binding` fields plus six more `ConfigUpdate` variants would have doubled the
+/// config's moving parts for a strictly smaller failure.
+///
+/// # Why every pad binding ships EMPTY
+///
+/// This crate claims no game prologue -- specifically not the DirectInput `GetDeviceState` one
+/// that three other shells in this profile already share -- so it can SEE a press but cannot
+/// take it away from the game. See the `er-npc-possess` entry in
+/// `scripts/me3-dll-conflicts.toml`. A controller has few buttons and Elden Ring uses them, so a
+/// shipped pad default for "move the picker cursor down" would very likely also swap the
+/// player's spell every time it was pressed -- and a default that misbehaves out of the box is
+/// worse than no default.
+///
+/// THAT IS NOT A MEASUREMENT. Elden Ring's own binding table was not read; it is a judgement
+/// about where a collision is likely, and every one of these keys is rebindable while the game
+/// runs precisely because the judgement may be wrong for a given setup.
+///
+/// # Why the keyboard defaults are the ARROWS and not the keypad
+///
+/// The keypad was the first choice, for being the cluster least likely to be in the way. It was
+/// wrong for a reason that has nothing to do with collisions: `KP_8` parses to `VK_NUMPAD8`, and
+/// with NUMLOCK OFF the numpad's 8 key does not produce `VK_NUMPAD8` at all -- it produces
+/// `VK_UP`. [`crate::input::chord_held`] reads the virtual key, so all four navigation defaults
+/// would have been silently dead for anyone with NumLock off or no numpad at all, on a feature
+/// with no runtime proof. A key that does nothing and says nothing is a worse default than a key
+/// that collides, because a collision is visible and this is not.
+///
+/// `Up`/`Down`/`Left`/`Right` produce `VK_UP`/`VK_DOWN`/`VK_LEFT`/`VK_RIGHT` from the arrow
+/// cluster AND from the numpad with NumLock off, so both work. `KP_*` spellings still parse and
+/// are still a fine thing to bind -- they just need NumLock on, which the shipped config says.
+///
+/// Binding a pad button here is supported and is a real choice a player may want; it is just not
+/// one this file makes on their behalf. When the DirectInput claim the conflicts table already
+/// anticipates lands, suppression becomes possible and these defaults can change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PickerSettings {
+    pub(crate) enabled: bool,
+    /// Rows drawn at once. A viewport, not a capacity: the list is always the whole catalogue.
+    pub(crate) visible_rows: u32,
+    /// Opens and closes the list. `None` when the value is empty, which is a real setting.
+    pub(crate) toggle: Option<Chord>,
+    pub(crate) up: Option<Chord>,
+    pub(crate) down: Option<Chord>,
+    pub(crate) prev_group: Option<Chord>,
+    pub(crate) next_group: Option<Chord>,
+    /// Pad equivalents. `PadChord::default()` is the empty mask, i.e. unbound.
+    pub(crate) pad_toggle: PadChord,
+    pub(crate) pad_up: PadChord,
+    pub(crate) pad_down: PadChord,
+    pub(crate) pad_prev_group: PadChord,
+    pub(crate) pad_next_group: PadChord,
+}
+
+/// The shipped keyboard defaults, spelled once so the parser, the config comment and the tests
+/// cannot drift apart.
+pub(crate) const PICKER_DEFAULT_TOGGLE: &str = "F10";
+pub(crate) const PICKER_DEFAULT_UP: &str = "Up";
+pub(crate) const PICKER_DEFAULT_DOWN: &str = "Down";
+pub(crate) const PICKER_DEFAULT_PREV_GROUP: &str = "Left";
+pub(crate) const PICKER_DEFAULT_NEXT_GROUP: &str = "Right";
+
+/// Rows on screen at once when the file says nothing.
+pub(crate) const PICKER_DEFAULT_VISIBLE_ROWS: u32 = 15;
+
+/// Bounds on `visible_rows`. One row is a picker you cannot see the shape of; past forty the
+/// panel is taller than the screen it is drawn on.
+const PICKER_MIN_VISIBLE_ROWS: u32 = 5;
+const PICKER_MAX_VISIBLE_ROWS: u32 = 40;
+
+impl Default for PickerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            visible_rows: PICKER_DEFAULT_VISIBLE_ROWS,
+            toggle: default_chord(PICKER_DEFAULT_TOGGLE),
+            up: default_chord(PICKER_DEFAULT_UP),
+            down: default_chord(PICKER_DEFAULT_DOWN),
+            prev_group: default_chord(PICKER_DEFAULT_PREV_GROUP),
+            next_group: default_chord(PICKER_DEFAULT_NEXT_GROUP),
+            pad_toggle: PadChord::default(),
+            pad_up: PadChord::default(),
+            pad_down: PadChord::default(),
+            pad_prev_group: PadChord::default(),
+            pad_next_group: PadChord::default(),
+        }
+    }
+}
+
 impl CameraSettings {
     fn apply(&mut self, doc: &Document, rejections: &mut Rejections) {
         let s = CAMERA_SECTION;
@@ -768,6 +869,81 @@ impl CameraSettings {
         format!(
             "enabled={} param_row={} distance_exponent={} distance_max={}",
             self.enabled, self.param_row, self.distance_exponent, self.distance_max
+        )
+    }
+}
+
+/// A built-in default must parse; a spelling this crate ships and cannot read is a build bug, and
+/// the test below is what turns it into a red gate rather than a silently unbound key.
+fn default_chord(spelling: &str) -> Option<Chord> {
+    parse_chord(spelling).ok()
+}
+
+/// An empty value is a real setting -- "unbound" -- not a parse failure. Anything else that does
+/// not parse is a rejection, so it reaches the log instead of silently unbinding the key.
+fn parse_optional_chord(raw: &str) -> Option<Option<Chord>> {
+    if raw.trim().is_empty() {
+        return Some(None);
+    }
+    parse_chord(raw).ok().map(Some)
+}
+
+fn parse_pad(raw: &str) -> Option<PadChord> {
+    if raw.trim().is_empty() {
+        return Some(PadChord::default());
+    }
+    parse_pad_chord(raw).ok()
+}
+
+impl PickerSettings {
+    fn apply(&mut self, doc: &Document, rejections: &mut Rejections) {
+        let s = PICKER_SECTION;
+        take(&mut self.enabled, doc, s, "enabled", rejections, parse_bool);
+        take(
+            &mut self.visible_rows,
+            doc,
+            s,
+            "visible_rows",
+            rejections,
+            |raw| {
+                raw.trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|v| (PICKER_MIN_VISIBLE_ROWS..=PICKER_MAX_VISIBLE_ROWS).contains(v))
+            },
+        );
+        for (field, key) in [
+            (&mut self.toggle, "hotkey"),
+            (&mut self.up, "up"),
+            (&mut self.down, "down"),
+            (&mut self.prev_group, "prev_group"),
+            (&mut self.next_group, "next_group"),
+        ] {
+            take(field, doc, s, key, rejections, parse_optional_chord);
+        }
+        for (field, key) in [
+            (&mut self.pad_toggle, "gamepad_hotkey"),
+            (&mut self.pad_up, "pad_up"),
+            (&mut self.pad_down, "pad_down"),
+            (&mut self.pad_prev_group, "pad_prev_group"),
+            (&mut self.pad_next_group, "pad_next_group"),
+        ] {
+            take(field, doc, s, key, rejections, parse_pad);
+        }
+    }
+
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "enabled={} visible_rows={} hotkey={} up={} down={} prev_group={} next_group={} \
+             gamepad_hotkey={}",
+            self.enabled,
+            self.visible_rows,
+            chord_text(self.toggle),
+            chord_text(self.up),
+            chord_text(self.down),
+            chord_text(self.prev_group),
+            chord_text(self.next_group),
+            pad_chord_name(self.pad_toggle),
         )
     }
 }
@@ -811,6 +987,10 @@ impl HudSettings {
     pub(crate) fn summary(&self) -> String {
         format!("enabled={}", self.enabled)
     }
+}
+
+fn chord_text(chord: Option<Chord>) -> String {
+    chord.map_or_else(|| "(none)".to_owned(), chord_name)
 }
 
 /// One `[chr.cXXXX]` table. Live, and open-ended: the parser reports the ids the FILE contains
@@ -894,6 +1074,7 @@ pub(crate) struct Tables {
     pub(crate) movement: MovementSettings,
     pub(crate) camera: CameraSettings,
     pub(crate) hud: HudSettings,
+    pub(crate) picker: PickerSettings,
     pub(crate) chr_overrides: Vec<ChrOverride>,
 }
 
@@ -906,6 +1087,7 @@ impl Tables {
         self.movement.apply(doc, rejections);
         self.camera.apply(doc, rejections);
         self.hud.apply(doc, rejections);
+        self.picker.apply(doc, rejections);
 
         // REPLACED, not merged. A `[chr.cXXXX]` table the player DELETED has to stop applying,
         // and merging into what is already in force would make deletion a no-op -- the one edit
@@ -920,12 +1102,14 @@ impl Tables {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "[mapping] {} | [buttons] {} | [movement] {} | [camera] {} | [hud] {} | chr_overrides={}",
+            "[mapping] {} | [buttons] {} | [movement] {} | [camera] {} | [hud] {} | \
+             [picker] {} | chr_overrides={}",
             self.mapping.summary(),
             self.buttons.summary(),
             self.movement.summary(),
             self.camera.summary(),
             self.hud.summary(),
+            self.picker.summary(),
             self.chr_overrides.len()
         )
     }

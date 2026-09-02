@@ -48,8 +48,8 @@ use crate::{
     engine::PossessionRequest,
     log::possess_log,
     settings::{
-        CameraSettings, ChrOverride, HudSettings, MovementSettings, Rejections, Tables,
-        TargetSettings,
+        CameraSettings, ChrOverride, HudSettings, MovementSettings, PickerSettings, Rejections,
+        Tables, TargetMode, TargetSettings,
     },
     toml::Document,
 };
@@ -317,6 +317,71 @@ enabled = true
 # this file happens to name -- there is no fixed list -- so a chr nobody has written down yet works
 # the moment you add its table. camera_distance_scale, pin, unusable and usable are LIVE;
 # turn_rate_deg_per_sec and speed_scale are RESERVED.
+# THE IN-GAME CREATURE PICKER. LIVE -- an edit applies within a second.
+#
+# Press the hotkey below and a list of every creature this mod knows appears on screen, by name,
+# with what each one can do. Move the cursor, then press YOUR POSSESS HOTKEY (the `hotkey` /
+# `gamepad_hotkey` at the top of this file) to choose. That press does not possess anything: it
+# writes the highlighted creature into `[target]` above exactly as if you had typed
+# `mode = "chr_id"` and its id yourself, and the log prints the two lines so you can paste them
+# in here to keep it. Press the picker hotkey again to close without choosing.
+#
+# THE LIST DOES NOT OPEN WHILE YOU ARE WEARING SOMETHING, and it closes itself if a possession
+# starts while it is up. That is on purpose: the possess hotkey means CHOOSE while the list is
+# open and RELEASE while you are possessing, so those two states are never both true. Pick who
+# to become while you are yourself; to switch, release first and then pick.
+#
+# The pick is STAGED, like every other `[target]` edit: it takes effect at the next possession,
+# not the current one. And the file wins -- the next time you save this file, `[target]` above is
+# read again and the pick is replaced. That is why the log prints the lines to paste.
+#
+# WHAT PICKING DOES NOT DO, TODAY: it does not summon anything. `mode = "chr_id"` looks through
+# the characters ALREADY LOADED in the map for one with that id, exactly as it does when you type
+# the id in by hand. Pick Malenia in Limgrave and the next press reports `no loaded enemy matches
+# chr_id` in the log, because there is not one. So the list is every creature the mod KNOWS,
+# which is a larger set than the creatures you can become where you happen to be standing. The
+# list says what each one can do, not whether it is nearby.
+#
+# THE PICKER DOES NOT TAKE THESE KEYS AWAY FROM THE GAME. This DLL does not hook the game's own
+# keyboard reader -- three other mods in this profile already share that one -- so it can SEE a
+# keypress but cannot stop Elden Ring from also seeing it. Whether the defaults below collide with
+# anything on your setup is a guess, not a reading of the game's binding table; rebind them if
+# they do, and the log will tell you if a navigation key never fires.
+#
+# EVERY PAD BINDING IS EMPTY ON PURPOSE: a controller has few buttons and the game uses them, so a
+# shipped default for "cursor down" would very likely swap your spell every time you pressed it.
+# Fill them in if you want pad navigation and can live with that; the spellings are the same as
+# `gamepad_hotkey`.
+[picker]
+enabled = true
+# Rows on screen at once, 5..40. The list is always all 408 creatures -- this is the window.
+visible_rows = 15
+# Open and close the list.
+hotkey = "F10"
+gamepad_hotkey = ""
+# One row at a time. Held keys repeat.
+#
+# These are the ARROWS rather than the numeric keypad, and the reason is worth knowing before you
+# rebind: "KP_8" means the virtual key VK_NUMPAD8, and with NUMLOCK OFF the numpad's 8 key does
+# not send that -- it sends the same code as the up arrow. So a keypad binding is SILENTLY DEAD
+# unless NumLock is on. "Up"/"Down"/"Left"/"Right" are sent by the arrow cluster and by the numpad
+# with NumLock off, so both work. Bind KP_* if you prefer, and turn NumLock on.
+up = "Up"
+down = "Down"
+# The other axis, and the reason 408 rows are navigable with four keys: these jump to the
+# previous and next INITIAL of the name. The list is sorted by name, so `prev_group` from the
+# middle of a long run of "G" names goes to the first of them and again goes to the "F"s.
+prev_group = "Left"
+next_group = "Right"
+# Pad equivalents. Empty = unbound; see the note above before filling these in.
+pad_up = ""
+pad_down = ""
+pad_prev_group = ""
+pad_next_group = ""
+
+# RESERVED. Per-character overrides, one table per chr id, added as you need them. The DLL reads
+# whatever ids this file happens to name -- there is no fixed list -- so a chr nobody has written
+# down yet works the moment you add its table.
 #
 # Left commented out on purpose: the ids below are an EXAMPLE of the shape, not a tuned profile,
 # and a shipped default that pins real animation ids for a character nobody has measured would be
@@ -469,6 +534,61 @@ impl PossessConfig {
     /// The `[target]` edit waiting for the next possession, if there is one.
     pub(crate) fn staged_target(&self) -> Option<TargetSettings> {
         (self.target_on_disk != self.target_in_force).then_some(self.target_on_disk)
+    }
+
+    /// Stage a creature the in-game picker chose, exactly as if the FILE had named it.
+    ///
+    /// # Why this writes `target_on_disk` and adds no field of its own
+    ///
+    /// `target_on_disk` is not "what the file says" -- it is "what is staged for the next
+    /// possession", and the file is merely its usual author. Writing there means the pick goes
+    /// through the same staging, the same `[target] staged` log line and the same
+    /// [`Self::adopt_staged_target`] promotion as a hand edit, with no second code path that
+    /// could stage differently. A `target_picked` field beside it would have been exactly that
+    /// second path.
+    ///
+    /// The consequence is worth stating because it is a rule rather than an accident: the NEXT
+    /// edit to the config file re-stages from the file and the pick is gone. [`Self::apply`]
+    /// rebuilds `target_on_disk` from the file on every reload, and the shipped file always names
+    /// `mode` and `chr_id`. Editing the file wins; that is the same precedence the rest of this
+    /// config has, and it means a player who wants their pick to stick copies the two lines the
+    /// log prints into their own `[target]`.
+    ///
+    /// Returns the `(from, to)` summaries for the log.
+    pub(crate) fn pick_target(&mut self, chr_id: u32) -> (String, String) {
+        let before = self.target_on_disk.summary();
+        self.target_on_disk = TargetSettings {
+            mode: TargetMode::ChrId,
+            // `[target] chr_id` is an `i32` because the FILE can name a negative and the parser
+            // has to be able to reject it out loud. The catalogue's ids are `u32` and run
+            // 100..9001, so this conversion cannot fail in practice; a value that did not fit
+            // would not be a chr id at all, and `0` is what `mode = "chr_id"` already means by
+            // "no creature named".
+            chr_id: i32::try_from(chr_id).unwrap_or(0),
+            // NOT reset: `release_on_death` is a preference about how a possession ends, and the
+            // picker is a statement about who to possess. Carrying it forward is what stops the
+            // picker from silently undoing a setting it has no opinion about.
+            release_on_death: self.target_on_disk.release_on_death,
+            // Carried forward for the same reason: `[spawn]` is how a creature is brought into the
+            // world, not which creature, so picking one must not silently reset it.
+            spawn: self.target_on_disk.spawn,
+        };
+        (before, self.target_on_disk.summary())
+    }
+
+    /// The chr id a possession starting now would use, or `None` when `[target]` is not in
+    /// `chr_id` mode. Read by the picker so re-opening lands on what is already chosen.
+    ///
+    /// The STAGED value rather than the one in force, because that is what the picker last wrote
+    /// and what the next possession will use.
+    pub(crate) fn staged_chr_id(&self) -> Option<u32> {
+        let target = self.staged_target().unwrap_or(self.target_in_force);
+        if target.mode != TargetMode::ChrId {
+            return None;
+        }
+        // A negative in the file is a typo, not a creature. It is already reported as a rejection
+        // by the parser; here it simply names nobody, and the picker opens at the top instead.
+        u32::try_from(target.chr_id).ok().filter(|id| *id != 0)
     }
 
     /// Promote a staged `[target]` into force. Called at the START of a possession, never during
@@ -721,6 +841,21 @@ pub(crate) fn hud() -> HudSettings {
     state().config.tables.hud
 }
 
+/// The `[picker]` table IN FORCE, read fresh. Live, like `[movement]`.
+pub(crate) fn picker() -> PickerSettings {
+    state().config.tables.picker
+}
+
+/// The chr id currently staged, for the picker's opening cursor.
+pub(crate) fn staged_chr_id() -> Option<u32> {
+    state().config.staged_chr_id()
+}
+
+/// Stage the creature the in-game picker chose. Returns the `(from, to)` summaries for the log.
+pub(crate) fn pick_target(chr_id: u32) -> (String, String) {
+    state().config.pick_target(chr_id)
+}
+
 /// Re-read the file if it changed, and report what moved.
 ///
 /// `None` when nothing happened, which is the overwhelmingly common case and the one that must
@@ -863,8 +998,106 @@ mod tests {
         assert_eq!(config.tables.mapping.watchdog_seconds, 4.0);
         assert_eq!(config.tables.buttons.r1, Bucket::Light);
         assert_eq!(config.tables.movement.turn_deadzone_deg, 20.0);
+        let picker = config.tables.picker;
+        assert!(picker.enabled);
+        assert_eq!(picker.visible_rows, 15);
+        assert_eq!(picker.toggle, Some(parse_chord("F10").expect("F10")));
+        // ARROWS, not the keypad, and asserted rather than assumed: `KP_8` parses to
+        // `VK_NUMPAD8`, which the numpad does not send with NumLock off, so a keypad default is
+        // silently dead for anyone who leaves it off. See `settings::PickerSettings`.
+        assert_eq!(picker.up, Some(parse_chord("Up").expect("Up")));
+        assert_eq!(picker.down, Some(parse_chord("Down").expect("Down")));
+        assert_eq!(picker.prev_group, Some(parse_chord("Left").expect("Left")));
+        assert_eq!(
+            picker.next_group,
+            Some(parse_chord("Right").expect("Right"))
+        );
+        // EMPTY, and asserted rather than assumed. This DLL cannot take a key away from the game,
+        // so a shipped pad default for "cursor down" would also swap the player's spell every
+        // time they pressed it. See the `er-npc-possess` entry in scripts/me3-dll-conflicts.toml.
+        for pad in [
+            picker.pad_toggle,
+            picker.pad_up,
+            picker.pad_down,
+            picker.pad_prev_group,
+            picker.pad_next_group,
+        ] {
+            assert_eq!(
+                pad,
+                PadChord::default(),
+                "every shipped pad binding is unbound"
+            );
+        }
         // The example per-chr table ships COMMENTED OUT, so a fresh install overrides nothing.
         assert!(config.tables.chr_overrides.is_empty());
+    }
+
+    /// A pick stages exactly what a hand edit of `[target]` would have staged, and goes through
+    /// the same promotion. If these ever diverge the picker becomes a second way to choose a
+    /// creature that behaves differently from the documented one.
+    #[test]
+    fn a_pick_stages_the_same_thing_a_hand_edit_would() {
+        let mut picked = from_default();
+        let (from, to) = picked.pick_target(4630);
+        assert!(from.contains("mode=lock_on"), "{from}");
+        assert!(to.contains("mode=chr_id"), "{to}");
+        assert!(to.contains("chr_id=4630"), "{to}");
+
+        let mut typed = from_default();
+        typed.apply("[target]\nmode = \"chr_id\"\nchr_id = 4630\n");
+        assert_eq!(picked.staged_target(), typed.staged_target());
+
+        // ...and the pick is STAGED, not in force, exactly like the edit.
+        assert_eq!(picked.target().mode, TargetMode::LockOn);
+        assert!(picked.adopt_staged_target().is_some());
+        assert_eq!(picked.target().mode, TargetMode::ChrId);
+        assert_eq!(picked.target().chr_id, 4630);
+        assert_eq!(picked.staged_target(), None, "nothing left staged");
+    }
+
+    /// The precedence rule the picker's doc comment states: the file wins on its next save.
+    #[test]
+    fn editing_the_file_replaces_a_pick() {
+        let mut config = from_default();
+        config.pick_target(4630);
+        assert_eq!(config.staged_chr_id(), Some(4630));
+
+        // Any edit re-reads `[target]`, and the shipped file always names mode and chr_id.
+        config.apply(DEFAULT_CONFIG_TOML);
+        assert_eq!(config.staged_chr_id(), None, "the file took it back");
+    }
+
+    /// `release_on_death` is a preference about how a possession ends; the picker has no opinion
+    /// about it and must not quietly reset it.
+    #[test]
+    fn a_pick_carries_release_on_death_forward() {
+        let mut config = from_default();
+        config.apply("[target]\nrelease_on_death = false\n");
+        config.pick_target(2120);
+        let staged = config.staged_target().expect("staged");
+        assert_eq!(staged.chr_id, 2120);
+        assert!(!staged.release_on_death);
+    }
+
+    /// The picker opens on whatever is already chosen, so this has to read the STAGED value and
+    /// has to say "nobody" for every mode that is not `chr_id`.
+    #[test]
+    fn the_staged_chr_id_is_only_reported_in_chr_id_mode() {
+        let mut config = from_default();
+        assert_eq!(config.staged_chr_id(), None, "lock_on names no id");
+
+        config.apply("[target]\nmode = \"chr_id\"\nchr_id = 2120\n");
+        assert_eq!(
+            config.staged_chr_id(),
+            Some(2120),
+            "read before it is adopted"
+        );
+
+        config.apply("[target]\nmode = \"chr_id\"\nchr_id = 0\n");
+        assert_eq!(config.staged_chr_id(), None, "zero names nobody");
+
+        config.apply("[target]\nmode = \"nearest\"\nchr_id = 2120\n");
+        assert_eq!(config.staged_chr_id(), None, "the id is inert in this mode");
     }
 
     /// A rebind is accepted, names both ends, and reports itself as a binding move -- which is

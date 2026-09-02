@@ -37,6 +37,11 @@
 //! `scripts/me3-dll-conflicts.toml`, and no other shell in the suite hooks that function or its
 //! caller.
 //!
+//! One more hook exists and is NOT a game prologue: hudhook's DX12 `Present`, which [`picker`]
+//! installs the first time the creature list is opened and never otherwise. That is a swapchain
+//! vtable slot, arbitrated by `er_build_watermark_core::overlay_host` so the process keeps exactly
+//! one of them however many shells want to draw.
+//!
 //! The one thing it does that IS dangerous is write `ChrCtrl+0x3b0`, because `ChrCtrl::Unref`
 //! DLPanics on a non-null value there. Every path that can end a possession -- the hotkey, the
 //! creature dying, the creature despawning, and `DLL_PROCESS_DETACH` below -- goes through
@@ -51,6 +56,7 @@ mod hud;
 mod input;
 mod log;
 mod moveset;
+mod picker;
 mod possess;
 mod settings;
 mod spawn;
@@ -158,6 +164,25 @@ fn tick() {
     // does not read the button that was already down as a fresh press.
     drop(guard);
 
+    // THE PICKER TICKS BEFORE THE MASTER-SWITCH RETURN, and the master switch is folded into the
+    // picker's own `enabled` rather than short-circuiting past it. It has to be: the panel is
+    // drawn from a snapshot the picker republishes each frame, so a `return` here with the list
+    // up would freeze that snapshot on screen with no key left that could clear it -- `enabled =
+    // false` also makes `take_confirm` unreachable, so neither the picker hotkey nor the possess
+    // hotkey could dismiss it. Routing through `[picker] enabled` instead reuses the close path
+    // that already exists, and keeps advancing the picker's latches for the same reason the
+    // possess latches are advanced above.
+    let mut picker_settings = config::picker();
+    picker_settings.enabled &= bindings.enabled;
+    if picker::tick(picker_settings, buttons) {
+        // The list just opened, so the overlay now has to exist. Installed HERE rather than
+        // inside the picker because the install waits on the game's window, takes a named mutex
+        // and may end in `Hudhook::apply()`; none of that may happen while the picker's own lock
+        // is held. It spawns a thread and returns immediately.
+        #[cfg(windows)]
+        picker::render::install_once();
+    }
+
     if !bindings.enabled {
         return;
     }
@@ -172,21 +197,42 @@ fn tick() {
 
     if let Some(source) = sample.possess_source() {
         PRESSES_SEEN.fetch_add(1, Ordering::Relaxed);
-        // Taking the request and promoting a staged `[target]` happen under one lock, so the
-        // request the engine is handed is the one the log line describes.
-        let (request, adopted) = config::take_request();
-        if let Some((from, to)) = adopted {
-            possess_log(format_args!("config: [target] ADOPTED {from} -> {to}"));
-        }
-        let report = engine::on_hotkey_edge(source, request);
-        let binding = if source == "keyboard" {
-            bindings
-                .keyboard
-                .map_or_else(|| "(none)".to_owned(), chord_name)
+        // THE PICKER GETS THIS PRESS FIRST. While the creature list is up, the possess hotkey
+        // CHOOSES rather than possesses -- one key to learn instead of two, and "the key that
+        // starts a possession also picks what to possess" is a sentence the config file can
+        // print. `take_confirm` returns `None` whenever the list is closed, which is every frame
+        // the picker is not in use, so the possession path below is unchanged.
+        if let Some(creature) = picker::take_confirm() {
+            let (from, to) = config::pick_target(creature.chr_id);
+            possess_log(format_args!(
+                "picker: chose {} (c{:04}) -- [target] staged {from} -> {to}. It applies at the \
+                 NEXT press of the possess hotkey. To keep it past your next edit of \
+                 {config}, put this in that file:  [target] mode = \"chr_id\"  chr_id = {}",
+                creature.label(),
+                creature.chr_id,
+                creature.chr_id,
+                config = config::CONFIG_FILE_NAME_FOR_LOG,
+            ));
         } else {
-            pad_chord_name(bindings.gamepad)
-        };
-        possess_log(format_args!("{}", report.line(&binding)));
+            // Taking the request and promoting a staged `[target]` happen under one lock, so the
+            // request the engine is handed is the one the log line describes.
+            let (request, adopted) = config::take_request();
+            if let Some((from, to)) = adopted {
+                possess_log(format_args!("config: [target] ADOPTED {from} -> {to}"));
+            }
+            let report = engine::on_hotkey_edge(source, request);
+            let binding = if source == "keyboard" {
+                bindings
+                    .keyboard
+                    .map_or_else(|| "(none)".to_owned(), chord_name)
+            } else {
+                pad_chord_name(bindings.gamepad)
+            };
+            possess_log(format_args!("{}", report.line(&binding)));
+        }
+        // NOT a `return` in the picker branch. `engine::tick_engine()` below has to run on every
+        // frame -- it is what notices a possessed character dying or despawning -- so skipping it
+        // on the one frame a pick was confirmed would leave a dead body possessed for a frame.
     }
 
     // THE POSSESSION ITSELF, one frame of it. After the hotkey edge, so a press and its first
@@ -197,7 +243,7 @@ fn tick() {
     if ticks.is_multiple_of(STATUS_LOG_TICKS) {
         let (state, presses) = engine::snapshot();
         possess_log(format_args!(
-            "status: enabled={} keyboard={} gamepad={} radial={} engine_installed={} state={} presses_seen={} presses_handled={} pad_buttons=0x{buttons:04x}",
+            "status: enabled={} keyboard={} gamepad={} radial={} engine_installed={} state={} presses_seen={} presses_handled={} pad_buttons=0x{buttons:04x} picker_open={} picker_overlay={} picker_draws={} picker_rows={}",
             bindings.enabled,
             bindings
                 .keyboard
@@ -207,7 +253,11 @@ fn tick() {
             engine::engine_installed(),
             state.name(),
             PRESSES_SEEN.load(Ordering::Relaxed),
-            presses
+            presses,
+            picker::is_open(),
+            picker::render::installed(),
+            picker::render::draws(),
+            picker::render::last_rows(),
         ));
     }
 }
@@ -308,11 +358,15 @@ fn install() {
 /// # Safety
 /// Standard Windows `DllMain`; on attach it only starts an installer thread.
 pub unsafe extern "system" fn DllMain(
-    _module: HINSTANCE,
+    module: HINSTANCE,
     reason: u32,
     reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // Stashed, not used: the picker's overlay needs a module handle to hand hudhook, and it
+        // installs only when the list is first opened. A session that never presses the picker
+        // hotkey therefore still hooks nothing at all.
+        picker::render::arm(module.0 as usize);
         // A `rust_panic` in a cdylib loaded into the game is otherwise anonymous: the message goes
         // to a stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and
         // nothing else. Every cdylib links its own copy of er-game-base, so this is per-DLL.
@@ -349,6 +403,16 @@ pub unsafe extern "system" fn DllMain(
     }
     DLL_MAIN_SUCCESS
 }
+
+// IF THIS MODULE WINS THE IMGUI CONTEXT, every other overlay in the process has to be able to
+// find it by name. `overlay_host::register_with_host` locates the host by looking this export up
+// on each loaded module, so a host that does not define it is a host nobody can register with --
+// and every other overlay in the profile silently draws nothing. That is the #336 regression the
+// arbitration exists to prevent, and omitting this line reintroduces it. The picker installs
+// lazily, so this DLL normally LOSES the claim to a shell that installs at attach; "normally" is
+// a timing accident, not a guarantee.
+#[cfg(windows)]
+er_build_watermark_core::export_overlay_host!();
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]

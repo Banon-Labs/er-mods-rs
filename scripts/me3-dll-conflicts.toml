@@ -417,8 +417,14 @@ on a FrameBegin walk of WorldChrMan's ChrSets."""
 nothing else: `CS::CSFeManImp::UpdatePlayerComponents` (1.16.2 `0x140772a80`, 1.17 `0x140773900`), \
 the per-frame HUD vitals pass, detoured so the HP/FP/stamina bars read the possessed creature \
 instead of the body the player walked in as. No other shell in this suite hooks that function or \
-its caller. It runs no D3D12/Present or overlay hook. Everything else it does happens from one \
-recurring `FrameBegin` task.
+its caller. Everything else it does happens from one recurring `FrameBegin` task.
+
+THE ONE OTHER HOOK, and only if the player opens the in-game creature picker: hudhook's DX12 \
+`Present`, through `er_build_watermark_core::overlay_host` -- the same host-or-guest arbitration \
+er-build-watermark, er-net-effects and er-invasion-path go through, so the process still has \
+exactly one `Present` hook whoever loaded first. It is LAZY: pressing nothing means installing \
+nothing. `Present` is a swapchain vtable slot rather than a game prologue, so it needs no \
+[[shared]] row -- the overlay host is the arbitration.
 
 WHAT IT DOES FROM THAT TASK, kept current as the layers land -- the sentence above is the \
 co-loadability claim and the ones here are what it rests on, so they are not the same claim twice. \
@@ -482,7 +488,10 @@ prologue three DLLs already share) and gain a [[shared]] row here.
 HOTKEY DEFAULTS ARE NOT SHARED WITH ANOTHER SHELL. Keyboard F9 and pad LS+RS; er-refill-all ships \
 Select+Start with no keyboard default, er-enemynpc-effects ships ctrl+alt+c. All three are \
 re-bindable in their own TOML while the game runs, which is the whole reason er-hotkey-config \
-exists."""
+exists. The picker adds F10 plus the four arrow keys and ships every pad binding EMPTY, which is \
+the same no-suppression fact stated as a default: it can see those keys but cannot take them from \
+the game. Whether they collide is a judgement rather than a reading of Elden Ring's binding \
+table, which is why all five are rebindable while the game runs."""
 "er-net-effects" = """Keyboard-selected network SpEffects. Its DirectInput keyboard and mouse \
 `GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
 above); nothing else it installs is claimed by another shell."""
