@@ -436,6 +436,55 @@ pub(crate) mod modules {
     pub(crate) const EVENT: usize = 0x58;
     /// `CSChrPhysicsModule`. Cross-checked.
     pub(crate) const PHYSICS: usize = 0x68;
+    /// `CSChrActionRequestModule` -- where the engine writes whether the animation it is
+    /// currently playing may be cancelled. See [`chr_action_request_module`]. Cross-checked.
+    pub(crate) const ACTION_REQUEST: usize = 0x80;
+}
+
+/// `CSChrActionRequestModule` -- the engine's own answer to "may this attack be left yet".
+///
+/// # Why this is an oracle and not a heuristic
+///
+/// `CS::CSAiFunc::IsEnableCancelAttack` (1.16.2 `0x140300800`) is what the game's own AI calls
+/// to decide whether the attack a creature is in the middle of may be cancelled into another
+/// attack. Its whole answer comes from one leaf, 1.16.2 `0x1404075a0` / 1.17 `0x140407ad0`:
+///
+/// ```text
+/// 8b 81 00 01 00 00   mov  eax, [rcx+0x100]      ; taeCancels
+/// a8 20               test al, 0x20              ; bit 5
+/// 74 09               je   .no
+/// 0f ba e0 0b         bt   eax, 0xb              ; bit 11
+/// 72 03               jb   .no
+/// b0 01               mov  al, 1
+/// c3                  ret
+/// .no: 32 c0 c3       xor  al, al ; ret
+/// ```
+///
+/// That 22-byte pattern occurs exactly once in `eldenring-deobf.bin` (1.16.2, `0x1404075a0`) and
+/// exactly once in `eldenring-deobf-1.17.bin` (`0x140407ad0`), which is what pins the field
+/// offset and both bit positions on the build the game is actually running. This crate reads the
+/// field and applies the same two tests; it does not call the function, so nothing here is a
+/// resolved address.
+///
+/// # Where the bit comes from
+///
+/// TAE event type 0 (`ChrActionFlag`) with `FlagType` 86 -- `CANCEL_AI_ATTACK_QUEUED` in
+/// `fromsoftware-rs`' naming of the same bitfield -- sets it, and
+/// `CSChrActionRequestModule::Update` clears bits 3..9 (`and dword [rcx+0x100], 0xfffffc07`)
+/// once per frame from `CS::ChrIns::PreBehaviorSafe`. So the bit is a genuine per-frame window
+/// authored per animation, not sticky state: it is true exactly while the playhead is inside the
+/// window the animation's own TimeAct declares. 91.1% of the corpus's non-player attack
+/// animations author one.
+///
+/// Bit 11 is `cancel_disable`, a PERSISTENT global veto, and the engine's own predicate requires
+/// it clear -- so this crate does too rather than reading bit 5 on its own.
+pub(crate) mod chr_action_request_module {
+    /// `taeCancels`, `u32`. Cross-checked.
+    pub(crate) const TAE_CANCELS: usize = 0x100;
+    /// Bit 5: this attack may be cancelled into another attack right now.
+    pub(crate) const CANCEL_ATTACK: u32 = 0x20;
+    /// Bit 11: global cancel veto. Every one of the engine's cancel predicates requires it clear.
+    pub(crate) const CANCEL_DISABLE: u32 = 0x800;
 }
 
 /// `CSChrEventModule` -- how an attack is fired, and why it costs no game address.
@@ -463,11 +512,28 @@ pub(crate) mod chr_event_module {
 }
 
 /// `CSChrTimeActModule` -- the ten-entry ring buffer of animations.
+///
+/// # The entry is a clock, and that is what the cancel discipline runs on
+///
+/// The 1.16.2 dump names all four fields of `CSChrTimeActModuleAnim` (`/CS/CSChrTimeActModule`,
+/// size 16): `animId` +0x0, `prevLocalTime` +0x4, `localTime` +0x8, `animLength` +0xC. So the
+/// entry the read cursor points at says which clip is playing, how far into it the creature is,
+/// and how long the clip runs -- in the creature's own seconds. `fromsoftware-rs` spells the same
+/// four `anim_id` / `play_time` / `play_time2` / `anim_length`, i.e. its public `play_time` is the
+/// dump's `prevLocalTime`, one frame behind; [`crate::moveset::chain`] uses `localTime` and this
+/// module names it after the dump, which is the more informed of the two namings.
 pub(crate) mod chr_time_act_module {
     /// `animQueue`, ten `CSChrTimeActModuleAnim`. Cross-checked.
     pub(crate) const ANIM_QUEUE: usize = 0x20;
-    /// Size of one queue entry: `animId`, `playTime`, `playTime2`, `animLength`.
+    /// Size of one queue entry: `animId`, `prevLocalTime`, `localTime`, `animLength`.
     pub(crate) const ANIM_STRIDE: usize = 0x10;
+    /// `localTime` within a queue entry, `f32` -- seconds into the clip THIS frame.
+    ///
+    /// `prevLocalTime` at +0x4 is the same measurement one frame earlier, which is what the pair
+    /// is for: an event whose time falls between the two fired during this frame. Reading the
+    /// later of the two is what makes a chain window open on the frame it is reached rather than
+    /// the frame after.
+    pub(crate) const ANIM_LOCAL_TIME: usize = 0x08;
     /// Entries in the ring.
     pub(crate) const ANIM_QUEUE_LEN: u32 = 10;
     /// `readIdx`, `u32` -- the index of the animation last played or updated, i.e. the current

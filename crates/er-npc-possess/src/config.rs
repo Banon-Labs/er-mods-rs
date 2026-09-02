@@ -207,7 +207,22 @@ despawn_on_release = true
 model = "context"
 # Neutral time after which the attack rank falls back to 0. Standing still resets it too, and
 # that is the one that usually fires first.
+#
+# This is about WHICH attack a press gives you, not about when a press happens -- see
+# input_buffer_ms below, which is the one that reads almost the same and does something else.
 combo_window_ms = 1200
+# How long a press made mid-swing waits before it is given up on.
+#
+# A press while the possessed creature is still committed to an attack NEVER cancels that attack.
+# It is held, and fired the moment the creature will accept it: either when the attack's damage
+# window has closed -- which is a chain, and the creature's own TimeAct data says when that is,
+# per animation -- or when the animation ends, whichever comes first. Only one press is held, so
+# mashing gives you one follow-up and not six; the last press wins.
+#
+# Set it to 0 and a press made mid-swing is simply lost, which is the honest way to turn the
+# buffer off. There is no setting that brings the old cancel-on-press behaviour back: cancelling
+# an attack you have already committed to is the thing this exists to stop.
+input_buffer_ms = 1000
 # close < 4m < mid < 12m < far. Two numbers, both required, near first. Measured to the nearest
 # enemy. While you are moving, the band is shifted one step CLOSER, on the reasoning that an
 # attack you start mid-run lands after the run has closed some of the gap.

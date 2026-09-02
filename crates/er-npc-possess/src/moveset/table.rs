@@ -61,7 +61,7 @@ pub(crate) const TABLE_TEXT: &str = include_str!("../../data/moveset.tbl");
 
 /// Grammar version. The generator writes it and the parser refuses anything else, so a format
 /// change cannot silently be read with the old column meanings.
-pub(crate) const TABLE_VERSION: u32 = 3;
+pub(crate) const TABLE_VERSION: u32 = 4;
 
 /// WHICH SPELLING OF AN ANIMATION ID THIS CREATURE ACTUALLY ANSWERS TO.
 ///
@@ -383,12 +383,29 @@ pub(crate) struct Move {
     /// Which event-name spelling reaches this animation on this creature. See [`Prefix`]; it
     /// decides whether firing is a field write or a call.
     pub(crate) prefix: Prefix,
+    /// When this move stops being worth protecting, in centiseconds from the start of the clip.
+    ///
+    /// The moment the last damage window closes: before it, a press that fires something else
+    /// cancels a hit that has not landed; after it, the swing has done everything it is going to
+    /// do and a follow-up is a combo rather than an interruption. Compared against
+    /// `CSChrTimeActModule::animQueue[readIdx].localTime` by [`crate::moveset::chain`].
+    ///
+    /// `None` means the generator could not measure one -- a move with no resolvable ability
+    /// event, which after the fireability gate is almost always a step or a dodge. Those are
+    /// treated as committed for their whole length: a press during one WAITS. Centiseconds rather
+    /// than a float because this table is integers only, and 10 ms is finer than a 60 Hz frame.
+    pub(crate) chain_from_cs: Option<u16>,
 }
 
 impl Move {
     /// Is this a grab -- an attack that starts a throw when it lands?
     pub(crate) fn grab(&self) -> bool {
         !self.throws.is_empty()
+    }
+
+    /// [`Self::chain_from_cs`] in the seconds the game's own animation clock counts in.
+    pub(crate) fn chain_from_s(&self) -> Option<f32> {
+        self.chain_from_cs.map(|cs| f32::from(cs) / 100.0)
     }
 }
 
@@ -412,6 +429,20 @@ impl Moveset {
 
     pub(crate) fn find(&self, fire: i32) -> Option<&Move> {
         self.moves.iter().find(|m| m.fire == fire)
+    }
+
+    /// The move behind an animation the creature is OBSERVED to be playing.
+    ///
+    /// [`Move::played`] first, [`Move::fire`] second, and the order is the whole reason this is
+    /// not [`Self::find`]. What comes back from `CSChrTimeActModule` is what is on screen, and
+    /// for `W_Event3110` that is 3000 while the id the table is keyed on is 3110 -- so looking up
+    /// by `fire` would miss exactly the one animation this crate already knows lies about its own
+    /// name, and miss it silently.
+    pub(crate) fn playing(&self, animation: i32) -> Option<&Move> {
+        self.moves
+            .iter()
+            .find(|m| m.played == animation)
+            .or_else(|| self.find(animation))
     }
 
     /// Move an animation out of the offered set and record why.
@@ -464,6 +495,10 @@ impl Moveset {
             // the field write can ask for. If it needed a different prefix the generator would
             // have offered it already.
             prefix: Prefix::Event,
+            // Unmeasured, which for a chain window means COMMITTED for the whole clip: a press
+            // during a move the player forced back on waits for it to finish rather than
+            // cancelling it on a number nobody measured.
+            chain_from_cs: None,
         });
         true
     }
@@ -526,7 +561,7 @@ fn parse_throws(spec: &str) -> Option<Throws> {
     (!throws.is_empty()).then_some(throws)
 }
 
-/// Parse `<fired>[=<played>][g<victim>,<rangeDm>[+...]]:<bucket>:<rank>:<reach>[:<prefix>]`.
+/// Parse `<fired>[=<played>][w<chainFromCs>][g<victim>,<rangeDm>[+...]]:<bucket>:<rank>:<reach>[:<prefix>]`.
 fn parse_move(field: &str) -> Option<Move> {
     let mut parts = field.split(':');
     let head = parts.next()?;
@@ -549,6 +584,16 @@ fn parse_move(field: &str) -> Option<Move> {
         Some((rest, spec)) => (rest, parse_throws(spec)?),
         None => (head, Throws::NONE),
     };
+    // ...and the chain window is `w` and the digits after it, stripped BEFORE the grab spec has
+    // been removed above, so `3006w45g0,100` reads as (3006, window 0.45s, grab). It is a suffix
+    // rather than a seventh colon-separated column because the prefix column is already optional:
+    // a positional window would force every `W_Event` move to spell a prefix it does not have.
+    // Absent means unmeasured, not zero -- zero would say "chainable from the first frame", which
+    // is the opposite of what an unmeasured move should be treated as.
+    let (head, chain_from_cs) = match head.split_once('w') {
+        Some((rest, window)) => (rest, Some(window.parse().ok()?)),
+        None => (head, None),
+    };
     let (fire, played) = match head.split_once('=') {
         Some((fire, played)) => (fire.parse().ok()?, played.parse().ok()?),
         None => {
@@ -564,6 +609,7 @@ fn parse_move(field: &str) -> Option<Move> {
         reach,
         throws,
         prefix,
+        chain_from_cs,
     })
 }
 
@@ -742,6 +788,52 @@ mod tests {
         assert_eq!(plain.fire, plain.played);
         assert!(!plain.grab());
         assert_eq!(plain.reach, Reach::Close);
+        assert_eq!(plain.chain_from_cs, None);
+    }
+
+    /// The window sits between the played id and the grab spec, and all four parts of a head have
+    /// to survive being spelled together -- this is the entry shape c4280's a3006 would take if
+    /// it ever gained one.
+    #[test]
+    fn a_chain_window_parses_beside_a_played_id_and_a_grab_spec() {
+        let full = parse_move("3110=3000w947g0,100:2:4:3").expect("well-formed");
+        assert_eq!(full.fire, 3110);
+        assert_eq!(full.played, 3000);
+        assert_eq!(full.chain_from_cs, Some(947));
+        assert!(full.grab());
+        let bare = parse_move("3000w947:0:0:1").expect("well-formed");
+        assert_eq!(bare.chain_from_cs, Some(947));
+        assert_eq!(bare.fire, 3000);
+    }
+
+    /// Centiseconds in, seconds out, because the game's animation clock counts in seconds and
+    /// the table counts in integers. A tenth of a frame of drift here would be invisible; a
+    /// factor of ten would put every window past the end of its animation.
+    #[test]
+    fn the_window_converts_from_centiseconds_to_the_seconds_the_game_counts_in() {
+        let entry = parse_move("3000w947:0:0:1").expect("well-formed");
+        assert_eq!(entry.chain_from_s(), Some(9.47));
+        assert_eq!(parse_move("3000:0:0:1").unwrap().chain_from_s(), None);
+    }
+
+    /// A window that will not parse costs the whole entry rather than being silently dropped:
+    /// keeping the move with no window would turn a typo into "this attack can never be chained",
+    /// which is indistinguishable from the mod working.
+    #[test]
+    fn a_malformed_window_rejects_the_entry_rather_than_dropping_the_window() {
+        assert!(parse_move("3000wxyz:0:0:1").is_none());
+        assert!(parse_move("3000w:0:0:1").is_none());
+    }
+
+    /// `Moveset::playing` is keyed on what is ON SCREEN, and `W_Event3110` is the one animation
+    /// where that differs from the id the table is keyed on. Looking the window up by `fire`
+    /// would miss it, and miss it quietly.
+    #[test]
+    fn the_played_animation_finds_the_move_even_when_it_is_not_the_fired_id() {
+        let (_, moveset) = parse_line("4500 3110=3000w947:2:0:3 3001w853:2:1:3").expect("parses");
+        assert_eq!(moveset.playing(3000).map(|m| m.fire), Some(3110));
+        assert_eq!(moveset.playing(3001).map(|m| m.fire), Some(3001));
+        assert!(moveset.playing(9999).is_none());
     }
 
     /// c4280's a3006 is the ONLY attack in the game that matches two `ThrowParam` rows, and the
@@ -1062,6 +1154,66 @@ mod tests {
             parse_move("6000:3:0:0:99").is_none(),
             "an unknown prefix code must be refused"
         );
+    }
+
+    /// How much of the shipped table has a real chain window, asserted rather than described.
+    ///
+    /// Measured on the corpus: 4,669 attacks, 4,576 of them (98.0%) carrying a TAE type-0
+    /// `ChrActionFlag` FlagType-86 window, against 2,252 movement moves of which only 510 do.
+    /// That split is the shape of the data and not a defect -- a dodge is not an attack, so it
+    /// authors no attack-cancel window -- and it is exactly what the runtime falls back on: a
+    /// press during a windowless move waits for the animation to end.
+    ///
+    /// The floor is what makes this a gate. If the generator ever reads FlagType 4 (the PLAYER
+    /// combo flag, 0.3% of creature attack animations) instead of 86, or the wrong param index,
+    /// the table still parses and every attack silently becomes uncancellable.
+    #[test]
+    fn nearly_every_attack_in_the_shipped_table_carries_a_real_chain_window() {
+        let mut attacks = 0;
+        let mut windowed = 0;
+        let mut movement = 0;
+        for chr in chr_ids() {
+            let Some(moveset) = lookup(chr) else { continue };
+            for entry in &moveset.moves {
+                if entry.bucket == Bucket::Movement {
+                    movement += 1;
+                    continue;
+                }
+                attacks += 1;
+                windowed += usize::from(entry.chain_from_cs.is_some());
+            }
+        }
+        assert!(attacks > 4000, "only {attacks} attacks in the table");
+        assert!(
+            movement > 2000,
+            "only {movement} movement moves in the table"
+        );
+        assert!(
+            windowed * 100 >= attacks * 95,
+            "only {windowed} of {attacks} attacks carry a chain window -- the generator is \
+             reading the wrong ChrActionFlag FlagType (86 is the creature one, 4 is the player \
+             one) or the wrong param index"
+        );
+    }
+
+    /// A window that is longer than any animation in the game would mean the units are wrong --
+    /// seconds written where centiseconds were meant, or the other way round. 25.53 s is the
+    /// longest the corpus has; anything past a minute is a bug, not a boss.
+    #[test]
+    fn no_chain_window_is_longer_than_an_animation_could_plausibly_be() {
+        for chr in chr_ids() {
+            let Some(moveset) = lookup(chr) else { continue };
+            for entry in &moveset.moves {
+                let Some(from) = entry.chain_from_s() else {
+                    continue;
+                };
+                assert!(
+                    (0.0..60.0).contains(&from),
+                    "c{chr} {} opens its chain window at {from} s",
+                    entry.fire
+                );
+            }
+        }
     }
 
     #[test]

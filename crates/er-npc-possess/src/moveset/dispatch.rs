@@ -35,6 +35,7 @@
 // proves it on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use crate::moveset::chain::{self, Availability, Buffer, Held, Playing, Release};
 use crate::moveset::table::{Move, Moveset, Reach};
 use crate::settings::{Bucket, ButtonSettings, MappingModel, MappingSettings, UnboundInputs};
 
@@ -191,6 +192,33 @@ impl NoMove {
     }
 }
 
+/// What one press turned into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Press {
+    /// Fire this now -- a fresh attack, or a chain out of one that has already landed.
+    Fire(Move),
+    /// The creature is still committed to what it is doing. The press is waiting, and
+    /// [`Dispatcher::release`] will spend it. Not a refusal, and not a cancel.
+    Waiting(Held),
+    /// This button has nothing to give on this creature.
+    Nothing(NoMove),
+}
+
+/// What a waiting press turned into, once the creature would take it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Released {
+    /// Nothing was waiting, or what is waiting is still waiting.
+    Nothing,
+    /// The waiting press fires now.
+    Fire(Input, Move),
+    /// The waiting press came due and the button had nothing to give after all -- possible
+    /// because the world moved between the press and the release, and the creature is no longer
+    /// standing where it was.
+    Empty(Input, NoMove),
+    /// The waiting press outlived `[mapping] input_buffer_ms` and is gone.
+    Expired(Input),
+}
+
 /// One possession's worth of input mapping.
 #[derive(Clone, Debug)]
 pub(crate) struct Dispatcher {
@@ -203,6 +231,8 @@ pub(crate) struct Dispatcher {
     last_press_ms: Option<u64>,
     /// Animation ids pinned by `[chr.*] pin`, indexed like `cursor`.
     pins: [Option<i32>; 4],
+    /// The one press waiting for the current animation to let go. See [`crate::moveset::chain`].
+    buffer: Buffer,
 }
 
 impl Dispatcher {
@@ -214,6 +244,7 @@ impl Dispatcher {
             cursor: [0; 4],
             last_press_ms: None,
             pins: [None; 4],
+            buffer: Buffer::new(mapping.input_buffer_ms),
         }
     }
 
@@ -235,7 +266,18 @@ impl Dispatcher {
     /// This, not the timer, is the primary reset. A player who finishes a combo and stands still
     /// expects the next press to be the first attack again, whether that took 200 ms or two
     /// seconds.
+    ///
+    /// A waiting press suspends it, and without that the whole feature reads as broken. The
+    /// animation ending is the moment a buffered press is released, and the watchdog announces
+    /// that same moment as a return to neutral -- one frame EARLIER, because it runs first by
+    /// design. Resetting there would hand the release a cursor of 0, so a press made during the
+    /// first swing would replay the first swing instead of continuing to the second, and the
+    /// player would see a combo that never advances. The creature has not stopped attacking; it
+    /// is between two attacks of the same chain.
     pub(crate) fn on_neutral(&mut self) {
+        if self.buffer.is_holding() {
+            return;
+        }
         self.cursor = [0; 4];
         self.last_press_ms = None;
     }
@@ -312,8 +354,12 @@ impl Dispatcher {
         Bucket::Movement,
     ];
 
-    /// Drive one press. Returns the animation to fire.
-    pub(crate) fn press(&mut self, input: Input, context: Context) -> Result<Move, NoMove> {
+    /// Which animation one press gives, ignoring whether it may be fired yet.
+    ///
+    /// Private on purpose. [`Self::press`] is the only way in, because the cancel discipline it
+    /// applies has to be structural: a caller that could reach this directly would be able to
+    /// interrupt an attack again by accident, which is the exact bug this layer exists to remove.
+    fn choose(&mut self, input: Input, context: Context) -> Result<Move, NoMove> {
         if self.moveset.is_empty() {
             return Err(NoMove::NoMoveset);
         }
@@ -372,6 +418,66 @@ impl Dispatcher {
         self.cursor[input.index()] = u16::try_from(index + 1).unwrap_or(0);
         self.last_press_ms = Some(context.now_ms);
         Ok(chosen[index])
+    }
+
+    /// What the creature will accept right now, given what it is playing.
+    ///
+    /// The window belongs to the move being played, not to the one about to be asked for, which is
+    /// why the lookup goes through [`Moveset::playing`] and not [`Moveset::find`].
+    pub(crate) fn availability(&self, playing: Option<Playing>) -> Availability {
+        let window = playing
+            .and_then(|state| self.moveset.playing(state.animation))
+            .and_then(Move::chain_from_s);
+        chain::availability(playing, window)
+    }
+
+    /// Drive one press. The only way in, and the only place the cancel rule is applied.
+    ///
+    /// Three answers, which are the three things a press can honestly mean:
+    ///
+    /// * the creature is idle or the playing attack has already landed -- fire, and that is either
+    ///   a fresh attack or a chain;
+    /// * the playing attack is still committed -- HOLD the press. It fires from
+    ///   [`Self::release`] the moment the animation lets go, and the attack that was already
+    ///   running is not disturbed;
+    /// * the button has nothing to give on this creature -- say which of the [`NoMove`] reasons.
+    pub(crate) fn press(
+        &mut self,
+        input: Input,
+        context: Context,
+        availability: Availability,
+    ) -> Press {
+        if availability.accepts_a_press() {
+            return match self.choose(input, context) {
+                Ok(chosen) => Press::Fire(chosen),
+                Err(reason) => Press::Nothing(reason),
+            };
+        }
+        Press::Waiting(self.buffer.hold(input, context.now_ms))
+    }
+
+    /// One frame. Fires the press that was waiting, if the creature will now take it.
+    pub(crate) fn release(&mut self, context: Context, availability: Availability) -> Released {
+        match self.buffer.release(context.now_ms, availability) {
+            Release::Nothing => Released::Nothing,
+            Release::Expired(input) => Released::Expired(input),
+            Release::Fire(input) => match self.choose(input, context) {
+                Ok(chosen) => Released::Fire(input, chosen),
+                Err(reason) => Released::Empty(input, reason),
+            },
+        }
+    }
+
+    /// Is a press waiting? The driver asks before paying for the distance reading a
+    /// [`Context`] needs on a frame where nothing was pressed.
+    pub(crate) const fn is_holding(&self) -> bool {
+        self.buffer.is_holding()
+    }
+
+    /// Throw away a waiting press without firing it. Used when the watchdog forces idle: that
+    /// animation was denied for the rest of the session and a queued follow-up to it is stale.
+    pub(crate) const fn forget_buffered_press(&mut self) {
+        self.buffer.forget();
     }
 
     /// Which of the reasons in [`NoMove`] applies, once a press has come up empty.
@@ -476,7 +582,7 @@ mod tests {
         let fired: Vec<i32> = (0..5)
             .map(|step| {
                 engine
-                    .press(Input::R1, context(1.0, 100 * step))
+                    .choose(Input::R1, context(1.0, 100 * step))
                     .expect("light bucket is populated")
                     .fire
             })
@@ -487,14 +593,17 @@ mod tests {
     #[test]
     fn the_combo_window_expiring_resets_the_cursor_to_rank_zero() {
         let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1 3002:0:2:1");
-        assert_eq!(engine.press(Input::R1, context(1.0, 0)).unwrap().fire, 3000);
         assert_eq!(
-            engine.press(Input::R1, context(1.0, 500)).unwrap().fire,
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3000
+        );
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 500)).unwrap().fire,
             3001
         );
         // Default combo_window_ms is 1200; 500 -> 2000 is 1500 of silence.
         assert_eq!(
-            engine.press(Input::R1, context(1.0, 2000)).unwrap().fire,
+            engine.choose(Input::R1, context(1.0, 2000)).unwrap().fire,
             3000,
             "a press after the combo window must start the chain again"
         );
@@ -503,10 +612,13 @@ mod tests {
     #[test]
     fn a_press_exactly_on_the_combo_window_boundary_still_continues_the_chain() {
         let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1");
-        assert_eq!(engine.press(Input::R1, context(1.0, 0)).unwrap().fire, 3000);
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3000
+        );
         let window = u64::from(MappingSettings::default().combo_window_ms);
         assert_eq!(
-            engine.press(Input::R1, context(1.0, window)).unwrap().fire,
+            engine.choose(Input::R1, context(1.0, window)).unwrap().fire,
             3001,
             "the window is inclusive; only strictly later presses reset"
         );
@@ -515,10 +627,13 @@ mod tests {
     #[test]
     fn returning_to_neutral_resets_every_cursor() {
         let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1");
-        assert_eq!(engine.press(Input::R1, context(1.0, 0)).unwrap().fire, 3000);
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3000
+        );
         engine.on_neutral();
         assert_eq!(
-            engine.press(Input::R1, context(1.0, 10)).unwrap().fire,
+            engine.choose(Input::R1, context(1.0, 10)).unwrap().fire,
             3000,
             "neutral, not the clock, is the primary reset"
         );
@@ -528,10 +643,13 @@ mod tests {
     fn distance_selects_between_a_close_and_a_far_attack() {
         // One close-reach light attack and one far-reach light attack.
         let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:3");
-        assert_eq!(engine.press(Input::R1, context(1.0, 0)).unwrap().fire, 3000);
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3000
+        );
         engine.on_neutral();
         assert_eq!(
-            engine.press(Input::R1, context(30.0, 0)).unwrap().fire,
+            engine.choose(Input::R1, context(30.0, 0)).unwrap().fire,
             3001
         );
     }
@@ -543,7 +661,7 @@ mod tests {
         // 30 m standing still is Far, and a mid-reach attack would whiff there, so only the
         // far-reach one is a candidate.
         assert_eq!(
-            engine.press(Input::R1, context(30.0, 0)).unwrap().fire,
+            engine.choose(Input::R1, context(30.0, 0)).unwrap().fire,
             3001
         );
         engine.on_neutral();
@@ -554,7 +672,7 @@ mod tests {
             locomotion: Locomotion::Moving,
             now_ms: 0,
         };
-        assert_eq!(engine.press(Input::R1, moving).unwrap().fire, 3000);
+        assert_eq!(engine.choose(Input::R1, moving).unwrap().fire, 3000);
     }
 
     /// A close-reach attack must NOT be offered at mid range even when the creature is running:
@@ -568,7 +686,7 @@ mod tests {
             now_ms: 0,
         };
         assert_eq!(
-            engine.press(Input::R1, moving).unwrap().fire,
+            engine.choose(Input::R1, moving).unwrap().fire,
             3001,
             "Far shifted to Mid still excludes a close-reach swing"
         );
@@ -580,7 +698,7 @@ mod tests {
     fn promotion_reaches_a_bucket_that_is_not_on_the_way_to_light() {
         let mut engine = dispatcher("120 3000:2:0:3 3001:2:1:3");
         let chosen = engine
-            .press(Input::R1, context(1.0, 0))
+            .choose(Input::R1, context(1.0, 0))
             .expect("a creature with only ranged attacks must still answer r1");
         assert_eq!(chosen.bucket, Bucket::Ranged);
     }
@@ -591,7 +709,7 @@ mod tests {
         for distance in [0.5, 8.0, 40.0] {
             engine.on_neutral();
             assert_eq!(
-                engine.press(Input::R1, context(distance, 0)).unwrap().fire,
+                engine.choose(Input::R1, context(distance, 0)).unwrap().fire,
                 3000,
                 "reach unknown must not mean reach nowhere"
             );
@@ -609,7 +727,7 @@ mod tests {
              bosses, and this flag now withholds 153 real attacks"
         );
         assert_eq!(
-            allowed.press(Input::R1, context(1.0, 0)).unwrap().fire,
+            allowed.choose(Input::R1, context(1.0, 0)).unwrap().fire,
             3022
         );
 
@@ -619,7 +737,7 @@ mod tests {
         };
         let mut denied = Dispatcher::new(moveset(line), mapping, ButtonSettings::default());
         assert_eq!(
-            denied.press(Input::R1, context(1.0, 0)),
+            denied.choose(Input::R1, context(1.0, 0)),
             Err(NoMove::GrabsWithheld),
             "the reason has to name the setting, or a player who set it months ago will read a \
              dead button as a broken mod"
@@ -633,17 +751,20 @@ mod tests {
     fn a_creature_victim_grab_is_withheld_when_nothing_is_in_throw_range() {
         let line = "4280 3006g3300,100:0:0:1";
         let mut engine = dispatcher(line);
-        assert_eq!(engine.press(Input::R1, context(5.0, 0)).unwrap().fire, 3006);
+        assert_eq!(
+            engine.choose(Input::R1, context(5.0, 0)).unwrap().fire,
+            3006
+        );
 
         let mut far = dispatcher(line);
         assert_eq!(
-            far.press(Input::R1, context(40.0, 0)),
+            far.choose(Input::R1, context(40.0, 0)),
             Err(NoMove::NoThrowVictim)
         );
 
         let mut empty = dispatcher(line);
         assert_eq!(
-            empty.press(
+            empty.choose(
                 Input::R1,
                 Context {
                     distance_m: None,
@@ -663,7 +784,7 @@ mod tests {
         let mut engine = dispatcher("2120 3022g0,100:0:0:1");
         assert_eq!(
             engine
-                .press(
+                .choose(
                     Input::R1,
                     Context {
                         distance_m: None,
@@ -693,7 +814,7 @@ mod tests {
             ButtonSettings::default(),
         );
         assert_eq!(
-            engine.press(Input::R1, context(40.0, 0)),
+            engine.choose(Input::R1, context(40.0, 0)),
             Err(NoMove::NothingInBand)
         );
     }
@@ -722,7 +843,7 @@ mod tests {
         let line = "4500 3000:0:0:1 3001:1:0:1";
         let mut promoting = dispatcher(line);
         assert!(
-            promoting.press(Input::L1, context(1.0, 0)).is_ok(),
+            promoting.choose(Input::L1, context(1.0, 0)).is_ok(),
             "promote must find the heavy bucket"
         );
 
@@ -732,7 +853,7 @@ mod tests {
         };
         let mut denying = Dispatcher::new(moveset(line), mapping, ButtonSettings::default());
         assert_eq!(
-            denying.press(Input::L1, context(1.0, 0)),
+            denying.choose(Input::L1, context(1.0, 0)),
             Err(NoMove::EmptyBucket)
         );
     }
@@ -743,7 +864,7 @@ mod tests {
         // still hand back the LIGHT attack, because `r1` means light.
         let mut engine = dispatcher("4500 3000:0:0:1 3001:1:0:3");
         assert_eq!(
-            engine.press(Input::R1, context(40.0, 0)).unwrap().bucket,
+            engine.choose(Input::R1, context(40.0, 0)).unwrap().bucket,
             Bucket::Light
         );
     }
@@ -755,7 +876,7 @@ mod tests {
         for step in 0..3 {
             assert_eq!(
                 engine
-                    .press(Input::R1, context(1.0, step * 100))
+                    .choose(Input::R1, context(1.0, step * 100))
                     .unwrap()
                     .fire,
                 3002,
@@ -768,7 +889,10 @@ mod tests {
     fn a_pin_naming_an_animation_the_creature_does_not_have_falls_back_to_cycling() {
         let mut engine = dispatcher("4500 3000:0:0:1");
         engine.pin(Input::R1, 9999);
-        assert_eq!(engine.press(Input::R1, context(1.0, 0)).unwrap().fire, 3000);
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3000
+        );
     }
 
     #[test]
@@ -779,7 +903,7 @@ mod tests {
             ButtonSettings::default(),
         );
         assert_eq!(
-            engine.press(Input::R1, context(1.0, 0)),
+            engine.choose(Input::R1, context(1.0, 0)),
             Err(NoMove::NoMoveset)
         );
     }
@@ -797,7 +921,7 @@ mod tests {
         );
         // Rank 0 is close-reach; at 40 m the context model would have skipped it.
         assert_eq!(
-            engine.press(Input::R1, context(40.0, 0)).unwrap().fire,
+            engine.choose(Input::R1, context(40.0, 0)).unwrap().fire,
             3000
         );
     }
@@ -810,12 +934,18 @@ mod tests {
         };
         let line = "4500 3000:0:0:1 3001:0:1:1 3002:0:2:1 3003:0:3:1 3004:0:4:1 3005:0:5:1";
         let mut engine = Dispatcher::new(moveset(line), mapping, ButtonSettings::default());
-        assert_eq!(engine.press(Input::R1, context(1.0, 0)).unwrap().fire, 3000);
-        engine.on_neutral();
-        assert_eq!(engine.press(Input::R1, context(8.0, 0)).unwrap().fire, 3002);
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3000
+        );
         engine.on_neutral();
         assert_eq!(
-            engine.press(Input::R1, context(40.0, 0)).unwrap().fire,
+            engine.choose(Input::R1, context(8.0, 0)).unwrap().fire,
+            3002
+        );
+        engine.on_neutral();
+        assert_eq!(
+            engine.choose(Input::R1, context(40.0, 0)).unwrap().fire,
             3004
         );
     }
@@ -842,7 +972,7 @@ mod tests {
                 for distance in [1.0, 8.0, 40.0] {
                     engine.on_neutral();
                     assert!(
-                        engine.press(input, context(distance, 0)).is_ok(),
+                        engine.choose(input, context(distance, 0)).is_ok(),
                         "c{chr} {} is dead at {distance} m",
                         input.name()
                     );
@@ -851,5 +981,156 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 200, "only {checked} creatures had a moveset");
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Cancel discipline. Five cases, and between them they are the whole feature.
+    // ---------------------------------------------------------------------------------------
+
+    /// c4500's a3000 as the table ships it: the window opens at 9.47 s.
+    const CHAINING: &str = "4500 3000w947:0:0:1 3001w853:0:1:1 3002w610:0:2:1";
+
+    /// What the creature's TimeAct would say mid-swing, with the engine declining to answer.
+    const fn mid(elapsed_s: f32) -> Option<Playing> {
+        Some(Playing {
+            animation: 3000,
+            elapsed_s: Some(elapsed_s),
+            cancel_allowed: None,
+        })
+    }
+
+    #[test]
+    fn a_press_while_the_window_is_open_chains_immediately() {
+        let mut engine = dispatcher(CHAINING);
+        let open = engine.availability(mid(9.5));
+        assert_eq!(open, Availability::Chainable);
+        assert_eq!(
+            engine.press(Input::R1, context(1.0, 0), open),
+            Press::Fire(*engine.moveset().find(3000).expect("rank 0"))
+        );
+    }
+
+    #[test]
+    fn a_press_while_the_creature_is_still_committed_waits_instead_of_firing() {
+        let mut engine = dispatcher(CHAINING);
+        let shut = engine.availability(mid(1.0));
+        assert_eq!(shut, Availability::Committed);
+        assert_eq!(
+            engine.press(Input::R1, context(1.0, 0), shut),
+            Press::Waiting(Held::Queued)
+        );
+        assert!(engine.is_holding());
+        // ...and NOTHING was fired, which is the whole point. The cursor must not have moved
+        // either: a press that did not happen cannot have advanced the chain.
+        assert_eq!(engine.release(context(1.0, 10), shut), Released::Nothing);
+    }
+
+    #[test]
+    fn the_waiting_press_fires_when_the_animation_ends() {
+        let mut engine = dispatcher(CHAINING);
+        engine.press(Input::R1, context(1.0, 0), Availability::Committed);
+        // The creature drops back to a neutral animation; the watchdog announces that as a return
+        // to neutral on the same frame, which `on_neutral` must not act on while a press waits.
+        engine.on_neutral();
+        let idle = engine.availability(None);
+        assert_eq!(idle, Availability::Idle);
+        assert_eq!(
+            engine.release(context(1.0, 500), idle),
+            Released::Fire(Input::R1, *engine.moveset().find(3000).expect("rank 0"))
+        );
+    }
+
+    /// A press made during the FIRST attack must give the SECOND one. Getting this wrong is not
+    /// subtle from the player's chair: the combo visibly refuses to advance, replaying the same
+    /// swing forever.
+    #[test]
+    fn a_press_buffered_through_one_attack_continues_the_chain_rather_than_restarting_it() {
+        let mut engine = dispatcher(CHAINING);
+        let first = engine.press(Input::R1, context(1.0, 0), Availability::Idle);
+        assert_eq!(first, Press::Fire(*engine.moveset().find(3000).unwrap()));
+        // Mid-swing press: buffered.
+        engine.press(Input::R1, context(1.0, 200), Availability::Committed);
+        // The watchdog sees the creature come back to neutral and says so...
+        engine.on_neutral();
+        // ...and the buffered press must still be rank 1, not rank 0.
+        assert_eq!(
+            engine.release(context(1.0, 900), Availability::Idle),
+            Released::Fire(Input::R1, *engine.moveset().find(3001).unwrap()),
+        );
+        // Now that nothing is waiting, a return to neutral DOES reset the chain.
+        engine.on_neutral();
+        assert_eq!(
+            engine.press(Input::R1, context(1.0, 3000), Availability::Idle),
+            Press::Fire(*engine.moveset().find(3000).unwrap()),
+        );
+    }
+
+    #[test]
+    fn a_waiting_press_that_outlives_its_window_is_dropped_rather_than_arriving_late() {
+        let mut engine = dispatcher(CHAINING);
+        engine.press(Input::R1, context(1.0, 0), Availability::Committed);
+        let window = u64::from(MappingSettings::default().input_buffer_ms);
+        assert_eq!(
+            engine.release(context(1.0, window), Availability::Committed),
+            Released::Nothing,
+            "the window is inclusive"
+        );
+        assert_eq!(
+            engine.release(context(1.0, window + 1), Availability::Committed),
+            Released::Expired(Input::R1)
+        );
+        assert!(!engine.is_holding());
+    }
+
+    /// The regression this whole layer exists for. No sequence of presses at any point inside a
+    /// committed animation may produce a fire, whatever the button and however many of them there
+    /// are -- because a fire is a write to `requestAnimationId`, and that write is the cancel.
+    #[test]
+    fn no_press_during_a_committed_animation_can_ever_fire() {
+        let mut engine = dispatcher(CHAINING);
+        for step in 0..40u64 {
+            let elapsed = 0.05 * step as f32;
+            let availability = engine.availability(mid(elapsed));
+            assert_eq!(
+                availability,
+                Availability::Committed,
+                "a3000's window opens at 9.47 s; {elapsed} s must still be committed"
+            );
+            for input in Input::ALL {
+                assert!(
+                    matches!(
+                        engine.press(input, context(1.0, step * 16), availability),
+                        Press::Waiting(_)
+                    ),
+                    "{} at {elapsed} s fired instead of waiting",
+                    input.name()
+                );
+            }
+            assert_eq!(
+                engine.release(context(1.0, step * 16), availability),
+                Released::Nothing
+            );
+        }
+    }
+
+    /// A move the generator found no window on is committed for its whole length -- so it is
+    /// waited out rather than guessed at, and a press during it still is not lost.
+    #[test]
+    fn a_move_with_no_measured_window_is_waited_out_and_the_press_survives_it() {
+        let mut engine = dispatcher("4500 3034:0:0:0 3035:0:1:0");
+        let playing = Some(Playing {
+            animation: 3034,
+            elapsed_s: Some(120.0),
+            cancel_allowed: None,
+        });
+        assert_eq!(engine.availability(playing), Availability::Committed);
+        assert_eq!(
+            engine.press(Input::R1, context(1.0, 0), Availability::Committed),
+            Press::Waiting(Held::Queued)
+        );
+        assert_eq!(
+            engine.release(context(1.0, 100), Availability::Idle),
+            Released::Fire(Input::R1, *engine.moveset().find(3034).unwrap())
+        );
     }
 }

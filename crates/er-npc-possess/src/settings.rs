@@ -465,6 +465,18 @@ pub(crate) struct MappingSettings {
     /// plain attack, so turning this off now genuinely removes something.
     pub(crate) allow_grabs: bool,
     pub(crate) unbound_inputs: UnboundInputs,
+    /// How long a press that could not be honoured yet stays waiting before it is dropped.
+    ///
+    /// Not [`Self::combo_window_ms`], and the two are next to each other in the config file
+    /// precisely because they read alike and mean different things. The combo window is about
+    /// WHICH attack a press gives you -- it decides when the rank cursor falls back to the first
+    /// move of the bucket. This one is about WHEN a press happens at all: a press that lands
+    /// mid-swing is held rather than allowed to cancel the swing, and this is how long it is held
+    /// for before the player is assumed to have given up on it. Reusing the combo window for both
+    /// would silently redefine a number somebody may have tuned for the other meaning.
+    ///
+    /// See [`crate::moveset::chain`].
+    pub(crate) input_buffer_ms: u32,
     /// How long the possessed creature may animate, go nowhere and be asked for nothing before
     /// the watchdog forces it back to idle. See [`crate::moveset::watchdog`].
     pub(crate) watchdog_seconds: f32,
@@ -478,6 +490,10 @@ impl Default for MappingSettings {
             bands_m: (4.0, 12.0),
             allow_grabs: true,
             unbound_inputs: UnboundInputs::Promote,
+            // Long enough to bridge the recovery of an ordinary attack, so a press made during
+            // one still arrives; short enough that a press you have already forgotten about does
+            // not swing at nothing while you walk away.
+            input_buffer_ms: 1000,
             watchdog_seconds: 4.0,
         }
     }
@@ -499,6 +515,14 @@ impl MappingSettings {
             doc,
             s,
             "combo_window_ms",
+            rejections,
+            |raw| raw.trim().parse::<u32>().ok(),
+        );
+        take(
+            &mut self.input_buffer_ms,
+            doc,
+            s,
+            "input_buffer_ms",
             rejections,
             |raw| raw.trim().parse::<u32>().ok(),
         );
@@ -549,10 +573,11 @@ impl MappingSettings {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "model={} combo_window_ms={} bands_m=[{},{}] allow_grabs={} unbound_inputs={} \
-             watchdog_seconds={}",
+            "model={} combo_window_ms={} input_buffer_ms={} bands_m=[{},{}] allow_grabs={} \
+             unbound_inputs={} watchdog_seconds={}",
             self.model.name(),
             self.combo_window_ms,
+            self.input_buffer_ms,
             self.bands_m.0,
             self.bands_m.1,
             self.allow_grabs,

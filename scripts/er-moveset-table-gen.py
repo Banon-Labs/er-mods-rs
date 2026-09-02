@@ -75,7 +75,7 @@ PR = _load('paramread', 'er-param-read.py')
 
 #: Table format version. Bump when the row grammar changes; the Rust parser refuses
 #: a version it was not written for rather than misreading columns.
-TABLE_VERSION = 3
+TABLE_VERSION = 4
 
 #: The animation-id bands this table covers. Banding is a FromSoft convention, not a
 #: proof -- the authoritative "is this an attack" answer is the BehaviorParam join
@@ -162,6 +162,29 @@ RAW_BEHAVIOR_TYPES = {5}
 #:
 #: THE GRAB ITSELF IS SOMEWHERE ELSE ENTIRELY -- see [`ATK_THROW_FIELD`].
 GRAB_EVENT_TYPE = 304
+
+#: The chain window. TAE event type 0 is `ChrActionFlag` and its `params[0]` (`FlagType`)
+#: selects a case in `CS::CSChrTaeAnimEvent::_ChrActionFlag` (1.16.2 `0x1404275e0`). The
+#: case that means "this attack may now be cancelled into another attack" is **86**, whose
+#: body is `actionRequest->taeCancels |= 0x20` -- the bit `CS::CSAiFunc::IsEnableCancelAttack`
+#: (`0x140300800` -> `0x1404075a0`, `taeCancels & 0x20 && !(taeCancels >> 0xb & 1)`) reads.
+#: That is the GAME's own per-animation answer to "may this swing be left yet", asked of a
+#: creature rather than of the player, which is exactly the question a possessed creature has.
+#:
+#: **86 IS THE CREATURE ONE AND 4 IS THE PLAYER ONE, AND THEY ARE NOT INTERCHANGEABLE.**
+#: FlagType 4 (`CANCEL_R1_R2_LIGHT_KICK_HEAVY_KICK`) is the combo window everybody means when
+#: they say "TAE combo window", and it covers 78.8% of c0000's 5,322 attack animations -- but
+#: only 19 of the 6,419 non-player attack animations in this corpus, 0.3%. Building the window
+#: on 4 would have produced a table that was empty for almost every creature this mod can
+#: possess. 86 covers 91.1% of them. 4 is still accepted as a fallback for the handful that
+#: carry it, since both cases mean the same thing to their own kind of character.
+#:
+#: `GetActiveAnimEvent` (`0x14264e420`) re-executes an event on every frame whose playhead
+#: slice `(prevLocalTime, localTime]` overlaps `[startTime, endTime]`, so the window is the
+#: event's own start and end in animation-local seconds and nothing has to be derived.
+CANCEL_ATTACK_FLAG_TYPES = (86, 4)
+#: `params[0]` of a type-0 event, the `FlagType` the dispatcher switches on.
+CHR_ACTION_FLAG_ARG = 0
 
 #: Buckets, in the fixed 4-button layout every creature shares.
 BUCKET_LIGHT, BUCKET_HEAVY, BUCKET_RANGED, BUCKET_MOVEMENT = 0, 1, 2, 3
@@ -296,7 +319,7 @@ def fireable_animations(behbnd_dir):
 # ---------------------------------------------------------------------------
 
 def tae_facts(tae_path):
-    """{animId: {'duration': f, 'abilities': [(type, id)], 'grab': bool}}."""
+    """{animId: {'duration': f, 'abilities': [...], 'grab': bool, 'chain_from': f|None}}."""
     _, anims = TAE.parse(tae_path)
     out = {}
     for raw_id, events in anims.items():
@@ -306,11 +329,22 @@ def tae_facts(tae_path):
         duration = 0.0
         abilities = []
         grab = False
+        chain_from = None
         for event in events:
             for stamp in (event.start, event.end):
                 value = float(stamp)
                 if 0.0 <= value <= MAX_PLAUSIBLE_EVENT_TIME:
                     duration = max(duration, value)
+            # The earliest moment the game itself says this attack may be left. Earliest
+            # rather than latest because a multi-window animation opens the door more than
+            # once and the first opening is the one a player pressing a button will reach;
+            # the runtime already stops treating the move as committed once the animation
+            # has ended, so the closing edge buys nothing worth a second column.
+            if event.type == TAE.JUMPTABLE_EVENT_TYPE and len(event.params) >= 4:
+                flag = struct.unpack_from('<i', event.params, CHR_ACTION_FLAG_ARG * 4)[0]
+                start = float(event.start)
+                if flag in CANCEL_ATTACK_FLAG_TYPES and 0.0 <= start <= MAX_PLAUSIBLE_EVENT_TIME:
+                    chain_from = start if chain_from is None else min(chain_from, start)
             arg = ABILITY_ARG.get(event.type)
             if arg is None:
                 continue
@@ -321,11 +355,21 @@ def tae_facts(tae_path):
             if event.type == GRAB_EVENT_TYPE:
                 grab = True
         record = out.setdefault(anim_id, {'duration': 0.0, 'abilities': [],
-                                          'grab': False})
+                                          'grab': False, 'chain_from': None})
         record['duration'] = max(record['duration'], duration)
         record['abilities'] += abilities
         record['grab'] = record['grab'] or grab
+        record['chain_from'] = _earliest(record['chain_from'], chain_from)
     return out
+
+
+def _earliest(left, right):
+    """min() that treats None as "not measured" rather than as zero."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +524,10 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
             denials.append((fired, DENY_NO_CLIP))
             continue
         facts = tae.get(played) or tae.get(fired) or {}
+        # The chain window belongs to the clip that plays, not to the id that is fired --
+        # `W_Event3110` plays `a000_003000`, and the TimeAct the runtime will be reading is
+        # 3000's. `facts` already resolves in that order for the same reason.
+        chain_from = facts.get('chain_from')
         # DEDUPE. A multi-hit swing repeats the same `(type, behaviorId)` pair once per
         # hitbox activation -- c4500's a3035 carries the same two bullet ids 44 times.
         # Summing the duplicates would rank an attack by how many times the TAE
@@ -523,7 +571,7 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
         throws = sorted(set(throws))
         if band_of(fired) == 'step':
             candidates.append((fired, played, BUCKET_MOVEMENT, 0.0, REACH_UNKNOWN,
-                               (), prefix))
+                               (), prefix, chain_from))
             continue
         if not (melee_any or bullet):
             if missing_atk:
@@ -542,7 +590,8 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
         bucket = BUCKET_RANGED if is_ranged else None
         score = duration * float(damage + bullet_damage)
         candidates.append((fired, played, bucket, score,
-                           reach_band(reach, is_ranged), tuple(throws), prefix))
+                           reach_band(reach, is_ranged), tuple(throws), prefix,
+                           chain_from))
 
     # Light vs heavy by PER-CHR percentile of duration x damage, so a rat and a
     # dragon are comparable: absolute damage would put every one of the rat's
@@ -556,10 +605,10 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
     heavy_from = (len(melee) + 1) // 2
     heavy = {c[0] for c in melee[heavy_from:]}
     resolved = []
-    for fired, played, bucket, score, reach, throws, prefix in candidates:
+    for fired, played, bucket, score, reach, throws, prefix, chain in candidates:
         if bucket is None:
             bucket = BUCKET_HEAVY if fired in heavy else BUCKET_LIGHT
-        resolved.append((fired, played, bucket, score, reach, throws, prefix))
+        resolved.append((fired, played, bucket, score, reach, throws, prefix, chain))
 
     # Rank inside a bucket: ascending score, then ascending animation id. Fully
     # deterministic, so the same corpus always produces the same table and the
@@ -568,8 +617,8 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
     for bucket in (BUCKET_LIGHT, BUCKET_HEAVY, BUCKET_RANGED, BUCKET_MOVEMENT):
         members = sorted((c for c in resolved if c[2] == bucket),
                          key=lambda c: (c[3], c[0]))
-        for rank, (fired, played, _, _, reach, throws, prefix) in enumerate(members):
-            entries.append((fired, played, bucket, rank, reach, throws, prefix))
+        for rank, (fired, played, _, _, reach, throws, prefix, chain) in enumerate(members):
+            entries.append((fired, played, bucket, rank, reach, throws, prefix, chain))
     entries.sort()
 
     # TRIM DENIALS TO THE SPAN THE CREATURE ACTUALLY USES.
@@ -608,7 +657,14 @@ def format_table(per_chr):
         '# entry filename) or a decision this generator made about one.',
         '#',
         '# One line per creature:  <chrid> <entry>...',
-        '#   entry  = <fired>[=<played>][<grab>]:<bucket>:<rank>:<reach>[:<prefix>]',
+        '#   entry  = <fired>[=<played>][<window>][<grab>]:<bucket>:<rank>:<reach>[:<prefix>]',
+        '#   window = w<centiseconds> -- the earliest moment the GAME says this attack may',
+        '#   be cancelled into another one: the start of its TAE type-0 ChrActionFlag event',
+        '#   with FlagType 86, the case whose handler sets the taeCancels bit 0x20 that',
+        '#   CSAiFunc::IsEnableCancelAttack reads. FlagType 4 (the PLAYER combo window) is',
+        '#   accepted as a fallback; it covers 78.8% of c0000 and 0.3% of everything else.',
+        '#   Absent means unmeasured, not zero: the runtime keeps such a move committed for',
+        '#   its whole length rather than guessing a window for it.',
         '#   grab   = g<victimChrId>,<rangeDecimetres>[+<victimChrId>,<rangeDecimetres>]...',
         '#   denial = !<fired>:<reason>',
         '#   "-"    = considered, nothing fireable -- a variant with no animations of its own',
@@ -655,8 +711,13 @@ def format_table(per_chr):
             lines.append(f'{int(chr_id[1:])} -')
             continue
         parts = []
-        for fired, played, bucket, rank, reach, throws, prefix in entries:
+        for fired, played, bucket, rank, reach, throws, prefix, chain in entries:
             head = str(fired) if played == fired else f'{fired}={played}'
+            # CENTISECONDS, and absent when unmeasured. `w0` would be a claim -- "chainable
+            # from the first frame" -- and the runtime treats a missing window as committed
+            # for the whole clip instead, which is the honest reading of "we do not know".
+            if chain is not None:
+                head += f'w{int(round(chain * 100))}'
             # The prefix column is OMITTED for `W_Event`, which is both the common case
             # and the one that costs no game address -- so a four-field entry reads as
             # "fired by the field write" and a five-field one as "fired by name".
@@ -682,10 +743,12 @@ def _one(args):
         try:
             for anim, facts in tae_facts(path).items():
                 merged = tae.setdefault(anim, {'duration': 0.0, 'abilities': [],
-                                               'grab': False})
+                                               'grab': False, 'chain_from': None})
                 merged['duration'] = max(merged['duration'], facts['duration'])
                 merged['abilities'] += facts['abilities']
                 merged['grab'] = merged['grab'] or facts['grab']
+                merged['chain_from'] = _earliest(merged['chain_from'],
+                                                 facts['chain_from'])
         except Exception:
             continue
     return chr_id, (fireable, declared, tae, variation), None
