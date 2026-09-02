@@ -116,9 +116,18 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
             } else {
                 format!(" via {}{:04}", entry.prefix.name(), entry.fire)
             };
+            // Whether a press during this move can chain, or has to wait it out. The distinction
+            // is the difference between a combo and a pause, so it is said per move rather than
+            // left for the player to infer from how it feels. `chains from` is the start of the
+            // animation's own TimeAct cancel window; "no chain window" means the animation
+            // authors none and a press during it waits for the animation to end.
+            let chain = match entry.chain_from_s() {
+                Some(from) => format!(" chains from {from:.2}s"),
+                None => String::from(" no chain window -- a press during it waits"),
+            };
             let _ = writeln!(
                 out,
-                "{} = \"{} rank {} reach {}{plays}{grab}{by}\"",
+                "{} = \"{} rank {} reach {}{plays}{grab}{by},{chain}\"",
                 entry.fire,
                 bucket.name(),
                 entry.rank,
@@ -352,6 +361,18 @@ mod tests {
         assert!(text.contains("Nothing at all"), "{text}");
     }
 
+    /// The player has to be able to tell a move that CHAINS from one that has to be waited out,
+    /// because those feel like two different mods and only one of them is a combo.
+    #[test]
+    fn a_move_says_whether_it_has_a_real_chain_window_or_has_to_be_waited_out() {
+        let text = render(4500, &moveset("4500 3000w947:0:0:1 3034:0:1:0"), "summary");
+        assert!(text.contains("chains from 9.47s"), "{text}");
+        assert!(
+            text.contains("3034 = \"light rank 1 reach unknown, no chain window"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn buckets_are_printed_in_rank_order() {
         let text = render(
@@ -377,7 +398,7 @@ mod tests {
         let doc = crate::toml::Document::parse(&text);
         assert_eq!(
             doc.scalar("chr.c4500", "3000"),
-            Some("light rank 0 reach close")
+            Some("light rank 0 reach close, no chain window -- a press during it waits")
         );
         assert_eq!(
             doc.scalar("chr.c4500", "3013"),

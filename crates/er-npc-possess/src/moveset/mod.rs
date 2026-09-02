@@ -85,13 +85,33 @@
 //!
 //! * [`table`] -- what each creature can do, decided offline. Integers only.
 //! * [`dispatch`] -- four fixed buttons onto 8-60 attacks, by distance band and rank cycling.
+//! * [`chain`] -- WHEN a press is allowed to happen: chain, wait, or fire. Never interrupt.
 //! * [`watchdog`] -- forces idle when an animation strands the creature, and denies it afterwards.
 //! * [`derived`] -- writes every decision, and every denial's reason, where the player can read it.
+//!
+//! # Cancel discipline, which is the fifth thing and arrived last
+//!
+//! Firing was a field write from the first commit, and the field write is honoured whenever it
+//! lands -- `CSChrEventModule::Update` gates it on death, a throw, an HKS-driven flag and five
+//! item-pickup ids, and on NOTHING about the animation currently playing. So for as long as this
+//! layer only decided WHICH move, a second press mid-swing cancelled the first, and the mod both
+//! chained and interrupted depending on when you pressed.
+//!
+//! [`chain`] is the answer, and the rule it applies is the game's own: TAE event type 0 with
+//! `FlagType` 86 sets the `taeCancels` bit that `CS::CSAiFunc::IsEnableCancelAttack` reads to let
+//! a creature's AI chain out of a swing. Reading that bit is the whole oracle; the shipped table
+//! carries the same window measured offline, as the fallback and as something the derived report
+//! can print per move.
 //!
 //! # What is still a seam after this layer
 //!
 //! * **Nothing here is runtime-proven.** Every claim above is static: read out of the 1.16.2 dump,
 //!   the unpacked corpus and `regulation.bin`. The game has not been launched against this code.
+//! * **The cancel window is read one frame late.** The possession ticks in
+//!   `CSTaskGroupIndex::FrameBegin`; `CS::ChrIns::PreBehaviorSafe` clears the transient
+//!   `taeCancels` bits and the TimeAct events re-set them later in the same frame. 16 ms on a
+//!   window whose median width is 800 ms, and not something this layer can fix without a second
+//!   task in a later group.
 //! * **ONE game function address, on the fallback path only.** `requestAnimationId` spells
 //!   `W_Event%04d` and nothing else, and `W_Event` is a broad alias layer rather than a total one
 //!   -- 88.4% num==anim-id across the corpus against 100% for `W_Step` in 6000-6023. So dodges,
@@ -125,6 +145,7 @@
 //!   `ChrIns::npcId` 0, which a SECOND player in the session also has, and this crate makes only
 //!   the possessing player's own body immune. Nothing here has been runtime-tested.
 
+pub(crate) mod chain;
 pub(crate) mod derived;
 pub(crate) mod dispatch;
 pub(crate) mod table;
@@ -168,7 +189,12 @@ mod tests {
             "DENY_THROW_RESULT_CLIP = 10",
             "ATK_THROW_FIELD = 'throwTypeId'",
             "'AtkChrId', 'DefChrId', 'throwTypeId', 'Dist'",
-            "TABLE_VERSION = 3",
+            // The chain window. 86 is the CREATURE cancel-into-attack flag and 4 is the PLAYER
+            // one; swapping them silently would produce a table with almost no windows in it,
+            // which reads as "this game has no combos" rather than as a bug.
+            "CANCEL_ATTACK_FLAG_TYPES = (86, 4)",
+            "CHR_ACTION_FLAG_ARG = 0",
+            "TABLE_VERSION = 4",
         ] {
             assert!(
                 generator.contains(expected),

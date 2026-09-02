@@ -27,12 +27,16 @@ ROOT = os.path.dirname(HERE)
 GENERATOR = os.path.join(HERE, 'er-moveset-table-gen.py')
 TABLE = os.path.join(ROOT, 'crates', 'er-npc-possess', 'data', 'moveset.tbl')
 
-#: `<fired>[=<played>][g<victim>,<rangeDm>[+...]]:<bucket>:<rank>:<reach>[:<prefix>]`.
+#: `<fired>[=<played>][w<chainCs>][g<victim>,<rangeDm>[+...]]:<bucket>:<rank>:<reach>[:<prefix>]`.
 #: The prefix column is optional and absent means `W_Event`, the field-write path. The `g`
 #: group is the THROW spec: which victim chr id and range each matching `ThrowParam` row
-#: demands. `g` on its own is rejected -- a grab with no row behind it is not a grab.
+#: demands. `g` on its own is rejected -- a grab with no row behind it is not a grab. The `w`
+#: group is the chain window in centiseconds -- the start of the animation's TAE cancel window
+#: -- and absent means the generator measured none, which the runtime reads as "committed for
+#: the whole clip" rather than as zero.
 ENTRY_RE = re.compile(
-    r'^(\d+)(?:=(\d+))?(?:g(\d+,\d+(?:\+\d+,\d+)*))?:([0-3]):(\d+):([0-3])(?::(\d+))?$')
+    r'^(\d+)(?:=(\d+))?(?:w(\d+))?(?:g(\d+,\d+(?:\+\d+,\d+)*))?'
+    r':([0-3]):(\d+):([0-3])(?::(\d+))?$')
 #: Reason codes are one or more digits: `throw-result-clip` is 10.
 DENIAL_RE = re.compile(r'^!(\d+):([1-9]\d*)$')
 
@@ -61,6 +65,7 @@ def check_shape(text):
     creatures = 0
     moves = 0
     grabs = 0
+    windows = 0
     for number, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line or line.startswith('#'):
@@ -91,9 +96,20 @@ def check_shape(text):
                 problems.append(f'line {number}: bad entry {field!r}')
                 continue
             moves += 1
-            fired, bucket, rank = int(match.group(1)), int(match.group(4)), int(match.group(5))
-            prefix = int(match.group(7) or 0)
-            if match.group(3):
+            fired, bucket, rank = int(match.group(1)), int(match.group(5)), int(match.group(6))
+            prefix = int(match.group(8) or 0)
+            if match.group(3) is not None:
+                windows += 1
+                # A zero window would mean "chainable from the first frame", i.e. cancellable
+                # before the swing has begun, which is the behaviour this column exists to
+                # stop. The generator writes no `w` at all when it measured nothing, so a
+                # literal `w0` can only be a rounding or units mistake.
+                if int(match.group(3)) == 0:
+                    problems.append(
+                        f'line {number}: entry {field!r} declares a chain window of zero; '
+                        f'omit the window instead of claiming the move is cancellable on its '
+                        f'first frame')
+            if match.group(4):
                 grabs += 1
                 # THE GRAB IS THE INITIATOR, NEVER THE THROW-RESULT CLIP. If a 4000-band id
                 # ever shows up marked as a grab, the join has gone back to reading TimeAct
@@ -103,7 +119,7 @@ def check_shape(text):
                     problems.append(
                         f'line {number}: entry {field!r} is marked a grab but sits outside '
                         f'the attack band {lo}-{hi}')
-                for row in match.group(3).split('+'):
+                for row in match.group(4).split('+'):
                     if int(row.split(',')[1]) <= 0:
                         problems.append(
                             f'line {number}: entry {field!r} has a zero-range ThrowParam row')
@@ -134,6 +150,16 @@ def check_shape(text):
         problems.append(
             f'only {grabs} grab-marked moves -- the corpus has 153 across 78 creatures; the '
             'AtkParam_Npc.throwTypeId -> ThrowParam join is not producing them')
+    # The same shape of regression, one column along. The chain window is a TAE type-0 event
+    # with FlagType 86 -- the CREATURE cancel-into-attack flag. FlagType 4 is the PLAYER one and
+    # covers 0.3% of non-player attack animations, so reading the wrong number would leave this
+    # near zero while everything still parsed. Near zero is not "these creatures cannot combo";
+    # it is "the runtime will make the player wait out every animation".
+    if windows < moves // 2:
+        problems.append(
+            f'only {windows} of {moves} moves carry a chain window -- most attack animations '
+            'author a TAE type-0 ChrActionFlag event with FlagType 86, so this low a count means '
+            'the generator is reading the wrong flag (4 is the player one) or the wrong param')
     return problems
 
 
@@ -177,6 +203,9 @@ def selftest():
         ('4500 3000g:0:0:1', 'a grab with no ThrowParam row behind it'),
         ('4500 4100g0,100:0:0:1', 'a grab marked on a throw-result clip'),
         ('4500 3000g0,0:0:0:1', 'a zero-range ThrowParam row'),
+        # A zero chain window is not the same statement as no window: it claims the attack may
+        # be cancelled on its first frame, which is the behaviour the column exists to prevent.
+        ('4500 3000w0:0:0:1', 'a chain window of zero'),
     ]
     for corrupt, why in corruptions:
         text = 'v1\n' + (corrupt + '\n') * 250
@@ -189,8 +218,8 @@ def selftest():
     # denial reason, and a plain denial.
     good = 'v1\n' + '\n'.join(
         f'{4000 + n} '
-        + ' '.join(f'{3000 + rank}:0:{rank}:1' for rank in range(5))
-        + ' 3100:1:0:2 3101g0,100:1:1:1 3102g0,100+3300,55:1:2:1'
+        + ' '.join(f'{3000 + rank}w{100 + rank}:0:{rank}:1' for rank in range(5))
+        + ' 3100w250:1:0:2 3101w300g0,100:1:1:1 3102w310g0,100+3300,55:1:2:1'
         + ' 3110=3000:2:0:3 6000:3:0:0:2 !3010:3 !4100:10'
         for n in range(300))
     problems = check_shape(good + '\n')

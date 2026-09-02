@@ -34,9 +34,9 @@
 //! skips when the read fails. That turns a stale pointer into a missed frame rather than a crash.
 
 use eldenring::cs::{
-    CSChrBehaviorModule, CSChrDataModule, CSChrEventModule, CSChrPhysicsModule, CSChrTimeActModule,
-    CSChrTimeActModuleAnim, ChrCtrl as CsChrCtrl, ChrIns as CsChrIns, ChrInsModuleContainer,
-    ChrSet, ChrType, WorldChrMan, WorldChrManDbg,
+    CSChrActionRequestModule, CSChrBehaviorModule, CSChrDataModule, CSChrEventModule,
+    CSChrPhysicsModule, CSChrTimeActModule, CSChrTimeActModuleAnim, ChrCtrl as CsChrCtrl,
+    ChrIns as CsChrIns, ChrInsModuleContainer, ChrSet, ChrType, WorldChrMan, WorldChrManDbg,
 };
 use er_game_base::mem::{
     game_rva_named, is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8,
@@ -46,9 +46,9 @@ use fromsoftware_shared::FromStatic;
 
 use crate::possess::intent::{IntentWrite, Stick};
 use crate::possess::layout::{
-    ai_ins, ai_path_data, chr_behavior_module, chr_ctrl, chr_ctrl_modifier, chr_data_module,
-    chr_event_module, chr_ins, chr_physics_module, chr_time_act_module, manipulator, modules,
-    world_chr_man_dbg,
+    ai_ins, ai_path_data, chr_action_request_module, chr_behavior_module, chr_ctrl,
+    chr_ctrl_modifier, chr_data_module, chr_event_module, chr_ins, chr_physics_module,
+    chr_time_act_module, manipulator, modules, world_chr_man_dbg,
 };
 use crate::settings::{TargetMode, TargetSettings};
 
@@ -85,6 +85,13 @@ const _: () = {
     assert!(core::mem::offset_of!(ChrInsModuleContainer, behavior) == modules::BEHAVIOR);
     assert!(core::mem::offset_of!(ChrInsModuleContainer, event) == modules::EVENT);
     assert!(
+        core::mem::offset_of!(ChrInsModuleContainer, action_request) == modules::ACTION_REQUEST
+    );
+    assert!(
+        core::mem::offset_of!(CSChrActionRequestModule, tae_cancels)
+            == chr_action_request_module::TAE_CANCELS
+    );
+    assert!(
         core::mem::offset_of!(CSChrEventModule, request_animation_id)
             == chr_event_module::REQUEST_ANIMATION_ID
     );
@@ -93,6 +100,16 @@ const _: () = {
     );
     assert!(core::mem::offset_of!(CSChrTimeActModule, read_idx) == chr_time_act_module::READ_IDX);
     assert!(core::mem::size_of::<CSChrTimeActModuleAnim>() == chr_time_act_module::ANIM_STRIDE);
+    // `localTime` is the THIRD field, and upstream keeps it private under the name `play_time2`
+    // -- so it cannot be reached by `offset_of!` and is pinned by arithmetic against the two
+    // public neighbours instead. `anim_length` is at +0xC and the entry is 0x10 wide, so the
+    // private field between `play_time` (+0x4) and `anim_length` sits at +0x8; if upstream ever
+    // repacks the entry, this stops matching and says so at compile time rather than reading a
+    // float out of the wrong quarter of the record.
+    assert!(
+        core::mem::offset_of!(CSChrTimeActModuleAnim, anim_length)
+            == chr_time_act_module::ANIM_LOCAL_TIME + size_of::<f32>()
+    );
     assert!(
         core::mem::offset_of!(CSChrBehaviorModule, root_motion) == chr_behavior_module::ROOT_MOTION
     );
@@ -315,8 +332,8 @@ impl Chr {
             .is_some_and(|pending| pending != -1)
     }
 
-    /// The animation playing right now, from the TimeAct ring buffer's read cursor.
-    pub(crate) fn current_animation(self) -> Option<i32> {
+    /// The TimeAct queue entry the read cursor points at -- i.e. what is playing right now.
+    fn current_anim_entry(self) -> Option<usize> {
         let time_act = self.module(modules::TIME_ACT)?;
         let read = unsafe { safe_read_i32(time_act + chr_time_act_module::READ_IDX) }?;
         let index = u32::try_from(read).ok()?;
@@ -326,10 +343,54 @@ impl Chr {
             // whatever follows it.
             return None;
         }
-        let entry = time_act
-            + chr_time_act_module::ANIM_QUEUE
-            + (index as usize) * chr_time_act_module::ANIM_STRIDE;
-        unsafe { safe_read_i32(entry) }
+        Some(
+            time_act
+                + chr_time_act_module::ANIM_QUEUE
+                + (index as usize) * chr_time_act_module::ANIM_STRIDE,
+        )
+    }
+
+    /// The animation playing right now, from the TimeAct ring buffer's read cursor.
+    pub(crate) fn current_animation(self) -> Option<i32> {
+        unsafe { safe_read_i32(self.current_anim_entry()?) }
+    }
+
+    /// May the animation being played be cancelled into another attack right now?
+    ///
+    /// The engine's own answer, not this crate's: the two tests are exactly the ones
+    /// `CS::CSAiFunc::IsEnableCancelAttack` applies before letting a creature's AI chain out of a
+    /// swing. `None` means the module chain did not read, which is a different answer from "no"
+    /// and the caller treats it as such -- see [`crate::moveset::chain`].
+    ///
+    /// One frame late, and that is fine. The possession ticks in `CSTaskGroupIndex::FrameBegin`,
+    /// while `PreBehaviorSafe` clears the transient bits and the TimeAct events re-set them
+    /// during the behaviour update -- both later in the same frame. So this reads the window the
+    /// PREVIOUS frame established, 16 ms of latency on a window whose median width is 800 ms.
+    pub(crate) fn attack_cancel_allowed(self) -> Option<bool> {
+        let module = self.module(modules::ACTION_REQUEST)?;
+        // `safe_read_u32` is not in `er_game_base::mem`; the field is a `u32` and the cast is
+        // the whole difference, so the bits are the same bits either way.
+        let flags =
+            unsafe { safe_read_i32(module + chr_action_request_module::TAE_CANCELS) }? as u32;
+        Some(
+            flags & chr_action_request_module::CANCEL_ATTACK != 0
+                && flags & chr_action_request_module::CANCEL_DISABLE == 0,
+        )
+    }
+
+    /// How far into that animation the creature is, in its own seconds.
+    ///
+    /// `animQueue[readIdx].localTime`. This is the whole basis of the cancel discipline -- see
+    /// [`crate::moveset::chain`] -- and it is a plain field read inside a structure this crate had
+    /// already resolved, so it costs no game address.
+    pub(crate) fn current_animation_elapsed(self) -> Option<f32> {
+        let elapsed = unsafe {
+            safe_read_i32(self.current_anim_entry()? + chr_time_act_module::ANIM_LOCAL_TIME)
+        }?;
+        // A negative or absurd reading means the entry is not what it should be; `chain` treats a
+        // non-finite value as unmeasured and waits, which is the safe direction.
+        let elapsed = f32::from_bits(elapsed as u32);
+        elapsed.is_finite().then_some(elapsed)
     }
 
     /// The creature's `hkbCharacter`, by two loads.

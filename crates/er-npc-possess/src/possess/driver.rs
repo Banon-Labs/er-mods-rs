@@ -14,7 +14,8 @@ use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
 use crate::hud;
 use crate::input::FaceEdges;
 use crate::log::possess_log;
-use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion};
+use crate::moveset::chain::{Availability, Held, Playing};
+use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion, NoMove, Press, Released};
 use crate::moveset::table::{self, Denial};
 use crate::moveset::watchdog::{Sample, Verdict, Watchdog};
 use crate::moveset::{derived, table as moveset_table};
@@ -142,6 +143,12 @@ struct Possessing {
     /// Did a request actually land on the previous frame? Read one frame late because the
     /// watchdog runs before the firing does, and consumed on read.
     fired_last_frame: bool,
+    /// Has the "your press is waiting rather than cancelling" line been said this possession?
+    ///
+    /// Once, not per press, for the same reason as [`Self::reported_dead_input`]: the log opens
+    /// and closes the file per line, and this is the state a player mashing through a long
+    /// animation is in on every one of sixty frames a second.
+    reported_buffered_press: bool,
 }
 
 impl Possessing {
@@ -470,10 +477,21 @@ impl NpcPossessionEngine {
         // evidence of being stuck, not evidence against it, so a player mashing at a softlock must
         // not be able to hold the watchdog off indefinitely.
         let consumed = core::mem::take(&mut state.fired_last_frame);
+        // What the creature is doing, and whether it is willing to be left. Read ONCE per frame
+        // and shared by the release and the press, so a buffered press and a fresh one on the
+        // same frame cannot disagree about what is playing.
+        let playing = state.creature.current_animation().map(|animation| Playing {
+            animation,
+            elapsed_s: state.creature.current_animation_elapsed(),
+            cancel_allowed: state.creature.attack_cancel_allowed(),
+        });
+        // `mut` because a release that fires spends the frame's one request slot, which makes
+        // anything else pressed this frame mid-animation by definition -- see below.
+        let mut availability = dispatcher.availability(playing);
 
-        if let Some(animation) = state.creature.current_animation() {
+        if let Some(current) = playing {
             let sample = Sample {
-                animation,
+                animation: current.animation,
                 // An unreadable root motion is treated as MOVING, i.e. not stuck. Failing the
                 // other way would force idle out of a perfectly good attack whenever the module
                 // pointer happened not to read.
@@ -489,6 +507,11 @@ impl NpcPossessionEngine {
                     dispatcher
                         .moveset_mut()
                         .deny(blame, Denial::UnusableAtRuntime);
+                    // A press queued behind an animation that has just been declared unusable is
+                    // stale: it was aimed at continuing a chain that turned out to be a softlock.
+                    // Dropped explicitly, because `on_neutral` deliberately does NOT reset while
+                    // something is waiting.
+                    dispatcher.forget_buffered_press();
                     dispatcher.on_neutral();
                     // THE NUMBER IS THE POSSESSION CLOCK, NOT THE STUCK DURATION, and the wording
                     // used to say the opposite -- "stuck ... for {elapsed_ms} ms" reported a
@@ -517,7 +540,9 @@ impl NpcPossessionEngine {
             }
         }
 
-        if pressed == 0 {
+        // Nothing pressed and nothing waiting: there is no work, and in particular no reason to
+        // pay for the distance sweep a `Context` needs.
+        if pressed == 0 && !dispatcher.is_holding() {
             return;
         }
         // ONE REQUEST PER FRAME, and only into an empty slot. `requestAnimationId` holds a single
@@ -527,13 +552,6 @@ impl NpcPossessionEngine {
         if state.creature.animation_request_pending() {
             return;
         }
-        let Some(input) = Input::ALL
-            .iter()
-            .copied()
-            .find(|input| pressed & (1 << Self::input_bit(*input)) != 0)
-        else {
-            return;
-        };
         let context = Context {
             distance_m: game::nearest_hostile_distance(state.creature),
             locomotion: if moving {
@@ -543,29 +561,110 @@ impl NpcPossessionEngine {
             },
             now_ms: state.elapsed_ms,
         };
-        match dispatcher.press(input, context) {
-            Ok(chosen) => {
-                if Self::fire(state.creature, chosen) {
-                    state.watchdog.armed_with(chosen.fire);
-                    state.fired_last_frame = true;
-                }
+
+        // The waiting press goes first, and it has to. A press held through an attack is older
+        // than anything arriving this frame, and the frame the animation lets go is exactly the
+        // frame a fresh press would also be allowed -- so spending the slot on the new one would
+        // silently eat the old one and give the player one attack for two presses.
+        match dispatcher.release(context, availability) {
+            Released::Nothing => {}
+            Released::Fire(_, chosen) => {
+                Self::fire_chosen(
+                    state.creature,
+                    &mut state.watchdog,
+                    &mut state.fired_last_frame,
+                    chosen,
+                );
+                // The frame's one request slot is now spent on an attack that has just started,
+                // so anything ALSO pressed this frame is by definition arriving mid-animation.
+                // Saying so rather than returning is what keeps it: it buffers instead of being
+                // thrown away, and the chain carries on.
+                availability = Availability::Committed;
             }
-            Err(reason) => {
-                // Said once per possession per input rather than per press: a player holding a
-                // dead button would otherwise write the log file at sixty lines a second.
-                if !state.reported_dead_input[Self::input_bit(input)] {
-                    state.reported_dead_input[Self::input_bit(input)] = true;
+            Released::Expired(input) => possess_log(format_args!(
+                "moveset: the {} press made while the creature was mid-attack waited out \
+                 [mapping] input_buffer_ms and was dropped. Raise it if you want presses made \
+                 early in a long animation to still arrive.",
+                input.name(),
+            )),
+            Released::Empty(input, reason) => {
+                Self::report_dead_input(&mut state.reported_dead_input, state.chr_id, input, reason)
+            }
+        }
+
+        if pressed == 0 {
+            return;
+        }
+        let Some(input) = Input::ALL
+            .iter()
+            .copied()
+            .find(|input| pressed & (1 << Self::input_bit(*input)) != 0)
+        else {
+            return;
+        };
+        match dispatcher.press(input, context, availability) {
+            Press::Fire(chosen) => Self::fire_chosen(
+                state.creature,
+                &mut state.watchdog,
+                &mut state.fired_last_frame,
+                chosen,
+            ),
+            Press::Waiting(held) => {
+                // Once per possession, not per press. The point is to tell a player who expected
+                // a cancel that the press was KEPT rather than eaten; repeating it sixty times a
+                // second would bury the log.
+                if !state.reported_buffered_press {
+                    state.reported_buffered_press = true;
                     possess_log(format_args!(
-                        "moveset: {} has nothing to fire on c{:04} ({}). See {} for what this \
-                         creature has and why the rest was withheld.",
+                        "moveset: {} landed while the creature was still committed to what it is \
+                         playing, so it is waiting rather than cancelling it. It fires the moment \
+                         the game says a chain is allowed, or when the animation ends -- \
+                         whichever comes first. {}",
                         input.name(),
-                        state.chr_id,
-                        reason.explanation(),
-                        crate::config::DERIVED_CONFIG_FILE_NAME,
+                        match held {
+                            Held::Queued => "Nothing else was waiting.",
+                            Held::Replaced => "It replaced an earlier press; only one is kept.",
+                        },
                     ));
                 }
             }
+            Press::Nothing(reason) => {
+                Self::report_dead_input(&mut state.reported_dead_input, state.chr_id, input, reason)
+            }
         }
+    }
+
+    /// Fire a chosen move and record that the frame spent its one request on it.
+    ///
+    /// Takes the three fields it touches rather than `&mut Possessing`, because every caller is
+    /// holding a mutable borrow of the sibling `moveset` field while it calls this.
+    fn fire_chosen(
+        creature: Chr,
+        watchdog: &mut Watchdog,
+        fired_last_frame: &mut bool,
+        chosen: table::Move,
+    ) {
+        if Self::fire(creature, chosen) {
+            watchdog.armed_with(chosen.fire);
+            *fired_last_frame = true;
+        }
+    }
+
+    /// Said once per possession per input rather than per press: a player holding a dead button
+    /// would otherwise write the log file at sixty lines a second.
+    fn report_dead_input(reported: &mut [bool; 4], chr_id: u32, input: Input, reason: NoMove) {
+        if reported[Self::input_bit(input)] {
+            return;
+        }
+        reported[Self::input_bit(input)] = true;
+        possess_log(format_args!(
+            "moveset: {} has nothing to fire on c{:04} ({}). See {} for what this creature has \
+             and why the rest was withheld.",
+            input.name(),
+            chr_id,
+            reason.explanation(),
+            crate::config::DERIVED_CONFIG_FILE_NAME,
+        ));
     }
 
     /// Fire one move, by whichever of the two paths its prefix says.
@@ -1025,6 +1124,7 @@ impl NpcPossessionEngine {
             chr_id,
             reported_dead_input: [false; 4],
             fired_last_frame: false,
+            reported_buffered_press: false,
         };
         Self::write_derived(chr_id, &state.camera, creature, state.moveset.as_ref());
         match state.moveset.as_ref() {
