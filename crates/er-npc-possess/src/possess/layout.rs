@@ -514,8 +514,29 @@ pub(crate) mod chr_physics_module {
     /// so the question "does the release point already qualify as ground" is a field read rather
     /// than a sphere cast. Cross-checked.
     pub(crate) const STANDING_ON_SOLID_GROUND: usize = 0x92;
-    /// `lastGroundedPosition`, engine-maintained. By construction a point this character stood
-    /// on, which is the free fallback when it dies airborne. RE-ONLY (`unk150` in the crate).
+    /// `lastGroundedPosition`. RE-ONLY (`unk150` in the crate), and the one field in this table
+    /// that is both READ and WRITTEN.
+    ///
+    /// Read, it is a point the character demonstrably stood on -- the free fallback for the release
+    /// point when the creature dies airborne.
+    ///
+    /// **Written, it is the possession's fall-death safety.** `CSChrFallModule`'s landing handler
+    /// charges for a fall of `lastGroundedPosition.y - GetPosition().y`, and dispatches the
+    /// fall-death call through the character's manipulator vtable when that exceeds a global
+    /// threshold. That path never calls `ChrIns::IsImmuneToAttack`, so
+    /// [`super::chr_ins::INVINCIBLE`] does not cover it -- which is why the body neuter has to
+    /// write this field rather than rely on the bit.
+    /// `CSChrPhysicsModule::ForceSetPosition`, which is how co-location moves the body, writes
+    /// `position` and `prevUpdatePosition` and leaves this one alone.
+    ///
+    /// BOTH BUILDS, byte-proven, and the pattern matches UNIQUELY in each image -- 1.16.2
+    /// `0x14044dd1f`, 1.17 `0x14044e27f`. `48 8b 88 90 01 00 00` is [`super::chr_ins::MODULES`],
+    /// `48 8b 59 68` is [`super::modules::PHYSICS`], and `0f 10 b3 50 01 00 00` is this offset:
+    ///
+    /// ```text
+    /// MOV RCX,[RAX+0x190] ; MOV RBX,[RCX+0x68] ; CALL GetPosition
+    /// MOVUPS XMM6,[RBX+0x150] ; SHUFPS XMM6,XMM6,0x55 ; SUBSS XMM6,[RAX+0x4]
+    /// ```
     pub(crate) const LAST_GROUNDED_POSITION: usize = 0x150;
     /// `orientationEuler`, a `FloatVector4` whose `.y` is yaw in radians -- the same convention
     /// `ChrCtrl.ragdollRotation` expects, so co-location can copy it across without touching a

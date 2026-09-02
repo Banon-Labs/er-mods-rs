@@ -24,6 +24,14 @@
 //! The one restriction that IS enforced is the format: [`request::MAX_CHR_ID`], because the name is
 //! `c%04d` and a five-digit id would spell a directory that cannot exist.
 //!
+//! # ...and one that is enforced on the PLACEMENT, which is new
+//!
+//! `[spawn].distance_m` used to be the whole answer, for every creature. It is now a FLOOR: the
+//! creature is put far enough out that its own physics capsule clears the player's, and the
+//! configured distance only wins when it is already further than that. See [`placement`] for the
+//! arithmetic, the measured case that produced it, and why the radius rather than the height is
+//! the field that decides overlap.
+//!
 //! # What this layer costs, in the currency this crate counts
 //!
 //! Two game function addresses, taking the crate from one to three. Both are byte-verified in both
@@ -47,6 +55,7 @@
 //! `crate::possess::teardown::Step::DespawnCreature`'s discriminant, sitting after
 //! `ClearManipulatorOverride`, with a test that fails if anyone reorders them.
 
+pub(crate) mod placement;
 pub(crate) mod readiness;
 pub(crate) mod request;
 
