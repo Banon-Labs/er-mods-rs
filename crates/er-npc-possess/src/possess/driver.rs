@@ -843,9 +843,11 @@ impl NpcPossessionEngine {
         if !state.creature.write_move_intent(write) && first_frame {
             // Said once, on the frame it is first known, rather than sixty times a second.
             possess_log(format_args!(
-                "movement: the AiIns layout canary did not pass, so no movement intent is being \
-                 written -- the character is possessed and camera-followed but will not walk. \
-                 The AiIns offsets are byte-proven on 1.16.2 and 1.17, so this is a THIRD build"
+                "movement: the AiIns identity round trip did not close, so no movement intent is \
+                 being written -- the character is possessed and camera-followed but will not \
+                 walk. The check is exact (AiIns.comThinkOwner must BE the manipulator's inline \
+                 member, which must point back at this ChrCtrl), so a failure means either a \
+                 build whose ComManipulator/AiIns layout moved or an AiIns that is no longer live"
             ));
         }
     }
