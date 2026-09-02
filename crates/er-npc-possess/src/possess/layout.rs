@@ -1130,6 +1130,61 @@ pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize
     }
 }
 
+/// THE GAME'S OWN RECEIVE BUFFER FOR PLAYER-VERSUS-PLAYER DAMAGE.
+///
+/// `WorldChrManImp`'s packet pump (1.16.2 `FUN_14050e4a0`, 1.17 `FUN_14050f2a0`) dequeues each
+/// arriving `Packet15` into ONE function-static buffer and then applies it. The buffer is not
+/// cleared afterwards, so it always holds the last PvP damage packet this process received --
+/// which makes it a read-only oracle for the one question this crate could not otherwise answer:
+/// when nobody's HP moves, did their damage ARRIVE and get ignored, or did it never arrive?
+///
+/// The pump's own sequence, in its own order, is what these offsets are transcribed from:
+///
+/// ```text
+/// LEA  RCX,[buffer]              ; CALL validate      (1.16.2 0x140ca6280 / 1.17 0x140ca7950)
+/// MOV  EAX,[buffer+0x128] / [+0x12c]  -> GetChrInsByP2PEntityHandle ; JZ skip   (the VICTIM)
+/// MOV  ECX,[buffer+0x120] / [+0x124]  -> GetChrInsByP2PEntityHandle ; JZ skip   (the DEALER)
+/// ... HitChr(victim->damage, dealer, info, true)
+/// MOV  EDX,[data+0x138]          ; hp
+/// MOVSX EAX,word ptr [buffer+0x130]   ; the damage, SIGNED 16-BIT
+/// SUB  EDX,EAX ; CALL SetHP
+/// MOV  EDX,[data+0x154]          ; stamina
+/// MOVSX EAX,word ptr [buffer+0x132]
+/// SUB  EDX,EAX ; CALL SetStamina
+/// ```
+///
+/// Note the width: the damage is read with `MOVSX ..., word ptr`, so it is an `i16`. A decompiler
+/// widening it to `int` is the kind of detail that makes a telemetry reader print garbage.
+pub(crate) mod packet15_receive {
+    /// Buffer base, 1.16.2 (`0x143d65fd0`).
+    pub(crate) const BUFFER_RVA_1162: u32 = 0x03d6_5fd0;
+    /// Buffer base, 1.17 (`0x143d6a040`). The four fields moved as one block, delta `+0x4070`,
+    /// which is why they are one base and fixed offsets rather than four constants per build.
+    pub(crate) const BUFFER_RVA_1170: u32 = 0x03d6_a040;
+    /// The attacker's `P2PEntityHandle` (`blockId`, `chrSelector`), 8 bytes.
+    pub(crate) const DEALER_HANDLE: usize = 0x120;
+    /// The victim's `P2PEntityHandle`, 8 bytes. On a packet aimed at us this is OUR handle.
+    pub(crate) const VICTIM_HANDLE: usize = 0x128;
+    /// The HP the pump subtracts, an `i16`.
+    pub(crate) const DAMAGE: usize = 0x130;
+    /// The stamina the pump subtracts, an `i16`.
+    pub(crate) const STAMINA: usize = 0x132;
+}
+
+/// The `Packet15` receive-buffer RVA FOR THE RUNNING BUILD, or `None` on a build nobody measured.
+///
+/// Refuses rather than guessing for the same reason [`debug_flags_offset`] does, and the stakes
+/// are lower but the failure is worse to read: a wrong base here does not crash, it prints a
+/// plausible number from unrelated memory and sends the next investigation somewhere false.
+#[must_use]
+pub(crate) fn packet15_receive_rva(version: Option<FileVersion>) -> Option<u32> {
+    match version? {
+        v if v == SUPPORTED_FILE_VERSION => Some(packet15_receive::BUFFER_RVA_1162),
+        v if v == FILE_VERSION_1170 => Some(packet15_receive::BUFFER_RVA_1170),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,6 +1211,45 @@ mod tests {
     /// The value is the whole of the lock-on fix, so it is pinned rather than left as a literal
     /// somebody could "tidy" into the player's team id -- which would work for lock-on and would
     /// also tell every PvP and invasion path that an `EnemyIns` is a player.
+    /// THE RECEIVE BUFFER IS A DIFFERENT ADDRESS ON EACH BUILD, and refusing beats guessing.
+    ///
+    /// The two bases are `0x4070` apart, which is nothing recognisable in either image, so a wrong
+    /// choice reads live-but-unrelated memory and prints a plausible packet that never arrived --
+    /// the worst possible failure for an instrument whose whole job is to say whether one did.
+    #[test]
+    fn the_packet15_receive_buffer_is_per_build_and_refuses_an_unknown_one() {
+        assert_eq!(
+            packet15_receive_rva(Some(SUPPORTED_FILE_VERSION)),
+            Some(packet15_receive::BUFFER_RVA_1162)
+        );
+        assert_eq!(
+            packet15_receive_rva(Some(FILE_VERSION_1170)),
+            Some(packet15_receive::BUFFER_RVA_1170)
+        );
+        assert_eq!(packet15_receive_rva(None), None);
+        assert_eq!(
+            packet15_receive_rva(Some(FileVersion {
+                major: 2,
+                minor: 8,
+                build: 0,
+                revision: 0,
+            })),
+            None
+        );
+        // The block moved as a unit, which is why the fields are offsets and not per-build
+        // constants. If a future build breaks that, this is where it shows up.
+        assert_eq!(
+            u64::from(packet15_receive::BUFFER_RVA_1170)
+                - u64::from(packet15_receive::BUFFER_RVA_1162),
+            0x4070
+        );
+        // ...and the four fields sit where the pump's own instructions read them.
+        assert_eq!(packet15_receive::DEALER_HANDLE, 0x120);
+        assert_eq!(packet15_receive::VICTIM_HANDLE, 0x128);
+        assert_eq!(packet15_receive::DAMAGE, 0x130);
+        assert_eq!(packet15_receive::STAMINA, 0x132);
+    }
+
     #[test]
     fn the_charmed_team_is_the_byte_the_game_itself_writes() {
         const {

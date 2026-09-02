@@ -1228,11 +1228,12 @@ impl NpcPossessionEngine {
             } else {
                 netdamage::Category::None
             };
-            for line in
-                state
-                    .net
-                    .observe(creature_category, &game::players_in_world(), state.frames)
-            {
+            for line in state.net.observe(
+                creature_category,
+                &game::players_in_world(),
+                game::last_received_damage_packet(),
+                state.frames,
+            ) {
                 possess_log(format_args!("{line}"));
             }
         }

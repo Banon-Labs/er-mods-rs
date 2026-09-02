@@ -38,14 +38,16 @@ use eldenring::cs::{
     CSChrPhysicsModule, CSChrTimeActModule, CSChrTimeActModuleAnim, ChrCtrl as CsChrCtrl,
     ChrIns as CsChrIns, ChrInsModuleContainer, ChrSet, ChrType, WorldChrMan, WorldChrManDbg,
 };
+use er_game_base::game_build::game_file_version;
 use er_game_base::mem::{
-    game_rva_named, is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8,
+    game_rva_named, is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8, safe_read_u16,
     safe_read_usize,
 };
 use fromsoftware_shared::FromStatic;
 
 use crate::possess::fall::{self, FallState};
 use crate::possess::intent::{IntentWrite, Stick};
+use crate::possess::layout::{self, packet15_receive};
 use crate::possess::layout::{
     ai_ins, ai_path_data, chr_action_request_module, chr_behavior_module, chr_ctrl,
     chr_ctrl_modifier, chr_data_module, chr_event_module, chr_ins, chr_physics_module,
@@ -1464,4 +1466,35 @@ pub(crate) fn players_in_world() -> Vec<netdamage::Seen> {
         });
     }
     seen
+}
+
+/// THE LAST PLAYER-VERSUS-PLAYER DAMAGE PACKET THIS PROCESS RECEIVED.
+///
+/// `WorldChrManImp`'s packet pump dequeues every arriving `Packet15` into one function-static
+/// buffer and never clears it, so reading that buffer answers the question no amount of local
+/// telemetry could: when nobody's HP moves, did the other player's damage ARRIVE?
+///
+/// Read-only, and the only game ADDRESS this module resolves for the net-damage watch -- one
+/// per-build data RVA, refused rather than guessed on an unmeasured build. See
+/// [`crate::possess::layout::packet15_receive`] for the pump's own instruction sequence and for
+/// why the damage is an `i16`.
+///
+/// `None` means the build is unmeasured or the read faulted, which the ledger reports as such
+/// rather than as an absence of packets.
+pub(crate) fn last_received_damage_packet() -> Option<netdamage::ReceivedPacket> {
+    let rva = layout::packet15_receive_rva(game_file_version())?;
+    let base = er_game_base::mem::game_module_base().ok()? + rva as usize;
+    // Handles are two `u32`s side by side; read them as one `usize` so a partial read is a miss
+    // rather than half a handle. `safe_read_usize` is `ReadProcessMemory`, so an address that has
+    // somehow gone bad answers `None` instead of raising.
+    let dealer = unsafe { safe_read_usize(base + packet15_receive::DEALER_HANDLE) }? as u64;
+    let victim = unsafe { safe_read_usize(base + packet15_receive::VICTIM_HANDLE) }? as u64;
+    let damage = unsafe { safe_read_u16(base + packet15_receive::DAMAGE) }? as i16;
+    let stamina = unsafe { safe_read_u16(base + packet15_receive::STAMINA) }? as i16;
+    Some(netdamage::ReceivedPacket {
+        dealer,
+        victim,
+        damage,
+        stamina,
+    })
 }

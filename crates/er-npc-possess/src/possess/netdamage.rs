@@ -382,6 +382,46 @@ impl Seen {
     }
 }
 
+/// The last player-versus-player damage packet this process received, as the game's own pump
+/// left it in its static buffer.
+///
+/// See [`crate::possess::layout::packet15_receive`] for where it lives and why it can be read.
+/// This is the instrument that splits the remaining question in two: their damage never arrived,
+/// or it arrived and something here refused it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct ReceivedPacket {
+    /// The attacker's `P2PEntityHandle`, both halves as one `u64`.
+    pub(crate) dealer: u64,
+    /// The victim's handle. On a packet aimed at us, ours.
+    pub(crate) victim: u64,
+    /// HP the pump subtracted. `i16` because the pump reads it with `MOVSX .., word ptr`.
+    pub(crate) damage: i16,
+    /// Stamina the pump subtracted.
+    pub(crate) stamina: i16,
+}
+
+impl ReceivedPacket {
+    /// Has anything ever landed in the buffer?
+    ///
+    /// The pump zeroes the sixteen-byte block containing the damage on init and only ever writes
+    /// it from a dequeued packet, so an all-zero reading means no PvP damage packet has been
+    /// received in this process -- which is a finding, not a missing measurement.
+    pub(crate) const fn is_empty(self) -> bool {
+        self.dealer == 0 && self.victim == 0 && self.damage == 0 && self.stamina == 0
+    }
+
+    /// The log form: what arrived, or that nothing has.
+    pub(crate) fn describe(self) -> String {
+        if self.is_empty() {
+            return "NOTHING -- no PvP damage packet has reached this process at all".to_owned();
+        }
+        format!(
+            "dealer={:#018x} victim={:#018x} damage={} stamina={}",
+            self.dealer, self.victim, self.damage, self.stamina
+        )
+    }
+}
+
 /// How often the ledger re-reads the player set, in frames.
 ///
 /// The set holds at most a handful of characters so the walk is cheap, but the log opens and
@@ -413,6 +453,13 @@ pub(crate) struct Ledger {
     last_sample: Option<u64>,
     /// How many samples have been taken, so a report can say "unchanged across N".
     samples: u64,
+    /// THE RECEIVE ORACLE'S LAST READING, so an arrival is reported as a CHANGE.
+    ///
+    /// `None` until the first sample, and `Some` of an empty packet when the buffer has never
+    /// been written -- different states, not to be collapsed.
+    last_packet: Option<ReceivedPacket>,
+    /// Has the "their damage is not arriving" line been said?
+    reported_silence: bool,
 }
 
 impl Ledger {
@@ -422,6 +469,8 @@ impl Ledger {
             reported_verdict: false,
             last_sample: None,
             samples: 0,
+            last_packet: None,
+            reported_silence: false,
         }
     }
 
@@ -441,6 +490,7 @@ impl Ledger {
         &mut self,
         creature: Category,
         world: &[Seen],
+        packet: Option<ReceivedPacket>,
         frame: u64,
     ) -> Vec<String> {
         self.last_sample = Some(frame);
@@ -489,6 +539,51 @@ impl Ledger {
             );
         }
 
+        // THE RECEIVE ORACLE, reported as a CHANGE: the buffer holds the last packet forever, so
+        // a repeated reading is not a repeated arrival.
+        let local_hp_moved = world.iter().any(|seen| {
+            seen.is_main_player
+                && self
+                    .tracked
+                    .iter()
+                    .find(|tracked| tracked.address == seen.address)
+                    .and_then(|tracked| tracked.hp)
+                    .zip(seen.hp)
+                    .is_some_and(|(before, now)| before != now)
+        });
+        match (self.last_packet, packet) {
+            (_, None) => {
+                if !self.reported_silence {
+                    self.reported_silence = true;
+                    lines.push(
+                        "net-damage: the Packet15 receive buffer could not be read on this \
+                         build, so a damage packet that never arrived and one that arrived and \
+                         was ignored cannot be told apart. See layout::packet15_receive_rva."
+                            .to_owned(),
+                    );
+                }
+            }
+            (None, Some(now)) => lines.push(format!(
+                "net-damage: PvP damage packets received by this process so far: {}",
+                now.describe(),
+            )),
+            (Some(before), Some(now)) if before != now => lines.push(format!(
+                "net-damage: A PvP DAMAGE PACKET ARRIVED -- {}. The local player's HP {} across \
+                 this sample, and the pump subtracts the packet's damage unconditionally, so an \
+                 unmoved HP means the packet named somebody else as its victim.",
+                now.describe(),
+                if local_hp_moved {
+                    "MOVED"
+                } else {
+                    "did NOT move"
+                },
+            )),
+            _ => {}
+        }
+        if let Some(now) = packet {
+            self.last_packet = Some(now);
+        }
+
         for seen in world {
             let previous = self
                 .tracked
@@ -529,11 +624,19 @@ impl Ledger {
     }
 
     /// The closing line: what the watch saw over the whole possession.
+    ///
+    /// The receive oracle's final reading is the load-bearing half. A possession that ends with
+    /// the buffer still empty, after the player was visibly being hit, says the other client's
+    /// damage never reached this process -- which points at their hit resolution or at what we
+    /// publish, and away from anything this crate does after a packet lands.
     pub(crate) fn summary(&self) -> String {
         format!(
-            "net-damage: {} sample(s) taken over the possession, {} character(s) still tracked",
+            "net-damage: {} sample(s) taken over the possession, {} character(s) still tracked. \
+             Last PvP damage packet received: {}",
             self.samples,
-            self.tracked.len()
+            self.tracked.len(),
+            self.last_packet
+                .map_or_else(|| "not sampled".to_owned(), ReceivedPacket::describe),
         )
     }
 }
@@ -688,6 +791,7 @@ mod tests {
         let lines = ledger.observe(
             Category::LocalNpc,
             &[seen(0x10, true, 800), seen(0x20, false, 1200)],
+            None,
             0,
         );
         assert!(
@@ -708,6 +812,7 @@ mod tests {
         let quiet = ledger.observe(
             Category::LocalNpc,
             &[seen(0x10, true, 800), seen(0x20, false, 1200)],
+            None,
             60,
         );
         assert!(quiet.is_empty(), "{quiet:?}");
@@ -716,8 +821,8 @@ mod tests {
     #[test]
     fn a_moving_hp_bar_is_reported_as_a_delta() {
         let mut ledger = Ledger::new();
-        ledger.observe(Category::LocalNpc, &[seen(0x20, false, 1200)], 0);
-        let lines = ledger.observe(Category::LocalNpc, &[seen(0x20, false, 900)], 60);
+        ledger.observe(Category::LocalNpc, &[seen(0x20, false, 1200)], None, 0);
+        let lines = ledger.observe(Category::LocalNpc, &[seen(0x20, false, 900)], None, 60);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].contains("HP 1200 -> 900 (-300)"), "{lines:?}");
     }
@@ -725,17 +830,112 @@ mod tests {
     #[test]
     fn the_sampler_waits_its_cadence_between_reads() {
         let mut ledger = Ledger::new();
-        ledger.observe(Category::LocalNpc, &[], 100);
+        ledger.observe(Category::LocalNpc, &[], None, 100);
         assert!(!ledger.due(101));
         assert!(!ledger.due(129));
         assert!(ledger.due(130));
     }
 
+    /// An unread receive buffer is reported as a GAP, once, rather than silently read as "no
+    /// packets" -- the two answers point at opposite halves of the problem.
+    #[test]
+    fn an_unreadable_receive_buffer_is_reported_as_a_gap_and_only_once() {
+        let mut ledger = Ledger::new();
+        let first = ledger.observe(Category::LocalNpc, &[], None, 0);
+        assert!(
+            first
+                .iter()
+                .any(|line| line.contains("could not be read on this build")),
+            "{first:?}"
+        );
+        let second = ledger.observe(Category::LocalNpc, &[], None, 60);
+        assert!(
+            !second
+                .iter()
+                .any(|line| line.contains("could not be read on this build")),
+            "{second:?}"
+        );
+    }
+
+    /// An empty buffer is a FINDING: no PvP damage packet has reached this process.
+    #[test]
+    fn an_empty_receive_buffer_says_nothing_has_arrived() {
+        let mut ledger = Ledger::new();
+        let lines = ledger.observe(
+            Category::LocalNpc,
+            &[],
+            Some(super::ReceivedPacket::default()),
+            0,
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("NOTHING")),
+            "{lines:?}"
+        );
+    }
+
+    /// An arrival is a CHANGE, and it is paired with whether our HP moved -- which is the whole
+    /// discriminator: the pump subtracts unconditionally, so an arrival with a still HP bar means
+    /// the packet was not addressed to us.
+    #[test]
+    fn an_arriving_packet_is_reported_once_with_whether_our_hp_moved() {
+        let mut ledger = Ledger::new();
+        ledger.observe(
+            Category::LocalNpc,
+            &[seen(0x10, true, 800)],
+            Some(super::ReceivedPacket::default()),
+            0,
+        );
+        let arrival = super::ReceivedPacket {
+            dealer: 0x1111_2222_3333_4444,
+            victim: 0x5555_6666_7777_8888,
+            damage: 250,
+            stamina: 30,
+        };
+        let hit = ledger.observe(
+            Category::LocalNpc,
+            &[seen(0x10, true, 550)],
+            Some(arrival),
+            60,
+        );
+        let arrived: Vec<&String> = hit
+            .iter()
+            .filter(|line| line.contains("A PvP DAMAGE PACKET ARRIVED"))
+            .collect();
+        assert_eq!(arrived.len(), 1, "{hit:?}");
+        assert!(arrived[0].contains("damage=250"), "{arrived:?}");
+        assert!(arrived[0].contains("HP MOVED"), "{arrived:?}");
+        // The same reading again is the same packet, not a second arrival.
+        let quiet = ledger.observe(
+            Category::LocalNpc,
+            &[seen(0x10, true, 550)],
+            Some(arrival),
+            120,
+        );
+        assert!(
+            !quiet
+                .iter()
+                .any(|line| line.contains("A PvP DAMAGE PACKET ARRIVED")),
+            "{quiet:?}"
+        );
+    }
+
+    /// The damage is an `i16` because the pump reads it with `MOVSX .., word ptr`. A negative
+    /// value is a heal in the game's own arithmetic and must survive the round trip.
+    #[test]
+    fn the_packet_damage_is_signed_sixteen_bit() {
+        let packet = super::ReceivedPacket {
+            damage: -500,
+            ..super::ReceivedPacket::default()
+        };
+        assert!(!packet.is_empty());
+        assert!(packet.describe().contains("damage=-500"), "{packet:?}");
+    }
+
     #[test]
     fn the_summary_counts_what_was_watched() {
         let mut ledger = Ledger::new();
-        ledger.observe(Category::LocalNpc, &[seen(0x20, false, 1200)], 0);
-        ledger.observe(Category::LocalNpc, &[seen(0x20, false, 1200)], 60);
+        ledger.observe(Category::LocalNpc, &[seen(0x20, false, 1200)], None, 0);
+        ledger.observe(Category::LocalNpc, &[seen(0x20, false, 1200)], None, 60);
         let summary = ledger.summary();
         assert!(summary.contains("2 sample(s)"), "{summary}");
         assert!(summary.contains("1 character(s)"), "{summary}");
