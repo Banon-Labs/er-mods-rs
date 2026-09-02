@@ -380,6 +380,21 @@ pub(crate) mod chr_ctrl {
     /// must keep seeing the creature's own `ComManipulator`, which is what lets us write AI intent
     /// while the tick path sees our thunk. Cross-checked.
     pub(crate) const MANIPULATOR: usize = 0x18;
+    /// `ChrCtrl.modelMatrix`, a `FloatMatrix4x4` whose rows are the images of the body's local
+    /// axes in world space -- row1 right, row2 up, row3 the local `+Z` whose NEGATION is forward.
+    ///
+    /// `[vt+0x50]` uses exactly these four rows to turn its world-space move direction into the
+    /// local-space vector it stages at [`super::manipulator::PENDING_MOVE_VECTOR`], so reproducing
+    /// that transform is what lets this crate stage a vector the engine cannot tell from its own.
+    ///
+    /// Byte-proven on BOTH builds, and the pattern matches UNIQUELY in each image -- 1.16.2
+    /// `0x1403d03e1`, 1.17 `0x1403d03f1`:
+    ///
+    /// ```text
+    /// 0f28a130020000  MOVAPS XMM4,[RCX+0x230]   ; row1
+    /// 0f28814002 0000 MOVAPS XMM0,[RCX+0x240]   ; row2
+    /// ```
+    pub(crate) const MODEL_MATRIX: usize = 0x230;
     /// `ChrCtrl.modifier` -- `ChrCtrlModifier`. Cross-checked.
     pub(crate) const MODIFIER: usize = 0xc8;
     /// `ChrCtrl.chrProxyFlags`. Cross-checked.
@@ -733,6 +748,44 @@ pub(crate) mod manipulator {
     /// [`crate::possess::game::Chr::validated_ai_ins`]: a manipulator reached from a `ChrIns` must
     /// name that same `ChrIns` back.
     pub(crate) const OWNING_CHR: usize = 0xa8;
+    /// `ChrManipulator`'s PENDING move vector -- the slot the engine publishes from, and the one
+    /// field in this whole problem that nothing fights us for.
+    ///
+    /// # Why this exists and `walkType` no longer decides anything
+    ///
+    /// `[vt+0x50]` (`FUN_1403d0250`) ends with, in this order:
+    ///
+    /// ```text
+    /// FUN_1403cdc20(&manip->super_ChrManipulator, &manip->field99_0x140);  // PUBLISH last frame
+    /// manip->field99_0x140 = <this frame's vector>;                        // STAGE this frame
+    /// ```
+    ///
+    /// `FUN_1403cdc20` copies its argument into `ChrManipulator+0x10` AND `+0x70`, which is where
+    /// locomotion is actually read from -- and all SIX manipulator `[vt+0x50]` implementations in
+    /// the game publish there, the player's included. So `+0x140` is the staging slot for the next
+    /// publish, and writing it is the same act the engine performs, one step earlier.
+    ///
+    /// The ordering is what makes it race-free. Whether our per-frame task runs before or after
+    /// `[vt+0x50]` in a given frame, our value is what sits in `+0x140` when the next publish
+    /// reads it: run before, and this frame publishes it; run after, and the next frame does. At
+    /// most one frame of latency, and no window in which a competing writer can win -- restricted
+    /// to `0x1403cd000-0x1403e0000`, the only store to this displacement inside `FUN_1403d0250`
+    /// is `0x1403d05a6`, the staging write above.
+    ///
+    /// That matters because `walkType` is NOT ours and cannot be made ours: six distinct sites
+    /// write it to literal zero, and every one of them is goal lifecycle --
+    /// `AiIns::ClearMoveRequest` (`0x1402bf9b5`), `FUN_1402bfaa0` under `TerminateGoal`
+    /// (`0x1402bfb23`), `ClearAiGoalRelatedInfo` (`0x1402d654c`), `FUN_1402e7350` (`0x1402e7464`),
+    /// a goal `Activate` (`0x1403208f7`) and a goal `Interrupt` (`0x1403248ab`). Possession
+    /// no-ops goal SELECTION at `[vt+0x48]`, so the goal machine churns and something zeroes the
+    /// gate at roughly frame cadence. Measured: a per-frame read-back immediately after our own
+    /// write returned `walk_type=0` with `wantToMoveTo` equal to the body's own position -- which
+    /// is `ClearMoveRequest`'s exact signature -- on half the sampled frames.
+    ///
+    /// The vector is in the BODY'S LOCAL FRAME and unit length, scaled by
+    /// [`super::super::intent::WALK_SPEED_SCALE`] for the walk gait. See
+    /// [`super::super::game::Chr::write_manipulator_move`].
+    pub(crate) const PENDING_MOVE_VECTOR: usize = 0x140;
     /// `ComManipulator.comThinkOwner` -- an **INLINE `CSComThinkOwner` member, not a pointer**.
     ///
     /// This is the fact that makes the canary exact rather than a plausibility screen.

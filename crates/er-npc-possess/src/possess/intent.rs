@@ -113,6 +113,13 @@ const QUATERNION_NORM_MIN: f32 = 0.9;
 /// The widest squared norm [`yaw_of_quaternion`] will still call a unit quaternion.
 const QUATERNION_NORM_MAX: f32 = 1.1;
 
+/// What `[vt+0x50]` multiplies the move vector by for the WALK gait, and the reason there are two
+/// moving gaits at all.
+///
+/// `DAT_14329e980`, byte-read out of `eldenring-deobf.bin` as `(0.5, 0.5, 0.5, 0.5)` -- a splatted
+/// scalar, applied only when `walkType == 1`. The run gait gets the unit vector unscaled.
+pub(crate) const WALK_SPEED_SCALE: f32 = 0.5;
+
 /// How long the horizontal part of the facing vector must be before it counts as a heading.
 ///
 /// One ten-thousandth of a unit vector is 0.006 degrees of tilt away from straight down -- far
@@ -227,6 +234,23 @@ impl IntentWrite {
     #[must_use]
     pub(crate) const fn moving(self) -> bool {
         self.walk_type != ai_ins::WALK_TYPE_STOP
+    }
+
+    /// How long the local-frame move vector staged at
+    /// [`PENDING_MOVE_VECTOR`](crate::possess::layout::manipulator::PENDING_MOVE_VECTOR) should be.
+    ///
+    /// The engine writes exactly three lengths and no others: `[vt+0x50]` normalises its direction
+    /// to unit length, leaves it alone for the run gait, multiplies it by
+    /// [`WALK_SPEED_SCALE`] for the walk gait, and stores `DL_ZERO_VECTOR` when the gate is shut.
+    /// Staying inside that set is deliberate -- an analog length would be a value nothing in the
+    /// game produces, and the behaviour graph is the thing that would have an opinion about it.
+    #[must_use]
+    pub(crate) fn gait_scale(self) -> f32 {
+        match self.walk_type {
+            ai_ins::WALK_TYPE_WALK => WALK_SPEED_SCALE,
+            ai_ins::WALK_TYPE_RUN => 1.0,
+            _ => 0.0,
+        }
     }
 
     /// The frame that stops the creature where it stands.
@@ -612,6 +636,30 @@ mod tests {
         ] {
             assert_eq!(out.turn_target, ai_ins::TURN_TARGET_SELF);
         }
+    }
+
+    /// The staged vector's length is one of the engine's own three, and it tracks the gait.
+    ///
+    /// This is the value that now does the moving, so a fourth length here would be a length
+    /// nothing in the game produces and the behaviour graph would be the thing with an opinion.
+    #[test]
+    fn the_staged_move_vector_is_one_of_the_three_lengths_the_engine_writes() {
+        let at = [0.0, 0.0, 0.0];
+        let run = drive(at, 0.0, Stick::from_axes(0.0, 1.0), 1.0);
+        assert_eq!(run.walk_type, ai_ins::WALK_TYPE_RUN);
+        assert!(close(run.gait_scale(), 1.0));
+
+        let walk = drive(at, 0.0, Stick::from_axes(0.0, 0.3), 1.0);
+        assert_eq!(walk.walk_type, ai_ins::WALK_TYPE_WALK);
+        assert!(close(walk.gait_scale(), WALK_SPEED_SCALE));
+
+        // A stopped frame stages nothing, which is what `[vt+0x50]` stages with its gate shut.
+        assert!(close(IntentWrite::stopped(at).gait_scale(), 0.0));
+        assert!(close(drive(at, 0.0, None, 1.0).gait_scale(), 0.0));
+
+        // ...and the walk really is the engine's half, not a number picked to feel right.
+        assert!(close(WALK_SPEED_SCALE, 0.5));
+        assert!(walk.gait_scale() < run.gait_scale());
     }
 
     /// Two angles equal modulo a full turn, within a millirad.

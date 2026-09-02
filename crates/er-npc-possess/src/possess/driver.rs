@@ -932,6 +932,26 @@ impl NpcPossessionEngine {
             movement.turn_deadzone_deg,
         );
         Self::tick_moveset(state, write.moving());
+        // THE WRITE THAT ACTUALLY MOVES THE BODY, and it is deliberately not the AI one.
+        //
+        // `walkType` is owned by the goal state machine -- six sites zero it, all of them goal
+        // lifecycle -- and possession no-ops goal selection, so that machine churns and clears our
+        // gate at roughly frame cadence. Read-back telemetry measured exactly that. This stages
+        // the move vector where `[vt+0x50]` stages its own, one step downstream of the whole
+        // argument; see `game::Chr::write_manipulator_move`.
+        //
+        // The AI write below is kept because it is what TURNS the body: `FUN_1402c9410`'s
+        // `TARGET_SELF` branch derives the facing from `walkType` and `wantToMoveTo`, so on the
+        // frames it survives the body also aims where it is going. Movement no longer depends on
+        // it surviving.
+        let direction = [
+            write.target[0] - state.last_position[0],
+            0.0,
+            write.target[2] - state.last_position[2],
+        ];
+        state
+            .creature
+            .write_manipulator_move(direction, write.gait_scale());
         if !state.creature.write_move_intent(write) && first_frame {
             // Said once, on the frame it is first known, rather than sixty times a second.
             possess_log(format_args!(
