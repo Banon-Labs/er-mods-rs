@@ -26,7 +26,7 @@ use crate::possess::game::{self, AnimFrame, Chr};
 use crate::possess::layout::chr_ins;
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
-use crate::possess::{body_size, fall, intent, layout};
+use crate::possess::{body_size, fall, intent, layout, netdamage};
 use crate::settings::{Bucket, TargetMode};
 use crate::spawn::game as spawn_game;
 use crate::spawn::placement;
@@ -193,6 +193,13 @@ struct Possessing {
     /// standing still, so a line that only appeared while a key was held would be silent on
     /// exactly the case the user reported.
     last_aim_log: Option<u64>,
+    /// WHO ELSE IS IN THE SESSION, AND WHETHER THEIR HP IS MOVING.
+    ///
+    /// The user reported "I can't damage other players ... neither HP bar goes down", and the
+    /// answer is a table in the binary rather than anything this crate does -- see
+    /// [`netdamage`] for the trace. This carries the verdict into the log next to an observed HP
+    /// series, so the claim is falsifiable rather than asserted.
+    net: netdamage::Ledger,
 }
 
 impl Possessing {
@@ -457,6 +464,11 @@ impl NpcPossessionEngine {
         // buttons on screen after those buttons stopped doing anything, which is worse than no
         // panel.
         banner::clear();
+        // THE NET-DAMAGE WATCH CLOSES HERE, beside the banner and for the same reason: every way
+        // a possession can end passes through this point, and a ledger that only reported while
+        // it was running would leave the question "did anybody's HP move" unanswered exactly when
+        // the player has stopped and gone to read the log.
+        possess_log(format_args!("{}", state.net.summary()));
         let mut run = Teardown::new(reason);
         let (swizzled_com, original_vptr, patched_vptr) = (
             state.thunk.real_com(),
@@ -1202,6 +1214,28 @@ impl NpcPossessionEngine {
             None => write,
         };
         Self::tick_moveset(state, write.moving());
+
+        // THE NET-DAMAGE WATCH, on its own cadence. Placed after the moveset tick so a sample
+        // taken on a frame that fired something is taken AFTER the fire, and outside every
+        // input gate so it keeps reporting while the player stands still -- "neither HP bar goes
+        // down" is a thing you notice by watching, not by pressing.
+        if state.net.due(state.frames) {
+            let creature_category = if state.creature.is_live() {
+                // Both NPC categories route identically against a remote player, so the crate
+                // never has to resolve `FUN_1403f3e30` to answer the question. See
+                // `netdamage::Category::is_npc`.
+                netdamage::Category::LocalNpc
+            } else {
+                netdamage::Category::None
+            };
+            for line in
+                state
+                    .net
+                    .observe(creature_category, &game::players_in_world(), state.frames)
+            {
+                possess_log(format_args!("{line}"));
+            }
+        }
         // THE MANUAL STAGE IS GONE, and its removal is the fix rather than a simplification.
         //
         // It was written when the vtable override starved the locomotion consumers: `[vt+0x50]`
@@ -1771,6 +1805,7 @@ impl NpcPossessionEngine {
             reported_one_page: [false; 2],
             original_team,
             last_aim_log: None,
+            net: netdamage::Ledger::new(),
         };
         Self::write_derived(chr_id, &state.camera, creature, state.moveset.as_ref());
         match state.moveset.as_ref() {

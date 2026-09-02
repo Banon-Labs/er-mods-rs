@@ -51,6 +51,7 @@ use crate::possess::layout::{
     chr_ctrl_modifier, chr_data_module, chr_event_module, chr_ins, chr_physics_module,
     chr_time_act_module, com_think_owner, manipulator, modules, world_chr_man_dbg,
 };
+use crate::possess::netdamage;
 use crate::settings::{TargetMode, TargetSettings};
 
 /// One frame of the creature's TimeAct queue: what it is animating, and where in the clip.
@@ -1423,4 +1424,44 @@ pub(crate) fn read_move_stick(movement: &crate::settings::MovementSettings) -> O
         movement.right,
     )?;
     Stick::from_axes(x, y)
+}
+
+/// Everyone else in the session, reduced to what the net-damage ledger needs.
+///
+/// Walks `WorldChrMan.player_chr_set` -- the set that holds PLAYER characters, which is precisely
+/// the population `FUN_14044a1b0` sorts into categories 1 and 2. Nothing here resolves a game
+/// address: the main player is identified by pointer against `WorldChrMan.main_player`, and
+/// everything else in that set is another human's character.
+///
+/// The set holds a handful of entries at most, but the caller still samples on a cadence rather
+/// than per frame -- see [`crate::possess::netdamage::Ledger::due`].
+pub(crate) fn players_in_world() -> Vec<netdamage::Seen> {
+    let Ok(world_chr_man) = (unsafe { WorldChrMan::instance() }) else {
+        return Vec::new();
+    };
+    let main_player = world_chr_man
+        .main_player
+        .as_ref()
+        .map(|player| core::ptr::from_ref(&player.chr_ins) as usize);
+    let mut seen = Vec::new();
+    for player in world_chr_man.player_chr_set.characters() {
+        let at = core::ptr::from_ref(&player.chr_ins) as usize;
+        // Same guard the target search uses: the game leaves `special_effect` null on a character
+        // that is still being constructed, and reading through a half-built one is a live crash
+        // this repo has already captured.
+        let special_effect =
+            unsafe { *(core::ptr::from_ref(&player.chr_ins.special_effect).cast::<usize>()) };
+        if special_effect == 0 {
+            continue;
+        }
+        let chr = Chr::new(at);
+        seen.push(netdamage::Seen {
+            address: at,
+            is_main_player: main_player == Some(at),
+            chr_type: player.chr_ins.chr_type as i32,
+            team: chr.team_type(),
+            hp: chr.hp(),
+        });
+    }
+    seen
 }

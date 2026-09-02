@@ -52,6 +52,7 @@ pub(crate) mod body_size;
 pub(crate) mod fall;
 pub(crate) mod intent;
 pub(crate) mod layout;
+pub(crate) mod netdamage;
 pub(crate) mod teardown;
 pub(crate) mod thunk;
 
