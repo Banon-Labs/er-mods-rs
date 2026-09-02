@@ -17,6 +17,19 @@
 //! That is what the player is locking onto, which is why the reticle appeared at their feet: it
 //! was drawn on a 1.5 m body at the bottom of a 12 m dragon.
 //!
+//! # THIS MODULE IS NOW THE FALLBACK, NOT THE ANSWER (2026-09-02)
+//!
+//! The paragraph above is still true of the pointer identity check, but it stopped being the whole
+//! story: the scan's OTHER filter is `CS::ChrIns::CanTargetTeamType(subject, candidate)`, and with
+//! the creature as subject that made every real enemy a FRIEND and the player's own body the only
+//! opposing character in the world. A player reported exactly that -- "I've never been able to
+//! lock on to anyone but myself". [`crate::possess::layout::chr_ins::TEAM_TYPE_CHARMED`] is the
+//! one-byte fix, and while it holds the body is not a candidate at all and nothing is drawn on it.
+//!
+//! The scale below is KEPT because that write can fail to take: the byte may not read, or a
+//! network `TemporaryTeamType` slot may outrank it in `GetTeamType`. In either case the old world
+//! comes back exactly as described above, and the reticle needs to be somewhere sensible.
+//!
 //! # Why the reticle CANNOT be moved directly
 //!
 //! Its world position is a **dummy polygon on the target's model**. `CS::ChrSlotSys::AddActPntSlot`

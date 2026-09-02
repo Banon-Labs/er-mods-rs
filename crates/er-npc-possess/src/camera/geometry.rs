@@ -569,10 +569,13 @@ mod tests {
         );
         // ...and the ceiling can never fire on its own, because it sits above the distance the law
         // asks for at the height clamp that runs one step earlier.
-        assert!(
-            MAX_FRAMING_DISTANCE >= PLAYER_CAM_DIST * (MAX_PLAUSIBLE_HEIGHT / PLAYER_HIT_HEIGHT),
-            "the ceiling has fallen below the law it is derived from"
-        );
+        const {
+            assert!(
+                MAX_FRAMING_DISTANCE
+                    >= PLAYER_CAM_DIST * (MAX_PLAUSIBLE_HEIGHT / PLAYER_HIT_HEIGHT),
+                "the ceiling has fallen below the law it is derived from"
+            );
+        }
         let absurd = shape(MAX_PLAUSIBLE_HEIGHT * 10.0, 0.0, 1.0, settings()).expect("clamped");
         assert!(absurd.distance < MAX_FRAMING_DISTANCE, "{absurd:?}");
     }

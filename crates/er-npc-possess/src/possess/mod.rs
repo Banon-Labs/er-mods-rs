@@ -27,10 +27,18 @@
 //!   which lives in the SpEffect-accumulated modifier block and is re-derived every frame. A raw
 //!   write is undone before it is read; the supported route is a SpEffect row, which this layer
 //!   does not have. The player's body is invisible, silent and invincible, so a hostile that locks
-//!   onto it is a cosmetic oddity rather than a hazard -- and since the body is also what the
-//!   POSSESSING player's own lock-on finds (it is the nearest legal target, the creature having
-//!   become the subject), [`body_size`] makes sure the reticle at least lands on the creature's
-//!   body rather than under its feet.
+//!   onto it is a cosmetic oddity rather than a hazard.
+//!
+//!   **What this layer DOES now do is make the body the wrong TEAM to be a candidate**, which is
+//!   a different mechanism reaching the same place and is one byte. The lock-on scan's filter is
+//!   `CanTargetTeamType(subject, candidate) && candidate != subject`, and possession made the
+//!   creature the subject -- so with the creature on its own hostile team the only opposing
+//!   character in the world was the player's own co-located body, and real enemies were FRIENDS
+//!   it could not lock onto. Writing `ChrIns+0x6c teamType = Charmed` on the worn creature
+//!   inverts both halves. [`body_size`] stays as the FALLBACK for when that write does not take
+//!   (an unreadable byte, or a network `TemporaryTeamType` slot that outranks it): then the body
+//!   is still the nearest legal target and the reticle still needs to land on the creature's head
+//!   rather than under its feet.
 //! * **Save suppression.** [`teardown::Step::LiftSaveSuppression`] exists and runs last, and it
 //!   it lifts nothing, because nothing is suppressed: co-location means the real `PlayerIns` is
 //!   genuinely standing where the creature is, so `UpdateSafePosition` writing the save's respawn

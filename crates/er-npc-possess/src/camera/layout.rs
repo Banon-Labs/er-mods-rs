@@ -6,7 +6,7 @@
 //!
 //! # What was measured, and how
 //!
-//! All six offsets below were byte-proven identical on 1.16.2 (`eldenring-deobf.bin`) and 1.17
+//! All seven offsets below were byte-proven identical on 1.16.2 (`eldenring-deobf.bin`) and 1.17
 //! (`eldenring-deobf-1.17.bin`), which is the build actually installed. The evidence, in the order
 //! a reader would want to re-run it:
 //!
@@ -21,6 +21,8 @@
 //!   in [`crate::camera::game`] pins the two together through `size_of::<CSPersCam>()`.
 //! * **`ChrExFollowCam+0x468`** -- see [`chr_ex_follow_cam::LOCK_CAM_PARAM_OVERRIDE`].
 //! * **`ChrExFollowCam+0x460`** -- written by `ApplyZoomLerp` at 1.17 `0x1403b76da`.
+//! * **`ChrExFollowCam+0x150/+0x154 anglesEuler`** -- see
+//!   [`chr_ex_follow_cam::ANGLES_EULER_YAW`], whose 73-byte window is unique in both images.
 //! * **`CSChrPhysicsModule+0x340/+0x344`** -- `ChrIns::GetPhysicsHitHeight` is
 //!   `[ChrIns+0x190] -> [+0x68] -> MOVSS XMM0,[RCX+0x340]; RET` in the 1.16.2 named dump, and the
 //!   same three-instruction chain sits at 1.17 `0x1403efe50 -> 0x14045e590` with the same `0x340`.
@@ -79,6 +81,46 @@ pub(crate) mod chr_ex_follow_cam {
     /// Read once at possession start to learn which row the camera was using a frame ago, so the
     /// fields the size law does NOT decide can be copied from it rather than from a guess.
     pub(crate) const RESOLVED_LOCK_CAM_PARAM: usize = 0x460;
+
+    /// `ChrExFollowCam+0x150 anglesEuler` -- the camera's own Euler angles. `x` is the PITCH.
+    ///
+    /// Named here only so [`ANGLES_EULER_YAW`] can say what it is one float past. Nothing reads
+    /// the pitch: the body turns about Y only.
+    pub(crate) const ANGLES_EULER: usize = 0x150;
+    /// `ChrExFollowCam+0x154 anglesEuler.y` -- WHERE THE PLAYER IS LOOKING, as one float.
+    ///
+    /// # What the number is, exactly
+    ///
+    /// `ChrExFollowCam::Update` closes by deriving the camera's Euler angles from the vector
+    /// between the point it is aimed at and the smoothed subject anchor:
+    ///
+    /// ```text
+    /// delta = targetCoordinates(+0xe0) - pivot         ; MOVAPS/SUBPS, 1.16.2 0x1403b62c9
+    /// pitch = angleFromXZPlane(delta, anglesEuler.x)   ; +0x150 goes in as the fallback
+    /// yaw   = angleOnXZPlane  (delta, anglesEuler.y)   ; +0x154 goes in as the fallback
+    /// anglesEuler = (pitch, yaw, pitch, yaw)           ; three UNPCKLPS, then MOVAPS to +0x150
+    /// ```
+    ///
+    /// and `angleOnXZPlane` (1.16.2 `0x1403b0c20`) is `atan2f(v.x, v.z)`, returning the passed-in
+    /// previous angle unchanged when the delta has no horizontal part. So this field is
+    /// **`atan2(look.x, look.z)`** and nothing else.
+    ///
+    /// # Why the angle and not the two coordinate fields
+    ///
+    /// Because `targetCoordinates` is differenced against the smoothed PIVOT above, not against
+    /// `cameraCoordinates(+0x110)`. Subtracting those two points would produce a
+    /// plausible-looking direction that the engine never actually computes. This is the engine's
+    /// own answer, in one read.
+    ///
+    /// # Sign
+    ///
+    /// A CHARACTER's yaw is `atan2(-d.x, -d.z)` for the direction `d` it faces -- two independent
+    /// proofs in [`crate::possess::intent`] -- so the body heading for this look direction is this
+    /// field PLUS PI. [`crate::possess::intent::aim`] is the one place that conversion happens.
+    ///
+    /// Byte-proven: the 73-byte window carrying `+0xe0`, `+0x150` and `+0x154` matches UNIQUELY in
+    /// both images -- 1.16.2 `0x1403b62c9`, 1.17 `0x1403b62d9`.
+    pub(crate) const ANGLES_EULER_YAW: usize = ANGLES_EULER + core::mem::size_of::<f32>();
 }
 
 /// `CSChrPhysicsModule` -- reached through `ChrIns+0x190 -> +0x68`, the same chain
@@ -109,6 +151,7 @@ pub(crate) struct Offsets {
     pub(crate) resolved_lock_cam_param: usize,
     pub(crate) hit_height: usize,
     pub(crate) hit_radius: usize,
+    pub(crate) angles_euler_yaw: usize,
 }
 
 /// The measured offsets, or `None`.
@@ -122,6 +165,7 @@ pub(crate) fn offsets(version: Option<FileVersion>) -> Option<Offsets> {
         resolved_lock_cam_param: chr_ex_follow_cam::RESOLVED_LOCK_CAM_PARAM,
         hit_height: chr_physics_module::HIT_HEIGHT,
         hit_radius: chr_physics_module::HIT_RADIUS,
+        angles_euler_yaw: chr_ex_follow_cam::ANGLES_EULER_YAW,
     })
 }
 
@@ -160,6 +204,24 @@ mod tests {
             chr_ex_follow_cam::LOCK_CAM_PARAM_OVERRIDE - chr_ex_follow_cam::RESOLVED_LOCK_CAM_PARAM,
             core::mem::size_of::<i32>() * 2,
             "+0x460 mirror, +0x464 map-region id, +0x468 our override"
+        );
+    }
+
+    /// The camera yaw is the SECOND float of the Euler vector; the one beside it is the PITCH.
+    ///
+    /// Reading `+0x150` instead would aim the body with the camera's ELEVATION, which shows up as
+    /// "the creature spins when I look up" rather than as anything that looks like an offset bug.
+    #[test]
+    fn the_camera_yaw_is_the_y_component_and_the_pitch_is_the_x() {
+        assert!(
+            chr_ex_follow_cam::ANGLES_EULER.is_multiple_of(16),
+            "the whole vector is stored with one MOVAPS, so it is 16-aligned"
+        );
+        assert_eq!(
+            chr_ex_follow_cam::ANGLES_EULER_YAW,
+            0x154,
+            "the byte-proven displacement, checked against the derivation rather than repeated \
+             by it: +0x150 pitch, +0x154 yaw, because the UNPCKLPS interleave puts the yaw second"
         );
     }
 

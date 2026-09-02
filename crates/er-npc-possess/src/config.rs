@@ -152,9 +152,10 @@ radial = "DPadDown"
 # lock_on   -- whatever you are locked on to
 # nearest   -- the closest character that passes the selection filter
 # crosshair -- whatever the middle of the screen is pointed at. NOT IMPLEMENTED YET: it currently
-#              behaves exactly like "nearest", because aiming by camera needs the camera's forward
-#              vector and that is not reversed. The spelling is kept so this file does not have to
-#              change when it lands.
+#              behaves exactly like "nearest". The camera's forward vector is no longer the
+#              blocker -- it is ChrExFollowCam+0xe0 minus +0x110 and the possessed creature is
+#              already aimed along it every frame -- nothing has wired it into target SELECTION.
+#              The spelling is kept so this file does not have to change when it lands.
 # chr_id    -- the literal chr_id below, ignoring where you are looking
 # spawn     -- CREATE the creature [spawn] names, in front of you, and become that. The only mode
 #              that puts something new in the world rather than borrowing something already there.

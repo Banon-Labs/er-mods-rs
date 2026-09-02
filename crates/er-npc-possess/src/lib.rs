@@ -366,9 +366,14 @@ fn install() {
     possess_log(format_args!(
         "possession engine: {} -- build={} | attacks fire by writing \
          CSChrEventModule::requestAnimationId, so this layer still resolves no game function \
-         address. NOT in this layer: untargetable (IsLockOnDisabled reads the \
-         SpEffect-accumulated modifier block, so it needs a SpEffect row rather than a field \
-         write), and range is measured to the nearest enemy rather than to a lock-on target",
+         address. Lock-on and aiming are BOTH one field write each now: the worn creature goes \
+         on teamType Charmed, which is what makes real enemies lockable instead of the player's \
+         own body, and its wantToMoveTo is aimed from the camera every frame, which is the only \
+         way to point an EnemyIns's attacks (the camera-to-aim path is gated on IsPlayerIns, a \
+         vtable predicate the camera override cannot move). NOT in this layer: untargetable \
+         (IsLockOnDisabled reads the SpEffect-accumulated modifier block, so it needs a SpEffect \
+         row rather than a field write), and range is measured to the nearest enemy rather than \
+         to a lock-on target",
         if installed {
             "INSTALLED"
         } else {

@@ -909,8 +909,10 @@ mod tests {
     /// back at the top -- the case a `take()` on the confirm path alone would have missed.
     #[test]
     fn confirming_also_remembers_the_position() {
-        let mut state = State::default();
-        state.open = Some(PickerModel::at(12, 408));
+        let mut state = State {
+            open: Some(PickerModel::at(12, 408)),
+            ..Default::default()
+        };
         let _ = take_confirm_from(&mut state);
         assert_eq!(state.last_cursor, Some(12));
     }
