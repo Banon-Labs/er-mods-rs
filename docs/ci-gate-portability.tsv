@@ -190,6 +190,8 @@ portable	-	audit-ungated-image-writes.py	source/AST/text analysis only
 portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces in tmp plus a source-only read of the live crates
 portable	-	check-test-target-coverage.py --prove-selftest-catches-regression	source/AST/text analysis only
 portable	-	check-test-target-coverage.py	source/AST/text analysis only
+portable	-	check-moveset-table.py --selftest	synthetic tables built in memory; needs nothing
+partial	chr-corpus	check-moveset-table.py	grammar and invariant half asserts on the committed table; the regenerate-and-diff half prints SKIP
 portable	-	check-me3-shell-coverage.py --selftest	source/AST/text analysis only
 portable	-	check-me3-shell-coverage.py	source/AST/text analysis only
 portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only

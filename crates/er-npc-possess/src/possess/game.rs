@@ -2,14 +2,22 @@
 //!
 //! # What is deliberately NOT here
 //!
-//! **No native calls, and therefore no game function addresses at all.** Every lever the
-//! possession needs turned out to be a field: `EnableInvincible`'s whole body is
+//! **Almost no native calls: ONE game function address in the whole module, and no detour.** Every
+//! lever the possession itself needs turned out to be a field: `EnableInvincible`'s whole body is
 //! `chrFlags1c5 = (chrFlags1c5 & 0xef) | (state << 4)`, `SetDisableFallDamage`'s is
-//! `MOV [RCX+0x1B],DL; RET`, and the move is the engine's own per-frame proxy drain rather than a
-//! teleport call. So this module resolves no RVA, installs no detour, and cannot be broken by the
-//! 1.16.2 -> 1.17 address migration -- there is nothing in it to translate. What it CAN be broken
-//! by is a struct offset, which is why [`crate::possess::layout`] is one module and why the
-//! assertions below exist.
+//! `MOV [RCX+0x1B],DL; RET`, the move is the engine's own per-frame proxy drain rather than a
+//! teleport call, and firing an attack is a write to `CSChrEventModule+0x18`.
+//!
+//! The single exception is [`PLAY_ANIMATION_BY_BEHAVIOR_NAME_RVA`], and it was not a free choice.
+//! The field write formats `W_Event%04d` and nothing else, and `W_Event` is a broad alias layer
+//! rather than a total one -- so every dodge in the game (2,252 of them, spelled `W_Step`) is
+//! unreachable without it. Keeping the property would have meant shipping a possession that cannot
+//! roll. That address is registered as a verified 1.16.2 -> 1.17 pair and resolved through
+//! `game_rva_named`, so on an unrecognised build the fallback goes quiet rather than jumping into
+//! whatever now occupies those bytes.
+//!
+//! Everything else here is still translation-proof; what it CAN be broken by is a struct offset,
+//! which is why [`crate::possess::layout`] is one module and why the assertions below exist.
 //!
 //! # The two singletons, and why neither is an address either
 //!
@@ -26,18 +34,21 @@
 //! skips when the read fails. That turns a stale pointer into a missed frame rather than a crash.
 
 use eldenring::cs::{
-    CSChrDataModule, CSChrPhysicsModule, ChrCtrl as CsChrCtrl, ChrIns as CsChrIns,
-    ChrInsModuleContainer, ChrSet, ChrType, WorldChrMan, WorldChrManDbg,
+    CSChrBehaviorModule, CSChrDataModule, CSChrEventModule, CSChrPhysicsModule, CSChrTimeActModule,
+    CSChrTimeActModuleAnim, ChrCtrl as CsChrCtrl, ChrIns as CsChrIns, ChrInsModuleContainer,
+    ChrSet, ChrType, WorldChrMan, WorldChrManDbg,
 };
 use er_game_base::mem::{
-    is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8, safe_read_usize,
+    game_rva_named, is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8,
+    safe_read_usize,
 };
 use fromsoftware_shared::FromStatic;
 
 use crate::possess::intent::{IntentWrite, Stick};
 use crate::possess::layout::{
-    ai_ins, ai_path_data, chr_ctrl, chr_ctrl_modifier, chr_data_module, chr_ins,
-    chr_physics_module, manipulator, modules, world_chr_man_dbg,
+    ai_ins, ai_path_data, chr_behavior_module, chr_ctrl, chr_ctrl_modifier, chr_data_module,
+    chr_event_module, chr_ins, chr_physics_module, chr_time_act_module, manipulator, modules,
+    world_chr_man_dbg,
 };
 use crate::settings::{TargetMode, TargetSettings};
 
@@ -70,6 +81,21 @@ const _: () = {
     assert!(core::mem::offset_of!(CsChrCtrl, chr_proxy_flags) == chr_ctrl::CHR_PROXY_FLAGS);
     assert!(core::mem::offset_of!(ChrInsModuleContainer, data) == modules::DATA);
     assert!(core::mem::offset_of!(ChrInsModuleContainer, physics) == modules::PHYSICS);
+    assert!(core::mem::offset_of!(ChrInsModuleContainer, time_act) == modules::TIME_ACT);
+    assert!(core::mem::offset_of!(ChrInsModuleContainer, behavior) == modules::BEHAVIOR);
+    assert!(core::mem::offset_of!(ChrInsModuleContainer, event) == modules::EVENT);
+    assert!(
+        core::mem::offset_of!(CSChrEventModule, request_animation_id)
+            == chr_event_module::REQUEST_ANIMATION_ID
+    );
+    assert!(
+        core::mem::offset_of!(CSChrTimeActModule, anim_queue) == chr_time_act_module::ANIM_QUEUE
+    );
+    assert!(core::mem::offset_of!(CSChrTimeActModule, read_idx) == chr_time_act_module::READ_IDX);
+    assert!(core::mem::size_of::<CSChrTimeActModuleAnim>() == chr_time_act_module::ANIM_STRIDE);
+    assert!(
+        core::mem::offset_of!(CSChrBehaviorModule, root_motion) == chr_behavior_module::ROOT_MOTION
+    );
     assert!(core::mem::offset_of!(CSChrDataModule, hp) == chr_data_module::HP);
     assert!(core::mem::offset_of!(CSChrPhysicsModule, position) == chr_physics_module::POSITION);
     assert!(
@@ -85,6 +111,29 @@ const _: () = {
             == world_chr_man_dbg::CAM_OVERRIDE_CHR_INS
     );
 };
+
+/// `CS::PlayAnimationByBehaviorName`, 1.16.2 RVA `0xc14370`.
+///
+/// The ONLY game function address this crate resolves. Layers 1 and 2 resolve none at all -- every
+/// lever they need turned out to be a field -- and layer 3 keeps that for everything the
+/// `W_Event%04d` field write can spell -- 4,667 of the 6,921 shipped moves. This exists for the
+/// remainder, which is almost entirely the 2,252 dodges: they are spelled `W_Step` and have no
+/// `W_Event` name at all, so without this they are simply not in the game.
+///
+/// Verified for 1.17 rather than assumed. The function is 80 bytes and BYTE-IDENTICAL between
+/// 1.16.2 `0x140c14370` and 1.17 `0x140c15a40`, matching uniquely in both images with no rel32
+/// wildcarding needed -- both of its callees moved by the same `+0x16d0` as the function itself.
+/// The pair is registered in `docs/recon/rva-map-1162-to-1170.verified.tsv`, which is what makes
+/// [`game_rva_named`] able to translate it; without that row it refuses and the fallback goes
+/// quiet rather than jumping into whatever now occupies those bytes.
+const PLAY_ANIMATION_BY_BEHAVIOR_NAME_RVA: u32 = 0x00c1_4370;
+
+/// `void PlayAnimationByBehaviorName(hkbCharacter** slot, const wchar_t* name)`.
+///
+/// The first argument is a POINTER TO the slot, not the character -- the function opens with
+/// `CMP qword ptr [RCX],0x0` and later `MOV RCX,[RBX]`. Ghidra types it `hkbCharacter*`, which is
+/// wrong and would have been a null-deref on the first call.
+type PlayAnimationByBehaviorNameFn = unsafe extern "system" fn(*mut usize, *const u16);
 
 /// A `FloatVector4` in the engine's layout, `align(16)` because `ForceSetPosition` loads its
 /// argument with `MOVAPS`, which `#GP`s on an unaligned address.
@@ -219,6 +268,137 @@ impl Chr {
     pub(crate) fn hp(self) -> Option<i32> {
         let data = self.module(modules::DATA)?;
         unsafe { safe_read_i32(data + chr_data_module::HP) }
+    }
+
+    /// FIRE AN ANIMATION, which for this crate means writing one `int`.
+    ///
+    /// `CSChrEventModule::RequestAnimation`'s entire lasting effect is this store; see
+    /// [`chr_event_module`] for why the other half of it does not need doing. The engine picks the
+    /// request up in its next `CSChrEventModule::Update`, turns the id into the behaviour-graph
+    /// event `W_Event%04d`, and resets the field to -1.
+    ///
+    /// Returns whether the store landed -- NOT whether the animation played. Nothing in the
+    /// process can answer the second question: an id the graph does not consume resolves cleanly
+    /// and does nothing. That is what the offline fireability gate and the watchdog are between
+    /// them for.
+    pub(crate) fn request_animation(self, animation: i32) -> bool {
+        let Some(event) = self.module(modules::EVENT) else {
+            return false;
+        };
+        write_u32(
+            event + chr_event_module::REQUEST_ANIMATION_ID,
+            animation as u32,
+        )
+    }
+
+    /// Is a request still waiting to be consumed?
+    ///
+    /// Used to avoid stacking two requests in one frame: the field holds ONE id, so a second
+    /// write before `Update` runs silently discards the first.
+    pub(crate) fn animation_request_pending(self) -> bool {
+        let Some(event) = self.module(modules::EVENT) else {
+            return false;
+        };
+        unsafe { safe_read_i32(event + chr_event_module::REQUEST_ANIMATION_ID) }
+            .is_some_and(|pending| pending != -1)
+    }
+
+    /// The animation playing right now, from the TimeAct ring buffer's read cursor.
+    pub(crate) fn current_animation(self) -> Option<i32> {
+        let time_act = self.module(modules::TIME_ACT)?;
+        let read = unsafe { safe_read_i32(time_act + chr_time_act_module::READ_IDX) }?;
+        let index = u32::try_from(read).ok()?;
+        if index >= chr_time_act_module::ANIM_QUEUE_LEN {
+            // The cursor is a `u32` the engine wraps itself, so an out-of-range value means the
+            // pointer chain landed somewhere wrong. Reading past the ring would be reading
+            // whatever follows it.
+            return None;
+        }
+        let entry = time_act
+            + chr_time_act_module::ANIM_QUEUE
+            + (index as usize) * chr_time_act_module::ANIM_STRIDE;
+        unsafe { safe_read_i32(entry) }
+    }
+
+    /// The creature's `hkbCharacter`, by two loads.
+    ///
+    /// `CSChrEventModule::Update` gets this by calling `FUN_14041aef0(behaviorModule, &slot)`,
+    /// which calls `FUN_140c07a40(behaviorModule->field_0x10, &slot)`, whose whole body is
+    /// `slot = *(field_0x10 + 0x30)` behind a null check. Both calls are pure loads, so this does
+    /// the loads and resolves neither address -- the moveset layer ends up needing exactly one
+    /// game function address, and this is not it.
+    fn hkb_character(self) -> Option<usize> {
+        let behavior = self.module(modules::BEHAVIOR)?;
+        let owner = unsafe { safe_read_usize(behavior + chr_behavior_module::HKB_OWNER) }?;
+        if !unsafe { is_heap_aligned_ptr(owner) } {
+            return None;
+        }
+        let character = unsafe { safe_read_usize(owner + chr_behavior_module::HKB_CHARACTER) }?;
+        unsafe { is_heap_aligned_ptr(character) }.then_some(character)
+    }
+
+    /// FIRE AN ANIMATION BY NAME -- the fallback for ids the field write cannot spell.
+    ///
+    /// `requestAnimationId` formats `W_Event%04d` and nothing else, and `W_Event` is a broad alias
+    /// layer rather than a total one: c2120's dodges exist only as `W_Step6000`..`W_Step6011` and
+    /// have no `W_Event` spelling at all. This builds the name the graph actually declares --
+    /// `<prefix><id>` at `%04d` -- and hands it to `PlayAnimationByBehaviorName`, which resolves it
+    /// through the same behaviour world and reaches the same `fireHkbEvent_C`.
+    ///
+    /// **THIS IS THE ONE GAME FUNCTION ADDRESS THE WHOLE CRATE RESOLVES**, and it is on this path
+    /// only. Everything the `W_Event` spelling can reach goes through
+    /// [`Self::request_animation`], which is a field write. Refusing costs the dodges; calling an
+    /// unresolved address costs the session, so a refusal returns `false` and the caller logs it.
+    pub(crate) fn play_animation_by_name(self, name: &[u16]) -> bool {
+        debug_assert_eq!(
+            name.last(),
+            Some(&0),
+            "the game expects a NUL-terminated wide string"
+        );
+        let Some(mut character) = self.hkb_character() else {
+            return false;
+        };
+        let Ok(address) = game_rva_named(
+            PLAY_ANIMATION_BY_BEHAVIOR_NAME_RVA,
+            "PLAY_ANIMATION_BY_BEHAVIOR_NAME_RVA",
+        ) else {
+            return false;
+        };
+        // Safety: the address was resolved for the running build immediately above, and the
+        // signature is read out of the function's own disassembly rather than inferred --
+        // `CMP qword ptr [RCX],0x0` proves the first argument is a POINTER TO the slot holding the
+        // `hkbCharacter`, not the character itself, which is why `character` is passed by address.
+        let play: PlayAnimationByBehaviorNameFn = unsafe { core::mem::transmute(address) };
+        unsafe { play(&raw mut character, name.as_ptr()) };
+        true
+    }
+
+    /// The creature's chr id -- `4500` for a Flying Dragon -- from its `NpcParam` row.
+    ///
+    /// `NpcParam` rows are `<chr><4 digits>`, so the id is the row divided by ten thousand. That
+    /// is the same arithmetic `scripts/er-moveset-table-gen.py` uses to key the shipped table, and
+    /// it is the reason the table can be keyed by an integer at all.
+    ///
+    /// The offset comes from `offset_of!` rather than from [`crate::possess::layout`], unlike
+    /// every other field here. The layout module exists for offsets the `eldenring` crate does
+    /// NOT model, where a hand-derived constant is the only option and a cross-check is the best
+    /// available guard. This field IS modelled, so taking the offset from the type is strictly
+    /// better than writing the number down twice and asserting they match.
+    pub(crate) fn npc_param_id(self) -> Option<u32> {
+        let at = self.0 + core::mem::offset_of!(CsChrIns, npc_param_id);
+        let row = unsafe { safe_read_i32(at) }?;
+        u32::try_from(row).ok().map(|row| row / 10_000)
+    }
+
+    /// Squared magnitude of the engine's own per-frame root motion for this character.
+    ///
+    /// Squared because the watchdog only compares it against a threshold, and because the
+    /// alternative -- differencing positions between frames -- is useless here: co-location moves
+    /// the player every frame whether or not the creature is going anywhere.
+    pub(crate) fn root_motion_squared(self) -> Option<f32> {
+        let behavior = self.module(modules::BEHAVIOR)?;
+        let [x, y, z] = read_vec3(behavior + chr_behavior_module::ROOT_MOTION)?;
+        Some(z.mul_add(z, x.mul_add(x, y * y)))
     }
 
     /// `CS::ChrIns::IsDead` -- `chrCtrl->ctrlModifier->ChrCtrlModifierData._1cFlags & 1`.
@@ -491,6 +671,31 @@ pub(crate) fn camera_override_is(chr: Chr) -> bool {
     let at = core::ptr::from_ref(dbg) as usize + world_chr_man_dbg::CAM_OVERRIDE_CHR_INS;
     let current = unsafe { safe_read_usize(at) };
     current == Some(chr.address())
+}
+
+/// Metres from the possessed creature to the nearest OTHER live enemy.
+///
+/// What the moveset dispatcher bands on. Not a lock-on distance: `CSLockTgtMan` is not modelled by
+/// this crate and reaching it would need an offset nobody here has verified on 1.17, so this is
+/// the nearest hostile instead and the module docs say so rather than implying otherwise.
+///
+/// The player's own body is excluded for free -- it is `ChrType::Player`, and co-located with the
+/// creature anyway, so including it would report every attack as point-blank.
+///
+/// `None` means nothing is within the fifty-unit search radius, which the dispatcher reads as
+/// [`crate::moveset::dispatch::Band::Far`]. Called only on a frame with a press, because it walks
+/// every loaded `ChrSet`.
+pub(crate) fn nearest_hostile_distance(creature: Chr) -> Option<f32> {
+    let settings = TargetSettings {
+        mode: TargetMode::Nearest,
+        ..TargetSettings::default()
+    };
+    // `pick_target` excludes the character it is given by address, so passing the creature makes
+    // it "nearest enemy to the creature, that is not the creature".
+    let (target, _) = pick_target(settings, creature);
+    let (from, to) = (creature.position()?, target?.position()?);
+    let squared = (to[0] - from[0]).powi(2) + (to[1] - from[1]).powi(2) + (to[2] - from[2]).powi(2);
+    squared.is_finite().then(|| squared.sqrt())
 }
 
 /// Why a target could not be found. Carried into the refusal so the player is told which of the

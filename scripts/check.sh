@@ -1516,6 +1516,15 @@ python3 "$repo_root/scripts/check-test-target-coverage.py" --selftest
 python3 "$repo_root/scripts/check-test-target-coverage.py" --prove-selftest-catches-regression
 python3 "$repo_root/scripts/check-test-target-coverage.py"
 
+# THE SHIPPED MOVESET TABLE, crates/er-npc-possess/data/moveset.tbl. Two gates in one script:
+# the grammar/invariant checks always run, and the full regeneration-and-diff runs only where the
+# unpacked chr corpus exists. It SKIPS loudly rather than passing quietly when it does not -- the
+# corpus is game-derived and will never be in the repo, so CI can prove the table is well-formed
+# and self-consistent but not that it is what the generator produces. Set ER_CHR_CORPUS_ROOT (or
+# pass --root) on a machine with an extraction to get the real check.
+python3 "$repo_root/scripts/check-moveset-table.py" --selftest
+python3 "$repo_root/scripts/check-moveset-table.py"
+
 # EVERY REMAINING HOST-TESTABLE CRATE, IN TWO BATCHES. Up to this line the crates above were
 # added one at a time, each by somebody who tripped over the fact that theirs had never run --
 # `default-members = ["crates/er-quickload"]` means a bare `cargo test` selects ONE of 64

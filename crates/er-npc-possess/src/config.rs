@@ -44,11 +44,15 @@ use er_hotkey_config::{
 use crate::{
     engine::PossessionRequest,
     log::possess_log,
-    settings::{MovementSettings, Rejections, Tables, TargetSettings},
+    settings::{ChrOverride, MovementSettings, Rejections, Tables, TargetSettings},
     toml::Document,
 };
 
 const CONFIG_FILE_NAME: &str = "er-npc-possess.toml";
+
+/// The same name, for log lines that have to tell the player which of the two files they should
+/// be typing in. Separate so the private constant stays private to the path logic.
+pub(crate) const CONFIG_FILE_NAME_FOR_LOG: &str = CONFIG_FILE_NAME;
 
 /// The auto-classified moveset table a later layer WRITES and the player then edits. Named here
 /// so the second file has a spelling before it has an implementation; nothing reads it yet.
@@ -72,11 +76,18 @@ const DEFAULT_CONFIG_TOML: &str = r##"# er-npc-possess.toml -- the standalone "b
 # and releasing drops you exactly there. The left stick walks the creature. Press again -- or let
 # it die -- to get out.
 #
+# ATTACKING. Four buttons, the same on every creature: R1 light, R2 heavy, L1 ranged, L2 movement
+# (on mouse and keyboard, the game's own default: click, shift+click, right click, shift+right
+# click). Which attack you get depends on how far away the nearest enemy is and how many times you
+# have pressed the button in a row -- see [mapping]. Every creature's attacks were classified
+# offline; er-npc-possess.derived.toml is written each time you possess something and lists what
+# that creature can do and, for anything withheld, exactly why.
+#
 # WHAT IS NOT WIRED YET, so you can tell a missing feature from a broken one:
-#   * ATTACKS. The possessed character will not attack. Everything under [mapping] and [buttons],
-#     and the `radial` binding, is parsed, validated and reported in the log, and consumed by
-#     nobody. They are written here anyway so the file you tune now is the file the later layer
-#     reads, rather than one you have to migrate.
+#   * The `radial` binding is parsed and reported and there is no wheel to open.
+#   * Range is measured to the nearest enemy, NOT to what you are locked on to.
+#   * GRABS. No creature's grab can be fired -- see allow_grabs below. Dodges CAN: they are
+#     fired under their real W_Step name rather than through the field write.
 #   * Your own body stays LOCK-ON-ABLE while you are away from it. It cannot be hurt and cannot be
 #     seen, so this is an oddity rather than a hazard.
 #   * turn_deadzone_deg, heading_converge and root_motion_only are RESERVED. speed_scale is live.
@@ -135,28 +146,53 @@ chr_id = 0
 # Hand the body back when it dies, instead of staying inside a corpse.
 release_on_death = true
 
-# RESERVED -- attacks are not wired yet. How one input will turn into one of the possessed
-# character's attacks. The values are read and reported now so the file does not have to change.
+# LIVE. How one press turns into one of the possessed character's attacks.
 [mapping]
-# context -- range band plus combo rank picks the attack. The default, and the only model that
-#            still means something on a character with thirty attacks and four buttons.
-# layered -- the same button means a different attack while a shoulder is held.
-# slots   -- one fixed attack per input, in file order.
+# context -- the range band picks which attacks are eligible, then repeated presses walk them in
+#            order. The default, and the only model that still means something on a character with
+#            thirty attacks and four buttons.
+# layered -- range picks a THIRD of the attack list rather than filtering by reach. More
+#            predictable, less situationally right.
+# slots   -- range is ignored entirely; every press walks the whole bucket. Use this on a creature
+#            whose attacks mostly came back with an unknown reach.
 model = "context"
-# Neutral time after which the attack rank falls back to 0.
+# Neutral time after which the attack rank falls back to 0. Standing still resets it too, and
+# that is the one that usually fires first.
 combo_window_ms = 1200
-# close < 4m < mid < 12m < far. Two numbers, both required, near first.
+# close < 4m < mid < 12m < far. Two numbers, both required, near first. Measured to the nearest
+# enemy. While you are moving, the band is shifted one step CLOSER, on the reasoning that an
+# attack you start mid-run lands after the run has closed some of the gap.
 bands_m = [4.0, 12.0]
-# Let ThrowParam (grab) attacks out of the deny list. Off by default: a grab that lands on a
-# player is not a move the player can be expected to survive fairly.
-allow_grabs = false
-# promote -- an input with nothing mapped borrows the nearest attack in the same bucket
+# Offer the creature's grabs. ON as a policy -- a grab is a real attack and withholding it by
+# default would quietly remove the signature move of most bosses.
+#
+# It currently gates NOTHING, and that is worth knowing rather than discovering. Grab animations
+# live in the 4000 band (Malenia's are 4100 and 4101) and NO event name in that band has a
+# transition behind it on any creature swept -- not W_Event, not W_Attack, not any prefix. So the
+# graph's event layer cannot reach them at all, by either firing path. This is a different wall
+# from the dodges, which the by-name path did solve. When a route to them is found, this setting
+# is already the right way round.
+allow_grabs = true
+# promote -- an input whose bucket is empty borrows from another one rather than doing nothing.
+#            It drops the RANGE requirement first and only then changes bucket, so the button
+#            keeps meaning what it says for as long as possible.
 # deny    -- it stays dead
 unbound_inputs = "promote"
+# Softlock guard. If the creature is animating, going nowhere, and you have not asked for
+# anything for this long, the animation is forced back to idle and never offered again this
+# session -- and it is written into er-npc-possess.derived.toml so you can see which one it was.
+# Some animations only exit on a condition the AI would have met, and the AI is what possession
+# switches off.
+watchdog_seconds = 4.0
 
-# RESERVED. Which bucket each input draws from. Identical on every character, which is the point:
+# LIVE. Which bucket each input draws from. Identical on every character, which is the point:
 # the same button means the same KIND of thing whoever you are wearing.
 # Buckets: light, heavy, ranged, movement.
+#
+# l2 is the creature's own dodges and steps, animation 6000-6023. The graph never names those
+# W_Event -- only W_Step -- so they are fired by name rather than by the field write this mod
+# prefers. That is the one place the mod calls a game function. A creature with no fireable step
+# gets nothing in this bucket and l2 promotes to an attack instead.
 [buttons]
 r1 = "light"
 r2 = "heavy"
@@ -347,6 +383,7 @@ impl PossessConfig {
         PossessionRequest {
             target: self.target_in_force,
             mapping: self.tables.mapping,
+            buttons: self.tables.buttons,
         }
     }
 
@@ -538,6 +575,22 @@ pub(crate) fn take_request() -> (PossessionRequest, Option<(String, String)>) {
 /// what changes, and snapshotting it at possession start would make it the one setting that
 /// mysteriously needs a re-possess. `[target]` is snapshotted for the opposite reason -- see
 /// [`PossessConfig::adopt_staged_target`].
+/// The `[chr.cNNNN]` overrides for one creature, or `None` when the file names none.
+///
+/// Read at possession START rather than snapshotted into [`PossessionRequest`]: the override is a
+/// growable `Vec` of pins and animation ids, and `PossessionRequest` is `Copy` on purpose so that
+/// the log line describing a possession is a value rather than a borrow of a lock.
+pub(crate) fn chr_override(chr_id: u32) -> Option<ChrOverride> {
+    let wanted = format!("c{chr_id:04}");
+    state()
+        .config
+        .tables
+        .chr_overrides
+        .iter()
+        .find(|over| over.chr == wanted)
+        .cloned()
+}
+
 pub(crate) fn movement() -> MovementSettings {
     state().config.tables.movement
 }
@@ -670,8 +723,12 @@ mod tests {
         assert_eq!(config.tables.mapping.model, MappingModel::Context);
         assert_eq!(config.tables.mapping.combo_window_ms, 1200);
         assert_eq!(config.tables.mapping.bands_m, (4.0, 12.0));
-        assert!(!config.tables.mapping.allow_grabs);
+        // ON, and asserted rather than assumed: TAE event 304 is 100% of the 4000 animation band
+        // and every boss grab in the game, so a `false` here silently removes the signature move
+        // of most of what anybody would want to possess.
+        assert!(config.tables.mapping.allow_grabs);
         assert_eq!(config.tables.mapping.unbound_inputs, UnboundInputs::Promote);
+        assert_eq!(config.tables.mapping.watchdog_seconds, 4.0);
         assert_eq!(config.tables.buttons.r1, Bucket::Light);
         assert_eq!(config.tables.movement.turn_deadzone_deg, 20.0);
         // The example per-chr table ships COMMENTED OUT, so a fresh install overrides nothing.

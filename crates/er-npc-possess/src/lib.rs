@@ -32,6 +32,7 @@ mod config;
 mod engine;
 mod input;
 mod log;
+mod moveset;
 mod possess;
 mod settings;
 mod toml;
@@ -236,19 +237,24 @@ fn install() {
         config.tables.summary()
     ));
     possess_log(format_args!(
-        "derived moveset table: {} is NOT written by this layer -- the auto-classifier that \
-         produces it lands later, and your edits to it will win over its verdicts when it does",
-        config::DERIVED_CONFIG_FILE_NAME
+        "moveset table: {} creatures classified offline. {} is rewritten on every possession and \
+         lists what the one you are wearing can do, plus the reason for anything withheld -- it \
+         is OUTPUT, so corrections go in {} under [chr.cNNNN] instead",
+        moveset::table::chr_ids().count(),
+        config::DERIVED_CONFIG_FILE_NAME,
+        config::CONFIG_FILE_NAME_FOR_LOG,
     ));
-    // STACK LAYER 2. The seam is filled: pressing the key now writes a forwarding thunk into the
-    // target's `ChrCtrl+0x3b0`, points `WorldChrManDbg+0xb8` at it, and co-locates the player's
-    // own (invisible, silent, invincible, non-attacking) body with it every frame.
+    // STACK LAYERS 2 AND 3. Pressing the key writes a forwarding thunk into the target's
+    // `ChrCtrl+0x3b0`, points `WorldChrManDbg+0xb8` at it, and co-locates the player's own
+    // (invisible, silent, invincible, non-attacking) body with it every frame -- and the four
+    // face inputs now fire that creature's own attacks out of the offline-classified table.
     let installed = engine::install_engine(Box::new(possess::NpcPossessionEngine::new()));
     possess_log(format_args!(
-        "possession engine: {} -- build={} | NOT in this layer: attacks (the W_Event/W_Attack \
-         animation-prefix question is unresolved and a wrong prefix silently no-ops) and \
-         untargetable (IsLockOnDisabled reads the SpEffect-accumulated modifier block, so it needs \
-         a SpEffect row rather than a field write)",
+        "possession engine: {} -- build={} | attacks fire by writing \
+         CSChrEventModule::requestAnimationId, so this layer still resolves no game function \
+         address. NOT in this layer: untargetable (IsLockOnDisabled reads the \
+         SpEffect-accumulated modifier block, so it needs a SpEffect row rather than a field \
+         write), and range is measured to the nearest enemy rather than to a lock-on target",
         if installed {
             "INSTALLED"
         } else {

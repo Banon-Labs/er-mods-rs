@@ -198,9 +198,13 @@ pub(crate) enum MappingModel {
     /// per-input meaning that survives a character with thirty attacks and four buttons.
     #[default]
     Context,
-    /// Modifier layers: the same button means a different attack while a shoulder is held.
+    /// The range band picks a contiguous THIRD of the bucket's rank order rather than filtering
+    /// by reach: close gets the low ranks, far the high ones. More predictable than
+    /// [`Self::Context`] and less situationally right.
     Layered,
-    /// A fixed slot per input, filled in file order.
+    /// No range filtering at all -- every press walks the whole bucket. For creatures whose
+    /// attacks mostly came back with an unmeasured reach, where filtering removes moves for no
+    /// good reason.
     Slots,
 }
 
@@ -258,10 +262,27 @@ pub(crate) struct MappingSettings {
     pub(crate) combo_window_ms: u32,
     /// `close < bands_m.0 < mid < bands_m.1 < far`, in metres.
     pub(crate) bands_m: (f32, f32),
-    /// Let `ThrowParam` attacks out of the deny list. Off by default because a grab that lands on
-    /// a player is not a move the player can be expected to survive fairly.
+    /// Offer the possessed creature's grabs.
+    ///
+    /// ON by default, and this reversed once the corpus was actually measured. The old default
+    /// was `false` on the reasoning that a grab is unfair; the reasoning was about the wrong
+    /// direction of the interaction (you are the one grabbing) and the scope was wrong too.
+    /// TimeAct event 304 `ThrowAttackBehavior` is 573 sites across 90 creatures and **100% of the
+    /// 4000 animation band** -- it is not a niche category, it is every boss grab in the game, so
+    /// withholding it by default was the wrong policy.
+    ///
+    /// It currently gates NOTHING, which is a separate fact and not a reason to flip it back. No
+    /// grab in the shipped table is reachable at all, and this survived the by-name fallback that
+    /// rescued the dodges: swept across all 408 creatures, NO event name in the 4000 band has a
+    /// transition behind it under ANY prefix -- not `W_Event`, not `W_Attack`, not one of the ride
+    /// families. The graph's event layer does not reach grabs, by either firing path, so this is a
+    /// different wall from the one `Prefix` climbs. The day a route is found this setting is
+    /// already the right way round.
     pub(crate) allow_grabs: bool,
     pub(crate) unbound_inputs: UnboundInputs,
+    /// How long the possessed creature may animate, go nowhere and be asked for nothing before
+    /// the watchdog forces it back to idle. See [`crate::moveset::watchdog`].
+    pub(crate) watchdog_seconds: f32,
 }
 
 impl Default for MappingSettings {
@@ -270,8 +291,9 @@ impl Default for MappingSettings {
             model: MappingModel::Context,
             combo_window_ms: 1200,
             bands_m: (4.0, 12.0),
-            allow_grabs: false,
+            allow_grabs: true,
             unbound_inputs: UnboundInputs::Promote,
+            watchdog_seconds: 4.0,
         }
     }
 }
@@ -311,6 +333,17 @@ impl MappingSettings {
             rejections,
             UnboundInputs::parse,
         );
+        // A zero or negative watchdog would mean "force idle immediately", which cancels every
+        // attack on the frame it starts. Rejected rather than clamped: somebody who typed 0 meant
+        // something, and silently turning it into 4 would hide that they cannot have it.
+        take(
+            &mut self.watchdog_seconds,
+            doc,
+            s,
+            "watchdog_seconds",
+            rejections,
+            |raw| parse_f32(raw).filter(|value| *value > 0.0),
+        );
 
         // The bands are one setting in two numbers, so they move together or not at all: half an
         // edit -- a readable near band and a junk far one -- would leave the two inconsistent
@@ -331,13 +364,15 @@ impl MappingSettings {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "model={} combo_window_ms={} bands_m=[{},{}] allow_grabs={} unbound_inputs={}",
+            "model={} combo_window_ms={} bands_m=[{},{}] allow_grabs={} unbound_inputs={} \
+             watchdog_seconds={}",
             self.model.name(),
             self.combo_window_ms,
             self.bands_m.0,
             self.bands_m.1,
             self.allow_grabs,
-            self.unbound_inputs.name()
+            self.unbound_inputs.name(),
+            self.watchdog_seconds
         )
     }
 }

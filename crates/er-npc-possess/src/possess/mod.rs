@@ -1,4 +1,5 @@
-//! THE POSSESSION ENGINE -- stack layer 2, the thing layer 1's seam was cut for.
+//! THE POSSESSION ENGINE -- stack layer 2, the thing layer 1's seam was cut for, plus the
+//! moveset layer that filled its own.
 //!
 //! # What actually happens when the key is pressed
 //!
@@ -14,12 +15,12 @@
 //! 4. The player's own body is neutered -- invincible, alpha 0, silent, `debugFlags |= noAttack`
 //!    -- and co-located with the creature every frame through the engine's own proxy drain.
 //! 5. Every frame after that, movement intent is written into the creature's `AiIns`.
+//! 6. The four face inputs fire that creature's own attacks -- see [`crate::moveset`], which fills
+//!    the seam this module's docs used to name. It costs no game address either: firing is a
+//!    write to `CSChrEventModule+0x18 requestAnimationId`.
 //!
-//! # The three things this layer does NOT do, named so nobody has to go looking
+//! # The two things this layer does NOT do, named so nobody has to go looking
 //!
-//! * **Attacks.** The `W_Event` vs `W_Attack` animation-name-prefix question is unresolved, and a
-//!   wrong prefix silently no-ops rather than failing. `driver`'s `possess` leaves the
-//!   seam and the log says so.
 //! * **Untargetable.** `IsLockOnDisabled` reads `ChrCtrl+0xc8 -> +0x8 -> +0x10 actionFlags` bit 3,
 //!   which lives in the SpEffect-accumulated modifier block and is re-derived every frame. A raw
 //!   write is undone before it is read; the supported route is a SpEffect row, which this layer

@@ -171,8 +171,75 @@ pub(crate) mod chr_ctrl_modifier {
 pub(crate) mod modules {
     /// `CSChrDataModule`. Cross-checked.
     pub(crate) const DATA: usize = 0x00;
+    /// `CSChrTimeActModule` -- the animation queue, i.e. what is playing right now.
+    /// Cross-checked.
+    pub(crate) const TIME_ACT: usize = 0x18;
+    /// `CSChrBehaviorModule` -- carries `rootMotion`, which is how the watchdog tells a slow
+    /// wind-up from a creature that has genuinely stopped. Cross-checked.
+    pub(crate) const BEHAVIOR: usize = 0x28;
+    /// `CSChrEventModule` -- the animation REQUEST slot. Cross-checked.
+    pub(crate) const EVENT: usize = 0x58;
     /// `CSChrPhysicsModule`. Cross-checked.
     pub(crate) const PHYSICS: usize = 0x68;
+}
+
+/// `CSChrEventModule` -- how an attack is fired, and why it costs no game address.
+///
+/// `CS::CSChrEventModule::RequestAnimation` (1.16.2 `0x14043aa30`) has a two-line body: it calls
+/// `SetRendererVisibility(chr, 5)` and then writes `requestAnimationId`. The visibility call is a
+/// min-latch into `ChrIns+0xBC` that the `ChrIns` update RESETS TO -2 every frame, so it has no
+/// lasting effect and nothing to undo. Which leaves a single `int` store -- so **writing this
+/// field IS calling the function**, and the moveset layer keeps the crate's no-game-addresses
+/// property intact.
+///
+/// `CSChrEventModule::Update` (1.16.2 `0x14043a580`) consumes it once per frame and resets it to
+/// -1, routing through `FUN_140c14400`, which formats `DLString::FormatW(L"%s%04d", L"W_Event",
+/// animId)` and resolves it against the same behaviour world `PlayAnimationByBehaviorName` uses.
+/// So the clip carries its TimeAct binding and the hitbox, VFX, sound and root motion all come
+/// along -- none of which this crate has to reimplement.
+///
+/// FOUR GATES sit in front of it, all of which a possessed creature ordinarily passes:
+/// `!ChrIns::IsDead`, `actionFlag->actionAnimationFlags` bit 12 clear, `!CSChrThrowModule::IsInTrow`,
+/// and `field_0x70 == 0`. A request that fails them is dropped silently; nothing here can observe
+/// that, which is part of why the watchdog exists.
+pub(crate) mod chr_event_module {
+    /// `requestAnimationId`, `i32`. -1 means "nothing pending". Cross-checked.
+    pub(crate) const REQUEST_ANIMATION_ID: usize = 0x18;
+}
+
+/// `CSChrTimeActModule` -- the ten-entry ring buffer of animations.
+pub(crate) mod chr_time_act_module {
+    /// `animQueue`, ten `CSChrTimeActModuleAnim`. Cross-checked.
+    pub(crate) const ANIM_QUEUE: usize = 0x20;
+    /// Size of one queue entry: `animId`, `playTime`, `playTime2`, `animLength`.
+    pub(crate) const ANIM_STRIDE: usize = 0x10;
+    /// Entries in the ring.
+    pub(crate) const ANIM_QUEUE_LEN: u32 = 10;
+    /// `readIdx`, `u32` -- the index of the animation last played or updated, i.e. the current
+    /// one. Cross-checked.
+    pub(crate) const READ_IDX: usize = 0xc4;
+}
+
+/// `CSChrBehaviorModule`.
+///
+/// # Reaching the `hkbCharacter`, without calling anything
+///
+/// `PlayAnimationByBehaviorName` wants a pointer to a slot holding the creature's `hkbCharacter`.
+/// `CSChrEventModule::Update` gets one by calling `FUN_14041aef0(behaviorModule, &slot)`, which
+/// calls `FUN_140c07a40(behaviorModule->field_0x10, &slot)`, whose entire body is
+/// `slot = *(behaviorModule->field_0x10 + 0x30)`. Two loads and a null check -- so this crate does
+/// the two loads and skips both calls, and the only address the moveset layer resolves is the one
+/// it genuinely cannot avoid.
+pub(crate) mod chr_behavior_module {
+    /// The `hkbCharacter` owner this module hangs off. RE-ONLY (`unk10` in the crate).
+    pub(crate) const HKB_OWNER: usize = 0x10;
+    /// ...and the `hkbCharacter` itself, inside that. RE-ONLY.
+    pub(crate) const HKB_CHARACTER: usize = 0x30;
+    /// `rootMotion`, a `FloatVector4`. The engine's own per-frame displacement for this
+    /// character, which is exactly the "is it actually going anywhere" question the watchdog
+    /// needs and cannot get from position deltas (co-location moves the player every frame
+    /// regardless). Cross-checked.
+    pub(crate) const ROOT_MOTION: usize = 0x30;
 }
 
 /// `CSChrDataModule`.

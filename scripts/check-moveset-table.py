@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Prove `crates/er-npc-possess/data/moveset.tbl` is what the generator produces.
+
+A shipped data table nobody can regenerate is a mystery blob: it cannot be reviewed, it cannot be
+updated when the corpus changes, and a hand-edit in it is invisible. So this re-runs
+`scripts/er-moveset-table-gen.py` over the local corpus and diffs the result against the committed
+file, byte for byte.
+
+SKIPS, loudly, when the corpus is not present -- the unpacked game assets are not in the repo and
+never will be (no game-derived binaries), so CI and any machine without an extraction cannot run
+the real check. Skipping is reported as a skip, never as a pass.
+
+  scripts/check-moveset-table.py            # regenerate and diff, or skip
+  scripts/check-moveset-table.py --selftest # prove the check catches a corrupted table
+  scripts/check-moveset-table.py --shape    # grammar/invariant checks only; no corpus needed
+"""
+import argparse
+import contextlib
+import difflib
+import importlib.util
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+GENERATOR = os.path.join(HERE, 'er-moveset-table-gen.py')
+TABLE = os.path.join(ROOT, 'crates', 'er-npc-possess', 'data', 'moveset.tbl')
+
+#: `<fired>[=<played>][g]:<bucket>:<rank>:<reach>[:<prefix>]`. The prefix column is optional
+#: and absent means `W_Event`, the field-write path.
+ENTRY_RE = re.compile(r'^(\d+)(?:=(\d+))?(g?):([0-3]):(\d+):([0-3])(?::(\d+))?$')
+DENIAL_RE = re.compile(r'^!(\d+):([1-9])$')
+
+
+_GEN = None
+
+
+def GEN_MODULE():
+    """The generator, loaded once. `multiprocessing` inside it needs the module to be
+    importable by the name it was loaded under, so the name is registered in
+    `sys.modules` -- without that the worker pool cannot pickle `_one`."""
+    global _GEN
+    if _GEN is None:
+        spec = importlib.util.spec_from_file_location('er_moveset_table_gen', GENERATOR)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['er_moveset_table_gen'] = module
+        spec.loader.exec_module(module)
+        _GEN = module
+    return _GEN
+
+
+def check_shape(text):
+    """Grammar and invariants that need no corpus, so they run everywhere."""
+    problems = []
+    version_seen = False
+    creatures = 0
+    moves = 0
+    for number, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('v'):
+            version_seen = True
+            continue
+        parts = line.split()
+        if len(parts) < 2 or not parts[0].isdigit():
+            problems.append(f'line {number}: no chr id')
+            continue
+        creatures += 1
+        if parts[1:] == ['-']:
+            continue
+        ranks = {}
+        offered = set()
+        denied = set()
+        for field in parts[1:]:
+            if field.startswith('!'):
+                match = DENIAL_RE.match(field)
+                if not match:
+                    problems.append(f'line {number}: bad denial {field!r}')
+                    continue
+                denied.add(int(match.group(1)))
+                continue
+            match = ENTRY_RE.match(field)
+            if not match:
+                problems.append(f'line {number}: bad entry {field!r}')
+                continue
+            moves += 1
+            fired, bucket, rank = int(match.group(1)), int(match.group(4)), int(match.group(5))
+            prefix = int(match.group(7) or 0)
+            if prefix >= len(GEN_MODULE().PREFIXES):
+                problems.append(
+                    f'line {number}: entry {field!r} names prefix {prefix}, and the generator '
+                    f'only has {len(GEN_MODULE().PREFIXES)}')
+            offered.add(fired)
+            ranks.setdefault(bucket, []).append(rank)
+        both = offered & denied
+        if both:
+            problems.append(f'line {number}: {sorted(both)} are both offered and denied')
+        for bucket, values in ranks.items():
+            if sorted(values) != list(range(len(values))):
+                problems.append(
+                    f'line {number}: bucket {bucket} ranks are not a dense 0..n: {sorted(values)}')
+    if not version_seen:
+        problems.append('no version marker')
+    if creatures < 200:
+        problems.append(f'only {creatures} creatures')
+    if moves < 2000:
+        problems.append(f'only {moves} moves')
+    return problems
+
+
+def corpus_present(root):
+    return bool(GEN_MODULE().chr_dirs(root, 'behbnd'))
+
+
+def regenerate(root, jobs):
+    """Rebuild the whole table IN THIS PROCESS and return the text.
+
+    In-process rather than `subprocess.run(GENERATOR)` for two reasons. The repo bans a
+    Python subprocess without a timeout of 30 seconds or less
+    (`scripts/check-no-timeouts.py`, enforced by the pre-commit hook), and a full-corpus
+    regeneration takes minutes -- so there is no timeout that is both legal and true. And
+    calling the generator's own functions is the stronger check anyway: it compares the
+    committed file against what THIS tree's generator produces, with no room for a stale
+    interpreter or a different working directory to change the answer.
+    """
+    # The generator narrates one line per creature on stderr, which is useful when a
+    # human runs it and pure noise inside a gate whose own verdict is one line.
+    with open(os.devnull, 'w', encoding='utf-8') as quiet:
+        with contextlib.redirect_stderr(quiet):
+            table, failures = GEN_MODULE().generate(root, None, jobs, None)
+    if failures:
+        raise SystemExit(
+            'the generator could not read {} creature(s): {}'.format(
+                len(failures), sorted(failures)[:5]))
+    return GEN_MODULE().format_table(table)
+
+
+def selftest():
+    """The check must FAIL on a table that does not match its own grammar."""
+    corruptions = [
+        ('4500 3000:0:0:1 3000:0:1:1 !3000:3', 'offered and denied'),
+        ('4500 6000:3:0:0:99', 'a prefix index the generator does not have'),
+        ('4500 3000:0:0:1 3001:0:2:1', 'rank gap'),
+        ('4500 3000:9:0:1', 'bucket out of range'),
+        ('4500 nonsense', 'unparsable entry'),
+    ]
+    for corrupt, why in corruptions:
+        text = 'v1\n' + (corrupt + '\n') * 250
+        if not check_shape(text):
+            print(f'SELFTEST FAILED: shape check accepted {why}: {corrupt!r}')
+            return 1
+    # ...and PASS on a well-formed one.
+    # Exercises every part of the grammar at once: dense ranks in two buckets, the
+    # plays-something-else spelling, the grab flag, and a denial.
+    good = 'v1\n' + '\n'.join(
+        f'{4000 + n} '
+        + ' '.join(f'{3000 + rank}:0:{rank}:1' for rank in range(5))
+        + ' 3100:1:0:2 4000g:1:1:1 3110=3000:2:0:3 6000:3:0:0:2 !3010:3'
+        for n in range(300))
+    problems = check_shape(good + '\n')
+    if problems:
+        print(f'SELFTEST FAILED: shape check rejected a good table: {problems[:3]}')
+        return 1
+    print(f'selftest ok: the shape check catches all {len(corruptions)} corruptions and accepts '
+          'a good table')
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root', default=None,
+                        help='unpacked chr corpus root (default: ER_CHR_CORPUS_ROOT or the '
+                             'generator default)')
+    parser.add_argument('--shape', action='store_true',
+                        help='grammar/invariant checks only; never needs the corpus')
+    parser.add_argument('--selftest', action='store_true')
+    parser.add_argument('--jobs', type=int,
+                        default=int(os.environ.get('SWEEP_JOBS', os.cpu_count() or 8)),
+                        help='parallel workers for the regeneration')
+    options = parser.parse_args()
+    if options.selftest:
+        return selftest()
+
+    if not os.path.exists(TABLE):
+        print(f'FAIL: {TABLE} is missing')
+        return 1
+    with open(TABLE, encoding='utf-8') as handle:
+        committed = handle.read()
+
+    problems = check_shape(committed)
+    if problems:
+        print('FAIL: the committed table does not satisfy its own grammar:')
+        for problem in problems[:20]:
+            print(f'  {problem}')
+        return 1
+    print(f'shape ok: {len(committed)} bytes')
+    if options.shape:
+        return 0
+
+    root = options.root or GEN_MODULE().CORPUS_ROOT
+    if not corpus_present(root):
+        print(f'SKIP: no unpacked chr corpus at {root}, so the table cannot be regenerated here. '
+              'Set ER_CHR_CORPUS_ROOT or pass --root. The shape checks above did run.')
+        return 0
+
+    regenerated = regenerate(root, options.jobs)
+    if regenerated == committed:
+        print('regenerates identically')
+        return 0
+    print('FAIL: the committed table is not what the generator produces from this corpus.')
+    diff = difflib.unified_diff(
+        committed.splitlines(), regenerated.splitlines(),
+        'committed', 'regenerated', lineterm='', n=0)
+    for line in list(diff)[:40]:
+        print(f'  {line[:200]}')
+    print('  Regenerate with: scripts/er-moveset-table-gen.py --out '
+          'crates/er-npc-possess/data/moveset.tbl')
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

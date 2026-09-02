@@ -104,6 +104,17 @@ DEP_PROBES = {
         root / "third_party/ER-Save-File-Readers/testdata/vagabond/save_slots/0.sl2"
     ).exists()
     or bool(os.environ.get("ER_SAVE_CORPUS_ROOT")),
+    # The unpacked per-character corpus (behbnd / anibnd / tae, one directory tree per chr).
+    # Game-derived and enormous, so it is never in the repo. The moveset-table gate regenerates
+    # `crates/er-npc-possess/data/moveset.tbl` against it where it exists and runs its
+    # grammar/invariant half everywhere. The default path is the same literal
+    # `scripts/er-moveset-table-gen.py` uses, which is the source of truth for it.
+    "chr-corpus": lambda root: Path(
+        os.environ.get(
+            "ER_CHR_CORPUS_ROOT",
+            "/home/banon/er-extract/LOOK_HERE_WITCHY_RECURSIVE_20260713/sharded/chr",
+        )
+    ).is_dir(),
     # The Ghidra MCP daemons: local processes over multi-GB projects.
     "ghidra-8765": lambda root: _port_open(8765),
     "ghidra-8767": lambda root: _port_open(8767),

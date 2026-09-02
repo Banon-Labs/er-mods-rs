@@ -33,7 +33,7 @@
 
 use std::sync::Mutex;
 
-use crate::settings::{MappingSettings, TargetSettings};
+use crate::settings::{ButtonSettings, MappingSettings, TargetSettings};
 
 /// Everything an engine needs to start a possession, snapshotted at the instant the key was
 /// pressed.
@@ -47,14 +47,18 @@ pub(crate) struct PossessionRequest {
     /// `crate::config::PossessConfig::adopt_staged_target`.
     pub(crate) target: TargetSettings,
     pub(crate) mapping: MappingSettings,
+    /// Which bucket each of the four fixed inputs draws from. Snapshotted with the rest, so the
+    /// layout cannot change under a possession that is already reporting it.
+    pub(crate) buttons: ButtonSettings,
 }
 
 impl PossessionRequest {
     pub(crate) fn summary(&self) -> String {
         format!(
-            "target[{}] mapping[{}]",
+            "target[{}] mapping[{}] buttons[{}]",
             self.target.summary(),
-            self.mapping.summary()
+            self.mapping.summary(),
+            self.buttons.summary()
         )
     }
 }
@@ -362,6 +366,7 @@ mod tests {
         PossessionRequest {
             target: TargetSettings::default(),
             mapping: MappingSettings::default(),
+            buttons: ButtonSettings::default(),
         }
     }
 

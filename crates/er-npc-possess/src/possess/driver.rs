@@ -10,7 +10,12 @@
 use er_game_base::game_build::{describe_build, game_file_version};
 
 use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
+use crate::input::FaceEdges;
 use crate::log::possess_log;
+use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion, NoMove};
+use crate::moveset::table::{self, Denial};
+use crate::moveset::watchdog::{Sample, Verdict, Watchdog};
+use crate::moveset::{derived, table as moveset_table};
 use crate::possess::game::{self, Chr};
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
@@ -20,6 +25,13 @@ use crate::possess::{intent, layout};
 const ALPHA_INVISIBLE: f32 = 0.0;
 /// ...and back.
 const ALPHA_OPAQUE: f32 = 1.0;
+
+/// The animation the watchdog fires to get a stuck creature back to neutral.
+///
+/// `W_Event0000` -> `a000_000000`, the base idle. Every creature has it: it is the bottom of the
+/// 0-999 idle band that the animation-id banding convention reserves, and the graph's `%04d`
+/// formatting spells zero as four digits rather than as a special case.
+const IDLE_ANIMATION: i32 = 0;
 
 /// One possession in flight.
 struct Possessing {
@@ -44,6 +56,30 @@ struct Possessing {
     /// Was the creature on solid ground at the last good read?
     last_on_ground: bool,
     frames: u64,
+    /// THE MOVESET, or `None` when this creature is not in the shipped table.
+    ///
+    /// `None` is a real and ordinary state -- 163 of the 408 creatures the generator looked at
+    /// have nothing fireable of their own -- so it is an `Option` rather than an empty dispatcher
+    /// that would silently swallow every press.
+    moveset: Option<Dispatcher>,
+    /// Rising-edge detector for the four face inputs.
+    face: FaceEdges,
+    watchdog: Watchdog,
+    /// Milliseconds since the possession started. The clock the combo window and the watchdog
+    /// both measure against.
+    elapsed_ms: u64,
+    started: std::time::Instant,
+    /// `NpcParam` id / 10000 -- `4500` for a Flying Dragon. The table's key, and what the derived
+    /// file is written under. Captured once at possession start, because the creature could
+    /// despawn before it is next needed.
+    chr_id: u32,
+    /// Whether a "this button has nothing to fire" line has already been logged, per input. The
+    /// log opens and closes the file per line, so an unguarded one on a held button would cost
+    /// sixty opens a second.
+    reported_dead_input: [bool; 4],
+    /// Did a request actually land on the previous frame? Read one frame late because the
+    /// watchdog runs before the firing does, and consumed on read.
+    fired_last_frame: bool,
 }
 
 impl Possessing {
@@ -137,6 +173,192 @@ impl NpcPossessionEngine {
         PossessionOutcome::Accepted
     }
 
+    /// Look the creature up in the shipped table and apply the player's `[chr.cNNNN]` corrections.
+    ///
+    /// The order is deliberate: `unusable` is applied BEFORE `usable`, so a player who lists the
+    /// same animation in both gets it -- the more specific instruction ("offer this") wins over
+    /// the broader one, rather than the answer depending on which line they typed first.
+    fn build_moveset(chr_id: u32, request: &PossessionRequest) -> Option<Dispatcher> {
+        let mut moveset = moveset_table::lookup(chr_id)?;
+        let overrides = crate::config::chr_override(chr_id);
+        if let Some(over) = overrides.as_ref() {
+            for animation in &over.unusable {
+                moveset.deny(*animation, Denial::UnusableAtRuntime);
+            }
+            for animation in &over.usable {
+                moveset.admit(*animation);
+            }
+        }
+        if moveset.is_empty() {
+            // Everything this creature had was denied -- by the table, by the player, or both.
+            // A dispatcher over nothing would answer every press with `NoMoveset`, which is the
+            // same outcome with more moving parts.
+            return None;
+        }
+        let mut dispatcher = Dispatcher::new(moveset, request.mapping, request.buttons);
+        for (name, animation) in overrides.iter().flat_map(|over| over.pin.iter()) {
+            // Case-insensitive: the config file spells these lowercase and so does `Input::name`,
+            // but `R2 = 3046` is the obvious typo and rejecting it teaches nothing.
+            match Input::ALL
+                .iter()
+                .find(|input| name.eq_ignore_ascii_case(input.name()))
+            {
+                Some(input) => dispatcher.pin(*input, *animation),
+                None => possess_log(format_args!(
+                    "moveset: [chr.c{chr_id:04}] pin names input \"{name}\", which is not one of \
+                     r1/r2/l1/l2 -- ignored"
+                )),
+            }
+        }
+        Some(dispatcher)
+    }
+
+    /// One frame of the moveset: watch what is playing, then act on what was pressed.
+    ///
+    /// ORDER MATTERS AND IS NOT ARBITRARY. The watchdog runs FIRST, so a press arriving on the
+    /// same frame a stuck animation is detected does not queue behind it -- the forced idle wins
+    /// and the press is spent on a frame that could not have fired anyway. Firing first would
+    /// leave the new request overwritten by the idle a line later, which reads to the player as a
+    /// button that sometimes does nothing.
+    fn tick_moveset(state: &mut Possessing, stick_active: bool) {
+        let Some(dispatcher) = state.moveset.as_mut() else {
+            return;
+        };
+        let pressed = state.face.feed(crate::input::read_face_inputs());
+        // CONSUMED, not held. See [`Sample::input_consumed`]: a press that fired nothing is
+        // evidence of being stuck, not evidence against it, so a player mashing at a softlock must
+        // not be able to hold the watchdog off indefinitely.
+        let consumed = core::mem::take(&mut state.fired_last_frame);
+
+        if let Some(animation) = state.creature.current_animation() {
+            let sample = Sample {
+                animation,
+                // An unreadable root motion is treated as MOVING, i.e. not stuck. Failing the
+                // other way would force idle out of a perfectly good attack whenever the module
+                // pointer happened not to read.
+                root_motion_squared: state.creature.root_motion_squared().unwrap_or(f32::MAX),
+                input_consumed: consumed,
+                now_ms: state.elapsed_ms,
+            };
+            match state.watchdog.observe(sample) {
+                Verdict::Fine => {}
+                Verdict::ReturnedToNeutral => dispatcher.on_neutral(),
+                Verdict::ForceIdle { idle, blame } => {
+                    state.creature.request_animation(idle);
+                    dispatcher
+                        .moveset_mut()
+                        .deny(blame, Denial::UnusableAtRuntime);
+                    dispatcher.on_neutral();
+                    possess_log(format_args!(
+                        "moveset: animation {blame} left the creature stuck with no root motion \
+                         for {} ms -- forced back to idle and denied for the rest of this \
+                         session. It is in {} as unusable-at-runtime; copy it into \
+                         er-npc-possess.toml under [chr.c{:04}] to keep it denied.",
+                        state.elapsed_ms,
+                        crate::config::DERIVED_CONFIG_FILE_NAME,
+                        state.chr_id,
+                    ));
+                    Self::write_derived(state.chr_id, dispatcher);
+                    return;
+                }
+            }
+        }
+
+        if pressed == 0 {
+            return;
+        }
+        // ONE REQUEST PER FRAME, and only into an empty slot. `requestAnimationId` holds a single
+        // id which `CSChrEventModule::Update` consumes once per frame; a second write before that
+        // runs discards the first silently. Two buttons in one frame therefore has to mean one
+        // attack, not one attack lost.
+        if state.creature.animation_request_pending() {
+            return;
+        }
+        let Some(input) = Input::ALL
+            .iter()
+            .copied()
+            .find(|input| pressed & (1 << Self::input_bit(*input)) != 0)
+        else {
+            return;
+        };
+        let context = Context {
+            distance_m: game::nearest_hostile_distance(state.creature),
+            locomotion: if stick_active {
+                Locomotion::Moving
+            } else {
+                Locomotion::Neutral
+            },
+            now_ms: state.elapsed_ms,
+        };
+        match dispatcher.press(input, context) {
+            Ok(chosen) => {
+                if Self::fire(state.creature, chosen) {
+                    state.watchdog.armed_with(chosen.fire);
+                    state.fired_last_frame = true;
+                }
+            }
+            Err(reason) => {
+                // Said once per possession per input rather than per press: a player holding a
+                // dead button would otherwise write the log file at sixty lines a second.
+                if !state.reported_dead_input[Self::input_bit(input)] {
+                    state.reported_dead_input[Self::input_bit(input)] = true;
+                    possess_log(format_args!(
+                        "moveset: {} has nothing to fire on c{:04} ({}). See {} for what this \
+                         creature has and why the rest was withheld.",
+                        input.name(),
+                        state.chr_id,
+                        match reason {
+                            NoMove::EmptyBucket => "that bucket is empty for this creature",
+                            NoMove::NothingInBand => "nothing in this bucket suits the range",
+                            NoMove::NoMoveset => "this creature has no shipped moveset",
+                        },
+                        crate::config::DERIVED_CONFIG_FILE_NAME,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Fire one move, by whichever of the two paths its prefix says.
+    ///
+    /// THE SPLIT IS THE POINT. `Prefix::Event` -- 4,667 of the shipped moves -- is a write to
+    /// `CSChrEventModule+0x18` and resolves no game address, so it keeps working on a build nobody
+    /// has mapped. Everything else builds the event name the graph actually declares and calls
+    /// `PlayAnimationByBehaviorName`, which costs the one address this crate resolves. Preferring
+    /// the field write is not an optimisation, it is what confines the address to the minority of
+    /// moves that cannot be reached any other way.
+    fn fire(creature: Chr, chosen: table::Move) -> bool {
+        if chosen.prefix.is_field_write() {
+            return creature.request_animation(chosen.fire);
+        }
+        // `%04d`, exactly: the graph's literals are `W_Step6000` and `W_Event0000`, minimum width
+        // four, longer ids printed raw. A three-digit id spelled without the leading zero resolves
+        // to nothing and no-ops silently, which is the failure this whole layer exists to avoid.
+        let mut name: Vec<u16> = chosen.prefix.name().encode_utf16().collect();
+        name.extend(format!("{:04}", chosen.fire).encode_utf16());
+        name.push(0);
+        creature.play_animation_by_name(&name)
+    }
+
+    const fn input_bit(input: Input) -> usize {
+        match input {
+            Input::R1 => 0,
+            Input::R2 => 1,
+            Input::L1 => 2,
+            Input::L2 => 3,
+        }
+    }
+
+    /// Write `er-npc-possess.derived.toml`.
+    ///
+    /// Best-effort by design: the game directory can be read-only, and a possession that works is
+    /// worth more than a report about it. A failed write is silent because the only thing lost is
+    /// a diagnostic, and a log line about failing to write a log-adjacent file is noise.
+    fn write_derived(chr_id: u32, dispatcher: &Dispatcher) {
+        let text = derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary());
+        let _ = std::fs::write(crate::config::DERIVED_CONFIG_FILE_NAME, text);
+    }
+
     /// One frame of an active possession. Called from the FrameBegin task.
     fn tick_active(&mut self) {
         let Some(state) = self.active.as_mut() else {
@@ -163,6 +385,10 @@ impl NpcPossessionEngine {
 
         state.frames = state.frames.saturating_add(1);
         let first_frame = state.frames == 1;
+        // A real clock rather than frames-times-sixteen: the combo window is specified in
+        // milliseconds and the frame rate is not sixty. On a machine holding thirty, a
+        // frame-counted window would be twice as long as the file says it is.
+        state.elapsed_ms = u64::try_from(state.started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         // CACHE BEFORE ANYTHING ELSE. Death and despawn both make this unreadable, and the release
         // point has to come from a read taken while the creature was definitely alive.
@@ -193,12 +419,14 @@ impl NpcPossessionEngine {
             .request_move(state.last_position, state.creature.yaw());
 
         let movement = crate::config::movement();
+        let stick = game::read_move_stick();
         let write = intent::intent(
             state.last_position,
             state.creature.yaw().unwrap_or(0.0),
-            game::read_move_stick(),
+            stick,
             movement.speed_scale,
         );
+        Self::tick_moveset(state, stick.is_some());
         if !state.creature.write_move_intent(write) && first_frame {
             // Said once, on the frame it is first known, rather than sixty times a second.
             possess_log(format_args!(
@@ -254,6 +482,8 @@ impl PossessionEngine for NpcPossessionEngine {
                 describe_build()
             ));
         }
+        let chr_id = creature.npc_param_id().unwrap_or(0);
+        let moveset = Self::build_moveset(chr_id, request);
         let state = Possessing {
             creature,
             player,
@@ -264,11 +494,37 @@ impl PossessionEngine for NpcPossessionEngine {
             last_grounded: creature.last_grounded_position(),
             last_on_ground: creature.standing_on_solid_ground().unwrap_or(false),
             frames: 0,
+            watchdog: Watchdog::new(
+                // Seconds in the file, milliseconds in the engine. Clamped rather than cast bare:
+                // a config value large enough to overflow would wrap to a tiny threshold and force
+                // idle on every attack, which is the opposite of what the number asked for.
+                (f64::from(request.mapping.watchdog_seconds) * 1000.0).clamp(1.0, 60_000.0) as u64,
+                IDLE_ANIMATION,
+            ),
+            moveset,
+            face: FaceEdges::default(),
+            elapsed_ms: 0,
+            started: std::time::Instant::now(),
+            chr_id,
+            reported_dead_input: [false; 4],
+            fired_last_frame: false,
         };
+        match state.moveset.as_ref() {
+            Some(dispatcher) => {
+                possess_log(format_args!(
+                    "moveset: c{chr_id:04} {}",
+                    dispatcher.summary()
+                ));
+                Self::write_derived(chr_id, dispatcher);
+            }
+            None => possess_log(format_args!(
+                "moveset: c{chr_id:04} is not in the shipped table, so this character has no                  attacks. That is expected for a variant that owns a model but no animations of                  its own -- 163 of the 408 the offline sweep looked at are like that. Movement,                  camera and release all still work."
+            )),
+        }
         possess_log(format_args!(
             "possession: ChrIns=0x{:x} com=0x{real_com:x} thunk=0x{:x} camera=override player=0x{:x} \
-             mode={} candidates={candidates} -- attacks are NOT wired in this layer, and the body \
-             stays lock-on-able (that needs a SpEffect, not a field write)",
+             mode={} candidates={candidates} -- the body stays lock-on-able (that needs a \
+             SpEffect, not a field write)",
             creature.address(),
             state.thunk.object_address(),
             player.address(),

@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+"""Generate the shipped `er-npc-possess` moveset table from the unpacked corpus.
+
+The table is INTEGERS ONLY -- chr id, animation ids, bucket, rank, reach band and a
+denial-reason code. No game bytes, no asset payloads, no strings lifted out of the
+game: everything here is a decision *about* an integer id, and the ids themselves are
+already public knowledge (they are BND entry filenames). That is what makes it
+committable under the repo's no-game-derived-binaries rule.
+
+FOUR OFFLINE SOURCES, joined per creature:
+
+  behavior graph   <chr>.behbnd.dcx (Havok TAG0)  fireable EVENT NAME -> state -> clip
+  TimeAct          <chr>.tae                      ability events + event times
+  regulation.bin   NpcParam -> BehaviorParam      judge id -> AtkParam_Npc / Bullet
+  regulation.bin   AtkParam_Npc                   damage numbers and hit-capsule radii
+
+WHY THE GRAPH AND NOT THE TAE DECIDES WHAT SHIPS: the graph is a strict superset (c2120
+has 41 fireable attack events against 36 TAE attacks, c3200 30 against 10) and every TAE
+attack animation has a graph event. So the graph says what can be FIRED and the TAE says
+which of those opens a damage window.
+
+FIREABILITY IS THE WHOLE POINT OF THIS SCRIPT. Declared != fireable: median 1366 declared
+event names per chr against median 580 that a `hkbStateMachine::TransitionInfo` actually
+consumes. Firing a declared-but-unconsumed name resolves fine and then SILENTLY NO-OPS --
+no error, no log, nothing on screen -- so the gate has to happen here, at generation time,
+where it can be checked, rather than at runtime where it cannot be observed.
+
+Usage:
+  scripts/er-moveset-table-gen.py --out crates/er-npc-possess/data/moveset.tbl
+  scripts/er-moveset-table-gen.py --event-histogram          # TAE types seen in-band
+  scripts/er-moveset-table-gen.py --only c4500,c2120 --out -
+"""
+import argparse
+import collections
+import contextlib
+import glob
+import importlib.util
+import multiprocessing
+import os
+import re
+import struct
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CORPUS = ('/home/banon/er-extract/LOOK_HERE_WITCHY_RECURSIVE_20260713/'
+                  'sharded/chr')
+CORPUS_ROOT = os.environ.get('ER_CHR_CORPUS_ROOT', DEFAULT_CORPUS)
+
+
+def _load(name, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, filename))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+BMAP = _load('bmap', 'er-behbnd-attack-map.py')
+TAE = _load('taescan', 'er-tae-event-scan.py')
+PR = _load('paramread', 'er-param-read.py')
+
+#: Table format version. Bump when the row grammar changes; the Rust parser refuses
+#: a version it was not written for rather than misreading columns.
+TABLE_VERSION = 2
+
+#: The animation-id bands this table covers. Banding is a FromSoft convention, not a
+#: proof -- the authoritative "is this an attack" answer is the BehaviorParam join
+#: below -- but it is consistent across every creature chr checked, and it is what
+#: keeps the table at a few thousand rows instead of thirty thousand.
+ATTACK_BAND = (3000, 3999)
+GRAB_BAND = (4000, 4999)
+STEP_BAND = (6000, 6023)
+BANDS = (ATTACK_BAND, GRAB_BAND, STEP_BAND)
+
+#: `CSChrEventModule::requestAnimationId` formats its event name as `W_Event%04d`
+#: unconditionally. That field write costs no game function address, so it is always the
+#: PREFERRED way to fire an animation -- but it is not a universal one.
+FIRE_PREFIX = 'W_Event'
+
+#: EVERY SPELLING AN ANIMATION ID CAN HAVE, in the order the generator prefers them.
+#:
+#: `W_Event` is a broad alias layer, not a total one: measured at 88.4% num==anim-id
+#: across the corpus, against 100% for `W_Step` in 6000-6023 and for the ride families.
+#: So dodges, goal actions and the ride sets have NO `W_Event` name, and the field write
+#: cannot ask for them however fireable they are -- c2120's 6000/6001/6002/6003/6011
+#: resolve under `W_Step` and under nothing else.
+#:
+#: The order is the policy. `W_Event` first, because choosing it keeps the possession on
+#: the path that resolves no game function address. Everything after it costs one call to
+#: `PlayAnimationByBehaviorName`, so it is only chosen when `W_Event` cannot reach the id.
+#: The ride families sit LAST on purpose: `W_Ridden_Enemy_Step` is what a mount plays
+#: while someone is riding it, and driving that into a free-standing creature is the kind
+#: of thing the runtime watchdog exists to catch. They are kept because they are 100%
+#: identity and are sometimes the only spelling that reaches an id at all.
+#:
+#: THE PREFIX IS RESOLVED PER CHR FROM THAT CHR'S OWN EVENT TABLE, never from the band.
+#: A band tells you what to try; only the chr's own `TransitionInfo` set says what works.
+PREFIXES = (
+    'W_Event',
+    'W_Attack',
+    'W_Step',
+    'W_GuardAttack',
+    'W_GoalAction',
+)
+
+#: THE RIDE FAMILIES, SCANNED AND THEN DROPPED -- measured, not assumed.
+#:
+#: `W_Ride_Attack_`, `W_RideStep`, `W_Ridden_Enemy_Attack`, `W_Ride_Enemy_Attack`,
+#: `W_Ridden_Enemy_Step` and `W_Ride_Enemy_Step` are all 100% num==anim-id, so they look
+#: like free coverage. A full sweep with them included says otherwise: they were chosen
+#: for **zero** of the 6921 shipped moves -- every id they reach is also reached by
+#: `W_Event` or `W_Step`, which outrank them -- while adding roughly six thousand
+#: `no-damage-window` denial rows for mount-only animations and doubling the table to
+#: 224 KB.
+#:
+#: They are also semantically wrong for this mod even when they are the only spelling:
+#: `W_Ridden_Enemy_Step` is what a mount plays while somebody is RIDING it, and a
+#: possessed creature is not being ridden. Firing one is a softlock the watchdog would
+#: have to clean up.
+#:
+#: Left here as a named constant rather than deleted, because "we tried the ride families
+#: and they bought nothing" is the finding, and a future agent reading a five-entry
+#: PREFIXES tuple would otherwise re-derive it.
+RIDE_PREFIXES_MEASURED_USELESS = (
+    'W_Ride_Attack_',
+    'W_RideStep',
+    'W_Ridden_Enemy_Attack',
+    'W_Ride_Enemy_Attack',
+    'W_Ridden_Enemy_Step',
+    'W_Ride_Enemy_Step',
+)
+
+#: TAE ability event type -> index into `TaeAnimEventParams::Args` holding the id it
+#: resolves. Decoded from both native dispatchers by `scripts/er-tae-dispatch-decode.py`.
+#: Type 5 is the odd one: it is a RAW absolute BehaviorParam row id with no
+#: `ResolveBehaviorId` call in front of it.
+ABILITY_ARG = {1: 2, 2: 2, 5: 1, 123: 1, 304: 1, 307: 2}
+RAW_BEHAVIOR_TYPES = {5}
+#: TAE event type 304 `ThrowAttackBehavior` is the grab carrier: 573 sites across 90
+#: chrs and 100% of the 4000 band. It is NOT denied -- it is every boss grab in the
+#: game -- it is only flagged, so the runtime can honour `allow_grabs`.
+GRAB_EVENT_TYPE = 304
+
+#: Buckets, in the fixed 4-button layout every creature shares.
+BUCKET_LIGHT, BUCKET_HEAVY, BUCKET_RANGED, BUCKET_MOVEMENT = 0, 1, 2, 3
+
+#: Reach bands, in absolute metres, because the runtime measures the player-to-target
+#: distance in metres too. A per-chr percentile would be wrong here for once: the
+#: dispatcher compares reach against a real distance, not against other attacks.
+REACH_UNKNOWN, REACH_CLOSE, REACH_MID, REACH_FAR = 0, 1, 2, 3
+REACH_CLOSE_MAX, REACH_MID_MAX = 3.0, 8.0
+
+#: Denial reasons. Every one of these is emitted into `er-npc-possess.derived.toml`
+#: at runtime WITH its reason -- nothing is withheld silently.
+DENY_NOT_FIREABLE = 1
+DENY_NO_CLIP = 2
+DENY_NO_DAMAGE_WINDOW = 3
+DENY_MISSING_ATK_ROW = 4
+DENY_SPEFFECT_ONLY = 5
+DENY_UNRESOLVED_BEHAVIOR = 6
+#: RETIRED. Reason 7 was `prefix-unreachable`: reachable by the graph but not spellable by
+#: the `W_Event%04d` field write. It existed for one commit and is gone because the class is
+#: gone -- those ids are now FIRED, through `PlayAnimationByBehaviorName` with a name built
+#: from the prefix this generator resolved. An id that no prefix reaches is `not-fireable`,
+#: which it always was. The number is left unused rather than recycled so a table written
+#: before the fallback cannot be misread by a parser written after it.
+DENY_UNUSABLE_AT_RUNTIME = 9
+
+#: A TAE event that runs to the end of its animation stores `FLT_MAX` as its end time.
+#: Taking `max(end)` naively therefore reports every animation in the game as lasting
+#: 3.4e38 seconds, which silently collapses the light/heavy score to a constant.
+MAX_PLAUSIBLE_EVENT_TIME = 120.0
+
+EVENT_NAME_RE = re.compile(r'^([A-Za-z_]+?)(\d{3,6})$')
+
+
+def in_bands(anim_id):
+    return any(lo <= anim_id <= hi for lo, hi in BANDS)
+
+
+def band_of(anim_id):
+    for name, (lo, hi) in (('attack', ATTACK_BAND), ('grab', GRAB_BAND),
+                           ('step', STEP_BAND)):
+        if lo <= anim_id <= hi:
+            return name
+    return None
+
+
+# ---------------------------------------------------------------------------
+# corpus discovery
+# ---------------------------------------------------------------------------
+
+def chr_dirs(root, kind):
+    """{chrId: [dir, ...]} for `<chr>-<kind>*` under root and its `_chunk_*` shards."""
+    out = collections.defaultdict(list)
+    for path in glob.glob(f'{root}/*/*-{kind}*') + glob.glob(f'{root}/*-{kind}*'):
+        stem = os.path.basename(path).split('-')[0]
+        chr_id = stem.split('_')[0]
+        if re.fullmatch(r'c\d{4}', chr_id):
+            out[chr_id].append(path)
+    return out
+
+
+def tae_paths_for(anibnd_dirs):
+    out = []
+    for directory in anibnd_dirs:
+        out += glob.glob(os.path.join(directory, '**', '*.tae'), recursive=True)
+    return sorted(out)
+
+
+# ---------------------------------------------------------------------------
+# behavior graph: which animation ids are actually FIREABLE
+# ---------------------------------------------------------------------------
+
+def fireable_animations(behbnd_dir):
+    """{firedId: (playedId, prefixIndex)} for every in-band id this chr can actually fire.
+
+    `firedId` is the number in the event name. `playedId` is the animation the target
+    state's `hkbClipGenerator` really plays -- equal to `firedId` for everything except the
+    systematic `W_Event3110 -> a000_003000` exception, which is why the table carries both
+    rather than assuming identity. `prefixIndex` indexes [`PREFIXES`] and says which
+    spelling of the id has a transition behind it on THIS creature.
+
+    The prefix is resolved from the chr's own event table and never from the band. Bands
+    are a FromSoft convention that tells you what to try; only a real `TransitionInfo`
+    landing on a real `StateInfo` says what works, and the two disagree constantly --
+    c4500 declares `W_Step6000` through `W_Step6023` and can fire none of them, while
+    c2120 fires five.
+
+    Also returns the set of in-band ids DECLARED under some prefix with no transition
+    behind any spelling, so they are reported as denials instead of vanishing.
+    """
+    fireable = {}
+    declared = set()
+    for hkx in sorted(glob.glob(os.path.join(behbnd_dir, 'Behaviors', '*.hkx'))):
+        graph = BMAP.Graph(hkx)
+        for name in graph.events:
+            match = EVENT_NAME_RE.match(name)
+            if match and match.group(1) in PREFIXES and in_bands(int(match.group(2))):
+                declared.add(int(match.group(2)))
+        for event, targets in graph.event_to_anim().items():
+            match = EVENT_NAME_RE.match(event)
+            if not match or match.group(1) not in PREFIXES:
+                continue
+            fired = int(match.group(2))
+            if not in_bands(fired):
+                continue
+            rank = PREFIXES.index(match.group(1))
+            anims = sorted({a for t in targets for a in t['anims']})
+            best = fireable.get(fired)
+            # Lower index wins, so `W_Event` beats everything and the ride families lose
+            # to everything. A tie inside one prefix keeps the first target seen.
+            if best is None or rank < best[1]:
+                fireable[fired] = (anims, rank)
+
+    resolved = {}
+    for fired, (anims, rank) in fireable.items():
+        if not anims:
+            resolved[fired] = (None, rank)      # a real state that plays no clip
+        elif fired in anims:
+            resolved[fired] = (fired, rank)
+        else:
+            resolved[fired] = (min(anims), rank)  # the 3110 case
+    return resolved, declared
+
+
+# ---------------------------------------------------------------------------
+# TimeAct: which animations open a damage window, and for how long
+# ---------------------------------------------------------------------------
+
+def tae_facts(tae_path):
+    """{animId: {'duration': f, 'abilities': [(type, id)], 'grab': bool}}."""
+    _, anims = TAE.parse(tae_path)
+    out = {}
+    for raw_id, events in anims.items():
+        anim_id = raw_id % 1000000
+        if not in_bands(anim_id):
+            continue
+        duration = 0.0
+        abilities = []
+        grab = False
+        for event in events:
+            for stamp in (event.start, event.end):
+                value = float(stamp)
+                if 0.0 <= value <= MAX_PLAUSIBLE_EVENT_TIME:
+                    duration = max(duration, value)
+            arg = ABILITY_ARG.get(event.type)
+            if arg is None:
+                continue
+            if len(event.params) < (arg + 1) * 4:
+                continue
+            value = struct.unpack_from('<i', event.params, arg * 4)[0]
+            abilities.append((event.type, value))
+            if event.type == GRAB_EVENT_TYPE:
+                grab = True
+        record = out.setdefault(anim_id, {'duration': 0.0, 'abilities': [],
+                                          'grab': False})
+        record['duration'] = max(record['duration'], duration)
+        record['abilities'] += abilities
+        record['grab'] = record['grab'] or grab
+    return out
+
+
+# ---------------------------------------------------------------------------
+# regulation.bin: behaviour rows, damage numbers and hit-capsule radii
+# ---------------------------------------------------------------------------
+
+ATK_DAMAGE_FIELDS = ('atkPhys', 'atkMag', 'atkFire', 'atkThun')
+ATK_RADIUS_FIELDS = ('hit0_Radius', 'hit1_Radius', 'hit2_Radius', 'hit3_Radius')
+
+
+class Regulation:
+    """The three param tables this join needs, read once and shared across chrs."""
+
+    def __init__(self, path=None):
+        files = PR.load(path)
+        npc, _, _ = PR.rows(PR.param_bytes(files, 'NpcParam'),
+                            ['behaviorVariationId'])
+        self.npc_variation = {}
+        for row in npc:
+            self.npc_variation.setdefault(row['id'] // 10000, []).append(
+                row['behaviorVariationId'])
+        behavior, _, _ = PR.rows(PR.param_bytes(files, 'BehaviorParam'),
+                                 ['variationId', 'behaviorJudgeId', 'refType', 'refId'])
+        self.behavior = {row['id']: (row['refType'], row['refId']) for row in behavior}
+        atk, _, _ = PR.rows(PR.param_bytes(files, 'AtkParam_Npc'),
+                            list(ATK_DAMAGE_FIELDS) + list(ATK_RADIUS_FIELDS))
+        self.atk = {
+            row['id']: (
+                sum(row[f] for f in ATK_DAMAGE_FIELDS),
+                max(row[f] for f in ATK_RADIUS_FIELDS),
+            )
+            for row in atk
+        }
+        # A projectile's reach is its OWN travel distance, not a hit capsule. Calling
+        # every bullet "far" would send a 2-metre spit and a cross-arena breath to the
+        # same distance band, and the short one whiffs every time the dispatcher picks
+        # it at range.
+        bullet, _, _ = PR.rows(PR.param_bytes(files, 'Bullet'),
+                               ['dist', 'atkId_Bullet'])
+        self.bullet_reach = {row['id']: float(row['dist']) for row in bullet}
+        self.bullet_damage = {
+            row['id']: self.atk.get(row['atkId_Bullet'], (0, 0.0))[0] for row in bullet
+        }
+
+    def variation_for(self, chr_id):
+        """`NpcParam.behaviorVariationId` for a chr, by majority of its NpcParam rows."""
+        values = self.npc_variation.get(int(chr_id[1:]), [])
+        if not values:
+            return None
+        return collections.Counter(values).most_common(1)[0][0]
+
+    def resolve(self, event_type, value, variation):
+        """(refType, refId) for one TAE ability event, or None when it resolves to nothing.
+
+        Creature `ResolveBehaviorId` is `(variationId + 200000) * 1000 + judgeId`;
+        type 5 skips it entirely and carries an absolute row id.
+        """
+        if event_type in RAW_BEHAVIOR_TYPES:
+            return self.behavior.get(value)
+        if variation is None or variation >= 100000:
+            return None
+        return self.behavior.get((variation + 200000) * 1000 + value)
+
+
+# ---------------------------------------------------------------------------
+# classification
+# ---------------------------------------------------------------------------
+
+def reach_band(metres, is_bullet):
+    if is_bullet:
+        return REACH_FAR
+    if metres is None or metres <= 0.0:
+        return REACH_UNKNOWN
+    if metres < REACH_CLOSE_MAX:
+        return REACH_CLOSE
+    if metres < REACH_MID_MAX:
+        return REACH_MID
+    return REACH_FAR
+
+
+def classify_chr(fireable, declared, tae, regulation, variation):
+    """-> (entries, denials) for one creature.
+
+    entries: [(fired, played, bucket, rank, reach, grab, prefix)]
+    denials: [(fired, reason)]
+    """
+    denials = [(a, DENY_NOT_FIREABLE) for a in sorted(declared - set(fireable))]
+    candidates = []
+    for fired in sorted(fireable):
+        played, prefix = fireable[fired]
+        if played is None:
+            denials.append((fired, DENY_NO_CLIP))
+            continue
+        facts = tae.get(played) or tae.get(fired) or {}
+        # DEDUPE. A multi-hit swing repeats the same `(type, behaviorId)` pair once per
+        # hitbox activation -- c4500's a3035 carries the same two bullet ids 44 times.
+        # Summing the duplicates would rank an attack by how many times the TAE
+        # re-arms its hitbox rather than by how hard it hits.
+        abilities = sorted(set(facts.get('abilities', [])))
+        duration = facts.get('duration', 0.0)
+        grab = bool(facts.get('grab'))
+        damage, bullet_damage, reach = 0, 0, 0.0
+        melee_any = melee_damaging = bullet = False
+        missing_atk = unresolved = False
+        for event_type, value in abilities:
+            resolved = regulation.resolve(event_type, value, variation)
+            if resolved is None:
+                unresolved = True
+                continue
+            ref_type, ref_id = resolved
+            if ref_type == 0:
+                row = regulation.atk.get(ref_id)
+                if row is None:
+                    missing_atk = True
+                    continue
+                melee_any = True
+                # A ZERO-DAMAGE ROW IS A MARKER, NOT A HIT. c4500's judge 900 resolves
+                # to AtkParam_Npc 4500900: damage 0, capsule radius 9.0, and it is
+                # attached to nearly every one of the dragon's attacks. Counting its
+                # radius would report the whole moveset as long-reach.
+                if row[0] > 0:
+                    melee_damaging = True
+                    damage += row[0]
+                    reach = max(reach, row[1])
+            elif ref_type == 1:
+                bullet = True
+                bullet_damage += regulation.bullet_damage.get(ref_id, 0)
+                reach = max(reach, regulation.bullet_reach.get(ref_id, 0.0))
+        if band_of(fired) == 'step':
+            candidates.append((fired, played, BUCKET_MOVEMENT, 0.0, REACH_UNKNOWN,
+                               False, prefix))
+            continue
+        if not (melee_any or bullet):
+            if missing_atk:
+                denials.append((fired, DENY_MISSING_ATK_ROW))
+            elif unresolved:
+                denials.append((fired, DENY_UNRESOLVED_BEHAVIOR))
+            elif abilities:
+                denials.append((fired, DENY_SPEFFECT_ONLY))
+            else:
+                denials.append((fired, DENY_NO_DAMAGE_WINDOW))
+            continue
+        # A ranged option is one that reaches through a bullet and NOT through a
+        # damaging melee capsule; a breath attack that does both stays melee, because
+        # its damage is delivered where the creature is standing.
+        is_ranged = bullet and not melee_damaging
+        bucket = BUCKET_RANGED if is_ranged else None
+        score = duration * float(damage + bullet_damage)
+        candidates.append((fired, played, bucket, score,
+                           reach_band(reach, is_ranged), grab, prefix))
+
+    # Light vs heavy by PER-CHR percentile of duration x damage, so a rat and a
+    # dragon are comparable: absolute damage would put every one of the rat's
+    # attacks in "light" and every one of the dragon's in "heavy".
+    #
+    # Split by INDEX, not by value. A value cutoff (`score >= median`) collapses
+    # whenever scores tie -- and they tie constantly, because a chr's attacks share
+    # AtkParam rows -- which sends the whole tied block into one bucket and leaves the
+    # other nearly empty.
+    melee = sorted((c for c in candidates if c[2] is None), key=lambda c: (c[3], c[0]))
+    heavy_from = (len(melee) + 1) // 2
+    heavy = {c[0] for c in melee[heavy_from:]}
+    resolved = []
+    for fired, played, bucket, score, reach, grab, prefix in candidates:
+        if bucket is None:
+            bucket = BUCKET_HEAVY if fired in heavy else BUCKET_LIGHT
+        resolved.append((fired, played, bucket, score, reach, grab, prefix))
+
+    # Rank inside a bucket: ascending score, then ascending animation id. Fully
+    # deterministic, so the same corpus always produces the same table and the
+    # regeneration test is meaningful.
+    entries = []
+    for bucket in (BUCKET_LIGHT, BUCKET_HEAVY, BUCKET_RANGED, BUCKET_MOVEMENT):
+        members = sorted((c for c in resolved if c[2] == bucket),
+                         key=lambda c: (c[3], c[0]))
+        for rank, (fired, played, _, _, reach, grab, prefix) in enumerate(members):
+            entries.append((fired, played, bucket, rank, reach, grab, prefix))
+    entries.sort()
+
+    # TRIM DENIALS TO THE SPAN THE CREATURE ACTUALLY USES.
+    #
+    # A denial earns its place by being a hole a player could notice: an id sitting among the
+    # moves that work, which they might reasonably expect and which is missing. Outside that
+    # span it is a fact about the shared behaviour-graph string table rather than about this
+    # creature, and there are a lot of those -- every chr's behbnd carries roughly the same
+    # declared vocabulary whether or not this one has states for it.
+    #
+    # MEASURED, both times this trim was widened. `not-fireable` alone was 62 KB, half the
+    # table, of 270 near-identical copies of one list. Widening the prefix set then produced
+    # 9,298 `no-damage-window` rows, of which 791 are in-span and 8,507 are not -- ids past
+    # everything the creature can do, reachable only because `W_Attack` spans 3000-4602 and
+    # carrying no damage window because they are not that creature's animations.
+    #
+    # The in-span 791 are kept in full, which is the set that existed before the prefix work,
+    # so nothing a player could act on has been dropped to save bytes.
+    if entries:
+        low, high = entries[0][0], entries[-1][0]
+        denials = [(a, r) for a, r in denials if low <= a <= high]
+    denials.sort()
+    return entries, denials
+
+
+# ---------------------------------------------------------------------------
+# emit
+# ---------------------------------------------------------------------------
+
+def format_table(per_chr):
+    lines = [
+        '# er-npc-possess moveset table -- GENERATED, do not hand-edit.',
+        '# Regenerate: scripts/er-moveset-table-gen.py --out '
+        'crates/er-npc-possess/data/moveset.tbl',
+        '# Integers only. No game bytes: every number here is an animation id (a BND',
+        '# entry filename) or a decision this generator made about one.',
+        '#',
+        '# One line per creature:  <chrid> <entry>...',
+        '#   entry  = <fired>[=<played>][g]:<bucket>:<rank>:<reach>[:<prefix>]',
+        '#   denial = !<fired>:<reason>',
+        '#   "-"    = considered, nothing fireable -- a variant with no animations of its own',
+        '#   "=played" appears only when the graph plays a DIFFERENT animation than the',
+        '#   one named in the event -- the W_Event3110 -> a000_003000 exception.',
+        '#   "g" marks a grab (TAE event 304); gated at runtime by allow_grabs.',
+        f'#   bucket {BUCKET_LIGHT}=light {BUCKET_HEAVY}=heavy '
+        f'{BUCKET_RANGED}=ranged {BUCKET_MOVEMENT}=movement',
+        f'#   reach  {REACH_UNKNOWN}=unknown {REACH_CLOSE}=close '
+        f'{REACH_MID}=mid {REACH_FAR}=far',
+        f'#   reason {DENY_NOT_FIREABLE}=not-fireable {DENY_NO_CLIP}=no-clip '
+        f'{DENY_NO_DAMAGE_WINDOW}=no-damage-window '
+        f'{DENY_MISSING_ATK_ROW}=missing-atk-row',
+        f'#          {DENY_SPEFFECT_ONLY}=speffect-only '
+        f'{DENY_UNRESOLVED_BEHAVIOR}=unresolved-behavior '
+        f'{DENY_UNUSABLE_AT_RUNTIME}=unusable-at-runtime (watchdog, runtime only)',
+        '#',
+        '# prefix 0=W_Event (fired by writing CSChrEventModule+0x18, no game address) and',
+        '# 1..10 = ' + ' '.join(f'{i}={p}' for i, p in enumerate(PREFIXES) if i),
+        '# A non-zero prefix is fired through PlayAnimationByBehaviorName with a name built',
+        '# from the id. Resolved per creature from its OWN event table, never from the band.',
+        '# Denials are listed only WITHIN the span of ids a creature really uses. Outside it they',
+        '# are a property of the shared graph string table rather than of this creature: 8,507 of',
+        '# 9,298 no-damage-window rows sat past everything the creature can do.',
+        f'v{TABLE_VERSION}',
+    ]
+    for chr_id in sorted(per_chr):
+        entries, denials = per_chr[chr_id]
+        if not entries and not denials:
+            continue
+        if not entries:
+            # NOTHING USABLE. Almost always a D-class variant: it owns a model and a
+            # skeleton but no animations of its own, and its behbnd carries the shared
+            # generic graph, so the same ~54 attack ids come back declared-but-stateless
+            # for every one of them. Enumerating that identical list 130 times would be
+            # 7000 rows of noise saying one thing, so it is said once, per creature: this
+            # one was looked at and has no fireable moveset.
+            lines.append(f'{int(chr_id[1:])} -')
+            continue
+        parts = []
+        for fired, played, bucket, rank, reach, grab, prefix in entries:
+            head = str(fired) if played == fired else f'{fired}={played}'
+            # The prefix column is OMITTED for `W_Event`, which is both the common case
+            # and the one that costs no game address -- so a four-field entry reads as
+            # "fired by the field write" and a five-field one as "fired by name".
+            tail = '' if prefix == 0 else f':{prefix}'
+            parts.append(
+                f'{head}{"g" if grab else ""}:{bucket}:{rank}:{reach}{tail}')
+        parts += [f'!{fired}:{reason}' for fired, reason in denials]
+        lines.append(f'{int(chr_id[1:])} ' + ' '.join(parts))
+    return '\n'.join(lines) + '\n'
+
+
+def _one(args):
+    chr_id, behbnd, taes, variation = args
+    try:
+        fireable, declared = fireable_animations(behbnd)
+    except Exception as error:                       # a chr whose graph will not parse
+        return chr_id, None, repr(error)[:120]
+    tae = {}
+    for path in taes:
+        try:
+            for anim, facts in tae_facts(path).items():
+                merged = tae.setdefault(anim, {'duration': 0.0, 'abilities': [],
+                                               'grab': False})
+                merged['duration'] = max(merged['duration'], facts['duration'])
+                merged['abilities'] += facts['abilities']
+                merged['grab'] = merged['grab'] or facts['grab']
+        except Exception:
+            continue
+    return chr_id, (fireable, declared, tae, variation), None
+
+
+def generate(root, only=None, jobs=10, regulation_path=None):
+    regulation = Regulation(regulation_path)
+    behbnds = chr_dirs(root, 'behbnd')
+    anibnds = chr_dirs(root, 'anibnd')
+    work = []
+    for chr_id in sorted(behbnds):
+        if only and chr_id not in only:
+            continue
+        if chr_id == 'c0000':                        # the player is out of scope
+            continue
+        work.append((chr_id, sorted(behbnds[chr_id])[0],
+                     tae_paths_for(anibnds.get(chr_id, [])),
+                     regulation.variation_for(chr_id)))
+    per_chr, errors = {}, {}
+    # SERIAL when asked for one job, and the check gate asks for one. `multiprocessing`
+    # cannot pickle `_one` when this file is loaded as a module by path rather than
+    # imported by name, which is exactly how `scripts/check-moveset-table.py` uses it --
+    # so the fast subset regeneration would die in the pool rather than in the work.
+    results = map(_one, work) if jobs <= 1 else None
+    with contextlib.ExitStack() as stack:
+        if results is None:
+            # FORK, not the 3.14 default forkserver. A forkserver worker is a fresh
+            # interpreter that re-imports the module a task came from BY NAME, and this
+            # file's name has hyphens in it, so it is not importable by name at all --
+            # every worker dies with ModuleNotFoundError the moment a task arrives.
+            # `scripts/check-moveset-table.py` loads this module by path, which is when
+            # that bites. Fork inherits the parent's already-loaded module instead.
+            pool = stack.enter_context(
+                multiprocessing.get_context('fork').Pool(jobs)
+            )
+            results = pool.imap_unordered(_one, work, chunksize=1)
+        for chr_id, payload, error in results:
+            if error:
+                errors[chr_id] = error
+                continue
+            fireable, declared, tae, variation = payload
+            per_chr[chr_id] = classify_chr(fireable, declared, tae, regulation,
+                                           variation)
+            print(f'{chr_id} {len(per_chr[chr_id][0])}+{len(per_chr[chr_id][1])}d',
+                  file=sys.stderr, flush=True)
+    return per_chr, errors
+
+
+def event_histogram(root):
+    """TAE event types seen inside the covered bands, so denial classes are grounded
+    in what the corpus actually contains rather than in a guess about what it might."""
+    anibnds = chr_dirs(root, 'anibnd')
+    counts, chrs = collections.Counter(), collections.defaultdict(set)
+    for chr_id, dirs in sorted(anibnds.items()):
+        if chr_id == 'c0000':
+            continue
+        for path in tae_paths_for(dirs):
+            try:
+                _, anims = TAE.parse(path)
+            except Exception:
+                continue
+            for raw_id, events in anims.items():
+                if not in_bands(raw_id % 1000000):
+                    continue
+                for event in events:
+                    counts[event.type] += 1
+                    chrs[event.type].add(chr_id)
+    for event_type, count in counts.most_common():
+        print(f'{event_type}\t{count}\t{len(chrs[event_type])}')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root', default=CORPUS_ROOT)
+    parser.add_argument('--out', default='-')
+    parser.add_argument('--only')
+    parser.add_argument('--jobs', type=int,
+                        default=int(os.environ.get('SWEEP_JOBS', '10')))
+    parser.add_argument('--regulation')
+    parser.add_argument('--event-histogram', action='store_true')
+    options = parser.parse_args()
+    if options.event_histogram:
+        event_histogram(options.root)
+        raise SystemExit(0)
+    only = set(options.only.split(',')) if options.only else None
+    table, failures = generate(options.root, only, options.jobs, options.regulation)
+    text = format_table(table)
+    if options.out == '-':
+        sys.stdout.write(text)
+    else:
+        with open(options.out, 'w', encoding='utf-8') as handle:
+            handle.write(text)
+    total = sum(len(v[0]) for v in table.values())
+    denied = sum(len(v[1]) for v in table.values())
+    print(f'# {len(table)} chrs, {total} entries, {denied} denials, '
+          f'{len(text)} bytes', file=sys.stderr)
+    for chr_id, error in sorted(failures.items()):
+        print(f'# FAILED {chr_id}: {error}', file=sys.stderr)

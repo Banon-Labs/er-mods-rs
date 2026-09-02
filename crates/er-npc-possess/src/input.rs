@@ -257,6 +257,87 @@ pub(crate) const fn read_left_stick() -> Option<(i16, i16)> {
     None
 }
 
+/// XInput `wButtons` masks for the two shoulder buttons.
+const PAD_LEFT_SHOULDER: u16 = 0x0100;
+const PAD_RIGHT_SHOULDER: u16 = 0x0200;
+
+/// How far a trigger must travel to count as pressed.
+///
+/// `r2` and `l2` are ANALOG on an XInput pad -- they are not in `wButtons` at all, which is why
+/// `er_hotkey_config`'s chord vocabulary has no spelling for them and why they need a reader of
+/// their own. Microsoft's own documented dead zone is 30/255; this is deliberately higher, because
+/// a moveset button that fires a heavy attack on a resting finger is worse than one that needs a
+/// firm pull.
+const TRIGGER_PRESSED: u8 = 96;
+
+/// The four moveset face inputs, as a held/not-held bitfield in [`Input::index`] order:
+/// bit 0 `r1`, bit 1 `r2`, bit 2 `l1`, bit 3 `l2`.
+///
+/// LEVELS, not edges -- [`FaceEdges`] turns them into presses. Keeping the two apart means the
+/// pad read stays the one untestable line and the edge logic is proved on the host.
+#[cfg(windows)]
+pub(crate) fn read_face_inputs() -> u8 {
+    let mut held = 0u8;
+    with_pad_state(|state| {
+        let pad = &state.gamepad;
+        held = u8::from(pad.buttons & PAD_RIGHT_SHOULDER != 0)
+            | (u8::from(pad.right_trigger >= TRIGGER_PRESSED) << 1)
+            | (u8::from(pad.buttons & PAD_LEFT_SHOULDER != 0) << 2)
+            | (u8::from(pad.left_trigger >= TRIGGER_PRESSED) << 3);
+    });
+    held | read_mouse_face_inputs()
+}
+
+/// The mouse half of the same four inputs, matching the game's OWN default keyboard layout:
+/// `r1` left click, `r2` shift + left click, `l1` right click, `l2` shift + right click.
+///
+/// Copied from vanilla rather than invented so a keyboard player's fingers already know it, and so
+/// this needs no new config surface. A shifted click reports ONLY the shifted input, or every
+/// heavy attack would fire a light one alongside it.
+#[cfg(windows)]
+fn read_mouse_face_inputs() -> u8 {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+
+    const HELD: u16 = 0x8000;
+    const VK_LBUTTON: i32 = 0x01;
+    const VK_RBUTTON: i32 = 0x02;
+    const VK_SHIFT: i32 = 0x10;
+
+    let held = |vk: i32| unsafe { GetAsyncKeyState(vk) } as u16 & HELD != 0;
+    let shift = held(VK_SHIFT);
+    let mut out = 0u8;
+    if held(VK_LBUTTON) {
+        out |= if shift { 1 << 1 } else { 1 };
+    }
+    if held(VK_RBUTTON) {
+        out |= if shift { 1 << 3 } else { 1 << 2 };
+    }
+    out
+}
+
+#[cfg(not(windows))]
+pub(crate) const fn read_face_inputs() -> u8 {
+    0
+}
+
+/// Rising edges for the four moveset inputs.
+///
+/// Edges rather than levels because an attack is a press, not a hold: a held trigger would refire
+/// the combo sixty times a second and walk the whole moveset in a fifth of a second.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FaceEdges {
+    held: u8,
+}
+
+impl FaceEdges {
+    /// Feed one frame's levels, get back the bits that went down THIS frame.
+    pub(crate) const fn feed(&mut self, held: u8) -> u8 {
+        let pressed = held & !self.held;
+        self.held = held;
+        pressed
+    }
+}
+
 /// One keyboard edge for the optional chord.
 ///
 /// BOTH bits of `GetAsyncKeyState` are used and the low one is not optional: it means "pressed
