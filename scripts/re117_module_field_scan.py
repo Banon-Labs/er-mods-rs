@@ -10,11 +10,17 @@ Usage: re117_module_field_scan.py <1162|1170> <module_off_hex>
 import sys, os, collections
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64, x86_const
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMAGES = {"1162": os.path.join(ROOT, "eldenring-deobf.bin"),
           "1170": os.path.join(ROOT, "eldenring-deobf-1.17.bin")}
 BASE = 0x140000000
 CONTAINER_OFF = 0x190
+#: The forward walk consumes at most six instructions (`insns[0]`, `insns[1]`, `insns[2:6]`);
+#: 48 bytes is a cap over that, never the reason the decode stops.
+WALK_CAP_BYTES = 48
 
 def main():
     which = sys.argv[1]
@@ -35,7 +41,15 @@ def main():
             start = i - back
             if start < 0:
                 continue
-            insns = list(md.disasm(data[start:start + 48], BASE + start))
+            # The decode starts at a byte-search hit, not at a function entry, so it is
+            # exactly the shape that resynchronises into instructions nobody assembled once it
+            # passes a `ret`. Bound it by the containing function's extent; 48 is only a cap on
+            # top of that (six instructions is the most the walk below ever consumes), and an
+            # unknown extent is a refusal, not a fallback to the byte count.
+            stop = function_extent.body_slice_end(data, BASE + start, cap=WALK_CAP_BYTES)
+            if stop is None or stop <= start:
+                continue
+            insns = list(md.disasm(data[start:stop], BASE + start))
             if len(insns) < 3:
                 continue
             a = insns[0]
