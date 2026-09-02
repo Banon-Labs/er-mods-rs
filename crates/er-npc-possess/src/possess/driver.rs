@@ -613,7 +613,12 @@ impl NpcPossessionEngine {
         // would. It costs one relaxed atomic load on the frames nothing has been edited.
         if state.camera.refresh() {
             possess_log(format_args!("{}", state.camera.log_line()));
-            Self::write_derived(state.chr_id, &state.camera, state.moveset.as_ref());
+            Self::write_derived(
+                state.chr_id,
+                &state.camera,
+                state.creature,
+                state.moveset.as_ref(),
+            );
         }
         state.camera.reassert();
 
@@ -909,7 +914,7 @@ impl NpcPossessionEngine {
             reported_dead_input: [false; 4],
             fired_last_frame: false,
         };
-        Self::write_derived(chr_id, &state.camera, state.moveset.as_ref());
+        Self::write_derived(chr_id, &state.camera, creature, state.moveset.as_ref());
         match state.moveset.as_ref() {
             Some(dispatcher) => {
                 possess_log(format_args!(
