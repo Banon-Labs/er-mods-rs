@@ -47,10 +47,25 @@
 //! re-based so they resolve to the *same* targets the real 1.17 site resolves to. ersc's scan
 //! then finds exactly one match -- ours -- and reads the correct 1.17 `GetAllocator` out of it.
 //!
-//! Nothing here is version-pinned: the site, the allocator, the `u"system:/"` global and the
-//! cave are all discovered by scanning the running image, so the shim survives a future patch
-//! that moves them again. It refuses to act rather than guess when the image does not look the
-//! way this reasoning requires (see [`shim::install`]).
+//! Nothing here is pinned to a GAME version: the site, the allocator, the `u"system:/"` global
+//! and the cave are all discovered by scanning the running image, so the shim survives a future
+//! ELDEN RING patch that moves them again. It refuses to act rather than guess when the image
+//! does not look the way this reasoning requires (see [`shim::install`]).
+//!
+//! # It IS pinned to a Seamless Co-op version, and that is deliberate
+//!
+//! The shapes above are ersc's own search strings, transcribed from the box **v1.9.9** puts on
+//! screen. The second fixup does not merely add bytes: it rewrites the entry of the game's
+//! `GetScadutreeBlessing` to `cmp byte [rcx+0xab5], 0`, which is 1.16.2's field offset and wrong
+//! for the 1.17 the game actually is. That rewrite is a favour to a scanner looking for exactly
+//! those bytes, and damage to anything else.
+//!
+//! So the scanner has to be shown to be present. [`ersc_build`] reads the installed `ersc.dll`'s
+//! version banner before any fixup runs and refuses on a build this shim was not measured
+//! against -- as Seamless Co-op v2.0.0 (released 2026-09-02) is. The asymmetry that decides the
+//! direction of that refusal: Scadutree blessing is co-op SESSION state, reported by a guest to
+//! its host, so a rewrite made for an absent scanner changes another player's damage numbers with
+//! nothing on screen to say so, while refusing costs one boot and writes down exactly why.
 //!
 //! # Load order
 //!
@@ -60,6 +75,10 @@
 
 #[cfg(windows)]
 mod cave;
+// Not `cfg(windows)`: reading the installed build's version banner is pure byte handling, and
+// the cost of getting it wrong is a silent rewrite of a game function on behalf of a Seamless
+// build that is not installed. That deserves host tests, which a Windows-only module cannot have.
+mod ersc_build;
 #[cfg(windows)]
 mod fixups;
 #[cfg(windows)]
@@ -68,6 +87,7 @@ mod scan;
 mod shim;
 
 /// `DLL_PROCESS_ATTACH`, the only `fdwReason` this DLL acts on.
+#[cfg(windows)]
 const DLL_PROCESS_ATTACH: u32 = 1;
 /// `DllMain` returning `TRUE`: the loader keeps the DLL loaded.
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -75,6 +95,13 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 /// # Safety
 ///
 /// Called by the Windows loader. Do not call directly.
+//
+// `cfg(windows)` on the whole function, not just on the `install()` call inside it. Its body
+// also names `shim::log_line` and `er_hook`, both of which are Windows-only, so off Windows this
+// did not merely do nothing -- it failed to COMPILE, and with it the crate's entire test target.
+// That is why this crate had no host tests to break: `cargo test -p er-ersc-sigshim` had never
+// built. The `cfg(not(windows))` stub below is the host half of the same pair.
+#[cfg(windows)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DllMain(
     _module: *mut core::ffi::c_void,
@@ -89,7 +116,6 @@ pub unsafe extern "system" fn DllMain(
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-ersc-sigshim", shim::log_line);
         er_hook::set_hook_logger(shim::log_line);
-        #[cfg(windows)]
         shim::install();
     }
     DLL_MAIN_SUCCESS

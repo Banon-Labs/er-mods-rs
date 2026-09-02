@@ -34,8 +34,51 @@ fn report(outcome: &Outcome) {
     }
 }
 
+/// Refuse unless the installed Seamless Co-op is the build these fixups were measured against.
+///
+/// The fixups are not additive. `scadutree_getter` rewrites the entry of the game's
+/// `GetScadutreeBlessing` to the bytes ONE ersc build searches for, and those bytes carry
+/// 1.16.2's field offset, not the running game's. That is a favour to a specific scanner and
+/// damage to anything else, so the scanner has to be shown to be there first.
+///
+/// Returns `true` when the fixups may run.
+fn ersc_build_is_the_measured_one() -> bool {
+    match crate::ersc_build::installed_version() {
+        Ok(version) if version == crate::ersc_build::MEASURED_VERSION => {
+            log_line(format_args!(
+                "ersc build: Seamless Co-op v{version}, the build these fixups were measured \
+                 against; proceeding"
+            ));
+            true
+        }
+        Ok(version) => {
+            log_line(format_args!(
+                "REFUSED installed Seamless Co-op is v{version}, but every fixup here was \
+                 measured against v{}. The AOB shapes this shim rebuilds were transcribed from \
+                 v{}'s own fatal-error box, and re-shaping GetScadutreeBlessing's entry for a \
+                 scanner that is not present would silently corrupt a co-op session's blessing \
+                 level. Nothing was written. To re-arm: measure what v{version} scans for and \
+                 update MEASURED_VERSION plus the shapes in fixups.rs together.",
+                crate::ersc_build::MEASURED_VERSION,
+                crate::ersc_build::MEASURED_VERSION,
+            ));
+            false
+        }
+        Err(unknown) => {
+            log_line(format_args!(
+                "REFUSED {unknown}. Nothing was written: these fixups only make sense as a favour \
+                 to a Seamless Co-op build that has been identified."
+            ));
+            false
+        }
+    }
+}
+
 /// Run every fixup, in a fixed order so the log reads the same way twice.
 pub(crate) fn install() {
+    if !ersc_build_is_the_measured_one() {
+        return;
+    }
     let Some((text_start, text_len)) = mem::module_text_range() else {
         log_line(format_args!(
             "REFUSED could not resolve the game image's .text; nothing was written"

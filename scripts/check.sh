@@ -424,6 +424,15 @@ python3 "$repo_root/scripts/check-counter-writers.py"
 # in any context, this one owns every other right-hand side plus `base.wrapping_add(CONST)`.
 python3 "$repo_root/scripts/check-oracle-singleton-globals.py" --selftest
 python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
+# Seamless Co-op is third-party and the user updates it on their own schedule, so the swap that
+# invalidates our pins arrives with no commit, no PR and nothing red. On 2026-09-02 v2.0.0
+# replaced v1.9.9 and moved every ersc RVA this repo holds, the session ABI behind them, and the
+# packer's section NAME (`.themida` -> `ERSC`). This is the reader that can see which build is
+# actually installed; the gate here is its selftest, which proves the banner parser on synthetic
+# bytes (so it is not vacuous in CI, where no game exists) and additionally validates the real
+# image when there is one. Only `--selftest` runs: the bare form is a report, and it exits
+# non-zero when no game is installed, which is not a repo defect.
+python3 "$repo_root/scripts/ersc_identify.py" --selftest
 # The workspace uses `../fromsoftware-rs` PATH dependencies, and CI clones that sibling at ONE
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
 # types upstream does not have. Everything below compiles against the developer's copy, so it

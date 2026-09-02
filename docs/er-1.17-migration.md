@@ -435,10 +435,22 @@ Two footnotes the inventory prints that are worth not rediscovering:
 * 6 of the resolvable addresses translate for a CALL and are refused for a DETOUR. Mapping cannot
   fix those; they need entry/verdict evidence.
 * 4 of the addresses are **not `eldenring.exe` addresses at all** -- `0x22d30`, `0x243e0`,
-  `0x24460`, `0xabc20` belong to `ersc.dll`. No ELDEN RING patch moves them and none of them is
-  migration work. Three of the four are `SHOW_RVA`, `INVADE_ACTION_RVA` and `CANCEL_ACTION_RVA`,
-  which the "eleven mechanical ones" table below flagged with "check what module they are relative
-  to before touching them". That question is answered: `ersc.dll`.
+  `0x24460`, `0xabc20` belong to `ersc.dll`. None of them is ELDEN RING migration work. Three of
+  the four are `SHOW_RVA`, `INVADE_ACTION_RVA` and `CANCEL_ACTION_RVA`, which the "eleven
+  mechanical ones" table below flagged with "check what module they are relative to before
+  touching them". That question is answered: `ersc.dll`.
+
+  **This bullet used to end "No ELDEN RING patch moves them", and that was read as "they do not
+  move". Seamless Co-op v2.0.0 moved every one of them on 2026-09-02.** The clause was true and
+  useless: `ersc.dll` has its own release schedule, so being immune to a GAME patch says nothing
+  about stability. Measured against the v1.9.9 the pins came from -- `show` `0x22d30` ->
+  `0x241a0`, `cancel` `0x24460` -> `0x258d0`, `invade` `0x243e0` -> **no match at any signature
+  length**, `BuildLobbyKey` `0xabc20` -> **ambiguous, three candidates**. The session ABI moved
+  with them (`S+0x110` -> `S+0x150`, `S+0x10c` -> `S+0x14c`, the option sub-object `+0xc0` ->
+  `+0x100`), cancel now writes `0x23` where it wrote `0x22`, and nothing in v2.0.0 writes `0xd`
+  at all. The lesson to carry forward is that a foreign module needs a version check, not an
+  exemption from one: `scripts/ersc_identify.py` reports which build is installed and
+  `scripts/locate-ersc-entry-points.py` maps a v1.9.9 function body onto it.
 
 ### The eleven mechanical ones -- eight of them are done
 
@@ -456,7 +468,7 @@ tree 2026-08-31, only two of the eleven are still in the shape described.
 | `SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA` | **gone** |
 | `TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA` | **converted** -- now derives from `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA` |
 | `FREELIST_SHUTDOWN_ASSERT_RVA` | **converted** -- `FREELIST_SHUTDOWN_ASSERT_FN_RVA + FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET` |
-| `SHOW_RVA` / `INVADE_ACTION_RVA` / `CANCEL_ACTION_RVA` | **answered** -- they are `ersc.dll` RVAs (`0x2_2d30`, `0x2_43e0`, `0x2_4460`), not `eldenring.exe`, and no ELDEN RING patch moves them |
+| `SHOW_RVA` / `INVADE_ACTION_RVA` / `CANCEL_ACTION_RVA` | **answered, then moved** -- they are `ersc.dll` RVAs (`0x2_2d30`, `0x2_43e0`, `0x2_4460`), not `eldenring.exe`. Immune to ELDEN RING patches, NOT to Seamless ones: v2.0.0 (2026-09-02) moved show to `0x2_41a0` and cancel to `0x2_58d0`, and `invade` matches nothing. See the footnote above |
 | `GX_COMMAND_QUEUE_RVA` | **still a bare mid-function literal**, `0x8012a8` in `er-loading-portrait-core/src/resource_readback.rs`. Containing fn `0x8012a0 -> 0x802120`, offset `+0x8` |
 | `GX_CMD_QUEUE_WRAPPER_RVA_MIN` | **still a bare mid-function literal**, `0x1aea900` in `er-title-flow/src/constants_autoload_state.rs`. Containing fn `0x1aea880 -> 0x1aec680`, offset `+0x80` |
 
@@ -684,27 +696,27 @@ with `CONFLICT: ... but functions.tsv now pairs it with 0x116c70`, and writes no
 | 1.16.2 | `functions.tsv` says | refuted to | evidence | 1.16.2 name |
 |---|---|---|---|---|
 | `0x140536630` | `0x140a7e5c0` | `0x140537480` | topology + whole-body bytes | thunk_FUN_145ac79fd |
-| `0x1406ab480` | `0x140e56250` | `0x1406ac2d0` | caller vote + masked bytes + region delta + unseeded topology | — |
-| `0x1409f5e70` | `0x140a96e80` | `0x1409f7150` | caller vote + masked bytes + region delta + unseeded topology | — |
-| `0x140b0f3f0` | `0x140bbab60` | `0x140b10a90` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x1406ab480` | `0x140e56250` | `0x1406ac2d0` | caller vote + masked bytes + region delta + unseeded topology | -- |
+| `0x1409f5e70` | `0x140a96e80` | `0x1409f7150` | caller vote + masked bytes + region delta + unseeded topology | -- |
+| `0x140b0f3f0` | `0x140bbab60` | `0x140b10a90` | caller vote + masked bytes + region delta + unseeded topology | -- |
 | `0x140b2d250` | `0x141d2b520` | `0x140b2e8f0` | topology + whole-body bytes + caller vote + region delta | thunk_FUN_1459837f8 |
-| `0x140d86bc0` | `0x141c99210` | `0x140d88900` | caller vote + masked bytes + region delta + unseeded topology | — |
-| `0x140db28d0` | `0x140e4dd80` | `0x140db4630` | caller vote + masked bytes + region delta + unseeded topology | — |
-| `0x140e44850` | `0x1401b9430` | `0x140e46650` | caller vote + masked bytes + region delta + unseeded topology | — |
-| `0x140e46020` | `0x140e54040` | `0x140e47e20` | caller vote + masked bytes + region delta (topology had no opinion) | — |
-| `0x140e4ac30` | `0x1426d51a0` | `0x140e4ca30` | caller vote + masked bytes + region delta + unseeded topology | — |
-| `0x140e4c550` | `0x1406c8190` | `0x140e4e350` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140d86bc0` | `0x141c99210` | `0x140d88900` | caller vote + masked bytes + region delta + unseeded topology | -- |
+| `0x140db28d0` | `0x140e4dd80` | `0x140db4630` | caller vote + masked bytes + region delta + unseeded topology | -- |
+| `0x140e44850` | `0x1401b9430` | `0x140e46650` | caller vote + masked bytes + region delta + unseeded topology | -- |
+| `0x140e46020` | `0x140e54040` | `0x140e47e20` | caller vote + masked bytes + region delta (topology had no opinion) | -- |
+| `0x140e4ac30` | `0x1426d51a0` | `0x140e4ca30` | caller vote + masked bytes + region delta + unseeded topology | -- |
+| `0x140e4c550` | `0x1406c8190` | `0x140e4e350` | caller vote + masked bytes + region delta + unseeded topology | -- |
 | `0x140e4c6d0` | `0x140ae1a80` | `0x140e4e4d0` | topology + whole-body bytes + caller vote + region delta | Game.Network.GetOpenFieldMaxDistFromHostPlayer |
-| `0x140e4e3e0` | `0x140654b70` | `0x140e501e0` | caller vote + masked bytes + region delta + unseeded topology | — |
-| `0x140e51e50` | `0x140540150` | `0x140e53c50` | caller vote + masked bytes + region delta (topology had no opinion) | — |
-| `0x140e530b0` | `0x140bf7f30` | `0x140e54eb0` | caller vote + masked bytes + region delta (topology had no opinion) | — |
+| `0x140e4e3e0` | `0x140654b70` | `0x140e501e0` | caller vote + masked bytes + region delta + unseeded topology | -- |
+| `0x140e51e50` | `0x140540150` | `0x140e53c50` | caller vote + masked bytes + region delta (topology had no opinion) | -- |
+| `0x140e530b0` | `0x140bf7f30` | `0x140e54eb0` | caller vote + masked bytes + region delta (topology had no opinion) | -- |
 | `0x140e5dc80` | `0x1406830c0` | `0x140e5fa80` | topology + whole-body bytes + caller vote + region delta | thunk_FUN_1402b9ccd |
-| `0x140e5df10` | `0x140e4a8e0` | `0x140e5fd10` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x140e5df10` | `0x140e4a8e0` | `0x140e5fd10` | caller vote + masked bytes + region delta + unseeded topology | -- |
 | `0x141125370` | `0x140dfde10` | `0x141127170` | topology + whole-body bytes | SysAllocStatic |
 | `0x14181e140` | `0x1404d3780` | `0x14181ff40` | topology + whole-body bytes + caller vote + region delta | thunk_FUN_145333383 |
-| `0x141a597c0` | `0x140b125b0` | `0x141a5b5c0` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x141a597c0` | `0x140b125b0` | `0x141a5b5c0` | caller vote + masked bytes + region delta + unseeded topology | -- |
 | `0x141ec5fe0` | `0x141ec7de0` | `0x141ec7e30` | topology + whole-body bytes | FUN_141ec5fe0 |
-| `0x141ecf9a0` | `0x140e45e80` | `0x141ed17a0` | caller vote + masked bytes + region delta + unseeded topology | — |
+| `0x141ecf9a0` | `0x140e45e80` | `0x141ed17a0` | caller vote + masked bytes + region delta + unseeded topology | -- |
 | `0x142028860` | `0x1414c146f` | `0x14202a660` | topology + whole-body bytes | thunk_FUN_144c45a14 |
 | `0x142217ae0` | `0x1422198e0` | `0x142219830` | topology + whole-body bytes | FUN_142217ae0 |
 | `0x14223f8f0` | `0x14296e345` | `0x142242080` | topology + whole-body bytes | SetSwitch |
