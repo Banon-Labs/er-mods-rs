@@ -129,6 +129,10 @@ pub(crate) enum Locomotion {
 pub(crate) struct Context {
     /// Metres to the lock-on target, or to the nearest hostile when there is none. `None` when
     /// nothing is in range at all, which reads as [`Band::Far`].
+    ///
+    /// It is also the reading a creature-victim grab is checked against; see
+    /// [`crate::moveset::table::Throws::reachable`], which deliberately does NOT apply it to a
+    /// player-victim grab.
     pub(crate) distance_m: Option<f32>,
     pub(crate) locomotion: Locomotion,
     /// Milliseconds since possession start. Monotonic; the combo window is measured against it.
@@ -161,6 +165,30 @@ pub(crate) enum NoMove {
     /// The whole moveset is empty -- an unknown creature, or one the generator found nothing
     /// fireable on.
     NoMoveset,
+    /// Everything this button could have fired is a grab, and `allow_grabs = false`.
+    ///
+    /// Worth its own reason rather than folding into [`Self::NothingInBand`]: the fix is one line
+    /// of config, and a player who set the flag months ago will not connect a dead button to it.
+    GrabsWithheld,
+    /// Everything this button could have fired is a grab whose `ThrowParam` row demands a CREATURE
+    /// victim, and no creature is inside that row's `Dist`. See
+    /// [`crate::moveset::table::Throws::reachable`].
+    NoThrowVictim,
+}
+
+impl NoMove {
+    /// One clause, written to be read mid-sentence in the possession log.
+    pub(crate) const fn explanation(self) -> &'static str {
+        match self {
+            Self::EmptyBucket => "that bucket is empty for this creature",
+            Self::NothingInBand => "nothing in this bucket suits the range",
+            Self::NoMoveset => "this creature has no shipped moveset",
+            Self::GrabsWithheld => "everything here is a grab and allow_grabs is off",
+            Self::NoThrowVictim => {
+                "everything here is a grab that needs another creature within its throw range"
+            }
+        }
+    }
 }
 
 /// One possession's worth of input mapping.
@@ -212,14 +240,34 @@ impl Dispatcher {
         self.last_press_ms = None;
     }
 
+    /// May this move be offered at all, given the config and who is standing nearby?
+    ///
+    /// Two separate refusals, both of which the derived file spells out rather than leaving the
+    /// player to guess:
+    ///
+    /// * `allow_grabs = false` withholds every grab. Since the `ThrowParam` join this withholds
+    ///   153 real, fireable attacks across 78 creatures -- before it, the flag matched nothing.
+    /// * a grab whose `ThrowParam` row demands a CREATURE victim is withheld unless something is
+    ///   within that row's `Dist`. `ValidateAttemptAndReturnParamId` would refuse the throw
+    ///   anyway; the difference is that the press is spent on a swing that could still land
+    ///   instead of on one that provably cannot become a grab.
+    ///
+    /// A grab whose victim is the player is never withheld for distance -- see
+    /// [`crate::moveset::table::Throws::reachable`].
+    fn offerable(&self, entry: &Move, distance_m: Option<f32>) -> bool {
+        if !entry.grab() {
+            return true;
+        }
+        self.mapping.allow_grabs && entry.throws.reachable(distance_m)
+    }
+
     /// The candidate list for one input in one context, in rank order.
-    fn candidates(&self, input: Input, band: Band) -> Vec<&Move> {
+    fn candidates(&self, input: Input, band: Band, distance_m: Option<f32>) -> Vec<&Move> {
         let bucket = input.bucket(self.buttons);
-        let allow_grabs = self.mapping.allow_grabs;
         let in_bucket: Vec<&Move> = self
             .moveset
             .bucket(bucket)
-            .filter(|entry| allow_grabs || !entry.grab)
+            .filter(|entry| self.offerable(entry, distance_m))
             .collect();
         match self.mapping.model {
             MappingModel::Slots => in_bucket,
@@ -279,7 +327,11 @@ impl Dispatcher {
         }
 
         let band = context.band(self.mapping.bands_m);
-        let mut chosen: Vec<Move> = self.candidates(input, band).into_iter().copied().collect();
+        let mut chosen: Vec<Move> = self
+            .candidates(input, band, context.distance_m)
+            .into_iter()
+            .copied()
+            .collect();
         let asked = input.bucket(self.buttons);
         if chosen.is_empty() && self.mapping.unbound_inputs == UnboundInputs::Promote {
             // Widen in two steps, cheapest first: the SAME bucket ignoring the band, then another
@@ -289,7 +341,7 @@ impl Dispatcher {
             let whole_bucket = |bucket| -> Vec<Move> {
                 self.moveset
                     .bucket(bucket)
-                    .filter(|entry| self.mapping.allow_grabs || !entry.grab)
+                    .filter(|entry| self.offerable(entry, context.distance_m))
                     .copied()
                     .collect()
             };
@@ -304,13 +356,7 @@ impl Dispatcher {
             }
         }
         if chosen.is_empty() {
-            return Err(
-                if self.moveset.bucket(input.bucket(self.buttons)).count() == 0 {
-                    NoMove::EmptyBucket
-                } else {
-                    NoMove::NothingInBand
-                },
-            );
+            return Err(self.why_nothing(input, context.distance_m));
         }
         chosen.sort_by_key(|entry| entry.rank);
 
@@ -328,11 +374,49 @@ impl Dispatcher {
         Ok(chosen[index])
     }
 
+    /// Which of the reasons in [`NoMove`] applies, once a press has come up empty.
+    ///
+    /// The grab reasons are checked FIRST and only when they explain the WHOLE bucket. A bucket
+    /// that also holds ordinary attacks came up empty for a range or promotion reason, and blaming
+    /// the grabs would point the player at the wrong setting.
+    fn why_nothing(&self, input: Input, distance_m: Option<f32>) -> NoMove {
+        let bucket = input.bucket(self.buttons);
+        let mut any = false;
+        let mut all_grabs = true;
+        for entry in self.moveset.bucket(bucket) {
+            any = true;
+            all_grabs &= entry.grab();
+        }
+        if !any {
+            return NoMove::EmptyBucket;
+        }
+        if all_grabs {
+            if !self.mapping.allow_grabs {
+                return NoMove::GrabsWithheld;
+            }
+            if !self
+                .moveset
+                .bucket(bucket)
+                .any(|entry| entry.throws.reachable(distance_m))
+            {
+                return NoMove::NoThrowVictim;
+            }
+        }
+        NoMove::NothingInBand
+    }
+
     /// A one-line description of what this creature can do, for the log.
     pub(crate) fn summary(&self) -> String {
         let count = |bucket| self.moveset.bucket(bucket).count();
+        let grabs = self
+            .moveset
+            .moves
+            .iter()
+            .filter(|entry| entry.grab())
+            .count();
         format!(
-            "moves={} (light={} heavy={} ranged={} movement={}) denied={} model={} grabs={}",
+            "moves={} (light={} heavy={} ranged={} movement={}) denied={} model={} grabs={} ({} \
+             throw initiator{})",
             self.moveset.moves.len(),
             count(Bucket::Light),
             count(Bucket::Heavy),
@@ -344,7 +428,9 @@ impl Dispatcher {
                 "on"
             } else {
                 "off"
-            }
+            },
+            grabs,
+            if grabs == 1 { "" } else { "s" },
         )
     }
 }
@@ -514,15 +600,17 @@ mod tests {
 
     #[test]
     fn grabs_are_offered_by_default_and_withheld_when_the_config_says_so() {
-        let line = "4500 4000g:0:0:1";
+        // c2120's real grab: a 3000-band attack that starts a throw on the player.
+        let line = "2120 3022g0,100:0:0:1";
         let mut allowed = dispatcher(line);
         assert!(
             MappingSettings::default().allow_grabs,
-            "the shipped default must be to allow grabs -- TAE 304 is every boss grab in the game"
+            "the shipped default must be to allow grabs -- they are the signature move of most \
+             bosses, and this flag now withholds 153 real attacks"
         );
         assert_eq!(
             allowed.press(Input::R1, context(1.0, 0)).unwrap().fire,
-            4000
+            3022
         );
 
         let mapping = MappingSettings {
@@ -532,8 +620,100 @@ mod tests {
         let mut denied = Dispatcher::new(moveset(line), mapping, ButtonSettings::default());
         assert_eq!(
             denied.press(Input::R1, context(1.0, 0)),
+            Err(NoMove::GrabsWithheld),
+            "the reason has to name the setting, or a player who set it months ago will read a \
+             dead button as a broken mod"
+        );
+    }
+
+    /// A grab whose `ThrowParam` row demands a CREATURE victim is not offered when there is no
+    /// creature inside that row's `Dist` -- the throw system would refuse it anyway, and the press
+    /// is better spent on something that can land.
+    #[test]
+    fn a_creature_victim_grab_is_withheld_when_nothing_is_in_throw_range() {
+        let line = "4280 3006g3300,100:0:0:1";
+        let mut engine = dispatcher(line);
+        assert_eq!(engine.press(Input::R1, context(5.0, 0)).unwrap().fire, 3006);
+
+        let mut far = dispatcher(line);
+        assert_eq!(
+            far.press(Input::R1, context(40.0, 0)),
+            Err(NoMove::NoThrowVictim)
+        );
+
+        let mut empty = dispatcher(line);
+        assert_eq!(
+            empty.press(
+                Input::R1,
+                Context {
+                    distance_m: None,
+                    locomotion: Locomotion::Neutral,
+                    now_ms: 0,
+                }
+            ),
+            Err(NoMove::NoThrowVictim)
+        );
+    }
+
+    /// ...and the converse, which is the case that covers 189 of the game's 190 creature throw
+    /// rows: the victim is the PLAYER, whose body the possession keeps co-located with the
+    /// creature. A hostile-distance reading is about somebody else and must not veto it.
+    #[test]
+    fn a_player_victim_grab_is_offered_however_far_away_the_nearest_hostile_is() {
+        let mut engine = dispatcher("2120 3022g0,100:0:0:1");
+        assert_eq!(
+            engine
+                .press(
+                    Input::R1,
+                    Context {
+                        distance_m: None,
+                        locomotion: Locomotion::Neutral,
+                        now_ms: 0,
+                    }
+                )
+                .unwrap()
+                .fire,
+            3022
+        );
+    }
+
+    /// A bucket that ALSO holds ordinary attacks came up empty for a range reason, so blaming the
+    /// grabs would point the player at a setting that is not the problem.
+    #[test]
+    fn a_mixed_bucket_is_never_blamed_on_the_grab_settings() {
+        let mapping = MappingSettings {
+            allow_grabs: false,
+            unbound_inputs: UnboundInputs::Deny,
+            ..MappingSettings::default()
+        };
+        // One grab and one close-range attack; press at long range with promotion off.
+        let mut engine = Dispatcher::new(
+            moveset("2120 3022g0,100:0:0:1 3023:0:1:1"),
+            mapping,
+            ButtonSettings::default(),
+        );
+        assert_eq!(
+            engine.press(Input::R1, context(40.0, 0)),
             Err(NoMove::NothingInBand)
         );
+    }
+
+    #[test]
+    fn every_no_move_reason_explains_itself() {
+        for reason in [
+            NoMove::EmptyBucket,
+            NoMove::NothingInBand,
+            NoMove::NoMoveset,
+            NoMove::GrabsWithheld,
+            NoMove::NoThrowVictim,
+        ] {
+            let text = reason.explanation();
+            assert!(!text.is_empty(), "{reason:?}");
+            assert!(
+                !text.ends_with('.'),
+                "{reason:?} is read mid-sentence: {text}"
+            );
+        }
     }
 
     #[test]

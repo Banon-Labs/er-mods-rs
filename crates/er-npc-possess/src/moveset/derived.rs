@@ -76,7 +76,25 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
             } else {
                 format!(" plays {}", entry.played)
             };
-            let grab = if entry.grab { " grab" } else { "" };
+            // A GRAB SAYS WHO IT NEEDS. `ThrowParam.DefChrId` is matched exactly against the
+            // victim's `ChrIns::npcId`, so "grab" on its own would be a half-truth: c2120's grab
+            // works on the player and on nothing else in the game. The range is the row's `Dist`.
+            let grab = if entry.grab() {
+                let victims: Vec<String> = entry
+                    .throws
+                    .iter()
+                    .map(|throw| {
+                        if throw.victim_is_player() {
+                            format!("the player within {:.1}m", throw.range_m())
+                        } else {
+                            format!("c{:04} within {:.1}m", throw.victim_chr, throw.range_m())
+                        }
+                    })
+                    .collect();
+                format!(" GRAB, throws {}", victims.join(" or "))
+            } else {
+                String::new()
+            };
             // The prefix is printed only when it is NOT the field write, because that is when it
             // is worth knowing: the move is fired through PlayAnimationByBehaviorName rather than
             // by writing a field, and the name it is fired under is the one shown.
@@ -177,6 +195,11 @@ const fn describe(reason: Denial) -> &'static str {
         Denial::UnusableAtRuntime => {
             "the watchdog saw this one leave the creature stuck with no way out"
         }
+        Denial::ThrowResultClip => {
+            "this is the clip the THROW system plays once a grab has landed, not one you can \
+             fire -- the game reaches it by the bare name W_ThrowAtk and picks it from a \
+             ThrowParam row. The grab itself is the attack marked GRAB above"
+        }
     }
 }
 
@@ -223,10 +246,34 @@ mod tests {
         assert!(text.contains("plays 3000"), "{text}");
     }
 
+    /// A grab has to say WHO it can be used on, because `ThrowParam.DefChrId` is an exact match
+    /// and "grab" alone tells the player nothing they can act on.
     #[test]
-    fn a_grab_is_labelled() {
-        let text = render(4500, &moveset("4500 4000g:0:0:1"), "summary");
-        assert!(text.contains("grab"), "{text}");
+    fn a_grab_is_labelled_with_the_victim_it_needs_and_the_range() {
+        let text = render(2120, &moveset("2120 3022g0,100:0:0:1"), "summary");
+        assert!(text.contains("GRAB"), "{text}");
+        assert!(text.contains("the player within 10.0m"), "{text}");
+    }
+
+    #[test]
+    fn a_grab_with_two_victims_lists_both() {
+        let text = render(4280, &moveset("4280 3006g0,100+3300,55:0:0:1"), "summary");
+        assert!(
+            text.contains("the player within 10.0m or c3300 within 5.5m"),
+            "{text}"
+        );
+    }
+
+    /// The 4000-band clips are the thing players go looking for by name, so their denial has to
+    /// explain the mechanism rather than say "not fireable" and leave it there.
+    #[test]
+    fn a_throw_result_clip_is_denied_with_an_explanation_of_the_throw_system() {
+        let text = render(2120, &moveset("2120 3022g0,100:0:0:1 !4100:10"), "summary");
+        assert!(
+            text.contains("4100 = \"denied: throw-result-clip\""),
+            "{text}"
+        );
+        assert!(text.contains("W_ThrowAtk"), "{text}");
     }
 
     #[test]

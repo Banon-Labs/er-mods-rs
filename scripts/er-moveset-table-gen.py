@@ -7,12 +7,27 @@ game: everything here is a decision *about* an integer id, and the ids themselve
 already public knowledge (they are BND entry filenames). That is what makes it
 committable under the repo's no-game-derived-binaries rule.
 
-FOUR OFFLINE SOURCES, joined per creature:
+FIVE OFFLINE SOURCES, joined per creature:
 
   behavior graph   <chr>.behbnd.dcx (Havok TAG0)  fireable EVENT NAME -> state -> clip
   TimeAct          <chr>.tae                      ability events + event times
   regulation.bin   NpcParam -> BehaviorParam      judge id -> AtkParam_Npc / Bullet
-  regulation.bin   AtkParam_Npc                   damage numbers and hit-capsule radii
+  regulation.bin   AtkParam_Npc                   damage, hit-capsule radii, throwTypeId
+  regulation.bin   ThrowParam                     throwTypeId -> victim chr id + range
+
+A GRAB IS AN ORDINARY ATTACK WITH ONE COLUMN SET. It is not a 4000-band animation and it
+is not TAE event 304. `CS::ChrDamageModule::ApplyDamage` looks up the landed hit's
+`AtkParam` row, reads `throwTypeId`, and -- before any damage is calculated -- calls
+`CSChrThrowModule::InitThrow(attackerThrowModule, victimChrIns, throwTypeId)`.
+`CSThrowNode::ValidateAttemptAndReturnParamId` then scans `ThrowParam` for a row matching
+(attacker npcId, victim npcId, throwTypeId); on a hit, the throw system drives BOTH parties
+into that row's `atkAnimId`/`defAnimId`. Those are the 4000-band clips, which is exactly why
+no event name reaches them: they are downstream of a throw that has already been accepted.
+
+So the fireable thing is the INITIATOR, and it was already in this table as a plain attack.
+Swept over the corpus: 153 fireable initiator ANIMATIONS across 78 creatures (169 counting
+(animation, throwTypeId) pairs), EVERY ONE in the 3000 band, against 108 TAE-304 clips of
+which ZERO are fireable.
 
 WHY THE GRAPH AND NOT THE TAE DECIDES WHAT SHIPS: the graph is a strict superset (c2120
 has 41 fireable attack events against 36 TAE attacks, c3200 30 against 10) and every TAE
@@ -60,7 +75,7 @@ PR = _load('paramread', 'er-param-read.py')
 
 #: Table format version. Bump when the row grammar changes; the Rust parser refuses
 #: a version it was not written for rather than misreading columns.
-TABLE_VERSION = 2
+TABLE_VERSION = 3
 
 #: The animation-id bands this table covers. Banding is a FromSoft convention, not a
 #: proof -- the authoritative "is this an attack" answer is the BehaviorParam join
@@ -135,9 +150,17 @@ RIDE_PREFIXES_MEASURED_USELESS = (
 #: `ResolveBehaviorId` call in front of it.
 ABILITY_ARG = {1: 2, 2: 2, 5: 1, 123: 1, 304: 1, 307: 2}
 RAW_BEHAVIOR_TYPES = {5}
-#: TAE event type 304 `ThrowAttackBehavior` is the grab carrier: 573 sites across 90
-#: chrs and 100% of the 4000 band. It is NOT denied -- it is every boss grab in the
-#: game -- it is only flagged, so the runtime can honour `allow_grabs`.
+#: TAE event type 304 `ThrowAttackBehavior` MARKS THE THROW-RESULT CLIP, not the grab.
+#:
+#: This constant used to be called the grab carrier, and reading it that way is what made
+#: `allow_grabs` gate nothing. 304 is 573 sites across 90 chrs and 100% of the 4000 band --
+#: and swept over the whole corpus, ZERO of the 108 animations carrying it are fireable
+#: under any prefix. That is not a wall the graph puts up; it is that these clips are never
+#: addressed by id. `CSChrThrowModule::PlayThrowAnim` reaches them through the two BARE
+#: names `W_ThrowAtk` (attacker) and `W_ThrowDef` (defender), and which clip that lands on
+#: is `ThrowParam.atkAnimId` / `defAnimId` for the row the throw system already picked.
+#:
+#: THE GRAB ITSELF IS SOMEWHERE ELSE ENTIRELY -- see [`ATK_THROW_FIELD`].
 GRAB_EVENT_TYPE = 304
 
 #: Buckets, in the fixed 4-button layout every creature shares.
@@ -157,6 +180,11 @@ DENY_NO_DAMAGE_WINDOW = 3
 DENY_MISSING_ATK_ROW = 4
 DENY_SPEFFECT_ONLY = 5
 DENY_UNRESOLVED_BEHAVIOR = 6
+#: The animation the THROW SYSTEM plays once a grab has been accepted, reached by the bare
+#: names `W_ThrowAtk`/`W_ThrowDef` rather than by id. There is nothing here to fire, which
+#: is a different and more useful thing to be told than `not-fireable`. See
+#: [`throw_result_clip`]; measured at 108 animations, all in the 4000 band, none fireable.
+DENY_THROW_RESULT_CLIP = 10
 #: RETIRED. Reason 7 was `prefix-unreachable`: reachable by the graph but not spellable by
 #: the `W_Event%04d` field write. It existed for one commit and is gone because the class is
 #: gone -- those ids are now FIRED, through `PlayAnimationByBehaviorName` with a name built
@@ -306,6 +334,9 @@ def tae_facts(tae_path):
 
 ATK_DAMAGE_FIELDS = ('atkPhys', 'atkMag', 'atkFire', 'atkThun')
 ATK_RADIUS_FIELDS = ('hit0_Radius', 'hit1_Radius', 'hit2_Radius', 'hit3_Radius')
+#: THE COLUMN THAT MAKES AN ATTACK A GRAB. Non-zero means the hit, when it lands, is
+#: handed to the throw system instead of to the damage calculation -- see [`Regulation`].
+ATK_THROW_FIELD = 'throwTypeId'
 
 
 class Regulation:
@@ -322,15 +353,30 @@ class Regulation:
         behavior, _, _ = PR.rows(PR.param_bytes(files, 'BehaviorParam'),
                                  ['variationId', 'behaviorJudgeId', 'refType', 'refId'])
         self.behavior = {row['id']: (row['refType'], row['refId']) for row in behavior}
-        atk, _, _ = PR.rows(PR.param_bytes(files, 'AtkParam_Npc'),
-                            list(ATK_DAMAGE_FIELDS) + list(ATK_RADIUS_FIELDS))
+        atk, _, _ = PR.rows(
+            PR.param_bytes(files, 'AtkParam_Npc'),
+            list(ATK_DAMAGE_FIELDS) + list(ATK_RADIUS_FIELDS) + [ATK_THROW_FIELD])
         self.atk = {
             row['id']: (
                 sum(row[f] for f in ATK_DAMAGE_FIELDS),
                 max(row[f] for f in ATK_RADIUS_FIELDS),
+                int(row[ATK_THROW_FIELD]),
             )
             for row in atk
         }
+        # THE GRAB JOIN. `ApplyDamage` reads `AtkParam.throwTypeId` off the hit that landed
+        # and hands it to `CSChrThrowModule::InitThrow`; `ValidateAttemptAndReturnParamId`
+        # then scans ThrowParam for a row matching (attacker npcId, victim npcId,
+        # throwTypeId). No row, no throw -- so an attack whose `throwTypeId` names nothing
+        # here is not a grab however the flag reads.
+        throw, _, _ = PR.rows(PR.param_bytes(files, 'ThrowParam'),
+                              ['AtkChrId', 'DefChrId', 'throwTypeId', 'Dist'])
+        self.throw = collections.defaultdict(list)
+        for row in throw:
+            if row['throwTypeId'] == 0 and row['AtkChrId'] == 0:
+                continue                                 # the null/default row
+            self.throw[(row['AtkChrId'], row['throwTypeId'])].append(
+                (row['DefChrId'], float(row['Dist'])))
         # A projectile's reach is its OWN travel distance, not a hit capsule. Calling
         # every bullet "far" would send a 2-metre spit and a cross-arena breath to the
         # same distance band, and the short one whiffs every time the dispatcher picks
@@ -341,6 +387,23 @@ class Regulation:
         self.bullet_damage = {
             row['id']: self.atk.get(row['atkId_Bullet'], (0, 0.0))[0] for row in bullet
         }
+
+    def throws_for(self, chr_num, throw_type_id):
+        """[(victimChrId, rangeDecimetres)] a throw of this type by this chr can complete.
+
+        Empty when `throw_type_id` is 0 (an ordinary hit) or when no `ThrowParam` row pairs
+        this attacker with this throw type -- measured, 10 of the 179 non-zero
+        `throwTypeId`s on fireable attacks name nothing. Those are NOT grabs: the native
+        scan in `CSThrowNode::ValidateAttemptAndReturnParamId` finds no row, returns -1,
+        and `StartThrow` gives up. Calling them grabs would put a label on a swing that can
+        never become one.
+
+        Decimetres so the table stays integers-only, per this file's header.
+        """
+        if not throw_type_id:
+            return []
+        return [(victim, int(round(distance * 10)))
+                for victim, distance in self.throw.get((chr_num, throw_type_id), ())]
 
     def variation_for(self, chr_id):
         """`NpcParam.behaviorVariationId` for a chr, by majority of its NpcParam rows."""
@@ -378,13 +441,38 @@ def reach_band(metres, is_bullet):
     return REACH_FAR
 
 
-def classify_chr(fireable, declared, tae, regulation, variation):
+def throw_result_clip(tae, anim_id):
+    """Is this animation the one the THROW SYSTEM plays, rather than one you can fire?
+
+    TAE event 304 `ThrowAttackBehavior` marks it. Measured over the whole corpus: 108
+    animations carry 304, ALL of them in the 4000 band, and NOT ONE of them is fireable
+    under any prefix -- because they are never addressed by id at all.
+    `CSChrThrowModule::PlayThrowAnim` reaches them by the two BARE, un-numbered names
+    `W_ThrowAtk` and `W_ThrowDef`, and which clip that resolves to is decided by the
+    `ThrowParam` row the throw system already chose. So the right denial for one of these
+    is not "the graph cannot reach it" -- it is "there is nothing here to fire".
+    """
+    return bool((tae.get(anim_id) or {}).get('grab'))
+
+
+def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
     """-> (entries, denials) for one creature.
 
-    entries: [(fired, played, bucket, rank, reach, grab, prefix)]
+    entries: [(fired, played, bucket, rank, reach, throws, prefix)]
     denials: [(fired, reason)]
     """
-    denials = [(a, DENY_NOT_FIREABLE) for a in sorted(declared - set(fireable))]
+    # THE THROW-RESULT CLIPS ARE LISTED WHETHER OR NOT THE GRAPH DECLARES A NAME FOR THEM.
+    #
+    # `declared` comes from the graph's event-name table, and most 4000-band clips have no
+    # event name at all -- so left to that set they would simply vanish, and the player who
+    # knows Malenia's grab is a4100 would find nothing in the derived file saying why it is
+    # not on offer. They are the single most-asked-about hole in a boss's moveset, so they
+    # get an entry with a reason that is TRUE of them rather than silence.
+    reasons = {a: DENY_NOT_FIREABLE for a in declared - set(fireable)}
+    for anim_id in tae:
+        if throw_result_clip(tae, anim_id) and anim_id not in fireable:
+            reasons[anim_id] = DENY_THROW_RESULT_CLIP
+    denials = sorted(reasons.items())
     candidates = []
     for fired in sorted(fireable):
         played, prefix = fireable[fired]
@@ -398,7 +486,7 @@ def classify_chr(fireable, declared, tae, regulation, variation):
         # re-arms its hitbox rather than by how hard it hits.
         abilities = sorted(set(facts.get('abilities', [])))
         duration = facts.get('duration', 0.0)
-        grab = bool(facts.get('grab'))
+        throws = []
         damage, bullet_damage, reach = 0, 0, 0.0
         melee_any = melee_damaging = bullet = False
         missing_atk = unresolved = False
@@ -414,11 +502,17 @@ def classify_chr(fireable, declared, tae, regulation, variation):
                     missing_atk = True
                     continue
                 melee_any = True
-                # A ZERO-DAMAGE ROW IS A MARKER, NOT A HIT. c4500's judge 900 resolves
-                # to AtkParam_Npc 4500900: damage 0, capsule radius 9.0, and it is
-                # attached to nearly every one of the dragon's attacks. Counting its
-                # radius would report the whole moveset as long-reach.
+                # THE GRAB. A non-zero `throwTypeId` means this hit does not go to the
+                # damage calculation at all: `ApplyDamage` hands it to
+                # `CSChrThrowModule::InitThrow` FIRST and returns early when the throw is
+                # accepted. Which is why most of these rows carry zero damage -- the damage
+                # arrives later, from the throw-result clip's own hitbox.
+                throws += regulation.throws_for(chr_num, row[2])
                 if row[0] > 0:
+                    # A ZERO-DAMAGE ROW IS A MARKER, NOT A HIT. c4500's judge 900 resolves
+                    # to AtkParam_Npc 4500900: damage 0, capsule radius 9.0, and it is
+                    # attached to nearly every one of the dragon's attacks. Counting its
+                    # radius would report the whole moveset as long-reach.
                     melee_damaging = True
                     damage += row[0]
                     reach = max(reach, row[1])
@@ -426,9 +520,10 @@ def classify_chr(fireable, declared, tae, regulation, variation):
                 bullet = True
                 bullet_damage += regulation.bullet_damage.get(ref_id, 0)
                 reach = max(reach, regulation.bullet_reach.get(ref_id, 0.0))
+        throws = sorted(set(throws))
         if band_of(fired) == 'step':
             candidates.append((fired, played, BUCKET_MOVEMENT, 0.0, REACH_UNKNOWN,
-                               False, prefix))
+                               (), prefix))
             continue
         if not (melee_any or bullet):
             if missing_atk:
@@ -447,7 +542,7 @@ def classify_chr(fireable, declared, tae, regulation, variation):
         bucket = BUCKET_RANGED if is_ranged else None
         score = duration * float(damage + bullet_damage)
         candidates.append((fired, played, bucket, score,
-                           reach_band(reach, is_ranged), grab, prefix))
+                           reach_band(reach, is_ranged), tuple(throws), prefix))
 
     # Light vs heavy by PER-CHR percentile of duration x damage, so a rat and a
     # dragon are comparable: absolute damage would put every one of the rat's
@@ -461,10 +556,10 @@ def classify_chr(fireable, declared, tae, regulation, variation):
     heavy_from = (len(melee) + 1) // 2
     heavy = {c[0] for c in melee[heavy_from:]}
     resolved = []
-    for fired, played, bucket, score, reach, grab, prefix in candidates:
+    for fired, played, bucket, score, reach, throws, prefix in candidates:
         if bucket is None:
             bucket = BUCKET_HEAVY if fired in heavy else BUCKET_LIGHT
-        resolved.append((fired, played, bucket, score, reach, grab, prefix))
+        resolved.append((fired, played, bucket, score, reach, throws, prefix))
 
     # Rank inside a bucket: ascending score, then ascending animation id. Fully
     # deterministic, so the same corpus always produces the same table and the
@@ -473,8 +568,8 @@ def classify_chr(fireable, declared, tae, regulation, variation):
     for bucket in (BUCKET_LIGHT, BUCKET_HEAVY, BUCKET_RANGED, BUCKET_MOVEMENT):
         members = sorted((c for c in resolved if c[2] == bucket),
                          key=lambda c: (c[3], c[0]))
-        for rank, (fired, played, _, _, reach, grab, prefix) in enumerate(members):
-            entries.append((fired, played, bucket, rank, reach, grab, prefix))
+        for rank, (fired, played, _, _, reach, throws, prefix) in enumerate(members):
+            entries.append((fired, played, bucket, rank, reach, throws, prefix))
     entries.sort()
 
     # TRIM DENIALS TO THE SPAN THE CREATURE ACTUALLY USES.
@@ -513,12 +608,17 @@ def format_table(per_chr):
         '# entry filename) or a decision this generator made about one.',
         '#',
         '# One line per creature:  <chrid> <entry>...',
-        '#   entry  = <fired>[=<played>][g]:<bucket>:<rank>:<reach>[:<prefix>]',
+        '#   entry  = <fired>[=<played>][<grab>]:<bucket>:<rank>:<reach>[:<prefix>]',
+        '#   grab   = g<victimChrId>,<rangeDecimetres>[+<victimChrId>,<rangeDecimetres>]...',
         '#   denial = !<fired>:<reason>',
         '#   "-"    = considered, nothing fireable -- a variant with no animations of its own',
         '#   "=played" appears only when the graph plays a DIFFERENT animation than the',
         '#   one named in the event -- the W_Event3110 -> a000_003000 exception.',
-        '#   "g" marks a grab (TAE event 304); gated at runtime by allow_grabs.',
+        '#   "g..."  marks a THROW INITIATOR: an ordinary attack whose AtkParam_Npc row has',
+        '#   throwTypeId != 0 AND a ThrowParam row pairing this chr with a victim. Landing it',
+        '#   is what starts a grab; the 4000-band clip is what the throw system plays after.',
+        '#   The victim chr id is ThrowParam.DefChrId (0 = the player) and the range is its',
+        '#   Dist. Gated at runtime by allow_grabs.',
         f'#   bucket {BUCKET_LIGHT}=light {BUCKET_HEAVY}=heavy '
         f'{BUCKET_RANGED}=ranged {BUCKET_MOVEMENT}=movement',
         f'#   reach  {REACH_UNKNOWN}=unknown {REACH_CLOSE}=close '
@@ -529,6 +629,8 @@ def format_table(per_chr):
         f'#          {DENY_SPEFFECT_ONLY}=speffect-only '
         f'{DENY_UNRESOLVED_BEHAVIOR}=unresolved-behavior '
         f'{DENY_UNUSABLE_AT_RUNTIME}=unusable-at-runtime (watchdog, runtime only)',
+        f'#          {DENY_THROW_RESULT_CLIP}=throw-result-clip (played BY the throw '
+        f'system, never fired)',
         '#',
         '# prefix 0=W_Event (fired by writing CSChrEventModule+0x18, no game address) and',
         '# 1..10 = ' + ' '.join(f'{i}={p}' for i, p in enumerate(PREFIXES) if i),
@@ -553,14 +655,17 @@ def format_table(per_chr):
             lines.append(f'{int(chr_id[1:])} -')
             continue
         parts = []
-        for fired, played, bucket, rank, reach, grab, prefix in entries:
+        for fired, played, bucket, rank, reach, throws, prefix in entries:
             head = str(fired) if played == fired else f'{fired}={played}'
             # The prefix column is OMITTED for `W_Event`, which is both the common case
             # and the one that costs no game address -- so a four-field entry reads as
             # "fired by the field write" and a five-field one as "fired by name".
             tail = '' if prefix == 0 else f':{prefix}'
-            parts.append(
-                f'{head}{"g" if grab else ""}:{bucket}:{rank}:{reach}{tail}')
+            grab = ''
+            if throws:
+                grab = 'g' + '+'.join(f'{victim},{reach_dm}'
+                                      for victim, reach_dm in throws)
+            parts.append(f'{head}{grab}:{bucket}:{rank}:{reach}{tail}')
         parts += [f'!{fired}:{reason}' for fired, reason in denials]
         lines.append(f'{int(chr_id[1:])} ' + ' '.join(parts))
     return '\n'.join(lines) + '\n'
@@ -623,7 +728,7 @@ def generate(root, only=None, jobs=10, regulation_path=None):
                 continue
             fireable, declared, tae, variation = payload
             per_chr[chr_id] = classify_chr(fireable, declared, tae, regulation,
-                                           variation)
+                                           variation, int(chr_id[1:]))
             print(f'{chr_id} {len(per_chr[chr_id][0])}+{len(per_chr[chr_id][1])}d',
                   file=sys.stderr, flush=True)
     return per_chr, errors

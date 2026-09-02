@@ -89,8 +89,10 @@ const DEFAULT_CONFIG_TOML: &str = r##"# er-npc-possess.toml -- the standalone "b
 # WHAT IS NOT WIRED YET, so you can tell a missing feature from a broken one:
 #   * The `radial` binding is parsed and reported and there is no wheel to open.
 #   * Range is measured to the nearest enemy, NOT to what you are locked on to.
-#   * GRABS. No creature's grab can be fired -- see allow_grabs below. Dodges CAN: they are
-#     fired under their real W_Step name rather than through the field write.
+#   * GRABS LAND ON THE PLAYER'S BODY OR ON NOBODY. The grab itself fires -- see allow_grabs --
+#     but ThrowParam picks the victim by exact chr id, and that is the player for 189 of the
+#     game's 190 creature throw rows. Your body is standing where the creature is, invisible and
+#     invincible; whether an invincible body accepts a throw has not been tested in-game.
 #   * Your own body stays LOCK-ON-ABLE while you are away from it. It cannot be hurt and cannot be
 #     seen, so this is an oddity rather than a hazard.
 #   * turn_deadzone_deg, heading_converge and root_motion_only are RESERVED. speed_scale is live.
@@ -205,14 +207,16 @@ combo_window_ms = 1200
 # attack you start mid-run lands after the run has closed some of the gap.
 bands_m = [4.0, 12.0]
 # Offer the creature's grabs. ON as a policy -- a grab is a real attack and withholding it by
-# default would quietly remove the signature move of most bosses.
+# default would quietly remove the signature move of most bosses. It gates 153 attacks across 78
+# creatures; turn it off and those buttons give you the creature's other attacks instead.
 #
-# It currently gates NOTHING, and that is worth knowing rather than discovering. Grab animations
-# live in the 4000 band (Malenia's are 4100 and 4101) and NO event name in that band has a
-# transition behind it on any creature swept -- not W_Event, not W_Attack, not any prefix. So the
-# graph's event layer cannot reach them at all, by either firing path. This is a different wall
-# from the dodges, which the by-name path did solve. When a route to them is found, this setting
-# is already the right way round.
+# A grab is NOT the 4000-band animation you may have gone looking for. Malenia's a4100 and a4101
+# are what the game plays AFTER a grab has been accepted, and nothing can fire them -- the throw
+# system reaches them by name and picks which one from a ThrowParam row. The grab you fire is an
+# ordinary attack (hers is a3022); when it lands, the game hands the hit to the throw system.
+# er-npc-possess.derived.toml marks each one GRAB and says who it can be used on -- almost always
+# "the player", because ThrowParam.DefChrId is matched exactly and is 0 for 189 of the game's 190
+# creature throw rows.
 allow_grabs = true
 # promote -- an input whose bucket is empty borrows from another one rather than doing nothing.
 #            It drops the RANGE requirement first and only then changes bucket, so the button

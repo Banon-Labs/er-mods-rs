@@ -442,18 +442,22 @@ pub(crate) struct MappingSettings {
     ///
     /// ON by default, and this reversed once the corpus was actually measured. The old default
     /// was `false` on the reasoning that a grab is unfair; the reasoning was about the wrong
-    /// direction of the interaction (you are the one grabbing) and the scope was wrong too.
-    /// TimeAct event 304 `ThrowAttackBehavior` is 573 sites across 90 creatures and **100% of the
-    /// 4000 animation band** -- it is not a niche category, it is every boss grab in the game, so
-    /// withholding it by default was the wrong policy.
+    /// direction of the interaction (you are the one grabbing) and the scope was wrong too --
+    /// grabs are the signature move of most bosses, not a niche category.
     ///
-    /// It currently gates NOTHING, which is a separate fact and not a reason to flip it back. No
-    /// grab in the shipped table is reachable at all, and this survived the by-name fallback that
-    /// rescued the dodges: swept across all 408 creatures, NO event name in the 4000 band has a
-    /// transition behind it under ANY prefix -- not `W_Event`, not `W_Attack`, not one of the ride
-    /// families. The graph's event layer does not reach grabs, by either firing path, so this is a
-    /// different wall from the one `Prefix` climbs. The day a route is found this setting is
-    /// already the right way round.
+    /// **IT NOW GATES 153 REAL MOVES ACROSS 78 CREATURES.** It used to gate nothing, and the
+    /// reason it did is worth keeping written down, because the mistake was in the model rather
+    /// than in the data. A grab is not a 4000-band animation and it is not TimeAct event 304: it
+    /// is an ORDINARY, already-fireable attack whose `AtkParam_Npc` row has `throwTypeId != 0`.
+    /// `ApplyDamage` reads that column off the hit that landed and calls
+    /// `CSChrThrowModule::InitThrow` before calculating any damage; the throw system then drives
+    /// both parties into the 4000-band clips through the bare behaviour names `W_ThrowAtk` and
+    /// `W_ThrowDef`. So the old sweep's finding was true and pointed at the wrong half -- no event
+    /// name in the 4000 band has a transition behind it because those clips are never addressed by
+    /// id at all. Marking THOSE as the grabs is what left this flag matching nothing.
+    ///
+    /// Every initiator is in the 3000 band, and every one of them was already being offered as a
+    /// plain attack, so turning this off now genuinely removes something.
     pub(crate) allow_grabs: bool,
     pub(crate) unbound_inputs: UnboundInputs,
     /// How long the possessed creature may animate, go nowhere and be asked for nothing before

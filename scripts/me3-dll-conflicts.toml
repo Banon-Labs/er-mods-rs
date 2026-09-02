@@ -440,7 +440,9 @@ references) and is re-checked at every possession against the LIVE `NpcParam.loc
 `RideParam.rideCamParamId` tables, so a player running a regulation mod that DOES use it gets a \
 refusal naming the row rather than a stolen camera. It is still a shared write: a second mod \
 patching the same row while a possession is in flight would fight it, which is exactly what the \
-setting exists to resolve.
+setting exists to resolve. Grabs added neither an address nor a \
+detour: a grab is an ordinary attack whose `AtkParam_Npc.throwTypeId` is non-zero, and the game's \
+own throw system does the rest.
 
 THE ONE THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
 DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \
