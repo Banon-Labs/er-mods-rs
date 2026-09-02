@@ -832,7 +832,19 @@ pub(crate) fn pick_target(settings: TargetSettings, player: Chr) -> (Option<Chr>
 
 /// Read the left thumbstick as a movement request. `None` when no pad is connected, or when the
 /// stick is inside the deadzone.
-pub(crate) fn read_move_stick() -> Option<Stick> {
-    let (x, y) = crate::input::read_left_stick()?;
-    Stick::from_xinput(x, y)
+pub(crate) fn read_move_stick(movement: &crate::settings::MovementSettings) -> Option<Stick> {
+    // The pad wins when it is deflected, so a player holding both does not fight themselves.
+    // `read_left_stick` answering `None` means no pad is attached at all; a resting stick answers
+    // `Some` and then falls inside the deadzone, and both end up here.
+    if let Some(stick) = crate::input::read_left_stick().and_then(|(x, y)| Stick::from_xinput(x, y))
+    {
+        return Some(stick);
+    }
+    let (x, y) = crate::input::read_move_keys(
+        movement.forward,
+        movement.back,
+        movement.left,
+        movement.right,
+    )?;
+    Stick::from_axes(x, y)
 }

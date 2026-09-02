@@ -254,6 +254,14 @@ l2 = "movement"
 
 # How the possessed body moves. LIVE -- an edit applies within a second, mid-possession.
 [movement]
+# The keyboard standing in for the left stick, because a keyboard has no stick and a creature is
+# driven by one. WASD, the same keys the game binds movement to. Leave a value empty to unbind it.
+# A controller's left stick still wins whenever it is deflected, so holding both does not fight.
+forward = "W"
+back = "S"
+left = "A"
+right = "D"
+
 # RESERVED. Turn toward the stick over time instead of snapping to it. The body currently turns
 # toward wherever it has been told to walk, at the rate its own NpcParam gives it.
 heading_converge = true
@@ -557,6 +565,17 @@ impl PossessConfig {
     /// Returns the `(from, to)` summaries for the log.
     pub(crate) fn pick_target(&mut self, chr_id: u32) -> (String, String) {
         let before = self.target_on_disk.summary();
+        // SPAWN MODE IS PRESERVED, and this is not a nicety. `mode = "chr_id"` searches the
+        // characters ALREADY LOADED in the map, so choosing from a 408-entry catalogue and being
+        // switched into it means the next press is almost always refused with "no loaded enemy
+        // matches chr_id" -- measured live 2026-09-02: eight consecutive refusals against 428
+        // loaded characters, because the picker had silently overwritten the mode that worked.
+        // In spawn mode the pick names `[spawn].chr_id` instead, which is the field that decides
+        // WHICH creature gets created, and the mode the player chose is left alone.
+        if self.target_on_disk.mode == TargetMode::Spawn {
+            self.target_on_disk.spawn.chr_id = chr_id;
+            return (before, self.target_on_disk.summary());
+        }
         self.target_on_disk = TargetSettings {
             mode: TargetMode::ChrId,
             // `[target] chr_id` is an `i32` because the FILE can name a negative and the parser

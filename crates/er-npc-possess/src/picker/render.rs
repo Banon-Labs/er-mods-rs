@@ -37,7 +37,14 @@ static HMODULE: AtomicUsize = AtomicUsize::new(0);
 /// Where the panel sits, and how wide. First-use only -- the window is movable, so a player who
 /// drags it keeps it there.
 const PANEL_POSITION: [f32; 2] = [48.0, 96.0];
-const PANEL_WIDTH: f32 = 420.0;
+/// Everything the panel draws is scaled by this. 1.5 because the list is read at a desk, from a
+/// game running full-screen at whatever resolution the monitor is, and imgui's default face is
+/// sized for a windowed tool rather than for that.
+const FONT_SCALE: f32 = 1.5;
+/// Widened by the same factor. The width is a fixed number of pixels rather than a text measure,
+/// so scaling the font without scaling this would clip every name at the same place it used to
+/// fit -- the failure would look like truncated data rather than like a layout constant.
+const PANEL_WIDTH: f32 = 420.0 * FONT_SCALE;
 
 /// The stable half of the window label. imgui takes everything after `###` as the window's ID and
 /// draws none of it, which is what lets the visible half carry a changing cursor position without
@@ -91,7 +98,13 @@ fn draw(ui: &Ui) {
         .size([PANEL_WIDTH, 0.0], Condition::Always)
         .collapsible(false)
         .resizable(false)
-        .build(|| draw_rows(ui, &view));
+        .build(|| {
+            // Scoped to this window: `set_window_font_scale` applies to the window imgui is
+            // currently building, so it cannot leak into another shell's overlay drawing on the
+            // same frame through the shared host.
+            ui.set_window_font_scale(FONT_SCALE);
+            draw_rows(ui, &view);
+        });
 }
 
 fn draw_rows(ui: &Ui, view: &View) {

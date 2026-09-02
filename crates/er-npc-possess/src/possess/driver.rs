@@ -247,9 +247,25 @@ impl NpcPossessionEngine {
         // A press that lands while a spawn is still coming up cancels it. Handled before the
         // active state because the two are mutually exclusive and this one has its own teardown.
         if let Some(pending) = self.pending.take() {
-            // `Reason::Shutdown` runs on `DllMain`'s thread, which is not the game thread; see
-            // `Step::DespawnCreature` in the release below for why a game call is refused there.
-            Self::cancel_pending(pending, reason, reason != Reason::Shutdown);
+            // A HOTKEY PRESS INSIDE THE READINESS WINDOW IS IGNORED, not treated as a cancel.
+            // A spawn takes up to `[spawn].readiness_ms` to become drivable and NOTHING ON SCREEN
+            // says one is in flight, so a player who taps twice -- or holds the key a beat too
+            // long -- used to create a creature and delete it 166 ms later, which is
+            // indistinguishable from the key doing nothing at all. Measured live 2026-09-02:
+            // `spawn: cancelled c2110 in roster slot 6 after 166 ms (reason=hotkey)`. The
+            // deadline is what ends a spawn that will never arrive; a second press is not.
+            // Shutdown still cancels, because there is no later frame to arrive in.
+            if reason != Reason::Shutdown {
+                possess_log(format_args!(
+                    "possess-hotkey: IGNORED -- a spawn has been coming up for {} ms. A press \
+                     while one is in flight is not a cancel; wait for it, or let \
+                     [spawn].readiness_ms end it",
+                    pending.started.elapsed().as_millis(),
+                ));
+                self.pending = Some(pending);
+                return PossessionOutcome::Accepted;
+            }
+            Self::cancel_pending(pending, reason, false);
             return PossessionOutcome::Accepted;
         }
         // `mut` because the camera restore below mutates the saved state as it unwinds it.
@@ -638,7 +654,7 @@ impl NpcPossessionEngine {
             .request_move(state.last_position, state.creature.yaw());
 
         let movement = crate::config::movement();
-        let stick = game::read_move_stick();
+        let stick = game::read_move_stick(&movement);
         let write = intent::intent(
             state.last_position,
             state.creature.yaw().unwrap_or(0.0),

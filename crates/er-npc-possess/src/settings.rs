@@ -643,6 +643,17 @@ pub(crate) struct MovementSettings {
     /// Move only by the animation's own root motion, never by writing a velocity.
     pub(crate) root_motion_only: bool,
     pub(crate) speed_scale: f32,
+    /// The keyboard fallback for the left stick. `None` is unbound, which is a real setting.
+    ///
+    /// A creature is driven by a STICK -- a direction and a magnitude -- and a keyboard has
+    /// neither, so these four keys are synthesised into one. They exist because the alternative
+    /// measured worse than "no controller, no movement": with no pad attached `XInputGetState`
+    /// returns nothing, the intent is empty every frame, and the creature stands still while
+    /// every attack works, which reads as a broken mod rather than as a missing device.
+    pub(crate) forward: Option<Chord>,
+    pub(crate) back: Option<Chord>,
+    pub(crate) left: Option<Chord>,
+    pub(crate) right: Option<Chord>,
 }
 
 impl Default for MovementSettings {
@@ -652,6 +663,10 @@ impl Default for MovementSettings {
             turn_deadzone_deg: 20.0,
             root_motion_only: true,
             speed_scale: 1.0,
+            forward: default_chord(MOVE_DEFAULT_FORWARD),
+            back: default_chord(MOVE_DEFAULT_BACK),
+            left: default_chord(MOVE_DEFAULT_LEFT),
+            right: default_chord(MOVE_DEFAULT_RIGHT),
         }
     }
 }
@@ -691,6 +706,14 @@ impl MovementSettings {
             rejections,
             |raw| parse_f32(raw).filter(|v| *v > 0.0),
         );
+        for (field, key) in [
+            (&mut self.forward, "forward"),
+            (&mut self.back, "back"),
+            (&mut self.left, "left"),
+            (&mut self.right, "right"),
+        ] {
+            take(field, doc, s, key, rejections, parse_optional_chord);
+        }
     }
 
     pub(crate) fn summary(&self) -> String {
@@ -800,6 +823,13 @@ pub(crate) struct PickerSettings {
 
 /// The shipped keyboard defaults, spelled once so the parser, the config comment and the tests
 /// cannot drift apart.
+/// The keyboard movement fallback, spelled once so the parser, the shipped config comment and the
+/// tests cannot drift apart. WASD because that is what the game itself binds movement to.
+pub(crate) const MOVE_DEFAULT_FORWARD: &str = "W";
+pub(crate) const MOVE_DEFAULT_BACK: &str = "S";
+pub(crate) const MOVE_DEFAULT_LEFT: &str = "A";
+pub(crate) const MOVE_DEFAULT_RIGHT: &str = "D";
+
 pub(crate) const PICKER_DEFAULT_TOGGLE: &str = "F10";
 pub(crate) const PICKER_DEFAULT_UP: &str = "Up";
 pub(crate) const PICKER_DEFAULT_DOWN: &str = "Down";

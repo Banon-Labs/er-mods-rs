@@ -170,6 +170,14 @@ struct State {
     /// resulting complaint has already been made. See [`DEAD_NAV_TICKS`].
     idle_ticks: u32,
     warned_about_dead_nav: bool,
+    /// Where the cursor was when the list last closed, for ANY reason -- chosen, cancelled,
+    /// closed by a possession starting, or disabled mid-list.
+    ///
+    /// Process-lifetime and deliberately not written to disk: it is a convenience about the last
+    /// few seconds, not a preference, and a file would make "where the list opens" survive a game
+    /// restart, which is a different promise from the one being made here. Restarting the game
+    /// puts it back at whatever `[target]` names.
+    last_cursor: Option<usize>,
 }
 
 /// How long an open list may go without a single navigation press before it says so.
@@ -348,7 +356,7 @@ fn drive(
     if !settings.enabled {
         // The latches were still advanced above, so switching the picker back on mid-hold does
         // not read a held key as a press. Nothing else happens.
-        if state.open.take().is_some() {
+        if close_remembering(state) {
             log(format_args!(
                 "picker: disabled while the list was up; list closed"
             ));
@@ -364,7 +372,7 @@ fn drive(
     // Refusing to open here makes them mutually exclusive by construction rather than by a rule
     // in a comment. You pick who to become while you are yourself; to switch, release first.
     if possessing {
-        if state.open.take().is_some() {
+        if close_remembering(state) {
             log(format_args!(
                 "picker: a possession started; list closed so the possess hotkey means RELEASE \
                  again"
@@ -375,15 +383,22 @@ fn drive(
     }
 
     if toggle_pressed {
-        if state.open.take().is_some() {
+        if close_remembering(state) {
             state.view = None;
             log(format_args!("picker: closed without choosing"));
             return false;
         }
         let creatures = catalog::creatures();
-        // Open on whatever is already staged, so re-opening lands where you left off rather than
-        // at the top of the alphabet every time.
-        let start = staged_chr_id.and_then(catalog::index_of).unwrap_or(0);
+        // WHERE IT WAS BEATS WHAT IS STAGED. Re-opening lands exactly where you left the cursor,
+        // including after choosing something -- browsing away from the staged creature and
+        // closing is a position worth keeping, and the staged id is only a starting guess for the
+        // first open of the session. Clamped, because the catalogue could in principle be shorter
+        // than it was (it is generated, and a regenerated table is a different length).
+        let start = state
+            .last_cursor
+            .filter(|cursor| *cursor < creatures.len())
+            .or_else(|| staged_chr_id.and_then(catalog::index_of))
+            .unwrap_or(0);
         state.open = Some(PickerModel::at(start, creatures.len()));
         state.idle_ticks = 0;
         state.warned_about_dead_nav = false;
@@ -458,8 +473,25 @@ pub(crate) fn take_confirm() -> Option<Creature> {
     chosen
 }
 
+/// Close the list, remembering where the cursor was. EVERY close goes through here.
+///
+/// Returns whether anything was open, which is what the callers used to get from `Option::take`.
+/// A close path that reached for `state.open.take()` directly would compile and would silently
+/// forget the position, and that is a defect nobody would report as one -- it just feels like the
+/// list opens in the wrong place sometimes.
+fn close_remembering(state: &mut State) -> bool {
+    match state.open.take() {
+        Some(model) => {
+            state.last_cursor = Some(model.cursor());
+            true
+        }
+        None => false,
+    }
+}
+
 fn take_confirm_from(state: &mut State) -> Option<Creature> {
     let model = state.open.take()?;
+    state.last_cursor = Some(model.cursor());
     state.view = None;
     let chosen = catalog::creatures().get(model.cursor()).copied();
     if chosen.is_none() {
@@ -855,6 +887,34 @@ mod tests {
     }
 
     /// The unbound case: with no toggle bound at all, nothing the player does opens the picker.
+    /// Every close remembers the cursor, and a close with nothing open changes nothing. This is
+    /// the property the four call sites depend on and the one a fifth could silently break.
+    #[test]
+    fn closing_the_list_remembers_where_the_cursor_was() {
+        let mut state = State::default();
+        assert!(!close_remembering(&mut state), "nothing was open");
+        assert_eq!(state.last_cursor, None, "a no-op close invents no position");
+
+        state.open = Some(PickerModel::at(37, 408));
+        assert!(close_remembering(&mut state));
+        assert_eq!(state.last_cursor, Some(37));
+        assert!(state.open.is_none(), "and it really did close");
+
+        // A second close with nothing open must not erase what the first one learned.
+        assert!(!close_remembering(&mut state));
+        assert_eq!(state.last_cursor, Some(37));
+    }
+
+    /// Confirming is a close too, so choosing a creature and re-opening lands on it rather than
+    /// back at the top -- the case a `take()` on the confirm path alone would have missed.
+    #[test]
+    fn confirming_also_remembers_the_position() {
+        let mut state = State::default();
+        state.open = Some(PickerModel::at(12, 408));
+        let _ = take_confirm_from(&mut state);
+        assert_eq!(state.last_cursor, Some(12));
+    }
+
     #[test]
     fn an_unbound_toggle_cannot_open_the_list() {
         let mut rig = Rig::new();
