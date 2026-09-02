@@ -439,10 +439,24 @@ impl Moveset {
     /// by `fire` would miss exactly the one animation this crate already knows lies about its own
     /// name, and miss it silently.
     pub(crate) fn playing(&self, animation: i32) -> Option<&Move> {
+        // THE RUNTIME ID IS RAW AND THIS TABLE'S IS COLLAPSED, so the lookup has to try both.
+        //
+        // `TAE_Callback` hands `CSChrTimeActModule::animQueue[].animId` the id Havok is running,
+        // ungrouped -- and a creature's TimeAct numbers the same animation once per group, as
+        // `<group> * 1000000 + <id>`. `scripts/er-moveset-table-gen.py` collapses that with
+        // `% 1000000` before it writes a row, so a c3700 clip the engine reports as 3009000 is
+        // 9000 in here. Measured on the 2026-09-02 Battlemage run: 3009000 and 3009500 are both
+        // literal raw ids in c3700's own TimeAct, and matching only the raw value would have
+        // missed every one of them.
+        let collapsed = animation.rem_euclid(1_000_000);
         self.moves
             .iter()
-            .find(|m| m.played == animation)
-            .or_else(|| self.find(animation))
+            .find(|m| m.played == animation || m.played == collapsed)
+            .or_else(|| {
+                self.moves
+                    .iter()
+                    .find(|m| m.fire == animation || m.fire == collapsed)
+            })
     }
 
     /// Move an animation out of the offered set and record why.

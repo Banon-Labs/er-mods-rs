@@ -580,10 +580,12 @@ impl Dispatcher {
     /// The window belongs to the move being played, not to the one about to be asked for, which is
     /// why the lookup goes through [`Moveset::playing`] and not [`Moveset::find`].
     pub(crate) fn reading(&self, playing: Option<Playing>) -> Reading {
-        let window = playing
-            .and_then(|state| self.moveset.playing(state.animation))
-            .and_then(Move::chain_from_s);
-        chain::resolve(playing, window)
+        let entry = playing.and_then(|state| self.moveset.playing(state.animation));
+        let playing = playing.map(|state| Playing {
+            is_known_move: entry.is_some(),
+            ..state
+        });
+        chain::resolve(playing, entry.and_then(Move::chain_from_s))
     }
 
     /// Drive one press. The only way in, and the only place the cancel rule is applied.
@@ -1260,6 +1262,8 @@ mod tests {
         Some(Playing {
             animation: 3000,
             elapsed_s: Some(elapsed_s),
+            // Overwritten by `Dispatcher::reading`; the value here is irrelevant.
+            is_known_move: false,
             // c4500's a3000 runs 10.333 s and its window opens at 9.47; long enough that the
             // clip-length bound is not what these cases are measuring.
             length_s: Some(10.333),
@@ -1390,6 +1394,7 @@ mod tests {
             animation: 3034,
             elapsed_s: Some(120.0),
             length_s: Some(600.0),
+            is_known_move: false,
             cancel_allowed: None,
         });
         assert_eq!(

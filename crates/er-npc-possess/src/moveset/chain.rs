@@ -106,7 +106,6 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use crate::moveset::dispatch::Input;
-use crate::moveset::watchdog::NEUTRAL_ANIMATION_CEILING;
 
 /// What the creature says it is doing this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,6 +119,16 @@ pub(crate) struct Playing {
     /// here can hold a press: once the playhead is past the end, the clip is over whatever the
     /// other two sources say.
     pub(crate) length_s: Option<f32>,
+    /// Is the animation being played one of THIS creature's shipped moves?
+    ///
+    /// The positive test, and it replaced "the id is below 3000" on 2026-09-02. A threshold
+    /// cannot work here: the id the engine reports is a raw TimeAct id in a per-creature space
+    /// that the table does not enumerate, and it is routinely five or seven digits. A possessed
+    /// Battlemage idles in 43000 and spawns through 3009000/3009500 -- so a ceiling test called
+    /// it "permanently mid-attack" and refused every press on a creature with thirteen melee
+    /// attacks. Asking whether the id is one this crate could have FIRED cannot be surprised by
+    /// a band nobody has seen.
+    pub(crate) is_known_move: bool,
     /// `CSChrActionRequestModule::taeCancels`, resolved through the engine's own predicate.
     /// `Some(true)` is the game saying a chain is allowed right now. `None` is "did not read",
     /// which is why this is not a `bool`.
@@ -158,8 +167,9 @@ impl Availability {
 pub(crate) enum Source {
     /// The TimeAct queue held nothing driven this frame: the creature is animating nothing.
     NotAnimating,
-    /// A fresh entry, below the attack band -- idle, locomotion or a turn.
-    Neutral,
+    /// A fresh entry the shipped table does not know: an idle loop, locomotion, a hit reaction.
+    /// Whatever it is, this crate did not fire it and does not own it.
+    NotOurMove,
     /// The playhead is at or past the clip's own length.
     ClipFinished,
     /// `CSChrActionRequestModule::taeCancels` answered.
@@ -175,7 +185,7 @@ impl Source {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::NotAnimating => "not-animating",
-            Self::Neutral => "neutral-anim",
+            Self::NotOurMove => "not-our-move",
             Self::ClipFinished => "clip-finished",
             Self::Engine => "engine-taecancels",
             Self::Table => "table-window",
@@ -215,8 +225,11 @@ pub(crate) fn resolve(playing: Option<Playing>, chain_from_s: Option<f32>) -> Re
     let Some(playing) = playing else {
         return read(Availability::Idle, Source::NotAnimating);
     };
-    if playing.animation < NEUTRAL_ANIMATION_CEILING {
-        return read(Availability::Idle, Source::Neutral);
+    if !playing.is_known_move {
+        // Not one of this creature's clips: an idle loop, locomotion, a hit reaction, a gimmick
+        // the world started. None of those is a swing this mod owns, so none of them may hold a
+        // press.
+        return read(Availability::Idle, Source::NotOurMove);
     }
     // The clip is over. Nothing below may hold a press past this, and that is the difference
     // between "wait for this swing to finish" and "wait forever": every other branch here can
@@ -338,6 +351,7 @@ mod tests {
             animation,
             elapsed_s: Some(elapsed_s),
             length_s: Some(9_999.0),
+            is_known_move: animation >= 3000,
             cancel_allowed: None,
         })
     }
@@ -348,6 +362,7 @@ mod tests {
             animation,
             elapsed_s: Some(elapsed_s),
             length_s: Some(9_999.0),
+            is_known_move: animation >= 3000,
             cancel_allowed: Some(allowed),
         })
     }
@@ -434,6 +449,7 @@ mod tests {
                     animation: 3000,
                     elapsed_s: None,
                     length_s: None,
+                    is_known_move: true,
                     cancel_allowed: None,
                 }),
                 Some(0.5)
@@ -477,6 +493,7 @@ mod tests {
                 animation: 3000,
                 elapsed_s: Some(4.0),
                 length_s: Some(3.5),
+                is_known_move: true,
                 cancel_allowed,
             })
         };
@@ -494,6 +511,7 @@ mod tests {
             animation: 3000,
             elapsed_s: Some(1.0),
             length_s: Some(3.5),
+            is_known_move: true,
             cancel_allowed: None,
         });
         let reading = resolve(inside, None);
@@ -506,7 +524,7 @@ mod tests {
     #[test]
     fn every_branch_reports_the_source_that_decided_it() {
         assert_eq!(resolve(None, None).source, Source::NotAnimating);
-        assert_eq!(resolve(playing(0, 0.0), None).source, Source::Neutral);
+        assert_eq!(resolve(playing(0, 0.0), None).source, Source::NotOurMove);
         assert_eq!(resolve(asked(3000, 0.1, true), None).source, Source::Engine);
         assert_eq!(resolve(playing(3000, 1.0), Some(0.5)).source, Source::Table);
         assert_eq!(resolve(playing(3000, 1.0), None).source, Source::Unmeasured);

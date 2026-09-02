@@ -34,10 +34,6 @@
 // Pure state machine over observations; ungated so `cargo test` proves it on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-/// Below this, an animation id is idle, locomotion or a turn -- i.e. the creature is available for
-/// input again. The attack band starts at 3000 and the generator ships nothing below it.
-pub(crate) const NEUTRAL_ANIMATION_CEILING: i32 = 3000;
-
 /// How far the playhead must move between two frames to count as advancing.
 ///
 /// A sixtieth of a second is one frame at 60 Hz; a tenth of that is under any real advance and
@@ -50,6 +46,14 @@ pub(crate) struct Sample {
     /// The animation the TimeAct queue says is playing, from
     /// `CSChrTimeActModule::anim_queue[read_idx].anim_id`.
     pub(crate) animation: i32,
+    /// Is the playing animation one of THIS creature's shipped moves?
+    ///
+    /// Resolved by the dispatcher against the table rather than from the id's magnitude. A
+    /// possessed Battlemage idles in animation 43000 and spawns through 3009000/3009500; the old
+    /// `animation < 3000` test read all three as "attacking", so the watchdog armed on an idle
+    /// loop and the chain gate refused every press. The ids the engine reports are raw TimeAct
+    /// ids in a per-creature space, and no threshold over them separates a swing from a stance.
+    pub(crate) is_known_move: bool,
     /// `animQueue[readIdx].localTime` -- how far into the clip the playhead is.
     ///
     /// THIS IS THE LIVENESS TEST, and it replaced root motion on 2026-09-02 because root motion
@@ -76,8 +80,12 @@ pub(crate) struct Sample {
 }
 
 impl Sample {
+    /// Is the creature doing something this crate fired?
+    ///
+    /// The positive test. It used to be `animation < NEUTRAL_ANIMATION_CEILING`, and that
+    /// threshold cannot express the question -- see [`Sample::is_known_move`].
     const fn is_neutral(self) -> bool {
-        self.animation < NEUTRAL_ANIMATION_CEILING
+        !self.is_known_move
     }
 
     /// Did the playhead move since `previous`? An unreadable clock counts as advancing.
@@ -206,6 +214,7 @@ mod tests {
         Sample {
             animation: 3005,
             local_time: Some(1.0),
+            is_known_move: true,
             input_consumed: false,
             now_ms,
         }
@@ -322,6 +331,7 @@ mod tests {
             let sample = Sample {
                 animation: 3005,
                 local_time: Some(step as f32 * 0.016),
+                is_known_move: true,
                 input_consumed: false,
                 now_ms: step * 1000,
             };
@@ -344,6 +354,7 @@ mod tests {
             let sample = Sample {
                 animation: 3005,
                 local_time: None,
+                is_known_move: true,
                 input_consumed: false,
                 now_ms: step * THRESHOLD_MS,
             };
@@ -357,6 +368,7 @@ mod tests {
         assert_eq!(dog.observe(stuck(0)), Verdict::Fine);
         let idle = Sample {
             animation: 0,
+            is_known_move: false,
             ..stuck(100)
         };
         assert_eq!(dog.observe(idle), Verdict::ReturnedToNeutral);
@@ -373,8 +385,12 @@ mod tests {
         // Never armed: the creature is in a hit reaction the world started.
         let mut dog = Watchdog::new(THRESHOLD_MS, IDLE);
         for step in 0..20 {
+            // A hit reaction is not in the shipped table, so the positive test already says it
+            // is not ours -- which is a stronger statement than the old "7010 is above 3000, but
+            // we never armed" and does not depend on the arming state at all.
             let reacting = Sample {
                 animation: 7010,
+                is_known_move: false,
                 ..stuck(step * 1000)
             };
             assert_eq!(
@@ -385,23 +401,68 @@ mod tests {
         }
     }
 
+    /// The ids that broke the threshold, pinned so no future ceiling can reintroduce it.
+    ///
+    /// Measured on the live 2026-09-02 Battlemage run: a possessed c3704 idles in a 3-second
+    /// LOOP whose id is 43000 and spawns through 3009000 and 3009500. Its shipped moves top out
+    /// at 6023. Every one of those three is above any threshold that would still call 3000 an
+    /// attack, which is why the test is membership and not magnitude.
     #[test]
-    fn the_neutral_ceiling_matches_the_attack_band_the_generator_ships() {
-        // The generator's ATTACK_BAND starts at 3000; anything the table offers is at or above it,
-        // so anything below is by construction not one of ours.
-        assert_eq!(NEUTRAL_ANIMATION_CEILING, 3000);
+    fn the_battlemage_ids_that_broke_the_ceiling_are_not_mistaken_for_this_creatures_moves() {
+        let moveset = crate::moveset::table::lookup(3704).expect("c3704 ships a moveset");
+        for observed in [43000, 3009000, 3009500] {
+            assert!(
+                moveset.playing(observed).is_none(),
+                "c3704 animation {observed} was taken for one of its own moves; it idles and \
+                 spawns in these and every press would be refused"
+            );
+        }
+        assert!(
+            moveset.playing(3000).is_some(),
+            "...but its actual first attack must still be recognised"
+        );
+    }
+
+    /// The runtime id is raw and the table's is collapsed, so the same clip in a different
+    /// TimeAct group has to resolve to the same move.
+    #[test]
+    fn a_grouped_runtime_id_finds_the_move_it_is_a_copy_of() {
+        let moveset = crate::moveset::table::lookup(3704).expect("c3704 ships a moveset");
+        for group in 0..4 {
+            let raw = group * 1_000_000 + 3000;
+            assert_eq!(
+                moveset.playing(raw).map(|entry| entry.fire),
+                Some(3000),
+                "group {group} spelling of animation 3000 did not resolve"
+            );
+        }
+    }
+
+    /// Every move this crate can fire must be recognisable when it comes back from the engine --
+    /// under its own id and under any group spelling of it. A move that fires and is then not
+    /// recognised is one the gate would let the next press cancel.
+    #[test]
+    fn every_shipped_move_is_recognised_when_it_comes_back_from_the_engine() {
+        let mut checked = 0;
         for chr in crate::moveset::table::chr_ids() {
             let Some(moveset) = crate::moveset::table::lookup(chr) else {
                 continue;
             };
             for entry in &moveset.moves {
                 assert!(
-                    entry.fire >= NEUTRAL_ANIMATION_CEILING,
-                    "c{chr} ships {} below the neutral ceiling, so firing it would look neutral \
-                     and the watchdog would never arm on it",
-                    entry.fire
+                    moveset.playing(entry.played).is_some(),
+                    "c{chr} fires {} which plays {} and would not be recognised",
+                    entry.fire,
+                    entry.played
                 );
+                assert!(
+                    moveset.playing(3_000_000 + entry.played).is_some(),
+                    "c{chr} would not recognise the group-3 spelling of {}",
+                    entry.played
+                );
+                checked += 1;
             }
         }
+        assert!(checked > 6000, "only {checked} moves checked");
     }
 }

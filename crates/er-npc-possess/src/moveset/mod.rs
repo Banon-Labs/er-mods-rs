@@ -240,12 +240,15 @@ mod tests {
         }
     }
 
-    /// The generator's neutral boundary and the watchdog's must be the same number, or the
-    /// watchdog either never arms or never disarms.
+    /// The generator's attack band is still the band the table is built from.
+    ///
+    /// It used to also assert a runtime NEUTRAL_ANIMATION_CEILING equal to it. That constant is
+    /// gone: the band describes what the GENERATOR scans offline, and it was never a safe
+    /// description of what the ENGINE reports at runtime -- a possessed Battlemage idles in
+    /// 43000. Nothing at runtime compares an id against a threshold any more.
     #[test]
-    fn the_generator_and_the_watchdog_agree_on_where_the_attack_band_starts() {
+    fn the_generator_still_builds_the_table_from_the_attack_band() {
         let generator = include_str!("../../../../scripts/er-moveset-table-gen.py");
         assert!(generator.contains("ATTACK_BAND = (3000, 3999)"));
-        assert_eq!(super::watchdog::NEUTRAL_ANIMATION_CEILING, 3000);
     }
 }

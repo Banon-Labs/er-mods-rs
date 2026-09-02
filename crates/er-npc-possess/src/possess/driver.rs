@@ -26,7 +26,7 @@ use crate::possess::game::{self, AnimFrame, Chr};
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
 use crate::possess::{body_size, intent, layout};
-use crate::settings::TargetMode;
+use crate::settings::{Bucket, TargetMode};
 use crate::spawn::game as spawn_game;
 use crate::spawn::placement;
 use crate::spawn::readiness::{Gate, Poll, Readiness};
@@ -172,6 +172,8 @@ struct Possessing {
     reported_dead_input: [bool; 4],
     /// The last availability state reported, so the log carries one line per CHANGE.
     reported_availability: Option<(Availability, Source)>,
+    /// Has the "a movement move fired" note been said this possession?
+    reported_movement_fire: bool,
     /// Has the "your press is waiting rather than cancelling" line been said this possession?
     ///
     /// Once, not per press, for the same reason as [`Self::reported_dead_input`]: the log opens
@@ -602,6 +604,8 @@ impl NpcPossessionEngine {
             animation: frame.animation,
             elapsed_s: frame.local_time,
             length_s: frame.anim_length,
+            // Filled in by `Dispatcher::reading`, which owns the table this is asked against.
+            is_known_move: false,
             cancel_allowed: state.creature.attack_cancel_allowed(),
         });
         let reading = dispatcher.reading(playing);
@@ -618,6 +622,10 @@ impl NpcPossessionEngine {
             let sample = Sample {
                 animation: frame.map_or(IDLE_ANIMATION, |frame| frame.animation),
                 local_time: frame.and_then(|frame| frame.local_time),
+                // The same membership question the chain gate asked, and the same answer -- both
+                // layers have to agree on whether the creature is doing something of OURS, or
+                // the watchdog arms on an idle loop while the gate calls it idle.
+                is_known_move: reading.source != Source::NotOurMove,
                 input_consumed: consumed,
                 now_ms: state.elapsed_ms,
             };
@@ -691,7 +699,12 @@ impl NpcPossessionEngine {
         match dispatcher.release(context, availability) {
             Released::Nothing => {}
             Released::Fire(_, chosen) => {
-                Self::fire_chosen(state.creature, &mut state.watchdog, chosen);
+                Self::fire_chosen(
+                    state.creature,
+                    &mut state.watchdog,
+                    &mut state.reported_movement_fire,
+                    chosen,
+                );
                 // The frame's one request slot is now spent on an attack that has just started,
                 // so anything ALSO pressed this frame is by definition arriving mid-animation.
                 // Saying so rather than returning is what keeps it: it buffers instead of being
@@ -720,7 +733,12 @@ impl NpcPossessionEngine {
             return;
         };
         match dispatcher.press(input, context, availability) {
-            Press::Fire(chosen) => Self::fire_chosen(state.creature, &mut state.watchdog, chosen),
+            Press::Fire(chosen) => Self::fire_chosen(
+                state.creature,
+                &mut state.watchdog,
+                &mut state.reported_movement_fire,
+                chosen,
+            ),
             Press::Waiting(held) => {
                 // Once per possession, not per press. The point is to tell a player who expected
                 // a cancel that the press was KEPT rather than eaten; repeating it sixty times a
@@ -797,9 +815,29 @@ impl NpcPossessionEngine {
     ///
     /// Takes the three fields it touches rather than `&mut Possessing`, because every caller is
     /// holding a mutable borrow of the sibling `moveset` field while it calls this.
-    fn fire_chosen(creature: Chr, watchdog: &mut Watchdog, chosen: table::Move) {
-        if Self::fire(creature, chosen) {
-            watchdog.armed_with(chosen.fire);
+    fn fire_chosen(
+        creature: Chr,
+        watchdog: &mut Watchdog,
+        reported_movement_fire: &mut bool,
+        chosen: table::Move,
+    ) {
+        if !Self::fire(creature, chosen) {
+            return;
+        }
+        watchdog.armed_with(chosen.fire);
+        // A MOVEMENT-BUCKET MOVE THAT FIRES AND GOES NOWHERE LOOKS LIKE A DEAD BUTTON, and it is
+        // a different fault from the one the availability gate can cause. `l2` is the creature's
+        // own dodges and steps, and while the locomotion layer cannot translate the body, those
+        // clips play in place: the press WAS honoured and the animation IS running. Said once,
+        // so the two failures are not mistaken for each other in a log.
+        if chosen.bucket == Bucket::Movement && !*reported_movement_fire {
+            *reported_movement_fire = true;
+            possess_log(format_args!(
+                "moveset: fired movement animation {} -- if the creature animated but did not \
+                 travel, that is the locomotion layer and not this button being dead; the press \
+                 was honoured and the clip is running",
+                chosen.fire,
+            ));
         }
     }
 
@@ -1466,6 +1504,7 @@ impl NpcPossessionEngine {
             chr_id,
             reported_dead_input: [false; 4],
             reported_availability: None,
+            reported_movement_fire: false,
             reported_buffered_press: false,
             reported_one_page: [false; 2],
         };
