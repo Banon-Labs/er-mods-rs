@@ -28,6 +28,7 @@
 
 // The config, settings, engine and edge-state modules are ungated on purpose: they are pure logic,
 // so their tests run on the host where the windows-only game bindings do not exist.
+mod camera;
 mod config;
 mod engine;
 mod input;

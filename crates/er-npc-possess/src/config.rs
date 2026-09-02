@@ -32,7 +32,10 @@
 use std::{
     fs,
     path::PathBuf,
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{
+        Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use er_hotkey_config::{
@@ -44,7 +47,7 @@ use er_hotkey_config::{
 use crate::{
     engine::PossessionRequest,
     log::possess_log,
-    settings::{ChrOverride, MovementSettings, Rejections, Tables, TargetSettings},
+    settings::{CameraSettings, ChrOverride, MovementSettings, Rejections, Tables, TargetSettings},
     toml::Document,
 };
 
@@ -215,9 +218,38 @@ root_motion_only = true
 # twitchier and stops sooner.
 speed_scale = 1.0
 
-# RESERVED. Per-character overrides, one table per chr id, added as you need them. The DLL reads
-# whatever ids this file happens to name -- there is no fixed list -- so a chr nobody has written
-# down yet works the moment you add its table.
+# How the camera frames the creature you are wearing. LIVE -- save the file and the framing moves
+# about a second later, mid-possession, without letting go.
+#
+# Vanilla's follow camera is tuned for a 1.8 m Tarnished, so wearing an Ancient Dragon puts the
+# camera inside the model. The mod reads the creature's OWN physics capsule height and writes
+# three numbers -- distance, pivot height and how far the camera may pitch down -- into a
+# LockCamParam row nothing else in the game references, for the length of the possession. Every
+# byte goes back on release. At player size the numbers it derives ARE the vanilla ones, so
+# possessing something human-sized looks like nothing happened.
+#
+# er-npc-possess.derived.toml records what it read, what it wrote, and -- if it did not -- why.
+[camera]
+# The off switch. false frames every creature the way your own body would be framed.
+enabled = true
+# Which LockCamParam row is patched in memory. 1000 is one of 73 rows the shipped regulation never
+# references. If you run a regulation mod that DOES use it, the mod refuses rather than stealing it
+# and says so in the log; pick another free row here. It must already exist as a row -- an id the
+# table does not contain makes the engine's camera update do nothing at all.
+param_row = 1000
+# How hard the camera backs off as the creature gets bigger: distance = 3.8 * (height / 1.5) ^ this.
+# 0 pins it at your own camera's distance whatever you are wearing; 1 scales it straight with
+# height, which puts a Fire Giant's camera 73 m out. 0..2.
+distance_exponent = 0.7
+# Metres. A ceiling on the formula above -- but NOT on the clearance the camera keeps over the
+# creature's own collision radius, because a camera far away is a bad shot and a camera inside the
+# model is no shot at all.
+distance_max = 40.0
+
+# Per-character overrides, one table per chr id, added as you need them. The DLL reads whatever ids
+# this file happens to name -- there is no fixed list -- so a chr nobody has written down yet works
+# the moment you add its table. camera_distance_scale, pin, unusable and usable are LIVE;
+# turn_rate_deg_per_sec and speed_scale are RESERVED.
 #
 # Left commented out on purpose: the ids below are an EXAMPLE of the shape, not a tuned profile,
 # and a shipped default that pins real animation ids for a character nobody has measured would be
@@ -225,6 +257,9 @@ speed_scale = 1.0
 #
 # [chr.c4500]
 # turn_rate_deg_per_sec = 45.0
+# # LIVE. Multiplies [camera].distance_exponent's answer for this character only. Above 1 pulls
+# # the camera back -- quadrupeds and anything wider than it is tall usually want it -- below 1
+# # brings it in. It cannot push the camera inside the creature's own collision radius.
 # camera_distance_scale = 2.4
 # speed_scale = 1.15
 # # force one input onto one animation id
@@ -511,6 +546,9 @@ struct ConfigState {
 
 static CONFIG: OnceLock<Mutex<ConfigState>> = OnceLock::new();
 
+/// Incremented by [`poll_reload`] every time a reload moved something. See [`generation`].
+static GENERATION: AtomicUsize = AtomicUsize::new(0);
+
 /// CWD-relative, which is the game directory: ME3 launches `eldenring.exe` from it, so this lands
 /// beside `eldenring.exe` next to every other er-* DLL's config.
 fn config_path() -> PathBuf {
@@ -595,6 +633,21 @@ pub(crate) fn movement() -> MovementSettings {
     state().config.tables.movement
 }
 
+/// The `[camera]` table IN FORCE.
+pub(crate) fn camera() -> CameraSettings {
+    state().config.tables.camera
+}
+
+/// How many reloads have MOVED something, since the process started.
+///
+/// The camera layer watches this rather than re-reading its two settings sixty times a second:
+/// `[camera]` costs a lock and the per-character `camera_distance_scale` costs a `format!` and a
+/// clone, and neither changes between edits to the file. One relaxed atomic load per frame buys
+/// the same liveness for nothing. See `camera::Session::refresh`.
+pub(crate) fn generation() -> usize {
+    GENERATION.load(Ordering::Relaxed)
+}
+
 /// Re-read the file if it changed, and report what moved.
 ///
 /// `None` when nothing happened, which is the overwhelmingly common case and the one that must
@@ -605,7 +658,13 @@ pub(crate) fn poll_reload() -> Option<ConfigUpdate> {
     match hot.poll()? {
         FileChange::Text(text) => {
             let update = config.apply(&text);
-            (!update.is_quiet()).then_some(update)
+            if update.is_quiet() {
+                return None;
+            }
+            // Bumped only when something ACTUALLY moved, which is what makes this usable as a
+            // "are my settings stale" test rather than a "was the file touched" one.
+            GENERATION.fetch_add(1, Ordering::Relaxed);
+            Some(update)
         }
         FileChange::Missing => {
             // Keep the settings that were working. A deleted config is not an instruction to

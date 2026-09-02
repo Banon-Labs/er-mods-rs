@@ -30,6 +30,7 @@ pub(crate) const TARGET_SECTION: &str = "target";
 pub(crate) const MAPPING_SECTION: &str = "mapping";
 pub(crate) const BUTTONS_SECTION: &str = "buttons";
 pub(crate) const MOVEMENT_SECTION: &str = "movement";
+pub(crate) const CAMERA_SECTION: &str = "camera";
 /// `[chr.c4500]`, `[chr.c2130]`, ... -- open-ended, one per character id.
 pub(crate) const CHR_SECTION_PREFIX: &str = "chr.";
 
@@ -516,6 +517,81 @@ impl MovementSettings {
     }
 }
 
+/// `[camera]`. Live -- but only read at possession START, because the row patch and the
+/// `ChrExFollowCam+0x468` write both happen once and are undone once.
+///
+/// See [`crate::camera`] for what each of these actually moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CameraSettings {
+    /// The off switch. `false` leaves the follow camera exactly as vanilla frames it, which on
+    /// anything large means inside the model.
+    pub(crate) enabled: bool,
+    /// Which `LockCamParam` row to patch in memory. It must exist and nothing in the regulation
+    /// may reference it; both are checked against the LIVE param tables at possession start.
+    pub(crate) param_row: u32,
+    /// How hard the camera distance follows size: `3.8 * (H / 1.5) ^ exponent`. `0.0` pins the
+    /// distance at the player's own, `1.0` scales it linearly with height (which puts a Fire
+    /// Giant's camera 73 m out).
+    pub(crate) distance_exponent: f32,
+    /// Ceiling on the size law, in metres. The clearance floor over the creature's own physics
+    /// radius still wins over this -- see [`crate::camera::geometry`].
+    pub(crate) distance_max: f32,
+}
+
+impl Default for CameraSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // 1000. Free in the shipped regulation -- 73 of the 166 `LockCamParam` rows are, and
+            // all of 1000-1099 are among them -- and re-checked live so a regulation mod that
+            // uses it gets a refusal rather than a stolen camera.
+            param_row: 1000,
+            distance_exponent: 0.7,
+            distance_max: 40.0,
+        }
+    }
+}
+
+impl CameraSettings {
+    fn apply(&mut self, doc: &Document, rejections: &mut Rejections) {
+        let s = CAMERA_SECTION;
+        take(&mut self.enabled, doc, s, "enabled", rejections, parse_bool);
+        take(
+            &mut self.param_row,
+            doc,
+            s,
+            "param_row",
+            rejections,
+            |raw| parse_i32(raw).and_then(|v| u32::try_from(v).ok()),
+        );
+        take(
+            &mut self.distance_exponent,
+            doc,
+            s,
+            "distance_exponent",
+            rejections,
+            // Negative would make bigger creatures CLOSER, which is the one shape this setting
+            // must not be able to express.
+            |raw| parse_f32(raw).filter(|v| (0.0..=2.0).contains(v)),
+        );
+        take(
+            &mut self.distance_max,
+            doc,
+            s,
+            "distance_max",
+            rejections,
+            |raw| parse_f32(raw).filter(|v| *v > 0.0),
+        );
+    }
+
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "enabled={} param_row={} distance_exponent={} distance_max={}",
+            self.enabled, self.param_row, self.distance_exponent, self.distance_max
+        )
+    }
+}
+
 /// One `[chr.cXXXX]` table. Live, and open-ended: the parser reports the ids the FILE contains
 /// rather than looking up a list this build was compiled knowing.
 ///
@@ -595,6 +671,7 @@ pub(crate) struct Tables {
     pub(crate) mapping: MappingSettings,
     pub(crate) buttons: ButtonSettings,
     pub(crate) movement: MovementSettings,
+    pub(crate) camera: CameraSettings,
     pub(crate) chr_overrides: Vec<ChrOverride>,
 }
 
@@ -605,6 +682,7 @@ impl Tables {
         self.mapping.apply(doc, rejections);
         self.buttons.apply(doc, rejections);
         self.movement.apply(doc, rejections);
+        self.camera.apply(doc, rejections);
 
         // REPLACED, not merged. A `[chr.cXXXX]` table the player DELETED has to stop applying,
         // and merging into what is already in force would make deletion a no-op -- the one edit
@@ -619,10 +697,11 @@ impl Tables {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "[mapping] {} | [buttons] {} | [movement] {} | chr_overrides={}",
+            "[mapping] {} | [buttons] {} | [movement] {} | [camera] {} | chr_overrides={}",
             self.mapping.summary(),
             self.buttons.summary(),
             self.movement.summary(),
+            self.camera.summary(),
             self.chr_overrides.len()
         )
     }
@@ -677,6 +756,12 @@ heading_converge = false
 turn_deadzone_deg = 5.0
 root_motion_only = false
 speed_scale = 1.25
+
+[camera]
+enabled = false
+param_row = 1099
+distance_exponent = 1.0
+distance_max = 25.0
 "#,
         );
         assert!(rejections.is_empty(), "{}", rejections.summary());
@@ -692,6 +777,40 @@ speed_scale = 1.25
         assert_eq!(tables.buttons.l2, Bucket::Ranged);
         assert!(!tables.movement.heading_converge);
         assert_eq!(tables.movement.speed_scale, 1.25);
+        assert!(!tables.camera.enabled);
+        assert_eq!(tables.camera.param_row, 1099);
+        assert_eq!(tables.camera.distance_exponent, 1.0);
+        assert_eq!(tables.camera.distance_max, 25.0);
+    }
+
+    /// `[camera]` values that would break the size law are rejected rather than taken.
+    ///
+    /// A negative exponent would make a dragon's camera CLOSER than a rat's, and a negative row id
+    /// cannot be a param row at all -- both are the kind of value that produces a camera nobody
+    /// can explain, so both keep the working value and name themselves.
+    #[test]
+    fn the_camera_table_refuses_values_that_invert_the_size_law() {
+        let (tables, _, rejections) =
+            read("[camera]\nparam_row = -3\ndistance_exponent = -1.0\ndistance_max = 0\n");
+        assert_eq!(tables.camera, CameraSettings::default());
+        let summary = rejections.summary();
+        assert!(summary.contains("camera.param_row=\"-3\""), "{summary}");
+        assert!(
+            summary.contains("camera.distance_exponent=\"-1.0\""),
+            "{summary}"
+        );
+        assert!(summary.contains("camera.distance_max=\"0\""), "{summary}");
+    }
+
+    /// The shipped default is the row this crate proved free offline, and the exponent that keeps
+    /// the biggest shipped creature inside the ceiling.
+    #[test]
+    fn the_camera_defaults_are_the_row_and_exponent_the_offline_proof_picked() {
+        let camera = CameraSettings::default();
+        assert!(camera.enabled);
+        assert_eq!(camera.param_row, 1000);
+        assert_eq!(camera.distance_exponent, 0.7);
+        assert_eq!(camera.distance_max, 40.0);
     }
 
     /// THE RULE. Junk keeps the value that was working and names itself, so the player can find
@@ -836,6 +955,9 @@ speed_scale = 0.5
             "turn_deadzone_deg=",
             "root_motion_only=",
             "speed_scale=",
+            "param_row=",
+            "distance_exponent=",
+            "distance_max=",
             "chr_overrides=",
         ] {
             assert!(summary.contains(field), "{field} missing from {summary}");

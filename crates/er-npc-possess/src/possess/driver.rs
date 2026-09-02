@@ -9,6 +9,7 @@
 
 use er_game_base::game_build::{describe_build, game_file_version};
 
+use crate::camera;
 use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
 use crate::input::FaceEdges;
 use crate::log::possess_log;
@@ -64,6 +65,9 @@ struct Possessing {
     moveset: Option<Dispatcher>,
     /// Rising-edge detector for the four face inputs.
     face: FaceEdges,
+    /// THE CAMERA, sized to this creature. Present even when nothing was adapted, because it also
+    /// carries the reason -- see [`crate::camera`].
+    camera: camera::Session,
     watchdog: Watchdog,
     /// Milliseconds since the possession started. The clock the combo window and the watchdog
     /// both measure against.
@@ -137,7 +141,7 @@ impl NpcPossessionEngine {
 
     /// Run the release, in order, whatever fails. See [`teardown`].
     fn release_with(&mut self, reason: Reason) -> PossessionOutcome {
-        let Some(state) = self.active.take() else {
+        let Some(mut state) = self.active.take() else {
             // Releasing when nothing is possessed must be safe and quiet: the shutdown path calls
             // it unconditionally, and so does the state machine after a refusal.
             return PossessionOutcome::Accepted;
@@ -152,6 +156,7 @@ impl NpcPossessionEngine {
             // machine enforces rather than a comment.
             Step::StopColocating => true,
             Step::MovePlayer => state.player.request_move(release_point, None),
+            Step::RestoreCameraSize => state.camera.restore(),
             Step::ClearCameraOverride => game::set_camera_override(None),
             Step::ClearManipulatorOverride => {
                 state.creature.clear_manipulator_override(thunk_address)
@@ -258,7 +263,7 @@ impl NpcPossessionEngine {
                         crate::config::DERIVED_CONFIG_FILE_NAME,
                         state.chr_id,
                     ));
-                    Self::write_derived(state.chr_id, dispatcher);
+                    Self::write_derived(state.chr_id, &state.camera, Some(dispatcher));
                     return;
                 }
             }
@@ -354,8 +359,24 @@ impl NpcPossessionEngine {
     /// Best-effort by design: the game directory can be read-only, and a possession that works is
     /// worth more than a report about it. A failed write is silent because the only thing lost is
     /// a diagnostic, and a log line about failing to write a log-adjacent file is noise.
-    fn write_derived(chr_id: u32, dispatcher: &Dispatcher) {
-        let text = derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary());
+    ///
+    /// The camera block is appended rather than interleaved so the two layers own separate halves
+    /// of one file; `camera` is taken as a plain reference rather than reached through `state`
+    /// because the moveset call site is holding a mutable borrow of a sibling field.
+    fn write_derived(chr_id: u32, camera: &camera::Session, dispatcher: Option<&Dispatcher>) {
+        let mut text = match dispatcher {
+            Some(dispatcher) => {
+                derived::render(chr_id, dispatcher.moveset(), &dispatcher.summary())
+            }
+            // A creature with no shipped moveset still gets a file, because it still gets a
+            // camera. `render` already has a block for a moveset that is empty.
+            None => derived::render(
+                chr_id,
+                &moveset_table::Moveset::default(),
+                "no shipped moveset",
+            ),
+        };
+        text.push_str(&camera.derived_block(chr_id));
         let _ = std::fs::write(crate::config::DERIVED_CONFIG_FILE_NAME, text);
     }
 
@@ -411,6 +432,18 @@ impl NpcPossessionEngine {
         if !game::camera_override_is(state.creature) {
             game::set_camera_override(Some(state.creature));
         }
+        // ...and the same for the camera's SIZE. Nothing in the game writes
+        // `ChrExFollowCam+0x468`, but the constructor sets it to -1, so a camera rebuilt by a warp
+        // or a map load mid-possession would quietly go back to framing a Tarnished.
+        //
+        // `refresh` first, because it may reinstall the whole patch: `[camera]` is LIVE, so a
+        // saved edit re-derives the row and re-points the override the same way a fresh possession
+        // would. It costs one relaxed atomic load on the frames nothing has been edited.
+        if state.camera.refresh() {
+            possess_log(format_args!("{}", state.camera.log_line()));
+            Self::write_derived(state.chr_id, &state.camera, state.moveset.as_ref());
+        }
+        state.camera.reassert();
 
         // Co-locate: the player's real body follows the creature, which is what keeps the net
         // position, the compass and the release point all correct with one mechanism.
@@ -483,6 +516,12 @@ impl PossessionEngine for NpcPossessionEngine {
             ));
         }
         let chr_id = creature.npc_param_id().unwrap_or(0);
+        // THE CAMERA, last of the installs and after everything that can still refuse -- so there
+        // is nothing to roll back if it fails, and nothing left behind if it succeeds and a later
+        // step does not. `Session::begin` never panics and answers with a reason rather than an
+        // error; see [`crate::camera`].
+        let camera = camera::Session::begin(creature.address(), chr_id);
+        possess_log(format_args!("{}", camera.log_line()));
         let moveset = Self::build_moveset(chr_id, request);
         let state = Possessing {
             creature,
@@ -494,6 +533,7 @@ impl PossessionEngine for NpcPossessionEngine {
             last_grounded: creature.last_grounded_position(),
             last_on_ground: creature.standing_on_solid_ground().unwrap_or(false),
             frames: 0,
+            camera,
             watchdog: Watchdog::new(
                 // Seconds in the file, milliseconds in the engine. Clamped rather than cast bare:
                 // a config value large enough to overflow would wrap to a tiny threshold and force
@@ -509,13 +549,13 @@ impl PossessionEngine for NpcPossessionEngine {
             reported_dead_input: [false; 4],
             fired_last_frame: false,
         };
+        Self::write_derived(chr_id, &state.camera, state.moveset.as_ref());
         match state.moveset.as_ref() {
             Some(dispatcher) => {
                 possess_log(format_args!(
                     "moveset: c{chr_id:04} {}",
                     dispatcher.summary()
                 ));
-                Self::write_derived(chr_id, dispatcher);
             }
             None => possess_log(format_args!(
                 "moveset: c{chr_id:04} is not in the shipped table, so this character has no                  attacks. That is expected for a variant that owns a model but no animations of                  its own -- 163 of the 408 the offline sweep looked at are like that. Movement,                  camera and release all still work."

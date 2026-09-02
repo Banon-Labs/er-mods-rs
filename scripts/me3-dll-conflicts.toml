@@ -414,10 +414,24 @@ product's single MinHook instance owns the prologue and the handlers chain; see 
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
 "er-npc-possess" = """Co-loadable with every other shell here, because it installs NO DETOUR AT ALL. \
-It claims no prologue, resolves no game address, patches no param row (which is what breaks \
-Seamless invasions), runs no D3D12/Present or overlay hook, and writes no game memory. Its whole \
-game-side footprint is one recurring `FrameBegin` task that calls `GetAsyncKeyState` and \
-`XInputGetState` and writes a log line.
+It claims no prologue and runs no D3D12/Present or overlay hook. It resolves exactly ONE game \
+address, `PlayAnimationByBehaviorName`, which the moveset layer needs for the 2,252 `W_Step` dodges \
+the `W_Event%04d` field write cannot spell; that goes through `game_rva_named` against the verified \
+1.16.2 -> 1.17 pair, so an unrecognised build goes quiet rather than jumping into whatever now \
+occupies those bytes. Everything else it does to the game is struct-field writes on two `ChrIns`, \
+made only while something is possessed and undone by `possess::teardown` on release, death, \
+despawn and `DLL_PROCESS_DETACH`.
+
+THE ONE PARAM ROW, AND WHY IT IS NOT THE KIND OF PARAM EDIT THAT BREAKS SEAMLESS. The camera layer \
+patches ONE `LockCamParam` row IN MEMORY for the length of a single possession -- three floats -- \
+and writes the row's original bytes back on release. `regulation.bin` on disk is never opened, so \
+this is not the file-level regulation edit that makes Seamless refuse a session. The row is chosen \
+by `[camera].param_row` (1000 by default, one of the 73 rows the shipped regulation never \
+references) and is re-checked at every possession against the LIVE `NpcParam.lockCameraParamId` and \
+`RideParam.rideCamParamId` tables, so a player running a regulation mod that DOES use it gets a \
+refusal naming the row rather than a stolen camera. It is still a shared write: a second mod \
+patching the same row while a possession is in flight would fight it, which is exactly what the \
+setting exists to resolve.
 
 THE ONE THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
 DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \

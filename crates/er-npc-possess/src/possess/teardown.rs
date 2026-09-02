@@ -5,12 +5,16 @@
 //!
 //! Release runs down three different paths -- the hotkey, the possessed creature dying, and
 //! `DLL_PROCESS_DETACH` -- and each one is a place where somebody can write the steps in a
-//! plausible order that is subtly the wrong one. Three of the six steps have a consequence if they
-//! move:
+//! plausible order that is subtly the wrong one. Four of the seven steps have a consequence if
+//! they move:
 //!
 //! * **The camera must be cleared AFTER the player has been moved.** Clearing first gives a
 //!   visible frame of the old body standing wherever it was; moving first means the camera snaps
 //!   to a player already standing in the right place.
+//! * **The camera's SIZE must go back before the camera does.** While `WorldChrManDbg+0xb8` still
+//!   names the creature, `ChrExFollowCam+0x468` still names the patched `LockCamParam` row -- so
+//!   undoing them in this order shows at most one frame of the creature framed for a player, and
+//!   the other order shows one frame of the player framed for a dragon.
 //! * **`ChrCtrl+0x3b0` must be cleared BEFORE anything can tear the character down.**
 //!   `ChrCtrl::Unref` compares that slot against zero and **DLPanics** when it is non-null. This
 //!   is the step that must run even when every step before it failed.
@@ -45,20 +49,29 @@ pub(crate) enum Step {
     /// co-location already left them exactly there; it matters when the creature died airborne and
     /// the point resolves to its last grounded position instead.
     MovePlayer = 2,
+    /// Put `ChrExFollowCam+0x468` and the patched `LockCamParam` row back exactly as they were.
+    ///
+    /// BEFORE the camera is handed back, for two reasons. The override is still pointing at the
+    /// patched row at this moment, so undoing them in this order costs at most one frame of the
+    /// creature framed with the player's parameters rather than one frame of the PLAYER framed
+    /// with a dragon's. And the row is shared game state that anything could read, unlike
+    /// `+0x468`, which nothing in the game ever touches -- so the shared thing goes back first.
+    RestoreCameraSize = 3,
     /// Clear `WorldChrManDbg+0xb8`. Camera and lock-on return to the real player.
-    ClearCameraOverride = 3,
+    ClearCameraOverride = 4,
     /// Clear `ChrCtrl+0x3b0` on the creature and give it its AI back. THE STEP THAT MUST HAPPEN.
-    ClearManipulatorOverride = 4,
+    ClearManipulatorOverride = 5,
     /// Whatever was holding the save off, released. Last, always.
-    LiftSaveSuppression = 5,
+    LiftSaveSuppression = 6,
 }
 
 impl Step {
     /// The release, in order.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::RestoreBody,
         Self::StopColocating,
         Self::MovePlayer,
+        Self::RestoreCameraSize,
         Self::ClearCameraOverride,
         Self::ClearManipulatorOverride,
         Self::LiftSaveSuppression,
@@ -70,6 +83,7 @@ impl Step {
             Self::RestoreBody => "restore-body",
             Self::StopColocating => "stop-colocating",
             Self::MovePlayer => "move-player",
+            Self::RestoreCameraSize => "restore-camera-size",
             Self::ClearCameraOverride => "clear-camera-override",
             Self::ClearManipulatorOverride => "clear-manipulator-override",
             Self::LiftSaveSuppression => "lift-save-suppression",
@@ -154,7 +168,7 @@ impl Teardown {
         self.failed.iter().copied().any(Step::is_critical)
     }
 
-    /// `release: reason=hotkey steps=6/6 ok` -- or the same line naming what did not work.
+    /// `release: reason=hotkey steps=7/7 ok` -- or the same line naming what did not work.
     pub(crate) fn line(&self) -> String {
         let mut line = format!(
             "release: reason={} steps={}/{}",
@@ -211,6 +225,14 @@ mod tests {
             Step::StopColocating < Step::MovePlayer,
             "co-location still running would put the player back on the creature"
         );
+        assert!(
+            Step::RestoreCameraSize < Step::ClearCameraOverride,
+            "handing the camera back first shows a frame of the player framed for a dragon"
+        );
+        assert!(
+            Step::MovePlayer < Step::RestoreCameraSize,
+            "the creature's framing is still the right one until the player has been moved"
+        );
         for step in Step::ALL {
             if step != Step::LiftSaveSuppression {
                 assert!(
@@ -234,7 +256,7 @@ mod tests {
         assert_eq!(seen, Step::ALL.to_vec());
         assert!(teardown.is_clean());
         assert!(!teardown.has_critical_failure());
-        assert_eq!(teardown.line(), "release: reason=hotkey steps=6/6 ok");
+        assert_eq!(teardown.line(), "release: reason=hotkey steps=7/7 ok");
     }
 
     /// THE PROPERTY THAT MATTERS. A step failing must not stop the run -- in particular the
@@ -256,7 +278,7 @@ mod tests {
         );
         let line = teardown.line();
         assert!(line.contains("reason=creature-died"), "{line}");
-        assert!(line.contains("steps=2/6"), "{line}");
+        assert!(line.contains("steps=2/7"), "{line}");
         assert!(line.contains("restore-body"), "{line}");
         assert!(!line.contains("DLPanic"), "{line}");
     }
@@ -279,7 +301,7 @@ mod tests {
         let line = teardown.line();
         assert!(line.contains("ChrCtrl+0x3b0 IS STILL ARMED"), "{line}");
         assert!(line.contains("DLPanic"), "{line}");
-        assert!(line.contains("steps=5/6"), "{line}");
+        assert!(line.contains("steps=6/7"), "{line}");
     }
 
     /// Every reason spells itself for the log, so "it let go on its own" and "the player pressed

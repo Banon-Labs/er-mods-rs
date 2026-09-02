@@ -11,7 +11,9 @@
 //!    Three dispatchers check it before `ChrCtrl+0x18`, so the creature's think path dies and its
 //!    execute path is untouched.
 //! 3. The creature goes into `WorldChrManDbg+0xb8 camOverrideChrIns`. Camera and lock-on follow it
-//!    for free; identity, damage and the save keep pointing at the real `PlayerIns`.
+//!    for free; identity, damage and the save keep pointing at the real `PlayerIns`. What follows
+//!    for free is the camera's AIM, not its SHAPE -- [`crate::camera`] sizes the framing to the
+//!    body being worn, because vanilla's is cut for a 1.8 m Tarnished.
 //! 4. The player's own body is neutered -- invincible, alpha 0, silent, `debugFlags |= noAttack`
 //!    -- and co-located with the creature every frame through the engine's own proxy drain.
 //! 5. Every frame after that, movement intent is written into the creature's `AiIns`.
