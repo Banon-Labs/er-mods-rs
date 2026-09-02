@@ -914,18 +914,28 @@ impl Chr {
         let Some(ai) = self.validated_ai_ins() else {
             return false;
         };
-        let Some(target_at) = self.ai_path_target() else {
-            return false;
-        };
         let value = FloatVector4::new(write.target[0], write.target[1], write.target[2], 1.0);
-        let path = write_vec4(target_at, value);
+        // `pathData->target` is a BONUS and is no longer a precondition. It is the answer to
+        // branch two of `AiIns::UpdateMovement` and costs one store, but the REQUEST is
+        // `wantToMoveTo` + `walkType` + `turnTarget`; gating all three on the optional fourth is
+        // how one bad frame becomes permanent. `CS::AiIns::ClearMoveRequest` calls
+        // `FUN_1402e7640(pathData)` -> `AiPathData::ClearFollowPathParams`, and the crate never
+        // rebuilds a path (that is `FUN_1402c65e0`, the third thing `CSAiFunc::MoveTo` does and
+        // the one this crate does not reproduce) -- so anything that made this resolve `None` used
+        // to silence the whole move request for the rest of the possession.
+        let path = self
+            .ai_path_target()
+            .is_some_and(|target_at| write_vec4(target_at, value));
         let want = write_vec4(ai + ai_ins::WANT_TO_MOVE_TO, value);
         // Every one of the four, every frame, and none of them short-circuited: a gait written
         // without a target walks the body somewhere stale, and a target written without a gait is
         // the failure this function shipped with.
         let walk = write_i32(ai + ai_ins::WALK_TYPE, write.walk_type);
         let turn = write_i32(ai + ai_ins::TURN_TARGET, write.turn_target);
-        path && want && walk && turn
+        // `path` is deliberately NOT in the verdict: it is the optional store above, and a
+        // creature whose path data has been cleared still takes a perfectly good move request.
+        let _ = path;
+        want && walk && turn
     }
 
     /// What `walkType` and `wantToMoveTo.x` hold RIGHT NOW -- the read-back instrument, kept
