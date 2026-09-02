@@ -309,6 +309,15 @@ a jittered timer AFTER this DLL's boot task has run, so the PATCHED fingerprint 
 published and filtered on -- and nobody else in the world has it. A search against a pool of one \
 finds nobody.
 
+The RULE survives a Seamless update; the ADDRESS does not. `0xABC20` and the SHA256 values below \
+were measured against ersc.dll v1.9.9. Seamless Co-op v2.0.0 (2026-09-02) moved its entry points, \
+and a body search for BuildLobbyKey there returns two candidates plus a third whose prologue \
+matches -- ambiguous, so it is unverified rather than relocated. That does not weaken this \
+conflict: param-table divergence locking you out of matchmaking is Seamless's design, not an \
+artifact of one build. It only means nothing should ACT on the number without re-measuring \
+(scripts/locate-ersc-entry-points.py; scripts/ersc_identify.py reports the installed build). \
+Tracked in bd er-effects-rs-wqzf.
+
 MEASURED TWICE, byte-identical two days apart (2026-08-23 A/B; reconfirmed live 2026-08-25 on the \
 user's own save and the full 14-DLL pack):
   with it     LOBBY KEY = 0044f570d958f07ace546a90fa62ba2044ef7c3a1f9864fb3cb336bf611965d3

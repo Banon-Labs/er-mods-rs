@@ -583,11 +583,19 @@ def collect(maps):
 # Co-op's, the next three are bounds that were being ranked as migration work above real
 # functions, and the last two are the control -- an exclusion that also ate real addresses would
 # look like progress.
+# The four ersc rows below assert ATTRIBUTION -- "this address belongs to ersc.dll, not
+# eldenring.exe" -- and that is still true and still what the test checks. The function NAMES in
+# the third column are v1.9.9 labels and are NOT true of the installed build: Seamless Co-op
+# v2.0.0 (2026-09-02) moved show to 0x241A0 and cancel to 0x258D0, "Invade world" matches nothing
+# at any signature length, and BuildLobbyKey is ambiguous. Do not read a name here as an answer to
+# "what lives at this offset"; run scripts/ersc_identify.py to see which build is installed and
+# scripts/locate-ersc-entry-points.py to re-measure. Kept as-is because changing them would change
+# what this fixture tests (module attribution) into something it does not test (current naming).
 FOREIGN_CASES = [
-    (0x22D30, "ersc.dll", "SHOW_RVA -- ersc!show, the option-menu builder"),
-    (0x243E0, "ersc.dll", "INVADE_ACTION_RVA -- ersc \"Invade world\""),
-    (0x24460, "ersc.dll", "CANCEL_ACTION_RVA -- ersc \"Cancel search\""),
-    (0xABC20, "ersc.dll", "BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey"),
+    (0x22D30, "ersc.dll", "SHOW_RVA -- ersc!show, the option-menu builder (v1.9.9 name)"),
+    (0x243E0, "ersc.dll", "INVADE_ACTION_RVA -- ersc \"Invade world\" (v1.9.9 name)"),
+    (0x24460, "ersc.dll", "CANCEL_ACTION_RVA -- ersc \"Cancel search\" (v1.9.9 name)"),
+    (0xABC20, "ersc.dll", "BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey (v1.9.9 name)"),
 ]
 NOT_ADDRESS_CASES = [
     (0x4000000, "GAME_TEXT_RVA_LIMIT -- plausibility bound in trace_first_game_caller_rva"),
