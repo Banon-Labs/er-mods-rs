@@ -165,6 +165,15 @@ type PlayAnimationByBehaviorNameFn = unsafe extern "system" fn(*mut usize, *cons
 /// whole point is a property nobody would notice was missing until the game died.
 pub(crate) use er_invasion_warp_core::warp::FloatVector4;
 
+/// Bytes in a `FloatVector4`, i.e. the stride between the rows of a `FloatMatrix4x4`.
+const FLOAT_VECTOR4_BYTES: usize = 16;
+
+/// The shortest horizontal move direction that still has a direction.
+///
+/// Below this the normalise is numerically meaningless and the request is a stop in all but name;
+/// the caller stages the zero vector instead, which is what the engine stages for the same case.
+const MOVE_DIRECTION_MIN_LENGTH: f32 = 1e-4;
+
 /// Read three floats as a position. `None` when the address will not read.
 fn read_vec3(at: usize) -> Option<[f32; 3]> {
     let x = unsafe { safe_read_f32(at) }?;
@@ -757,8 +766,10 @@ impl Chr {
     /// backwards until 2026-09-02.
     ///
     /// Gated on [`Self::validated_ai_ins`], so a build whose `AiIns` layout has moved gets no
-    /// writes at all rather than four wrong ones, and READ BACK afterwards: `write_i32` proves the
-    /// address was readable before the store, which is not the same as proving the store landed.
+    /// writes at all rather than four wrong ones. It returns whether the STORES happened, not
+    /// whether they survived: see [`Self::read_move_intent`] for why surviving is not this
+    /// function's business any more.
+
     /// Read `AiIns.walkType` back, for telemetry only.
     ///
     /// A read-back is the half of the instrument that a write-side check cannot supply: a write
@@ -791,16 +802,107 @@ impl Chr {
         // the failure this function shipped with.
         let walk = write_i32(ai + ai_ins::WALK_TYPE, write.walk_type);
         let turn = write_i32(ai + ai_ins::TURN_TARGET, write.turn_target);
-        if !(path && want && walk && turn) {
+        path && want && walk && turn
+    }
+
+    /// What `walkType` and `wantToMoveTo.x` hold RIGHT NOW -- the read-back instrument, kept
+    /// deliberately separate from [`Self::write_move_intent`]'s verdict.
+    ///
+    /// It used to be part of that verdict, on the reasoning that the game thread cannot write
+    /// between our store and our load. That reasoning was wrong and the instrument is what proved
+    /// it: on roughly half of all frames the pair reads back as `walkType = 0` with
+    /// `wantToMoveTo` equal to the body's own position, which is `AiIns::ClearMoveRequest`'s exact
+    /// signature. The goal machine is a genuine competing writer and losing that race is now
+    /// EXPECTED, not a fault -- so folding it into a boolean made the caller log "the layout is
+    /// wrong" about a healthy possession.
+    ///
+    /// It stays because it is the only instrument this problem has ever had, and because it is how
+    /// anyone checks that the manipulator path in [`Self::write_manipulator_move`] is carrying the
+    /// movement the AI path keeps losing.
+    pub(crate) fn read_move_intent(self) -> Option<(i32, f32)> {
+        let ai = self.validated_ai_ins()?;
+        let walk = unsafe { safe_read_i32(ai + ai_ins::WALK_TYPE) }?;
+        let target_x = unsafe { safe_read_f32(ai + ai_ins::WANT_TO_MOVE_TO) }?;
+        Some((walk, target_x))
+    }
+
+    /// Stage the frame's move vector where the ENGINE stages its own -- the fix for a field war
+    /// this crate cannot win.
+    ///
+    /// # Why this exists alongside [`Self::write_move_intent`]
+    ///
+    /// `walkType` is not ours. Six sites write it to literal zero and every one is goal
+    /// lifecycle (`ClearMoveRequest`, `TerminateGoal`, `ClearAiGoalRelatedInfo`, a goal
+    /// `Activate`, a goal `Interrupt`); possession no-ops goal SELECTION, so the goal machine
+    /// churns and zeroes the gate at roughly frame cadence. A per-frame read-back taken
+    /// immediately after our own write measured `walk_type=0` with `wantToMoveTo` equal to the
+    /// body's own position -- `ClearMoveRequest`'s exact signature -- on half the sampled frames,
+    /// with the body stationary throughout. Writing harder cannot fix that, and this repo's rules
+    /// say a manual field write is diagnostic until it becomes native-ownership integration.
+    ///
+    /// So this writes one step DOWNSTREAM of the whole argument.
+    /// [`manipulator::PENDING_MOVE_VECTOR`] is what `[vt+0x50]` publishes on its next run, into
+    /// the `ChrManipulator+0x10`/`+0x70` pair that every one of the game's six manipulator
+    /// implementations -- the player's included -- publishes locomotion through. `walkType` gates
+    /// only whether `[vt+0x50]` computes a vector of its OWN; it does not gate the publish, and it
+    /// does not gate us.
+    ///
+    /// # The value
+    ///
+    /// The body's LOCAL frame, because that is the space `[vt+0x50]` stages in: it normalises the
+    /// world direction and dots it against the four rows of [`chr_ctrl::MODEL_MATRIX`]. This
+    /// reproduces that transform row for row, including the fourth, so what lands in the slot is
+    /// indistinguishable from what the engine would have put there. Length is
+    /// [`IntentWrite::gait_scale`], which is the engine's own set of three.
+    ///
+    /// A direction too short to normalise, or a zero gait, stages `DL_ZERO_VECTOR` -- which is
+    /// exactly what `[vt+0x50]` stages when its own gate is shut, so releasing the stick leaves
+    /// the slot in a state the engine produces.
+    pub(crate) fn write_manipulator_move(self, world_direction: [f32; 3], scale: f32) -> bool {
+        let Some(manip) = self.real_manipulator() else {
             return false;
+        };
+        let at = manip + manipulator::PENDING_MOVE_VECTOR;
+        let Some(local) = self.local_move_vector(world_direction, scale) else {
+            return write_vec4(at, FloatVector4::new(0.0, 0.0, 0.0, 0.0));
+        };
+        write_vec4(at, local)
+    }
+
+    /// The world direction, flattened, normalised, rotated into the body's frame and scaled.
+    ///
+    /// `None` for anything that is not a movable request -- a zero or junk gait, a direction with
+    /// no horizontal extent, a model matrix that will not read. Every one of those means "stage
+    /// the zero vector", which the caller does.
+    fn local_move_vector(self, world_direction: [f32; 3], scale: f32) -> Option<FloatVector4> {
+        if !scale.is_finite() || scale <= 0.0 {
+            return None;
         }
-        // The read-back. Same tick, same thread, nothing else has run in between, so anything
-        // other than the value just stored means the store did not take -- and THAT is the
-        // symptom the old canary could not see.
-        let gait_took = unsafe { safe_read_i32(ai + ai_ins::WALK_TYPE) } == Some(write.walk_type);
-        let target_took = unsafe { safe_read_f32(ai + ai_ins::WANT_TO_MOVE_TO) }
-            .is_some_and(|x| x.to_bits() == write.target[0].to_bits());
-        gait_took && target_took
+        let [dx, _, dz] = world_direction;
+        // Flattened before normalising, exactly as `[vt+0x50]` does: it zeroes `y` on the
+        // difference vector before it takes the length, so a target above or below the body is a
+        // horizontal request and not a climb.
+        let length = dx.hypot(dz);
+        if !length.is_finite() || length < MOVE_DIRECTION_MIN_LENGTH {
+            return None;
+        }
+        let unit = [dx / length, 0.0, dz / length];
+        let matrix = self.chr_ctrl()? + chr_ctrl::MODEL_MATRIX;
+        let mut local = [0.0f32; 4];
+        for (index, component) in local.iter_mut().enumerate() {
+            let row = matrix + index * FLOAT_VECTOR4_BYTES;
+            let row_x = unsafe { safe_read_f32(row) }?;
+            let row_y = unsafe { safe_read_f32(row + 4) }?;
+            let row_z = unsafe { safe_read_f32(row + 8) }?;
+            // The engine's dot includes `dir.w * row.w`, and `dir.w` is zero after its own
+            // normalise -- so three terms is the same arithmetic, not a simplification of it.
+            let dot = unit[2].mul_add(row_z, unit[0].mul_add(row_x, unit[1] * row_y));
+            if !dot.is_finite() {
+                return None;
+            }
+            *component = dot * scale;
+        }
+        Some(FloatVector4::new(local[0], local[1], local[2], local[3]))
     }
 
     /// Stop the creature, the way `CS::AiIns::ClearMoveRequest` stops one.

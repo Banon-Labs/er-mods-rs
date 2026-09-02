@@ -937,6 +937,45 @@ impl NpcPossessionEngine {
             movement.turn_deadzone_deg,
         );
         Self::tick_moveset(state, write.moving());
+        // THE WRITE THAT ACTUALLY MOVES THE BODY, and it is deliberately not the AI one.
+        //
+        // `walkType` is owned by the goal state machine -- six sites zero it, all of them goal
+        // lifecycle -- and possession no-ops goal selection, so that machine churns and clears our
+        // gate at roughly frame cadence. Read-back telemetry measured exactly that. This stages
+        // the move vector where `[vt+0x50]` stages its own, one step downstream of the whole
+        // argument; see `game::Chr::write_manipulator_move`.
+        //
+        // The AI write below is kept because it is what TURNS the body: `FUN_1402c9410`'s
+        // `TARGET_SELF` branch derives the facing from `walkType` and `wantToMoveTo`, so on the
+        // frames it survives the body also aims where it is going. Movement no longer depends on
+        // it surviving.
+        let direction = [
+            write.target[0] - state.last_position[0],
+            0.0,
+            write.target[2] - state.last_position[2],
+        ];
+        let staged = state
+            .creature
+            .write_manipulator_move(direction, write.gait_scale());
+        if first_frame {
+            // ONCE per possession, not sixty times a second. The read-back is taken immediately
+            // after the AI write and is expected to disagree with it -- that disagreement is the
+            // goal machine's `ClearMoveRequest`, and it is why `staged` is the value that moves
+            // the body. A line that showed them agreeing would mean the goal churn had stopped.
+            let (walk, target_x) = state
+                .creature
+                .read_move_intent()
+                .map_or((i32::MIN, f32::NAN), |pair| pair);
+            possess_log(format_args!(
+                "movement: staged={staged} gait={} dir=({:.2}, {:.2}) | AI read-back after our \
+                 own write: walkType={walk} wantToMoveTo.x={target_x:.2} (ours was {:.2}). A \
+                 disagreement here is EXPECTED -- six goal-lifecycle sites zero walkType and \
+                 possession no-ops goal selection, so the AI move request is contested every \
+                 frame. Movement is staged at ComManipulator+0x140 instead, which nothing else \
+                 writes; the AI fields are kept only because they are what TURNS the body",
+                write.walk_type, direction[0], direction[2], write.target[0],
+            ));
+        }
         // THE INSTRUMENT, because three movement fixes have now shipped without one.
         //
         // The canary only answers "did the write land somewhere legitimate". It has never
@@ -986,7 +1025,9 @@ impl NpcPossessionEngine {
                  being written -- the character is possessed and camera-followed but will not \
                  walk. The check is exact (AiIns.comThinkOwner must BE the manipulator's inline \
                  member, which must point back at this ChrCtrl), so a failure means either a \
-                 build whose ComManipulator/AiIns layout moved or an AiIns that is no longer live"
+                 build whose ComManipulator/AiIns layout moved or an AiIns that is no longer \
+                 live. Movement itself does not depend on this: it is staged at \
+                 ComManipulator+0x140, one step downstream of the AI"
             ));
         }
     }
