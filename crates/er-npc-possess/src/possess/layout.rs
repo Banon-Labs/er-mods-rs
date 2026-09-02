@@ -687,14 +687,25 @@ pub(crate) mod chr_physics_module {
     /// Read, it is a point the character demonstrably stood on -- the free fallback for the release
     /// point when the creature dies airborne.
     ///
-    /// **Written, it is the possession's fall-death safety.** `CSChrFallModule`'s landing handler
-    /// charges for a fall of `lastGroundedPosition.y - GetPosition().y`, and dispatches the
-    /// fall-death call through the character's manipulator vtable when that exceeds a global
-    /// threshold. That path never calls `ChrIns::IsImmuneToAttack`, so
-    /// [`super::chr_ins::INVINCIBLE`] does not cover it -- which is why the body neuter has to
-    /// write this field rather than rely on the bit.
+    /// **Written, it is the possession's fall-death safety.** `CSChrFallModule::Update`
+    /// (`0x14044df00`) charges for a fall of `lastGroundedPosition.y - GetPosition().y` on the
+    /// frame the character lands, through `CSChrDataModule::ChangeHP` with
+    /// `serverLogDataTracker->deathType = Fall`.
     /// `CSChrPhysicsModule::ForceSetPosition`, which is how co-location moves the body, writes
-    /// `position` and `prevUpdatePosition` and leaves this one alone.
+    /// `position` and `prevUpdatePosition` and leaves this one alone, so a body carried through a
+    /// leaping creature's arc lands reading a fall it never took.
+    ///
+    /// **CORRECTED 2026-09-02: that path DOES call `ChrIns::IsImmuneToAttack`, and this doc used
+    /// to say the opposite.** The damage block is gated on `FUN_14044e730`, whose tail reads
+    /// `MOV RCX,RAX ; MOV R9,[RAX] ; CALL [R9+0x1d8] ; TEST AL,AL ; JNZ 0x14044e79a` at
+    /// `0x14044e866`, and `0x14044e79a` is `XOR EAX,EAX; RET`. So `super::chr_ins::INVINCIBLE`
+    /// alone already stops a possessed body being charged for a fall, and this write is not what
+    /// keeps the body alive DURING a possession.
+    ///
+    /// What it is for is the frames on either SIDE of one -- release takes the bit off, and the
+    /// field then still names whatever height the possession left it at. See
+    /// [`super::fall`] for the clamp that makes the subtraction safe there, and for the byte proof
+    /// of the whole gate.
     ///
     /// BOTH BUILDS, byte-proven, and the pattern matches UNIQUELY in each image -- 1.16.2
     /// `0x14044dd1f`, 1.17 `0x14044e27f`. `48 8b 88 90 01 00 00` is [`super::chr_ins::MODULES`],
@@ -705,6 +716,53 @@ pub(crate) mod chr_physics_module {
     /// MOVUPS XMM6,[RBX+0x150] ; SHUFPS XMM6,XMM6,0x55 ; SUBSS XMM6,[RAX+0x4]
     /// ```
     pub(crate) const LAST_GROUNDED_POSITION: usize = 0x150;
+    /// `maxStepHeight`, an `f32` in metres -- how far this character can step UP without the
+    /// engine treating it as anything.
+    ///
+    /// Read only, and only to size the co-location telemetry's alarm: a body that is below the
+    /// point it was placed on by less than its own step height has stepped down, and a body that
+    /// is below it by more has been pushed somewhere. Named in the 1.16.2 dump's
+    /// `CSChrPhysicsModule` layout beside `currentStepHeight` at `+0x100`; both are reset by
+    /// `FUN_1404610c0`, the per-frame pre-physics reset, which also clears
+    /// [`SKIP_PHYSICS_THIS_FRAME`].
+    pub(crate) const MAX_STEP_HEIGHT: usize = 0x104;
+    /// `capsuleHalfHeight`, an `f32` in metres.
+    ///
+    /// THE NUMBER THE RENDER SCALE DOES NOT TOUCH, which is why it is worth logging next to the
+    /// body scale the lock-on anchor applies. `ChrCtrl::SetScaleSize` (`0x1403c8350`) is
+    /// `MOVSD [RCX+0x2d4] ; MOV [RCX+0x2dc] ; ... ; MOVSD [R8+0x54] ; MOV [R8+0x5c] ; RET` -- six
+    /// stores and a return, none of them into `CSChrPhysicsModule`. So the body wearing a 0.47x
+    /// vertical scale still carries a full-height collision capsule, and this is the field that
+    /// says so.
+    pub(crate) const CAPSULE_HALF_HEIGHT: usize = 0x110;
+    /// `falling`, a `bool`.
+    pub(crate) const FALLING: usize = 0x1d0;
+    /// `isTouchingGround`, a `bool`. The looser sibling of [`STANDING_ON_SOLID_GROUND`].
+    pub(crate) const IS_TOUCHING_GROUND: usize = 0x1d1;
+    /// `skipPhysicsThisFrame`, a `bool`. **NOT WRITTEN BY THIS CRATE**, and documented here so the
+    /// next reader does not have to find it twice.
+    ///
+    /// This is the engine's own switch for "this character's position is being driven from
+    /// outside, do not run its physics". `CSChrPhysicsModule::doUpdates` (`0x140460460`, called
+    /// only from `ChrCtrl::updatePos`) opens with `CMPB $0x0,0x1e2(RBX)` at `0x1404607b0` and, when
+    /// it is set, writes `physicsUpdateMode = 4`, clears `physicsStepPending` and jumps past the
+    /// entire character-proxy update. `ChrCtrl::updatePos` sets it itself, through
+    /// `CSChrPhysicsModule::SetSkipPhysics` (`0x14045f8e0`, `MOVB $0x1,0x1e2(RCX); RET`), for a
+    /// `NET_AI`-manipulated character at LOD 30 -- the network-ghost case this crate's co-location
+    /// is modelled on.
+    ///
+    /// It is the obvious lever for stopping the possessed body's own proxy from resolving against
+    /// geometry it does not fit in, and it is deliberately NOT used yet: `FUN_1404610c0` clears it
+    /// every frame before `doUpdates` runs, so whether a write from this crate's `FrameBegin` task
+    /// survives to be read depends on task ordering that has not been measured. Measure it before
+    /// writing it.
+    ///
+    /// Unused ON PURPOSE, and kept rather than deleted: the offset, the reader, the writer and the
+    /// per-frame clear each cost a separate Ghidra session to find, and the next agent who reaches
+    /// this hazard should not have to pay for them again. The `expect` turns into a warning the
+    /// moment somebody does wire it up, which is the right time for this note to be re-read.
+    #[expect(dead_code)]
+    pub(crate) const SKIP_PHYSICS_THIS_FRAME: usize = 0x1e2;
     /// `qInterpolatedOrientation`, the character's LIVE orientation QUATERNION.
     ///
     /// # The field this replaced, and why a passing cross-check did not save it

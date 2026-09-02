@@ -14,6 +14,12 @@
 //! * **The camera must be cleared AFTER the player has been moved.** Clearing first gives a
 //!   visible frame of the old body standing wherever it was; moving first means the camera snaps
 //!   to a player already standing in the right place.
+//! * **The body is made mortal LAST of the body steps -- after it has been placed.** Invincibility
+//!   is the only thing stopping `CSChrFallModule::Update` charging the body for the difference
+//!   between its `lastGroundedPosition` and where it actually is (the gate is byte-read in
+//!   [`crate::possess::fall`]), so clearing it before the placement hands back a mortal body at a
+//!   position nothing has checked. Both abnormal releases in the reference log did exactly that
+//!   and then failed the move.
 //! * **The camera's SIZE must go back before the camera does.** While `WorldChrManDbg+0xb8` still
 //!   names the creature, `ChrExFollowCam+0x468` still names the patched `LockCamParam` row -- so
 //!   undoing them in this order shows at most one frame of the creature framed for a player, and
@@ -53,17 +59,33 @@ pub(crate) enum Step {
     /// through the creature or make it stop resolving, and the HUD post-pass reads the creature's
     /// `CSChrDataModule` once a frame until it is told not to.
     StopHudRetarget = 0,
-    /// Invincibility off, alpha back to opaque, `debugFlags` cleared. The player's own body
-    /// becomes an ordinary character again.
-    RestoreBody = 1,
     /// Stop writing the player's proxy position every frame. Nothing to undo -- the last write
     /// already landed -- but the per-frame driver has to be told before the player is moved, or it
     /// would put them back on the creature next frame.
-    StopColocating = 2,
-    /// Put the player on the resolved ground point. Usually a no-op in effect, because
-    /// co-location already left them exactly there; it matters when the creature died airborne and
-    /// the point resolves to its last grounded position instead.
-    MovePlayer = 3,
+    StopColocating = 1,
+    /// Put the player on the resolved ground point, and pin their fall bookkeeping to it. Usually
+    /// a no-op in effect, because co-location already left them exactly there; it matters when the
+    /// creature died airborne and the point resolves to its last grounded position instead.
+    ///
+    /// **BEFORE [`Self::RestoreBody`], AND THAT REORDERING IS A BUG FIX.** See that variant.
+    MovePlayer = 2,
+    /// Invincibility off, alpha back to opaque, `debugFlags` cleared. The player's own body
+    /// becomes an ordinary character again.
+    ///
+    /// **AFTER [`Self::MovePlayer`], because this step is the one that makes the body mortal and
+    /// it must not run while the body is still wherever the world last pushed it.** The two
+    /// abnormal releases in the reference log both reported
+    /// `FAILED=[restore-body move-player restore-manipulator-vtable]`: `RestoreBody` ran FIRST and
+    /// its five writes are AND-ed into one result, so the invincibility clear can land while the
+    /// move that was supposed to put the body somewhere survivable never happens at all. Running
+    /// the placement first means the body is put down and its `lastGroundedPosition` pinned while
+    /// it is still immune, and mortality is the last thing handed back.
+    ///
+    /// The old order had no reason behind it -- the module docs above justify six of the nine
+    /// steps and this was not one of them -- and nothing else in the release depends on the body
+    /// being restored early: the camera steps read the CREATURE, and the body scale this also
+    /// undoes is render-only (`ChrCtrl::SetScaleSize` touches no physics field).
+    RestoreBody = 3,
     /// Put `ChrExFollowCam+0x468` and the patched `LockCamParam` row back exactly as they were.
     ///
     /// BEFORE the camera is handed back, for two reasons. The override is still pointing at the
@@ -103,9 +125,9 @@ impl Step {
     /// The release, in order.
     pub(crate) const ALL: [Self; 9] = [
         Self::StopHudRetarget,
-        Self::RestoreBody,
         Self::StopColocating,
         Self::MovePlayer,
+        Self::RestoreBody,
         Self::RestoreCameraSize,
         Self::ClearCameraOverride,
         Self::RestoreManipulatorVtable,
@@ -117,9 +139,9 @@ impl Step {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::StopHudRetarget => "stop-hud-retarget",
-            Self::RestoreBody => "restore-body",
             Self::StopColocating => "stop-colocating",
             Self::MovePlayer => "move-player",
+            Self::RestoreBody => "restore-body",
             Self::RestoreCameraSize => "restore-camera-size",
             Self::ClearCameraOverride => "clear-camera-override",
             Self::RestoreManipulatorVtable => "restore-manipulator-vtable",
@@ -302,6 +324,14 @@ mod tests {
         assert!(
             Step::MovePlayer < Step::RestoreCameraSize,
             "the creature's framing is still the right one until the player has been moved"
+        );
+        // THE ORDERING THIS FIX EXISTS FOR. `RestoreBody` is what takes the invincibility bit off,
+        // and that bit is the only thing stopping `CSChrFallModule::Update` charging the body for
+        // `lastGroundedPosition.y - position.y`. It must not run until the body has been put
+        // somewhere and that field has been pinned to it.
+        assert!(
+            Step::MovePlayer < Step::RestoreBody,
+            "a body made mortal before it is placed is charged for wherever the world left it"
         );
         for step in Step::ALL {
             if step != Step::LiftSaveSuppression {

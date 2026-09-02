@@ -44,6 +44,7 @@ use er_game_base::mem::{
 };
 use fromsoftware_shared::FromStatic;
 
+use crate::possess::fall::{self, FallState};
 use crate::possess::intent::{IntentWrite, Stick};
 use crate::possess::layout::{
     ai_ins, ai_path_data, chr_action_request_module, chr_behavior_module, chr_ctrl,
@@ -1088,15 +1089,37 @@ impl Chr {
     /// f3 0f 5c 70 04         SUBSS  XMM6,[RAX+0x4]   ; - position.y
     /// ```
     ///
-    /// -- and when that exceeds a global threshold the handler dispatches the fall-death call
-    /// through the character's manipulator vtable. **None of it consults `IsImmuneToAttack`**, so
-    /// `chrFlags1c5 & 0x10` -- the whole of the possession's body neuter as far as damage goes --
-    /// does not cover it.
+    /// -- and above `DAT_14329e658` (`0.30 m`) `CSChrFallModule::Update` dispatches the landing
+    /// notification through the character's manipulator vtable slot `+0x80`, and above the damage
+    /// thresholds it charges `hpMax * ratio` through `CSChrDataModule::ChangeHP` with
+    /// `deathType = Fall`.
+    ///
+    /// **CORRECTED 2026-09-02: the damage half DOES consult `IsImmuneToAttack`, and this doc said
+    /// the opposite.** `FUN_14044e730` gates it, and at `0x14044e866` it is
+    /// `MOV RCX,RAX ; MOV R9,[RAX] ; CALL [R9+0x1d8] ; TEST AL,AL ; JNZ 0x14044e79a`, where
+    /// `0x14044e79a` is `XOR EAX,EAX; RET` -- and `[vtable+0x1d8]` is the slot
+    /// [`chr_ins::INVINCIBLE`] already documents as `ChrIns::IsImmuneToAttack`. So the bit alone
+    /// stops a possessed body being charged for a fall, and this write is NOT what keeps the body
+    /// alive while a possession is running.
+    ///
+    /// It is what keeps it alive on the frames either side of one, when the bit is off and the
+    /// field still names whatever height the possession left it at -- which is why the value
+    /// written is clamped rather than copied. See [`fall`].
     ///
     /// [`Self::request_move`] snaps `position` and `prevUpdatePosition` and leaves this field
     /// alone, so a body carried through a leaping creature's arc lands reading a fall it never
     /// took. Writing it alongside the move is not a lie to the engine: the body IS being put here,
     /// so here is where it last stood.
+    ///
+    /// # The clamp, which is the part that survives a body the world has moved
+    ///
+    /// `Y` is pinned at the co-location target OR at the body's own current height, whichever is
+    /// LOWER -- [`fall::grounded_pin`], which carries the reasoning and the tests. The body keeps
+    /// its own full-size character proxy while it is being carried (`ChrCtrl::updatePos` runs a
+    /// whole `CSChrPhysicsModule::doUpdates` immediately after draining our teleport), so it can
+    /// end up below the point we placed it on. Pinning the field at the creature's height in that
+    /// state stores a fall the body never took, and the engine charges for it the moment the bit
+    /// that currently hides it comes off.
     pub(crate) fn pin_last_grounded(self, position: [f32; 3]) -> bool {
         let Some(physics) = self.physics() else {
             return false;
@@ -1104,10 +1127,40 @@ impl Chr {
         if !position.iter().all(|v| v.is_finite()) {
             return false;
         }
+        // The body's own `Y`, read straight out of `position.y` rather than through
+        // `Self::position` so the module pointer chain is walked once.
+        let body_y = unsafe { safe_read_f32(physics + chr_physics_module::POSITION + 4) };
+        let pinned = fall::grounded_pin(position, body_y);
         write_vec4(
             physics + chr_physics_module::LAST_GROUNDED_POSITION,
-            FloatVector4::new(position[0], position[1], position[2], 1.0),
+            FloatVector4::new(pinned[0], pinned[1], pinned[2], 1.0),
         )
+    }
+
+    /// Everything the fall path reads off this character, in one pointer walk.
+    ///
+    /// For the co-location telemetry, and for nothing else: no decision in this crate is taken on
+    /// it. A body whose physics module does not resolve reports every field as `None` rather than
+    /// failing the caller, because the line is worth writing either way -- "the body did not read"
+    /// is the single most useful thing it can say on the frame a possession goes wrong.
+    pub(crate) fn fall_state(self) -> FallState {
+        let Some(physics) = self.physics() else {
+            return FallState::default();
+        };
+        let flag = |offset: usize| unsafe { safe_read_u8(physics + offset) }.map(|byte| byte != 0);
+        FallState {
+            position: read_vec3(physics + chr_physics_module::POSITION),
+            last_grounded: read_vec3(physics + chr_physics_module::LAST_GROUNDED_POSITION),
+            on_ground: flag(chr_physics_module::STANDING_ON_SOLID_GROUND),
+            falling: flag(chr_physics_module::FALLING),
+            touching_ground: flag(chr_physics_module::IS_TOUCHING_GROUND),
+            max_step_height: unsafe {
+                safe_read_f32(physics + chr_physics_module::MAX_STEP_HEIGHT)
+            },
+            capsule_half_height: unsafe {
+                safe_read_f32(physics + chr_physics_module::CAPSULE_HALF_HEIGHT)
+            },
+        }
     }
 }
 

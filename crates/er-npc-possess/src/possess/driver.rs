@@ -25,7 +25,7 @@ use crate::moveset::{derived, table as moveset_table};
 use crate::possess::game::{self, AnimFrame, Chr};
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
-use crate::possess::{body_size, intent, layout};
+use crate::possess::{body_size, fall, intent, layout};
 use crate::settings::{Bucket, TargetMode};
 use crate::spawn::game as spawn_game;
 use crate::spawn::placement;
@@ -224,18 +224,22 @@ impl NpcPossessionEngine {
     /// costs more than writing it, and `lastGroundedPosition` has to track the body every frame or
     /// it is not tracking it at all.
     ///
-    /// **THE INVINCIBILITY BIT IS NOT THE WHOLE OF BODY SAFETY, AND THAT IS THE CORRECTION THIS
-    /// COMMENT CARRIES.** `layout::chr_ins::INVINCIBLE` was re-verified on 1.17 rather than
-    /// assumed -- `ChrIns::IsImmuneToAttack` at `0x1403f3dc0` is `TESTB $0x10,0x1c5(%r9)`, the same
-    /// instruction 1.16.2 has at `0x1403f3c76`, and `+0x1c5` sits below the `+0x3b8` insertion that
-    /// grew `ChrIns` on this build, so it could not have moved. What the bit gates is HIT
-    /// RESOLUTION, and nothing else. `CSChrFallModule`'s landing handler charges for a fall of
-    /// `lastGroundedPosition.y - position.y` and dispatches a fall-death call above a threshold
-    /// WITHOUT ever asking whether the victim is immune -- and this engine teleports the player's
-    /// body to the creature's root every frame, through whatever arc a leaping creature takes.
-    /// [`game::Chr::pin_last_grounded`] carries the byte proof; it is here because a neuter that
-    /// only covers the hit path is a neuter that lets a Fallingstar Beast's leap kill the body it
-    /// is carrying.
+    /// **THE INVINCIBILITY BIT COVERS MORE THAN THIS COMMENT USED TO SAY, AND THAT IS THE
+    /// CORRECTION IT NOW CARRIES.** `layout::chr_ins::INVINCIBLE` was re-verified on 1.17 rather
+    /// than assumed -- `ChrIns::IsImmuneToAttack` at `0x1403f3dc0` is `TESTB $0x10,0x1c5(%r9)`, the
+    /// same instruction 1.16.2 has at `0x1403f3c76`, and `+0x1c5` sits below the `+0x3b8` insertion
+    /// that grew `ChrIns` on this build, so it could not have moved. This block used to claim the
+    /// bit gates HIT RESOLUTION "and nothing else", and that the fall path never asks whether the
+    /// victim is immune. It does: `CSChrFallModule::Update`'s damage block is gated on
+    /// `FUN_14044e730`, which calls exactly that vtable slot and returns false when it answers yes
+    /// (`0x14044e866`; the byte trace is in [`crate::possess::fall`]). So a possessed body cannot
+    /// be charged for a fall AT ALL while the bit is on.
+    ///
+    /// The `lastGroundedPosition` write below is therefore not what keeps the body alive during a
+    /// possession -- it is what keeps the field honest for the frames after one, when the bit comes
+    /// off and the engine starts believing that number again. It is written every frame, and
+    /// CLAMPED to the body's own height rather than the creature's, so the difference the engine
+    /// subtracts can never come out positive at any subject size.
     ///
     /// **THE INVINCIBILITY IS ALSO WHY THE POSSESSED CREATURE'S GRABS NEVER LAND, and that is
     /// kept deliberately.** `layout::chr_ins::INVINCIBLE` carries the trace: every route into the
@@ -271,10 +275,88 @@ impl NpcPossessionEngine {
         if let Some(scale) = state.body_scale {
             state.player.set_body_scale(scale.worn);
         }
-        // The co-location target for THIS frame, which is where the body is about to be put. See
-        // the doc above for why the fall path needs this and the invincibility bit cannot supply
-        // it.
-        state.player.pin_last_grounded(state.last_position);
+        // The co-location target for THIS frame, which is where the body is about to be put, and
+        // the one line that says what was written and what the body's own grounding read as.
+        Self::pin_and_report(state, "carried", state.last_position);
+    }
+
+    /// Pin the body's fall bookkeeping to a point, and SAY WHAT WAS WRITTEN AND WHAT THE BODY'S
+    /// GROUNDING WAS.
+    ///
+    /// # Why this line exists
+    ///
+    /// The only account this engine could previously give of a player who died mid-possession was
+    /// the player's own: "I got sent through the floor and died." Every field the engine's fall
+    /// path actually reads was invisible. The creature's position was logged; the BODY's was not,
+    /// and the body is the thing that dies.
+    ///
+    /// So this reports, in order: the point the co-location is writing, the point the body is
+    /// actually at, the gap between them, the `lastGroundedPosition` that was there before the pin
+    /// and the one written after it, and `lastGroundedPosition.y - position.y` -- the exact
+    /// subtraction `CS::CSChrFallModule::GetFallDeathTime` makes and the number
+    /// `CSChrFallModule::Update` charges the body for on the frame it lands.
+    ///
+    /// # Two lines, throttled differently
+    ///
+    /// The routine line is one a second (see [`fall::colocation_line_due`]). The ALARM -- the body
+    /// is further below the co-location target than its own `maxStepHeight` -- is not throttled at
+    /// all, because it is rare by construction and the frame it happens on is the frame worth
+    /// having.
+    fn pin_and_report(state: &Possessing, phase: &str, target: [f32; 3]) {
+        // BEFORE the pin, so the line can show what the field held on the way in. One pointer walk
+        // for everything the fall path reads.
+        let before = state.player.fall_state();
+        let pinned = state.player.pin_last_grounded(target);
+        let alarm_m = fall::drift_alarm_m(before.max_step_height);
+        let drift = fall::drift_below_m(target[1], before.body_y(), alarm_m);
+
+        if let Some(below) = drift {
+            possess_log(format_args!(
+                "colocation: THE BODY IS {below:.2} m BELOW WHERE IT WAS PUT ({phase}) -- target \
+                 {target}, body {body}. Its own step height is {alarm_m:.2} m, so this is not a \
+                 step down: the co-location teleport was resolved somewhere else by the body's own \
+                 character proxy, which `ChrCtrl::updatePos` integrates through \
+                 `CSChrPhysicsModule::doUpdates` immediately AFTER draining our write, and which \
+                 still carries a full-height capsule (half-height {half} m) whatever the render \
+                 scale on `ChrCtrl+0x2d8` says. `lastGroundedPosition` is pinned to the BODY's \
+                 height rather than the target's, so `CSChrFallModule` cannot charge this as a \
+                 fall -- see crates/er-npc-possess/src/possess/fall.rs for the byte proof of that \
+                 gate",
+                target = describe_point(Some(target)),
+                body = describe_point(before.position),
+                half = describe_metres(before.capsule_half_height),
+            ));
+        } else if !fall::colocation_line_due() {
+            return;
+        }
+
+        let after = state.player.fall_state();
+        possess_log(format_args!(
+            "colocation: {phase} -- wrote lastGroundedPosition <- {after_grounded} (target \
+             {target}, was {before_grounded}, write={pinned}) | body at {body} | fall charge \
+             lastGrounded.y - position.y = {charge} m before, {charge_after} m after. That \
+             subtraction IS `CS::CSChrFallModule::GetFallDeathTime` (1.16.2 0x14044dce0, the SUBSS \
+             at 0x14044dd1f); `CSChrFallModule::Update` evaluates it only on a frame where \
+             standingOnSolidGround is set, and charges hpMax * ratio(it) through \
+             `CSChrDataModule::ChangeHP` with deathType=Fall. Positive means the engine believes \
+             the body fell that far, and the pin holds it at or below zero at every subject size, \
+             so this should read <= 0.00 whatever the creature is | onGround={ground} \
+             touching={touching} falling={falling} | maxStep={step} m capsuleHalf={half} m \
+             (UNSCALED -- the lock-on anchor's body scale writes `ChrCtrl+0x2d4..0x2dc` and the \
+             `CSChrDataModule+0x54` mirror and touches no physics field, so a body worn at 0.47x \
+             still collides at full height)",
+            target = describe_point(Some(target)),
+            before_grounded = describe_point(before.last_grounded),
+            after_grounded = describe_point(after.last_grounded),
+            body = describe_point(after.position),
+            charge = describe_metres(before.charge_m()),
+            charge_after = describe_metres(after.charge_m()),
+            ground = describe_flag(after.on_ground),
+            touching = describe_flag(after.touching_ground),
+            falling = describe_flag(after.falling),
+            step = describe_metres(after.max_step_height),
+            half = describe_metres(after.capsule_half_height),
+        ));
     }
 
     /// Undo [`Self::neuter`]. Returns whether every part of it took.
@@ -391,7 +473,10 @@ impl NpcPossessionEngine {
             // `CSChrFallModule` as a fall of exactly that height. See
             // [`game::Chr::pin_last_grounded`].
             Step::MovePlayer => {
-                state.player.pin_last_grounded(release_point);
+                // THE SAME PIN AS EVERY CARRIED FRAME, and reported the same way -- this is the
+                // teleport most likely to be downward and the last one taken while the body is
+                // still immune, so it is the one whose numbers a post-mortem needs.
+                Self::pin_and_report(&state, "released", release_point);
                 state.player.request_move(release_point, None)
             }
             Step::RestoreCameraSize => state.camera.restore(),
@@ -1524,6 +1609,9 @@ impl NpcPossessionEngine {
         // player's body rather than the creature's, so a later refusal would leave the body
         // wearing a size nothing is going to take off it.
         let body_scale = Self::plan_body_scale(creature, player);
+        // So the FIRST carried frame of every possession writes a co-location line, rather than
+        // whichever frame the previous possession happened to leave the counter on.
+        fall::reset_colocation_throttle();
         let state = Possessing {
             creature,
             player,
@@ -1714,4 +1802,26 @@ impl PossessionEngine for NpcPossessionEngine {
             self.release_with(Reason::Shutdown);
         }
     }
+}
+
+/// A point, for a log line, or the word that says the read failed.
+///
+/// `None` is a real outcome on every one of these reads -- the module pointer chain can fail on a
+/// character the game is tearing down -- and a line that says so is worth more than a line that
+/// prints zeroes and lets the reader believe them.
+fn describe_point(point: Option<[f32; 3]>) -> String {
+    point.map_or_else(
+        || "UNREADABLE".to_owned(),
+        |point| format!("({:.2}, {:.2}, {:.2})", point[0], point[1], point[2]),
+    )
+}
+
+/// A scalar in metres, likewise.
+fn describe_metres(value: Option<f32>) -> String {
+    value.map_or_else(|| "UNREADABLE".to_owned(), |value| format!("{value:.2}"))
+}
+
+/// A physics flag, likewise.
+fn describe_flag(value: Option<bool>) -> String {
+    value.map_or_else(|| "UNREADABLE".to_owned(), |value| format!("{value}"))
 }

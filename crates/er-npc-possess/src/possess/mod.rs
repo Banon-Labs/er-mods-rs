@@ -41,6 +41,7 @@
 // stay ungated, so `cargo test` proves them on the host with no game running. `game` and the
 // engine that drives them touch live memory through the windows-only `eldenring` bindings.
 pub(crate) mod body_size;
+pub(crate) mod fall;
 pub(crate) mod intent;
 pub(crate) mod layout;
 pub(crate) mod teardown;
