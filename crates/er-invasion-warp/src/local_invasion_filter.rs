@@ -80,6 +80,36 @@ use er_invasion_warp_core::param_row::PinAppearance;
 /// image base `0x180000000`) on 2026-08-05 -- not copied from a decompile listing. Every one is
 /// byte-checked against the loaded module before it is hooked or called, so a Seamless update that
 /// moves them disarms the filter instead of jumping into the middle of an instruction.
+///
+/// # These describe v1.9.9, and Seamless is now on v2.0.0
+///
+/// v2.0.0 shipped 2026-09-02 and this whole module is inert against it, by design: every gate
+/// below refuses, which is the fail-closed direction. Re-pinning it is a reverse-engineering job
+/// and NOT a find-and-replace, for two separate reasons.
+///
+/// Only half the addresses can be re-derived by content at all, and the other half must not be
+/// used on their own even so. Measured with
+/// `scripts/locate-ersc-entry-points.py`, mapping each v1.9.9 function's masked body onto v2.0.0:
+///
+/// | constant | v1.9.9 | v2.0.0 |
+/// |---|---|---|
+/// | [`SHOW_RVA`] | `0x22d30` | `0x241a0`, unique -- re-derivable |
+/// | [`CANCEL_ACTION_RVA`] | `0x24460` | `0x258d0`, unique -- but see the codes below |
+/// | [`INVADE_ACTION_RVA`] | `0x243e0` | no match at any signature length; the function changed |
+/// | [`BUILD_LOBBY_KEY_RVA`] | `0xabc20` | two candidates, `0xa7600` / `0xab5f0` -- ambiguous |
+///
+/// `BUILD_LOBBY_KEY_PROLOGUE` is the cautionary one: its 19 bytes match exactly ONE address in
+/// v2.0.0 (`0x1a6d0`), and that address is in neither of the two the body mapping finds. A unique
+/// prologue match is a code SHAPE, not an identification.
+///
+/// And the addresses are only half of it. v2.0.0 also moved the session object's fields and
+/// renumbered the action codes, all of which are hard-coded further down this module:
+/// [`SESSION_STATE_OFFSET`] `0x110` -> `0x150`, [`SESSION_GUARD_OFFSET`] `0x10c` -> `0x14c`, the
+/// sub-object both actions `lea` `+0xc0` -> `+0x100`, and the cancel action writes `0x23` where
+/// v1.9.9 wrote [`SESSION_STATE_CANCELLING`] (`0x22`). No v2.0.0 option action writes `0xd` at
+/// all, so [`SESSION_STATE_SEARCHING`] has no direct counterpart. A correct v2.0.0 address used
+/// with these v1.9.9 offsets would read and write the wrong fields of a live multiplayer session
+/// -- and this module's whole failure mode is cancelling other players' invasions.
 mod ersc {
     // Every `*_PROLOGUE` below is assembled from NAMED `iced-x86` instructions by this crate's
     // `build.rs`, which additionally checks them against the installed `ersc.dll` when one is
@@ -771,7 +801,9 @@ fn install_show_observer() -> usize {
         if SHOW_HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 0 {
             crate::standalone_log(format_args!(
                 "local-invasion: ersc.dll @0x{base:x} does not match the RVAs this build was \
-                 measured against -- NOT touching it. The filter stays inert."
+                 measured against (Seamless Co-op v1.9.9) -- NOT touching it. The filter stays \
+                 inert. To see where the entry points went: uv run --with capstone python3 \
+                 scripts/locate-ersc-entry-points.py"
             ));
         }
         return 0;
@@ -1778,7 +1810,7 @@ fn ersc_action(rva: usize, prologue: &[u8]) -> Option<ErscActionFn> {
         crate::standalone_log(format_args!(
             "local-invasion: ersc+{rva:#x} does not start with the bytes this build expects -- \
              refusing to call it. The filter is disarmed until the RVAs are re-read against this \
-             ersc.dll."
+             ersc.dll: uv run --with capstone python3 scripts/locate-ersc-entry-points.py"
         ));
         return None;
     }
