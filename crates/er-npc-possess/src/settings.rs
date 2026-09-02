@@ -773,8 +773,28 @@ impl Default for CameraSettings {
             // all of 1000-1099 are among them -- and re-checked live so a regulation mod that
             // uses it gets a refusal rather than a stolen camera.
             param_row: 1000,
-            distance_exponent: 0.7,
-            distance_max: 40.0,
+            // 1.0, NOT 0.7, and the difference is the whole of "the big ones get clipped".
+            //
+            // The camera's job is to hold a framing, and with a fixed vertical FOV holding a
+            // framing means distance scales LINEARLY with subject height. Any exponent below 1
+            // makes the shot TIGHTER the bigger the creature -- the framing degrades in exactly
+            // the direction the size increases, which is the worst possible place to be sublinear.
+            //
+            // Measured in the live game 2026-09-02, and reported by the user before the number was
+            // looked at: a 6.00 m creature framed at 10.03 m, where the player's own 3.8 m at
+            // 1.5 m tall wants 15.2 m for the same shot. The user's words were that a normal
+            // character has "at least a full character's height between my head and the top of the
+            // screen" while big avatars "get clipped by the camera because it doesn't travel far
+            // enough away from the target".
+            distance_exponent: 1.0,
+            // 120 m, up from 40. The 40 was chosen alongside the 0.7 and inherits its reasoning:
+            // the shipped comment rejected a linear law because it "puts a Fire Giant's camera
+            // 73 m out". But 73 m IS the correctly framed distance for a ~29 m subject -- it only
+            // sounds absurd next to a human's 3.8 m, and a ceiling below it does not tame the
+            // camera, it crops the creature. The ceiling stays as a guard against a nonsense
+            // height (a modded `NpcParam`, a `hitHeight` that is not a height) rather than as a
+            // limit on legitimate framing, so it sits well above the tallest real subject.
+            distance_max: 120.0,
         }
     }
 }
@@ -1261,15 +1281,55 @@ enabled = false
         assert!(summary.contains("camera.distance_max=\"0\""), "{summary}");
     }
 
-    /// The shipped default is the row this crate proved free offline, and the exponent that keeps
-    /// the biggest shipped creature inside the ceiling.
+    /// The shipped default is the row this crate proved free offline, and the exponent that holds
+    /// a FRAMING rather than the one that fitted under a ceiling.
+    ///
+    /// The old default was `0.7`, and this comment used to justify it as "the exponent that keeps
+    /// the biggest shipped creature inside the ceiling" -- which is the reasoning backwards. The
+    /// ceiling was picked first, the exponent was bent until the giants fitted under it, and what
+    /// the bending actually did was crop them: below 1.0 the shot gets TIGHTER as the subject gets
+    /// bigger, because distance grows slower than the thing it is framing.
+    ///
+    /// Reported by the user from a live run 2026-09-02, before anyone looked at the number: a
+    /// normal character has "at least a full character's height between my head and the top of the
+    /// screen", while the big avatars "get clipped by the camera because it doesn't travel far
+    /// enough away from the target, and not high enough". The log from that same run shows a
+    /// 6.00 m creature framed at 10.03 m; linear framing from the player's 3.8 m at 1.5 m wants
+    /// 15.2 m.
+    ///
+    /// So the exponent is pinned at 1.0 by the geometry, not by taste, and the second assertion
+    /// below states that geometry directly -- a future edit that moves the constant back has to
+    /// break a claim about framing, not merely a number.
     #[test]
-    fn the_camera_defaults_are_the_row_and_exponent_the_offline_proof_picked() {
+    fn the_camera_defaults_hold_a_framing_rather_than_fit_under_a_ceiling() {
         let camera = CameraSettings::default();
         assert!(camera.enabled);
         assert_eq!(camera.param_row, 1000);
-        assert_eq!(camera.distance_exponent, 0.7);
-        assert_eq!(camera.distance_max, 40.0);
+        assert_eq!(camera.distance_exponent, 1.0);
+        assert_eq!(camera.distance_max, 120.0);
+
+        // THE PROPERTY THE NUMBER IS FOR. Doubling the subject's height must double the framing
+        // distance, or the headroom above its head shrinks as it grows. `powf` is the law in
+        // `camera::geometry::shape`; this asserts the exponent the law is fed keeps it linear.
+        let at = |scale: f32| scale.powf(camera.distance_exponent);
+        assert!(
+            (at(2.0) / at(1.0) - 2.0).abs() < 1e-6,
+            "2x taller wants 2x the distance"
+        );
+        assert!(
+            (at(8.0) / at(4.0) - 2.0).abs() < 1e-6,
+            "and it must not decay with size"
+        );
+
+        // The ceiling must not be what decides the shot for a real creature. The tallest shipped
+        // subjects are around 29 m, which linear framing puts near 73 m -- comfortably inside 120,
+        // so the clamp only ever catches a nonsense height.
+        let tallest_real_m: f32 = 29.0;
+        let wanted = 3.8 * at(tallest_real_m / 1.5);
+        assert!(
+            wanted < camera.distance_max,
+            "{wanted} m would be cropped by the ceiling"
+        );
     }
 
     /// `[spawn]` reads back as written, and it reads back through `[target]`'s reader -- which is

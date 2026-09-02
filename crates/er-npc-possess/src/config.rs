@@ -319,13 +319,18 @@ enabled = true
 # table does not contain makes the engine's camera update do nothing at all.
 param_row = 1000
 # How hard the camera backs off as the creature gets bigger: distance = 3.8 * (height / 1.5) ^ this.
-# 0 pins it at your own camera's distance whatever you are wearing; 1 scales it straight with
-# height, which puts a Fire Giant's camera 73 m out. 0..2.
-distance_exponent = 0.7
+# 1 is the default and is not a taste setting: with a fixed field of view, holding a framing means
+# distance scales STRAIGHT with height, so 1 gives a Fire Giant the same headroom above its head
+# that your own character gets. Below 1 the shot gets TIGHTER the bigger the creature, which is
+# what used to clip them off the top of the screen; 0 pins the camera at your own distance whatever
+# you are wearing. Above 1 backs off faster than size, for a wider establishing shot. 0..2.
+distance_exponent = 1.0
 # Metres. A ceiling on the formula above -- but NOT on the clearance the camera keeps over the
 # creature's own collision radius, because a camera far away is a bad shot and a camera inside the
-# model is no shot at all.
-distance_max = 40.0
+# model is no shot at all. 120 is deliberately well above the tallest real creature (a Fire Giant
+# wants about 73 m): this is a guard against a nonsense height from a modded NpcParam, not a limit
+# on legitimate framing. Lower it and the big ones get cropped again.
+distance_max = 120.0
 
 # The HP / FP / stamina bars in the corner. LIVE -- an edit applies within a second, and turning
 # it off mid-possession hands the bars straight back to your own character.
