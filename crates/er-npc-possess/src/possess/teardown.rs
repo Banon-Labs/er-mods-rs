@@ -74,15 +74,26 @@ pub(crate) enum Step {
     RestoreCameraSize = 4,
     /// Clear `WorldChrManDbg+0xb8`. Camera and lock-on return to the real player.
     ClearCameraOverride = 5,
-    /// Clear `ChrCtrl+0x3b0` on the creature and give it its AI back. THE STEP THAT MUST HAPPEN.
-    ClearManipulatorOverride = 6,
+    /// Put the creature's own vtable pointer back and give it its AI back. THE STEP THAT MUST
+    /// HAPPEN.
+    ///
+    /// Possession swizzles the real `ComManipulator`'s vptr to a patched copy of its own table in
+    /// a page we allocated. That page is freed when the `Thunk` drops, so a creature left pointing
+    /// at it dispatches through unmapped memory on its very next tick.
+    RestoreManipulatorVtable = 6,
     /// Hand a creature this mod SPAWNED back to the game. A no-op for a creature the map placed.
     ///
-    /// **AFTER [`Self::ClearManipulatorOverride`], AND THAT IS A CRASH IF IT MOVES.**
-    /// `WorldChrManImp::RemoveChrIns` passes the character to `CSDelayDeleteMan`, whose eventual
-    /// destruction runs `ChrCtrl::Unref`, which DLPanics on a non-null `ChrCtrl+0x3b0`. Removing
-    /// first therefore arms the exact crash the step before it exists to prevent -- and arms it on
-    /// a delay, in a destructor, minutes later.
+    /// **AFTER [`Self::RestoreManipulatorVtable`], AND THAT IS A CRASH IF IT MOVES.**
+    /// `WorldChrManImp::RemoveChrIns` passes the character to `CSDelayDeleteMan`, and the eventual
+    /// destruction DISPATCHES THROUGH THE MANIPULATOR'S VTABLE -- which, until the step before has
+    /// run, is ours, in a page that is freed with the possession. Removing first therefore arms a
+    /// call through unmapped memory inside the engine's own teardown, where nothing of ours is
+    /// left to notice.
+    ///
+    /// The ordering predates the swizzle and the reason changed with it: under the old
+    /// `ChrCtrl+0x3b0` override it was `ChrCtrl::Unref`, which DLPanics on a non-null slot. That
+    /// hazard is retired -- this design leaves `+0x3b0` null -- but the order it forced is still
+    /// exactly right, so the test that pins it stayed while its justification was replaced.
     DespawnCreature = 7,
     /// Whatever was holding the save off, released. Last, always.
     LiftSaveSuppression = 8,
@@ -97,7 +108,7 @@ impl Step {
         Self::MovePlayer,
         Self::RestoreCameraSize,
         Self::ClearCameraOverride,
-        Self::ClearManipulatorOverride,
+        Self::RestoreManipulatorVtable,
         Self::DespawnCreature,
         Self::LiftSaveSuppression,
     ];
@@ -111,7 +122,7 @@ impl Step {
             Self::MovePlayer => "move-player",
             Self::RestoreCameraSize => "restore-camera-size",
             Self::ClearCameraOverride => "clear-camera-override",
-            Self::ClearManipulatorOverride => "clear-manipulator-override",
+            Self::RestoreManipulatorVtable => "restore-manipulator-vtable",
             Self::DespawnCreature => "despawn-creature",
             Self::LiftSaveSuppression => "lift-save-suppression",
         }
@@ -120,7 +131,7 @@ impl Step {
     /// Is this a step whose failure leaves the game in a state that will crash later?
     ///
     /// Exactly one qualifies. A failed `RestoreBody` leaves the player invisible until the next
-    /// possession, which is bad and survivable; a failed `ClearManipulatorOverride` leaves a
+    /// possession, which is bad and survivable; a failed `RestoreManipulatorVtable` leaves a
     /// DLPanic armed inside `ChrCtrl::Unref` for whenever that creature is unloaded.
     ///
     /// `DespawnCreature` deliberately does NOT qualify, and the difference is the point: its
@@ -128,7 +139,7 @@ impl Step {
     /// up by the next map load. It gets a [`Self::failure_note`] instead, because "despawn-creature
     /// failed" does not tell the reader what is now standing behind them.
     pub(crate) const fn is_critical(self) -> bool {
-        matches!(self, Self::ClearManipulatorOverride)
+        matches!(self, Self::RestoreManipulatorVtable)
     }
 
     /// What the reader needs to know when THIS step fails, spelled out because the consequence is
@@ -137,7 +148,7 @@ impl Step {
     /// `None` for the steps whose failure is self-explanatory from the name.
     pub(crate) const fn failure_note(self) -> Option<&'static str> {
         match self {
-            Self::ClearManipulatorOverride => {
+            Self::RestoreManipulatorVtable => {
                 Some("ChrCtrl+0x3b0 IS STILL ARMED; ChrCtrl::Unref will DLPanic")
             }
             Self::DespawnCreature => Some(
@@ -341,13 +352,13 @@ mod tests {
     #[test]
     fn the_creature_is_despawned_only_after_its_override_slot_has_been_cleared() {
         assert!(
-            Step::ClearManipulatorOverride < Step::DespawnCreature,
+            Step::RestoreManipulatorVtable < Step::DespawnCreature,
             "RemoveChrIns before the override clear is a delayed DLPanic in ChrCtrl::Unref"
         );
         // ...and the run order matches, not merely the discriminants.
         let clear = Step::ALL
             .iter()
-            .position(|step| *step == Step::ClearManipulatorOverride)
+            .position(|step| *step == Step::RestoreManipulatorVtable)
             .expect("present");
         let despawn = Step::ALL
             .iter()
@@ -381,7 +392,7 @@ mod tests {
         teardown.run(|step| {
             seen.push(step);
             // Everything before the override clear fails.
-            step >= Step::ClearManipulatorOverride
+            step >= Step::RestoreManipulatorVtable
         });
         assert_eq!(seen, Step::ALL.to_vec(), "every step was still attempted");
         assert!(!teardown.is_clean());
@@ -403,13 +414,13 @@ mod tests {
         for step in Step::ALL {
             assert_eq!(
                 step.is_critical(),
-                step == Step::ClearManipulatorOverride,
+                step == Step::RestoreManipulatorVtable,
                 "{}",
                 step.name()
             );
         }
         let mut teardown = Teardown::new(Reason::Shutdown);
-        teardown.run(|step| step != Step::ClearManipulatorOverride);
+        teardown.run(|step| step != Step::RestoreManipulatorVtable);
         assert!(teardown.has_critical_failure());
         let line = teardown.line();
         assert!(line.contains("ChrCtrl+0x3b0 IS STILL ARMED"), "{line}");

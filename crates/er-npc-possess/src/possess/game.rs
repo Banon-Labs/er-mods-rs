@@ -544,6 +544,18 @@ impl Chr {
     /// while the position does not change means a clip is playing and something is holding the
     /// body, which is the co-located player capsule the user suspected.
     ///
+    /// **THAT LAST CASE IS LIVE, AND IT WAS WRONGLY CLOSED ONCE.** An earlier note eliminated the
+    /// capsule on the grounds that this field read zero -- so no clip was playing, so nothing
+    /// could be holding anything. A later run read `0.0031356404` here with the creature's
+    /// position identical to five decimals across thirteen seconds. One zero sample is not the
+    /// property "always zero", and treating it as one closed the user's own hypothesis on
+    /// evidence that did not support it.
+    ///
+    /// What still separates the two readings is WHICH CLIP: |rootMotion| of `0.056` per frame is
+    /// walking pace at 60 fps, but an idle sway or a turn-in-place also translates a little. That
+    /// is why `anim` now prints on the same line -- a locomotion id there makes the body HELD,
+    /// an idle id makes it merely swaying, and neither needs another argument to settle.
+    ///
     /// Squared, because nothing here needs the magnitude itself and a square root would be a
     /// wasted instruction sixty times a second in service of a log line.
     pub(crate) fn root_motion_squared(self) -> Option<f32> {
@@ -586,41 +598,98 @@ impl Chr {
         unsafe { is_heap_aligned_ptr(manip) }.then_some(manip)
     }
 
-    /// Install the thunk on `ChrCtrl+0x3b0`.
-    pub(crate) fn install_manipulator_override(self, thunk: usize) -> bool {
+    /// Point the creature's REAL `ComManipulator` at our patched vtable.
+    ///
+    /// # Why this replaced the `ChrCtrl+0x3b0` override
+    ///
+    /// The override worked -- `[vt+0x48]` really was no-oped through it -- but it created a SECOND
+    /// OBJECT, and the engine does not only DISPATCH through that slot. Fourteen sites resolve
+    /// `chrManipulator ?? manipulator` and then use the answer as an OBJECT. The publish and the
+    /// consume are a matched pair, and they end up on opposite sides of that split:
+    ///
+    /// ```text
+    /// publish:  FUN_1403cdc20(manip, vec)   writes ChrManipulator +0x10 AND +0x70
+    /// consume:  FUN_1403cd770(manip, out)   MOVUPS XMM0,[RCX+0x10] ; MOVAPS [RDX],XMM0 ; RET
+    /// caller:   FUN_1403cbff0(ChrCtrl*)     resolves chrManipulator ?? manipulator,
+    ///                                       then calls FUN_1403cd770 on the result
+    /// ```
+    ///
+    /// The old forwarding stub swapped `rcx` to the real manipulator, so `[vt+0x50]` published
+    /// into THAT object while `FUN_1403cbff0` read `+0x10` off the override's zeroes.
+    /// `FUN_1403cd4c0`, called on the same pointer two lines later, reads `+0x20`..`+0x50` and is
+    /// starved the same way.
+    ///
+    /// **A correction to an earlier version of this note**, kept because the mistake is repeatable:
+    /// it cited `FUN_1403cbff0` as reading `+0x70` at `0x1403cc0b9`. That load is `ChrCtrl+0x70` --
+    /// `FUN_1403cbff0` takes a `ChrCtrl*`, not a manipulator. The citation came from a displacement
+    /// scan, which is exactly the inference `find-deobf-field-access.py` warns about in its own
+    /// help text: a displacement is not a struct. The mechanism survived the correction; the
+    /// evidence for it had to be re-derived through the getter above.
+    ///
+    /// One object cannot diverge from itself. `ChrCtrl+0x3b0` is now left NULL -- which also
+    /// retires the `ChrCtrl::Unref` DLPanic hazard the old design had to tiptoe around.
+    ///
+    /// # What this refuses
+    ///
+    /// The manipulator must still be the one this creature owns, and must still hold the exact
+    /// vptr the copy was taken from. Anything else means either a second copy of this mod or an
+    /// assumption that has stopped holding, and both are worse to overwrite than to decline.
+    pub(crate) fn install_manipulator_vtable(
+        self,
+        real_com: usize,
+        original: usize,
+        patched: usize,
+    ) -> bool {
+        if self.real_manipulator() != Some(real_com) {
+            return false;
+        }
+        // `ChrCtrl+0x3b0` must be EMPTY. This design deliberately leaves it null, so a non-null
+        // slot means something else owns this creature -- an older build of this mod, or another
+        // mod using the override the same way this one used to. Swizzling underneath that would
+        // give the creature two owners and one of them a stale vtable.
         let Some(ctrl) = self.chr_ctrl() else {
             return false;
         };
-        let at = ctrl + chr_ctrl::MANIPULATOR_OVERRIDE;
-        // Refuse to install over anything: a non-null slot means either a second copy of this mod
-        // or an assumption that has stopped holding, and both are worse to overwrite than to
-        // decline.
-        if unsafe { safe_read_usize(at) } != Some(0) {
+        if unsafe { safe_read_usize(ctrl + chr_ctrl::MANIPULATOR_OVERRIDE) } != Some(0) {
             return false;
         }
-        unsafe { (at as *mut usize).write(thunk) };
+        if unsafe { safe_read_usize(real_com) } != Some(original) {
+            return false;
+        }
+        // A pointer-sized store into a live game object, at an address just proven readable and
+        // proven to hold the value we expect. The engine reads it on its next virtual dispatch.
+        unsafe { (real_com as *mut usize).write(patched) };
         true
     }
 
-    /// Clear `ChrCtrl+0x3b0`. THE STEP THAT MUST HAPPEN: `ChrCtrl::Unref` DLPanics on a non-null
-    /// slot, so leaving it armed is a crash whenever the character is next unloaded.
+    /// Put the creature's original vtable pointer back. THE STEP THAT MUST HAPPEN.
     ///
-    /// Returns `true` when the slot is null afterwards -- including when the whole chain has gone,
-    /// because a `ChrCtrl` that no longer resolves cannot be holding our pointer either.
-    pub(crate) fn clear_manipulator_override(self, expected: usize) -> bool {
-        let Some(ctrl) = self.chr_ctrl() else {
-            return true;
-        };
-        let at = ctrl + chr_ctrl::MANIPULATOR_OVERRIDE;
-        match unsafe { safe_read_usize(at) } {
+    /// Our patched table lives in a page we free, so a creature left pointing at it dispatches
+    /// through unmapped memory on its next tick. [`crate::possess::teardown`] orders this before
+    /// the `Thunk` is dropped for exactly that reason.
+    ///
+    /// An associated function, addressed by the RECORDED `real_com` rather than through the
+    /// `ChrIns`: the creature can be freed while possessed -- 23 release/retake cycles happened in
+    /// one session -- and a pointer chain that no longer resolves must not stop us putting the
+    /// vptr back. Four outcomes, and only one is a failure:
+    ///
+    /// * the address will not read -- the object is gone, nothing to undo, success;
+    /// * it holds OUR table -- restore it, success;
+    /// * it holds the original already -- somebody beat us to it, success;
+    /// * it holds anything else -- another owner has it, and stomping that is worse than leaving
+    ///   it alone.
+    pub(crate) fn restore_manipulator_vtable(
+        real_com: usize,
+        original: usize,
+        patched: usize,
+    ) -> bool {
+        match unsafe { safe_read_usize(real_com) } {
             None => true,
-            Some(0) => true,
-            // Only OUR pointer is ours to remove.
-            Some(current) if current == expected => {
-                unsafe { (at as *mut usize).write(0) };
+            Some(current) if current == patched => {
+                unsafe { (real_com as *mut usize).write(original) };
                 true
             }
-            Some(_) => false,
+            Some(current) => current == original,
         }
     }
 
