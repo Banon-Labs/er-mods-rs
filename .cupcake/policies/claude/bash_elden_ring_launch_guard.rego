@@ -68,6 +68,14 @@ deny contains decision if {
 	# command is that single mv, so nothing else can ride under the exemption.
 	not ersc_user_restore_rename_command
 
+	# ...and the gitignored RE reference archive, same reasoning, same
+	# fail-closed shape. See ersc_reference_archive_copy_command below.
+	not ersc_reference_archive_copy_command
+
+	# ...and a bd memory that merely DESCRIBES the rule. See
+	# ersc_bd_text_mention_only below for why this has to exist at all.
+	not ersc_bd_text_mention_only
+
 	decision := {
 		"rule_id": "ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD",
 		"severity": "HIGH",
@@ -378,6 +386,78 @@ ersc_naming_statement_tokens contains tokens if {
 # destination (a repo `target/`/`dist/` path, a different directory, an extra
 # command) fails the shape and the file-moving arms deny as before.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# The gitignored RE REFERENCE ARCHIVE.
+#
+# User directive 2026-09-02, after Seamless Co-op v2.0.0 replaced v1.9.9 and
+# the launcher left the old build at `Game/_SeamlessCoop/ersc.dll`: archive the
+# previous DLL into this repo so a later launcher run cannot delete the only
+# copy of the build every current pin was measured against. Without it, the
+# addresses in `build-support/prologue_build.rs` become unre-derivable the next
+# time Seamless updates -- there would be nothing left to diff the new image
+# against.
+#
+# This is NOT bundling, and the distinction is the guard's own documented
+# mandate, quoted from the exemption above: "The guard's mandate keys on the
+# DESTINATION: no ersc.dll into me3/product release artifacts or repo target/
+# bundles." `vendor-archive/` is gitignored, is never referenced by a `.me3`
+# profile, is never staged into `target/`, and never enters a release. It is a
+# read-only RE input of exactly the same kind as `eldenring-deobf.bin`, which
+# this repo already keeps untracked for the same reason.
+#
+# Fail-closed shape, mirroring the restore-rename exemption: the WHOLE command
+# must be a single `cp` with two quoted operands and nothing else -- no
+# chaining, no substitution, no redirects -- the SOURCE must be an `ersc.dll`,
+# and the DESTINATION must sit directly in `vendor-archive/seamless/` under a
+# version-named `ersc-<version>.dll`. A destination anywhere else -- a `target/`
+# path, a `.me3` profile directory, a release tree, or even a different
+# subdirectory of the archive -- fails the shape and denies exactly as before.
+#
+# The archive path is also in `.gitignore`, so the "never committed" half of
+# the rule is enforced by git rather than by this policy agreeing to be careful.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# A `bd` memory that merely DESCRIBES this rule.
+#
+# Added 2026-09-02 after the guard blocked the memory recording where the
+# reference archive lives -- a memory whose entire purpose is telling the next
+# agent what this policy permits and forbids. It was denied because it QUOTES
+# the rule: it names `ersc.dll`, it names `cp`, it explains that a chained
+# `mkdir && cp` is refused. Prose about a guard trips the guard.
+#
+# `require_scoped_cargo` documents this same defect in its own header, and the
+# phrasing is worth keeping: "a guard whose own removal cannot be described in
+# the commit that removes it is unwritable in the repo that enforces it". The
+# same is true of a guard whose own DOCUMENTATION cannot be written down.
+#
+# Same shape every text-mention exemption in this directory uses: a single,
+# non-chained `bd` invocation with no substitution and no backticks. `bd` writes
+# text to a database; it cannot copy, stage or package anything, so the verbs
+# inside its argument are quoted prose by construction. Anything chained,
+# substituted, or wrapped fails the shape and denies as before.
+# ---------------------------------------------------------------------------
+
+ersc_bd_text_mention_only if {
+	tool_name == "Bash"
+	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, proc_scan_norm_command)
+	not contains(command, "$(")
+	not contains(command, "`")
+}
+
+ersc_reference_archive_copy_command if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	quote_parts := split(ersc_restore_quote_normalized, "'")
+	count(quote_parts) == 5
+	regex.match(`^cp( -{1,2}[a-zA-Z-]+)* $`, quote_parts[0])
+	quote_parts[2] == " "
+	quote_parts[4] == ""
+	regex.match(`/ersc\.dll$`, quote_parts[1])
+	regex.match(`(^|/)vendor-archive/seamless/ersc-[0-9]+(\.[0-9]+)*\.dll$`, quote_parts[3])
+}
 
 ersc_user_restore_rename_command if {
 	tool_name == "Bash"
