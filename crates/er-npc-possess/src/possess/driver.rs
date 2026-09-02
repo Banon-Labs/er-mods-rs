@@ -21,6 +21,10 @@ use crate::possess::game::{self, Chr};
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
 use crate::possess::{intent, layout};
+use crate::settings::TargetMode;
+use crate::spawn::game as spawn_game;
+use crate::spawn::readiness::{Gate, Poll, Readiness};
+use crate::spawn::request::SpawnSpec;
 
 /// Fully opaque, for the player's own body while somebody else is being worn.
 const ALPHA_INVISIBLE: f32 = 0.0;
@@ -34,10 +38,52 @@ const ALPHA_OPAQUE: f32 = 1.0;
 /// formatting spells zero as four digits rather than as a special case.
 const IDLE_ANIMATION: i32 = 0;
 
+/// A creature THIS MOD CREATED, carried by whatever is wearing it so the teardown knows there is
+/// something to give back.
+///
+/// `None` on a `Possessing` means the map placed the character and removing it is not ours to do.
+#[derive(Clone, Copy)]
+struct SpawnedBody {
+    spawned: spawn_game::Spawned,
+    /// `[spawn].despawn_on_release`. `false` leaves the creature standing when the possession
+    /// ends, which is a real choice and not a failure -- the log says which it was.
+    despawn_on_release: bool,
+}
+
+/// A spawn that has happened and is not yet drivable.
+///
+/// A state of its own rather than a flag on [`Possessing`], because almost nothing that is true of
+/// a possession is true here: there is no thunk, no camera override, no neutered body, and the
+/// creature cannot be driven or even read through for most of it. The one thing it shares is that
+/// the hotkey has been pressed and the player is waiting.
+struct Pending {
+    spawned: spawn_game::Spawned,
+    player: Chr,
+    /// The request that started it, replayed into [`NpcPossessionEngine::enter`] once ready.
+    request: PossessionRequest,
+    readiness: Readiness,
+    /// `layout::ene_dat_cap_offsets` for the running build, resolved once at spawn rather than per
+    /// frame. `None` makes the asset gate undecidable, which the readiness machine skips.
+    caps: Option<(usize, usize)>,
+    /// Where the creature is put the instant it becomes placeable. Captured at spawn, from the
+    /// player's position THEN -- so a player who walks away while it loads does not drag the spawn
+    /// point with them.
+    place_at: [f32; 3],
+    place_yaw: f32,
+    started: std::time::Instant,
+    /// The last gate a line was written about, so progress is logged on CHANGE rather than sixty
+    /// times a second.
+    reported: Option<Gate>,
+    despawn_on_release: bool,
+    chr_id: u32,
+}
+
 /// One possession in flight.
 struct Possessing {
     creature: Chr,
     player: Chr,
+    /// Set only when this mod created the creature; see [`SpawnedBody`].
+    spawned: Option<SpawnedBody>,
     /// Kept alive for exactly as long as `ChrCtrl+0x3b0` points at it. Dropping it frees the page,
     /// so it must outlive the clear -- which is why teardown owns this whole struct and drops it
     /// only after [`Step::ClearManipulatorOverride`] has run.
@@ -105,11 +151,17 @@ impl Possessing {
 #[derive(Default)]
 pub(crate) struct NpcPossessionEngine {
     active: Option<Possessing>,
+    /// A spawn waiting to become drivable. Mutually exclusive with [`Self::active`]: the pending
+    /// one becomes the active one, and nothing else can start while either is set.
+    pending: Option<Pending>,
 }
 
 impl NpcPossessionEngine {
     pub(crate) const fn new() -> Self {
-        Self { active: None }
+        Self {
+            active: None,
+            pending: None,
+        }
     }
 
     /// Everything that has to be true of the player's body while somebody else is being worn.
@@ -139,8 +191,48 @@ impl NpcPossessionEngine {
         invincible && alpha && muted && flags
     }
 
+    /// Cancel a spawn that never became drivable, or that the player pressed the key out of.
+    ///
+    /// A separate path from [`Self::release_with`] on purpose: none of the six possession steps
+    /// applies -- nothing was neutered, no camera was moved, no override was installed -- and
+    /// running them would report six successes for work that was never done. The only thing owed is
+    /// the creature.
+    fn cancel_pending(pending: Pending, reason: Reason, despawn: bool) -> bool {
+        let removed = if despawn && pending.despawn_on_release {
+            spawn_game::despawn(pending.spawned.creature)
+        } else {
+            false
+        };
+        possess_log(format_args!(
+            "spawn: cancelled c{:04} in roster slot {} after {} ms (reason={}) -- creature {}",
+            pending.chr_id,
+            pending.spawned.slot,
+            pending.started.elapsed().as_millis(),
+            reason.name(),
+            if removed {
+                "removed"
+            } else if !despawn {
+                "LEFT IN THE WORLD; RemoveChrIns is a game call and this is not the game thread"
+            } else if pending.despawn_on_release {
+                "COULD NOT BE REMOVED and is still in the world"
+            } else {
+                "left standing, as [spawn].despawn_on_release asks"
+            }
+        ));
+        removed
+    }
+
     /// Run the release, in order, whatever fails. See [`teardown`].
     fn release_with(&mut self, reason: Reason) -> PossessionOutcome {
+        // A press that lands while a spawn is still coming up cancels it. Handled before the
+        // active state because the two are mutually exclusive and this one has its own teardown.
+        if let Some(pending) = self.pending.take() {
+            // `Reason::Shutdown` runs on `DllMain`'s thread, which is not the game thread; see
+            // `Step::DespawnCreature` in the release below for why a game call is refused there.
+            Self::cancel_pending(pending, reason, reason != Reason::Shutdown);
+            return PossessionOutcome::Accepted;
+        }
+        // `mut` because the camera restore below mutates the saved state as it unwinds it.
         let Some(mut state) = self.active.take() else {
             // Releasing when nothing is possessed must be safe and quiet: the shutdown path calls
             // it unconditionally, and so does the state machine after a refusal.
@@ -161,6 +253,36 @@ impl NpcPossessionEngine {
             Step::ClearManipulatorOverride => {
                 state.creature.clear_manipulator_override(thunk_address)
             }
+            // AFTER the override clear, always; see `Step::DespawnCreature`, whose discriminant is
+            // that ordering and whose test fails if anyone moves it.
+            Step::DespawnCreature => match state.spawned {
+                // The map placed this character. Removing it is not ours to do.
+                None => true,
+                // The player asked for it to stay. Nothing failed.
+                Some(body) if !body.despawn_on_release => true,
+                // `DLL_PROCESS_DETACH` RUNS ON A THREAD THAT IS NOT THE GAME THREAD, under the
+                // loader lock, with the other threads possibly already gone. `RemoveChrIns` walks
+                // four singletons, calls a virtual on the character and DLPanics if any of them is
+                // missing -- so it is refused here, and an orphaned NPC is accepted instead.
+                //
+                // That is a real, deliberate restriction and not an oversight: the creature is an
+                // ordinary `EnemyIns` in the buddy roster with its AI already given back by the
+                // step above, and the next map load removes it. A crash inside `DllMain` would not
+                // be survivable and would be attributed to whatever unloaded us.
+                Some(body) => {
+                    if reason == Reason::Shutdown {
+                        possess_log(format_args!(
+                            "spawn: the creature in roster slot {} is being LEFT IN THE WORLD -- \
+                             RemoveChrIns is a game call and DLL_PROCESS_DETACH is not the game \
+                             thread. It has its own AI back and the next map load clears it",
+                            body.spawned.slot
+                        ));
+                        true
+                    } else {
+                        spawn_game::despawn(body.spawned.creature)
+                    }
+                }
+            },
             Step::LiftSaveSuppression => true,
         });
         possess_log(format_args!("{}", run.line()));
@@ -472,21 +594,199 @@ impl NpcPossessionEngine {
     }
 }
 
-impl PossessionEngine for NpcPossessionEngine {
-    fn possess(&mut self, request: &PossessionRequest) -> PossessionOutcome {
-        if self.active.is_some() {
-            return PossessionOutcome::Refused("already possessing".to_owned());
+impl NpcPossessionEngine {
+    /// Ask the game to create the creature `[spawn]` names, and start waiting for it.
+    ///
+    /// Returns `Accepted` the moment the `ChrIns` exists -- NOT when it is drivable. The state
+    /// machine above treats that as an active possession, which is right: the player pressed the
+    /// key, something happened, and pressing again must cancel it rather than start a second one.
+    fn begin_spawn(&mut self, request: &PossessionRequest, player: Chr) -> PossessionOutcome {
+        let settings = request.target.spawn;
+        let Some(position) = player.position() else {
+            return PossessionOutcome::Refused("the player's position did not read".to_owned());
+        };
+        let yaw = player.yaw().unwrap_or(0.0);
+        // In front of the player, at the player's own height, using the SAME basis the movement
+        // target uses -- see `intent::ahead_of` for why that is one function and not two.
+        let place_at = intent::ahead_of(position, yaw, settings.distance_m);
+        let spec = SpawnSpec {
+            chr_id: settings.chr_id,
+            npc_param_id: settings.resolved_npc_param_id(),
+            npc_think_id: settings.npc_think_id,
+            position: place_at,
+            yaw,
+        };
+        let spawned = match spawn_game::spawn(&spec) {
+            Ok(spawned) => spawned,
+            Err(reason) => {
+                Self::write_spawn_refusal(settings.chr_id, &reason);
+                return PossessionOutcome::Refused(reason);
+            }
+        };
+        possess_log(format_args!(
+            "spawn: created c{:04} (NpcParam {}) as ChrIns=0x{:x} in buddy roster slot {} -- \
+             waiting up to {} ms for it to become drivable. Nothing is pumped while it loads: \
+             EneDatManImp::Update walks every slot each frame from the game's own STEP_Update",
+            settings.chr_id,
+            spec.npc_param_id,
+            spawned.creature.address(),
+            spawned.slot,
+            settings.readiness_ms,
+        ));
+        self.pending = Some(Pending {
+            spawned,
+            player,
+            request: *request,
+            readiness: Readiness::new(u64::from(settings.readiness_ms)),
+            caps: layout::ene_dat_cap_offsets(game_file_version()),
+            place_at,
+            place_yaw: yaw,
+            started: std::time::Instant::now(),
+            reported: None,
+            despawn_on_release: settings.despawn_on_release,
+            chr_id: settings.chr_id,
+        });
+        PossessionOutcome::Accepted
+    }
+
+    /// One frame of waiting for a spawned creature to come up.
+    fn tick_pending(&mut self) {
+        let Some(pending) = self.pending.as_mut() else {
+            return;
+        };
+        let elapsed = u64::try_from(pending.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let caps = pending.caps;
+        let spawned = pending.spawned;
+        let verdict = pending
+            .readiness
+            .observe(elapsed, |gate| spawn_game::evaluate(&spawned, caps, gate));
+        match verdict {
+            Poll::Waiting(gate) => {
+                // Once per gate CHANGE. A per-frame line on a five-second wait is three hundred
+                // identical lines, which is the same as no line at all.
+                if pending.reported != Some(gate) {
+                    pending.reported = Some(gate);
+                    possess_log(format_args!(
+                        "spawn: c{:04} is waiting on {} ({} ms elapsed)",
+                        pending.chr_id,
+                        gate.name(),
+                        elapsed
+                    ));
+                }
+            }
+            Poll::Ready => {
+                let pending = self.pending.take().expect("checked above");
+                self.finish_spawn(pending, elapsed);
+            }
+            // THE GAME took it away -- `EnemyIns::InitializeCharacterRendering` self-despawns a
+            // character whose caps loaded but yielded no FLVER. The pointer is already dead, so
+            // this drops it and MUST NOT call `RemoveChrIns` again.
+            Poll::Vanished => {
+                let pending = self.pending.take().expect("checked above");
+                let reason = format!(
+                    "the game removed c{:04} itself after {elapsed} ms, which is what it does to a \
+                     character whose assets loaded but produced no model",
+                    pending.chr_id
+                );
+                possess_log(format_args!("spawn: {reason}"));
+                Self::write_spawn_refusal(pending.chr_id, &reason);
+            }
+            Poll::Expired(gate) => {
+                let reached = pending.readiness.reached();
+                let pending = self.pending.take().expect("checked above");
+                // BOTH the gate it died on AND how far it ever got. "waiting on chrres-loaded"
+                // reads the same whether nothing at all happened or everything up to the assets
+                // did, and those are different problems.
+                let reason = format!(
+                    "c{:04} was still waiting on {} after {elapsed} ms (furthest stage reached: \
+                     {}): {}",
+                    pending.chr_id,
+                    gate.name(),
+                    reached.map_or("none", Gate::name),
+                    gate.stuck_means()
+                );
+                possess_log(format_args!("spawn: giving up -- {reason}"));
+                Self::write_spawn_refusal(pending.chr_id, &reason);
+                Self::cancel_pending(pending, Reason::SpawnTimedOut, true);
+            }
         }
-        let Some(player) = game::main_player() else {
-            return PossessionOutcome::Refused("no local player".to_owned());
+    }
+
+    /// The creature is drivable. Put it where the press asked for it and wear it.
+    fn finish_spawn(&mut self, pending: Pending, elapsed: u64) {
+        // Placed HERE and not at spawn time, because the creature's position field is not read on
+        // the creature path of `CreateCharacter` at all -- `InitEnemyChrBaseData` supplies the base
+        // data and the request's vectors are consumed only by the PlayerIns branch. So the request
+        // says where it should be and this is what actually puts it there, through the same proxy
+        // drain co-location uses (which also means no fall damage on the way).
+        let placed = pending
+            .spawned
+            .creature
+            .request_move(pending.place_at, Some(pending.place_yaw));
+        possess_log(format_args!(
+            "spawn: c{:04} became drivable after {elapsed} ms; {}",
+            pending.chr_id,
+            if placed {
+                "placed in front of the player"
+            } else {
+                "COULD NOT BE PLACED, so it is wherever InitEnemyChrBaseData left it"
+            }
+        ));
+        let body = SpawnedBody {
+            spawned: pending.spawned,
+            despawn_on_release: pending.despawn_on_release,
         };
-        let (target, candidates) = game::pick_target(request.target, player);
-        let Some(creature) = target else {
-            return PossessionOutcome::Refused(game::describe_no_target(
-                request.target.mode,
-                candidates,
-            ));
-        };
+        let provenance = format!("mode=spawn slot={}", pending.spawned.slot);
+        match self.enter(
+            pending.spawned.creature,
+            pending.player,
+            &pending.request,
+            &provenance,
+            Some(body),
+        ) {
+            PossessionOutcome::Accepted => {}
+            outcome => {
+                // We made it and we cannot wear it, so we take it away -- an untracked creature is
+                // one nothing will ever remove.
+                let reason = format!(
+                    "c{:04} loaded but could not be possessed: {}",
+                    pending.chr_id,
+                    outcome.describe()
+                );
+                possess_log(format_args!("spawn: {reason}"));
+                Self::write_spawn_refusal(pending.chr_id, &reason);
+                if pending.despawn_on_release {
+                    spawn_game::despawn(pending.spawned.creature);
+                }
+            }
+        }
+    }
+
+    /// `er-npc-possess.derived.toml`, for a press that produced no creature.
+    ///
+    /// Best-effort, like the moveset report it replaces: the game directory can be read-only, and a
+    /// log line about failing to write a log-adjacent file is noise.
+    fn write_spawn_refusal(chr_id: u32, reason: &str) {
+        let _ = std::fs::write(
+            crate::config::DERIVED_CONFIG_FILE_NAME,
+            derived::render_spawn_refusal(chr_id, reason),
+        );
+    }
+
+    /// Wear `creature`: install the thunk, move the camera, neuter the player's body and build the
+    /// moveset.
+    ///
+    /// Extracted so the found-a-target path and the spawned-one path are the SAME code. They
+    /// differ only in where the creature came from -- and `spawned` is that difference, carried
+    /// into the teardown so it knows whether it owes the world a despawn.
+    fn enter(
+        &mut self,
+        creature: Chr,
+        player: Chr,
+        request: &PossessionRequest,
+        provenance: &str,
+        spawned: Option<SpawnedBody>,
+    ) -> PossessionOutcome {
         let Some(real_com) = creature.real_manipulator() else {
             return PossessionOutcome::Refused("the target has no manipulator".to_owned());
         };
@@ -526,6 +826,7 @@ impl PossessionEngine for NpcPossessionEngine {
         let state = Possessing {
             creature,
             player,
+            spawned,
             thunk,
             debug_flags_offset,
             release_on_death: request.target.release_on_death,
@@ -563,16 +864,51 @@ impl PossessionEngine for NpcPossessionEngine {
         }
         possess_log(format_args!(
             "possession: ChrIns=0x{:x} com=0x{real_com:x} thunk=0x{:x} camera=override player=0x{:x} \
-             mode={} candidates={candidates} -- the body stays lock-on-able (that needs a \
-             SpEffect, not a field write)",
+             {provenance} spawned={} -- the body stays lock-on-able (that needs a SpEffect, not a \
+             field write)",
             creature.address(),
             state.thunk.object_address(),
             player.address(),
-            request.target.mode.name(),
+            match state.spawned {
+                None => "no (the map placed this one)",
+                Some(body) if body.despawn_on_release => "yes, and it is removed again on release",
+                Some(_) => "yes, and [spawn].despawn_on_release leaves it standing",
+            },
         ));
         debug_assert_eq!(state.thunk.real_com(), real_com);
         self.active = Some(state);
         PossessionOutcome::Accepted
+    }
+}
+
+impl PossessionEngine for NpcPossessionEngine {
+    fn possess(&mut self, request: &PossessionRequest) -> PossessionOutcome {
+        if self.active.is_some() {
+            return PossessionOutcome::Refused("already possessing".to_owned());
+        }
+        if self.pending.is_some() {
+            return PossessionOutcome::Refused("a spawn is still coming up".to_owned());
+        }
+        let Some(player) = game::main_player() else {
+            return PossessionOutcome::Refused("no local player".to_owned());
+        };
+        // THE MODE THAT CREATES RATHER THAN FINDS. It returns before any of the possession
+        // machinery, because there is nothing to possess yet -- see `tick_pending`.
+        if request.target.mode == TargetMode::Spawn {
+            return self.begin_spawn(request, player);
+        }
+        let (target, candidates) = game::pick_target(request.target, player);
+        let Some(creature) = target else {
+            return PossessionOutcome::Refused(game::describe_no_target(
+                request.target.mode,
+                candidates,
+            ));
+        };
+        let provenance = format!(
+            "mode={} candidates={candidates}",
+            request.target.mode.name()
+        );
+        self.enter(creature, player, request, &provenance, None)
     }
 
     fn release(&mut self) -> PossessionOutcome {
@@ -580,18 +916,42 @@ impl PossessionEngine for NpcPossessionEngine {
     }
 
     fn tick(&mut self) {
+        if self.pending.is_some() {
+            self.tick_pending();
+            return;
+        }
         self.tick_active();
     }
 
+    /// A spawn in flight counts as active.
+    ///
+    /// Otherwise `tick_engine` would reconcile the toggle back to idle on the first frame of the
+    /// wait, and the player's next press would start a SECOND spawn while the first was still
+    /// loading -- two creatures, one of them untracked and never removed.
     fn is_active(&self) -> bool {
-        self.active.is_some()
+        self.active.is_some() || self.pending.is_some()
+    }
+
+    /// Hold a config reload off while a spawn is coming up.
+    ///
+    /// The pending spawn carries the request it was started with, and it is replayed into the
+    /// possession when the creature becomes drivable. Letting `[spawn]` move in between would mean
+    /// the roster slot was created under one set of rules and worn under another -- and, if
+    /// `despawn_on_release` moved, torn down under a third.
+    fn accepts_reload(&self) -> bool {
+        self.pending.is_none()
     }
 
     fn shutdown(&mut self) {
         // The one release that MUST happen even though nobody asked: an armed `ChrCtrl+0x3b0` in a
         // process that is about to unload this DLL is a DLPanic the next time that character is
         // torn down, with our code no longer present to explain it.
-        if self.active.is_some() {
+        //
+        // A PENDING SPAWN GOES THROUGH THE SAME CALL, and this is why the check covers both: the
+        // creature it created is real and registered even though nothing is possessed yet, so
+        // "nothing to release" would be wrong. `release_with` declines the game call on this
+        // thread and says the creature is being left; see `Step::DespawnCreature`.
+        if self.active.is_some() || self.pending.is_some() {
             self.release_with(Reason::Shutdown);
         }
     }

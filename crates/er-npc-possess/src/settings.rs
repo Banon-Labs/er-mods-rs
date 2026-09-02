@@ -1,10 +1,10 @@
 //! The schema: every table in `er-npc-possess.toml` that is not a hotkey.
 //!
-//! Almost nothing here is CONSUMED yet -- stack layer 1 owns the config file, the hotkeys and the
-//! seam, and the possession engine that reads these values lands in a later layer. They are
-//! parsed, validated and reported anyway, for one reason: the file a player tunes now has to be
-//! the file the later layers read. A schema that appears a table at a time makes every early
-//! config a migration.
+//! Layer 1 shipped this whole schema before anything read it, on the reasoning that the file a
+//! player tunes now has to be the file the later layers read -- a schema that appears a table at a
+//! time makes every early config a migration. Layers 2, 3 and 4 have since consumed most of it;
+//! what remains unread is named in the shipped file's own comments rather than here, so the two
+//! cannot disagree.
 //!
 //! # The rule every field here follows
 //!
@@ -27,6 +27,7 @@ use crate::toml::Document;
 
 /// Section names, spelled once.
 pub(crate) const TARGET_SECTION: &str = "target";
+pub(crate) const SPAWN_SECTION: &str = "spawn";
 pub(crate) const MAPPING_SECTION: &str = "mapping";
 pub(crate) const BUTTONS_SECTION: &str = "buttons";
 pub(crate) const MOVEMENT_SECTION: &str = "movement";
@@ -110,6 +111,12 @@ pub(crate) enum TargetMode {
     Crosshair,
     /// The literal [`TargetSettings::chr_id`], ignoring where the player is looking.
     ChrId,
+    /// CREATE the creature `[spawn]` names and possess that, rather than finding one.
+    ///
+    /// The only mode that puts something in the world rather than borrowing something already
+    /// there, and therefore the only one with a teardown that has to remove what it made. See
+    /// [`SpawnSettings`] and `crate::spawn`.
+    Spawn,
 }
 
 impl TargetMode {
@@ -119,6 +126,7 @@ impl TargetMode {
             "nearest" => Some(Self::Nearest),
             "crosshair" => Some(Self::Crosshair),
             "chr_id" | "chrid" => Some(Self::ChrId),
+            "spawn" => Some(Self::Spawn),
             _ => None,
         }
     }
@@ -129,7 +137,13 @@ impl TargetMode {
             Self::Nearest => "nearest",
             Self::Crosshair => "crosshair",
             Self::ChrId => "chr_id",
+            Self::Spawn => "spawn",
         }
+    }
+
+    /// Does this mode CREATE a character, and therefore owe the world a despawn?
+    pub(crate) const fn creates(self) -> bool {
+        matches!(self, Self::Spawn)
     }
 }
 
@@ -139,12 +153,19 @@ impl TargetMode {
 /// saved. This one cannot: it decides who you are, and swapping that out from under an in-flight
 /// possession would mean the mapping, the camera and the moveset all belonging to a different
 /// character than the body on screen. An edit is STAGED and adopted at the next possession.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TargetSettings {
     pub(crate) mode: TargetMode,
-    /// Used only when `mode == ChrId`, e.g. 45000.
+    /// Used only when `mode == ChrId`. An `NpcParam` ROW, matched against a loaded character's
+    /// `npc_param_id` or `npc_id` -- so `45000000` for a Flying Dragon, not `4500` and not `45000`.
+    /// `[spawn].chr_id` is the other kind of number and is deliberately a different field.
     pub(crate) chr_id: i32,
     pub(crate) release_on_death: bool,
+    /// `[spawn]`. Carried inside `[target]` rather than beside it, because it decides WHO YOU
+    /// BECOME and therefore has to be staged with the rest of that decision -- an edit adopted
+    /// mid-possession would mean the roster slot being torn down at release was chosen under
+    /// different rules than the one that was created.
+    pub(crate) spawn: SpawnSettings,
 }
 
 impl Default for TargetSettings {
@@ -153,7 +174,152 @@ impl Default for TargetSettings {
             mode: TargetMode::LockOn,
             chr_id: 0,
             release_on_death: true,
+            spawn: SpawnSettings::default(),
         }
+    }
+}
+
+/// `[spawn]`. Read with `[target]` and staged with it; see [`TargetSettings::spawn`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SpawnSettings {
+    /// The MODEL number: `4500` becomes `c4500`. Used only when `mode = "spawn"`.
+    pub(crate) chr_id: u32,
+    /// The `NpcParam` row, or `0` to derive `chr_id * 10000` -- the row whose moveset the shipped
+    /// table is keyed by, so the easy configuration and the moveset agree.
+    pub(crate) npc_param_id: i32,
+    /// The `NpcThinkParam` row. Rarely worth setting: the lookup pre-initialises its result and
+    /// `LoadWait` treats the resulting NULL `LuaDat` caps as satisfied, so an invalid one is not a
+    /// failure.
+    pub(crate) npc_think_id: i32,
+    /// How far in front of the player it appears, in metres.
+    ///
+    /// Not zero, and not configurable down to zero: a creature placed exactly on the player is one
+    /// the player is standing inside for the frame before possession takes, and a large creature
+    /// resolving that overlap can throw the body.
+    pub(crate) distance_m: f32,
+    /// How long to wait for it to become drivable before giving up and removing it.
+    ///
+    /// THE ONLY THING THAT ENDS A BAD PICK. There is no error edge anywhere in the `ChrRes` or
+    /// `EneDat` state machines, so a chr id with no assets waits forever; this is the deadline that
+    /// turns that into a message.
+    pub(crate) readiness_ms: u32,
+    /// Take the creature away again when the possession ends.
+    ///
+    /// ON by default. Leaving it is not free: it is a live NPC that nothing else will ever remove,
+    /// and the buddy roster has fourteen slots the game's own spawner shares.
+    pub(crate) despawn_on_release: bool,
+}
+
+impl Default for SpawnSettings {
+    fn default() -> Self {
+        Self {
+            // A REAL CREATURE, not zero. `mode = "spawn"` with a default of `c0000` would ask for a
+            // model that does not exist, and the game does not fail that request -- it waits, until
+            // the deadline removes it. So the default id has to be one that works, and c4500 is in
+            // the shipped moveset table, which makes the first press do something rather than
+            // demonstrate the timeout.
+            chr_id: 4500,
+            npc_param_id: 0,
+            npc_think_id: 0,
+            distance_m: 3.0,
+            readiness_ms: 5_000,
+            despawn_on_release: true,
+        }
+    }
+}
+
+impl SpawnSettings {
+    /// The `NpcParam` row in force: the configured one, or the id-derived default.
+    ///
+    /// The derivation is [`crate::spawn::request::SpawnSpec::default_npc_param_id`] rather than the
+    /// same multiply written again -- the magnitude is the part that is easy to get wrong (c4500 is
+    /// row 45,000,000, not 45,000) and it is asserted against the moveset table's own inverse over
+    /// there.
+    #[must_use]
+    pub(crate) const fn resolved_npc_param_id(&self) -> i32 {
+        if self.npc_param_id != 0 {
+            return self.npc_param_id;
+        }
+        crate::spawn::request::SpawnSpec::default_npc_param_id(self.chr_id)
+    }
+
+    fn apply(&mut self, doc: &Document, rejections: &mut Rejections) {
+        let s = SPAWN_SECTION;
+        // Bounded at parse time rather than at spawn time, so a five-digit id is reported next to
+        // the line it was typed on instead of as a refused hotkey press minutes later.
+        // `1..=9999`, bounded at parse time rather than at spawn time so a bad id is reported next
+        // to the line it was typed on instead of as a refused hotkey press minutes later. Zero is
+        // excluded with the rest: `c0000` is not a creature, and the game answers a request for a
+        // model that does not exist by waiting rather than by failing.
+        take(&mut self.chr_id, doc, s, "chr_id", rejections, |raw| {
+            raw.trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|id| (1..=9999).contains(id))
+        });
+        take(
+            &mut self.npc_param_id,
+            doc,
+            s,
+            "npc_param_id",
+            rejections,
+            parse_i32,
+        );
+        take(
+            &mut self.npc_think_id,
+            doc,
+            s,
+            "npc_think_id",
+            rejections,
+            parse_i32,
+        );
+        // A metre is about the radius of the player's own capsule, and 50 is past anything the
+        // camera will follow comfortably. Rejected rather than clamped: 0 would mean "inside me".
+        take(
+            &mut self.distance_m,
+            doc,
+            s,
+            "distance_m",
+            rejections,
+            |raw| parse_f32(raw).filter(|v| (1.0..=50.0).contains(v)),
+        );
+        // A deadline under a second cannot be met by an asset load, and one over a minute is
+        // indistinguishable from no deadline at all -- which is the state this setting exists to
+        // leave.
+        take(
+            &mut self.readiness_ms,
+            doc,
+            s,
+            "readiness_ms",
+            rejections,
+            |raw| {
+                raw.trim()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|ms| (1_000..=60_000).contains(ms))
+            },
+        );
+        take(
+            &mut self.despawn_on_release,
+            doc,
+            s,
+            "despawn_on_release",
+            rejections,
+            parse_bool,
+        );
+    }
+
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "chr_id=c{:04} npc_param_id={} npc_think_id={} distance_m={} readiness_ms={} \
+             despawn_on_release={}",
+            self.chr_id,
+            self.resolved_npc_param_id(),
+            self.npc_think_id,
+            self.distance_m,
+            self.readiness_ms,
+            self.despawn_on_release
+        )
     }
 }
 
@@ -180,11 +346,20 @@ impl TargetSettings {
             rejections,
             parse_bool,
         );
+        // `[spawn]` is read HERE, inside `[target]`'s reader, because it is staged with it. A
+        // separate live table would let the roster slot be chosen under one set of rules and torn
+        // down under another.
+        self.spawn.apply(doc, rejections);
     }
 
     pub(crate) fn summary(&self) -> String {
+        let spawn = if self.mode.creates() {
+            format!(" spawn[{}]", self.spawn.summary())
+        } else {
+            String::new()
+        };
         format!(
-            "mode={} chr_id={} release_on_death={}",
+            "mode={} chr_id={} release_on_death={}{spawn}",
             self.mode.name(),
             self.chr_id,
             self.release_on_death
@@ -811,6 +986,98 @@ distance_max = 25.0
         assert_eq!(camera.param_row, 1000);
         assert_eq!(camera.distance_exponent, 0.7);
         assert_eq!(camera.distance_max, 40.0);
+    }
+
+    /// `[spawn]` reads back as written, and it reads back through `[target]`'s reader -- which is
+    /// what makes it staged rather than live. A `[spawn]` that took effect immediately could change
+    /// `despawn_on_release` under an in-flight possession and decide the fate of a roster slot that
+    /// was created under the other answer.
+    #[test]
+    fn the_spawn_table_reads_back_what_the_file_says_and_arrives_through_target() {
+        let (_, target, rejections) = read(
+            r#"
+[target]
+mode = "spawn"
+
+[spawn]
+chr_id = 3200
+npc_param_id = 32000100
+npc_think_id = 32000000
+distance_m = 7.5
+readiness_ms = 12000
+despawn_on_release = false
+"#,
+        );
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+        assert_eq!(target.mode, TargetMode::Spawn);
+        assert!(target.mode.creates(), "spawn is the mode that creates");
+        assert_eq!(target.spawn.chr_id, 3200);
+        assert_eq!(target.spawn.npc_param_id, 32_000_100);
+        assert_eq!(target.spawn.resolved_npc_param_id(), 32_000_100);
+        assert_eq!(target.spawn.npc_think_id, 32_000_000);
+        assert_eq!(target.spawn.distance_m, 7.5);
+        assert_eq!(target.spawn.readiness_ms, 12_000);
+        assert!(!target.spawn.despawn_on_release);
+        // ...and it is named in the summary only for the mode that uses it, so the log line for a
+        // lock-on possession does not carry six irrelevant numbers.
+        assert!(target.summary().contains("spawn["), "{}", target.summary());
+        let borrowed = TargetSettings::default();
+        assert!(!borrowed.mode.creates());
+        assert!(
+            !borrowed.summary().contains("spawn["),
+            "{}",
+            borrowed.summary()
+        );
+    }
+
+    /// `npc_param_id = 0` means "derive it", and the derivation has to land on the row the shipped
+    /// moveset table is keyed by -- c4500 is row 45,000,000, not 45,000.
+    #[test]
+    fn a_zero_param_row_is_derived_from_the_chr_id_at_the_right_magnitude() {
+        let (_, target, _) = read("[spawn]\nchr_id = 4500\nnpc_param_id = 0\n");
+        assert_eq!(target.spawn.resolved_npc_param_id(), 45_000_000);
+        assert_eq!(target.spawn.resolved_npc_param_id() / 10_000, 4500);
+    }
+
+    /// EVERY `[spawn]` BOUND IS ENFORCED AT PARSE TIME, so a bad number is reported next to the
+    /// line it was typed on rather than as a hotkey press that quietly does nothing. Zero is
+    /// rejected with the out-of-range ids: `c0000` is not a creature, and the game answers a
+    /// request for a model that does not exist by WAITING rather than by failing -- so accepting it
+    /// would buy a five-second timeout instead of a message.
+    #[test]
+    fn out_of_range_spawn_values_are_rejected_and_the_working_ones_stay() {
+        let (_, target, rejections) = read(
+            r#"
+[spawn]
+chr_id = 10000
+npc_think_id = 5
+distance_m = 0.0
+readiness_ms = 500
+"#,
+        );
+        for key in ["spawn.chr_id", "spawn.distance_m", "spawn.readiness_ms"] {
+            assert!(
+                rejections.summary().contains(key),
+                "{key} in {}",
+                rejections.summary()
+            );
+        }
+        // The rejected ones kept the value in force; the readable one landed.
+        assert_eq!(target.spawn.chr_id, SpawnSettings::default().chr_id);
+        assert_eq!(target.spawn.distance_m, SpawnSettings::default().distance_m);
+        assert_eq!(
+            target.spawn.readiness_ms,
+            SpawnSettings::default().readiness_ms
+        );
+        assert_eq!(target.spawn.npc_think_id, 5);
+        // Zero is out of range for the same reason 10000 is.
+        let (_, zeroed, rejected) = read("[spawn]\nchr_id = 0\n");
+        assert!(
+            rejected.summary().contains("spawn.chr_id"),
+            "{}",
+            rejected.summary()
+        );
+        assert_eq!(zeroed.spawn.chr_id, SpawnSettings::default().chr_id);
     }
 
     /// THE RULE. Junk keeps the value that was working and names itself, so the player can find

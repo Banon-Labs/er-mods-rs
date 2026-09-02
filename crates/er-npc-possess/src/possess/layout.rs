@@ -46,6 +46,23 @@ pub(crate) const FILE_VERSION_1170: FileVersion = FileVersion {
 
 /// `ChrIns` field offsets.
 pub(crate) mod chr_ins {
+    /// `ChrIns.chrSetEntry` -- back to the `ChrSetEntry` this character occupies. Cross-checked.
+    ///
+    /// THE SLOT, WITHOUT SEARCHING FOR IT. `ChrInsFactory::CreateCharacter` is handed the entry and
+    /// the `ChrIns` constructor keeps it here, so a spawn's slot index is
+    /// `(chrSetEntry - chrSet->entries) / `[`super::chr_set::ENTRY_STRIDE`] rather than a scan --
+    /// and the division having no remainder, plus the quotient landing inside
+    /// [`super::chr_set::BAND_FIRST`]`..capacity`, is the bounds proof for every later read of that
+    /// slot.
+    pub(crate) const CHR_SET_ENTRY: usize = 0x10;
+    /// `ChrIns.chrRes` -- the per-character asset step machine.
+    ///
+    /// RE-ONLY: the `eldenring` crate models this field but keeps it PRIVATE, so there is no
+    /// `offset_of!` cross-check to be had. The evidence is byte-level instead, and is stronger
+    /// than a cross-check would have been: `ChrIns::GetEneDat` is BYTE-IDENTICAL between 1.16.2
+    /// `0x1403ef830` and 1.17 `0x1403efa60`, and it opens `48 8b 43 28` -- `MOV RAX,[RBX+0x28]`.
+    /// See [`super::chr_res`].
+    pub(crate) const CHR_RES: usize = 0x28;
     /// `ChrIns.chrCtrl`. Cross-checked against `offset_of!(ChrIns, chr_ctrl)`.
     pub(crate) const CHR_CTRL: usize = 0x58;
     /// `ChrIns.modules` -- the `ChrInsModuleContainer`. Cross-checked.
@@ -114,6 +131,230 @@ pub(crate) mod chr_ins {
     /// creature every frame by writing the proxy request directly, and freezing its move vector
     /// buys nothing while making the body fight that write.
     pub(crate) const DEBUG_FLAG_NO_MOVE: u32 = 0x20;
+}
+
+/// `ChrSet`, and the band of it the game's own dynamic spawner claims.
+///
+/// # The bound, and which array it is actually on
+///
+/// `FUN_140492a90` -- the function `CSTalkDynamicChrCtrl` reaches through the spawn entry
+/// [`crate::spawn`] calls -- opens `index = 6` and loops `while (index < 0x14)`, taking the first
+/// entry whose `chrIns` is null. It reads `entries[6..20)` **without consulting `chrInsCapacity`
+/// at all**, so the bound that matters is not on our index (we never form one) but on the ARRAY: a
+/// `ChrSet` smaller than twenty entries would have the GAME read past its own allocation.
+/// [`CAPACITY`] is therefore read at runtime and the spawn refused unless it covers [`BAND_END`].
+///
+/// The buddy `ChrSet` allocates `0x500` bytes and sets `chrInsCapacity = 0x50` (`FUN_140494f50`,
+/// whose init loop also confirms [`ENTRY_STRIDE`]: `0x500 / 0x50 == 0x10`, and it walks the array
+/// in `0x10` steps). So the check passes on a stock game and exists for the case where it does not
+/// -- another mod having resized it, or a build where the constant moved. It is deliberately NOT
+/// the fix for a full roster: fourteen slots is what the game gives its own dynamic spawner, and
+/// widening that allocation is the one change that could corrupt a Seamless Co-op session, which
+/// lives in this same `ChrSet`.
+///
+/// # Every value here is byte-identical on 1.17
+///
+/// The loop is thirty-seven bytes and they are the SAME thirty-seven bytes in both images -- 1.16.2
+/// `0x140492abf`, 1.17 `0x14049301f`, reached by decoding the `rel32` in the spawn wrapper:
+///
+/// ```text
+/// bf 06 00 00 00     MOV EDI,0x6            ; BAND_FIRST
+/// 48 8b 59 18        MOV RBX,[RCX+0x18]     ; ENTRIES
+/// 44 8b c7           MOV R8D,EDI
+/// 48 83 c3 60        ADD RBX,0x60           ; 6 * ENTRY_STRIDE
+/// 90                 NOP
+/// 4c 39 3b           CMP [RBX],R15          ; ENTRY_CHR_INS == 0 ?
+/// 74 17              JZ   <take it>
+/// ff c7              INC EDI
+/// 49 ff c0           INC R8
+/// 48 83 c3 10        ADD RBX,0x10           ; ENTRY_STRIDE
+/// 49 83 f8 14        CMP R8,0x14            ; BAND_END
+/// 7c ec              JL   <loop>
+/// ```
+pub(crate) mod chr_set {
+    /// `ChrSet.chrInsCapacity`, `u32`. Cross-checked against `offset_of!(ChrSet<ChrIns>, capacity)`.
+    pub(crate) const CAPACITY: usize = 0x10;
+    /// `ChrSet.entries`, a `ChrSetEntry*`. Cross-checked.
+    pub(crate) const ENTRIES: usize = 0x18;
+    /// `sizeof(ChrSetEntry)` -- `chrIns`, `loadStatus`, `updateType`, padding.
+    pub(crate) const ENTRY_STRIDE: usize = 0x10;
+    /// `ChrSetEntry.chrIns`, at the very front. NULL means the slot is free, and
+    /// `ChrSet::RemoveChrIns` puts it back to NULL -- which is what makes this field double as the
+    /// despawn detector.
+    pub(crate) const ENTRY_CHR_INS: usize = 0x0;
+    /// First slot the game's dynamic spawner will take. Slots 0..5 belong to the real summons and
+    /// are never scanned by it.
+    pub(crate) const BAND_FIRST: u32 = 6;
+    /// One past the last slot it will take: the loop condition is `index < 0x14`.
+    pub(crate) const BAND_END: u32 = 0x14;
+}
+
+/// `ChrSpawnRequest` -- the 200-byte block the spawn call reads, built by this crate.
+///
+/// # Every offset here is read out of the retail caller's own stores
+///
+/// `CSTalkDynamicChrCtrl`'s spawn step (1.16.2 `0x140e9ce30`) builds one of these on its stack and
+/// hands it to the same function this crate calls. Its frame resolves to `request = RSP+0x60` and
+/// `RBP = RSP+0x100`, and every field below is one of its stores at the matching displacement --
+/// so this table is a transcription of working code rather than an inference from a struct
+/// definition.
+///
+/// # What the CREATURE path actually reads, which is less than the struct suggests
+///
+/// `ChrInsFactory::CreateCharacter` branches on [`CHARA_INIT_PARAM`]: negative takes the
+/// `HeapAlloc(0x5e0)` + `EnemyIns` path, non-negative the `HeapAlloc(0x740)` + `PlayerIns` one. On
+/// the creature branch it reads exactly [`NPC_PARAM_ID`], [`NPC_THINK_ID`], [`EVENT_ENTITY_ID`],
+/// [`TALK_ID`] and the raw pointer at `MODEL +` [`MODEL_BACKING`]. It does **not** read
+/// [`POSITION`] or [`ORIENTATION`] -- those are consumed only by `PlayerChrBaseData::Init` on the
+/// player branch, and the enemy branch takes its base data from `InitEnemyChrBaseData` instead.
+///
+/// **So a spawned creature does not appear where the request says.** This crate fills the two
+/// vectors anyway, because the retail caller does and a well-formed request costs nothing, and
+/// then PLACES the creature itself once it is ready, through the same proxy-drain write
+/// co-location already uses. A layer that trusted the position field would have shipped a mod that
+/// spawns everything at wherever `InitEnemyChrBaseData` leaves it.
+pub(crate) mod chr_spawn_request {
+    /// `sizeof(ChrSpawnRequest)`.
+    pub(crate) const SIZE: usize = 0xc8;
+    /// `position`, a `FloatVector4`. See the module note: NOT read on the creature path.
+    pub(crate) const POSITION: usize = 0x00;
+    /// `orientation`, a `FloatVector4`. Likewise.
+    pub(crate) const ORIENTATION: usize = 0x10;
+    /// `scale`, a `FloatVector4`. The retail caller writes the constant at `0x144802470` here and
+    /// at [`UNK30`]; it is `{1,1,1,1}`, so this crate writes ones.
+    pub(crate) const SCALE: usize = 0x20;
+    /// The unnamed fourth vector, written with the same value as [`SCALE`].
+    pub(crate) const UNK30: usize = 0x30;
+    /// `npcParamId`, `i32`. THE ROW THAT DRIVES THE CREATURE: an id `NpcParam` has no row for falls
+    /// back to row 0, and the row is what selects the model, animation and sound resources the
+    /// `ChrRes` step machine then goes and acquires.
+    pub(crate) const NPC_PARAM_ID: usize = 0x40;
+    /// `npcThinkId`, `i32`. Need not be valid: the think-param lookup pre-initialises its result to
+    /// `{-1, NULL, -1, -1}`, no `luabnd` is requested, and `LoadWait` treats the NULL `LuaDat` caps
+    /// as already satisfied.
+    pub(crate) const NPC_THINK_ID: usize = 0x44;
+    /// `charaInitParam`, `i32`. **NEGATIVE SELECTS THE CREATURE PATH**; see the module note.
+    pub(crate) const CHARA_INIT_PARAM: usize = 0x48;
+    /// `eventEntityId`, `u32`. ZERO IS THE SAFE VALUE and the one the retail caller uses:
+    /// `FUN_140494240` returns immediately on 0, so a zero id is never inserted into the `ChrSet`'s
+    /// `eventEntityIdMap` and cannot shadow a map entity. Any nonzero id we invented WOULD be.
+    pub(crate) const EVENT_ENTITY_ID: usize = 0x4c;
+    /// `talkId`, `i32`. Zero for a creature nobody talks to.
+    pub(crate) const TALK_ID: usize = 0x50;
+    /// `model`, a `DLTX::DLInplaceStr`. The `cNNNN` name, and the whole of how a chr id reaches the
+    /// asset loader.
+    pub(crate) const MODEL: usize = 0x58;
+    /// `model.backingString.pointer`, a `wchar_t*`. **THE ONLY FIELD OF `model` THAT ANY CONSUMER
+    /// ON THE SPAWN PATH READS** -- `FUN_140492a90` passes it to `Format(L"%s_%04d", ptr, index)`
+    /// and `CreateCharacter` passes it straight into `ChrInitData`. Neither reads `len`, and
+    /// neither dispatches through the string's vtable, which is why [`MODEL_VFTABLE`] can stay
+    /// null.
+    pub(crate) const MODEL_BACKING: usize = 0x08;
+    /// `model.len`, in WCHARS and not bytes.
+    pub(crate) const MODEL_LEN: usize = 0x10;
+    /// The `u32` the retail caller zeroes between `len` and `charSize`.
+    pub(crate) const MODEL_UNK18: usize = 0x18;
+    /// `model.charSize`, `u16`, `2` for UTF-16.
+    pub(crate) const MODEL_CHAR_SIZE: usize = 0x1c;
+    /// `model.type`, `u8`, `1` for `UTF16`. The retail caller writes `charSize`, `type` and the
+    /// flags byte as one `MOV dword ptr [model+0x1c],0x10002`.
+    pub(crate) const MODEL_TYPE: usize = 0x1e;
+    /// The value [`MODEL_TYPE`] holds for UTF-16.
+    pub(crate) const MODEL_TYPE_UTF16: u8 = 1;
+    /// `model.flags`, `u8`, zero.
+    pub(crate) const MODEL_FLAGS: usize = 0x1f;
+    /// The inplace character buffer, which [`MODEL_BACKING`] is made to point at.
+    pub(crate) const MODEL_BUFFER: usize = 0x20;
+    /// How many `wchar_t` fit in it. The retail caller installs the
+    /// `DLInplaceStr<1,32,DLCodedStr<1>>` vtable, so thirty-two is the capacity that vtable's own
+    /// grow check would report; `cNNNN` needs six including the terminator.
+    pub(crate) const MODEL_BUFFER_WCHARS: usize = 32;
+    /// `model`'s vtable slot, LEFT NULL BY THIS CRATE -- and that is the deliberate part.
+    ///
+    /// The retail caller stores `DLTX::DLInplaceStr<1,32,DLCodedStr<1>>::vftable` (1.16.2
+    /// `0x142a425a0`) because it then calls `[vtable+0x30]`, the capacity check, before `memcpy`ing
+    /// in a name of unknown length. This crate writes a name of KNOWN length -- six wchars into a
+    /// thirty-two wchar buffer -- so it never needs that call, and nothing on the spawn path
+    /// dispatches through this pointer: `FUN_140492a90`'s only touch of `model` is
+    /// `MOV R8,[R14+0x60]`, the backing pointer, and `CreateCharacter`'s two indirect calls are
+    /// both `InitializeCharacter` on the NEW character's vtable. Writing it would cost a third
+    /// resolved game address for a pointer nobody follows.
+    pub(crate) const MODEL_VFTABLE: usize = 0x00;
+}
+
+/// `ChrRes`, the per-character asset step machine at `ChrIns+` [`chr_ins::CHR_RES`].
+///
+/// # This is `ChrIns::IsInLoadedState`, read rather than called
+///
+/// `CS::ChrIns::GetEneDat` (1.16.2 `0x1403ef830`) is `IsInLoadedState() ? chrRes->eneDat : NULL`;
+/// its gate is `ChrIns` vtable `+0x4f8`, whose whole body is `MOV RCX,[RCX+0x28]; JMP
+/// ChrRes::IsInLoadedState`; and `ChrRes::IsInLoadedState` is `3 <= vft[10]() && vft[10]() < 6`
+/// with `vft[10]` being `MOV EAX,[RCX+0x40]; RET`. So the entire predicate is one bounds test on
+/// one `i32` field, and the readiness oracle reads it rather than making three calls.
+///
+/// BOTH BUILDS, byte-proven. `GetEneDat` is BYTE-IDENTICAL at 1.16.2 `0x1403ef830` and 1.17
+/// `0x1403efa60` -- `48 8b 43 28` is [`chr_ins::CHR_RES`] and `48 8b 80 30 01 00 00` is [`ENE_DAT`]
+/// -- and 1.17's `ChrRes` vtable, located by RTTI at `0x142a400c8`, has `MOV EAX,[RCX+0x40]; RET`
+/// in slot 10 exactly as 1.16.2 does.
+pub(crate) mod chr_res {
+    /// `FD4StepTemplateBase<ChrRes,...>::currentState`, `i32`. RE-ONLY.
+    ///
+    /// NOT `+0x48`: Ghidra's generic `FD4StepTemplateBase` is `0xb0` bytes and puts `currentState`
+    /// there, but the `ChrRes` instantiation is `0xa8` and the accessor's own disassembly says
+    /// `+0x40`. The disassembly wins.
+    pub(crate) const STEP: usize = 0x40;
+    /// Lowest [`STEP`] value that counts as loaded.
+    pub(crate) const STEP_LOADED_FIRST: i32 = 3;
+    /// One past the highest.
+    pub(crate) const STEP_LOADED_END: i32 = 6;
+    /// `ChrRes.eneDat`, an `EneDat*`. RE-ONLY.
+    pub(crate) const ENE_DAT: usize = 0x130;
+}
+
+/// `EneDat` and the `FD4FileCap` it hangs the chrbnd off.
+///
+/// # The second offset in this crate that MOVED between the two builds
+///
+/// `FUN_1404ca4a0` -- "give me this character's `FlverResCap`, or null" -- is the asset-residency
+/// predicate. It is NOT byte-identical across the builds: its 1.17 counterpart is `0x1404caf70`
+/// (uniquely shape-matched in both images, and independently confirmed by decoding the `rel32` at
+/// its caller `EnemyIns::InitializeCharacterRendering`), and both `EneDat` offsets it loads moved:
+///
+/// | | 1.16.2 | 1.17 | delta |
+/// |---|---|---|---|
+/// | primary cap | `+0xa0` | `+0xb0` | `+0x10` |
+/// | fallback cap | `+0x88` | `+0x90` | `+0x8` |
+///
+/// **THE TWO DELTAS ARE NOT THE SAME**, which is the part worth reading twice: an eight-byte field
+/// was inserted somewhere below `+0x88` and another between `+0x88` and `+0xa0`. So the pair cannot
+/// be carried forward by adding one number to both, and a reader who checked only the primary would
+/// get the fallback wrong by eight bytes -- landing on a live pointer rather than on nothing.
+///
+/// The `FD4FileCap` offsets it then reads -- [`file_cap::LOAD_STATE`] and
+/// [`file_cap::FLVER_RES_CAP`] -- ARE unchanged. `EneDat` is a large heap struct, so a stale
+/// `+0xa0` on 1.17 reads a live neighbouring field rather than faulting, which is why
+/// [`ene_dat_cap_offsets`] answers `None` on a build nobody has measured instead of guessing.
+pub(crate) mod ene_dat {
+    /// `EneDat`'s primary `ChrbndFileCap*` on 1.16.2.
+    pub(crate) const CAP_PRIMARY_1162: usize = 0xa0;
+    /// ...and the one it falls back to when that is null.
+    pub(crate) const CAP_FALLBACK_1162: usize = 0x88;
+    /// `EneDat`'s primary `ChrbndFileCap*` on 1.17. IT MOVED; see the module docs.
+    pub(crate) const CAP_PRIMARY_1170: usize = 0xb0;
+    /// ...and the 1.17 fallback.
+    pub(crate) const CAP_FALLBACK_1170: usize = 0x90;
+}
+
+/// `FD4FileCap`, as `FUN_1404ca4a0` reads it. Both offsets are identical on both builds.
+pub(crate) mod file_cap {
+    /// The load-state byte. `4` means the cap's bytes are in memory.
+    pub(crate) const LOAD_STATE: usize = 0x88;
+    /// The value [`LOAD_STATE`] holds once loading has finished.
+    pub(crate) const LOADED: u8 = 4;
+    /// `flverResCap`. Non-null means the chr actually has geometry; the game self-despawns a
+    /// character whose caps loaded but yielded no FLVER, inside
+    /// `EnemyIns::InitializeCharacterRendering`.
+    pub(crate) const FLVER_RES_CAP: usize = 0x90;
 }
 
 /// `ChrCtrl` field offsets.
@@ -339,9 +580,124 @@ pub(crate) fn debug_flags_offset(version: Option<FileVersion>) -> Option<usize> 
     }
 }
 
+/// The `(primary, fallback)` `EneDat` cap offsets FOR THE RUNNING BUILD, or `None` when the build
+/// is one nobody has measured.
+///
+/// # Why this refuses rather than guessing, and what refusing costs
+///
+/// The two answers are `0x10` apart in both fields, and `EneDat` is a large heap struct, so a wrong
+/// choice reads a live neighbouring pointer and follows it -- the residency gate would then be
+/// deciding on whatever that field happens to hold. There is no crash to notice.
+///
+/// Refusing is cheap here in a way it is not for `debugFlags`: the asset-residency gate is one
+/// conjunct of a readiness predicate whose other three are byte-proven identical on both builds, so
+/// `None` SKIPS that conjunct and readiness still rests on the registration, the `ChrRes` step and
+/// the `ChrCtrl` chain. What is lost is the early detection of a chr whose caps loaded but yielded
+/// no FLVER -- and the game self-despawns that case anyway, which the registration gate sees.
+#[must_use]
+pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize, usize)> {
+    match version? {
+        v if v == SUPPORTED_FILE_VERSION => {
+            Some((ene_dat::CAP_PRIMARY_1162, ene_dat::CAP_FALLBACK_1162))
+        }
+        v if v == FILE_VERSION_1170 => {
+            Some((ene_dat::CAP_PRIMARY_1170, ene_dat::CAP_FALLBACK_1170))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ene_dat_cap_offsets_are_known_for_both_supported_builds_and_nothing_else() {
+        assert_eq!(
+            ene_dat_cap_offsets(Some(SUPPORTED_FILE_VERSION)),
+            Some((0xa0, 0x88)),
+            "1.16.2"
+        );
+        assert_eq!(
+            ene_dat_cap_offsets(Some(FILE_VERSION_1170)),
+            Some((0xb0, 0x90)),
+            "1.17 -- BOTH MOVED, by +0x10"
+        );
+        assert_eq!(
+            ene_dat_cap_offsets(Some(FileVersion {
+                major: 2,
+                minor: 8,
+                build: 0,
+                revision: 0,
+            })),
+            None
+        );
+        assert_eq!(ene_dat_cap_offsets(None), None, "the host, with no game");
+    }
+
+    /// THE TWO FIELDS DID NOT MOVE BY THE SAME AMOUNT, and this is what stops anyone "simplifying"
+    /// the table into one delta. The primary went `+0x10` and the fallback `+0x8`; deriving the
+    /// fallback from the primary's delta lands eight bytes off, on a live pointer rather than on
+    /// nothing, and the residency gate would then be following it.
+    ///
+    /// The primary must also stay ABOVE the fallback in both builds -- reading them in the wrong
+    /// order would prefer a cap the game only consults second.
+    #[test]
+    fn the_two_ene_dat_offsets_moved_by_different_amounts_and_keep_their_order() {
+        assert_eq!(ene_dat::CAP_PRIMARY_1170 - ene_dat::CAP_PRIMARY_1162, 0x10);
+        assert_eq!(ene_dat::CAP_FALLBACK_1170 - ene_dat::CAP_FALLBACK_1162, 0x8);
+        assert_ne!(
+            ene_dat::CAP_PRIMARY_1170 - ene_dat::CAP_PRIMARY_1162,
+            ene_dat::CAP_FALLBACK_1170 - ene_dat::CAP_FALLBACK_1162,
+            "one delta cannot carry both fields forward"
+        );
+        // `const` blocks rather than plain asserts: both sides are constants, so this is decidable
+        // at compile time and a violation should be a BUILD error rather than a test that has to be
+        // run to notice. (clippy::assertions_on_constants says the same thing.)
+        const { assert!(ene_dat::CAP_PRIMARY_1162 > ene_dat::CAP_FALLBACK_1162) };
+        const { assert!(ene_dat::CAP_PRIMARY_1170 > ene_dat::CAP_FALLBACK_1170) };
+    }
+
+    /// The band the game scans must sit inside the array it scans, and the request must be big
+    /// enough to hold the string it ends with.
+    #[test]
+    fn the_spawn_band_and_the_request_block_are_self_consistent() {
+        const { assert!(chr_set::BAND_FIRST < chr_set::BAND_END) };
+        // The entries pointer and the capacity must be different fields of the same struct, and
+        // both below the first entry stride -- a `ChrSet` header, not an entry.
+        const { assert!(chr_set::CAPACITY < chr_set::ENTRIES) };
+        assert_eq!(chr_spawn_request::MODEL_BACKING, 0x08);
+        // The inplace buffer must fit inside the request block after `model`.
+        let buffer_end = chr_spawn_request::MODEL
+            + chr_spawn_request::MODEL_BUFFER
+            + chr_spawn_request::MODEL_BUFFER_WCHARS * 2;
+        assert!(
+            buffer_end <= chr_spawn_request::SIZE,
+            "{buffer_end:#x} past the end of a {:#x}-byte request",
+            chr_spawn_request::SIZE
+        );
+        // ...and the string header must not overlap the buffer it points at.
+        const { assert!(chr_spawn_request::MODEL_FLAGS < chr_spawn_request::MODEL_BUFFER) };
+    }
+
+    /// `3..6` and nothing else, because that is what `ChrRes::IsInLoadedState` compares against.
+    #[test]
+    fn the_loaded_step_window_is_the_one_the_game_tests() {
+        assert_eq!(chr_res::STEP_LOADED_FIRST, 3);
+        assert_eq!(chr_res::STEP_LOADED_END, 6);
+        for step in [0, 1, 2, 6, 7, 10] {
+            assert!(
+                !(chr_res::STEP_LOADED_FIRST..chr_res::STEP_LOADED_END).contains(&step),
+                "{step}"
+            );
+        }
+        for step in [3, 4, 5] {
+            assert!(
+                (chr_res::STEP_LOADED_FIRST..chr_res::STEP_LOADED_END).contains(&step),
+                "{step}"
+            );
+        }
+    }
 
     #[test]
     fn the_debug_flags_offset_is_known_for_both_supported_builds_and_nothing_else() {

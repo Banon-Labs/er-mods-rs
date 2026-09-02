@@ -11,15 +11,28 @@
 //! filled that seam in and nothing above it had to change, which is the only real evidence that
 //! the seam was cut in the right place.
 //!
+//! Layer 4 added the other half of "pick an NPC to control": [`spawn`] CREATES the creature named
+//! in `[spawn]` rather than finding one the map placed, waits for it to become drivable, and takes
+//! it away again afterwards. There is no residency restriction on which creature -- assets load on
+//! demand and nothing on the spawn path validates the id -- so what replaces one is a deadline,
+//! because a chr id with no assets does not fail, it waits forever.
+//!
 //! # What it touches in the game
 //!
 //! One recurring `FrameBegin` task and two Win32 input reads inside it, plus -- only while
 //! something is possessed -- a handful of struct-field writes on two `ChrIns`. It installs **NO
-//! detour**, resolves **no game function address**, patches no param and claims no prologue, so it
-//! stays co-loadable with every other shell in this profile and cannot be broken by the
-//! 1.16.2 -> 1.17 address migration. See `input` for why polling rather than hooking is the
-//! smaller claim rather than the lazier one, and [`possess::game`] for why the engine needed no
-//! addresses at all.
+//! detour**, patches no param and claims no prologue, so it stays co-loadable with every other
+//! shell in this profile. See `input` for why polling rather than hooking is the smaller claim
+//! rather than the lazier one.
+//!
+//! It resolves **three** game function addresses, and it is worth knowing which three because the
+//! number was zero for two layers and every one of them is a thing that can break on a game patch.
+//! [`possess::game`] explains why the possession itself needed none (every lever turned out to be a
+//! field); [`moveset`] spends one on `PlayAnimationByBehaviorName`, without which no dodge in the
+//! game is reachable; [`spawn`] spends two, on creating and removing a character, which are the two
+//! things that cannot be done by writing a field. All three go through `game_rva_named`, so an
+//! unrecognised build refuses the feature rather than jumping into whatever now occupies those
+//! bytes.
 //!
 //! The one thing it does that IS dangerous is write `ChrCtrl+0x3b0`, because `ChrCtrl::Unref`
 //! DLPanics on a non-null value there. Every path that can end a possession -- the hotkey, the
@@ -36,6 +49,7 @@ mod log;
 mod moveset;
 mod possess;
 mod settings;
+mod spawn;
 mod toml;
 
 #[cfg(windows)]
@@ -245,10 +259,21 @@ fn install() {
         config::DERIVED_CONFIG_FILE_NAME,
         config::CONFIG_FILE_NAME_FOR_LOG,
     ));
-    // STACK LAYERS 2 AND 3. Pressing the key writes a forwarding thunk into the target's
+    possess_log(format_args!(
+        "spawn: [target] mode = \"spawn\" CREATES c{:04} in front of you rather than looking for a \
+         character to borrow. Any four-digit creature works -- assets load on demand and nothing \
+         checks the id against the current map -- but an id with no chrbnd on disk does not fail, \
+         it WAITS, so the {} ms deadline is what turns a bad pick into a message. {} names the \
+         stage it died at",
+        config.target().spawn.chr_id,
+        config.target().spawn.readiness_ms,
+        config::DERIVED_CONFIG_FILE_NAME,
+    ));
+    // STACK LAYERS 2, 3 AND 4. Pressing the key writes a forwarding thunk into the target's
     // `ChrCtrl+0x3b0`, points `WorldChrManDbg+0xb8` at it, and co-locates the player's own
-    // (invisible, silent, invincible, non-attacking) body with it every frame -- and the four
-    // face inputs now fire that creature's own attacks out of the offline-classified table.
+    // (invisible, silent, invincible, non-attacking) body with it every frame; the four face
+    // inputs fire that creature's own attacks out of the offline-classified table; and in
+    // `mode = "spawn"` the creature is one this mod asked the game to create.
     let installed = engine::install_engine(Box::new(possess::NpcPossessionEngine::new()));
     possess_log(format_args!(
         "possession engine: {} -- build={} | attacks fire by writing \
