@@ -1227,26 +1227,6 @@ impl NpcPossessionEngine {
                 write.gait_scale(),
             ));
         }
-<<<<<<< HEAD
-        // THE BRACKET. The read in the telemetry block above happens BEFORE this write, so it
-        // shows what survived the previous frame -- it can say the request is gone but not who
-        // took it. This one is taken immediately after our own store, same frame, same thread. If
-        // it reads back what we wrote and the next frame's line reads 0, the clearer runs between
-        // this task and `[vt+0x50]`; if it disagrees HERE, the store never landed at all. That is
-        // the fork the last round could not settle.
-        let stored = state.creature.write_move_intent(write);
-        if telemetry_due {
-            let after = state.creature.read_move_intent();
-            let agrees = after.is_some_and(|(walk, _)| walk == write.walk_type);
-            if !stored || !agrees {
-                possess_log(format_args!(
-                    "movement: c{:04} THE WRITE DID NOT HOLD -- stored={stored}                      immediate-read-back={after:?} (we wrote walkType={}). This line is throttled,                      not once-per-possession: the previous version logged only on the first frame,                      so a request that started failing mid-possession was invisible and the                      creature simply stopped taking orders with nothing in the log. stored=false                      means our own store was refused -- the AiIns identity round trip failed.                      stored=true with a disagreeing read-back means something cleared it within                      the same frame",
-                    state.chr_id, write.walk_type,
-                ));
-            }
-        }
-        if !stored && first_frame {
-=======
         // THE AIM INSTRUMENT, and deliberately NOT gated on an input.
         //
         // The reported defect is "I move the camera and the cast vector does not follow", which is
@@ -1280,8 +1260,24 @@ impl NpcPossessionEngine {
                 chr_ins::TEAM_TYPE_CHARMED,
             ));
         }
-        if !state.creature.write_move_intent(write) && first_frame {
->>>>>>> fix/npc-possess-targeting
+        // THE BRACKET. The read in the telemetry block above happens BEFORE this write, so it
+        // shows what survived the previous frame -- it can say the request is gone but not who
+        // took it. This one is taken immediately after our own store, same frame, same thread. If
+        // it reads back what we wrote and the next frame's line reads 0, the clearer runs between
+        // this task and `[vt+0x50]`; if it disagrees HERE, the store never landed at all. That is
+        // the fork the last round could not settle.
+        let stored = state.creature.write_move_intent(write);
+        if telemetry_due {
+            let after = state.creature.read_move_intent();
+            let agrees = after.is_some_and(|(walk, _)| walk == write.walk_type);
+            if !stored || !agrees {
+                possess_log(format_args!(
+                    "movement: c{:04} THE WRITE DID NOT HOLD -- stored={stored}                      immediate-read-back={after:?} (we wrote walkType={}). This line is throttled,                      not once-per-possession: the previous version logged only on the first frame,                      so a request that started failing mid-possession was invisible and the                      creature simply stopped taking orders with nothing in the log. stored=false                      means our own store was refused -- the AiIns identity round trip failed.                      stored=true with a disagreeing read-back means something cleared it within                      the same frame",
+                    state.chr_id, write.walk_type,
+                ));
+            }
+        }
+        if !stored && first_frame {
             // Said once, on the frame it is first known, rather than sixty times a second.
             possess_log(format_args!(
                 "movement: the AiIns identity round trip did not close, so no movement intent is \
