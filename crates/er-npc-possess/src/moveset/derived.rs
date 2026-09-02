@@ -106,6 +106,40 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
     out
 }
 
+/// The same file, for a spawn that never produced a creature to report on.
+///
+/// # Why the refusal goes here rather than only in the log
+///
+/// `mode = "spawn"` is the one mode where the player picks a number out of thin air, and the number
+/// they picked is the thing most likely to be wrong. A refusal that lives only in
+/// `er-npc-possess.log` asks them to go and find a log; this file is already the place they are
+/// told to look after a press, it is already regenerated on every press, and it is named in the
+/// same breath as the config they need to edit. So a bad `chr_id` explains itself in the file
+/// beside the file that set it.
+///
+/// It overwrites the previous possession's moveset report, which is correct: this file always
+/// describes the MOST RECENT press, and the most recent press produced no moveset.
+pub(crate) fn render_spawn_refusal(chr_id: u32, reason: &str) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "# er-npc-possess.derived.toml -- WRITTEN BY THE MOD ON EVERY POSSESSION.\n\
+         #\n\
+         # EDITS HERE ARE LOST. This file is regenerated from scratch each time you press the\n\
+         # possess hotkey.\n\
+         #\n\
+         # THE LAST PRESS DID NOT PRODUCE A CREATURE. [target] mode = \"spawn\" asks the game to\n\
+         # create the character named below, and this is what happened instead. Change the id in\n\
+         # er-npc-possess.toml under [spawn] and press again.\n\
+         #\n\
+         # Any four-digit chr id is spawnable -- assets load on demand and nothing checks the id\n\
+         # against the current map -- so an id that does not work is one with no chrbnd of its own,\n\
+         # not one that is merely far away.\n\n",
+    );
+    let _ = writeln!(out, "[spawn.c{chr_id:04}]");
+    let _ = writeln!(out, "refused = {reason:?}");
+    out
+}
+
 /// One prose line per denial reason actually present, so the codes above mean something without
 /// the player having to find this crate's source.
 fn explanations(denials: &[(i32, Denial)]) -> String {
@@ -201,6 +235,35 @@ mod tests {
         assert!(text.contains("EDITS HERE ARE LOST"));
         assert!(text.contains("er-npc-possess.toml"));
         assert!(text.contains("[chr.c4500]"));
+    }
+
+    /// A refused spawn has to name the id that was refused and the reason, and it has to still be
+    /// a TOML file -- a player copying a block out of it into the real config gets a rejection they
+    /// cannot explain otherwise.
+    #[test]
+    fn a_refused_spawn_names_the_id_and_the_reason_and_still_parses() {
+        let text = render_spawn_refusal(
+            9998,
+            "the asset step machine never reached a loaded state after 5000 ms",
+        );
+        assert!(text.contains("[spawn.c9998]"), "{text}");
+        assert!(text.contains("EDITS HERE ARE LOST"), "{text}");
+        assert!(text.contains("DID NOT PRODUCE A CREATURE"), "{text}");
+        let doc = crate::toml::Document::parse(&text);
+        assert_eq!(
+            doc.scalar("spawn.c9998", "refused"),
+            Some("the asset step machine never reached a loaded state after 5000 ms")
+        );
+    }
+
+    /// The refusal must not blame distance or the current map: any four-digit id is spawnable, and
+    /// sending the player off to stand nearer something would be sending them after the wrong
+    /// cause.
+    #[test]
+    fn the_refusal_says_residency_is_not_the_reason() {
+        let text = render_spawn_refusal(4500, "whatever");
+        assert!(text.contains("assets load on demand"), "{text}");
+        assert!(text.contains("not one that is merely far away"), "{text}");
     }
 
     #[test]

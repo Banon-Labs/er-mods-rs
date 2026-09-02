@@ -709,6 +709,16 @@ pub(crate) fn describe_no_target(mode: TargetMode, candidates: usize) -> String 
             format!("no enemy within reach ({candidates} loaded)")
         }
         TargetMode::ChrId => format!("no loaded enemy matches chr_id ({candidates} loaded)"),
+        // UNREACHABLE IN PRACTICE, and spelled out rather than swept under a `_` arm. The engine
+        // returns into `begin_spawn` before any search happens, so `spawn` never reaches a
+        // target-not-found path -- but a wildcard here would also silently swallow the NEXT mode
+        // somebody adds, and this is the message that would be printed if the interception ever
+        // stopped working.
+        TargetMode::Spawn => {
+            "spawn mode creates a character rather than searching for one, so this refusal means \
+             the spawn path was not taken"
+                .to_owned()
+        }
     }
 }
 
@@ -810,6 +820,10 @@ pub(crate) fn pick_target(settings: TargetSettings, player: Chr) -> (Option<Chr>
                         best = Some((distance, chr));
                     }
                 }
+                // Spawn mode has no search to do: the engine intercepts it before this walk. The
+                // arm is explicit rather than a wildcard so that adding a mode that DOES search is
+                // a compile error here instead of a mode that silently matches nothing.
+                TargetMode::Spawn => {}
             }
         }
     }

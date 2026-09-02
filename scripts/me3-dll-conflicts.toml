@@ -414,10 +414,20 @@ product's single MinHook instance owns the prologue and the handlers chain; see 
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
 "er-npc-possess" = """Co-loadable with every other shell here, because it installs NO DETOUR AT ALL. \
-It claims no prologue, resolves no game address, patches no param row (which is what breaks \
-Seamless invasions), runs no D3D12/Present or overlay hook, and writes no game memory. Its whole \
-game-side footprint is one recurring `FrameBegin` task that calls `GetAsyncKeyState` and \
-`XInputGetState` and writes a log line.
+It claims no prologue, patches no param row (which is what breaks Seamless invasions), and runs no \
+D3D12/Present or overlay hook. Its whole game-side footprint is one recurring `FrameBegin` task.
+
+WHAT IT DOES FROM THAT TASK, kept current as the layers land -- the sentence above is the \
+co-loadability claim and the ones here are what it rests on, so they are not the same claim twice. \
+It polls `GetAsyncKeyState` and `XInputGetState`; while something is possessed it WRITES game \
+memory (`ChrCtrl+0x3b0`, `WorldChrManDbg+0xb8`, and a handful of fields on two `ChrIns`); and it \
+RESOLVES THREE game function addresses, all through `game_rva_named` so an unrecognised build \
+refuses rather than jumping into whatever occupies those bytes. Those three are \
+`PlayAnimationByBehaviorName` (dodges, which have no `W_Event` name to write into a field), \
+`WorldChrManImp::SpawnDynamicChr` and `WorldChrManImp::RemoveChrIns` (the `mode = \"spawn\"` \
+creature, created and removed through the same entries `CSTalkDynamicChrCtrl` uses). Resolving an \
+address to CALL is not claiming a prologue: nothing is patched and no other shell's detour is \
+disturbed, which is why the co-loadability line above is unchanged.
 
 THE ONE THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
 DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \

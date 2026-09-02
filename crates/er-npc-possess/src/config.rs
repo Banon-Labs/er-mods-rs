@@ -140,11 +140,49 @@ radial = "DPadDown"
 #              vector and that is not reversed. The spelling is kept so this file does not have to
 #              change when it lands.
 # chr_id    -- the literal chr_id below, ignoring where you are looking
+# spawn     -- CREATE the creature [spawn] names, in front of you, and become that. The only mode
+#              that puts something new in the world rather than borrowing something already there.
 mode = "lock_on"
-# Used only when mode = "chr_id", e.g. 45000.
+# Used only when mode = "chr_id". This is an NpcParam row, e.g. 45000000 for a Flying Dragon.
 chr_id = 0
 # Hand the body back when it dies, instead of staying inside a corpse.
 release_on_death = true
+
+# USED ONLY WHEN mode = "spawn", above. Staged with [target] and adopted at the next possession,
+# for the same reason: it decides who you become.
+#
+# ANY four-digit creature works. Assets load on demand -- the character's own ChrRes step machine
+# goes and fetches its chrbnd, anibnd, behbnd and texbnd -- so you are NOT limited to creatures
+# that happen to be loaded near you, and there is no residency check to fail.
+#
+# WHAT DOES FAIL is an id with no chrbnd on disk at all, and it fails by WAITING: there is no error
+# state anywhere in the game's asset step machines, so such a character sits half-built forever
+# rather than reporting anything. readiness_ms below is the deadline that turns that into a message;
+# when it expires the creature is removed and er-npc-possess.derived.toml says which stage it died
+# at and what that means.
+[spawn]
+# The MODEL number. 4500 becomes c4500. 0..9999.
+chr_id = 4500
+# The NpcParam row, which drives stats, behaviour and which resources get loaded. 0 derives
+# chr_id * 10000 -- 45000000 for c4500 -- which is the row the shipped moveset table is keyed by,
+# so leaving this at 0 is the answer that keeps the attacks matching the body.
+npc_param_id = 0
+# The NpcThinkParam row. Rarely worth setting: an invalid one is not a failure, because the lookup
+# pre-initialises its result and the loader treats the resulting empty AI script as satisfied.
+npc_think_id = 0
+# How far in front of you it appears, in metres. 1 to 50. Not zero: a creature placed exactly on
+# you is one you are standing inside for the frame before possession takes.
+distance_m = 3.0
+# How long to wait for it to become drivable before giving up and removing it. 1000 to 60000 ms.
+readiness_ms = 5000
+# Take the creature away again when the possession ends. Leaving it is not free -- it is a live NPC
+# nothing else will ever remove, and it holds one of the fourteen roster slots the game's own
+# dynamic spawner shares -- but it is a real choice and the log says which one was made.
+#
+# ONE CASE IGNORES THIS, and it is not a bug: if the game is closing (the DLL is being unloaded),
+# the creature is left standing. Removing it is a call into the game and that path does not run on
+# the game's thread. It gets its own AI back either way and the next map load clears it.
+despawn_on_release = true
 
 # LIVE. How one press turns into one of the possessed character's attacks.
 [mapping]

@@ -5,8 +5,7 @@
 //!
 //! Release runs down three different paths -- the hotkey, the possessed creature dying, and
 //! `DLL_PROCESS_DETACH` -- and each one is a place where somebody can write the steps in a
-//! plausible order that is subtly the wrong one. Three of the six steps have a consequence if they
-//! move:
+//! plausible order that is subtly the wrong one. Four of the seven have a consequence if they move:
 //!
 //! * **The camera must be cleared AFTER the player has been moved.** Clearing first gives a
 //!   visible frame of the old body standing wherever it was; moving first means the camera snaps
@@ -14,6 +13,10 @@
 //! * **`ChrCtrl+0x3b0` must be cleared BEFORE anything can tear the character down.**
 //!   `ChrCtrl::Unref` compares that slot against zero and **DLPanics** when it is non-null. This
 //!   is the step that must run even when every step before it failed.
+//! * **A spawned creature is removed AFTER that clear**, for exactly the same reason from the other
+//!   side: `WorldChrManImp::RemoveChrIns` hands the character to `CSDelayDeleteMan`, and the
+//!   destruction that eventually follows is the thing that runs `ChrCtrl::Unref`. Despawning first
+//!   arms the crash the step before it exists to prevent -- on a delay, in a destructor.
 //! * **Save suppression is lifted LAST**, because `PlayerIns::UpdateSafePosition` and
 //!   `UpdateBlockPosition` write the save's respawn fields the instant that gate opens, and they
 //!   must not do it from a position the player is about to leave.
@@ -49,18 +52,27 @@ pub(crate) enum Step {
     ClearCameraOverride = 3,
     /// Clear `ChrCtrl+0x3b0` on the creature and give it its AI back. THE STEP THAT MUST HAPPEN.
     ClearManipulatorOverride = 4,
+    /// Hand a creature this mod SPAWNED back to the game. A no-op for a creature the map placed.
+    ///
+    /// **AFTER [`Self::ClearManipulatorOverride`], AND THAT IS A CRASH IF IT MOVES.**
+    /// `WorldChrManImp::RemoveChrIns` passes the character to `CSDelayDeleteMan`, whose eventual
+    /// destruction runs `ChrCtrl::Unref`, which DLPanics on a non-null `ChrCtrl+0x3b0`. Removing
+    /// first therefore arms the exact crash the step before it exists to prevent -- and arms it on
+    /// a delay, in a destructor, minutes later.
+    DespawnCreature = 5,
     /// Whatever was holding the save off, released. Last, always.
-    LiftSaveSuppression = 5,
+    LiftSaveSuppression = 6,
 }
 
 impl Step {
     /// The release, in order.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::RestoreBody,
         Self::StopColocating,
         Self::MovePlayer,
         Self::ClearCameraOverride,
         Self::ClearManipulatorOverride,
+        Self::DespawnCreature,
         Self::LiftSaveSuppression,
     ];
 
@@ -72,6 +84,7 @@ impl Step {
             Self::MovePlayer => "move-player",
             Self::ClearCameraOverride => "clear-camera-override",
             Self::ClearManipulatorOverride => "clear-manipulator-override",
+            Self::DespawnCreature => "despawn-creature",
             Self::LiftSaveSuppression => "lift-save-suppression",
         }
     }
@@ -81,8 +94,30 @@ impl Step {
     /// Exactly one qualifies. A failed `RestoreBody` leaves the player invisible until the next
     /// possession, which is bad and survivable; a failed `ClearManipulatorOverride` leaves a
     /// DLPanic armed inside `ChrCtrl::Unref` for whenever that creature is unloaded.
+    ///
+    /// `DespawnCreature` deliberately does NOT qualify, and the difference is the point: its
+    /// failure leaves a live NPC standing in the world, which is visible, survivable, and cleaned
+    /// up by the next map load. It gets a [`Self::failure_note`] instead, because "despawn-creature
+    /// failed" does not tell the reader what is now standing behind them.
     pub(crate) const fn is_critical(self) -> bool {
         matches!(self, Self::ClearManipulatorOverride)
+    }
+
+    /// What the reader needs to know when THIS step fails, spelled out because the consequence is
+    /// nowhere near the cause.
+    ///
+    /// `None` for the steps whose failure is self-explanatory from the name.
+    pub(crate) const fn failure_note(self) -> Option<&'static str> {
+        match self {
+            Self::ClearManipulatorOverride => {
+                Some("ChrCtrl+0x3b0 IS STILL ARMED; ChrCtrl::Unref will DLPanic")
+            }
+            Self::DespawnCreature => Some(
+                "the creature this mod created is STILL IN THE WORLD and nothing else will remove \
+                 it; it holds one of the fourteen buddy roster slots until the next map load",
+            ),
+            _ => None,
+        }
     }
 }
 
@@ -97,6 +132,12 @@ pub(crate) enum Reason {
     /// The possessed creature stopped being readable -- despawned, unloaded, or the pointer chain
     /// stopped resolving.
     CreatureGone,
+    /// A spawned creature never became drivable inside `[spawn].readiness_ms`.
+    ///
+    /// Its own reason rather than [`Self::CreatureGone`], which is what it was first written as and
+    /// is the opposite claim: the creature is still THERE, and still ours to remove. Reporting a
+    /// deadline as a disappearance would send the reader looking for what removed it.
+    SpawnTimedOut,
     /// `DLL_PROCESS_DETACH`, or the shell shutting down. The path that exists purely so the
     /// override slot is not left armed in a process that is about to unload us.
     Shutdown,
@@ -108,6 +149,7 @@ impl Reason {
             Self::Hotkey => "hotkey",
             Self::CreatureDied => "creature-died",
             Self::CreatureGone => "creature-gone",
+            Self::SpawnTimedOut => "spawn-timed-out",
             Self::Shutdown => "shutdown",
         }
     }
@@ -174,11 +216,14 @@ impl Teardown {
             line.push_str(failure.name());
         }
         line.push(']');
-        if self.has_critical_failure() {
-            // Spelled out because the consequence is nowhere near the cause: the game will DLPanic
-            // the next time that character is unloaded, which can be minutes later and in a
-            // completely unrelated place.
-            line.push_str(" -- ChrCtrl+0x3b0 IS STILL ARMED; ChrCtrl::Unref will DLPanic");
+        // Spelled out because the consequence is nowhere near the cause -- a DLPanic the next time
+        // that character is unloaded, or an NPC left standing in the world -- and neither is
+        // guessable from the step's name.
+        for failure in &self.failed {
+            if let Some(note) = failure.failure_note() {
+                line.push_str(" -- ");
+                line.push_str(note);
+            }
         }
         line
     }
@@ -234,7 +279,45 @@ mod tests {
         assert_eq!(seen, Step::ALL.to_vec());
         assert!(teardown.is_clean());
         assert!(!teardown.has_critical_failure());
-        assert_eq!(teardown.line(), "release: reason=hotkey steps=6/6 ok");
+        assert_eq!(teardown.line(), "release: reason=hotkey steps=7/7 ok");
+    }
+
+    /// THE ORDERING THAT IS A CRASH IF IT MOVES. `WorldChrManImp::RemoveChrIns` hands the character
+    /// to `CSDelayDeleteMan`, and the delayed destruction runs `ChrCtrl::Unref`, which DLPanics on a
+    /// non-null `ChrCtrl+0x3b0`. Despawning before the override is cleared therefore arms the exact
+    /// crash the clear exists to prevent -- and arms it on a delay, in a destructor.
+    #[test]
+    fn the_creature_is_despawned_only_after_its_override_slot_has_been_cleared() {
+        assert!(
+            Step::ClearManipulatorOverride < Step::DespawnCreature,
+            "RemoveChrIns before the override clear is a delayed DLPanic in ChrCtrl::Unref"
+        );
+        // ...and the run order matches, not merely the discriminants.
+        let clear = Step::ALL
+            .iter()
+            .position(|step| *step == Step::ClearManipulatorOverride)
+            .expect("present");
+        let despawn = Step::ALL
+            .iter()
+            .position(|step| *step == Step::DespawnCreature)
+            .expect("present");
+        assert!(clear < despawn);
+    }
+
+    /// A despawn that did not happen leaves a live NPC nobody will remove, which is not guessable
+    /// from the step's name -- and is NOT the crash class, so it must not claim to be.
+    #[test]
+    fn a_failed_despawn_names_the_orphan_and_is_not_reported_as_a_crash() {
+        let mut teardown = Teardown::new(Reason::Hotkey);
+        teardown.run(|step| step != Step::DespawnCreature);
+        assert!(
+            !teardown.has_critical_failure(),
+            "an orphan is not a DLPanic"
+        );
+        let line = teardown.line();
+        assert!(line.contains("despawn-creature"), "{line}");
+        assert!(line.contains("STILL IN THE WORLD"), "{line}");
+        assert!(!line.contains("DLPanic"), "{line}");
     }
 
     /// THE PROPERTY THAT MATTERS. A step failing must not stop the run -- in particular the
@@ -256,7 +339,7 @@ mod tests {
         );
         let line = teardown.line();
         assert!(line.contains("reason=creature-died"), "{line}");
-        assert!(line.contains("steps=2/6"), "{line}");
+        assert!(line.contains("steps=3/7"), "{line}");
         assert!(line.contains("restore-body"), "{line}");
         assert!(!line.contains("DLPanic"), "{line}");
     }
@@ -279,7 +362,7 @@ mod tests {
         let line = teardown.line();
         assert!(line.contains("ChrCtrl+0x3b0 IS STILL ARMED"), "{line}");
         assert!(line.contains("DLPanic"), "{line}");
-        assert!(line.contains("steps=5/6"), "{line}");
+        assert!(line.contains("steps=6/7"), "{line}");
     }
 
     /// Every reason spells itself for the log, so "it let go on its own" and "the player pressed
@@ -290,6 +373,7 @@ mod tests {
             Reason::Hotkey,
             Reason::CreatureDied,
             Reason::CreatureGone,
+            Reason::SpawnTimedOut,
             Reason::Shutdown,
         ]
         .into_iter()

@@ -163,6 +163,28 @@ pub(crate) fn intent(
     }
 }
 
+/// A point `distance` in front of a character facing `yaw`, at the same height.
+///
+/// THE SAME BASIS AS [`intent`], and that is the whole reason it lives here rather than beside its
+/// caller: `forward = (sin yaw, 0, cos yaw)`. A second copy of that convention, written from the
+/// same description, is exactly how a sign error gets in -- and the failure would be a creature
+/// spawned behind the player, which reads as "the spawn did nothing".
+///
+/// Height is COPIED, never offset. A spawn point raised off the player's own footing is a creature
+/// dropped from a height, and the ground under it is not known here.
+#[must_use]
+pub(crate) fn ahead_of(position: [f32; 3], yaw: f32, distance: f32) -> [f32; 3] {
+    if !yaw.is_finite() || !distance.is_finite() {
+        return position;
+    }
+    let (sin, cos) = yaw.sin_cos();
+    [
+        distance.mul_add(sin, position[0]),
+        position[1],
+        distance.mul_add(cos, position[2]),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +192,37 @@ mod tests {
     /// Within a millimetre, which is far below anything the engine can act on.
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
+    }
+
+    /// The spawn point uses the SAME basis as the movement target, and in front means in front.
+    /// A sign error here spawns the creature behind the player, which is indistinguishable from
+    /// the spawn having done nothing.
+    #[test]
+    fn ahead_of_agrees_with_the_movement_basis_and_never_changes_height() {
+        let at = [10.0, 5.0, -20.0];
+        // Yaw 0 faces +Z, which is what `intent` says and what `EulerToQuat` uses.
+        let north = ahead_of(at, 0.0, 3.0);
+        assert!(close(north[0], 10.0), "{north:?}");
+        assert!(close(north[1], 5.0), "height is copied, not offset");
+        assert!(close(north[2], -17.0), "{north:?}");
+        // A quarter turn faces +X.
+        let east = ahead_of(at, core::f32::consts::FRAC_PI_2, 3.0);
+        assert!(close(east[0], 13.0), "{east:?}");
+        assert!(close(east[2], -20.0), "{east:?}");
+        // ...and it is the same direction `intent` walks toward on full forward stick.
+        let walked = intent(at, 1.0, Stick::from_axes(0.0, 1.0), 1.0);
+        let placed = ahead_of(at, 1.0, REACH);
+        assert!(close(walked.target[0], placed[0]), "{walked:?} {placed:?}");
+        assert!(close(walked.target[2], placed[2]), "{walked:?} {placed:?}");
+    }
+
+    /// A junk yaw or distance must place the creature exactly on the player rather than at a NaN,
+    /// which the proxy drain would then feed to `ForceSetPosition`.
+    #[test]
+    fn a_non_finite_input_places_the_creature_on_the_player_rather_than_nowhere() {
+        let at = [1.0, 2.0, 3.0];
+        assert_eq!(ahead_of(at, f32::NAN, 3.0), at);
+        assert_eq!(ahead_of(at, 0.0, f32::INFINITY), at);
     }
 
     #[test]
