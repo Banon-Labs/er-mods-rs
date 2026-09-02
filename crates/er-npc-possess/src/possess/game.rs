@@ -759,6 +759,23 @@ impl Chr {
     /// Gated on [`Self::validated_ai_ins`], so a build whose `AiIns` layout has moved gets no
     /// writes at all rather than four wrong ones, and READ BACK afterwards: `write_i32` proves the
     /// address was readable before the store, which is not the same as proving the store landed.
+    /// Read `AiIns.walkType` back, for telemetry only.
+    ///
+    /// A read-back is the half of the instrument that a write-side check cannot supply: a write
+    /// that "succeeded" and a field that holds the value are different claims, and the difference
+    /// is exactly the difference between "the engine ignored us" and "we never wrote". `None`
+    /// means the AI object did not validate this frame, which is itself the answer.
+    pub(crate) fn read_walk_type(self) -> Option<i32> {
+        let ai = self.validated_ai_ins()?;
+        unsafe { safe_read_i32(ai + ai_ins::WALK_TYPE) }
+    }
+
+    /// Read `AiIns.wantToMoveTo` back, for telemetry only. See [`Self::read_walk_type`].
+    pub(crate) fn read_want_to_move_to(self) -> Option<[f32; 3]> {
+        let ai = self.validated_ai_ins()?;
+        read_vec3(ai + ai_ins::WANT_TO_MOVE_TO)
+    }
+
     pub(crate) fn write_move_intent(self, write: IntentWrite) -> bool {
         let Some(ai) = self.validated_ai_ins() else {
             return false;

@@ -133,6 +133,11 @@ struct Possessing {
     last_position: [f32; 3],
     /// Likewise, and the fallback when the creature dies airborne.
     last_grounded: Option<[f32; 3]>,
+    /// The FRAME on which the movement telemetry line was last written, so a held key does not
+    /// produce sixty log lines a second. A frame count rather than an `Instant` because the
+    /// no-timeouts gate bans wall-clock `elapsed()` control flow, and because the frame loop is
+    /// the clock the thing being measured actually runs on. `None` until the first line.
+    last_movement_log: Option<u64>,
     /// Was the creature on solid ground at the last good read?
     last_on_ground: bool,
     frames: u64,
@@ -932,6 +937,48 @@ impl NpcPossessionEngine {
             movement.turn_deadzone_deg,
         );
         Self::tick_moveset(state, write.moving());
+        // THE INSTRUMENT, because three movement fixes have now shipped without one.
+        //
+        // The canary only answers "did the write land somewhere legitimate". It has never
+        // answered the question the user keeps asking, which is "did pressing W produce
+        // anything at all" -- and with no line between the key and the field, every attempt so
+        // far has been a guess dressed as a diagnosis. This says, in order: whether an input
+        // was read this frame, what gait and target came out of it, and what the field reads
+        // back as AFTER the write. A press that produces `stick=none` is an input bug; a
+        // `stick=some` that reads back as zero is an engine bug; and those are different
+        // repairs that were previously indistinguishable from the log.
+        //
+        // Rate-limited to one line a second and only while an input is actually being held, so
+        // standing still is silent and a held key does not write sixty lines a second.
+        // Throttled by FRAME COUNT, not wall clock. `scripts/check-no-timeouts.py` bans an
+        // `elapsed()` gate outright, and it is right to: the frame counter is the clock this
+        // engine actually runs on, it cannot drift against the thing being measured, and a
+        // stalled frame loop stops the log instead of flooding it.
+        const MOVEMENT_LOG_EVERY_FRAMES: u64 = 60;
+        let telemetry_due = state
+            .last_movement_log
+            .is_none_or(|at| state.frames.saturating_sub(at) >= MOVEMENT_LOG_EVERY_FRAMES);
+        if stick.is_some() && telemetry_due {
+            state.last_movement_log = Some(state.frames);
+            possess_log(format_args!(
+                "movement: input READ -- gait={} target=({:.2}, {:.2}, {:.2}) turn={:.1} deg | \
+                 creature at ({:.2}, {:.2}, {:.2}) yaw={:.3} | field read-back: walk_type={:?} \
+                 want_to_move_to={:?}. If gait is non-zero and the read-back matches but the \
+                 body does not move, the write is landing and the engine is refusing it -- that \
+                 is a different bug from the key not arriving",
+                write.walk_type,
+                write.target[0],
+                write.target[1],
+                write.target[2],
+                write.turn_target,
+                state.last_position[0],
+                state.last_position[1],
+                state.last_position[2],
+                state.creature.yaw().unwrap_or(f32::NAN),
+                state.creature.read_walk_type(),
+                state.creature.read_want_to_move_to(),
+            ));
+        }
         if !state.creature.write_move_intent(write) && first_frame {
             // Said once, on the frame it is first known, rather than sixty times a second.
             possess_log(format_args!(
@@ -1271,6 +1318,8 @@ impl NpcPossessionEngine {
             release_on_death: request.target.release_on_death,
             last_position: creature.position().unwrap_or([0.0; 3]),
             last_grounded: creature.last_grounded_position(),
+            // No line has been written yet, so the first frame carrying an input emits one.
+            last_movement_log: None,
             last_on_ground: creature.standing_on_solid_ground().unwrap_or(false),
             frames: 0,
             camera,
