@@ -615,10 +615,66 @@ pub(crate) mod chr_physics_module {
     /// MOVUPS XMM6,[RBX+0x150] ; SHUFPS XMM6,XMM6,0x55 ; SUBSS XMM6,[RAX+0x4]
     /// ```
     pub(crate) const LAST_GROUNDED_POSITION: usize = 0x150;
-    /// `orientationEuler`, a `FloatVector4` whose `.y` is yaw in radians -- the same convention
-    /// `ChrCtrl.ragdollRotation` expects, so co-location can copy it across without touching a
-    /// quaternion. Cross-checked.
-    pub(crate) const ORIENTATION_EULER: usize = 0x2d0;
+    /// `qInterpolatedOrientation`, the character's LIVE orientation QUATERNION.
+    ///
+    /// # The field this replaced, and why a passing cross-check did not save it
+    ///
+    /// Until 2026-09-02 [`super::super::game::Chr::yaw`] read `+0x2d0` and called it
+    /// `orientationEuler.y`. It is not an orientation at all: the 1.16.2 named dump types
+    /// `CSChrPhysicsModule+0x2c0` as `ChrPhysicsModuleInitData initData`, whose second field is
+    /// `initialOrientation` at `+0x10` -- i.e. `+0x2d0` is the orientation the character was
+    /// CONSTRUCTED with, a spawn-time constant. The rest of that block reads the same way and
+    /// confirms it: `chrHitHeight`/`chrHitRadius` at `+0x2e0`/`+0x2e4`, `collisionGroup`,
+    /// `weight`, `proxyGravityScale`, `moveTypeFlags` -- an `NpcParam`-shaped init record, with
+    /// the LIVE `hitHeight`/`hitRadius` pair living separately at `+0x340`/`+0x344` (which is
+    /// where [`crate::camera::layout::chr_physics_module`] already reads them).
+    ///
+    /// Read live out of a running 1.17 game (pid 650512, the player's own physics module reached
+    /// through `ChrIns+0x190 -> +0x68`, whose `CSChrModuleBase.owner` read back as the player
+    /// `ChrIns`), `+0x2d0` was `(0, 0, 0, 0)` in every sample while `position` at `+0x70` changed
+    /// between them. So `yaw()` returned a CONSTANT `0.0` for every character, always: the spawn
+    /// point was placed at a fixed world offset instead of in front of the player, and the
+    /// movement basis never rotated with the body.
+    ///
+    /// The `offset_of!` cross-check passed the whole time because `fromsoftware-rs` names the same
+    /// eight bytes `orientation_euler` -- one guessed name checked against another. The assertion
+    /// in [`super::super::game`] now pins THIS field instead, whose name upstream and the named
+    /// dump agree on and whose meaning is byte-proven below.
+    ///
+    /// # Byte proof, both builds
+    ///
+    /// `CS::ChrCtrl::GetPhysicsOrientation` -- the body of `GetForward`, i.e. the engine's own
+    /// answer to "which way is this character facing" -- reaches the quaternion through a
+    /// six-accessor family on `ChrCtrl` that is byte-identical in both images. The prologue
+    ///
+    /// ```text
+    /// 488b4110 488bda 488b8890010000 488b4968 e8
+    ///   MOV RAX,[RCX+0x10]      ; ChrCtrl.owningChr
+    ///   MOV RBX,RDX
+    ///   MOV RCX,[RAX+0x190]     ; ChrIns.modules
+    ///   MOV RCX,[RCX+0x68]      ; modules.physics
+    ///   CALL <accessor>
+    /// ```
+    ///
+    /// matches 6 times in each image, at the SAME six functions in the SAME order (1.16.2
+    /// `0x1403c6d4f`, 1.17 `0x1403c6d5f`, and five more), and every callee is byte-identical:
+    ///
+    /// ```text
+    /// 488d4160 c3               LEA RAX,[RCX+0x60] ; RET   -> THIS FIELD, callees 1 and 6
+    /// 40534883ec70 0f286150     MOVAPS XMM4,[RCX+0x50]     -> qOrientation, callees 2 and 3
+    /// 0f104170                  MOVUPS XMM0,[RCX+0x70]     -> POSITION, callee 4
+    /// ```
+    ///
+    /// which pins this offset, [`POSITION`], `ChrIns+0x190` and `modules+0x68` on the build the
+    /// game is actually running, not just on the one with symbols.
+    ///
+    /// # Interpolated, not `qOrientation`
+    ///
+    /// `+0x50` is the TURN TARGET (upstream: "interpolated towards the target rotation"), and is
+    /// what `ChrIns::GetOrientation` decomposes for the AI's turn delta. `+0x60` is where the body
+    /// actually is, which is what `GetForward` reads and what the player is looking at when they
+    /// push the stick. The two differ only by a frame of turn interpolation.
+    pub(crate) const Q_INTERPOLATED_ORIENTATION: usize = 0x60;
 }
 
 /// `ComManipulator`, and the `AiIns` reached through it.
@@ -629,6 +685,33 @@ pub(crate) mod manipulator {
     pub(crate) const COM_SIZE: usize = 0x170;
     /// `ComManipulator.aiIns`.
     pub(crate) const AI_INS: usize = 0xc0;
+    /// `ChrManipulator.owningChr` -- the `ChrIns` this manipulator drives.
+    ///
+    /// `ComManipulator` opens with a `ChrManipulator` base (`0xc0` bytes), and this is that base's
+    /// back-pointer. It is the first leg of the identity round trip in
+    /// [`crate::possess::game::Chr::validated_ai_ins`]: a manipulator reached from a `ChrIns` must
+    /// name that same `ChrIns` back.
+    pub(crate) const OWNING_CHR: usize = 0xa8;
+    /// `ComManipulator.comThinkOwner` -- an **INLINE `CSComThinkOwner` member, not a pointer**.
+    ///
+    /// This is the fact that makes the canary exact rather than a plausibility screen.
+    /// `CSComThinkOwner` is `0x18` bytes and lives at `+0xc8` INSIDE the manipulator, so the
+    /// pointer `AiIns.comThinkOwner` holds is not merely "some live object": it must equal
+    /// `manipulator + 0xc8` on the nose. A stale `AiIns`, a freed manipulator, or a build whose
+    /// `AI_INS` offset has moved cannot satisfy an exact address equality by accident.
+    pub(crate) const COM_THINK_OWNER: usize = 0xc8;
+}
+
+/// `CSComThinkOwner` -- three fields in `0x18` bytes, embedded in every [`manipulator`].
+///
+/// The AI side of a character. `AiIns` reaches the body exclusively through this: every
+/// `GetPhysicsPosition` / `GetForward1` / `GetChrCtrlModifierData` call in `CSAiFunc` is a virtual
+/// call on it. Only the two back-pointers are used here, and only to close the round trip.
+pub(crate) mod com_think_owner {
+    /// `comManipOwner` -- back to the `ComManipulator` this is embedded in.
+    pub(crate) const COM_MANIP_OWNER: usize = 0x8;
+    /// `chrCtrl` -- back to the body.
+    pub(crate) const CHR_CTRL: usize = 0x10;
 }
 
 /// `AiIns`, and the `AiPathData` it points at -- THE FOUR FIELDS `CSAiFunc::MoveTo` WRITES.
@@ -695,9 +778,17 @@ pub(crate) mod manipulator {
 /// Untouched by this layer: `MoveTo` does not write it either, and `walkType` already carries the
 /// walk/run distinction the engine scales the move vector by.
 ///
-/// The canary in `crate::possess::game::ai_path_target` stays, and stays load-bearing: these
-/// offsets are proven for the two builds that were measured, and a third build gets no writes.
+/// The canary in `crate::possess::game::Chr::validated_ai_ins` stays, and stays load-bearing:
+/// these offsets are proven for the two builds that were measured, and a third build gets no
+/// writes. It is an EXACT identity round trip now rather than the plausibility screen it was --
+/// which passed happily through the whole period the creature refused to move.
 pub(crate) mod ai_ins {
+    /// `AiIns.comThinkOwner`, the struct's FIRST field -- a `CSComThinkOwner*`.
+    ///
+    /// `FUN_1402c9410` opens `pCVar1 = param_1->comThinkOwner; if (pCVar1 == 0) return;`, and the
+    /// named 1.16.2 dump types `AiIns+0x0` as `CSComThinkOwner *`. It is the canary's anchor: see
+    /// [`super::manipulator::COM_THINK_OWNER`].
+    pub(crate) const COM_THINK_OWNER: usize = 0x0;
     /// `wantToMoveTo`, a `FloatVector4` in physics space. Byte-verified on 1.16.2 and 1.17.
     pub(crate) const WANT_TO_MOVE_TO: usize = 0xc3e0;
     /// `walkType`, an `int`. **THE GATE** -- see the module note. Byte-verified on both builds.

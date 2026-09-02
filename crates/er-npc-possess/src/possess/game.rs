@@ -48,7 +48,7 @@ use crate::possess::intent::{IntentWrite, Stick};
 use crate::possess::layout::{
     ai_ins, ai_path_data, chr_action_request_module, chr_behavior_module, chr_ctrl,
     chr_ctrl_modifier, chr_data_module, chr_event_module, chr_ins, chr_physics_module,
-    chr_time_act_module, manipulator, modules, world_chr_man_dbg,
+    chr_time_act_module, com_think_owner, manipulator, modules, world_chr_man_dbg,
 };
 use crate::settings::{TargetMode, TargetSettings};
 
@@ -119,9 +119,14 @@ const _: () = {
         core::mem::offset_of!(CSChrPhysicsModule, standing_on_solid_ground)
             == chr_physics_module::STANDING_ON_SOLID_GROUND
     );
+    // NOT `orientation_euler`, which upstream places at `+0x2d0` and which this crate read until
+    // 2026-09-02. That name is a guess -- the named 1.16.2 dump types the same bytes as
+    // `ChrPhysicsModuleInitData.initialOrientation`, and it reads `(0,0,0,0)` on a live character
+    // -- so asserting one guessed name against another proved nothing. This pins the LIVE
+    // quaternion instead, whose offset is byte-proven on both builds.
     assert!(
-        core::mem::offset_of!(CSChrPhysicsModule, orientation_euler)
-            == chr_physics_module::ORIENTATION_EULER
+        core::mem::offset_of!(CSChrPhysicsModule, interpolated_orientation)
+            == chr_physics_module::Q_INTERPOLATED_ORIENTATION
     );
     assert!(
         core::mem::offset_of!(WorldChrManDbg, cam_override_chr_ins)
@@ -276,10 +281,24 @@ impl Chr {
         read_vec3(self.physics()? + chr_physics_module::POSITION)
     }
 
-    /// Heading in radians, from `orientationEuler.y`.
+    /// Heading in radians, derived from the body's LIVE orientation quaternion.
+    ///
+    /// The quaternion, not a euler field: the euler field this used to read
+    /// (`+0x2d0`) is `ChrPhysicsModuleInitData.initialOrientation`, a spawn-time constant that
+    /// reads all-zero on a live character, so this answered `0.0` for every creature and every
+    /// player. `+0x60` is what `CS::ChrCtrl::GetPhysicsOrientation` -- the body of `GetForward` --
+    /// reads, and the offset is byte-proven on 1.16.2 and 1.17 alike; see
+    /// [`chr_physics_module::Q_INTERPOLATED_ORIENTATION`].
+    ///
+    /// `None` when the sixteen bytes are not a unit quaternion, which doubles as a liveness check
+    /// on the physics module.
     pub(crate) fn yaw(self) -> Option<f32> {
-        let at = self.physics()? + chr_physics_module::ORIENTATION_EULER;
-        unsafe { safe_read_f32(at + 4) }.filter(|v| v.is_finite())
+        let at = self.physics()? + chr_physics_module::Q_INTERPOLATED_ORIENTATION;
+        let x = unsafe { safe_read_f32(at) }?;
+        let y = unsafe { safe_read_f32(at + 4) }?;
+        let z = unsafe { safe_read_f32(at + 8) }?;
+        let w = unsafe { safe_read_f32(at + 12) }?;
+        crate::possess::intent::yaw_of_quaternion([x, y, z, w])
     }
 
     /// The engine-maintained last position this character was standing on.
@@ -508,17 +527,6 @@ impl Chr {
         unsafe { is_heap_aligned_ptr(manip) }.then_some(manip)
     }
 
-    /// The `AiIns`, reached through the REAL manipulator.
-    ///
-    /// Through `ChrCtrl+0x18` on purpose: `ChrIns::GetAiInsFromManipulator` and
-    /// `EnemyIns::GetChrManipulator` do not consult the `+0x3b0` override, so the AI side of the
-    /// engine still sees the creature's own `ComManipulator` -- which is exactly what lets us
-    /// write intent into fields the forwarded `[vt+0x50]` will then consume.
-    pub(crate) fn ai_ins(self) -> Option<usize> {
-        let ai = unsafe { safe_read_usize(self.real_manipulator()? + manipulator::AI_INS) }?;
-        unsafe { is_heap_aligned_ptr(ai) }.then_some(ai)
-    }
-
     /// Install the thunk on `ChrCtrl+0x3b0`.
     pub(crate) fn install_manipulator_override(self, thunk: usize) -> bool {
         let Some(ctrl) = self.chr_ctrl() else {
@@ -660,20 +668,79 @@ impl Chr {
         write_u32(at, flags)
     }
 
-    /// Does this creature's `AiIns` still look like the structure the offsets describe?
+    /// The creature's `AiIns`, PROVEN to be the live AI object of THIS body.
     ///
-    /// **THE LAYOUT CANARY.** `AiIns` is `0xf0d0` bytes, its field offsets come from the 1.16.2
-    /// named dump, and the 1.17 verification sweep did not cover it -- so a single inserted field
-    /// would move `wantToMoveTo` and `pathData` silently, and the struct is far too big for a
-    /// stray write to fault. `pathData` is a pointer, which is the one field in the neighbourhood
-    /// whose value can be checked for plausibility, so it vouches for its neighbours: if the
-    /// offsets are wrong, `+0xd9c8` is overwhelmingly likely to hold something that is not a
-    /// heap-aligned pointer to memory containing three finite floats.
+    /// **THE LAYOUT CANARY, and it is an identity proof rather than a plausibility screen.** The
+    /// version this replaced checked only that `pathData` was a heap-aligned pointer to three
+    /// finite floats. That passed on every frame of a possession in which nothing moved, and it
+    /// was cited as evidence the offsets were right -- a canary that cannot fail is worse than no
+    /// canary, because it launders a guess into a fact.
     ///
-    /// This is not proof. It is the strongest check available without a runtime probe, and it
-    /// fails CLOSED -- movement intent is simply not written.
+    /// What makes an exact check possible is that `ComManipulator` **embeds** its
+    /// `CSComThinkOwner` at `+0xc8` instead of pointing at one. So the pointer `AiIns+0x0` holds
+    /// is not merely "a live object": it must equal `manipulator + 0xc8` to the byte. Walking on
+    /// from there, `CSComThinkOwner+0x10` must be the `ChrCtrl` we started from, and
+    /// `ChrManipulator+0xa8` must be the `ChrIns` we started from. Four addresses, three exact
+    /// equalities, one closed loop:
+    ///
+    /// ```text
+    /// ChrIns --+0x58--> ChrCtrl --+0x18--> ComManipulator --+0xc0--> AiIns
+    ///    ^                  ^                     |  ^                  |
+    ///    +------------------|---------------------+  |    +0x0 (comThinkOwner)
+    ///     ChrManipulator+0xa8|                       |                  |
+    ///                        +-- CSComThinkOwner+0x10 +--- == manip+0xc8 <-+
+    /// ```
+    ///
+    /// The manipulator is the REAL one, from `ChrCtrl+0x18`, never the thunk this crate installs
+    /// at `+0x3b0`: `ChrIns::GetAiInsFromManipulator` and `EnemyIns::GetChrManipulator` do not
+    /// consult the override, so the AI side of the engine still sees the creature's own
+    /// `ComManipulator` -- which is exactly what lets us write intent into fields the forwarded
+    /// `[vt+0x50]` then consumes. The thunk would fail leg three anyway, since it is a byte copy
+    /// whose embedded `comManipOwner` still names the object it was copied FROM.
+    ///
+    /// Every offset in that loop comes from the named 1.16.2 dump, and a build that moved ANY of
+    /// them cannot close it by accident -- which is exactly the failure mode
+    /// [`Self::write_move_intent`] must not have, because `AiIns` is `0xf0d0` bytes and a stray
+    /// write inside it faults on nothing and reports success.
+    ///
+    /// The `walkType` range check is the one soft conjunct: `CSAiFunc::MoveTo` writes `2 - walk`
+    /// and `ClearMoveRequest` writes `0`, so a live field holds `0..=2` and sixteen thousand other
+    /// values say the offset is not the field.
+    fn validated_ai_ins(self) -> Option<usize> {
+        let ctrl = self.chr_ctrl()?;
+        let manip = self.real_manipulator()?;
+        // Leg one: the manipulator we reached from this ChrIns names it back.
+        if unsafe { safe_read_usize(manip + manipulator::OWNING_CHR) }? != self.0 {
+            return None;
+        }
+        let ai = unsafe { safe_read_usize(manip + manipulator::AI_INS) }?;
+        if !unsafe { is_heap_aligned_ptr(ai) } {
+            return None;
+        }
+        // Leg two: the AI object's owner IS the manipulator's own inline member, exactly.
+        let owner = unsafe { safe_read_usize(ai + ai_ins::COM_THINK_OWNER) }?;
+        if owner != manip + manipulator::COM_THINK_OWNER {
+            return None;
+        }
+        // Leg three: the member's own back-pointer names the manipulator it is embedded in...
+        if unsafe { safe_read_usize(owner + com_think_owner::COM_MANIP_OWNER) }? != manip {
+            return None;
+        }
+        // ...and leg four, it points back at this body.
+        if unsafe { safe_read_usize(owner + com_think_owner::CHR_CTRL) }? != ctrl {
+            return None;
+        }
+        // ...and the field the gate is written into currently holds a value the engine writes.
+        let walk = unsafe { safe_read_i32(ai + ai_ins::WALK_TYPE) }?;
+        if !(ai_ins::WALK_TYPE_STOP..=ai_ins::WALK_TYPE_RUN).contains(&walk) {
+            return None;
+        }
+        Some(ai)
+    }
+
+    /// The address of `pathData->target`, or `None` when the chain does not check out.
     pub(crate) fn ai_path_target(self) -> Option<usize> {
-        let path_data = unsafe { safe_read_usize(self.ai_ins()? + ai_ins::PATH_DATA) }?;
+        let path_data = unsafe { safe_read_usize(self.validated_ai_ins()? + ai_ins::PATH_DATA) }?;
         if !unsafe { is_heap_aligned_ptr(path_data) } {
             return None;
         }
@@ -686,16 +753,17 @@ impl Chr {
     /// `wantToMoveTo` and `pathData->target` get the same point, because neither wins in every
     /// branch of `AiIns::UpdateMovement`. `walkType` is the gate that decides whether the engine
     /// builds a move vector from that point at all, and `turnTarget` is what makes the body face
-    /// it; see [`crate::possess::intent`] for why one of those was missing and the creature
-    /// therefore stood still with a perfectly good target.
+    /// it; see [`crate::possess::intent`] for the direction those point in and why it was
+    /// backwards until 2026-09-02.
     ///
-    /// Gated on [`Self::ai_path_target`], so a build whose `AiIns` layout has moved gets no writes
-    /// at all rather than four wrong ones.
+    /// Gated on [`Self::validated_ai_ins`], so a build whose `AiIns` layout has moved gets no
+    /// writes at all rather than four wrong ones, and READ BACK afterwards: `write_i32` proves the
+    /// address was readable before the store, which is not the same as proving the store landed.
     pub(crate) fn write_move_intent(self, write: IntentWrite) -> bool {
-        let Some(target_at) = self.ai_path_target() else {
+        let Some(ai) = self.validated_ai_ins() else {
             return false;
         };
-        let Some(ai) = self.ai_ins() else {
+        let Some(target_at) = self.ai_path_target() else {
             return false;
         };
         let value = FloatVector4::new(write.target[0], write.target[1], write.target[2], 1.0);
@@ -706,7 +774,16 @@ impl Chr {
         // the failure this function shipped with.
         let walk = write_i32(ai + ai_ins::WALK_TYPE, write.walk_type);
         let turn = write_i32(ai + ai_ins::TURN_TARGET, write.turn_target);
-        path && want && walk && turn
+        if !(path && want && walk && turn) {
+            return false;
+        }
+        // The read-back. Same tick, same thread, nothing else has run in between, so anything
+        // other than the value just stored means the store did not take -- and THAT is the
+        // symptom the old canary could not see.
+        let gait_took = unsafe { safe_read_i32(ai + ai_ins::WALK_TYPE) } == Some(write.walk_type);
+        let target_took = unsafe { safe_read_f32(ai + ai_ins::WANT_TO_MOVE_TO) }
+            .is_some_and(|x| x.to_bits() == write.target[0].to_bits());
+        gait_took && target_took
     }
 
     /// Stop the creature, the way `CS::AiIns::ClearMoveRequest` stops one.

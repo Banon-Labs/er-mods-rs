@@ -20,6 +20,34 @@
 //! creature's own `NpcParam` row, so a creature the game ships as stationary stays stationary and
 //! that is correct. See [`crate::possess::layout::ai_ins`] for the byte proof of all of it.
 //!
+//! # WHICH WAY IS FORWARD: the sign, and its two proofs
+//!
+//! `forward = (-sin yaw, 0, -cos yaw)`. The minus signs are not a convention someone picked; they
+//! are read out of the binary twice, by routes that share nothing.
+//!
+//! **Route one -- the loop this module's writes actually feed.** `FUN_1402c9410`, the
+//! `turnTarget` dispatch `AiIns::UpdateMovement` ends with, takes the direction to face
+//! `d = wantToMoveTo - GetPhysicsPosition()` and stores an `AngleBundle` whose yaw is
+//!
+//! ```text
+//! atan2f(d.x, d.z) + PI          ; 1.16.2 0x1402ca1c4, ADDSS XMM0,[0x1430b2614] = 3.14159274
+//! ```
+//!
+//! into `aiIns+0xc3f0` (`FUN_1402c6850` writes `param_1[0x187e]`, i.e. byte `0xc3f0`). `[vt+0x50]`
+//! then forms the frame's turn delta as `aiIns[0xc3f0] - ChrIns::GetOrientation()`. A body that
+//! already faces `d` must produce a zero delta, so `GetOrientation().y = atan2(d.x, d.z) + PI`,
+//! and inverting that gives `d = (-sin yaw, 0, -cos yaw)`. The `+ PI` IS the minus sign.
+//!
+//! **Route two -- the engine's own "which way is this character facing".** `GetForward` is
+//! `CS::ChrCtrl::GetPhysicsOrientation`, which builds the rotation matrix from
+//! `qInterpolatedOrientation` and multiplies it by `DL_Z_VECTOR ^ FloatVector4_14329f470` -- the
+//! `+Z` basis vector XOR'd with `(-0.0, -0.0, -0.0, -0.0)`, i.e. **negated**. So the character's
+//! forward is minus the image of local `+Z`: the models face local `-Z`.
+//!
+//! `right`, by contrast, did NOT change: `forward x up` works out to `(cos yaw, 0, -sin yaw)`,
+//! which is the image of local `+X` and exactly what this module already had. Only one of the two
+//! basis vectors was wrong, which is why strafing looked no worse than walking.
+//!
 //! # The race this module still has to lose safely
 //!
 //! `[vt+0x50]` runs `AiIns::UpdateMovement` before reading any of this, and that function branches
@@ -75,6 +103,22 @@ use crate::possess::layout::ai_ins;
 /// roughly two of the range bands' "close" figure and holds a continuous walk at 60fps with a
 /// wide margin.
 pub(crate) const REACH: f32 = 8.0;
+
+/// The narrowest squared norm [`yaw_of_quaternion`] will still call a unit quaternion.
+///
+/// The engine renormalises, so a live quaternion sits within a few ULP of 1.0; this window is
+/// wide enough that no legitimate value is ever refused and narrow enough that four floats picked
+/// out of freed memory essentially never land inside it.
+const QUATERNION_NORM_MIN: f32 = 0.9;
+/// The widest squared norm [`yaw_of_quaternion`] will still call a unit quaternion.
+const QUATERNION_NORM_MAX: f32 = 1.1;
+
+/// How long the horizontal part of the facing vector must be before it counts as a heading.
+///
+/// One ten-thousandth of a unit vector is 0.006 degrees of tilt away from straight down -- far
+/// tighter than any body the game will ever hand us, and far looser than the few ULP a computed
+/// nose-down quaternion misses zero by.
+const HEADING_MIN_HORIZONTAL: f32 = 1e-4;
 
 /// Stick deflection below this is no input at all.
 ///
@@ -204,10 +248,10 @@ impl IntentWrite {
 
 /// Turn a stick reading into the frame's intent.
 ///
-/// `yaw` is the creature's own heading in radians, taken from
-/// `CSChrPhysicsModule.orientationEuler.y`. The basis is `forward = (sin yaw, 0, cos yaw)` and
-/// `right = (cos yaw, 0, -sin yaw)`, i.e. yaw 0 faces `+Z` and a quarter turn faces `+X` -- the
-/// right-handed, Y-up convention `EulerToQuat` uses on the other side of this same field.
+/// `yaw` is the creature's own heading in radians, from [`yaw_of_quaternion`]. The basis is
+/// **`forward = (-sin yaw, 0, -cos yaw)`** and `right = (cos yaw, 0, -sin yaw)`, i.e. yaw 0 faces
+/// `-Z` and a quarter turn faces `-X`. See the module note for the two proofs of that minus sign;
+/// it was `+` until 2026-09-02 and that is why the creature walked away from where it was pushed.
 ///
 /// Creature-relative rather than camera-relative on purpose, and it costs nothing in feel: the
 /// camera is a follow camera behind the possessed body, so its forward and the body's forward
@@ -245,9 +289,10 @@ pub(crate) fn intent(
         stick
     };
     let (sin, cos) = yaw.sin_cos();
-    // forward * stick.y + right * stick.x
-    let dx = sin.mul_add(stick.y, cos * stick.x);
-    let dz = cos.mul_add(stick.y, -sin * stick.x);
+    // forward * stick.y + right * stick.x, with forward = (-sin, -cos) and right = (cos, -sin).
+    // The MINUS on forward is the whole of the 2026-09-02 fix; see the module note.
+    let dx = cos.mul_add(stick.x, -sin * stick.y);
+    let dz = (-sin).mul_add(stick.x, -cos * stick.y);
     let reach = REACH * speed_scale;
     IntentWrite {
         target: [
@@ -267,9 +312,11 @@ pub(crate) fn intent(
 /// A point `distance` in front of a character facing `yaw`, at the same height.
 ///
 /// THE SAME BASIS AS [`intent`], and that is the whole reason it lives here rather than beside its
-/// caller: `forward = (sin yaw, 0, cos yaw)`. A second copy of that convention, written from the
-/// same description, is exactly how a sign error gets in -- and the failure would be a creature
-/// spawned behind the player, which reads as "the spawn did nothing".
+/// caller: `forward = (-sin yaw, 0, -cos yaw)`. A second copy of that convention, written from the
+/// same description, is exactly how a sign error gets in -- and the failure is a creature spawned
+/// behind the player, which reads as "the spawn did nothing". That is not hypothetical: it is what
+/// this function did until 2026-09-02, and the user's report of it ("the spawned enemy definitely
+/// is behind the player") is what found the sign.
 ///
 /// Height is COPIED, never offset. A spawn point raised off the player's own footing is a creature
 /// dropped from a height, and the ground under it is not known here.
@@ -279,11 +326,65 @@ pub(crate) fn ahead_of(position: [f32; 3], yaw: f32, distance: f32) -> [f32; 3] 
         return position;
     }
     let (sin, cos) = yaw.sin_cos();
+    let back = -distance;
     [
-        distance.mul_add(sin, position[0]),
+        back.mul_add(sin, position[0]),
         position[1],
-        distance.mul_add(cos, position[2]),
+        back.mul_add(cos, position[2]),
     ]
+}
+
+/// The engine's own heading angle for a character, from its orientation QUATERNION.
+///
+/// # Why this is not a field read
+///
+/// Because the field that looked like one was not. `CSChrPhysicsModule+0x2d0` is
+/// `ChrPhysicsModuleInitData.initialOrientation` -- a spawn-time constant that reads `(0,0,0,0)`
+/// on a live character -- and reading it made [`intent`] and [`ahead_of`] operate in a basis that
+/// never rotated. See [`crate::possess::layout::chr_physics_module::Q_INTERPOLATED_ORIENTATION`].
+///
+/// # The formula, and where each half of it comes from
+///
+/// `CS::CSChrPhysicsModule::GetTargetOrientation` builds a rotation matrix from the quaternion
+/// whose rows are the images of the local axes, then hands it to
+/// `FloatVector4::EulerFromTransformationMatrix`, whose yaw output is
+/// `-atan2(row1.z, row1.x)` (the `XOR` against `FloatVector4_14329f470`, byte-read as
+/// `(-0.0, -0.0, -0.0, -0.0)`, is that negation). Writing `row3` for the image of local `+Z`:
+///
+/// ```text
+/// row3 = ( 2(wy + xz), 2(yz - wx), 1 - 2(x^2 + y^2) )
+/// ```
+///
+/// and the heading is `atan2(row3.x, row3.z)`, which for a level character is the same angle
+/// `EulerFromTransformationMatrix` reports and which stays the horizontal heading when the body is
+/// pitched on a slope.
+///
+/// Returns `None` for a quaternion that is not finite or not unit-length -- which is the cheapest
+/// available proof that the sixteen bytes really are an orientation and not whatever now occupies
+/// a freed physics module.
+#[must_use]
+pub(crate) fn yaw_of_quaternion(q: [f32; 4]) -> Option<f32> {
+    let [x, y, z, w] = q;
+    if !(x.is_finite() && y.is_finite() && z.is_finite() && w.is_finite()) {
+        return None;
+    }
+    // A unit quaternion, within a tolerance far wider than float error and far narrower than
+    // anything a garbage read would land in.
+    let norm_squared = w.mul_add(w, z.mul_add(z, x.mul_add(x, y * y)));
+    if !(QUATERNION_NORM_MIN..=QUATERNION_NORM_MAX).contains(&norm_squared) {
+        return None;
+    }
+    let row3_x = 2.0 * w.mul_add(y, x * z);
+    let row3_z = 2.0f32.mul_add(-x.mul_add(x, y * y), 1.0);
+    // A body pitched onto its nose has its local +Z pointing straight down and no horizontal
+    // heading at all. `atan2` would answer 0 there -- a silent claim that it faces -Z -- so the
+    // horizontal component has to be long enough to have a direction. The threshold is a LENGTH
+    // and not an equality test because the components are computed, so a nose-down quaternion
+    // lands a few ULP off zero rather than on it.
+    if row3_x.hypot(row3_z) < HEADING_MIN_HORIZONTAL {
+        return None;
+    }
+    Some(row3_x.atan2(row3_z))
 }
 
 #[cfg(test)]
@@ -310,15 +411,15 @@ mod tests {
     #[test]
     fn ahead_of_agrees_with_the_movement_basis_and_never_changes_height() {
         let at = [10.0, 5.0, -20.0];
-        // Yaw 0 faces +Z, which is what `intent` says and what `EulerToQuat` uses.
-        let north = ahead_of(at, 0.0, 3.0);
-        assert!(close(north[0], 10.0), "{north:?}");
-        assert!(close(north[1], 5.0), "height is copied, not offset");
-        assert!(close(north[2], -17.0), "{north:?}");
-        // A quarter turn faces +X.
-        let east = ahead_of(at, core::f32::consts::FRAC_PI_2, 3.0);
-        assert!(close(east[0], 13.0), "{east:?}");
-        assert!(close(east[2], -20.0), "{east:?}");
+        // Yaw 0 faces -Z: the models face local -Z and `GetForward` negates the axis.
+        let ahead = ahead_of(at, 0.0, 3.0);
+        assert!(close(ahead[0], 10.0), "{ahead:?}");
+        assert!(close(ahead[1], 5.0), "height is copied, not offset");
+        assert!(close(ahead[2], -23.0), "{ahead:?}");
+        // A quarter turn faces -X.
+        let turned = ahead_of(at, core::f32::consts::FRAC_PI_2, 3.0);
+        assert!(close(turned[0], 7.0), "{turned:?}");
+        assert!(close(turned[2], -20.0), "{turned:?}");
         // ...and it is the same direction `intent` walks toward on full forward stick.
         let walked = drive(at, 1.0, Stick::from_axes(0.0, 1.0), 1.0);
         let placed = ahead_of(at, 1.0, REACH);
@@ -370,21 +471,21 @@ mod tests {
         assert_eq!(Stick::from_axes(0.0, f32::INFINITY), None);
     }
 
-    /// The basis: yaw 0 faces `+Z`, a quarter turn faces `+X`, and Y is never touched -- writing a
+    /// The basis: yaw 0 faces `-Z`, a quarter turn faces `-X`, and Y is never touched -- writing a
     /// height into a walk target is how a ground creature is asked to fly.
     #[test]
-    fn forward_is_plus_z_at_yaw_zero_and_plus_x_a_quarter_turn_later() {
+    fn forward_is_minus_z_at_yaw_zero_and_minus_x_a_quarter_turn_later() {
         let at = [10.0, 5.0, -20.0];
         let forward = Stick::from_axes(0.0, 1.0);
-        let north = drive(at, 0.0, forward, 1.0);
-        assert!(north.moving());
-        assert!(close(north.target[0], 10.0), "{:?}", north.target);
-        assert!(close(north.target[1], 5.0), "height is never written");
-        assert!(close(north.target[2], -20.0 + REACH), "{:?}", north.target);
+        let ahead = drive(at, 0.0, forward, 1.0);
+        assert!(ahead.moving());
+        assert!(close(ahead.target[0], 10.0), "{:?}", ahead.target);
+        assert!(close(ahead.target[1], 5.0), "height is never written");
+        assert!(close(ahead.target[2], -20.0 - REACH), "{:?}", ahead.target);
 
-        let east = drive(at, core::f32::consts::FRAC_PI_2, forward, 1.0);
-        assert!(close(east.target[0], 10.0 + REACH), "{:?}", east.target);
-        assert!(close(east.target[2], -20.0), "{:?}", east.target);
+        let turned = drive(at, core::f32::consts::FRAC_PI_2, forward, 1.0);
+        assert!(close(turned.target[0], 10.0 - REACH), "{:?}", turned.target);
+        assert!(close(turned.target[2], -20.0), "{:?}", turned.target);
     }
 
     /// Right on the stick is right of the body, which is the other half of the basis and the half
@@ -413,7 +514,7 @@ mod tests {
         let at = [0.0, 0.0, 0.0];
         let forward = Stick::from_axes(0.0, 1.0);
         let doubled = drive(at, 0.0, forward, 2.0);
-        assert!(close(doubled.target[2], REACH * 2.0));
+        assert!(close(doubled.target[2], -REACH * 2.0));
         for junk in [0.0, -1.0, f32::NAN] {
             let out = drive(at, 0.0, forward, junk);
             assert!(!out.moving(), "{junk}");
@@ -513,6 +614,125 @@ mod tests {
         }
     }
 
+    /// Two angles equal modulo a full turn, within a millirad.
+    fn wrapped_close(a: f32, b: f32) -> bool {
+        use core::f32::consts::{PI, TAU};
+        let mut delta = (a - b) % TAU;
+        if delta > PI {
+            delta -= TAU;
+        }
+        if delta < -PI {
+            delta += TAU;
+        }
+        delta.abs() < 1e-3
+    }
+
+    /// THE BASIS, PINNED TO THE BINARY RATHER THAN TO ITS OWN DESCRIPTION.
+    ///
+    /// The tests above assert that yaw 0 faces `-Z`, which is exactly the shape of assertion that
+    /// let the WRONG sign ship: written from the same prose as the code, it agrees with whatever
+    /// the code happens to do. This one is different. It asserts the engine's own equation, read
+    /// out of `FUN_1402c9410` (which stores `atan2f(d.x, d.z) + PI` into `aiIns+0xc3f0`) and
+    /// `FUN_1403d0250` (which turns the body by `aiIns[0xc3f0] - ChrIns::GetOrientation()`):
+    ///
+    /// ```text
+    /// a body already facing d is a body whose turn delta is zero,
+    ///   so  yaw == atan2(d.x, d.z) + PI   for d = the direction it faces.
+    /// ```
+    ///
+    /// A flipped sign in [`ahead_of`] or [`intent`] fails this by exactly PI, and it cannot be
+    /// made to pass by editing the prose.
+    #[test]
+    fn the_forward_direction_satisfies_the_engines_own_facing_equation() {
+        use core::f32::consts::PI;
+        let origin = [0.0, 0.0, 0.0];
+        for step in 0..32u8 {
+            let yaw = core::f32::consts::TAU * f32::from(step) / 32.0 - PI;
+            // `ahead_of` places a point in the direction the body faces...
+            let placed = ahead_of(origin, yaw, 5.0);
+            assert!(
+                wrapped_close(placed[0].atan2(placed[2]) + PI, yaw),
+                "ahead_of at yaw {yaw}: {placed:?}"
+            );
+            // ...and a full-forward stick walks toward that same direction.
+            let walked = drive(origin, yaw, Stick::from_axes(0.0, 1.0), 1.0);
+            assert!(
+                wrapped_close(walked.target[0].atan2(walked.target[2]) + PI, yaw),
+                "intent at yaw {yaw}: {:?}",
+                walked.target
+            );
+        }
+    }
+
+    /// `yaw_of_quaternion` must invert the rotation the engine builds from a heading.
+    ///
+    /// A yaw of `psi` about `+Y` is the quaternion `(0, sin(psi/2), 0, cos(psi/2))`, and
+    /// `CSChrPhysicsModule::GetTargetOrientation` into `EulerFromTransformationMatrix` reports
+    /// `psi` back for it. Anything else here and every heading in the game is wrong by that much.
+    #[test]
+    fn a_pure_yaw_quaternion_decodes_to_the_yaw_it_was_built_from() {
+        use core::f32::consts::PI;
+        for step in 0..32u8 {
+            let psi = core::f32::consts::TAU * f32::from(step) / 32.0 - PI;
+            let (half_sin, half_cos) = (psi * 0.5).sin_cos();
+            let decoded =
+                yaw_of_quaternion([0.0, half_sin, 0.0, half_cos]).expect("a unit quaternion");
+            assert!(wrapped_close(decoded, psi), "{psi} decoded to {decoded}");
+        }
+        // The identity quaternion is heading zero, not a refusal.
+        assert_eq!(yaw_of_quaternion([0.0, 0.0, 0.0, 1.0]), Some(0.0));
+    }
+
+    /// The decoded heading and the forward direction must agree with `GetForward`, whose answer is
+    /// minus the image of local `+Z` under the rotation -- computed here straight from the
+    /// quaternion, so the two halves of the basis check each other rather than the prose.
+    #[test]
+    fn the_decoded_heading_points_where_getforward_points() {
+        // A yaw, and a yaw with a pitch on top of it: the heading must stay horizontal.
+        for q in [
+            [0.0f32, 0.382_683_4, 0.0, 0.923_879_5],
+            [0.130_526_2, 0.353_553_4, -0.146_446_6, 0.914_527_3],
+        ] {
+            let [x, y, z, w] = q;
+            // row3 = the image of local +Z; forward is its negation.
+            let row3_x = 2.0 * w.mul_add(y, x * z);
+            let row3_z = 2.0f32.mul_add(-x.mul_add(x, y * y), 1.0);
+            let (forward_x, forward_z) = (-row3_x, -row3_z);
+
+            let yaw = yaw_of_quaternion(q).expect("a unit quaternion");
+            let placed = ahead_of([0.0, 0.0, 0.0], yaw, 1.0);
+            let scale = forward_x.hypot(forward_z);
+            assert!(close(placed[0], forward_x / scale), "{q:?} gave {placed:?}");
+            assert!(close(placed[2], forward_z / scale), "{q:?} gave {placed:?}");
+        }
+    }
+
+    /// THE ZERO QUATERNION MUST BE A REFUSAL. `(0,0,0,0)` is exactly what
+    /// `CSChrPhysicsModule+0x2d0` held on a live character -- the field this crate used to read as
+    /// a heading -- and the point of answering `None` is that a dead field can no longer
+    /// masquerade as "facing world zero".
+    #[test]
+    fn only_a_unit_quaternion_is_a_heading() {
+        assert_eq!(
+            yaw_of_quaternion([0.0, 0.0, 0.0, 0.0]),
+            None,
+            "the dead field"
+        );
+        assert!(yaw_of_quaternion([0.5, 0.5, 0.5, 0.5]).is_some());
+        assert_eq!(yaw_of_quaternion([3.0, 0.0, 0.0, 0.0]), None, "not unit");
+        assert_eq!(yaw_of_quaternion([f32::NAN, 0.0, 0.0, 1.0]), None);
+        assert_eq!(yaw_of_quaternion([0.0, 0.0, f32::INFINITY, 0.0]), None);
+        // A QUARTER turn about X stands the body on its nose: the image of local +Z is straight
+        // down, there is no horizontal heading at all, and answering `0.0` would be a silent claim
+        // that it faces -Z.
+        let quarter = core::f32::consts::FRAC_1_SQRT_2;
+        assert_eq!(yaw_of_quaternion([quarter, 0.0, 0.0, quarter]), None);
+        // A HALF turn about X is upside down but still pointing somewhere horizontal -- forward is
+        // +Z, i.e. yaw PI -- so that one is an answer and not a refusal.
+        let upside_down = yaw_of_quaternion([1.0, 0.0, 0.0, 0.0]).expect("still has a heading");
+        assert!(wrapped_close(upside_down, core::f32::consts::PI));
+    }
+
     /// `turn_deadzone_deg` straightens a nearly-forward push into an exactly-forward one, so the
     /// heading the engine derives from the target is the heading the body already has and it walks
     /// straight instead of weaving.
@@ -523,9 +743,9 @@ mod tests {
         let off = 10.0_f32.to_radians();
         let nudged = Stick::from_axes(off.sin(), off.cos());
         let straightened = intent(at, 0.0, nudged, 1.0, 20.0);
-        // Yaw 0 faces +Z, so "no turn asked for" is a target with no X component at all.
+        // Yaw 0 faces -Z, so "no turn asked for" is a target with no X component at all.
         assert!(close(straightened.target[0], 0.0), "{straightened:?}");
-        assert!(close(straightened.target[2], REACH), "{straightened:?}");
+        assert!(close(straightened.target[2], -REACH), "{straightened:?}");
         // ...and the same push outside the deadzone keeps its angle.
         let kept = intent(at, 0.0, nudged, 1.0, 5.0);
         assert!(kept.target[0] > 0.1, "{kept:?}");
