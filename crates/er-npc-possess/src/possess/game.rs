@@ -77,6 +77,10 @@ pub(crate) struct AnimFrame {
 /// marked RE-ONLY in `layout`.
 const _: () = {
     assert!(core::mem::offset_of!(CsChrIns, chr_ctrl) == chr_ins::CHR_CTRL);
+    assert!(core::mem::offset_of!(CsChrIns, team_type) == chr_ins::TEAM_TYPE);
+    assert!(
+        core::mem::offset_of!(CsChrIns, lock_on_target_position) == chr_ins::LOCK_ON_TARGET_POS
+    );
     assert!(core::mem::offset_of!(CsChrIns, modules) == chr_ins::MODULES);
     assert!(core::mem::offset_of!(CsChrIns, chr_flags1c5) == chr_ins::CHR_FLAGS_1C5);
     assert!(core::mem::offset_of!(CsChrIns, chr_flags1c8) == chr_ins::CHR_FLAGS_1C8);
@@ -736,6 +740,35 @@ impl Chr {
         write_u32(at, existing | flags)
     }
 
+    /// `ChrIns+0x6c teamType`, or `None` when the byte does not read.
+    pub(crate) fn team_type(self) -> Option<u8> {
+        // Safety: as everywhere else here -- the read goes through `ReadProcessMemory`, so an
+        // unmapped address answers `None` instead of faulting.
+        unsafe { safe_read_u8(self.0 + chr_ins::TEAM_TYPE) }
+    }
+
+    /// Put this character on `team`, which is what decides who its lock-on can and cannot see.
+    ///
+    /// One byte, and `CS::ChrIns::GetTeamType` reads it directly -- but with two overrides above
+    /// it, and one of them can make this write invisible. A `SpecialEffect` carrying state info
+    /// `0x84` forces [`chr_ins::TEAM_TYPE_CHARMED`] anyway, which agrees with what possession
+    /// writes; a `ChrSlotSys` `TemporaryTeamType` slot, which is network state, wins outright. On
+    /// an ordinary offline enemy there is no such slot and this byte is the answer.
+    pub(crate) fn set_team_type(self, team: u8) -> bool {
+        write_u8(self.0 + chr_ins::TEAM_TYPE, team)
+    }
+
+    /// `ChrIns+0xd0 lockOnTargetPos` -- where the lock-on system last put this character's lock
+    /// point, in physics space.
+    ///
+    /// Meaningful on the possessed creature because `camOverrideChrIns` has made it the lock-on
+    /// SUBJECT, so `FUN_140716260` writes this field on it every frame a lock is held. **Nothing
+    /// clears it when the lock is dropped**, so the value alone is not evidence that a lock exists;
+    /// [`crate::possess::intent::aim`] is where that is dealt with.
+    pub(crate) fn lock_on_target_pos(self) -> Option<[f32; 3]> {
+        read_vec3(self.0 + chr_ins::LOCK_ON_TARGET_POS)
+    }
+
     /// Invincibility, exactly as `CS::ChrIns::EnableInvincible` writes it.
     pub(crate) fn set_invincible(self, on: bool) -> bool {
         let at = self.0 + chr_ins::CHR_FLAGS_1C5;
@@ -876,19 +909,6 @@ impl Chr {
         read_vec3(target).map(|_| target)
     }
 
-    /// Write this frame's movement intent -- ALL FOUR FIELDS `CSAiFunc::MoveTo` writes.
-    ///
-    /// `wantToMoveTo` and `pathData->target` get the same point, because neither wins in every
-    /// branch of `AiIns::UpdateMovement`. `walkType` is the gate that decides whether the engine
-    /// builds a move vector from that point at all, and `turnTarget` is what makes the body face
-    /// it; see [`crate::possess::intent`] for the direction those point in and why it was
-    /// backwards until 2026-09-02.
-    ///
-    /// Gated on [`Self::validated_ai_ins`], so a build whose `AiIns` layout has moved gets no
-    /// writes at all rather than four wrong ones. It returns whether the STORES happened, not
-    /// whether they survived: see [`Self::read_move_intent`] for why surviving is not this
-    /// function's business any more.
-
     /// Read `AiIns.walkType` back, for telemetry only.
     ///
     /// A read-back is the half of the instrument that a write-side check cannot supply: a write
@@ -906,6 +926,20 @@ impl Chr {
         read_vec3(ai + ai_ins::WANT_TO_MOVE_TO)
     }
 
+    /// Write this frame's movement intent -- ALL FOUR FIELDS `CSAiFunc::MoveTo` writes.
+    ///
+    /// `wantToMoveTo` and `pathData->target` get the same point, because neither wins in every
+    /// branch of `AiIns::UpdateMovement`. That point is [`IntentWrite::aim`], which is the walk
+    /// target until something has called [`IntentWrite::aiming_at`] -- the two fields are what the
+    /// body FACES. `walkType` is the gate that decides whether the ENGINE builds a move vector
+    /// from them at all, and `turnTarget` is what makes the facing follow them; see
+    /// [`crate::possess::intent`] for the direction those point in and why it was backwards until
+    /// 2026-09-02.
+    ///
+    /// Gated on [`Self::validated_ai_ins`], so a build whose `AiIns` layout has moved gets no
+    /// writes at all rather than four wrong ones. It returns whether the STORES happened, not
+    /// whether they survived: see [`Self::read_move_intent`] for why surviving is not this
+    /// function's business any more.
     pub(crate) fn write_move_intent(self, write: IntentWrite) -> bool {
         let Some(ai) = self.validated_ai_ins() else {
             return false;
@@ -913,7 +947,13 @@ impl Chr {
         let Some(target_at) = self.ai_path_target() else {
             return false;
         };
-        let value = FloatVector4::new(write.target[0], write.target[1], write.target[2], 1.0);
+        // THE AIM POINT, NOT THE WALK TARGET, and the two are the same value until something has
+        // called `IntentWrite::aiming_at`. Both fields get it because neither wins in every branch
+        // of `AiIns::UpdateMovement`, and because what the body FACES is derived from
+        // `wantToMoveTo` -- see [`crate::possess::intent::aim`]. The walk target reaches the engine
+        // by a different route entirely: the driver measures the move direction from
+        // `IntentWrite::target` and stages it at `ComManipulator+0x140`.
+        let value = FloatVector4::new(write.aim[0], write.aim[1], write.aim[2], 1.0);
         let path = write_vec4(target_at, value);
         let want = write_vec4(ai + ai_ins::WANT_TO_MOVE_TO, value);
         // Every one of the four, every frame, and none of them short-circuited: a gait written

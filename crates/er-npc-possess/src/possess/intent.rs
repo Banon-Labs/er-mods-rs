@@ -215,9 +215,24 @@ impl Stick {
 /// discipline expected of the caller.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct IntentWrite {
-    /// The physics-space point to walk to. Written to `AiIns.wantToMoveTo` AND to
-    /// `AiIns.pathData->target`.
+    /// The physics-space point to walk to. The MOVEMENT vector the driver stages at
+    /// `ComManipulator+0x140` is measured from here, and that staging is what moves the body.
+    ///
+    /// It is NOT written to any game field. The engine has its own staging into the same slot,
+    /// built from `wantToMoveTo` -- i.e. from [`Self::aim`] -- but only on the frames `walkType`
+    /// survives the goal churn, and ours is written every frame. With an aim in force and the
+    /// stick pushed off-forward the two disagree; that contest is not new, and the resolution has
+    /// not changed.
     pub(crate) target: [f32; 3],
+    /// The physics-space point to FACE. Written to `AiIns.wantToMoveTo` AND to
+    /// `AiIns.pathData->target`.
+    ///
+    /// Equal to [`Self::target`] unless [`Self::aiming_at`] has replaced it, which is the whole
+    /// of the aim bridge: `[vt+0x50]` differences `aiIns+0xc3f0` against the body's live
+    /// orientation OUTSIDE the `walkType` gate, and `+0xc3f0` is written by `UpdateMovement`'s
+    /// closing `FUN_1402c9410(aiIns, turnTarget)` from `wantToMoveTo - GetPhysicsPosition()`. So
+    /// this field is the only steering wheel the body has, and it steers with the gait stopped.
+    pub(crate) aim: [f32; 3],
     /// `AiIns.walkType`. **THE GATE**: `0` and the engine builds no move vector at all, whatever
     /// `target` says. `1` walks, `2` runs.
     pub(crate) walk_type: i32,
@@ -264,9 +279,23 @@ impl IntentWrite {
     pub(crate) const fn stopped(at: [f32; 3]) -> Self {
         Self {
             target: at,
+            aim: at,
             walk_type: ai_ins::WALK_TYPE_STOP,
             turn_target: ai_ins::TURN_TARGET_SELF,
         }
+    }
+
+    /// Face `point` instead of facing the walk target.
+    ///
+    /// Movement is untouched: [`Self::target`] and [`Self::gait_scale`] still describe the stick,
+    /// and the driver still stages the move vector from them. Only what goes into `wantToMoveTo`
+    /// changes, and `wantToMoveTo` is what the body turns toward.
+    #[must_use]
+    pub(crate) fn aiming_at(self, point: [f32; 3]) -> Self {
+        if !point.iter().all(|v| v.is_finite()) {
+            return self;
+        }
+        Self { aim: point, ..self }
     }
 }
 
@@ -318,12 +347,14 @@ pub(crate) fn intent(
     let dx = cos.mul_add(stick.x, -sin * stick.y);
     let dz = (-sin).mul_add(stick.x, -cos * stick.y);
     let reach = REACH * speed_scale;
+    let target = [
+        reach.mul_add(dx, position[0]),
+        position[1],
+        reach.mul_add(dz, position[2]),
+    ];
     IntentWrite {
-        target: [
-            reach.mul_add(dx, position[0]),
-            position[1],
-            reach.mul_add(dz, position[2]),
-        ],
+        target,
+        aim: target,
         walk_type: if magnitude > RUN_DEFLECTION {
             ai_ins::WALK_TYPE_RUN
         } else {
@@ -356,6 +387,145 @@ pub(crate) fn ahead_of(position: [f32; 3], yaw: f32, distance: f32) -> [f32; 3] 
         position[1],
         back.mul_add(cos, position[2]),
     ]
+}
+
+/// How far in front of the creature the camera aim point is placed, in physics-space units.
+///
+/// A FACING target, not a walk target: the engine turns toward `wantToMoveTo` and this distance
+/// only has to be long enough that the direction to it is not swamped by the body's own radius.
+/// `[vt+0x50]` calls a target closer than `hitRadius * 0.01` "arrived"; thirty units clears that
+/// for every creature the game ships.
+pub(crate) const AIM_REACH: f32 = 30.0;
+
+/// The farthest a lock-on point may be and still be believed, in physics-space units.
+///
+/// The same fifty `game::pick_target` uses for target selection, and for the same reason: past it
+/// the point is not something the player is fighting.
+const LOCK_ON_MAX_DISTANCE: f32 = 50.0;
+
+/// ...and the nearest, so a point collapsed onto the creature's own origin -- which is what an
+/// untouched `lockOnTargetPos` reads as -- has no direction and is refused.
+const LOCK_ON_MIN_DISTANCE: f32 = 0.1;
+
+/// `cos(60 degrees)`: how far off the camera's own look direction a lock-on point may sit and
+/// still be treated as the thing the player is aiming at.
+///
+/// **This is the freshness test, and it is why no lock-on STATE has to be read.** Nothing clears
+/// `ChrIns+0xd0 lockOnTargetPos` when a lock is dropped, so the field alone cannot say whether it
+/// describes now or ten seconds ago -- and the handle the rest of this crate reads for that,
+/// `PlayerIns+0x6b0`, is not written during a possession at all: `FUN_140716260` gates that store
+/// on `IsMainPlayerIns(subject)`, which is FALSE once `camOverrideChrIns` has made the creature
+/// the subject. But lock-on DRIVES the camera, so a live lock point and the camera always agree.
+/// A stale one agrees only while the player still happens to be looking that way, in which case
+/// using it is right anyway.
+const LOCK_ON_AGREEMENT_COS: f32 = 0.5;
+
+/// Where the aim came from, for the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AimSource {
+    /// `ChrIns+0xd0 lockOnTargetPos` on the possessed creature, agreed with the camera.
+    LockOn,
+    /// The camera's own look direction, which is the answer whenever there is no live lock.
+    Camera,
+}
+
+impl AimSource {
+    /// For the log line.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::LockOn => "lock-on",
+            Self::Camera => "camera",
+        }
+    }
+}
+
+/// Where the possessed creature should be pointing this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Aim {
+    /// The physics-space point to face. Goes into `AiIns.wantToMoveTo`.
+    pub(crate) point: [f32; 3],
+    /// The heading that point implies, in the same basis as [`intent`]. For the log only.
+    pub(crate) yaw: f32,
+    pub(crate) source: AimSource,
+}
+
+/// Turn "where the camera looks" and "what the lock-on system last wrote" into one facing target.
+///
+/// `look_yaw` is `ChrExFollowCam+0x154 anglesEuler.y` (see [`crate::camera::game::look_yaw`]),
+/// which the engine computes as `atan2(look.x, look.z)`; `lock_on` is `ChrIns+0xd0
+/// lockOnTargetPos` read off the POSSESSED CREATURE, which is a physics-space point because
+/// possession has made the creature the lock-on subject. `None` when the camera is unreadable,
+/// which leaves the OLD behaviour -- face wherever you were told to walk -- exactly in place.
+///
+/// # THE SIGN, WHICH IS THE ONE THING HERE THAT CAN BE SILENTLY WRONG
+///
+/// The camera angle and the character heading are the same angle plus PI, and this is the only
+/// place the two meet. `angleOnXZPlane` is `atan2f(v.x, v.z)`, so the look direction is
+/// `(sin(look_yaw), 0, cos(look_yaw))`; a body facing `d` has yaw `atan2(-d.x, -d.z)` (see the
+/// module note's two proofs); substituting gives `look_yaw + PI`. Both forms are computed below
+/// from the one input, so they cannot drift apart.
+///
+/// # Why an NPC needs this at all
+///
+/// Because the camera-to-aim path the player gets is gated on being a player, by TYPE. The bullet
+/// spawn orientation comes from `FUN_1403fb0b0`, whose first line is
+/// `ChrCtrl::GetPhysicsOrientation` -- the body's facing -- and which only adjusts that by the
+/// camera when `(*chr->vfptr->IsPlayerIns)(chr)` is true. That is a virtual on the `ChrIns`
+/// vtable, false for every `EnemyIns`, and `camOverrideChrIns` cannot move it: the override is a
+/// POINTER the ~40 `GetMainPlayerIns` consumers follow, not a change of class. So a possessed
+/// creature's attacks fly along its BODY FACING, always, and the only way to aim them is to turn
+/// the body.
+#[must_use]
+pub(crate) fn aim(
+    position: [f32; 3],
+    look_yaw: Option<f32>,
+    lock_on: Option<[f32; 3]>,
+) -> Option<Aim> {
+    if !position.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let look_yaw = look_yaw.filter(|yaw| yaw.is_finite())?;
+    // The look direction the camera angle came from, as a unit vector in the XZ plane. It is
+    // horizontal by construction, so the vertical part of the look never enters the heading --
+    // which is what stops a steep camera from shortening the aim toward nothing.
+    let (look_x, look_z) = look_yaw.sin_cos();
+    if let Some(aim) = lock_on.and_then(|point| lock_on_aim(position, point, look_x, look_z)) {
+        return Some(aim);
+    }
+    // `forward = (-sin yaw, 0, -cos yaw)`, so the body heading for this look is `atan2(-x, -z)`,
+    // i.e. `look_yaw + PI`. The same inversion as [`ahead_of`], which turns it back into a point.
+    let yaw = (-look_x).atan2(-look_z);
+    Some(Aim {
+        point: ahead_of(position, yaw, AIM_REACH),
+        yaw,
+        source: AimSource::Camera,
+    })
+}
+
+/// The lock-on refinement, or `None` when the point is out of range or disagrees with the camera.
+///
+/// `look_x`/`look_z` are an already-normalised horizontal look direction.
+fn lock_on_aim(position: [f32; 3], point: [f32; 3], look_x: f32, look_z: f32) -> Option<Aim> {
+    if !point.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let (dx, dz) = (point[0] - position[0], point[2] - position[2]);
+    let distance = dx.hypot(dz);
+    if !(LOCK_ON_MIN_DISTANCE..=LOCK_ON_MAX_DISTANCE).contains(&distance) {
+        return None;
+    }
+    let agreement = (dx / distance).mul_add(look_x, (dz / distance) * look_z);
+    if agreement < LOCK_ON_AGREEMENT_COS {
+        return None;
+    }
+    Some(Aim {
+        // Height copied from the creature: `FUN_1402c9410` derives the facing from the X and Z of
+        // `wantToMoveTo - physicsPosition` and reads no Y at all, so carrying the target's own
+        // height in would be a number with no meaning attached to it.
+        point: [point[0], position[1], point[2]],
+        yaw: (-dx).atan2(-dz),
+        source: AimSource::LockOn,
+    })
 }
 
 /// The engine's own heading angle for a character, from its orientation QUATERNION.
@@ -427,6 +597,159 @@ mod tests {
     /// sign error into a passing test.
     fn drive(position: [f32; 3], yaw: f32, stick: Option<Stick>, speed_scale: f32) -> IntentWrite {
         intent(position, yaw, stick, speed_scale, 0.0)
+    }
+
+    /// `ChrExFollowCam+0x154` for a camera looking along `-Z`, which is the direction a body at
+    /// yaw 0 faces. The field is `atan2(look.x, look.z)`, so `atan2(0, -1)` is PI.
+    const LOOK_YAW_MINUS_Z: f32 = core::f32::consts::PI;
+
+    /// THE INVARIANT THE WHOLE AIM BRIDGE RESTS ON: aiming moves what the body FACES and leaves
+    /// what it WALKS TOWARD exactly alone.
+    ///
+    /// The driver measures the move vector it stages at `ComManipulator+0x140` from
+    /// [`IntentWrite::target`], and that vector is the only thing that moves the body. If
+    /// `aiming_at` ever touched it, pointing the camera somewhere would drag the creature there --
+    /// which is a movement regression wearing an aiming feature's clothes.
+    #[test]
+    fn aiming_moves_the_facing_target_and_never_the_walk_target() {
+        let at = [0.0, 0.0, 0.0];
+        let walking = drive(at, 0.0, Stick::from_axes(0.0, 1.0), 1.0);
+        let aimed = walking.aiming_at([100.0, 0.0, 100.0]);
+        assert_eq!(aimed.target, walking.target, "the walk target is untouched");
+        assert_eq!(aimed.walk_type, walking.walk_type, "so is the gait");
+        assert!(close(aimed.gait_scale(), walking.gait_scale()));
+        assert_eq!(aimed.aim, [100.0, 0.0, 100.0], "only the facing moved");
+    }
+
+    /// ...and with nothing aiming, the two are the same point, which is the behaviour every
+    /// version of this module before the aim bridge had.
+    #[test]
+    fn an_unaimed_frame_faces_wherever_it_was_told_to_walk() {
+        let at = [3.0, 4.0, 5.0];
+        for stick in [
+            None,
+            Stick::from_axes(0.0, 1.0),
+            Stick::from_axes(-1.0, 0.0),
+        ] {
+            let write = drive(at, 0.7, stick, 1.0);
+            assert_eq!(write.aim, write.target, "{write:?}");
+        }
+        assert_eq!(IntentWrite::stopped(at).aim, at);
+    }
+
+    /// A junk aim point is refused rather than written, because `wantToMoveTo` is a
+    /// `FloatVector4` the engine subtracts a position from and then feeds to `atan2`.
+    #[test]
+    fn a_non_finite_aim_point_is_refused_rather_than_written() {
+        let write = IntentWrite::stopped([1.0, 2.0, 3.0]);
+        assert_eq!(write.aiming_at([f32::NAN, 0.0, 0.0]).aim, write.aim);
+        assert_eq!(write.aiming_at([0.0, f32::INFINITY, 0.0]).aim, write.aim);
+    }
+
+    /// With no lock, the aim is the camera's own look direction -- and it is expressed in the
+    /// SAME basis the body walks in, so `ahead_of` reproduces the point from the yaw.
+    #[test]
+    fn the_camera_alone_aims_the_body_where_the_camera_looks() {
+        let at = [10.0, 5.0, -20.0];
+        let aim = aim(at, Some(LOOK_YAW_MINUS_Z), None).expect("a camera yaw is always a heading");
+        assert_eq!(aim.source, AimSource::Camera);
+        // A camera looking down -Z asks for body yaw 0, which is what the body already calls -Z.
+        assert!(close(aim.yaw, 0.0), "{aim:?}");
+        let placed = ahead_of(at, 0.0, AIM_REACH);
+        assert!(close(aim.point[0], placed[0]), "{aim:?}");
+        assert!(close(aim.point[1], at[1]), "height is copied, not aimed");
+        assert!(close(aim.point[2], placed[2]), "{aim:?}");
+    }
+
+    /// THE SIGN, PINNED AT EVERY ANGLE RATHER THAN AT ONE.
+    ///
+    /// The camera field is `atan2(look.x, look.z)` and the body's heading for that same direction
+    /// is `atan2(-look.x, -look.z)`; a flipped sign or a swapped pair still passes a single-angle
+    /// test (`-Z` is symmetric in x) and puts the creature's back to the camera everywhere else.
+    #[test]
+    fn the_aim_point_is_always_straight_along_the_cameras_own_look() {
+        let at = [1.0, 2.0, 3.0];
+        for eighth in 0..8 {
+            let camera_yaw = core::f32::consts::FRAC_PI_4 * eighth as f32;
+            let aim = aim(at, Some(camera_yaw), None).expect("every angle is a heading");
+            // The direction the camera field describes: atan2(x, z) == camera_yaw.
+            let (look_x, look_z) = camera_yaw.sin_cos();
+            assert!(
+                close(aim.point[0], AIM_REACH.mul_add(look_x, at[0])),
+                "{eighth}: {aim:?}"
+            );
+            assert!(
+                close(aim.point[2], AIM_REACH.mul_add(look_z, at[2])),
+                "{eighth}: {aim:?}"
+            );
+            // ...and the heading it reports is the one `ahead_of` would reproduce the point from.
+            let placed = ahead_of(at, aim.yaw, AIM_REACH);
+            assert!(close(placed[0], aim.point[0]), "{eighth}: {aim:?}");
+            assert!(close(placed[2], aim.point[2]), "{eighth}: {aim:?}");
+        }
+    }
+
+    /// No camera means no aim, which leaves the OLD behaviour in place rather than spinning the
+    /// body about an invented yaw. Same for a junk angle or a junk position.
+    #[test]
+    fn an_unreadable_camera_or_position_produces_no_aim() {
+        let at = [0.0; 3];
+        assert_eq!(aim(at, None, None), None, "no camera at all");
+        assert_eq!(aim(at, Some(f32::NAN), None), None);
+        assert_eq!(aim(at, Some(f32::INFINITY), None), None);
+        assert_eq!(
+            aim([f32::NAN, 0.0, 0.0], Some(LOOK_YAW_MINUS_Z), None),
+            None
+        );
+    }
+
+    /// A lock point the camera agrees with wins, and the aim is at the POINT rather than at a
+    /// fixed distance along the camera -- which is the whole reason to prefer it.
+    #[test]
+    fn a_lock_point_the_camera_agrees_with_is_the_aim() {
+        let at = [0.0, 1.0, 0.0];
+        let target = [1.0, 7.0, -9.0];
+        let aim = aim(at, Some(LOOK_YAW_MINUS_Z), Some(target)).expect("a heading exists");
+        assert_eq!(aim.source, AimSource::LockOn);
+        assert!(close(aim.point[0], target[0]), "{aim:?}");
+        assert!(close(aim.point[2], target[2]), "{aim:?}");
+        assert!(
+            close(aim.point[1], at[1]),
+            "the target's own height is dropped: the engine reads only x and z"
+        );
+    }
+
+    /// THE FRESHNESS TEST. `lockOnTargetPos` is never cleared, so a point the player has since
+    /// turned away from is stale -- and the only evidence available for that, with the lock-on
+    /// handle unwritten during a possession, is that it disagrees with the camera.
+    #[test]
+    fn a_lock_point_the_camera_has_turned_away_from_is_refused() {
+        let at = [0.0; 3];
+        // Behind the camera entirely.
+        let behind = aim(at, Some(LOOK_YAW_MINUS_Z), Some([0.0, 0.0, 9.0])).expect("heading");
+        assert_eq!(behind.source, AimSource::Camera, "{behind:?}");
+        // Ninety degrees off, which is outside the sixty-degree cone.
+        let sideways = aim(at, Some(LOOK_YAW_MINUS_Z), Some([9.0, 0.0, 0.0])).expect("heading");
+        assert_eq!(sideways.source, AimSource::Camera, "{sideways:?}");
+        // ...and just inside it still wins, so the cone is a cone and not a rejection of
+        // everything that is not dead ahead.
+        let inside = aim(at, Some(LOOK_YAW_MINUS_Z), Some([-3.0, 0.0, -9.0])).expect("heading");
+        assert_eq!(inside.source, AimSource::LockOn, "{inside:?}");
+    }
+
+    /// An untouched `lockOnTargetPos` reads as a point with no direction, and one past the
+    /// selection range is not something the player is fighting. Both fall back to the camera
+    /// rather than producing a facing the body would chase.
+    #[test]
+    fn a_lock_point_with_no_direction_or_out_of_range_is_refused() {
+        let at = [4.0, 0.0, 4.0];
+        for point in [at, [4.0, 0.0, 3.95], [4.0, 0.0, -60.0]] {
+            let answer = aim(at, Some(LOOK_YAW_MINUS_Z), Some(point)).expect("heading");
+            assert_eq!(answer.source, AimSource::Camera, "{point:?} -> {answer:?}");
+        }
+        let just_inside =
+            aim(at, Some(LOOK_YAW_MINUS_Z), Some([4.0, 0.0, -45.0])).expect("heading");
+        assert_eq!(just_inside.source, AimSource::LockOn);
     }
 
     /// The spawn point uses the SAME basis as the movement target, and in front means in front.

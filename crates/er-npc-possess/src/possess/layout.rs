@@ -65,6 +65,48 @@ pub(crate) mod chr_ins {
     pub(crate) const CHR_RES: usize = 0x28;
     /// `ChrIns.chrCtrl`. Cross-checked against `offset_of!(ChrIns, chr_ctrl)`.
     pub(crate) const CHR_CTRL: usize = 0x58;
+    /// `ChrIns.teamType`, one byte. **THE FIELD THE WHOLE LOCK-ON DEFECT TURNS ON.**
+    ///
+    /// `CS::ChrIns::GetTeamType` (1.16.2 `0x1403f1a60`) is `MOVZX EAX,byte [RCX+0x6c]; MOV [RDX],AL`
+    /// and then two overrides: a `SpecialEffect` with state info `0x84` (charm) replaces the answer
+    /// with [`TEAM_TYPE_CHARMED`], and a `ChrSlotSys` `TemporaryTeamType` slot replaces it with the
+    /// slot's. The 28-byte prologue carrying the `0f b6 41 6c` load is UNIQUE in both images --
+    /// 1.16.2 `0x1403f1a60`, 1.17 `0x1403f1c90` -- so the offset did not move.
+    ///
+    /// `CS::ChrIns::CanTargetTeamType` (1.16.2 `0x14051a810`) is the lock-on candidate filter: it
+    /// calls `GetTeamType` on both characters and dispatches through
+    /// `CSTeamTypeRelation[subject][candidate]` (the 79x79 pointer matrix at 1.16.2 `0x143b243f0`)
+    /// with `{opposeTarget: true, friendlyTarget: false, selfTarget: false}`. Only an `Enemy` or a
+    /// `Rival` cell answers true. Cross-checked against `offset_of!(ChrIns, team_type)`.
+    pub(crate) const TEAM_TYPE: usize = 0x6c;
+    /// `TeamType::Charmed`, and the team a possessed creature is put on for as long as it is worn.
+    ///
+    /// Byte-read out of `GetTeamTypeCharmed`, whose whole body is `MOV byte [RCX],0x0F; MOV RAX,RCX;
+    /// RET` -- `c6 01 0f 48 8b c1 c3`, unique in both images (1.16.2 `0x1403e9ff0`, 1.17
+    /// `0x1403ea1d0`).
+    ///
+    /// # Why this value and not the player's own team
+    ///
+    /// Read straight off the shipped relation matrix, row 15: Charmed is `Friend` to the player
+    /// teams (1, 2, 4) and `Rival` to every hostile team, and row 6 column 15 is `Rival` back. So
+    /// one byte delivers all three things possession needs -- the player's own co-located body
+    /// stops being a legal lock-on candidate (`Friend` fails `friendlyTarget: false`), real enemies
+    /// START being legal ones (`Rival` passes on `opposeTarget`), and hostiles treat the worn
+    /// creature as a combatant. Writing the player's team id would do the first two as well but
+    /// would also make an `EnemyIns` claim to be a player to every PvP and invasion path that asks.
+    ///
+    /// Charmed is a state the game already produces on ordinary enemies through a SpEffect, so
+    /// nothing downstream is being shown a combination it has never seen.
+    pub(crate) const TEAM_TYPE_CHARMED: u8 = 15;
+    /// `ChrIns.lockOnTargetPos`, a `FloatVector4` in physics space. Cross-checked against
+    /// `offset_of!(ChrIns, lock_on_target_position)`.
+    ///
+    /// Written on the lock-on SUBJECT, which possession has made the creature: `FUN_140716260`
+    /// copies the chosen lock point's cached world position into it with
+    /// `MOVUPS [R15+0xd0],XMM0` (1.16.2 `0x140717251`). Read-only here, and only as a REFINEMENT of
+    /// the camera aim -- nothing clears it when the lock is dropped, so a bare read of it is a
+    /// stale point. See [`super::intent::aim`] for the agreement test that makes it safe.
+    pub(crate) const LOCK_ON_TARGET_POS: usize = 0xd0;
     /// `ChrIns.modules` -- the `ChrInsModuleContainer`. Cross-checked.
     pub(crate) const MODULES: usize = 0x190;
     /// `ChrIns.chrFlags1c5`. Bit `0x10` is INVINCIBILITY and nothing else -- not visibility, not
@@ -1024,6 +1066,35 @@ pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The team byte sits between two fields this crate also writes and must not be confused with
+    /// either: `chrCtrl` is a pointer at `+0x58` and `lockOnTargetPos` a vector at `+0xd0`.
+    ///
+    /// A one-byte write to the wrong address here is not a compile error and not a crash -- it is
+    /// a corrupted pointer or a corrupted position on a live character.
+    #[test]
+    fn the_team_byte_is_one_byte_clear_of_everything_around_it() {
+        const {
+            assert!(chr_ins::TEAM_TYPE > chr_ins::CHR_CTRL + core::mem::size_of::<usize>());
+            assert!(chr_ins::TEAM_TYPE < chr_ins::LOCK_ON_TARGET_POS);
+            // The lock-on point is a whole `FloatVector4`, so the engine's own `MOVUPS` store of
+            // it is sixteen bytes wide starting here.
+            assert!(chr_ins::LOCK_ON_TARGET_POS + 16 <= chr_ins::MODULES);
+        }
+    }
+
+    /// `Charmed` is the byte `GetTeamTypeCharmed` writes, and it is not one of the values a
+    /// creature could already be carrying by accident.
+    ///
+    /// The value is the whole of the lock-on fix, so it is pinned rather than left as a literal
+    /// somebody could "tidy" into the player's team id -- which would work for lock-on and would
+    /// also tell every PvP and invasion path that an `EnemyIns` is a player.
+    #[test]
+    fn the_charmed_team_is_the_byte_the_game_itself_writes() {
+        const {
+            assert!(chr_ins::TEAM_TYPE_CHARMED == 15);
+        }
+    }
 
     #[test]
     fn the_ene_dat_cap_offsets_are_known_for_both_supported_builds_and_nothing_else() {

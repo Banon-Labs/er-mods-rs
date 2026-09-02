@@ -23,6 +23,7 @@ use crate::moveset::table::{self, Denial};
 use crate::moveset::watchdog::{Sample, Verdict, Watchdog};
 use crate::moveset::{derived, table as moveset_table};
 use crate::possess::game::{self, AnimFrame, Chr};
+use crate::possess::layout::chr_ins;
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
 use crate::possess::{body_size, intent, layout};
@@ -182,6 +183,16 @@ struct Possessing {
     reported_buffered_press: bool,
     /// Whether the "this hand has one page" line has been said, per hand.
     reported_one_page: [bool; 2],
+    /// WHAT TEAM THE CREATURE WAS ON before it was worn, so release puts it back on it.
+    ///
+    /// `None` means the byte did not read and nothing was written, which is also what stops the
+    /// release from writing a guess over a live field. See [`game::Chr::set_team_type`].
+    original_team: Option<u8>,
+    /// The FRAME the aim telemetry line was last written on. Same throttle and same reason as
+    /// [`Self::last_movement_log`], but NOT gated on an input: aiming is the thing you do while
+    /// standing still, so a line that only appeared while a key was held would be silent on
+    /// exactly the case the user reported.
+    last_aim_log: Option<u64>,
 }
 
 impl Possessing {
@@ -404,6 +415,24 @@ impl NpcPossessionEngine {
             // page that is about to be freed -- and a creature that jogs for one frame is not a
             // reason to report the release broken.
             Step::RestoreManipulatorVtable => {
+                // THE TEAM GOES BACK HERE, with the AI, because they are the same handover: a
+                // creature whose goal selection is live again must be on the team its own think
+                // logic was written for. Its result is deliberately not folded into this step's
+                // verdict -- for the same reason `stop_move_intent`'s is not, and one step further
+                // along: a creature left on `Charmed` is a mis-aggroed NPC, while a creature left
+                // dispatching through a freed vtable is a crash, and only the second is what
+                // `is_critical` means.
+                if let Some(team) = state
+                    .original_team
+                    .filter(|team| !state.creature.set_team_type(*team))
+                {
+                    possess_log(format_args!(
+                        "lock-on: the creature's teamType could NOT be put back to {team} -- it \
+                         stays on {}, which leaves it fighting its own side until the next map \
+                         load",
+                        chr_ins::TEAM_TYPE_CHARMED
+                    ));
+                }
                 state.creature.stop_move_intent();
                 game::Chr::restore_manipulator_vtable(swizzled_com, original_vptr, patched_vptr)
             }
@@ -1013,6 +1042,15 @@ impl NpcPossessionEngine {
         if !game::camera_override_is(state.creature) {
             game::set_camera_override(Some(state.creature));
         }
+        // ...and the same for the TEAM. One byte read, and a write only when something has put it
+        // back: an aggro transition, a `TemporaryTeamType` slot arriving, or a respawn. Skipped
+        // entirely when the original did not read at possession start, because then nothing was
+        // written and there is nothing to hold.
+        if state.original_team.is_some()
+            && state.creature.team_type() != Some(chr_ins::TEAM_TYPE_CHARMED)
+        {
+            state.creature.set_team_type(chr_ins::TEAM_TYPE_CHARMED);
+        }
         // ...and the same for the camera's SIZE. Nothing in the game writes
         // `ChrExFollowCam+0x468`, but the constructor sets it to -1, so a camera rebuilt by a warp
         // or a map load mid-possession would quietly go back to framing a Tarnished.
@@ -1055,6 +1093,29 @@ impl NpcPossessionEngine {
             movement.speed_scale,
             movement.turn_deadzone_deg,
         );
+        // WHERE THE PLAYER IS AIMING, and the reason it has to be turned into a FACING rather
+        // than handed to the attack.
+        //
+        // A player's own attacks get their spawn orientation from `FUN_1403fb0b0`, which starts
+        // from `ChrCtrl::GetPhysicsOrientation` and only bends it toward the camera when
+        // `(*chr->vfptr->IsPlayerIns)(chr)` is true. That is a vtable predicate on the CLASS, so
+        // an `EnemyIns` can never take that branch and `camOverrideChrIns` cannot help -- the
+        // override moves a POINTER, not a type. Whatever the possessed creature fires therefore
+        // leaves along its body facing, which is why the camera appeared to do nothing.
+        //
+        // So the bridge is the body: `wantToMoveTo` with `turnTarget = TARGET_SELF` is what
+        // `UpdateMovement` turns into `aiIns+0xc3f0`, and `[vt+0x50]` differences THAT against the
+        // live orientation OUTSIDE the `walkType` gate -- so the body turns toward the aim even
+        // standing still, and the movement staged at `ComManipulator+0x140` is untouched.
+        let aim = intent::aim(
+            state.last_position,
+            camera::game::look_yaw(),
+            state.creature.lock_on_target_pos(),
+        );
+        let write = match aim {
+            Some(aim) => write.aiming_at(aim.point),
+            None => write,
+        };
         Self::tick_moveset(state, write.moving());
         // THE WRITE THAT ACTUALLY MOVES THE BODY, and it is deliberately not the AI one.
         //
@@ -1084,7 +1145,7 @@ impl NpcPossessionEngine {
             let (walk, target_x) = state
                 .creature
                 .read_move_intent()
-                .map_or((i32::MIN, f32::NAN), |pair| pair);
+                .unwrap_or((i32::MIN, f32::NAN));
             possess_log(format_args!(
                 "movement: staged={staged} gait={} dir=({:.2}, {:.2}) | AI read-back after our \
                  own write: walkType={walk} wantToMoveTo.x={target_x:.2} (ours was {:.2}). A \
@@ -1154,6 +1215,39 @@ impl NpcPossessionEngine {
                     .creature
                     .current_anim_frame()
                     .map(|frame| (frame.animation, frame.local_time)),
+            ));
+        }
+        // THE AIM INSTRUMENT, and deliberately NOT gated on an input.
+        //
+        // The reported defect is "I move the camera and the cast vector does not follow", which is
+        // a thing you observe standing still, so a line throttled behind `stick.is_some()` would
+        // be silent on it. One line a second, always, while a possession is up.
+        const AIM_LOG_EVERY_FRAMES: u64 = 60;
+        let aim_due = state
+            .last_aim_log
+            .is_none_or(|at| state.frames.saturating_sub(at) >= AIM_LOG_EVERY_FRAMES);
+        if aim_due {
+            state.last_aim_log = Some(state.frames);
+            possess_log(format_args!(
+                "aim: source={} yaw={} point={:?} | body yaw={:.3} | ChrExFollowCam+0x154 \
+                 camera yaw={:?} | \
+                 ChrIns+0xd0 lockOnTargetPos={:?} | wantToMoveTo written={:?} teamType={:?} \
+                 (worn={}). THE READ. source=camera with a non-None lockOnTargetPos means the \
+                 lock point was REFUSED -- it is out of the 0.1..50 band or more than 60 degrees \
+                 off the camera, which is the freshness test standing in for a lock-on state bit \
+                 the override makes unreadable. source=none means the camera did not read at all \
+                 and the body is being left facing wherever it walks, i.e. the OLD behaviour. \
+                 `body yaw` converging on `yaw` over a few frames is the feature working; the \
+                 convergence RATE is the creature's own NpcParam turn rate and is not ours",
+                aim.map_or("none", |aim| aim.source.name()),
+                aim.map_or_else(|| "n/a".to_owned(), |aim| format!("{:.3}", aim.yaw)),
+                aim.map(|aim| aim.point),
+                state.creature.yaw().unwrap_or(f32::NAN),
+                camera::game::look_yaw(),
+                state.creature.lock_on_target_pos(),
+                write.aim,
+                state.creature.team_type(),
+                chr_ins::TEAM_TYPE_CHARMED,
             ));
         }
         if !state.creature.write_move_intent(write) && first_frame {
@@ -1497,6 +1591,36 @@ impl NpcPossessionEngine {
         // player's body rather than the creature's, so a later refusal would leave the body
         // wearing a size nothing is going to take off it.
         let body_scale = Self::plan_body_scale(creature, player);
+        // THE LOCK-ON FIX, and the smallest write in this whole function.
+        //
+        // Possession makes the creature the lock-on SUBJECT, so `CS::ChrIns::CanTargetTeamType`
+        // is asked `relation[creature.team][candidate.team]` for every candidate in the world --
+        // and an enemy creature is FRIEND to every other enemy and ENEMY to the player. That is
+        // one relation table lookup away from being the whole of what the player saw: the only
+        // thing they could lock onto was their own co-located body, because it was the only
+        // candidate on an opposing team. Putting the worn creature on `Charmed` inverts both
+        // halves at once -- see [`chr_ins::TEAM_TYPE_CHARMED`] for the row read off the shipped
+        // matrix. Read BEFORE the write, so the release has the real previous value and not an
+        // assumption that every creature ships on the same team.
+        let original_team = creature.team_type();
+        let team_written =
+            original_team.is_some_and(|_| creature.set_team_type(chr_ins::TEAM_TYPE_CHARMED));
+        possess_log(format_args!(
+            "lock-on: creature teamType {} -> {} ({}) -- this is what makes REAL ENEMIES lockable \
+             and stops the player's own co-located body from being the only candidate. \
+             CanTargetTeamType dispatches through CSTeamTypeRelation[subject][candidate] with \
+             {{oppose, !friendly, !self}}, and possession made the CREATURE the subject; row 15 is \
+             Rival to every hostile team and Friend to the player teams, so one byte flips both. \
+             Nothing else in this mod makes the body untargetable -- IsLockOnDisabled still needs \
+             a SpEffect -- but the body is now the WRONG TEAM to be a candidate at all",
+            original_team.map_or_else(|| "unreadable".to_owned(), |team| team.to_string()),
+            chr_ins::TEAM_TYPE_CHARMED,
+            if team_written {
+                "written"
+            } else {
+                "NOT WRITTEN -- lock-on is unchanged and the body is still the only candidate"
+            },
+        ));
         let state = Possessing {
             creature,
             player,
@@ -1530,6 +1654,8 @@ impl NpcPossessionEngine {
             reported_movement_fire: false,
             reported_buffered_press: false,
             reported_one_page: [false; 2],
+            original_team,
+            last_aim_log: None,
         };
         Self::write_derived(chr_id, &state.camera, creature, state.moveset.as_ref());
         match state.moveset.as_ref() {
@@ -1596,8 +1722,9 @@ impl NpcPossessionEngine {
         }
         possess_log(format_args!(
             "possession: ChrIns=0x{:x} com=0x{real_com:x} thunk=0x{:x} camera=override player=0x{:x} \
-             {provenance} spawned={} -- the body stays lock-on-able (that needs a SpEffect, not a \
-             field write)",
+             {provenance} spawned={} -- the body is still lock-on-ABLE in the IsLockOnDisabled \
+             sense (that needs a SpEffect), but it is no longer a lock-on CANDIDATE: the team \
+             write above put the worn creature on the other side of the relation table from it",
             creature.address(),
             state.thunk.vtable_address(),
             player.address(),

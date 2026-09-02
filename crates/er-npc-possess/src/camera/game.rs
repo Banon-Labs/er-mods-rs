@@ -429,6 +429,33 @@ fn follow_cam(offsets: Offsets) -> Option<usize> {
     unsafe { er_game_base::mem::is_heap_aligned_ptr(follow) }.then_some(follow)
 }
 
+/// WHERE THE PLAYER IS LOOKING: the camera's own yaw, or `None` when the camera is not up.
+///
+/// One `f32` at `ChrExFollowCam+0x154 anglesEuler.y`, which the engine derives as
+/// `atan2(look.x, look.z)` -- see [`layout::chr_ex_follow_cam::ANGLES_EULER_YAW`] for the four
+/// lines of `Update` that compute it and the byte window that pins it on both builds. This layer
+/// still resolves no game function address.
+///
+/// **The sign is NOT a character heading.** A body facing this direction has yaw
+/// `anglesEuler.y + PI`; [`crate::possess::intent::aim`] is the only place that conversion is
+/// made, so there is one copy of it.
+///
+/// # Why this answers the lock-on case too
+///
+/// Lock-on drives this camera -- `ChrExFollowCam::Update` derives these angles from the point the
+/// camera is aimed at, and a held lock is what moves that point. So "where the camera looks"
+/// already points at the locked target, which is why [`crate::possess::intent::aim`] treats the
+/// camera as the always-available answer and the subject's own `ChrIns+0xd0 lockOnTargetPos` as a
+/// REFINEMENT it accepts only when the two agree.
+pub(crate) fn look_yaw() -> Option<f32> {
+    let offsets = layout::offsets(game_file_version())?;
+    let follow_cam = follow_cam(offsets)?;
+    // Safety: the read goes through `ReadProcessMemory`, so an unmapped address answers `None`
+    // instead of faulting.
+    let yaw = unsafe { safe_read_f32(follow_cam + offsets.angles_euler_yaw) }?;
+    yaw.is_finite().then_some(yaw)
+}
+
 /// `[[ChrIns+0x190] + 0x68] + 0x340/0x344` -- the physics capsule's height and radius, in metres.
 ///
 /// This is what `CS::ChrIns::GetPhysicsHitHeight` returns, reached by the two loads the function
