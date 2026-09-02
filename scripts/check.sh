@@ -79,7 +79,7 @@ fi
 # prevent. XDG_RUNTIME_DIR is per-user and tmpfs-backed; /tmp is the fallback. If flock is absent
 # the gate runs anyway -- a missing tool must not make the suite unrunnable.
 _check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
-if [[ "${ER_CHECK_FORCE:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
+if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
 	exec 9>"$_check_lock" || true
 	if ! flock -n 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
@@ -90,6 +90,14 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
 		exit 2
 	fi
 	echo "$$" >&9
+	# ...and a STEP of this suite may re-enter this preamble. test-check-sh-accumulates.py lifts
+	# it verbatim and drives it over synthetic suites -- deliberately, because testing a copy
+	# would prove nothing about the file that runs. Those children are not a second run competing
+	# for the box; they are this run's own steps, and the lock they find held is their parent's.
+	# Without this marker every one of them exits 2 here and the gate reports thirteen failures
+	# that have nothing to do with accumulation, which is exactly what CI showed on 2026-09-02.
+	# Exported, so it reaches a grandchild through python/bash alike.
+	export ER_CHECK_LOCK_HELD=1
 fi
 
 # --- failure accumulation ------------------------------------------------------------------
