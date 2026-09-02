@@ -35,7 +35,7 @@
 // proves it on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use crate::moveset::chain::{self, Availability, Buffer, Held, Playing, Release};
+use crate::moveset::chain::{self, Availability, Buffer, Held, Playing, Reading, Release};
 use crate::moveset::table::{Move, Moveset, Reach};
 use crate::settings::{Bucket, ButtonSettings, MappingModel, MappingSettings, UnboundInputs};
 
@@ -579,11 +579,11 @@ impl Dispatcher {
     ///
     /// The window belongs to the move being played, not to the one about to be asked for, which is
     /// why the lookup goes through [`Moveset::playing`] and not [`Moveset::find`].
-    pub(crate) fn availability(&self, playing: Option<Playing>) -> Availability {
+    pub(crate) fn reading(&self, playing: Option<Playing>) -> Reading {
         let window = playing
             .and_then(|state| self.moveset.playing(state.animation))
             .and_then(Move::chain_from_s);
-        chain::availability(playing, window)
+        chain::resolve(playing, window)
     }
 
     /// Drive one press. The only way in, and the only place the cancel rule is applied.
@@ -1260,6 +1260,9 @@ mod tests {
         Some(Playing {
             animation: 3000,
             elapsed_s: Some(elapsed_s),
+            // c4500's a3000 runs 10.333 s and its window opens at 9.47; long enough that the
+            // clip-length bound is not what these cases are measuring.
+            length_s: Some(10.333),
             cancel_allowed: None,
         })
     }
@@ -1267,7 +1270,7 @@ mod tests {
     #[test]
     fn a_press_while_the_window_is_open_chains_immediately() {
         let mut engine = dispatcher(CHAINING);
-        let open = engine.availability(mid(9.5));
+        let open = engine.reading(mid(9.5)).availability;
         assert_eq!(open, Availability::Chainable);
         assert_eq!(
             engine.press(Input::R1, context(1.0, 0), open),
@@ -1278,7 +1281,7 @@ mod tests {
     #[test]
     fn a_press_while_the_creature_is_still_committed_waits_instead_of_firing() {
         let mut engine = dispatcher(CHAINING);
-        let shut = engine.availability(mid(1.0));
+        let shut = engine.reading(mid(1.0)).availability;
         assert_eq!(shut, Availability::Committed);
         assert_eq!(
             engine.press(Input::R1, context(1.0, 0), shut),
@@ -1297,7 +1300,7 @@ mod tests {
         // The creature drops back to a neutral animation; the watchdog announces that as a return
         // to neutral on the same frame, which `on_neutral` must not act on while a press waits.
         engine.on_neutral();
-        let idle = engine.availability(None);
+        let idle = engine.reading(None).availability;
         assert_eq!(idle, Availability::Idle);
         assert_eq!(
             engine.release(context(1.0, 500), idle),
@@ -1355,7 +1358,7 @@ mod tests {
         let mut engine = dispatcher(CHAINING);
         for step in 0..40u64 {
             let elapsed = 0.05 * step as f32;
-            let availability = engine.availability(mid(elapsed));
+            let availability = engine.reading(mid(elapsed)).availability;
             assert_eq!(
                 availability,
                 Availability::Committed,
@@ -1386,9 +1389,13 @@ mod tests {
         let playing = Some(Playing {
             animation: 3034,
             elapsed_s: Some(120.0),
+            length_s: Some(600.0),
             cancel_allowed: None,
         });
-        assert_eq!(engine.availability(playing), Availability::Committed);
+        assert_eq!(
+            engine.reading(playing).availability,
+            Availability::Committed
+        );
         assert_eq!(
             engine.press(Input::R1, context(1.0, 0), Availability::Committed),
             Press::Waiting(Held::Queued)
