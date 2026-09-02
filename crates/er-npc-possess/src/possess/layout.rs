@@ -494,6 +494,17 @@ pub(crate) mod chr_behavior_module {
     /// character, which is exactly the "is it actually going anywhere" question the watchdog
     /// needs and cannot get from position deltas (co-location moves the player every frame
     /// regardless). Cross-checked.
+    ///
+    /// **Byte-verified on 1.17**, because the watchdog decides on this number whether a move is
+    /// marked permanently unusable, and a wrong offset would mark good moves bad. The
+    /// `CSChrBehaviorModule` constructor zero-inits it, and its zero-init window is unique
+    /// (`hits=1`) in both images and byte-for-byte IDENTICAL between them:
+    ///
+    /// ```text
+    /// 48890333ed 48896b?? 48896b?? 48896b?? 48896b?? 0f57c0 0f2943?? 0f2943?? 0f2943?? 488d4b?? e8
+    ///     1.16.2 @0x1404189ea, 1.17 @0x140418f1a, and every wildcarded displacement reads back
+    ///     the same: the four pointers at +0x10..+0x28 and the three vectors at +0x30/+0x40/+0x50.
+    /// ```
     pub(crate) const ROOT_MOTION: usize = 0x30;
 }
 
@@ -554,28 +565,95 @@ pub(crate) mod manipulator {
     pub(crate) const AI_INS: usize = 0xc0;
 }
 
-/// `AiIns`, and the `AiPathData` it points at. Offsets read out of the 1.16.2 named Ghidra dump's
-/// own curated structures (`getStructure AiIns` / `AiPathData`), not guessed.
-/// # Three findings recorded here rather than as constants
+/// `AiIns`, and the `AiPathData` it points at -- THE FOUR FIELDS `CSAiFunc::MoveTo` WRITES.
 ///
-/// * `turnTarget` (`+0xdab0`) is an `AiTargetPointType` -- **a 4-byte ENUM naming WHICH known
-///   point to face, not a yaw and not a position.** `UpdateMovement` consumes it as
-///   `FUN_1402c9410(aiIns, aiIns->turnTarget)`. With goal selection no-oped those points are not
-///   refreshed, so writing it steers nothing; there is no constant for it because using it would
-///   be a mistake.
-/// * `motionMult` (`+0xc410`, `FloatVector4`) and `walkType` (`+0xc424`, `int`) are the gait
-///   levers `[vt+0x50]` consumes after `UpdateMovement`. Untouched by this layer.
-/// * Every offset in this module was read out of the 1.16.2 named dump's own curated structures.
-///   **`AiIns` is `0xf0d0` bytes and the 1.17 sweep did not cover it**, so a single inserted field
-///   anywhere below `+0xc3e0` would move all of them silently. `crate::possess::game` therefore
-///   refuses to write any of them unless `pathData` reads back as a plausible heap pointer AND the
-///   current target reads back as finite floats -- one validated field vouching for the
-///   neighbourhood, which is the strongest check available without a runtime probe.
+/// # The move request is three fields, and this crate used to write one
+///
+/// `CSAiFunc::MoveTo` (`0x140301f70`) is the engine's own front door for "walk to this point",
+/// and its whole body is:
+///
+/// ```text
+/// aiIns->walkType = 2 - (walk != 0);          // 2 run, 1 walk
+/// CS::AiIns::SetWantToMoveTo(aiIns, &point);  // a bare 16-byte store, nothing else
+/// FUN_1402c65e0(aiIns, targetType, angles);   // build the follow path
+/// ```
+///
+/// `CS::AiIns::ClearMoveRequest` (`0x1402bf9a0`) is the inverse: `walkType = 0` and
+/// `wantToMoveTo = own physics position`. So both halves of "go" and "stop" are plain field
+/// writes, and `walkType` is the one that decides whether anything happens at all --
+/// `[vt+0x50]` (`FUN_1403d0250`) reads it at `0x1403d0307`
+/// (1.17: `0x1403d0317`) and computes the frame's move vector **only** inside
+/// `if (walkType != 0 && ChrIns::GetMoveType(chr) != 0)`; otherwise the vector is
+/// `DL_ZERO_VECTOR` and the body stands still however good `wantToMoveTo` is.
+///
+/// Nothing on the per-frame path writes `walkType`: `CS::AiIns::UpdateMovement` runs first and
+/// never touches it, and every writer in the AI region (`MoveTo`, `MoveToEventPoint`,
+/// `FollowPath`, `ClearMoveRequest`, and the goal `Activate`/`Interrupt`/`Update` bodies) is
+/// reached from GOAL SELECTION -- which possession deliberately no-ops at `[vt+0x48]`. That is
+/// what makes writing these fields the product mechanism rather than a diagnostic: the native
+/// owner is not merely idle, it is the thing this mod switched off on purpose.
+///
+/// # `turnTarget` steers after all, in exactly one of its values
+///
+/// A previous note here said writing `turnTarget` steers nothing because the named points it
+/// selects are not refreshed once goal selection is dead. That is true of every value except
+/// `TARGET_SELF`, which refreshes from a field we DO write. `UpdateMovement` ends with
+/// `FUN_1402c9410(aiIns, aiIns->turnTarget)`, and that function's `TARGET_SELF` branch
+/// (`0x1402ca0c4`) reads `walkType`, returns early if it is zero, and otherwise takes
+/// `wantToMoveTo - GetPhysicsPosition()` as the direction to face, converts it to angles and
+/// stores them in `aiIns+0xc3f0` -- which `[vt+0x50]` then differences against the body's live
+/// orientation to produce the frame's turn request. So `turnTarget = TARGET_SELF` means "face
+/// wherever you have been told to walk", which is precisely the steering this crate needs, and
+/// it costs one `int`.
+///
+/// With `walkType == 0` that same branch falls to `FUN_1402c68f0`, which writes the body's
+/// CURRENT orientation into `+0xc3f0` -- i.e. releasing the stick stops the turn too, with no
+/// extra write.
+///
+/// # 1.17
+///
+/// Every offset below was read out of the 1.16.2 named dump's own curated `AiIns` structure and
+/// then **byte-verified on 1.17**, because `AiIns` is `0xf0d0` bytes and one inserted field would
+/// move all of them silently. Two windows carry all four, and each is unique (`hits=1`) in BOTH
+/// `eldenring-deobf.bin` and `eldenring-deobf-1.17.bin`:
+///
+/// ```text
+/// 488b8fc0000000 448bb1????0000 e8???????? 8bf0
+///     1.16.2 @0x1403d0300, 1.17 @0x1403d0310 -> AI_INS 0xc0, WALK_TYPE 0xc424 on both
+/// 488b83????0000 0f1000 0f1183????0000 8b93????0000 488bcb e8???????? ...
+///     1.16.2 @0x1402c751e, 1.17 @0x1402c752e -> PATH_DATA 0xd9c8, target +0x0,
+///                                               WANT_TO_MOVE_TO 0xc3e0, TURN_TARGET 0xdab0
+/// ```
+///
+/// `motionMult` (`+0xc410`, `FloatVector4`) is the remaining gait lever `[vt+0x50]` consumes.
+/// Untouched by this layer: `MoveTo` does not write it either, and `walkType` already carries the
+/// walk/run distinction the engine scales the move vector by.
+///
+/// The canary in `crate::possess::game::ai_path_target` stays, and stays load-bearing: these
+/// offsets are proven for the two builds that were measured, and a third build gets no writes.
 pub(crate) mod ai_ins {
-    /// `wantToMoveTo`, a `FloatVector4` in physics space.
+    /// `wantToMoveTo`, a `FloatVector4` in physics space. Byte-verified on 1.16.2 and 1.17.
     pub(crate) const WANT_TO_MOVE_TO: usize = 0xc3e0;
+    /// `walkType`, an `int`. **THE GATE** -- see the module note. Byte-verified on both builds.
+    pub(crate) const WALK_TYPE: usize = 0xc424;
     /// `pathData`, an `AiPathData*`. Doubles as the layout canary; see the module note above.
     pub(crate) const PATH_DATA: usize = 0xd9c8;
+    /// `turnTarget`, an `AiTargetPointType` -- a 4-byte SIGNED enum. Byte-verified on both builds.
+    pub(crate) const TURN_TARGET: usize = 0xdab0;
+
+    /// `walkType = 0`, exactly as `CS::AiIns::ClearMoveRequest` writes it. No move vector.
+    pub(crate) const WALK_TYPE_STOP: i32 = 0;
+    /// `walkType = 1`. `[vt+0x50]` scales the move vector down by `DAT_14329e980` for this value
+    /// and this value only, which is what makes it the WALK of the pair.
+    pub(crate) const WALK_TYPE_WALK: i32 = 1;
+    /// `walkType = 2`, the unscaled gait. `MoveTo` writes `2 - walk`, so these two are the only
+    /// values the engine's own front door produces.
+    pub(crate) const WALK_TYPE_RUN: i32 = 2;
+
+    /// `AiTargetPointType::TARGET_SELF`. Proven from the dispatch in `FUN_1402c9410`:
+    /// `CMP ESI,-0x1` at `0x1402c94ca` jumps to the branch at `0x1402ca0c4` that reads
+    /// `[RDI+0xc424]` and then `[RDI+0xc3e0]`.
+    pub(crate) const TURN_TARGET_SELF: i32 = -1;
 }
 
 /// `AiPathData`.
@@ -825,5 +903,57 @@ mod tests {
             chr_ctrl::RAGDOLL_ROTATION - chr_ctrl::RAGDOLL_POSITION,
             0x10
         );
+    }
+
+    /// The four `AiIns` fields one frame of movement writes must be four DIFFERENT fields, and
+    /// the 16-byte `wantToMoveTo` must not run over the `int` that follows it in the struct.
+    ///
+    /// `wantToMoveTo` is at `+0xc3e0` and the desired-orientation vector the engine derives from
+    /// it is at `+0xc3f0` -- adjacent, which is exactly the arrangement where a `write_vec4` one
+    /// slot wide too far silently overwrites the heading every frame.
+    #[test]
+    fn the_movement_fields_are_four_distinct_non_overlapping_fields() {
+        let fields = [
+            ai_ins::WANT_TO_MOVE_TO,
+            ai_ins::WALK_TYPE,
+            ai_ins::PATH_DATA,
+            ai_ins::TURN_TARGET,
+        ];
+        for (i, a) in fields.iter().enumerate() {
+            for b in &fields[i + 1..] {
+                assert_ne!(a, b, "two movement writes share one offset");
+            }
+        }
+        // The 16 bytes of `wantToMoveTo` end before `walkType` begins...
+        const { assert!(ai_ins::WANT_TO_MOVE_TO + 0x10 <= ai_ins::WALK_TYPE) };
+        // ...and stop short of `+0xc3f0`, the orientation the engine writes there itself.
+        assert_eq!(ai_ins::WANT_TO_MOVE_TO + 0x10, 0xc3f0);
+    }
+
+    /// `walkType`'s three values are distinct, and the two moving ones are what `CSAiFunc::MoveTo`
+    /// produces: it writes `2 - (walk != 0)`, so the pair is exactly `{1, 2}` and nothing else.
+    #[test]
+    fn the_walk_types_are_the_pair_moveto_writes_plus_the_stop_clearmoverequest_writes() {
+        assert_eq!(ai_ins::WALK_TYPE_STOP, 0, "ClearMoveRequest writes zero");
+        assert_eq!(
+            ai_ins::WALK_TYPE_RUN - i32::from(true),
+            ai_ins::WALK_TYPE_WALK
+        );
+        assert_eq!(
+            ai_ins::WALK_TYPE_RUN - i32::from(false),
+            ai_ins::WALK_TYPE_RUN
+        );
+        // ...and neither moving value can be mistaken for the stop.
+        assert_ne!(ai_ins::WALK_TYPE_WALK, ai_ins::WALK_TYPE_STOP);
+        assert_ne!(ai_ins::WALK_TYPE_RUN, ai_ins::WALK_TYPE_STOP);
+    }
+
+    /// `TARGET_SELF` is NEGATIVE, and that is the whole reason the field is written through an
+    /// `i32` rather than the `u32` every other write in this crate uses. A `usize`/`u32` spelling
+    /// of `-1` that lost its sign would write `TARGET_NONE`'s neighbour, not `TARGET_SELF`.
+    #[test]
+    fn the_turn_target_is_a_signed_enum_and_self_is_negative() {
+        const { assert!(ai_ins::TURN_TARGET_SELF < 0) };
+        assert_eq!(ai_ins::TURN_TARGET_SELF as u32, 0xffff_ffff);
     }
 }

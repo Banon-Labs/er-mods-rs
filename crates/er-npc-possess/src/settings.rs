@@ -634,14 +634,27 @@ impl ButtonSettings {
 }
 
 /// `[movement]`. Live.
+///
+/// # Two keys that used to be here and are not settings
+///
+/// `heading_converge` and `root_motion_only` shipped as `RESERVED` with a comment admitting there
+/// was nothing for `false` to mean. There still is not, and now the mechanism is known well enough
+/// to say why rather than to promise it later, so they are gone rather than reserved:
+///
+/// * The body converges on the requested heading at the rate its own `NpcParam` gives it, because
+///   turning is the locomotion executor's job and this crate only names the direction. There is no
+///   snap available to write.
+/// * Root motion is the only mechanism there is. The engine's move vector is a normalised
+///   DIRECTION handed to `CSChrActionRequestModule` -- the player's own request module -- and the
+///   behaviour graph moves the body with locomotion clips. Nothing on the path takes a velocity.
+///
+/// An old config that still names them is unaffected: the parser only reads keys it asks for, so
+/// an unknown one is ignored rather than rejected.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MovementSettings {
-    /// Turn the possessed body toward the stick rather than snapping to it.
-    pub(crate) heading_converge: bool,
-    /// Stick deflection inside this cone is treated as "no turn asked for".
+    /// Stick deflection inside this cone of the body's own heading is treated as "no turn asked
+    /// for", and straightened to exactly forward. Degrees, `0..=180`.
     pub(crate) turn_deadzone_deg: f32,
-    /// Move only by the animation's own root motion, never by writing a velocity.
-    pub(crate) root_motion_only: bool,
     pub(crate) speed_scale: f32,
     /// The keyboard fallback for the left stick. `None` is unbound, which is a real setting.
     ///
@@ -659,9 +672,7 @@ pub(crate) struct MovementSettings {
 impl Default for MovementSettings {
     fn default() -> Self {
         Self {
-            heading_converge: true,
             turn_deadzone_deg: 20.0,
-            root_motion_only: true,
             speed_scale: 1.0,
             forward: default_chord(MOVE_DEFAULT_FORWARD),
             back: default_chord(MOVE_DEFAULT_BACK),
@@ -675,28 +686,12 @@ impl MovementSettings {
     fn apply(&mut self, doc: &Document, rejections: &mut Rejections) {
         let s = MOVEMENT_SECTION;
         take(
-            &mut self.heading_converge,
-            doc,
-            s,
-            "heading_converge",
-            rejections,
-            parse_bool,
-        );
-        take(
             &mut self.turn_deadzone_deg,
             doc,
             s,
             "turn_deadzone_deg",
             rejections,
             |raw| parse_f32(raw).filter(|v| (0.0..=180.0).contains(v)),
-        );
-        take(
-            &mut self.root_motion_only,
-            doc,
-            s,
-            "root_motion_only",
-            rejections,
-            parse_bool,
         );
         take(
             &mut self.speed_scale,
@@ -718,8 +713,8 @@ impl MovementSettings {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "heading_converge={} turn_deadzone_deg={} root_motion_only={} speed_scale={}",
-            self.heading_converge, self.turn_deadzone_deg, self.root_motion_only, self.speed_scale
+            "turn_deadzone_deg={} speed_scale={}",
+            self.turn_deadzone_deg, self.speed_scale
         )
     }
 }
@@ -1190,9 +1185,7 @@ unbound_inputs = "deny"
 r1 = "heavy"; r2 = "light"; l1 = "movement"; l2 = "ranged"
 
 [movement]
-heading_converge = false
 turn_deadzone_deg = 5.0
-root_motion_only = false
 speed_scale = 1.25
 
 [camera]
@@ -1215,7 +1208,7 @@ enabled = false
         assert_eq!(tables.mapping.unbound_inputs, UnboundInputs::Deny);
         assert_eq!(tables.buttons.r1, Bucket::Heavy);
         assert_eq!(tables.buttons.l2, Bucket::Ranged);
-        assert!(!tables.movement.heading_converge);
+        assert_eq!(tables.movement.turn_deadzone_deg, 5.0);
         assert_eq!(tables.movement.speed_scale, 1.25);
         assert!(!tables.camera.enabled);
         assert_eq!(tables.camera.param_row, 1099);
@@ -1508,9 +1501,7 @@ speed_scale = 0.5
             "r2=",
             "l1=",
             "l2=",
-            "heading_converge=",
             "turn_deadzone_deg=",
-            "root_motion_only=",
             "speed_scale=",
             "param_row=",
             "distance_exponent=",

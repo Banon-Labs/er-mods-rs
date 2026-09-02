@@ -101,7 +101,8 @@ const DEFAULT_CONFIG_TOML: &str = r##"# er-npc-possess.toml -- the standalone "b
 #     affected move REFUSED so you can tell this apart from a move that is simply missing.
 #   * Your own body stays LOCK-ON-ABLE while you are away from it. It cannot be hurt and cannot be
 #     seen, so this is an oddity rather than a hazard.
-#   * turn_deadzone_deg, heading_converge and root_motion_only are RESERVED. speed_scale is live.
+#   * A creature whose own NpcParam says it does not move -- a turret, something rooted in place --
+#     still will not, however hard you push. That gate is the game's, not the mod's.
 #
 # A value this file does not understand is REPORTED AND IGNORED, and the last value that worked
 # stays in force. A typo never leaves you with no hotkey and never silently resets a setting.
@@ -269,18 +270,18 @@ back = "S"
 left = "A"
 right = "D"
 
-# RESERVED. Turn toward the stick over time instead of snapping to it. The body currently turns
-# toward wherever it has been told to walk, at the rate its own NpcParam gives it.
-heading_converge = true
-# RESERVED. Stick deflection inside this cone counts as "no turn asked for". 0..180.
+# LIVE. A push closer to straight ahead than this counts as "no turn asked for" and is treated as
+# exactly straight ahead. 0..180 degrees. The body is steered by being told WHERE to walk, so
+# without a floor a stick two degrees off centre is a standing request to turn and the creature
+# weaves down a corridor you meant it to walk straight along. 0 turns the floor off.
 turn_deadzone_deg = 20.0
-# RESERVED. Move only by the animation's own root motion, never by writing a velocity. This is
-# already how it works -- the mod asks the character's own AI to walk somewhere and the engine's
-# locomotion does the rest -- so there is nothing yet for the "false" setting to mean.
-root_motion_only = true
 # LIVE. How far ahead of itself the possessed character is told to walk, as a multiplier. Higher
 # is a longer stride between re-aims and a body that runs on further after you let go; lower is
 # twitchier and stops sooner.
+#
+# It does NOT set the gait. Past half deflection the creature runs and below it walks, because the
+# engine has exactly those two speeds for a character following an order and picks between them
+# itself. WASD is full deflection, so the keyboard always runs.
 speed_scale = 1.0
 
 # How the camera frames the creature you are wearing. LIVE -- save the file and the framing moves

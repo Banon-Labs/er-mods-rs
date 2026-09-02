@@ -331,7 +331,14 @@ impl NpcPossessionEngine {
             }
             Step::RestoreCameraSize => state.camera.restore(),
             Step::ClearCameraOverride => game::set_camera_override(None),
+            // The AI move request is cancelled BEFORE the override is cleared, because after it
+            // the creature is the AI's again and our last order is a run command it did not
+            // issue. `stop_move_intent` writes exactly what `CS::AiIns::ClearMoveRequest` writes,
+            // so what the AI wakes up to is a state its own code produces. Its failure is not
+            // this step's failure: the override clear is THE step that must happen, and a
+            // creature that jogs for one frame is not a reason to report the release broken.
             Step::ClearManipulatorOverride => {
+                state.creature.stop_move_intent();
                 state.creature.clear_manipulator_override(thunk_address)
             }
             // AFTER the override clear, always; see `Step::DespawnCreature`, whose discriminant is
@@ -449,7 +456,12 @@ impl NpcPossessionEngine {
     /// and the press is spent on a frame that could not have fired anyway. Firing first would
     /// leave the new request overwritten by the idle a line later, which reads to the player as a
     /// button that sometimes does nothing.
-    fn tick_moveset(state: &mut Possessing, stick_active: bool) {
+    ///
+    /// `moving` is whether this frame actually ASKED the creature to move -- the gait written into
+    /// `AiIns.walkType`, not whether a stick was touched. The two differ on exactly the frames
+    /// where the request was refused (an unreadable heading, a junk `speed_scale`), and on those
+    /// the body is standing still, so offering it a running attack would be wrong.
+    fn tick_moveset(state: &mut Possessing, moving: bool) {
         let Some(dispatcher) = state.moveset.as_mut() else {
             return;
         };
@@ -524,7 +536,7 @@ impl NpcPossessionEngine {
         };
         let context = Context {
             distance_m: game::nearest_hostile_distance(state.creature),
-            locomotion: if stick_active {
+            locomotion: if moving {
                 Locomotion::Moving
             } else {
                 Locomotion::Neutral
@@ -726,15 +738,15 @@ impl NpcPossessionEngine {
             state.creature.yaw().unwrap_or(0.0),
             stick,
             movement.speed_scale,
+            movement.turn_deadzone_deg,
         );
-        Self::tick_moveset(state, stick.is_some());
+        Self::tick_moveset(state, write.moving());
         if !state.creature.write_move_intent(write) && first_frame {
             // Said once, on the frame it is first known, rather than sixty times a second.
             possess_log(format_args!(
                 "movement: the AiIns layout canary did not pass, so no movement intent is being \
                  written -- the character is possessed and camera-followed but will not walk. \
-                 AiIns field offsets come from the 1.16.2 dump and the 1.17 sweep did not cover \
-                 that struct"
+                 The AiIns offsets are byte-proven on 1.16.2 and 1.17, so this is a THIRD build"
             ));
         }
     }

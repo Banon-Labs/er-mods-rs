@@ -160,6 +160,18 @@ fn write_u32(at: usize, value: u32) -> bool {
     true
 }
 
+/// Write a SIGNED 32-bit field, but only after proving the address reads.
+///
+/// Separate from [`write_u32`] because `AiIns.turnTarget` is an `AiTargetPointType`, whose
+/// `TARGET_SELF` is `-1`. Spelling that as a `u32` at every call site is how a sign gets lost.
+fn write_i32(at: usize, value: i32) -> bool {
+    if unsafe { safe_read_i32(at) }.is_none() {
+        return false;
+    }
+    unsafe { (at as *mut i32).write(value) };
+    true
+}
+
 /// Write a byte, but only after proving the address reads.
 fn write_u8(at: usize, value: u8) -> bool {
     if unsafe { safe_read_u8(at) }.is_none() {
@@ -608,12 +620,16 @@ impl Chr {
         read_vec3(target).map(|_| target)
     }
 
-    /// Write this frame's movement intent into BOTH `wantToMoveTo` and `pathData->target`.
+    /// Write this frame's movement intent -- ALL FOUR FIELDS `CSAiFunc::MoveTo` writes.
     ///
-    /// Both, with the same value, because neither wins in every branch of
-    /// `AiIns::UpdateMovement`; see [`crate::possess::intent`] for the three-way branch this is
-    /// answering. Gated on [`Self::ai_path_target`], so a build whose `AiIns` layout has moved
-    /// gets no writes at all rather than two wrong ones.
+    /// `wantToMoveTo` and `pathData->target` get the same point, because neither wins in every
+    /// branch of `AiIns::UpdateMovement`. `walkType` is the gate that decides whether the engine
+    /// builds a move vector from that point at all, and `turnTarget` is what makes the body face
+    /// it; see [`crate::possess::intent`] for why one of those was missing and the creature
+    /// therefore stood still with a perfectly good target.
+    ///
+    /// Gated on [`Self::ai_path_target`], so a build whose `AiIns` layout has moved gets no writes
+    /// at all rather than four wrong ones.
     pub(crate) fn write_move_intent(self, write: IntentWrite) -> bool {
         let Some(target_at) = self.ai_path_target() else {
             return false;
@@ -624,7 +640,26 @@ impl Chr {
         let value = FloatVector4::new(write.target[0], write.target[1], write.target[2], 1.0);
         let path = write_vec4(target_at, value);
         let want = write_vec4(ai + ai_ins::WANT_TO_MOVE_TO, value);
-        path && want
+        // Every one of the four, every frame, and none of them short-circuited: a gait written
+        // without a target walks the body somewhere stale, and a target written without a gait is
+        // the failure this function shipped with.
+        let walk = write_i32(ai + ai_ins::WALK_TYPE, write.walk_type);
+        let turn = write_i32(ai + ai_ins::TURN_TARGET, write.turn_target);
+        path && want && walk && turn
+    }
+
+    /// Stop the creature, the way `CS::AiIns::ClearMoveRequest` stops one.
+    ///
+    /// Called on release rather than left to the AI. Goal selection comes back the moment
+    /// `ChrCtrl+0x3b0` is cleared and its next `Activate` writes `walkType` itself -- but "next"
+    /// is a frame or more away, and until then a released creature would still be carrying our
+    /// last run order toward a point the player picked, which looks exactly like the mod failing
+    /// to let go.
+    pub(crate) fn stop_move_intent(self) -> bool {
+        let Some(at) = self.position() else {
+            return false;
+        };
+        self.write_move_intent(IntentWrite::stopped(at))
     }
 
     /// The physics capsule's horizontal half-extent, in metres -- `CSChrPhysicsModule+0x344`.
