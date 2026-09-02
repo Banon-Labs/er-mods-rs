@@ -27,10 +27,14 @@ ROOT = os.path.dirname(HERE)
 GENERATOR = os.path.join(HERE, 'er-moveset-table-gen.py')
 TABLE = os.path.join(ROOT, 'crates', 'er-npc-possess', 'data', 'moveset.tbl')
 
-#: `<fired>[=<played>][g]:<bucket>:<rank>:<reach>[:<prefix>]`. The prefix column is optional
-#: and absent means `W_Event`, the field-write path.
-ENTRY_RE = re.compile(r'^(\d+)(?:=(\d+))?(g?):([0-3]):(\d+):([0-3])(?::(\d+))?$')
-DENIAL_RE = re.compile(r'^!(\d+):([1-9])$')
+#: `<fired>[=<played>][g<victim>,<rangeDm>[+...]]:<bucket>:<rank>:<reach>[:<prefix>]`.
+#: The prefix column is optional and absent means `W_Event`, the field-write path. The `g`
+#: group is the THROW spec: which victim chr id and range each matching `ThrowParam` row
+#: demands. `g` on its own is rejected -- a grab with no row behind it is not a grab.
+ENTRY_RE = re.compile(
+    r'^(\d+)(?:=(\d+))?(?:g(\d+,\d+(?:\+\d+,\d+)*))?:([0-3]):(\d+):([0-3])(?::(\d+))?$')
+#: Reason codes are one or more digits: `throw-result-clip` is 10.
+DENIAL_RE = re.compile(r'^!(\d+):([1-9]\d*)$')
 
 
 _GEN = None
@@ -56,6 +60,7 @@ def check_shape(text):
     version_seen = False
     creatures = 0
     moves = 0
+    grabs = 0
     for number, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line or line.startswith('#'):
@@ -88,6 +93,20 @@ def check_shape(text):
             moves += 1
             fired, bucket, rank = int(match.group(1)), int(match.group(4)), int(match.group(5))
             prefix = int(match.group(7) or 0)
+            if match.group(3):
+                grabs += 1
+                # THE GRAB IS THE INITIATOR, NEVER THE THROW-RESULT CLIP. If a 4000-band id
+                # ever shows up marked as a grab, the join has gone back to reading TimeAct
+                # event 304 -- which is the mistake that made `allow_grabs` gate nothing.
+                lo, hi = GEN_MODULE().ATTACK_BAND
+                if not lo <= fired <= hi:
+                    problems.append(
+                        f'line {number}: entry {field!r} is marked a grab but sits outside '
+                        f'the attack band {lo}-{hi}')
+                for row in match.group(3).split('+'):
+                    if int(row.split(',')[1]) <= 0:
+                        problems.append(
+                            f'line {number}: entry {field!r} has a zero-range ThrowParam row')
             if prefix >= len(GEN_MODULE().PREFIXES):
                 problems.append(
                     f'line {number}: entry {field!r} names prefix {prefix}, and the generator '
@@ -107,6 +126,14 @@ def check_shape(text):
         problems.append(f'only {creatures} creatures')
     if moves < 2000:
         problems.append(f'only {moves} moves')
+    # THE REGRESSION THIS FILE EXISTS TO CATCH. The table shipped with ZERO grab-marked moves
+    # for a whole layer, because the marker was on the throw-RESULT clip (which nothing can
+    # fire) instead of on the initiator. Zero here is not "this creature has no grabs"; it is
+    # "the ThrowParam join is not running", and it makes `allow_grabs` a dead setting again.
+    if grabs < 100:
+        problems.append(
+            f'only {grabs} grab-marked moves -- the corpus has 153 across 78 creatures; the '
+            'AtkParam_Npc.throwTypeId -> ThrowParam join is not producing them')
     return problems
 
 
@@ -145,6 +172,11 @@ def selftest():
         ('4500 3000:0:0:1 3001:0:2:1', 'rank gap'),
         ('4500 3000:9:0:1', 'bucket out of range'),
         ('4500 nonsense', 'unparsable entry'),
+        # THE GRAB REGRESSIONS. A bare `g` is the pre-ThrowParam spelling and must not parse;
+        # a grab on a 4000-band id means the marker went back onto the throw-result clip.
+        ('4500 3000g:0:0:1', 'a grab with no ThrowParam row behind it'),
+        ('4500 4100g0,100:0:0:1', 'a grab marked on a throw-result clip'),
+        ('4500 3000g0,0:0:0:1', 'a zero-range ThrowParam row'),
     ]
     for corrupt, why in corruptions:
         text = 'v1\n' + (corrupt + '\n') * 250
@@ -153,11 +185,13 @@ def selftest():
             return 1
     # ...and PASS on a well-formed one.
     # Exercises every part of the grammar at once: dense ranks in two buckets, the
-    # plays-something-else spelling, the grab flag, and a denial.
+    # plays-something-else spelling, both grab spellings (one victim and two), a two-digit
+    # denial reason, and a plain denial.
     good = 'v1\n' + '\n'.join(
         f'{4000 + n} '
         + ' '.join(f'{3000 + rank}:0:{rank}:1' for rank in range(5))
-        + ' 3100:1:0:2 4000g:1:1:1 3110=3000:2:0:3 6000:3:0:0:2 !3010:3'
+        + ' 3100:1:0:2 3101g0,100:1:1:1 3102g0,100+3300,55:1:2:1'
+        + ' 3110=3000:2:0:3 6000:3:0:0:2 !3010:3 !4100:10'
         for n in range(300))
     problems = check_shape(good + '\n')
     if problems:

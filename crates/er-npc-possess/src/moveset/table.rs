@@ -35,6 +35,16 @@
 //! checked. So a row carries BOTH ids: [`Move::fire`] is what gets written into the request field,
 //! [`Move::played`] is what actually appears on screen. They are equal everywhere else, which is
 //! why the format spells the second one only when it differs.
+//!
+//! # The grab, and the animation everybody mistakes for it
+//!
+//! A grab is not a 4000-band animation and it is not TimeAct event 304. It is an ORDINARY,
+//! already-fireable attack whose `AtkParam_Npc` row has `throwTypeId != 0`: when that hit lands,
+//! `ApplyDamage` hands it to the throw system before calculating any damage, and the throw system
+//! -- not the event layer -- drives both parties into the 4000-band clips. That is exactly why no
+//! event name in the 4000 band has a transition behind it on any of the 409 creatures swept: those
+//! clips are reached by the bare names `W_ThrowAtk`/`W_ThrowDef` and are never addressed by id.
+//! See [`Throw`] for the join and [`Denial::ThrowResultClip`] for how the clips are reported.
 
 // Pure parsing; no game memory is touched here, so it stays ungated and `cargo test` proves it on
 // the host.
@@ -51,7 +61,7 @@ pub(crate) const TABLE_TEXT: &str = include_str!("../../data/moveset.tbl");
 
 /// Grammar version. The generator writes it and the parser refuses anything else, so a format
 /// change cannot silently be read with the old column meanings.
-pub(crate) const TABLE_VERSION: u32 = 2;
+pub(crate) const TABLE_VERSION: u32 = 3;
 
 /// WHICH SPELLING OF AN ANIMATION ID THIS CREATURE ACTUALLY ANSWERS TO.
 ///
@@ -128,6 +138,107 @@ impl Prefix {
     }
 }
 
+/// ONE WAY THIS ATTACK CAN TURN INTO A GRAB.
+///
+/// A grab is not an animation you play. `CS::ChrDamageModule::ApplyDamage` reads
+/// `AtkParam.throwTypeId` off the hit that just landed and, before it calculates any damage,
+/// calls `CSChrThrowModule::InitThrow(attackerThrowModule, victimChrIns, throwTypeId)`.
+/// `CSThrowNode::ValidateAttemptAndReturnParamId` then walks `ThrowParam` looking for a row whose
+/// `AtkChrId` is the attacker's `ChrIns::npcId`, whose `DefChrId` is the victim's, and whose
+/// `throwTypeId` matches. On a match the throw system drives BOTH parties into that row's
+/// `atkAnimId`/`defAnimId` -- the 4000-band clips, reached through the bare behaviour names
+/// `W_ThrowAtk`/`W_ThrowDef` and never by id.
+///
+/// So this type is the ROW's half of that match: who has to be on the receiving end, and how far
+/// away they may be. It is what makes a grab refusable for a stated reason rather than a swing
+/// that mysteriously never grabs anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Throw {
+    /// `ThrowParam.DefChrId` -- the victim's `ChrIns::npcId`, matched EXACTLY, not as a wildcard.
+    /// `0` is the player, and it is `0` for 189 of the 190 creature rows in the shipped
+    /// regulation; the single exception is c4280 grabbing c3300.
+    pub(crate) victim_chr: u32,
+    /// `ThrowParam.Dist` in DECIMETRES, because the table is integers-only. Divide by ten for
+    /// metres. Measured across the shipped table: 50 to 1000, i.e. 5 m to 100 m -- most rows are
+    /// 100 (10 m), and the 1000 is a single outlier. Comfortably inside a `u16`.
+    pub(crate) range_dm: u16,
+}
+
+impl Throw {
+    /// `ThrowParam.Dist` back in the metres the dispatcher measures distance in.
+    pub(crate) fn range_m(self) -> f32 {
+        f32::from(self.range_dm) / 10.0
+    }
+
+    /// Is the required victim the player's own body rather than another creature?
+    ///
+    /// It decides whether a live distance reading means anything for this throw. The possession
+    /// co-locates the player's `PlayerIns` with the creature every frame, so a player-victim throw
+    /// always has its victim in reach and a "nothing nearby" reading is about the wrong body.
+    pub(crate) const fn victim_is_player(self) -> bool {
+        self.victim_chr == 0
+    }
+}
+
+/// EVERY `ThrowParam` ROW ONE ATTACK CAN COMPLETE, inline and `Copy`.
+///
+/// Fixed-size rather than a `Vec` because [`Move`] is `Copy` and is copied per press. Four slots
+/// against a measured maximum of TWO: swept over all 409 creatures, exactly one attack
+/// (c4280's a3006) matches more than one row, and it matches two. The spare pair is headroom for
+/// a regulation edit, not a guess.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Throws {
+    slots: [Option<Throw>; Self::CAPACITY],
+}
+
+impl Throws {
+    pub(crate) const CAPACITY: usize = 4;
+
+    /// No throw: an ordinary attack.
+    pub(crate) const NONE: Self = Self {
+        slots: [None; Self::CAPACITY],
+    };
+
+    /// Append, silently dropping past [`Self::CAPACITY`]. Dropping is right here: the slots hold
+    /// alternative victims for the same attack, so an overflow costs one alternative rather than
+    /// the move, and the move is still correctly marked a grab.
+    fn push(&mut self, throw: Throw) {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(throw);
+        }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Throw> + '_ {
+        self.slots.iter().filter_map(|slot| *slot)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.slots.iter().all(Option::is_none)
+    }
+
+    /// Can this grab reach a victim, given the live distance to the nearest hostile?
+    ///
+    /// `None` for the distance means nothing is loaded nearby. The two cases are genuinely
+    /// different and are kept apart on purpose:
+    ///
+    /// * a throw whose victim is the PLAYER is always reachable, because the possession keeps the
+    ///   player's body co-located with the creature -- the hostile distance is measuring somebody
+    ///   else entirely and must not be allowed to veto;
+    /// * a throw whose victim is another CREATURE needs that creature within `ThrowParam.Dist`,
+    ///   and the nearest-hostile distance is the best reading the crate has of it.
+    ///
+    /// This is a NECESSARY condition, not a sufficient one. It does not check the victim's chr id
+    /// (the crate does not read `ChrIns::npcId`), nor the angle and vertical gates
+    /// `ThrowPoseChecks` applies. The game re-checks all of it; this only stops the dispatcher
+    /// from spending a press on a grab that provably cannot land.
+    pub(crate) fn reachable(&self, distance_m: Option<f32>) -> bool {
+        self.iter().any(|throw| {
+            throw.victim_is_player()
+                || distance_m.is_some_and(|distance| distance <= throw.range_m())
+        })
+    }
+}
+
 /// How far an attack reaches, in bands rather than metres.
 ///
 /// Bands rather than a number because the dispatcher compares this against a live distance that is
@@ -196,6 +307,15 @@ pub(crate) enum Denial {
     SpEffectOnly,
     /// The TimeAct names a behaviour id that `BehaviorParam` does not have a row for.
     UnresolvedBehavior,
+    /// It is the animation the THROW SYSTEM plays once a grab has been accepted, not one anybody
+    /// can fire. `CSChrThrowModule::PlayThrowAnim` reaches these through the two bare, un-numbered
+    /// behaviour names `W_ThrowAtk` and `W_ThrowDef`; which clip that lands on is decided by the
+    /// `ThrowParam` row, so there is no id to ask for. 108 animations across the corpus carry
+    /// TimeAct event 304 `ThrowAttackBehavior`, all in the 4000 band, and not one of them is
+    /// fireable under any prefix -- which is the whole of the "grabs are unreachable" finding,
+    /// pointed at the wrong half of the mechanism. The grab itself is a 3000-band attack; see
+    /// [`Throw`].
+    ThrowResultClip,
     // RETIRED: reason 7, `PrefixUnreachable`. It meant "the graph can play this but the
     // `W_Event%04d` field write cannot spell it", and it covered every dodge in the game. The
     // class no longer exists: those ids are FIRED now, through `PlayAnimationByBehaviorName`
@@ -217,6 +337,7 @@ impl Denial {
             5 => Some(Self::SpEffectOnly),
             6 => Some(Self::UnresolvedBehavior),
             9 => Some(Self::UnusableAtRuntime),
+            10 => Some(Self::ThrowResultClip),
             _ => None,
         }
     }
@@ -230,6 +351,7 @@ impl Denial {
             Self::SpEffectOnly => "speffect-only",
             Self::UnresolvedBehavior => "unresolved-behavior",
             Self::UnusableAtRuntime => "unusable-at-runtime",
+            Self::ThrowResultClip => "throw-result-clip",
         }
     }
 }
@@ -248,13 +370,26 @@ pub(crate) struct Move {
     /// across regenerations, which is what makes rank-cycling reproducible.
     pub(crate) rank: u8,
     pub(crate) reach: Reach,
-    /// Carries TimeAct event 304 `ThrowAttackBehavior` -- a grab. NOT a denial: 304 is 573 sites
-    /// across 90 creatures and the whole of the 4000 band, i.e. every boss grab in the game. It is
-    /// flagged only so `allow_grabs` can be honoured.
-    pub(crate) grab: bool,
+    /// The `ThrowParam` rows this attack can complete, empty for an ordinary one.
+    ///
+    /// Non-empty means this is a GRAB INITIATOR: an ordinary, already-fireable attack whose
+    /// `AtkParam_Npc` row carries a non-zero `throwTypeId` AND for which a `ThrowParam` row pairs
+    /// this creature with a victim. Landing it is what starts a grab. See [`Throw`] for the
+    /// mechanism and [`Denial::ThrowResultClip`] for the 4000-band clips that are NOT this.
+    ///
+    /// 153 of the 6921 shipped moves across 78 creatures, every one of them in the 3000 band.
+    /// (169 counting `(animation, throwTypeId)` pairs -- a few attacks carry two.)
+    pub(crate) throws: Throws,
     /// Which event-name spelling reaches this animation on this creature. See [`Prefix`]; it
     /// decides whether firing is a field write or a call.
     pub(crate) prefix: Prefix,
+}
+
+impl Move {
+    /// Is this a grab -- an attack that starts a throw when it lands?
+    pub(crate) fn grab(&self) -> bool {
+        !self.throws.is_empty()
+    }
 }
 
 /// Everything the table knows about one creature.
@@ -320,7 +455,11 @@ impl Moveset {
             bucket: Bucket::Light,
             rank: u8::try_from(rank).unwrap_or(u8::MAX),
             reach: Reach::Unknown,
-            grab: false,
+            // Re-admitted by animation id, and a `ThrowParam` join cannot be redone in the
+            // process -- so it comes back as a plain attack. If it really is a grab initiator the
+            // game still starts the throw when it lands; only this crate's label is missing, and
+            // with it the `allow_grabs` veto the player just overrode by name anyway.
+            throws: Throws::NONE,
             // Re-admitted by animation id, so the only spelling that can be assumed is the one
             // the field write can ask for. If it needed a different prefix the generator would
             // have offered it already.
@@ -369,7 +508,25 @@ const _: () = assert!(
      with scripts/er-moveset-table-gen.py and update moveset::table"
 );
 
-/// Parse `<fired>[=<played>][g]:<bucket>:<rank>:<reach>[:<prefix>]`.
+/// Parse the grab suffix: `g<victim>,<rangeDm>[+<victim>,<rangeDm>]...`.
+///
+/// `None` when the suffix is present but malformed, so a mangled grab spec costs the whole entry
+/// rather than silently downgrading a grab into an ordinary attack -- `parse_line` then skips the
+/// field and says so by omission. Silently dropping the spec would leave a grab on offer that
+/// `allow_grabs = false` no longer withholds.
+fn parse_throws(spec: &str) -> Option<Throws> {
+    let mut throws = Throws::NONE;
+    for row in spec.split('+') {
+        let (victim, range) = row.split_once(',')?;
+        throws.push(Throw {
+            victim_chr: victim.parse().ok()?,
+            range_dm: range.parse().ok()?,
+        });
+    }
+    (!throws.is_empty()).then_some(throws)
+}
+
+/// Parse `<fired>[=<played>][g<victim>,<rangeDm>[+...]]:<bucket>:<rank>:<reach>[:<prefix>]`.
 fn parse_move(field: &str) -> Option<Move> {
     let mut parts = field.split(':');
     let head = parts.next()?;
@@ -386,9 +543,11 @@ fn parse_move(field: &str) -> Option<Move> {
     if parts.next().is_some() {
         return None;
     }
-    let (head, grab) = match head.strip_suffix('g') {
-        Some(rest) => (rest, true),
-        None => (head, false),
+    // The grab suffix is `g` and everything after it. `split_once` rather than a search from the
+    // end, because the spec itself contains no `g` -- only digits, commas and `+`.
+    let (head, throws) = match head.split_once('g') {
+        Some((rest, spec)) => (rest, parse_throws(spec)?),
+        None => (head, Throws::NONE),
     };
     let (fire, played) = match head.split_once('=') {
         Some((fire, played)) => (fire.parse().ok()?, played.parse().ok()?),
@@ -403,7 +562,7 @@ fn parse_move(field: &str) -> Option<Move> {
         bucket,
         rank,
         reach,
-        grab,
+        throws,
         prefix,
     })
 }
@@ -564,23 +723,119 @@ mod tests {
 
     #[test]
     fn a_move_field_round_trips() {
-        let parsed = parse_move("3110=3000g:2:4:3").expect("well-formed");
+        let parsed = parse_move("3110=3000g0,100:2:4:3").expect("well-formed");
+        assert_eq!(parsed.fire, 3110);
+        assert_eq!(parsed.played, 3000);
+        assert_eq!(parsed.bucket, Bucket::Ranged);
+        assert_eq!(parsed.rank, 4);
+        assert_eq!(parsed.reach, Reach::Far);
+        assert_eq!(parsed.prefix, Prefix::Event);
+        assert!(parsed.grab());
         assert_eq!(
-            parsed,
-            Move {
-                fire: 3110,
-                played: 3000,
-                bucket: Bucket::Ranged,
-                rank: 4,
-                reach: Reach::Far,
-                grab: true,
-                prefix: Prefix::Event,
-            }
+            parsed.throws.iter().collect::<Vec<_>>(),
+            vec![Throw {
+                victim_chr: 0,
+                range_dm: 100
+            }]
         );
         let plain = parse_move("3001:0:0:1").expect("well-formed");
         assert_eq!(plain.fire, plain.played);
-        assert!(!plain.grab);
+        assert!(!plain.grab());
         assert_eq!(plain.reach, Reach::Close);
+    }
+
+    /// c4280's a3006 is the ONLY attack in the game that matches two `ThrowParam` rows, and the
+    /// only creature-victim grab there is. It is the reason [`Throws`] is a list.
+    #[test]
+    fn a_grab_can_name_more_than_one_victim() {
+        let parsed = parse_move("3006g0,100+3300,100:0:0:1").expect("well-formed");
+        assert_eq!(
+            parsed.throws.iter().collect::<Vec<_>>(),
+            vec![
+                Throw {
+                    victim_chr: 0,
+                    range_dm: 100
+                },
+                Throw {
+                    victim_chr: 3300,
+                    range_dm: 100
+                },
+            ]
+        );
+        assert!(
+            parsed
+                .throws
+                .iter()
+                .next()
+                .expect("first")
+                .victim_is_player()
+        );
+        assert!(
+            !parsed
+                .throws
+                .iter()
+                .nth(1)
+                .expect("second")
+                .victim_is_player()
+        );
+    }
+
+    /// A mangled grab spec must cost the whole entry, never quietly downgrade a grab into an
+    /// ordinary attack that `allow_grabs = false` would then fail to withhold.
+    #[test]
+    fn a_malformed_grab_spec_rejects_the_entry_rather_than_dropping_the_grab() {
+        assert!(parse_move("3006g:0:0:1").is_none());
+        assert!(parse_move("3006gnonsense:0:0:1").is_none());
+        assert!(parse_move("3006g0:0:0:1").is_none());
+        assert!(parse_move("3006g0,:0:0:1").is_none());
+    }
+
+    /// The reach gate, which is what makes `allow_grabs` refuse for a stated reason.
+    #[test]
+    fn a_player_victim_throw_is_always_reachable_and_a_creature_one_is_not() {
+        let player = parse_move("3016g0,100:0:0:1").expect("well-formed").throws;
+        // The player's body is co-located with the creature, so a hostile distance -- or the
+        // absence of one -- says nothing about whether this throw has a victim.
+        assert!(player.reachable(None));
+        assert!(player.reachable(Some(200.0)));
+
+        let creature = parse_move("3006g3300,100:0:0:1")
+            .expect("well-formed")
+            .throws;
+        assert!(creature.reachable(Some(9.9)), "9.9 m is inside a 10 m Dist");
+        assert!(!creature.reachable(Some(10.1)));
+        assert!(!creature.reachable(None), "nothing loaded is not a victim");
+        // Exactly at the range is INCLUSIVE here and EXCLUSIVE in the game -- `ThrowPoseChecks`
+        // is `if (distance < GetDist(row))`. Deliberate: this gate is a filter in front of the
+        // game's own check, and being a hair generous costs a swing that misses rather than a
+        // grab silently withheld. The reading it compares is coarser than that anyway: the game
+        // measures between each party's physics position, swapped for a dummy-poly position when
+        // the row names one in `judgeRangeBasePosDmyId1/2` (`GetPlayerThrowPositions`).
+        assert!(creature.reachable(Some(10.0)));
+
+        // The two-victim case falls back to the player half, which always holds.
+        let both = parse_move("3006g0,100+3300,100:0:0:1")
+            .expect("well-formed")
+            .throws;
+        assert!(both.reachable(None));
+
+        assert!(
+            !Throws::NONE.reachable(None),
+            "an empty set reaches nothing"
+        );
+        assert!(!Throws::NONE.reachable(Some(0.0)));
+    }
+
+    /// Past capacity the move stays a grab and loses only an alternative victim -- never the
+    /// other way round, which would put an ungated grab on offer.
+    #[test]
+    fn more_victims_than_there_are_slots_costs_a_victim_and_not_the_grab() {
+        let spec: String = (0..Throws::CAPACITY + 3)
+            .map(|index| format!("{}{index},50", if index == 0 { "" } else { "+" }))
+            .collect();
+        let parsed = parse_move(&format!("3006g{spec}:0:0:1")).expect("well-formed");
+        assert!(parsed.grab());
+        assert_eq!(parsed.throws.iter().count(), Throws::CAPACITY);
     }
 
     #[test]
@@ -632,6 +887,102 @@ mod tests {
                     .map(|(_, r)| *r),
                 Some(Denial::NotFireable),
                 "c4500 {id} should be declared-but-not-fireable"
+            );
+        }
+    }
+
+    /// THE GRABS, ASSERTED AGAINST THE SHIPPED DATA rather than against the finding that produced
+    /// it. Before the `ThrowParam` join the table carried ZERO grab-marked moves, so `allow_grabs`
+    /// gated nothing and said so in its own doc comment. If this goes back to zero the join broke
+    /// and the setting is dead again.
+    #[test]
+    fn the_shipped_table_carries_real_grabs_and_every_one_is_a_fireable_attack() {
+        let mut grabs = 0;
+        let mut creatures = 0;
+        for chr in chr_ids() {
+            let Some(moveset) = lookup(chr) else { continue };
+            let here = moveset.moves.iter().filter(|entry| entry.grab()).count();
+            if here > 0 {
+                creatures += 1;
+            }
+            grabs += here;
+            for entry in moveset.moves.iter().filter(|entry| entry.grab()) {
+                // THE WHOLE POINT. A grab initiator is an ordinary attack; the 4000-band clip it
+                // leads to is the throw system's, and is never on offer.
+                assert!(
+                    (3000..4000).contains(&entry.fire),
+                    "c{chr} {} is marked a grab but is not in the attack band",
+                    entry.fire
+                );
+                assert!(
+                    entry.throws.iter().count() <= Throws::CAPACITY,
+                    "c{chr} {} overflowed its victim list",
+                    entry.fire
+                );
+                for throw in entry.throws.iter() {
+                    assert!(
+                        throw.range_dm > 0,
+                        "c{chr} {} has a zero-range ThrowParam row",
+                        entry.fire
+                    );
+                }
+            }
+        }
+        assert!(
+            grabs >= 150 && creatures >= 70,
+            "only {grabs} grabs across {creatures} creatures -- the ThrowParam join is not \
+             producing what the corpus sweep measured (153 across 78)"
+        );
+    }
+
+    /// The other half: the 4000-band clips are REPORTED, with a reason that is true of them,
+    /// instead of vanishing or being mislabelled `not-fireable`.
+    #[test]
+    fn the_throw_result_clips_are_denied_with_their_own_reason() {
+        let mut clips = 0;
+        for chr in chr_ids() {
+            let Some(moveset) = lookup(chr) else { continue };
+            for (animation, reason) in &moveset.denials {
+                if *reason != Denial::ThrowResultClip {
+                    continue;
+                }
+                assert!(
+                    (4000..5000).contains(animation),
+                    "c{chr} {animation} is a throw-result clip outside the 4000 band"
+                );
+                clips += 1;
+            }
+        }
+        assert!(
+            clips >= 50,
+            "only {clips} throw-result clips reported -- 88 fall inside a creature's span"
+        );
+    }
+
+    /// Malenia, the creature whose grab the config file names by animation id. Both halves of the
+    /// mechanism have to show up on her line, or the documentation is lying to the player.
+    #[test]
+    fn malenias_grab_is_an_attack_and_her_4100_is_a_throw_result_clip() {
+        let malenia = lookup(2120).expect("c2120 must be in the table");
+        let grab = malenia
+            .moves
+            .iter()
+            .find(|entry| entry.grab())
+            .expect("c2120 has a grab initiator");
+        assert!((3000..4000).contains(&grab.fire), "{}", grab.fire);
+        assert!(
+            grab.throws.iter().all(|throw| throw.victim_is_player()),
+            "c2120 grabs the player"
+        );
+        for clip in [4100, 4101] {
+            assert_eq!(
+                malenia
+                    .denials
+                    .iter()
+                    .find(|(a, _)| *a == clip)
+                    .map(|(_, r)| *r),
+                Some(Denial::ThrowResultClip),
+                "c2120 a{clip} should be reported as the throw system's clip"
             );
         }
     }

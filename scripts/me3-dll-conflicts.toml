@@ -414,10 +414,13 @@ product's single MinHook instance owns the prologue and the handlers chain; see 
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
 "er-npc-possess" = """Co-loadable with every other shell here, because it installs NO DETOUR AT ALL. \
-It claims no prologue, resolves no game address, patches no param row (which is what breaks \
-Seamless invasions), runs no D3D12/Present or overlay hook, and writes no game memory. Its whole \
-game-side footprint is one recurring `FrameBegin` task that calls `GetAsyncKeyState` and \
-`XInputGetState` and writes a log line.
+It claims no prologue, patches no param row (which is what breaks Seamless invasions), and runs \
+no D3D12/Present or overlay hook. It does resolve ONE game address and CALL it -- \
+`PlayAnimationByBehaviorName`, for the minority of animations the `CSChrEventModule+0x18` field \
+write cannot spell -- which is a plain call on the game's own thread and claims no prologue, so it \
+takes nothing away from another shell. Grabs added neither an address nor a detour: a grab is an \
+ordinary attack whose `AtkParam_Npc.throwTypeId` is non-zero, and the game's own throw system does \
+the rest.
 
 THE ONE THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
 DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \

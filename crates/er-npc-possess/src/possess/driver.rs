@@ -12,7 +12,7 @@ use er_game_base::game_build::{describe_build, game_file_version};
 use crate::engine::{PossessionEngine, PossessionOutcome, PossessionRequest};
 use crate::input::FaceEdges;
 use crate::log::possess_log;
-use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion, NoMove};
+use crate::moveset::dispatch::{Context, Dispatcher, Input, Locomotion};
 use crate::moveset::table::{self, Denial};
 use crate::moveset::watchdog::{Sample, Verdict, Watchdog};
 use crate::moveset::{derived, table as moveset_table};
@@ -307,11 +307,7 @@ impl NpcPossessionEngine {
                          creature has and why the rest was withheld.",
                         input.name(),
                         state.chr_id,
-                        match reason {
-                            NoMove::EmptyBucket => "that bucket is empty for this creature",
-                            NoMove::NothingInBand => "nothing in this bucket suits the range",
-                            NoMove::NoMoveset => "this creature has no shipped moveset",
-                        },
+                        reason.explanation(),
                         crate::config::DERIVED_CONFIG_FILE_NAME,
                     ));
                 }

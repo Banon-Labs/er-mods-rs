@@ -31,6 +31,31 @@
 //! where the graph can be read -- and what ships is the answer. See
 //! `scripts/er-moveset-table-gen.py`.
 //!
+//! # Grabs, and the animation this layer first mistook for one
+//!
+//! Layer 3 shipped saying no creature's grab could be fired, having swept all 408 creatures and
+//! found that no event name in the 4000 band has a transition behind it under any prefix. That
+//! sweep result is correct. The conclusion drawn from it was not, because the 4000-band clip is
+//! not the grab.
+//!
+//! `CS::ChrDamageModule::ApplyDamage` looks up the `AtkParam` row of the hit that just landed and
+//! reads `throwTypeId`. If it is non-zero it calls
+//! `CSChrThrowModule::InitThrow(attackerThrowModule, victimChrIns, throwTypeId)` **before any
+//! damage is calculated**, and returns early when the throw is accepted.
+//! `CSThrowNode::ValidateAttemptAndReturnParamId` scans `ThrowParam` for a row matching (attacker
+//! `ChrIns::npcId`, victim `ChrIns::npcId`, `throwTypeId`); on a match `CSChrThrowModule` sets
+//! both nodes' roles and `PlayThrowAnim` plays `W_ThrowAtk` on the attacker and `W_ThrowDef` on
+//! the victim. Those are BARE names with no id in them -- which is exactly why nothing in the 4000
+//! band is reachable by an event name, and why the fireability sweep was right and the label was
+//! wrong.
+//!
+//! So the thing to fire is the INITIATOR, and it was already in the table as a plain attack: 153
+//! of them across 78 creatures, every one in the 3000 band, all already fireable. Marking them
+//! costs **no game address, no offset and no hook** -- the whole change is an extra param join in
+//! the generator. What the runtime gained is a reason: [`table::Throw`] carries the victim chr id
+//! and range the throw system will demand, `allow_grabs` finally withholds something, and a grab
+//! that needs a creature victim is not offered when there is none in range.
+//!
 //! # The four parts
 //!
 //! * [`table`] -- what each creature can do, decided offline. Integers only.
@@ -59,6 +84,17 @@
 //! * **Root-motion TRAVEL never made it into the table.** It is the documented fallback for reach
 //!   when there is no hit capsule, and getting it means deserialising the animation itself, which
 //!   the offline toolchain does not do.
+//! * **Whether a possessed creature's grab is ACCEPTED is unproven.** Firing the initiator is
+//!   settled; the throw system's own gates are not. `ThrowParam.DefChrId` is 0 -- the player -- for
+//!   189 of the 190 creature rows, and the possession neuters the player's body by setting
+//!   `chrFlags1c5 & 0x10`. `ChrIns::IsImmuneToAttack` reads exactly that bit and returns "immune"
+//!   unless the `AtkParam` row sets `isDisableNoDamage`, and 188 of the 206 `AtkParam_Npc`
+//!   rows with a non-zero `throwTypeId` leave it at 0. `ChrIns::IsImmuneToThrow` -- the adjacent
+//!   vtable slot, `+0x1E0` against `+0x1D8` -- does NOT read it, and the throw path's own
+//!   pre-check (`CSThrowNode` -> `FUN_140482910` ->
+//!   `FUN_140485be0`) goes through that one. Which predicate governs the hit that STARTS the throw
+//!   was not settled statically, so the honest answer is that this needs the game running. The
+//!   initiator plays either way; a grab that is refused is a swing that misses.
 
 pub(crate) mod derived;
 pub(crate) mod dispatch;
@@ -98,7 +134,12 @@ mod tests {
             "'W_Ridden_Enemy_Step',",
             "'W_Ride_Enemy_Step',",
             "DENY_UNUSABLE_AT_RUNTIME = 9",
-            "TABLE_VERSION = 2",
+            // The grab join. The column name is the whole mechanism: an attack is a grab because
+            // its AtkParam row says so, not because its animation id is in a band.
+            "DENY_THROW_RESULT_CLIP = 10",
+            "ATK_THROW_FIELD = 'throwTypeId'",
+            "'AtkChrId', 'DefChrId', 'throwTypeId', 'Dist'",
+            "TABLE_VERSION = 3",
         ] {
             assert!(
                 generator.contains(expected),
