@@ -395,6 +395,15 @@ pub(crate) mod chr_ctrl {
     /// 0f28814002 0000 MOVAPS XMM0,[RCX+0x240]   ; row2
     /// ```
     pub(crate) const MODEL_MATRIX: usize = 0x230;
+
+    /// `MOVAPS` reads it, and `MOVAPS` `#GP`s on an unaligned address -- so a drifted offset here
+    /// is a crash inside the engine rather than a wrong number. A build error is the right answer.
+    ///
+    /// This crate no longer reads the matrix itself: reproducing `[vt+0x50]`'s world-to-local
+    /// transform was part of the manual move stage, and the stage is gone. The offset stays
+    /// because it is where the engine reads the body's basis, and every claim in this module about
+    /// what local space MEANS is anchored to it.
+    const _: () = assert!(MODEL_MATRIX.is_multiple_of(16));
     /// `ChrCtrl.modifier` -- `ChrCtrlModifier`. Cross-checked.
     pub(crate) const MODIFIER: usize = 0xc8;
     /// `ChrCtrl.chrProxyFlags`. Cross-checked.

@@ -184,14 +184,18 @@ type PlayAnimationByBehaviorNameFn = unsafe extern "system" fn(*mut usize, *cons
 /// whole point is a property nobody would notice was missing until the game died.
 pub(crate) use er_invasion_warp_core::warp::FloatVector4;
 
-/// Bytes in a `FloatVector4`, i.e. the stride between the rows of a `FloatMatrix4x4`.
-const FLOAT_VECTOR4_BYTES: usize = 16;
-
-/// The shortest horizontal move direction that still has a direction.
+/// Read all FOUR floats of a `FloatVector4`.
 ///
-/// Below this the normalise is numerically meaningless and the request is a stop in all but name;
-/// the caller stages the zero vector instead, which is what the engine stages for the same case.
-const MOVE_DIRECTION_MIN_LENGTH: f32 = 1e-4;
+/// `w` is not decoration here. `[vt+0x50]` computes it as `dot(direction, modelMatrix.row4)` --
+/// row4 being the TRANSLATION row -- so on a body at `(5.04, 5.06, 0.44)` moving along `-X` it is
+/// `-5.04`, a number that changes as the creature walks. That looks exactly like a bug and is not:
+/// it is what the engine itself writes, and matching it is the point. It was invisible until now
+/// because the telemetry printed three components.
+fn read_vec4(at: usize) -> Option<[f32; 4]> {
+    let [x, y, z] = read_vec3(at)?;
+    let w = unsafe { safe_read_f32(at + 12) }?;
+    w.is_finite().then_some([x, y, z, w])
+}
 
 /// Read three floats as a position. `None` when the address will not read.
 fn read_vec3(at: usize) -> Option<[f32; 3]> {
@@ -945,150 +949,34 @@ impl Chr {
         Some((walk, target_x))
     }
 
-    /// Stage the frame's move vector where the ENGINE stages its own -- the fix for a field war
-    /// this crate cannot win.
+    /// What sits in the staging slot the engine publishes from, all four components.
     ///
-    /// # Why this exists alongside [`Self::write_move_intent`]
-    ///
-    /// `walkType` is not ours. Six sites write it to literal zero and every one is goal
-    /// lifecycle (`ClearMoveRequest`, `TerminateGoal`, `ClearAiGoalRelatedInfo`, a goal
-    /// `Activate`, a goal `Interrupt`); possession no-ops goal SELECTION, so the goal machine
-    /// churns and zeroes the gate at roughly frame cadence. A per-frame read-back taken
-    /// immediately after our own write measured `walk_type=0` with `wantToMoveTo` equal to the
-    /// body's own position -- `ClearMoveRequest`'s exact signature -- on half the sampled frames,
-    /// with the body stationary throughout. Writing harder cannot fix that, and this repo's rules
-    /// say a manual field write is diagnostic until it becomes native-ownership integration.
-    ///
-    /// So this writes one step DOWNSTREAM of the whole argument.
-    /// [`manipulator::PENDING_MOVE_VECTOR`] is what `[vt+0x50]` publishes on its next run, into
-    /// the `ChrManipulator+0x10`/`+0x70` pair that every one of the game's six manipulator
-    /// implementations -- the player's included -- publishes locomotion through. `walkType` gates
-    /// only whether `[vt+0x50]` computes a vector of its OWN; it does not gate the publish, and it
-    /// does not gate us.
-    ///
-    /// # The value
-    ///
-    /// The body's LOCAL frame, because that is the space `[vt+0x50]` stages in: it normalises the
-    /// world direction and dots it against the four rows of [`chr_ctrl::MODEL_MATRIX`]. This
-    /// reproduces that transform row for row, including the fourth, so what lands in the slot is
-    /// indistinguishable from what the engine would have put there. Length is
-    /// [`IntentWrite::gait_scale`], which is the engine's own set of three.
-    ///
-    /// A direction too short to normalise, or a zero gait, stages `DL_ZERO_VECTOR` -- which is
-    /// exactly what `[vt+0x50]` stages when its own gate is shut, so releasing the stick leaves
-    /// the slot in a state the engine produces.
-    pub(crate) fn write_manipulator_move(self, world_direction: [f32; 3], scale: f32) -> bool {
-        let Some(manip) = self.real_manipulator() else {
-            return false;
-        };
-        let at = manip + manipulator::PENDING_MOVE_VECTOR;
-        let Some(local) = self.local_move_vector(world_direction, scale) else {
-            return write_vec4(at, FloatVector4::new(0.0, 0.0, 0.0, 0.0));
-        };
-        write_vec4(at, local)
+    /// This crate no longer WRITES it -- the manual stage was a workaround for the starvation the
+    /// vtable swizzle removed, and leaving it in was what made movement unnatural. Reading it is
+    /// still the cheapest proof that `[vt+0x50]` is computing a move vector of its own.
+    pub(crate) fn staged_move_vector(self) -> Option<[f32; 4]> {
+        read_vec4(self.real_manipulator()? + manipulator::PENDING_MOVE_VECTOR)
     }
 
-    /// The world direction, flattened, normalised, rotated into the body's frame and scaled.
+    /// What the engine has PUBLISHED at `ChrManipulator+0x10`, all four components.
     ///
-    /// `None` for anything that is not a movable request -- a zero or junk gait, a direction with
-    /// no horizontal extent, a model matrix that will not read. Every one of those means "stage
-    /// the zero vector", which the caller does.
-    fn local_move_vector(self, world_direction: [f32; 3], scale: f32) -> Option<FloatVector4> {
-        if !scale.is_finite() || scale <= 0.0 {
-            return None;
-        }
-        let [dx, _, dz] = world_direction;
-        // Flattened before normalising, exactly as `[vt+0x50]` does: it zeroes `y` on the
-        // difference vector before it takes the length, so a target above or below the body is a
-        // horizontal request and not a climb.
-        let length = dx.hypot(dz);
-        if !length.is_finite() || length < MOVE_DIRECTION_MIN_LENGTH {
-            return None;
-        }
-        let unit = [dx / length, 0.0, dz / length];
-        let matrix = self.chr_ctrl()? + chr_ctrl::MODEL_MATRIX;
-        let mut local = [0.0f32; 4];
-        for (index, component) in local.iter_mut().enumerate() {
-            let row = matrix + index * FLOAT_VECTOR4_BYTES;
-            let row_x = unsafe { safe_read_f32(row) }?;
-            let row_y = unsafe { safe_read_f32(row + 4) }?;
-            let row_z = unsafe { safe_read_f32(row + 8) }?;
-            // The engine's dot includes `dir.w * row.w`, and `dir.w` is zero after its own
-            // normalise -- so three terms is the same arithmetic, not a simplification of it.
-            let dot = unit[2].mul_add(row_z, unit[0].mul_add(row_x, unit[1] * row_y));
-            if !dot.is_finite() {
-                return None;
-            }
-            *component = dot * scale;
-        }
-        Some(FloatVector4::new(local[0], local[1], local[2], local[3]))
+    /// The consume side is `FUN_1403cd770` -- `MOVUPS XMM0,[RCX+0x10]; MOVAPS [RDX],XMM0; RET` --
+    /// called by `FUN_1403cbff0` on `chrManipulator ?? manipulator`. With the swizzle that is one
+    /// object, so this is the same field `FUN_1403cdc20` publishes into and the divergence that
+    /// starved locomotion cannot recur.
+    ///
+    /// `w` is `dot(direction, modelMatrix.row4)`, row4 being the TRANSLATION row, so it tracks the
+    /// creature's position and is meant to. `[vt+0x50]` computes the same value.
+    pub(crate) fn published_move_vector(self) -> Option<[f32; 4]> {
+        read_vec4(self.real_manipulator()? + manipulator::PUBLISHED_MOVE_VECTOR)
     }
 
-    /// What we STAGED at [`manipulator::PENDING_MOVE_VECTOR`], read back.
-    ///
-    /// Half of the three-way discriminator below; see [`Self::published_move_vector`].
-    pub(crate) fn staged_move_vector(self) -> Option<[f32; 3]> {
-        read_vec3(self.real_manipulator()? + manipulator::PENDING_MOVE_VECTOR)
-    }
-
-    /// What the engine has PUBLISHED at `ChrManipulator+0x10`, read back.
-    ///
-    /// # This read ANSWERED the question, and the answer is that the consumers read a DIFFERENT
-    /// OBJECT than the one the engine publishes into
-    ///
-    /// The run said: `staged == published` exactly, `proxyFlags == 0`, `rootMotion2 == 0`. So
-    /// `[vt+0x50]` runs, reads our staging slot and publishes it correctly -- and nothing turns it
-    /// into a locomotion clip. The cause is the thunk, and it is structural.
-    ///
-    /// `ChrCtrl+0x3b0` is `chrManipulator` and `ChrCtrl+0x18` is `manipulator`, and **fourteen
-    /// sites resolve the pair as `chrManipulator ?? manipulator`** -- so while the override is
-    /// installed, every one of them is handed OUR THUNK. Among them, from
-    /// `find-deobf-field-access.py 0x3b0`:
-    ///
-    /// ```text
-    /// 0x1403c8fef  FUN_1403c8fd0   <- PreBehaviorSafe@140401bd0   (the pre-behaviour step)
-    /// 0x1403cc060  FUN_1403cbff0   <- FUN_1403c8da0 <- FUN_1404016d0
-    /// 0x1403cc160  FUN_1403cbff0   (the same function, resolving it a second time)
-    /// 0x1403c8c44  UpdateAiLogic@140400960
-    /// 0x1403c8647  updatePos, and two more inside it
-    /// ```
-    ///
-    /// `FUN_1403cbff0` resolves the override and then reads `+0x70` off it at `0x1403cc0b9` --
-    /// the published move vector. But the engine never wrote the THUNK's `+0x70`: the forwarding
-    /// stub swaps `rcx` for the real `ComManipulator` before every forwarded slot, so
-    /// `[vt+0x50]`'s `FUN_1403cdc20` publishes into the REAL object. The consumer then reads the
-    /// thunk's, which is 0x170 bytes of zeroes that nothing ever writes.
-    ///
-    /// So the vector is published perfectly and read as zero. No locomotion clip, no root motion,
-    /// and a body held at a position constant to five decimals. Every observation, one cause.
-    ///
-    /// **The fix is not another write.** Mirroring fields into the thunk would be whack-a-mole
-    /// across fourteen call sites and an unknown number of fields. The object identity has to stop
-    /// diverging: swizzle the REAL `ComManipulator`'s vtable pointer to a patched copy of its own
-    /// (slot `+0x48` no-oped) and leave `ChrCtrl+0x3b0` NULL. Then goal selection is still dead,
-    /// every consumer reads the real object's real fields, and the `rcx` swap -- the thing that
-    /// created the divergence -- is not needed at all. Hazard to respect when doing it: with the
-    /// real object swizzled, slot `+0x08` MUST forward to the true destructor rather than
-    /// returning `this`, because the engine really will destroy that object.
-    ///
-    /// These reads stay. They are what found it and they are how the fix gets confirmed:
-    /// `published` non-zero with `rootMotion2` non-zero is the shape of a working possession.
-    pub(crate) fn published_move_vector(self) -> Option<[f32; 3]> {
-        read_vec3(self.real_manipulator()? + manipulator::PUBLISHED_MOVE_VECTOR)
-    }
-
-    /// `ChrCtrl.chrProxyFlags` -- kept as a control, NOT as a suspect. **The suspicion this was
-    /// added for is dead.**
+    /// `ChrCtrl.chrProxyFlags` -- kept as a logged control, NOT a suspect.
     ///
     /// `CS::ChrCtrl::ShouldUpdateAi` returns false when this is non-zero, and `[vt+0x50]` returns
-    /// on it before publishing anything -- so a latched non-zero value would have starved
-    /// movement while every write reported success. This crate's own co-location writes the field,
-    /// which made it the strongest suspect there was.
-    ///
-    /// It reads `0` on a possessed creature, measured. The co-location does not latch it, the gate
-    /// is open, and `[vt+0x50]` demonstrably runs. It stays logged because it is the one line of
-    /// defence against that gate closing for some other reason, and because a suspect ruled out by
-    /// measurement is worth keeping visible so nobody re-derives it.
+    /// on it before publishing anything, so a latched value would starve movement while every
+    /// write reported success. It reads `0` on a possessed creature, measured. It stays visible so
+    /// nobody re-derives the suspicion.
     pub(crate) fn chr_proxy_flags(self) -> Option<u32> {
         let at = self.chr_ctrl()? + chr_ctrl::CHR_PROXY_FLAGS;
         unsafe { safe_read_i32(at) }.map(|flags| flags as u32)
