@@ -10,6 +10,14 @@ A pattern is a hex string; use "??" for a wildcard byte, e.g.:
     python3 scripts/find-deobf-bytes.py "0fb683a8820000" "488b0d????????"
 
 Override the image with ER_DEOBF_BIN.
+
+The scan STOPS at 64 hits and says so ("hits=64+ (TRUNCATED ...)"), because a pattern loose
+enough to match dozens of sites is usually the wrong pattern rather than a long answer. Raise the
+cap with ER_DEOBF_MAX_HITS when you genuinely want the whole list -- but note that "hits=N" with
+no `+` is the only form that means "these are all of them", and an enumeration read off a
+truncated list is a negative nobody has actually proved. For "who touches struct field +N",
+reach for `scripts/find-deobf-field-access.py` instead: it decodes ModRM rather than matching one
+encoding, so it covers every base register and prefix in one pass and does not truncate.
 """
 import os
 import sys
@@ -19,7 +27,7 @@ DEFAULT_IMG = os.path.join(
 )
 IMG = os.environ.get("ER_DEOBF_BIN", DEFAULT_IMG)
 BASE = 0x140000000
-MAX_HITS = 64
+MAX_HITS = int(os.environ.get("ER_DEOBF_MAX_HITS", "64"))
 
 
 def parse(pat: str):
@@ -68,9 +76,21 @@ def main() -> int:
     for pat in sys.argv[1:]:
         want, mask = parse(pat)
         hits = search(data, want, mask)
+        # THE `+` IS LOAD-BEARING. A bare count reads as "this is the complete set", and an
+        # agent that concluded "nothing else writes this field" off a silently-capped list would
+        # be proving a negative out of a truncated sample.
+        truncated = len(hits) >= MAX_HITS
         print(
-            "%s  hits=%d  %s"
-            % (pat, len(hits), " ".join(hex(h + BASE) for h in hits))
+            "%s  hits=%d%s  %s%s"
+            % (
+                pat,
+                len(hits),
+                "+" if truncated else "",
+                " ".join(hex(h + BASE) for h in hits),
+                "  (TRUNCATED at ER_DEOBF_MAX_HITS=%d -- NOT the whole set)" % MAX_HITS
+                if truncated
+                else "",
+            )
         )
     return 0
 

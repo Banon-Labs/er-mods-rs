@@ -394,6 +394,39 @@ pub(crate) mod chr_ctrl {
     /// drain feeds it to `CSChrPhysicsModule::SetOrientation`, which feeds `EulerToQuat`.
     /// RE-ONLY (`unk110` in the crate).
     pub(crate) const RAGDOLL_ROTATION: usize = 0x110;
+    /// `ChrCtrl.scaleSizeX`, three consecutive `f32` (`X`, `Y`, `Z` at `+0x2d4/+0x2d8/+0x2dc`).
+    ///
+    /// **THE LOCK-ON ANCHOR, reached the only way it can be reached.** A character's lock-on
+    /// point is a dummy polygon on its model (ids 220..228, chosen by `NpcParam.lockGazePoint0..7`)
+    /// and there is no per-character offset field anywhere in that chain -- so the anchor moves
+    /// only when the model does. `ChrCtrl::RecalculateChrMatrix` multiplies these three into
+    /// `ChrCtrl.modelMatrix` and copies that matrix into `locationMtx44ChrEntity->mtx`, the root
+    /// the dummy lookup resolves against. See [`crate::possess::body_size`] for the whole trace.
+    ///
+    /// This is the RENDER transform and only the render transform: `ChrCtrl::SetScaleSize` never
+    /// touches `CSChrPhysicsModule`, so the body's hknp capsule, its hurtbox and its own
+    /// `hitHeight` are all unaffected by writing it.
+    ///
+    /// **BOTH BUILDS, byte-proven, and the pattern matches UNIQUELY in each image.** The whole of
+    /// `ChrCtrl::SetScaleSize` is fifty-three bytes, and they are the SAME fifty-three bytes in
+    /// both -- 1.16.2 `0x1403c8350`, 1.17 `0x1403c8360`, the `+0x10` shift the rest of the
+    /// `ChrCtrl` module has. Every offset this table needs is one of its displacements:
+    ///
+    /// ```text
+    /// f2 0f 10 02              MOVSD XMM0,[RDX]           ; scale.xy
+    /// f2 0f 11 81 d4 02 00 00  MOVSD [RCX+0x2d4],XMM0     ; scaleSizeX | scaleSizeY
+    /// 8b 42 08                 MOV   EAX,[RDX+0x8]        ; scale.z
+    /// 89 81 dc 02 00 00        MOV   [RCX+0x2dc],EAX      ; scaleSizeZ
+    /// 48 8b 41 10              MOV   RAX,[RCX+0x10]       ; ChrCtrl.owner   (OWNER)
+    /// f2 0f 10 02              MOVSD XMM0,[RDX]
+    /// 48 8b 88 90 01 00 00     MOV   RCX,[RAX+0x190]      ; ChrIns.modules  (chr_ins::MODULES)
+    /// 4c 8b 01                 MOV   R8,[RCX]             ; modules[0]      (modules::DATA)
+    /// f2 41 0f 11 40 54        MOVSD [R8+0x54],XMM0       ; the mirror -- chr_data_module::SCALE
+    /// 8b 42 08                 MOV   EAX,[RDX+0x8]
+    /// 41 89 40 5c              MOV   [R8+0x5c],EAX
+    /// c3                       RET
+    /// ```
+    pub(crate) const SCALE_SIZE: usize = 0x2d4;
     /// `ChrCtrl+0x3b0` -- THE MANIPULATOR OVERRIDE SLOT, and the whole reason this mod is
     /// possible. RE-ONLY (`unk3b0` in the crate).
     ///
@@ -579,6 +612,14 @@ pub(crate) mod chr_data_module {
     /// `hp`, `i32`. Proven by `CSChrDataModule::GetHpRate` being `[+0x138] / [+0x13c]`.
     /// Cross-checked.
     pub(crate) const HP: usize = 0x138;
+    /// THE MIRROR of [`super::chr_ctrl::SCALE_SIZE`] -- three `f32` at `+0x54/+0x58/+0x5c`.
+    ///
+    /// Written by `ChrCtrl::SetScaleSize` in the same breath as the `ChrCtrl` copy (the byte proof
+    /// is on that constant), and this crate writes both for the same reason the game does: a
+    /// consumer that reads the mirror instead of the source must not see a body of a different
+    /// size from the one the renderer is using. Which of the two any given consumer reads was not
+    /// enumerated, and writing both is cheaper than finding out.
+    pub(crate) const SCALE_SIZE: usize = 0x54;
 }
 
 /// `CSChrPhysicsModule`.

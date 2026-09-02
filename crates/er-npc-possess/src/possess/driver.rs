@@ -24,7 +24,7 @@ use crate::moveset::{derived, table as moveset_table};
 use crate::possess::game::{self, Chr};
 use crate::possess::teardown::{Reason, Step, Teardown};
 use crate::possess::thunk::Thunk;
-use crate::possess::{intent, layout};
+use crate::possess::{body_size, intent, layout};
 use crate::settings::TargetMode;
 use crate::spawn::game as spawn_game;
 use crate::spawn::placement;
@@ -42,6 +42,21 @@ const ALPHA_OPAQUE: f32 = 1.0;
 /// 0-999 idle band that the animation-id banding convention reserves, and the graph's `%04d`
 /// formatting spells zero as four digits rather than as a special case.
 const IDLE_ANIMATION: i32 = 0;
+
+/// THE BODY'S RENDER SCALE while somebody else is being worn, and what it was before.
+///
+/// `None` on a [`Possessing`] means the body was left at its own size -- either the two heights
+/// did not read, or the creature is close enough to player-sized that scaling would be a write
+/// with nothing to show for it. Both are ordinary; see [`body_size`].
+#[derive(Clone, Copy)]
+struct BodyScale {
+    /// What `ChrCtrl+0x2d4..0x2dc` held before the possession. Restored verbatim, rather than
+    /// assumed to be `1.0`, so a body another mod had already scaled goes back to ITS size and not
+    /// to ours.
+    original: [f32; 3],
+    /// ...and what it is set to while the possession lasts: the same vector with `Y` multiplied.
+    worn: [f32; 3],
+}
 
 /// A creature THIS MOD CREATED, carried by whatever is wearing it so the teardown knows there is
 /// something to give back.
@@ -99,6 +114,9 @@ struct Possessing {
     player: Chr,
     /// Set only when this mod created the creature; see [`SpawnedBody`].
     spawned: Option<SpawnedBody>,
+    /// THE LOCK-ON ANCHOR, expressed as the only thing that moves it; see [`BodyScale`] and
+    /// [`body_size`]. `None` means the body was left at its own size.
+    body_scale: Option<BodyScale>,
     /// Kept alive for exactly as long as `ChrCtrl+0x3b0` points at it. Dropping it frees the page,
     /// so it must outlive the clear -- which is why teardown owns this whole struct and drops it
     /// only after [`Step::ClearManipulatorOverride`] has run.
@@ -238,6 +256,14 @@ impl NpcPossessionEngine {
         if let Some(offset) = state.debug_flags_offset {
             state.player.set_no_attack(offset, true);
         }
+        // THE LOCK-ON ANCHOR. Re-asserted with the rest rather than written once at possession
+        // start, for the cheapest of reasons: nothing in the game recomputes `scaleSize` (its only
+        // writers are the `ChrCtrl` constructor and `SetScaleSize`, whose one caller is character
+        // construction), so this is insurance against a respawn rebuilding the body mid-possession
+        // rather than a fight with a per-frame writer. Three float stores and their mirror.
+        if let Some(scale) = state.body_scale {
+            state.player.set_body_scale(scale.worn);
+        }
         // The co-location target for THIS frame, which is where the body is about to be put. See
         // the doc above for why the fall path needs this and the invincibility bit cannot supply
         // it.
@@ -252,7 +278,11 @@ impl NpcPossessionEngine {
         let flags = state
             .debug_flags_offset
             .is_none_or(|offset| state.player.set_no_attack(offset, false));
-        invincible && alpha && muted && flags
+        // Back to whatever it was, which is not necessarily 1.0 -- see [`BodyScale::original`].
+        let scale = state
+            .body_scale
+            .is_none_or(|scale| state.player.set_body_scale(scale.original));
+        invincible && alpha && muted && flags && scale
     }
 
     /// Cancel a spawn that never became drivable, or that the player pressed the key out of.
@@ -1112,6 +1142,71 @@ impl NpcPossessionEngine {
         );
     }
 
+    /// Decide how big the player's body has to be for the lock-on reticle to land on the creature,
+    /// apply it, and say what was decided.
+    ///
+    /// **Always logs, including when it does nothing.** "My reticle is still at my feet" needs an
+    /// answer that is not "read the source", and the four ways this ends are four different
+    /// problems: a height did not read, a height is not a plausible body, there was genuinely
+    /// nothing to do, or the write did not land.
+    ///
+    /// The failed-write case still answers `Some`, and that is deliberate rather than sloppy: the
+    /// record is what the release path restores from, so returning `None` after a write that
+    /// PARTLY landed would leave the body carrying a scale nothing will ever take off it.
+    fn plan_body_scale(creature: Chr, player: Chr) -> Option<BodyScale> {
+        let (Some(creature_height), Some(player_height)) =
+            (creature.hit_height(), player.hit_height())
+        else {
+            possess_log(format_args!(
+                "lock-on anchor: NOT adapted -- CSChrPhysicsModule+0x340 hitHeight did not read on \
+                 the creature, the player, or both. The reticle stays on the body's own model, \
+                 which on a large creature draws it near the feet"
+            ));
+            return None;
+        };
+        let Some(scale) = body_size::scale_for(creature_height, player_height) else {
+            possess_log(format_args!(
+                "lock-on anchor: NOT adapted -- hitHeight read {creature_height:.2} m (creature) \
+                 and {player_height:.2} m (player), and at least one of those is not a plausible \
+                 body. The reticle stays on the body's own model"
+            ));
+            return None;
+        };
+        if !body_size::worth_applying(scale) {
+            possess_log(format_args!(
+                "lock-on anchor: nothing to do -- the creature is {creature_height:.2} m against \
+                 the body's {player_height:.2} m, so the reticle is already where it belongs"
+            ));
+            return None;
+        }
+        let Some(original) = player.body_scale() else {
+            possess_log(format_args!(
+                "lock-on anchor: NOT adapted -- ChrCtrl+0x2d4 did not read on the player's body, \
+                 so there is nothing to put back afterwards and nothing is written"
+            ));
+            return None;
+        };
+        let worn = body_size::worn_scale(original, scale);
+        if player.set_body_scale(worn) {
+            possess_log(format_args!(
+                "lock-on anchor: the body is stretched {scale:.2}x VERTICALLY ({creature_height:.2} \
+                 m creature / {player_height:.2} m body), which lifts its lock-on dummy to the \
+                 creature's own height. ChrCtrl+0x2d8 {:.2} -> {:.2}; X and Z are untouched. This \
+                 is the RENDER transform only -- the body's hurtbox and collision do not move -- \
+                 and it is what the reticle is drawn on, because the body is what your lock-on \
+                 finds while the creature is the subject",
+                original[1], worn[1],
+            ));
+        } else {
+            possess_log(format_args!(
+                "lock-on anchor: the {scale:.2}x vertical stretch did NOT fully land on \
+                 ChrCtrl+0x2d8. The reticle may still be low, and release will put {original:?} \
+                 back regardless"
+            ));
+        }
+        Some(BodyScale { original, worn })
+    }
+
     /// Wear `creature`: install the thunk, move the camera, neuter the player's body and build the
     /// moveset.
     ///
@@ -1162,10 +1257,15 @@ impl NpcPossessionEngine {
         let camera = camera::Session::begin(creature.address(), chr_id);
         possess_log(format_args!("{}", camera.log_line()));
         let moveset = Self::build_moveset(chr_id, request);
+        // AFTER everything that can still refuse, like the camera above: this one writes the
+        // player's body rather than the creature's, so a later refusal would leave the body
+        // wearing a size nothing is going to take off it.
+        let body_scale = Self::plan_body_scale(creature, player);
         let state = Possessing {
             creature,
             player,
             spawned,
+            body_scale,
             thunk,
             debug_flags_offset,
             release_on_death: request.target.release_on_death,

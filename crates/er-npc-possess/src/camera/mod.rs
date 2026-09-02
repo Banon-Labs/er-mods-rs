@@ -61,7 +61,14 @@
 //!   hurtbox does NOT follow it -- that function writes `ChrCtrl+0x2d4` and mirrors to
 //!   `CSChrDataModule+0x54`, and never touches `CSChrPhysicsModule` where `hitHeight` lives. The
 //!   camera would then have to be driven from the same scalar the scale used, not from
-//!   `hitHeight`. Nothing in this crate applies a visual scale today.
+//!   `hitHeight`.
+//!
+//!   [`crate::possess::body_size`] now DOES apply one -- and this layer is still correct, which is
+//!   the part worth reading rather than the part worth panicking about. It scales the possessing
+//!   player's own invisible BODY, to lift its lock-on dummy to the creature's height. The camera's
+//!   subject is the CREATURE, whose scale is untouched, so `hitHeight` remains the right scalar
+//!   here. The warning above still stands for the case it was written about: a scale applied to
+//!   the SUBJECT.
 
 // The size law, the offset table and the derived-file renderer are pure, so `cargo test` proves
 // them on the host with no game running. Only `game` touches live memory.
