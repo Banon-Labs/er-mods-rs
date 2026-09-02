@@ -44,9 +44,32 @@
 //! `+Z` basis vector XOR'd with `(-0.0, -0.0, -0.0, -0.0)`, i.e. **negated**. So the character's
 //! forward is minus the image of local `+Z`: the models face local `-Z`.
 //!
-//! `right`, by contrast, did NOT change: `forward x up` works out to `(cos yaw, 0, -sin yaw)`,
-//! which is the image of local `+X` and exactly what this module already had. Only one of the two
-//! basis vectors was wrong, which is why strafing looked no worse than walking.
+//! # `right` WAS ALSO WRONG, and the note here used to say otherwise
+//!
+//! An earlier version of this section concluded that `right` did not need changing, deriving
+//! `forward x up = (cos yaw, 0, -sin yaw)` and calling that the image of local `+X`. The
+//! arithmetic is right and the conclusion is wrong, which is the worst shape a note can have: it
+//! reads as proof. `forward x up` is the RIGHT-hand-rule construction, and Elden Ring is
+//! left-handed (`+X` right, `+Y` up, `+Z` forward), so in this basis that cross product yields
+//! LEFT. A model whose nose is local `-Z` -- which the forward proof above establishes -- has its
+//! right hand at local `-X`, not `+X`.
+//!
+//! So `right = (-cos yaw, 0, sin yaw)`, the negation of what shipped between 2026-09-02 and the
+//! fix below.
+//!
+//! **The evidence for this one is the OBSERVABLE, and that is stated rather than dressed up.**
+//! There is no `GetRight`/`GetSide` export to pair with `GetForward` -- searched, none exists --
+//! and the one binary route that looked promising is ambiguous: `CalcSelfToDirectionPos` sets
+//! `AI_DIR_TYPE_L` to `-row1`, which WOULD settle it, except that the same switch sets
+//! `AI_DIR_TYPE_F` to `+row3` while `GetPhysicsOrientation` proves the body's forward is `-row3`.
+//! Those two cannot both be the body's own frame, so the `DIR_TYPE` frame is rotated by something
+//! this note cannot pin, and reading `L` out of it would be a guess wearing a citation.
+//!
+//! What is not ambiguous: pressing A (`stick.x = -1`) rotated every creature CLOCKWISE viewed
+//! from above -- toward its own right -- consistently and across creature types. A left input that
+//! turns the body right is a sign error on the lateral vector and nothing else. The handedness
+//! argument above agrees with that measurement, which is why it is kept; the measurement is what
+//! decides it.
 //!
 //! # The race this module still has to lose safely
 //!
@@ -313,10 +336,11 @@ pub(crate) fn intent(
         stick
     };
     let (sin, cos) = yaw.sin_cos();
-    // forward * stick.y + right * stick.x, with forward = (-sin, -cos) and right = (cos, -sin).
-    // The MINUS on forward is the whole of the 2026-09-02 fix; see the module note.
-    let dx = cos.mul_add(stick.x, -sin * stick.y);
-    let dz = (-sin).mul_add(stick.x, -cos * stick.y);
+    // forward * stick.y + right * stick.x, with forward = (-sin, -cos) and right = (-cos, sin).
+    // BOTH basis vectors are negated against the naive reading; see the module note for which
+    // evidence pins which.
+    let dx = (-cos).mul_add(stick.x, -sin * stick.y);
+    let dz = sin.mul_add(stick.x, -cos * stick.y);
     let reach = REACH * speed_scale;
     IntentWrite {
         target: [
@@ -515,11 +539,35 @@ mod tests {
     /// Right on the stick is right of the body, which is the other half of the basis and the half
     /// a sign error hides in.
     #[test]
-    fn right_on_the_stick_is_ninety_degrees_clockwise_from_forward() {
+    fn right_on_the_stick_is_the_bodys_own_right_which_is_minus_x_at_yaw_zero() {
         let at = [0.0, 0.0, 0.0];
         let right = drive(at, 0.0, Stick::from_axes(1.0, 0.0), 1.0);
-        assert!(close(right.target[0], REACH), "{:?}", right.target);
+        assert!(close(right.target[0], -REACH), "{:?}", right.target);
         assert!(close(right.target[2], 0.0), "{:?}", right.target);
+        // ...and LEFT is the other way, which is the whole of the bug this pins: pressing A used
+        // to send the body clockwise, toward its own right.
+        let left = drive(at, 0.0, Stick::from_axes(-1.0, 0.0), 1.0);
+        assert!(close(left.target[0], REACH), "{:?}", left.target);
+    }
+
+    /// THE OBSERVABLE, as an assertion. At yaw 0 the body faces `-Z`; a LEFT push must send it to
+    /// the `+X` side of that heading, which is counter-clockwise viewed from above. This is the
+    /// test that fails if anyone re-derives `right` from `forward x up` and trusts the answer.
+    #[test]
+    fn a_left_push_turns_the_body_counter_clockwise() {
+        let at = [0.0, 0.0, 0.0];
+        for yaw in [0.0_f32, 1.0, -2.296, 3.0] {
+            let left = drive(at, yaw, Stick::from_axes(-1.0, 0.0), 1.0);
+            let (sin, cos) = yaw.sin_cos();
+            // The cross product of forward with the requested direction, about +Y. Forward is
+            // (-sin, -cos); a counter-clockwise turn puts the target on the positive side.
+            let cross = (-sin) * left.target[2] - (-cos) * left.target[0];
+            assert!(
+                cross > 0.0,
+                "yaw {yaw} turned the wrong way: {:?}",
+                left.target
+            );
+        }
     }
 
     /// RELEASING THE STICK MUST STOP THE CREATURE. A stale target is a creature that keeps
@@ -794,9 +842,10 @@ mod tests {
         // Yaw 0 faces -Z, so "no turn asked for" is a target with no X component at all.
         assert!(close(straightened.target[0], 0.0), "{straightened:?}");
         assert!(close(straightened.target[2], -REACH), "{straightened:?}");
-        // ...and the same push outside the deadzone keeps its angle.
+        // ...and the same push outside the deadzone keeps its angle. Negative, because a push
+        // to the body's right is toward `-X` at yaw 0.
         let kept = intent(at, 0.0, nudged, 1.0, 5.0);
-        assert!(kept.target[0] > 0.1, "{kept:?}");
+        assert!(kept.target[0] < -0.1, "{kept:?}");
     }
 
     /// Straightening must not change how hard the stick was pushed -- a walk that became a run
@@ -824,7 +873,7 @@ mod tests {
         for junk in [f32::NAN, f32::INFINITY, -1.0] {
             let out = intent(at, 0.0, right, 1.0, junk);
             assert!(out.moving(), "{junk}");
-            assert!(close(out.target[0], REACH), "{junk} {out:?}");
+            assert!(close(out.target[0], -REACH), "{junk} {out:?}");
         }
     }
 }

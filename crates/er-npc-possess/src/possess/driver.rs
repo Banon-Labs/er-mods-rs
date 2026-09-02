@@ -1119,7 +1119,8 @@ impl NpcPossessionEngine {
         if stick.is_some() && telemetry_due {
             state.last_movement_log = Some(state.frames);
             possess_log(format_args!(
-                "movement: input READ -- gait={} target=({:.2}, {:.2}, {:.2}) turnTarget={} | \
+                "movement: input READ -- c{:04} gait={} target=({:.2}, {:.2}, {:.2}) \
+                 turnTarget={} | \
                  creature at ({:.2}, {:.2}, {:.2}) yaw={:.3} | field read-back: walk_type={:?} \
                  want_to_move_to={:?} | staged={:?} published={:?} proxyFlags={:?} \
                  rootMotion2={:?} posNow={:?} anim={:?} gaitScale={:.2}. THE READ, and this \
@@ -1134,6 +1135,10 @@ impl NpcPossessionEngine {
                  the body's own displacement: NON-ZERO with posNow constant is a clip playing \
                  against something that holds the body. proxyFlags is a control, not a suspect: \
                  it reads 0",
+                // THE CREATURE, first, because sliding is creature-DEPENDENT now: some move
+                // correctly and at least one does not, so a line that describes the symptom
+                // without naming the subject cannot be acted on.
+                state.chr_id,
                 write.walk_type,
                 write.target[0],
                 write.target[1],
