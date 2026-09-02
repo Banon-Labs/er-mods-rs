@@ -31,10 +31,23 @@ changed in 1.17 can still match on its unchanged prologue while its behaviour di
 mid-function match is worse than no match. Before any mapped address is written into code, read
 the 1.17 function and confirm it does the same job.
 
+WHERE THE ANCHORS COME FROM (2026-09-01)
+----------------------------------------
+Pass 2 settles an ambiguous address by the delta of the nearest mapping it trusts. Until this
+date the only mappings it trusted were other addresses in the SAME invocation that happened to
+match uniquely -- so mapping one address alone could never use an anchor at all, and the answer
+depended on what else the caller had typed. It now also reads `VERIFIED_LEDGER`, where every pair
+has been compared instruction by instruction by `verify-rva-map-1170.py`. Measured over every
+`.pdata` entry of the three regions `er-effects-rs-4uw5.13` names, one address at a time:
+0x87xxxx 67/278 -> 271/278, 0x92xxxx 37/501 -> 355/501, 0x9axxxx 24/342 -> 265/342.
+`scripts/measure-1170-anchor-coverage.py` is what produced those numbers and will produce them
+again for any range.
+
 USAGE
     python3 scripts/map-rvas-1162-to-1170.py 0x1407ada40 0x14025f5f0
     python3 scripts/map-rvas-1162-to-1170.py --from-refusal-log <er-quickload-autoload-debug.log>
     python3 scripts/map-rvas-1162-to-1170.py --tsv docs/recon/rva-map-1162-to-1170.tsv 0x...
+    python3 scripts/map-rvas-1162-to-1170.py --no-anchors 0x...   # ledger ignored
 
 The refusal-log mode reads the addresses `er-hook` refused at runtime, which is the authoritative
 work list: it is what this build actually tried to hook, not what someone thought it hooks.
@@ -68,6 +81,22 @@ KNOWN_MAPPINGS = {
     0x14025F5F0: 0x14025F5D0,
     # The call site in GetWwiseSettings that Seamless Co-op uses to locate GetAllocator.
     0x1422222D8: 0x142224238,
+}
+# The four addresses er-effects-rs-4uw5.13 was filed about, with their 1.17 values established
+# INDEPENDENTLY of this matcher: `docs/recon/rva-map-1162-to-1170.needed-verified.tsv` carries all
+# four at IDENTICAL-WHOLE, ratio 1.000, BOTH-ENTRIES, derived from the whole-image `.pdata`
+# alignment rather than from any byte search.
+#
+# Every one of them was UNRESOLVED here until 2026-09-01, and every one of them resolves now ONLY
+# because the ledger supplies a nearby delta. That is what makes this fixture worth its runtime:
+# delete one of the eight anchor rows added to `rva-map-1162-to-1170.verified.tsv` and `--selftest`
+# goes red naming the address, which is the only thing standing between those rows and somebody
+# tidying away a table entry that nothing appears to read.
+ANCHORED_MAPPINGS = {
+    0x140875590: 0x140876580,  # PROFILE_SELECT_LIST_BUILDER_RVA
+    0x140920C90: 0x140921E30,  # SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA
+    0x1409A4670: 0x1409A5810,  # PROFILE_LOAD_ACTIVATE_RVA / CAP_LOAD_ACTIVATE_RVA
+    0x1409A4ED0: 0x1409A6070,  # PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA
 }
 # The matcher searches +-window around the source offset first, then widens. 1.17 moved code by
 # far more than the intra-version staircase this default was tuned for, so start wide.
@@ -174,9 +203,43 @@ def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_retu
     return bytes(pattern), bytes(mask)
 
 
+# How many shape matches may be collected before the signature is treated as identifying nothing.
+#
+# THIS USED TO BE 9, AND THE 9 WAS COSTING CORRECT ANSWERS. The loop below appended `while
+# len(hits) <= 8`, so a signature matching 51 times reported the first 9 and pass 2 chose among
+# those. Measured on the address this ticket is about: `0x1409a4670`'s real 1.17 address is
+# `0x1409a5810`, which is the THIRTY-NINTH of 51 shape matches at the 40-byte rung -- thirty past
+# where the list ended. `rva-map-1162-to-1170.tsv` records the consequence in its own words,
+# "UNRESOLVED: 9 shape matches, none at the nearest anchor's delta (+0x11a0)", and +0x11a0 is
+# exactly the delta `0x1409a5810` sits at. The anchor was right, the delta was right, and the
+# answer had been trimmed off the list before pass 2 could see it.
+#
+# The ceiling is kept, because an over-wildcarded pattern really can match thousands of times and
+# collecting them all is a memory problem rather than evidence. What CHANGED with it is what
+# reaching it MEANS: a list this long is now a refusal in `map_one` rather than a list, and the
+# reason is that letting it through made the answer depend on the cutoff.
+#
+# THE ARBITRARINESS THAT FORCED THAT, measured over all 1,121 `.pdata` entries of the three regions
+# this ticket names. 227 of them produce a list that reaches the ceiling -- compiler-generated
+# unwind funclets and vtable stubs, e.g. `0x1409a07a0` and fourteen neighbours 0x40 apart, whose
+# masked shape is `sub rsp,N; mov [rsp],-2; ...; lea rax,[rip+X]; mov [rdx],rax` with every
+# displacement wildcarded. Pass 2 picks the candidate at the anchor's delta, and since a delta
+# names exactly one address, that reduces to "is `va + delta` in the list" -- which for a truncated
+# list means "is it among the 2048 LOWEST-ADDRESSED matches". 148 of the 227 were resolved on that
+# basis and 79 were not, and nothing distinguishes the two groups except where the scan stopped.
+#
+# The alternative was to test `va + delta` against the pattern directly, which is sound and would
+# resolve more. It is not taken because it answers the wrong question: when a shape occurs
+# thousands of times, "the bytes at the predicted address have that shape too" is nearly free, and
+# the resolution would rest entirely on the region delta with the byte check contributing nothing
+# while appearing to corroborate. The region-delta method already exists and says so plainly --
+# `docs/recon/rva-map-1162-to-1170.functions.tsv`, paired by masked-signature identity ACROSS
+# `.pdata` -- and that is where an address of this shape should be looked up.
+CANDIDATE_CEILING = 2048
+
+
 def find_unique(haystack, pattern, mask):
-    """Every offset where `pattern` matches under `mask`, capped so an over-wildcarded signature
-    reports as ambiguous rather than silently taking the first of thousands."""
+    """Every offset where `pattern` matches under `mask`, up to `CANDIDATE_CEILING` of them."""
     anchor_at = next((i for i, keep in enumerate(mask) if keep), None)
     if anchor_at is None:
         return []
@@ -193,7 +256,7 @@ def find_unique(haystack, pattern, mask):
     anchor = pattern[best_start : best_start + best_len]
     hits = []
     at = haystack.find(anchor)
-    while at >= 0 and len(hits) <= 8:
+    while at >= 0 and len(hits) < CANDIDATE_CEILING:
         start = at - best_start
         if start >= 0 and start + len(pattern) <= len(haystack):
             window = haystack[start : start + len(pattern)]
@@ -218,6 +281,16 @@ def map_one(source, target, va, args):
         kept = sum(1 for keep in mask if keep)
         if len(hits) == 1:
             return BASE + hits[0], f"unique, {len(pattern)}B signature, {kept}B fixed"
+        if len(hits) >= CANDIDATE_CEILING:
+            # Not a candidate list -- a statement that this shape is everywhere. Refused here so
+            # pass 2 never sees it, because pass 2 would answer from the anchor's delta alone
+            # while the printed note read as though a byte match had confirmed it. See the
+            # measurement in `CANDIDATE_CEILING`'s comment, and use the region-delta map
+            # (`rva-map-1162-to-1170.functions.tsv`) for addresses of this shape.
+            return None, (
+                f"UNRESOLVED: over-wildcarded, >= {CANDIDATE_CEILING} shape matches at "
+                f"{len(pattern)}B ({kept}B fixed); this signature identifies nothing"
+            )
         if len(hits) > 1:
             # Two functions can share a shape -- ELDEN RING has more than one getter built exactly
             # like `GetScadutreeBlessing`. Report every candidate and let the second pass choose
@@ -237,15 +310,90 @@ def map_one(source, target, va, args):
 # version of this demanded unanimity over 0x40000 and resolved nothing.
 REGION_RADIUS = 0x8000
 
+# The curated ledger, read as an ANCHOR POOL rather than as a lookup table.
+#
+# WHY IT IS READ AT ALL. Until this was wired up, pass 2's anchors came only from OTHER addresses
+# in the same invocation that happened to map uniquely -- so mapping one address alone could never
+# use an anchor, and the tool's answer depended on what else the caller happened to type on the
+# command line. Every pair in this file was verified instruction-by-instruction by
+# `verify-rva-map-1170.py`, which is far better evidence than a same-run byte match, and it was
+# being thrown away. The file already held six rows inside `0x9axxxx`, one of them 0x720 from the
+# address that reported "no anchor nearby".
+#
+# WHAT IT IS NOT. It is not consulted for the answer. An anchor contributes only its DELTA, and
+# only to arbitrate between shape candidates the matcher found in the image itself; a row for the
+# very address being mapped is skipped (see `regional_delta`), because reading an address out of a
+# table is a lookup and reporting it as a derivation would launder one into the other.
+#
+# AND WHY `rva-map-1162-to-1170.needed-verified.tsv` IS NOT THE DEFAULT, though it is far larger
+# and `--anchors` will happily take it. Its pairs come from `functions.tsv`, which is the
+# whole-image REGION-DELTA alignment. Anchoring on them would feed the region delta back in as the
+# evidence for choosing by region delta -- exactly the circularity that makes an over-wildcarded
+# signature worthless here (see `CANDIDATE_CEILING`). The curated ledger's rows were each
+# established by a comparison of their own.
+VERIFIED_LEDGER = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.verified.tsv")
 
-def resolve_all(source, target, addresses, args):
-    """Map every address, then use the unambiguous results to settle the ambiguous ones.
+# Verdicts whose row may anchor. Every one of these asserts the two WHOLE bodies were compared and
+# agreed, which is what makes the pair -- and therefore its delta -- a fact worth deferring to.
+#
+# The prefix verdicts are deliberately absent. `IDENTICAL` stopped at a `ret` or at the decode
+# limit and says nothing about the rest of the body; `IDENTICAL-SHORT` and `NEAR` say less than
+# that. Anchoring on one would let a pair established by a short prefix match arbitrate between
+# candidates for its neighbour -- the matcher's own weakness, promoted to a tiebreaker.
+ANCHOR_VERDICTS = frozenset(
+    (
+        "BYTE-IDENTICAL",
+        "IDENTICAL-WHOLE",
+        "IDENTICAL-LEAF",
+        # Proved over its whole body and refused a detour for being too short to hold a JMP. The
+        # refusal is about MinHook, not about whether the pair is right, so it anchors.
+        "IDENTICAL-LEAF-NOPATCH",
+        # Bodies differ, patch sites do not -- and the comparison still covered both bodies in
+        # full, so the pair is established.
+        "PATCH-SITE-IDENTICAL",
+    )
+)
 
-    Pass 1 keeps only signatures that matched exactly once -- strong evidence on its own. Pass 2
-    takes each remaining address's candidate list and keeps the candidate whose delta equals the
-    delta every nearby pass-1 mapping agrees on. Anything that survives neither pass is reported
-    UNRESOLVED, which is the honest answer: a wrong address here is a mid-function detour, and a
-    blank cell costs a Ghidra lookup while a wrong one costs a crash.
+
+def load_anchors(paths):
+    """`(old_va, new_va)` pairs from verdict ledgers, for pass 2 to take deltas from.
+
+    Rows whose verdict is not in `ANCHOR_VERDICTS` are skipped rather than trusted quietly: a
+    `DIVERGES` row is evidence AGAINST its pair, and anchoring on it would spread one wrong
+    address across a whole region.
+    """
+    pairs = []
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        for line in open(path, encoding="utf-8"):
+            if line.startswith("#") or not line.strip():
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 3 or fields[2] not in ANCHOR_VERDICTS:
+                continue
+            try:
+                old_va, new_va = int(fields[0], 16), int(fields[1], 16)
+            except ValueError:
+                continue
+            # The ledgers are written in VAs; the whole-image maps are keyed by RVA. Both are
+            # unambiguous because the image base is 0x140000000 and no RVA reaches it.
+            if old_va < BASE:
+                old_va += BASE
+            if new_va < BASE:
+                new_va += BASE
+            pairs.append((old_va, new_va))
+    return pairs
+
+
+def map_all(source, target, addresses, args):
+    """Pass 1 alone: `(results, pending)`, where `pending` holds the shape-candidate lists.
+
+    Split out from `resolve_all` because pass 1 is the expensive half -- one masked scan of a 98 MB
+    image per address per ladder rung -- while pass 2 is arithmetic over its output. A caller that
+    wants to compare two anchor policies over the same addresses (see
+    `scripts/measure-1170-anchor-coverage.py`) must not pay for the scan twice, and must be sure
+    the two policies saw byte-for-byte the same candidate lists, which re-running cannot promise.
     """
     results = {}
     pending = {}
@@ -257,25 +405,45 @@ def resolve_all(source, target, addresses, args):
             pending[va] = [int(c, 16) for c in note[len("candidates:"):].split(",")]
         else:
             results[va] = (None, note)
+    return results, pending
+
+
+def settle(results, pending, anchors=()):
+    """Pass 2: choose among each pending address's candidates by the nearest anchor's delta.
+
+    `results` is updated in place and returned. `anchors` are verified `(old, new)` pairs from
+    `load_anchors`, which this treats exactly like a pass-1 unique result: as a delta, and only as
+    a delta.
+    """
 
     def regional_delta(va):
-        """Delta of the nearest uniquely-mapped address within `REGION_RADIUS`, or `None`."""
-        anchors = [
-            (abs(other - va), mapped - other)
-            for other, (mapped, note) in results.items()
-            if mapped is not None
-            and note.startswith("unique")
-            and abs(other - va) <= REGION_RADIUS
+        """Delta of the nearest established mapping within `REGION_RADIUS`, or `None`.
+
+        `other != va` is the whole of the circularity guard. A ledger row FOR this address would
+        otherwise be distance 0, win every time, and hand back the ledger's own answer dressed as
+        a derivation -- which is the one thing a reader of this table must be able to rule out.
+        """
+        candidates = [
+            (abs(other - va), mapped - other, kind)
+            for other, mapped, kind in (
+                [(o, m, "unique") for o, (m, n) in results.items()
+                 if m is not None and n.startswith("unique")]
+                + [(o, m, "ledger") for o, m in anchors]
+            )
+            if other != va and abs(other - va) <= REGION_RADIUS
         ]
-        return min(anchors)[1] if anchors else None
+        return min(candidates)[1:] if candidates else (None, None)
 
     for va, candidates in pending.items():
-        delta = regional_delta(va)
+        delta, kind = regional_delta(va)
         agreeing = [c for c in candidates if delta is not None and c - va == delta]
         if len(agreeing) == 1:
             results[va] = (
                 agreeing[0],
-                f"nearest-anchor delta {delta:+#x}, {len(candidates)} shape candidates",
+                # `kind` is in the note because the two are not equally strong and the reader
+                # cannot tell them apart afterwards: `unique` is one byte match made by this run,
+                # `ledger` is a pair a full instruction-by-instruction comparison accepted.
+                f"nearest-anchor delta {delta:+#x} ({kind}), {len(candidates)} shape candidates",
             )
         else:
             results[va] = (
@@ -285,13 +453,29 @@ def resolve_all(source, target, addresses, args):
             )
     return results
 
+
+def resolve_all(source, target, addresses, args, anchors=()):
+    """Map every address, then use the unambiguous results to settle the ambiguous ones.
+
+    Pass 1 keeps only signatures that matched exactly once -- strong evidence on its own. Pass 2
+    takes each remaining address's candidate list and keeps the candidate whose delta equals the
+    delta the nearest established mapping agrees on. Anything that survives neither pass is
+    reported UNRESOLVED, which is the honest answer: a wrong address here is a mid-function
+    detour, and a blank cell costs a Ghidra lookup while a wrong one costs a crash.
+    """
+    results, pending = map_all(source, target, addresses, args)
+    return settle(results, pending, anchors)
+
+
 def selftest(source, target, args):
-    """Assert the mapper reproduces the two mappings established by hand from the live process."""
+    """Assert the mapper reproduces mappings established without it, by three routes."""
     failures = []
     # `GetScadutreeBlessing` shares its shape with another getter, so it is only resolvable with a
     # nearby anchor -- exactly the situation the two-pass design exists for. 0x14025f2d0 maps
     # uniquely 0x320 bytes away with the same -0x20 delta; supplying it is what a real run gets
     # for free from the rest of the work list.
+    #
+    # Deliberately run with NO ledger, so this half stays a test of the byte path alone.
     anchor_fixture = 0x14025F2D0
     resolved = resolve_all(
         source, target, list(KNOWN_MAPPINGS) + [anchor_fixture], args
@@ -303,10 +487,41 @@ def selftest(source, target, args):
               f"{'UNMAPPED' if found is None else f'{found:#x}'}  ({note})")
         if found != expected:
             failures.append(old_va)
+
+    # THE CANDIDATE CEILING, pinned to the measurement that motivated raising it. If this ever
+    # stops holding, the number in `CANDIDATE_CEILING`'s comment has gone stale and the claim that
+    # a 9-deep list was losing answers no longer has anything behind it.
+    ceiling_va, ceiling_expected = 0x1409A4670, 0x1409A5810
+    pattern, mask = build_masked_pattern(source, ceiling_va - BASE, SIGNATURE_LADDER[0])
+    hits = [BASE + h for h in find_unique(target, pattern, mask)]
+    rank = hits.index(ceiling_expected) if ceiling_expected in hits else None
+    if rank is None or rank < 9:
+        print(f"  FAIL {ceiling_va:#x}: expected {ceiling_expected:#x} past the old 9-deep cap, "
+              f"found at index {rank} of {len(hits)}")
+        failures.append(ceiling_va)
+    else:
+        print(f"  ok   {ceiling_va:#x}: {ceiling_expected:#x} is match {rank + 1} of {len(hits)}, "
+              "which the old 9-deep candidate cap cut off")
+
+    # THE LEDGER PATH, and the reason the anchor rows are not decoration. Each address is resolved
+    # ALONE -- one-element work list -- so nothing but `verified.tsv` can supply the delta.
+    anchors = load_anchors([VERIFIED_LEDGER])
+    for old_va, expected in ANCHORED_MAPPINGS.items():
+        found, note = resolve_all(source, target, [old_va], args, anchors)[old_va]
+        state = "ok  " if found == expected else "FAIL"
+        print(f"  {state} {old_va:#x} -> expected {expected:#x}, got "
+              f"{'UNMAPPED' if found is None else f'{found:#x}'}  ({note})")
+        if found != expected:
+            failures.append(old_va)
+
     if failures:
         print(f"selftest FAILED for {len(failures)} known mapping(s)")
         return 1
-    print("selftest passed: both known 1.17 mappings re-derived from bytes alone")
+    print(
+        f"selftest passed: {len(KNOWN_MAPPINGS)} live-process mappings re-derived from bytes "
+        f"alone, and {len(ANCHORED_MAPPINGS)} more re-derived one at a time from "
+        f"{len(anchors)} ledger anchors"
+    )
     return 0
 
 def main():
@@ -338,7 +553,37 @@ def main():
         default=DEFAULT_WINDOW,
         help=f"initial +- search window (default {DEFAULT_WINDOW:#x})",
     )
+    parser.add_argument(
+        "--anchors",
+        action="append",
+        metavar="TSV",
+        help="verdict ledger whose verified pairs may supply pass-2 deltas; repeatable "
+        f"(default: {os.path.relpath(VERIFIED_LEDGER, ROOT)})",
+    )
+    parser.add_argument(
+        "--no-anchors",
+        action="store_true",
+        help="use only anchors this run derived itself, ignoring every ledger. What the tool did "
+        "before the ledger was wired in, kept so the difference can be measured rather than "
+        "asserted",
+    )
     args = parser.parse_args()
+
+    # RE-EXEC UNDER uv IF capstone IS ABSENT, the bootstrap `check-leaf-extent-pdata-coverage.py`
+    # and `verify-thunk-rva-1170.py` already carry. There is no system pip here, so
+    # `build_masked_pattern`'s decoder import died with a bare ImportError at exit 1 --
+    # indistinguishable from a real finding, and the reason `--selftest` could not be a check.sh
+    # gate. Doing it here rather than making check.sh spell `uv run --with capstone` keeps the step
+    # matching check.sh's own `python3 ...` step pattern, which does not recognise a `uv` command
+    # and would drop the gate from the summary and the total.
+    try:
+        import capstone  # noqa: F401
+    except ImportError:
+        try:
+            os.execvp("uv", ["uv", "run", "--with", "capstone", "python3", *sys.argv])
+        except OSError:
+            print("skipped: capstone unavailable and `uv` is not on PATH")
+            return 0
 
     for image in (SRC_IMAGE, DST_IMAGE):
         if not os.path.exists(image):
@@ -362,7 +607,10 @@ def main():
     if not wanted:
         sys.exit("no addresses: pass VAs or --from-refusal-log")
 
-    resolved = resolve_all(source, target, wanted, args)
+    anchors = () if args.no_anchors else load_anchors(args.anchors or [VERIFIED_LEDGER])
+    if anchors:
+        print(f"anchor pool: {len(anchors)} verified pairs")
+    resolved = resolve_all(source, target, wanted, args, anchors)
     rows = []
     mapped = 0
     for va in wanted:

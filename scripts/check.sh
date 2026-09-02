@@ -1052,6 +1052,27 @@ python3 "$repo_root/scripts/check-double-resolved-hook-targets.py" --selftest
 # without the two gitignored images.
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" --selftest
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
+# THE MAPPER'S OWN SELFTEST, wired 2026-09-01; it had existed for weeks and was invoked by nothing.
+# It asserts three things no other gate does. (1) The two mappings established by reading the LIVE
+# 1.17 process are re-derived from bytes alone. (2) `0x1409a5810` is the 39th of 51 shape matches
+# for `0x1409a4670`, which is why `CANDIDATE_CEILING` is not 9 -- the old cap ended the candidate
+# list thirty short of the answer and the table recorded the loss as "UNRESOLVED: 9 shape matches".
+# (3) The four ProfileSelect/System-Quit addresses er-effects-rs-4uw5.13 was filed about resolve
+# ONE AT A TIME, which they can only do from the anchor rows in
+# docs/recon/rva-map-1162-to-1170.verified.tsv -- so deleting one of those rows goes red here
+# naming the address, rather than quietly taking a region's coverage with it. Negative control run
+# 2026-09-01: with the eight anchor rows removed, 0x875590 and 0x920c90 both go UNMAPPED and this
+# exits 1. Re-execs itself under `uv` when capstone is absent, so the step stays spelled `python3`.
+python3 "$repo_root/scripts/map-rvas-1162-to-1170.py" --selftest
+# THE INDEPENDENT OPINION ON THOSE SAME ANCHORS. Everything above reads the two flat images with
+# one decoder under one normalisation, so a wrong destination that decodes into the right shape is
+# invisible to all of it. This asks both Ghidra dumps instead -- 1.16.2 on :8765, 1.17 on :8767 --
+# whether each half of a pair is a declared function ENTRY and whether the call graph carries
+# across. Its refusals are the control: six destinations that are wrong in a named way (0x10 past
+# the entry, or another anchor's entry) must all be refused, and the clause that refuses a
+# differing size with too few carried callees exists BECAUSE the swapped cases passed without it.
+# Skips at exit 0 when either daemon is down.
+python3 "$repo_root/scripts/confirm-1170-pair-in-dumps.py" --selftest
 # THE FIELD-OFFSET GATE (2026-08-30). The three ways to be wrong about a 1.17 address are not
 # equally loud. A stale DETOUR target is REFUSED by er-hook and logged; an unmapped CALL/data RVA
 # resolves to 0 and the caller says so; a stale STRUCT FIELD OFFSET returns the NEIGHBOURING

@@ -310,3 +310,54 @@
 # deadline in the per-frame MoveMapStep tick that forces the field WITHOUT releasing the SL
 # device -- which is the save-wedge signature exactly. The derivation is in the note column.
 0x14067ac90	0x14067bae0	IDENTICAL-LEAF	1.000	3	hand-derived 2026-08-31: GameMan::SetSaveState(int), the ONLY register store to GameMan+0xb80 in either image and absent from functions.tsv because its 14-byte body has no .pdata record to signature. Four independent confirmations. (1) Region delta: 246 of the 247 functions.tsv pairs sourced in 0x671000-0x684000 carry +0xe50, and so do all 22 saveState stores when the two images' writer sets are paired. (2) ORDER-PRESERVING bracket, both neighbours at the same delta: 0x67abd0->0x67ba20 < this < 0x67aec0->0x67bd10; the destination is claimed by no other 1.16.2 source. (3) Byte check: 1.16.2 `48 8b 05 <rip> 89 88 80 0b 00 00 c3` loads [0x143d69918] and 1.17 loads [0x143d6d988] -- the SAME singleton 1.17's own IsSaveState1 (0x14067ae60) loads, so the destination reads the 1.17 GameMan and writes the same +0xb80 field. The single RIP displacement is the only difference, which is why the verdict is IDENTICAL-LEAF and not BYTE-IDENTICAL. (4) Entry kind checked with classify-1170-entry-kind.py: LEAF in both, inside no other function's .pdata extent -- not the mid-function NEITHER-ENTRY this file has removed rows for twice. Its one caller is FUN_140aff640 (1.17 FUN_140b00490), the per-frame MoveMapStep tick, where it is the 210-second saveState watchdog: acc += dt while !IsSaveStateIdle, COMISS against 210.0f at [0x142b60870], then SetSaveState(0) with the SL device untouched	NEITHER-ENTRY	LEAF:0xe/0xe
+#
+# ANCHORS FOR 0x87xxxx AND 0x92xxxx, added 2026-09-01 for er-effects-rs-4uw5.13. These eight rows
+# are not here because anything hooks them. They are here to be ANCHORS: pass 2 of
+# scripts/map-rvas-1162-to-1170.py settles an ambiguous address by the delta of the nearest pair it
+# trusts, and this file is now the pool it draws from, so a row in a region makes every OTHER
+# address in that region resolvable. Measured one address at a time -- the situation somebody
+# holding a single address a feature needs is actually in -- over every .pdata entry in each
+# region, by scripts/measure-1170-anchor-coverage.py:
+#
+#     0x87xxxx    67/278 (24.1%)  ->  271/278 (97.5%)
+#     0x92xxxx    37/501  (7.4%)  ->  355/501 (70.9%)
+#     0x9axxxx    24/342  (7.0%)  ->  265/342 (77.5%)
+#
+# Deleting one of these lines takes a region's coverage with it, and does so silently unless
+# `map-rvas-1162-to-1170.py --selftest` is run -- which check.sh now does, and which goes red
+# naming 0x875590 and 0x920c90 when the eight are removed.
+#
+# WHY THESE EIGHT AND NOT ANY OTHER EIGHT. Spread, not merit: within each region every measured
+# delta is the same value (+0xff0 across 0x87xxxx, +0x11a0 across 0x92xxxx), so what an anchor is
+# worth is where it sits, and these are placed so no entry is far from one. They were picked from
+# the addresses the matcher already resolves ALONE -- an anchor that itself needed an anchor would
+# be circular -- and each carries four independent agreements:
+#   1. a relocation-masked signature that occurs exactly ONCE in the 1.16.2 image and exactly once
+#      in the 1.17 image, so the pattern identifies a function rather than a shape;
+#   2. this file's own columns: the whole declared body compared instruction by instruction at
+#      ratio 1.000, both images' .pdata declaring an entry, and the two extents equal;
+#   3. both Ghidra dumps -- 1.16.2 on :8765 and 1.17 on :8767 -- declaring a function to START at
+#      each half, with equal sizes and a call graph that carries across
+#      (scripts/confirm-1170-pair-in-dumps.py, whose negative control refuses every one of these
+#      pairs when its destination is nudged 0x10 off the entry or swapped with another anchor's);
+#   4. docs/recon/rva-map-1162-to-1170.functions.tsv, the whole-image .pdata alignment, which
+#      pairs all eight identically and was derived by a different pipeline entirely.
+#
+# 0x9axxxx GOT NO NEW ROWS, and that is a measurement rather than an omission. It already held six
+# (0x9a4d90, 0x9a5f20, 0x9a6180, 0x9a62c0, 0x9aa680, 0x9af3a0), which nothing read until now;
+# reading them is the whole of its 24 -> 265. A greedy search over every address the matcher
+# resolves alone, in all three regions, then found NONE that resolves even one more entry.
+#
+# WHAT IS LEFT IS NOT SHORT OF ANCHORS. 227 of the 230 addresses still unresolved across the three
+# regions produce a masked signature matching the CANDIDATE_CEILING of 2048 places -- unwind
+# funclets and vtable stubs, whose shape is the compiler's rather than the function's. The mapper
+# refuses those outright rather than letting an anchor's delta answer for a byte check that
+# contributed nothing. Look them up in functions.tsv, which pairs by region delta and says so.
+0x140873850	0x140874840	IDENTICAL-WHOLE	1.000	29	anchor 2026-09-01 (er-effects-rs-4uw5.13): 46B masked signature, 32B fixed, UNIQUE in both images; delta +0xff0; both Ghidra dumps declare the entry, size 117/117, 2/2 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0x76/0x76
+0x140874480	0x140875470	BYTE-IDENTICAL	1.000	159	anchor 2026-09-01 (er-effects-rs-4uw5.13): 44B masked signature, 33B fixed, UNIQUE in both images; delta +0xff0; both Ghidra dumps declare the entry, size 159/159, 1/1 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0x9f/0x9f
+0x1408776e0	0x1408786d0	IDENTICAL-WHOLE	1.000	99	anchor 2026-09-01 (er-effects-rs-4uw5.13): 42B masked signature, 36B fixed, UNIQUE in both images; delta +0xff0; both Ghidra dumps declare the entry, size 350/350, 5/5 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0x15e/0x15e
+0x14087eba0	0x14087fb90	IDENTICAL-WHOLE	1.000	45	anchor 2026-09-01 (er-effects-rs-4uw5.13): 44B masked signature, 32B fixed, UNIQUE in both images; delta +0xff0; both Ghidra dumps declare the entry, size 175/175, 4/4 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0xaf/0xaf
+0x1409202d0	0x140921470	IDENTICAL-WHOLE	1.000	19	anchor 2026-09-01 (er-effects-rs-4uw5.13): 42B masked signature, 26B fixed, UNIQUE in both images; delta +0x11a0; both Ghidra dumps declare the entry, size 70/70, 1/1 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0x46/0x46
+0x140926e50	0x140927ff0	IDENTICAL-WHOLE	1.000	48	anchor 2026-09-01 (er-effects-rs-4uw5.13): 43B masked signature, 27B fixed, UNIQUE in both images; delta +0x11a0; both Ghidra dumps declare the entry, size 202/202, 5/5 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0xca/0xca
+0x14092abe0	0x14092bd80	IDENTICAL-WHOLE	1.000	40	anchor 2026-09-01 (er-effects-rs-4uw5.13): 46B masked signature, 29B fixed, UNIQUE in both images; delta +0x11a0; both Ghidra dumps declare the entry, size 163/163, 2/3 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0xa3/0xa3
+0x14092df10	0x14092f0b0	IDENTICAL-WHOLE	1.000	192	anchor 2026-09-01 (er-effects-rs-4uw5.13): 40B masked signature, 32B fixed, UNIQUE in both images; delta +0x11a0; both Ghidra dumps declare the entry, size 705/705, 10/10 callees carry; the .pdata alignment map agrees	BOTH-ENTRIES	PDATA:0x2c1/0x2c1
