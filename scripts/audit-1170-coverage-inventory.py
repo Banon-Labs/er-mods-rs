@@ -128,6 +128,13 @@ DETOURABLE_ENTRY = ("BOTH-ENTRIES", "NEITHER-ENTRY")
 # `GetModuleHandleA(NULL)` / `game_module_base()` can never be mistaken for a foreign module.
 FOREIGN_HANDLE = re.compile(r'GetModuleHandle[AW]\s*\(\s*c?"([A-Za-z0-9_+.\-]+)\.dll"')
 MODBLOCK = re.compile(r"\bmod\s+(\w+)\s*\{")
+# The SAME module, declared in its own file instead of as an inline block: `mod ersc;` beside
+# `ersc.rs`. Measured 2026-09-02 -- `local_invasion_filter.rs` crossed the file-size limit, its
+# `mod ersc { ... }` block moved to `local_invasion_filter/ersc.rs`, and eight ersc.dll RVAs
+# silently became eldenring.exe migration work because the block form was the only one recognised.
+# A refactor that changes nothing about which module an address belongs to must not change its
+# attribution.
+MODFILE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", re.M)
 GAME_MODULE = "eldenring.exe"
 # `<stem>_module_base()` / `game_module_base()` -- what a nearby `base + 0x...` literal was added
 # to. Only consulted for the literal forms, which have no declaration site to attribute.
@@ -152,11 +159,50 @@ RANGE_ARG = re.compile(
 LITERAL_RANGE = re.compile(r"(0x[0-9a-fA-F_]+)\s*\.\.=?\s*(0x[0-9a-fA-F_]+)")
 
 
-def foreign_module_spans(text):
+def foreign_module_files(paths):
+    """`{path: "ersc.dll"}` for every file that IS a foreign module, declared `mod <stem>;`.
+
+    The safety property is the same one the inline-block form relies on: the DECLARING file must
+    resolve `<stem>.dll` by name itself, so the game's own `GetModuleHandleA(NULL)` can never
+    promote a sibling file to foreign. Only the two paths rustc itself would look at are accepted
+    (`<dir>/<stem>.rs` and `<dir>/<stem>/mod.rs`), so this cannot reach a same-named file
+    elsewhere in the tree.
+    """
+    known = set(paths)
+    out = {}
+    for path in paths:
+        text = open(path, encoding="utf-8", errors="replace").read()
+        stems = {m.group(1).lower() for m in FOREIGN_HANDLE.finditer(text)}
+        if not stems:
+            continue
+        directory = os.path.join(os.path.dirname(path), os.path.basename(path)[: -len(".rs")])
+        for m in MODFILE.finditer(text):
+            stem = m.group(1).lower()
+            if stem not in stems:
+                continue
+            for candidate in (
+                os.path.join(directory, f"{stem}.rs"),
+                os.path.join(directory, stem, "mod.rs"),
+                os.path.join(os.path.dirname(path), f"{stem}.rs"),
+            ):
+                if candidate in known and candidate != path:
+                    out[candidate] = f"{stem}.dll"
+    return out
+
+
+def foreign_module_spans(text, whole_file_module=None):
     """`[(first_line, last_line, "ersc.dll")]` -- the `mod <stem> { ... }` blocks holding a
-    NON-game module's addresses, plus the set of foreign stems the file resolves by name."""
+    NON-game module's addresses, plus the set of foreign stems the file resolves by name.
+
+    `whole_file_module` is set when the file itself IS such a module (see
+    [`foreign_module_files`]); then the span is the whole file and no block search is needed.
+    """
     stems = {m.group(1).lower() for m in FOREIGN_HANDLE.finditer(text)}
     spans = []
+    if whole_file_module:
+        stems = stems | {whole_file_module.rsplit(".", 1)[0]}
+        spans.append((1, text.count("\n") + 2, whole_file_module))
+        return spans, stems
     if not stems:
         return spans, stems
     for m in MODBLOCK.finditer(text):
@@ -222,9 +268,13 @@ def build_symbol_table(paths):
     """
     consts, aliases, by_enum, any_variant, decl = {}, {}, {}, {}, {}
     foreign = {}
+    # A pre-pass, because a module in its own file is attributed by its PARENT and the two are
+    # separate paths -- relying on the walk reaching the parent first would make the answer depend
+    # on sort order.
+    module_files = foreign_module_files(paths)
     for path in paths:
         text = open(path, encoding="utf-8", errors="replace").read()
-        spans, _stems = foreign_module_spans(text)
+        spans, _stems = foreign_module_spans(text, module_files.get(path))
 
         def declared_in_foreign(char_pos, _text=text, _spans=spans):
             if not _spans:
@@ -583,11 +633,19 @@ def collect(maps):
 # Co-op's, the next three are bounds that were being ranked as migration work above real
 # functions, and the last two are the control -- an exclusion that also ate real addresses would
 # look like progress.
+# BOTH Seamless builds, because `er-invasion-warp` pins one address set per build and picks
+# between them at runtime -- see `ersc::SUPPORTED`. The v2.0.0 row is the one that matters most
+# here: those addresses were measured on 2026-09-02 and are as plausible-looking a set of game
+# `.text` RVAs as the v1.9.9 ones ever were.
 FOREIGN_CASES = [
-    (0x22D30, "ersc.dll", "SHOW_RVA -- ersc!show, the option-menu builder"),
-    (0x243E0, "ersc.dll", "INVADE_ACTION_RVA -- ersc \"Invade world\""),
-    (0x24460, "ersc.dll", "CANCEL_ACTION_RVA -- ersc \"Cancel search\""),
-    (0xABC20, "ersc.dll", "BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey"),
+    (0x22D30, "ersc.dll", "V199_SHOW_RVA -- ersc!show, the option-menu builder"),
+    (0x243E0, "ersc.dll", "V199_INVADE_ACTION_RVA -- ersc \"Invade world\""),
+    (0x24460, "ersc.dll", "V199_CANCEL_ACTION_RVA -- ersc \"Cancel search\""),
+    (0xABC20, "ersc.dll", "V199_BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey"),
+    (0x241A0, "ersc.dll", "V200_SHOW_RVA -- ersc!show, Seamless v2.0.0"),
+    (0x25850, "ersc.dll", "V200_INVADE_ACTION_RVA -- ersc \"Invade world\", v2.0.0"),
+    (0x258D0, "ersc.dll", "V200_CANCEL_ACTION_RVA -- ersc \"Cancel search\", v2.0.0"),
+    (0xAD590, "ersc.dll", "V200_BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey, v2.0.0"),
 ]
 NOT_ADDRESS_CASES = [
     (0x4000000, "GAME_TEXT_RVA_LIMIT -- plausibility bound in trace_first_game_caller_rva"),
@@ -642,8 +700,36 @@ def selftest(maps):
         failures.append("enum-alias constants are invisible: TITLE_TOP_DIALOG_IS_IN_STATE_RVA")
     if syms.get("GET_CURRENT_MAP_ID_RVA") != 0x5EEFB0:
         failures.append("plain literal constants are invisible: GET_CURRENT_MAP_ID_RVA")
-    if foreign_syms.get("SHOW_RVA") != "ersc.dll":
-        failures.append("a constant declared inside `mod ersc` is not attributed to ersc.dll")
+    # One per build, so a future edit that drops a whole Seamless version's constants out of the
+    # foreign table fails here rather than silently reclassifying that build's RVAs as the game's.
+    for name in ("V199_SHOW_RVA", "V200_SHOW_RVA"):
+        if foreign_syms.get(name) != "ersc.dll":
+            failures.append(
+                f"a constant declared inside `mod ersc` is not attributed to ersc.dll: {name}"
+            )
+    # BOTH spellings of "this module is not the game", on synthetic text. The live tree only
+    # exercises one of them at a time -- `mod ersc` was an inline block until 2026-09-02 and is a
+    # separate file now -- and the day it moved, the file form was not recognised and eight
+    # ersc.dll RVAs became eldenring.exe migration work. Whichever form the tree happens to use,
+    # the other stays tested here.
+    block_form = (
+        'fn base() { GetModuleHandleA(c"ersc.dll".as_ptr()) }\n'
+        "mod ersc {\n    pub const SOME_RVA: usize = 0x2_2d30;\n}\n"
+    )
+    spans, _ = foreign_module_spans(block_form)
+    if [module for _lo, _hi, module in spans] != ["ersc.dll"]:
+        failures.append("the inline `mod ersc { ... }` block form is no longer recognised")
+    spans, _ = foreign_module_spans("pub const SOME_RVA: usize = 0x2_2d30;\n", "ersc.dll")
+    if [module for _lo, _hi, module in spans] != ["ersc.dll"]:
+        failures.append("a foreign module in its OWN FILE is no longer recognised")
+    # And the safety property both forms rest on: a file that does not resolve the stem by name
+    # cannot have a module of that name promoted to foreign.
+    spans, _ = foreign_module_spans("mod ersc {\n    pub const SOME_RVA: usize = 0x1;\n}\n")
+    if spans:
+        failures.append(
+            "a `mod ersc` block was attributed to ersc.dll in a file that never resolves it by "
+            "name -- the game's own module could be mistaken for a foreign one"
+        )
 
     # --- classification by BASE, not by name -------------------------------------------------
     inv = collect(maps)

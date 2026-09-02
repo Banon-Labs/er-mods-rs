@@ -104,16 +104,49 @@ pub enum Image {
     /// the previous build. Both halves have to move, which is why the version is named here
     /// rather than assumed.
     EldenRing1170,
-    /// Seamless Co-op's `ersc.dll`, preferred base `0x180000000`. Ground truth is the installed
-    /// DLL, an ordinary PE whose section table has to be walked to turn an RVA into an offset.
-    Ersc,
+    /// Seamless Co-op's `ersc.dll` **v1.9.9**, preferred base `0x180000000`. Ground truth is a
+    /// copy of that build on this machine: an ordinary PE whose section table has to be walked to
+    /// turn an RVA into an offset.
+    ///
+    /// # Why the Seamless version is part of the spec, and why it is located by CONTENT
+    ///
+    /// This repo pins four functions inside `ersc.dll` and has to keep working across a Seamless
+    /// update, so it carries one pin set per build and picks between them at runtime. That means
+    /// two specs describe the same file NAME, and only one of them can be true of any given file
+    /// -- so a path is not enough to decide which spec a file is allowed to ground-truth.
+    ///
+    /// The Seamless launcher moves the previous build to `_SeamlessCoop/` when it installs a new
+    /// one, and the user may downgrade, so neither directory reliably holds either version.
+    /// [`Image::locate`] therefore READS each candidate and matches [`Image::version_marker`], the
+    /// product string Seamless ships in its own resources. A file that does not carry this image's
+    /// marker is not this image, whatever it is called and wherever it sits.
+    Ersc199,
+    /// `ersc.dll` **v2.0.0**, shipped 2026-09-02. See [`Image::Ersc199`] for why the version is
+    /// named rather than assumed.
+    Ersc200,
 }
 
 impl Image {
     pub fn base(self) -> u64 {
         match self {
             Self::EldenRing | Self::EldenRing1170 => 0x1_4000_0000,
-            Self::Ersc => 0x1_8000_0000,
+            Self::Ersc199 | Self::Ersc200 => 0x1_8000_0000,
+        }
+    }
+
+    /// Whether this image is a build of Seamless Co-op's `ersc.dll`.
+    fn is_ersc(self) -> bool {
+        matches!(self, Self::Ersc199 | Self::Ersc200)
+    }
+
+    /// The product string Seamless ships in its own version resource, as ASCII. It is compared
+    /// UTF-16-encoded, which is how it appears in the file. This is what makes a candidate
+    /// identifiable as a PARTICULAR Seamless build rather than merely as "some ersc.dll".
+    fn version_marker(self) -> Option<&'static str> {
+        match self {
+            Self::Ersc199 => Some("Seamless Co-op v1.9.9 by Yui"),
+            Self::Ersc200 => Some("Seamless Co-op v2.0.0 by Yui"),
+            _ => None,
         }
     }
 
@@ -121,7 +154,8 @@ impl Image {
         match self {
             Self::EldenRing => "eldenring-deobf.bin",
             Self::EldenRing1170 => "eldenring-deobf-1.17.bin",
-            Self::Ersc => "ersc.dll",
+            Self::Ersc199 => "ersc.dll (Seamless Co-op v1.9.9)",
+            Self::Ersc200 => "ersc.dll (Seamless Co-op v2.0.0)",
         }
     }
 
@@ -129,7 +163,11 @@ impl Image {
         match self {
             Self::EldenRing => "ER_DEOBF_BIN",
             Self::EldenRing1170 => "ER_DEOBF_BIN_1170",
-            Self::Ersc => "ER_ERSC_DLL",
+            // Both Seamless images name the same two variables on purpose: the variables list
+            // FILES to consider, and the version marker decides which spec each file answers
+            // for. One variable per version would make the caller assert the very thing this
+            // code is able to measure.
+            Self::Ersc199 | Self::Ersc200 => "ER_ERSC_DLL / ER_ERSC_DLL_REFERENCE",
         }
     }
 
@@ -141,7 +179,7 @@ impl Image {
     /// image already skips for every `Image`; this is the same reasoning applied to an image that
     /// is present but is a build we never measured.
     fn ground_truth_is_advisory(self) -> bool {
-        matches!(self, Self::Ersc)
+        self.is_ersc()
     }
 
     /// The one-line command that re-measures this image's addresses by hand.
@@ -151,26 +189,44 @@ impl Image {
                 "python3 scripts/map-rvas-1162-to-1170.py <va>"
             }
             // uv, because the body mapping needs capstone and there is no system pip here.
-            Self::Ersc => "uv run --with capstone python3 scripts/locate-ersc-entry-points.py",
+            Self::Ersc199 | Self::Ersc200 => {
+                "uv run --with capstone python3 scripts/locate-ersc-entry-points.py"
+            }
         }
     }
 
     /// Candidate locations, in order. Every one is env-overridable and none is required; a miss
     /// downgrades ground truth to a warning rather than breaking the build.
     fn locate(self, manifest_dir: &Path) -> Option<PathBuf> {
-        if let Some(explicit) = env::var_os(self.env_override()) {
-            let path = PathBuf::from(explicit);
-            return path.is_file().then_some(path);
-        }
         match self {
-            Self::EldenRing | Self::EldenRing1170 => manifest_dir
-                .ancestors()
-                .map(|ancestor| ancestor.join(self.label()))
-                .find(|candidate| candidate.is_file()),
-            Self::Ersc => steam_roots()
-                .into_iter()
-                .map(|root| root.join("steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"))
-                .find(|candidate| candidate.is_file()),
+            Self::EldenRing | Self::EldenRing1170 => {
+                if let Some(explicit) = env::var_os(self.env_override()) {
+                    let path = PathBuf::from(explicit);
+                    return path.is_file().then_some(path);
+                }
+                manifest_dir
+                    .ancestors()
+                    .map(|ancestor| ancestor.join(self.label()))
+                    .find(|candidate| candidate.is_file())
+            }
+            // Content, not position: every candidate is read and kept only if it carries THIS
+            // build's version marker. On a machine that has updated Seamless at least once, both
+            // specs find a file, so both pin sets get ground-truthed in the same build.
+            Self::Ersc199 | Self::Ersc200 => {
+                let marker: Vec<u8> = self
+                    .version_marker()?
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect();
+                ersc_candidates()
+                    .into_iter()
+                    .find(|candidate| match fs::read(candidate) {
+                        Ok(image) => image
+                            .windows(marker.len())
+                            .any(|window| window == marker.as_slice()),
+                        Err(_) => false,
+                    })
+            }
         }
     }
 
@@ -179,7 +235,7 @@ impl Image {
         let rva = va.checked_sub(self.base())?;
         let offset = match self {
             Self::EldenRing | Self::EldenRing1170 => usize::try_from(rva).ok()?,
-            Self::Ersc => pe_rva_to_offset(image, u32::try_from(rva).ok()?)?,
+            Self::Ersc199 | Self::Ersc200 => pe_rva_to_offset(image, u32::try_from(rva).ok()?)?,
         };
         image
             .get(offset..offset.checked_add(len)?)
@@ -221,7 +277,7 @@ impl Image {
         let ranges: Vec<(usize, usize, u64)> = match self {
             // Flat: file offset == RVA for every section, so one range covers the image.
             Self::EldenRing | Self::EldenRing1170 => vec![(0, image.len(), 0)],
-            Self::Ersc => pe_sections(image)
+            Self::Ersc199 | Self::Ersc200 => pe_sections(image)
                 .into_iter()
                 .filter(|section| {
                     section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0
@@ -313,6 +369,29 @@ fn pe_sections(image: &[u8]) -> Vec<Section> {
             .collect()
     };
     parse().unwrap_or_default()
+}
+
+/// Every file that might be a build of `ersc.dll`, in the order they are tried.
+///
+/// Both env overrides and BOTH install directories, because a version-named spec has to be able
+/// to find its own build wherever it currently sits -- the Seamless launcher shuffles them
+/// (`SeamlessCoop/` is the live one, `_SeamlessCoop/` is where the previous build is left), and
+/// the user may downgrade. Which candidate answers for which spec is decided by
+/// [`Image::version_marker`], never by which directory a file happens to be in.
+fn ersc_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for variable in ["ER_ERSC_DLL", "ER_ERSC_DLL_REFERENCE"] {
+        if let Some(explicit) = env::var_os(variable) {
+            candidates.push(PathBuf::from(explicit));
+        }
+    }
+    for root in steam_roots() {
+        let game = root.join("steamapps/common/ELDEN RING/Game");
+        candidates.push(game.join("SeamlessCoop/ersc.dll"));
+        candidates.push(game.join("_SeamlessCoop/ersc.dll"));
+    }
+    candidates.retain(|candidate| candidate.is_file());
+    candidates
 }
 
 fn steam_roots() -> Vec<PathBuf> {

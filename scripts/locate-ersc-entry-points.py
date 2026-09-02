@@ -62,6 +62,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Single source of truth for the pinned addresses and bytes. Parsed rather than copied: a second
 # copy of an RVA in a Python file is how the two drift and the tool starts lying.
 BUILD_RS = os.path.join(ROOT, "crates", "er-invasion-warp", "build.rs")
+# Where the version markers live. Parsed rather than copied for the same reason as the RVAs: a
+# second copy of "which string identifies v2.0.0" is how the tool and the build script drift.
+PROLOGUE_BUILD_RS = os.path.join(ROOT, "build-support", "prologue_build.rs")
 ERSC_BASE = 0x180000000
 RELATIVE_INSTALL = "steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"
 IMAGE_SCN_MEM_EXECUTE = 0x20000000
@@ -154,8 +157,18 @@ class Pe:
 # ---------------------------------------------------------------------------------------------
 
 
+def parse_version_markers(source):
+    """`{"Ersc199": "Seamless Co-op v1.9.9 by Yui", ...}` out of `Image::version_marker`."""
+    return dict(re.findall(r'Self::(Ersc\w+)\s*=>\s*Some\("([^"]+)"\)', source))
+
+
 def parse_pins(source):
-    """`[(name, va, pin_bytes)]` for every `Image::Ersc` spec in er-invasion-warp's build.rs."""
+    """`[(name, image, va, pin_bytes)]` for every Seamless spec in er-invasion-warp's build.rs.
+
+    `image` is the `Image::Ersc*` variant, i.e. WHICH Seamless build the spec describes. There is
+    one pin set per build because this repo has to keep working across a Seamless update, so a pin
+    that does not hold is only news once you know which build it was measured against.
+    """
     consts = {
         key: int(value, 16)
         for key, value in re.findall(r"const\s+(\w+_VA)\s*:\s*u64\s*=\s*(0x[0-9a-fA-F_]+)", source)
@@ -168,7 +181,8 @@ def parse_pins(source):
     }
     pins = []
     for block in re.findall(r"PrologueSpec\s*\{(.*?)\n\s*\},", source, re.S):
-        if "Image::Ersc" not in block:
+        image = re.search(r"image:\s*Image::(Ersc\w*)", block)
+        if not image:
             continue
         name = re.search(r'name:\s*"(\w+)"', block)
         va = re.search(r"va:\s*(\w+)", block)
@@ -176,7 +190,7 @@ def parse_pins(source):
         if not (name and va and pin):
             continue
         raw = parse_byte_array(pin.group(1)) if pin.group(1) else byte_consts.get(pin.group(2), b"")
-        pins.append((name.group(1), consts.get(va.group(1)), raw))
+        pins.append((name.group(1), image.group(1), consts.get(va.group(1)), raw))
     return pins
 
 
@@ -269,33 +283,45 @@ def find_installed(explicit):
     return None
 
 
-def find_reference(explicit, installed, pins):
-    """A copy of the build the pins describe, VALIDATED by the pins themselves.
+def ersc_candidates(explicit_installed, explicit_reference):
+    """Every file that might be a build of `ersc.dll`, in the order they are tried.
 
-    `_SeamlessCoop/` beside the install is where the Seamless launcher leaves the previous
-    version, which makes it the one bounded fallback worth having. It is only accepted if every
-    pinned VA in it actually holds its pinned bytes -- otherwise it is just another build, and
-    mapping from it would produce confident nonsense.
+    Both install directories, because the Seamless launcher shuffles them -- `SeamlessCoop/` is the
+    live one and `_SeamlessCoop/` is where the previous build is left -- and the user may
+    downgrade. Which file answers for which pin set is decided by the version marker inside it,
+    never by the directory it happens to sit in. Same rule, and the same reason, as
+    `Image::locate` in `build-support/prologue_build.rs`.
     """
     candidates = []
-    if explicit:
-        candidates.append(explicit)
-    if os.environ.get("ER_ERSC_DLL_REFERENCE"):
-        candidates.append(os.environ["ER_ERSC_DLL_REFERENCE"])
-    if installed:
-        game = os.path.dirname(os.path.dirname(installed))
+    for explicit in (explicit_installed, explicit_reference):
+        if explicit:
+            candidates.append(explicit)
+    for variable in ("ER_ERSC_DLL", "ER_ERSC_DLL_REFERENCE"):
+        if os.environ.get(variable):
+            candidates.append(os.environ[variable])
+    for root in steam_roots():
+        game = os.path.join(root, "steamapps/common/ELDEN RING/Game")
+        candidates.append(os.path.join(game, "SeamlessCoop", "ersc.dll"))
         candidates.append(os.path.join(game, "_SeamlessCoop", "ersc.dll"))
-    for path in candidates:
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, "rb") as handle:
-                pe = Pe(handle.read())
-        except (ValueError, struct.error, OSError):
-            continue
-        if all(pin and pe.bytes_at_va(va, len(pin)) == pin for _, va, pin in pins):
-            return path, pe
-    return None, None
+    seen, ordered = set(), []
+    for candidate in candidates:
+        real = os.path.realpath(candidate)
+        if real not in seen and os.path.isfile(candidate):
+            seen.add(real)
+            ordered.append(candidate)
+    return ordered
+
+
+def load_pe(path):
+    try:
+        with open(path, "rb") as handle:
+            return Pe(handle.read())
+    except (ValueError, struct.error, OSError):
+        return None
+
+
+def match_marker(pe, marker):
+    return marker.encode("utf-16le") in pe.image
 
 
 # ---------------------------------------------------------------------------------------------
@@ -303,46 +329,93 @@ def find_reference(explicit, installed, pins):
 # ---------------------------------------------------------------------------------------------
 
 
-def report(installed_path, installed, reference_path, reference, pins):
+def report(installed_path, installed, builds, pins, markers):
+    """Say, per Seamless build this repo pins, whether its pins still hold and where they went.
+
+    `builds` maps an `Image::Ersc*` variant to `(path, Pe)` for the copy of THAT build found on
+    this machine, or to `None`. On a machine that has updated Seamless at least once, both are
+    usually present -- the launcher leaves the previous build behind -- so both pin sets can be
+    verified in one run.
+    """
     print(f"installed:  {installed_path}\n            {installed.describe()}")
-    if reference_path:
-        print(f"reference:  {reference_path}\n            {reference.describe()}")
-    else:
-        print(
-            "reference:  none -- pass --reference <a copy of the build the pins were measured\n"
-            "            against> for body mapping, which is the strong evidence. Without it\n"
-            "            only the prologue search below runs, and a prologue is a shape."
-        )
-    print()
-    for name, va, pin in pins:
-        print(f"{name} (pinned 0x{va:x}, {len(pin)} bytes)")
-        actual = installed.bytes_at_va(va, len(pin))
-        if actual is None:
-            print("  pinned VA falls outside every section of the installed build")
-        elif actual == pin:
-            print("  PIN HOLDS -- this is the build these constants were measured against")
-            continue
+    for image in sorted(builds):
+        found = builds[image]
+        marker = markers.get(image, image)
+        if found:
+            path, pe = found
+            print(f"{image:<11} {path}\n            {pe.describe()}")
         else:
-            print(f"  pin does not hold; that address holds {actual.hex(' ')}")
-        hits = installed.find(pin)
-        print(f"  by prologue: {format_hits(hits)}")
-        if reference is not None:
-            try:
-                mapped, note = map_by_body(reference, installed, va)
-            except ImportError:
-                # Degrade rather than die: the prologue search above is still useful, and the
-                # obvious thing to type is `python3 scripts/...`, which has no capstone.
-                print(
-                    "  by body: capstone not importable -- re-run as"
-                    " `uv run --with capstone python3 scripts/locate-ersc-entry-points.py`"
-                    " for the body mapping, which is the strong evidence"
-                )
-            else:
-                print(f"  by body ({note}): {format_hits(mapped)}")
+            print(f"{image:<11} no copy of {marker!r} on this machine -- its pins cannot be")
+            print("            ground-truthed here, only checked against the installed build")
+    print()
+
+    recognised = None
+    for image in sorted({image for _, image, _, _ in pins}):
+        group = [(name, va, pin) for name, gimage, va, pin in pins if gimage == image]
+        own = builds.get(image)
+        holds_in_own = own is not None and all(
+            pin and own[1].bytes_at_va(va, len(pin)) == pin for _, va, pin in group
+        )
+        holds_in_installed = all(
+            pin and installed.bytes_at_va(va, len(pin)) == pin for _, va, pin in group
+        )
+        verdict = []
+        if holds_in_own:
+            verdict.append("all pins hold against its own build (ground truth OK)")
+        elif own is not None:
+            verdict.append("SOME PINS DO NOT HOLD against its own build -- re-measure")
+        if holds_in_installed:
+            verdict.append("and this IS the installed build")
+            recognised = image
+        else:
+            verdict.append("not the installed build")
+        print(f"=== {image} ({markers.get(image, '?')}): {'; '.join(verdict)} ===")
+        if holds_in_installed:
+            print("    Nothing to do: the runtime gate will recognise this build and arm.\n")
+            continue
+        for name, va, pin in group:
+            actual = installed.bytes_at_va(va, len(pin))
+            if actual is None:
+                print(f"  {name}: pinned 0x{va:x} falls outside every section of the installed build")
+                continue
+            if actual == pin:
+                print(f"  {name}: pinned 0x{va:x} still holds in the installed build")
+                continue
+            print(f"  {name} (pinned 0x{va:x}, {len(pin)} bytes)")
+            print(f"    by prologue: {format_hits(installed.find(pin))}")
+            if own is not None:
+                try:
+                    mapped, note = map_by_body(own[1], installed, va)
+                except ImportError:
+                    print(
+                        "    by body: capstone not importable -- re-run as"
+                        " `uv run --with capstone python3 scripts/locate-ersc-entry-points.py`"
+                        " for the body mapping, which is the strong evidence"
+                    )
+                else:
+                    print(f"    by body ({note}): {format_hits(mapped)}")
+        print()
+
+    if recognised:
+        print(
+            f"The installed build is {markers.get(recognised, recognised)}, which this repo already"
+            "\nsupports. No re-pin is needed."
+        )
+        return
     print(
-        "\nEvery address above is a CANDIDATE. Read the function before pinning it, and re-check\n"
-        "the session field offsets and action codes too -- see this file's header for the ones\n"
-        "v2.0.0 moved."
+        "NONE of the pin sets matches the installed build, so the invasion filter will refuse to\n"
+        "arm against it -- fail-closed, which is correct but inert. Every address above is a\n"
+        "CANDIDATE and nothing more:\n"
+        "  * a unique PROLOGUE hit is a code SHAPE. v2.0.0's 19-byte `BuildLobbyKey` prologue\n"
+        "    matched exactly one address and it was the wrong function.\n"
+        "  * a masked BODY match survives struct-offset drift but not a re-ordered branch. v2.0.0\n"
+        "    inverted the invade action's idle guard, so it matched nothing at any length while\n"
+        "    sitting untouched 0x1470 further along.\n"
+        "Identify each one by something independent -- `.pdata` index and function size, a\n"
+        "cross-referenced constant, the callers -- before pinning it. `scripts/ersc-disas.py` has\n"
+        "`align`, `pdata`, `xref`, `states` and `crossmatch` for exactly that. And re-check the\n"
+        "session field offsets and state codes too: v2.0.0 moved the field group by +0x40 and\n"
+        "renumbered the whole state enum by +1."
     )
 
 
@@ -420,16 +493,44 @@ def selftest():
 
     with open(BUILD_RS, encoding="utf-8") as handle:
         pins = parse_pins(handle.read())
-    # `< 4` rather than `!= 4`: a broken regex parses too FEW, and a regex that over-matches into
+    with open(PROLOGUE_BUILD_RS, encoding="utf-8") as handle:
+        markers = parse_version_markers(handle.read())
+    # `< 4` rather than `!= N`: a broken regex parses too FEW, and a regex that over-matches into
     # the game-image specs is caught by the address-range check below instead. Pinning the exact
-    # count would just break the day someone legitimately adds a fifth ERSC entry point.
+    # count would just break the day someone legitimately adds a fifth ERSC entry point -- or a
+    # THIRD Seamless build, which is the whole shape this tool now has to survive.
     if len(pins) < 4:
         failures.append(f"parsed {len(pins)} ERSC pins out of {BUILD_RS}, expected at least 4")
-    for name, va, pin in pins:
+    images = {image for _, image, _, _ in pins}
+    if not images:
+        failures.append("no pin named an Image::Ersc* variant, so no pin can be matched to a build")
+    for image in images:
+        if image not in markers:
+            failures.append(
+                f"{image} has no version marker in {os.path.relpath(PROLOGUE_BUILD_RS, ROOT)}, so "
+                "no file can be identified as that build"
+            )
+    if len(set(markers.values())) != len(markers):
+        failures.append(f"two Seamless images share a version marker: {markers}")
+    for name, image, va, pin in pins:
         if va is None or not (ERSC_BASE <= va < ERSC_BASE + (1 << 32)):
             failures.append(f"{name}: parsed VA {va!r} is not an ersc.dll address")
         if len(pin) < 8:
             failures.append(f"{name}: parsed pin is {len(pin)} bytes, too short to identify a shape")
+        if not name.upper().startswith(image.upper()[:4]):
+            continue
+    # A pin set per build is only useful if the pins differ between them. Two builds whose invade
+    # pins are equal cannot be told apart, which is the failure the runtime gate refuses on.
+    by_image = {}
+    for name, image, _, pin in pins:
+        by_image.setdefault(image, {})[name.split("_", 1)[1]] = pin
+    roles = set().union(*(set(group) for group in by_image.values())) if by_image else set()
+    for role in roles:
+        variants = [group[role] for group in by_image.values() if role in group]
+        if role != "SHOW_PROLOGUE" and len(variants) > 1 and len(set(variants)) != len(variants):
+            failures.append(
+                f"two builds share identical bytes for {role}, so they cannot be told apart"
+            )
 
     for failure in failures:
         print(f"SELFTEST FAIL: {failure}", file=sys.stderr)
@@ -442,17 +543,20 @@ def selftest():
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--installed", help="the ersc.dll to inspect (default: the Steam install)")
-    parser.add_argument("--reference", help="a copy of the build the pinned RVAs were measured on")
+    parser.add_argument("--reference", help="another ersc.dll to consider as a pinned build")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
     if args.selftest:
         return selftest()
 
-    pins = parse_pins(open(BUILD_RS, encoding="utf-8").read())
+    with open(BUILD_RS, encoding="utf-8") as handle:
+        pins = parse_pins(handle.read())
     if not pins:
-        print(f"no Image::Ersc prologue specs found in {BUILD_RS}", file=sys.stderr)
+        print(f"no Image::Ersc* prologue specs found in {BUILD_RS}", file=sys.stderr)
         return 2
+    with open(PROLOGUE_BUILD_RS, encoding="utf-8") as handle:
+        markers = parse_version_markers(handle.read())
 
     installed_path = find_installed(args.installed)
     if installed_path is None:
@@ -463,20 +567,23 @@ def main():
             file=sys.stderr,
         )
         return 2
-    try:
-        installed = Pe(open(installed_path, "rb").read())
-    except (ValueError, struct.error) as error:
-        print(f"{installed_path}: not a readable PE image ({error})", file=sys.stderr)
+    installed = load_pe(installed_path)
+    if installed is None:
+        print(f"{installed_path}: not a readable PE image", file=sys.stderr)
         return 2
 
-    reference_path, reference = find_reference(args.reference, installed_path, pins)
-    if reference is None and args.reference:
-        print(
-            f"{args.reference}: rejected as a reference -- the pinned VAs do not hold the pinned\n"
-            "bytes in it, so it is not the build these constants were measured against.",
-            file=sys.stderr,
+    # Match each pinned build to a copy of ITSELF by the version string inside the file, never by
+    # which directory it sits in -- the launcher shuffles those and the user may downgrade.
+    candidates = [(path, load_pe(path)) for path in ersc_candidates(args.installed, args.reference)]
+    candidates = [(path, pe) for path, pe in candidates if pe is not None]
+    builds = {}
+    for image in sorted({image for _, image, _, _ in pins}):
+        marker = markers.get(image)
+        builds[image] = next(
+            ((path, pe) for path, pe in candidates if marker and match_marker(pe, marker)),
+            None,
         )
-    report(installed_path, installed, reference_path, reference, pins)
+    report(installed_path, installed, builds, pins, markers)
     return 0
 
 
