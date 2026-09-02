@@ -766,8 +766,9 @@ impl Chr {
     /// backwards until 2026-09-02.
     ///
     /// Gated on [`Self::validated_ai_ins`], so a build whose `AiIns` layout has moved gets no
-    /// writes at all rather than four wrong ones, and READ BACK afterwards: `write_i32` proves the
-    /// address was readable before the store, which is not the same as proving the store landed.
+    /// writes at all rather than four wrong ones. It returns whether the STORES happened, not
+    /// whether they survived: see [`Self::read_move_intent`] for why surviving is not this
+    /// function's business any more.
     pub(crate) fn write_move_intent(self, write: IntentWrite) -> bool {
         let Some(ai) = self.validated_ai_ins() else {
             return false;
@@ -783,16 +784,28 @@ impl Chr {
         // the failure this function shipped with.
         let walk = write_i32(ai + ai_ins::WALK_TYPE, write.walk_type);
         let turn = write_i32(ai + ai_ins::TURN_TARGET, write.turn_target);
-        if !(path && want && walk && turn) {
-            return false;
-        }
-        // The read-back. Same tick, same thread, nothing else has run in between, so anything
-        // other than the value just stored means the store did not take -- and THAT is the
-        // symptom the old canary could not see.
-        let gait_took = unsafe { safe_read_i32(ai + ai_ins::WALK_TYPE) } == Some(write.walk_type);
-        let target_took = unsafe { safe_read_f32(ai + ai_ins::WANT_TO_MOVE_TO) }
-            .is_some_and(|x| x.to_bits() == write.target[0].to_bits());
-        gait_took && target_took
+        path && want && walk && turn
+    }
+
+    /// What `walkType` and `wantToMoveTo.x` hold RIGHT NOW -- the read-back instrument, kept
+    /// deliberately separate from [`Self::write_move_intent`]'s verdict.
+    ///
+    /// It used to be part of that verdict, on the reasoning that the game thread cannot write
+    /// between our store and our load. That reasoning was wrong and the instrument is what proved
+    /// it: on roughly half of all frames the pair reads back as `walkType = 0` with
+    /// `wantToMoveTo` equal to the body's own position, which is `AiIns::ClearMoveRequest`'s exact
+    /// signature. The goal machine is a genuine competing writer and losing that race is now
+    /// EXPECTED, not a fault -- so folding it into a boolean made the caller log "the layout is
+    /// wrong" about a healthy possession.
+    ///
+    /// It stays because it is the only instrument this problem has ever had, and because it is how
+    /// anyone checks that the manipulator path in [`Self::write_manipulator_move`] is carrying the
+    /// movement the AI path keeps losing.
+    pub(crate) fn read_move_intent(self) -> Option<(i32, f32)> {
+        let ai = self.validated_ai_ins()?;
+        let walk = unsafe { safe_read_i32(ai + ai_ins::WALK_TYPE) }?;
+        let target_x = unsafe { safe_read_f32(ai + ai_ins::WANT_TO_MOVE_TO) }?;
+        Some((walk, target_x))
     }
 
     /// Stage the frame's move vector where the ENGINE stages its own -- the fix for a field war
