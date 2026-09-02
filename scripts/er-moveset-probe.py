@@ -34,12 +34,16 @@ def main():
     regulation = GEN.Regulation(options.regulation)
     variation = regulation.variation_for(options.chrid)
     behbnds = GEN.chr_dirs(options.root, 'behbnd').get(options.chrid)
-    anibnds = GEN.chr_dirs(options.root, 'anibnd').get(options.chrid, [])
+    anibnds = GEN.chr_dirs(options.root, 'anibnd')
     if not behbnds:
         raise SystemExit(f'no behbnd for {options.chrid} under {options.root}')
     fireable, declared = GEN.fireable_animations(sorted(behbnds)[0])
+    # Same join the generator uses, from the same function: a creature with no TimeAct of
+    # its own reads its family base's. Duplicating the rule here instead would let the
+    # probe say a creature has no attacks while the shipped table says it has thirty.
+    tae_paths, tae_owner = GEN.tae_paths_for_chr(anibnds, options.chrid, variation)
     tae = {}
-    for path in GEN.tae_paths_for(anibnds):
+    for path in tae_paths:
         try:
             for anim, facts in GEN.tae_facts(path).items():
                 tae.setdefault(anim, facts)
@@ -47,7 +51,8 @@ def main():
             print(f'# {os.path.basename(path)}: {error!r}', file=sys.stderr)
 
     print(f'# {options.chrid} behaviorVariationId={variation} '
-          f'fireable={len(fireable)} declared={len(declared)} tae={len(tae)}',
+          f'fireable={len(fireable)} declared={len(declared)} tae={len(tae)} '
+          f'tae_owner={tae_owner or "NONE"}',
           file=sys.stderr)
     print('anim\tfireable\tplays\tdur\tabilities\tresolved')
     for anim in sorted(set(fireable) | set(declared) | set(tae)):

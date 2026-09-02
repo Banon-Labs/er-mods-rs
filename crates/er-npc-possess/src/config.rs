@@ -274,6 +274,23 @@ r1 = "light"
 r2 = "heavy"
 l1 = "ranged"
 l2 = "movement"
+# LIVE from the next possession. THE ATTACK-SET PAGE KEYS.
+#
+# A creature has up to sixty attacks and four buttons. Repeated presses already walk a bucket, but
+# that is a COMBO -- it falls back to the first move the moment you stop. These two keys are the
+# other thing: a standing choice of WHICH attack each button leads with. The right arrow pages
+# r1/r2 and the left arrow pages l1/l2, which is the hand each key already swaps an armament for in
+# vanilla -- and a possessed creature has no armaments, so neither key does anything else while you
+# are wearing one.
+#
+# er-npc-possess.derived.toml has a [pages] block saying which set you are on and what each button
+# leads with, and the log says so every time you turn a page. A creature with only one set on a
+# hand ignores that key rather than cycling one page. Leave a value empty to unbind it.
+page_right = "Right"
+page_left = "Left"
+# The controller spelling of the same two. The d-pad, for the same reason.
+pad_page_right = "DPad_Right"
+pad_page_left = "DPad_Left"
 
 # How the possessed body moves. LIVE -- an edit applies within a second, mid-possession.
 [movement]
@@ -1044,6 +1061,25 @@ mod tests {
         assert_eq!(config.tables.mapping.unbound_inputs, UnboundInputs::Promote);
         assert_eq!(config.tables.mapping.watchdog_seconds, 4.0);
         assert_eq!(config.tables.buttons.r1, Bucket::Light);
+        // THE ATTACK-SET PAGE KEYS, asserted rather than assumed for the same reason the picker's
+        // arrows are: these two are the keys vanilla puts the armament swap on, and picking any
+        // other pair would throw away the muscle memory that is the whole argument for them.
+        assert_eq!(
+            config.tables.buttons.page_right,
+            Some(parse_chord("Right").expect("Right"))
+        );
+        assert_eq!(
+            config.tables.buttons.page_left,
+            Some(parse_chord("Left").expect("Left"))
+        );
+        assert_eq!(
+            pad_chord_name(config.tables.buttons.pad_page_right),
+            "DPad_Right"
+        );
+        assert_eq!(
+            pad_chord_name(config.tables.buttons.pad_page_left),
+            "DPad_Left"
+        );
         assert_eq!(config.tables.movement.turn_deadzone_deg, 20.0);
         let picker = config.tables.picker;
         assert!(picker.enabled);

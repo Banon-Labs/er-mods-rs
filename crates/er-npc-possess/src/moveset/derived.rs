@@ -22,6 +22,7 @@
 
 use std::fmt::Write as _;
 
+use crate::moveset::dispatch::{Dispatcher, Hand};
 use crate::moveset::table::{Denial, Moveset, Throw};
 use crate::settings::Bucket;
 
@@ -45,6 +46,21 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
     );
     let _ = writeln!(out, "[chr.c{chr_id:04}]");
     let _ = writeln!(out, "# {summary}");
+    // SAID IN WORDS, not left to be inferred from four zeroes in the counts above. A creature whose
+    // whole moveset is `movement` answers every attack button with a walk clip, which from the
+    // player's chair is indistinguishable from a mod that has stopped working -- and 25 of the 408
+    // creatures in the shipped table really are like that (a Balloon Dummy has no attacks, and no
+    // amount of fixing will give it any). The counts were already here and nobody read them as a
+    // sentence; this is the sentence.
+    if !moveset.moves.is_empty() && moveset.bucket(Bucket::Movement).count() == moveset.moves.len()
+    {
+        out.push_str(
+            "# THIS CREATURE HAS NO ATTACK ANIMATIONS. Everything below is locomotion, so r1, r2\n\
+             # and l1 have nothing of their own to fire -- with [mapping] unbound_inputs =\n\
+             # \"promote\" they borrow from the movement list and play a step, and with \"deny\"\n\
+             # they do nothing at all. Movement, the camera, the HUD and release still work.\n",
+        );
+    }
     if moveset.moves.is_empty() && moveset.denials.is_empty() {
         out.push_str(
             "# Nothing at all: this creature is not in the shipped table, or the table found\n\
@@ -146,6 +162,75 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
     out
 }
 
+/// The `[pages]` block: which attack set each hand is on, and what its two buttons lead with.
+///
+/// # Why the page needs a report at all
+///
+/// The page is the one piece of moveset state the PLAYER moves, and it is invisible: nothing on
+/// screen says whether right arrow has been pressed three times or none. Every other decision in
+/// this file was made offline and is fixed for the possession; this one changes under the player's
+/// hand, so it is the one most worth being able to look up.
+///
+/// `leads with` is what the next press gives from a standing start. A press made mid-combo or at an
+/// unusual distance can still land elsewhere -- the rank cursor walks on from the page, and the
+/// `context` model filters by reach -- and the note below says so rather than letting the block
+/// read as a promise.
+pub(crate) fn pages_block(dispatcher: &Dispatcher) -> String {
+    let mut out = String::from(
+        "\n# ---------------------------------------------------------------------------\n\
+         # [pages] -- the attack SET each hand is on.\n\
+         #\n\
+         # A creature has up to sixty attacks and four buttons. The page is a standing offset into\n\
+         # each bucket, moved only by you: the RIGHT arrow pages r1/r2 and the LEFT arrow pages\n\
+         # l1/l2, matching the two armament-swap keys vanilla puts there -- a possessed creature\n\
+         # has no armaments, so both keys are otherwise dead. Rebind them with [buttons] page_left\n\
+         # / page_right (and pad_page_left / pad_page_right).\n\
+         #\n\
+         # `leads with` is the move the next press gives from a standing start. Repeated presses\n\
+         # still walk on from there within the combo window, and [mapping] model = \"context\"\n\
+         # filters by reach, so a press at an odd distance can land on a different one.\n\n",
+    );
+    out.push_str("[pages]\n");
+    for hand in Hand::ALL {
+        let pages = dispatcher.pages(hand);
+        let mut leads = Vec::new();
+        for input in hand.inputs() {
+            let bucket = input.bucket(dispatcher.buttons());
+            match dispatcher.leads_with(input) {
+                Some(entry) => leads.push(format!(
+                    "{} leads with {} ({} rank {})",
+                    input.name(),
+                    entry.fire,
+                    bucket.name(),
+                    entry.rank
+                )),
+                None => leads.push(format!(
+                    "{} has nothing ({} is empty on this creature)",
+                    input.name(),
+                    bucket.name()
+                )),
+            }
+        }
+        if pages <= 1 {
+            let _ = writeln!(
+                out,
+                "{} = \"1/1 -- one set only, so the page key does nothing here: {}\"",
+                hand.name(),
+                leads.join(", ")
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "{} = \"{}/{pages} -- {}\"",
+                hand.name(),
+                dispatcher.page(hand) + 1,
+                leads.join(", ")
+            );
+        }
+    }
+    out
+}
+
 /// The same file, for a spawn that never produced a creature to report on.
 ///
 /// # Why the refusal goes here rather than only in the log
@@ -232,6 +317,51 @@ mod tests {
 
     fn moveset(line: &str) -> Moveset {
         parse_line(line).expect("well-formed test line").1
+    }
+
+    fn dispatcher(line: &str) -> Dispatcher {
+        Dispatcher::new(
+            moveset(line),
+            crate::settings::MappingSettings::default(),
+            crate::settings::ButtonSettings::default(),
+        )
+    }
+
+    /// The counts said `light=0 heavy=0 ranged=0 movement=12` and the player read it as nothing at
+    /// all. This is the sentence that says it out loud, and the assertion that it is there.
+    #[test]
+    fn a_creature_with_only_locomotion_is_told_so_in_words() {
+        let text = render(
+            130,
+            &moveset("130 6000:3:0:0:2 6001:3:1:0:2"),
+            "moves=2 (light=0 heavy=0 ranged=0 movement=2) denied=0",
+        );
+        assert!(text.contains("HAS NO ATTACK ANIMATIONS"), "{text}");
+        // ...and a creature that HAS attacks must not be told it has none.
+        let armed = render(4500, &moveset("4500 3000:0:0:1 6000:3:0:0:2"), "summary");
+        assert!(!armed.contains("HAS NO ATTACK ANIMATIONS"), "{armed}");
+    }
+
+    /// The page is the only piece of moveset state the player moves, and nothing on screen shows
+    /// it. The report is where they look it up, so what it says has to be the truth about the live
+    /// dispatcher rather than a fixed line of prose.
+    #[test]
+    fn the_pages_block_names_the_current_set_and_what_each_button_leads_with() {
+        let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1 3002:0:2:1 3010:1:0:1");
+        let first = pages_block(&engine);
+        assert!(first.contains("right = \"1/3"), "{first}");
+        assert!(first.contains("r1 leads with 3000"), "{first}");
+        engine.turn_page(Hand::Right);
+        let second = pages_block(&engine);
+        assert!(second.contains("right = \"2/3"), "{second}");
+        assert!(second.contains("r1 leads with 3001"), "{second}");
+        // The left hand has nothing here, so it must say the key does nothing rather than
+        // offering a page turn that would not happen.
+        assert!(second.contains("left = \"1/1"), "{second}");
+        assert!(
+            second.contains("the page key does nothing here"),
+            "{second}"
+        );
     }
 
     #[test]

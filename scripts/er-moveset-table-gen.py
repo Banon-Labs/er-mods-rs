@@ -258,6 +258,50 @@ def tae_paths_for(anibnd_dirs):
     return sorted(out)
 
 
+def family_base(variation):
+    """The chr id whose `.tae` describes a creature with this `behaviorVariationId`.
+
+    THE CHR-ID JOIN IS NOT THE ANIMATION JOIN, and assuming it was cost this table a third
+    of its attacks. A creature like c4351 Godrick Knight owns a model, a skeleton and a
+    behaviour graph that declares and can fire all 72 in-band ids -- and its `.anibnd`
+    contains `skeleton.hkx` and nothing else. There is no `c4351.tae` because there are no
+    c4351 animations: the whole 435x knight family plays out of `c4350.anibnd.dcx`, whose
+    `INTERROOT_win64/chr/c4350/tae/c4350.tae` is a megabyte of TimeAct covering all six of
+    them.
+
+    `NpcParam.behaviorVariationId` is what names that base -- `<family> * 100 + <variant>`,
+    so 43500 is family 435 and its animations ship under `c4350`. Measured over the corpus:
+    270 creatures own their TimeAct (their own family base IS themselves, e.g. c4160 at
+    variation 41600), 133 inherit it, and 5 have none under either id. Before this join
+    those 133 reached `classify_chr` with an EMPTY TimeAct dict, so every attack they can
+    fire was denied `no-damage-window` and then trimmed out of existence by the in-span
+    rule, leaving the twelve `W_Step` walk clips as the entire shipped moveset.
+
+    Returns None for a variation the convention cannot express -- absent, or one of the
+    100000+ sentinels `Regulation.resolve` already refuses.
+    """
+    if variation is None or variation >= 100000 or variation < 0:
+        return None
+    return f'c{variation // 100 * 10:04d}'
+
+
+def tae_paths_for_chr(anibnds, chr_id, variation):
+    """Every `.tae` describing this creature: its own, else its family base's.
+
+    The single place the fallback is decided, so the generator and the probe cannot drift
+    apart and report different movesets for the same creature.
+    """
+    paths = tae_paths_for(anibnds.get(chr_id, []))
+    if paths:
+        return paths, chr_id
+    base = family_base(variation)
+    if base and base != chr_id:
+        paths = tae_paths_for(anibnds.get(base, []))
+        if paths:
+            return paths, base
+    return [], None
+
+
 # ---------------------------------------------------------------------------
 # behavior graph: which animation ids are actually FIREABLE
 # ---------------------------------------------------------------------------
@@ -764,9 +808,12 @@ def generate(root, only=None, jobs=10, regulation_path=None):
             continue
         if chr_id == 'c0000':                        # the player is out of scope
             continue
-        work.append((chr_id, sorted(behbnds[chr_id])[0],
-                     tae_paths_for(anibnds.get(chr_id, [])),
-                     regulation.variation_for(chr_id)))
+        variation = regulation.variation_for(chr_id)
+        # The TimeAct join goes through `behaviorVariationId`, not through the chr id --
+        # see `family_base`. The fallback is only taken when the chr-id join found nothing
+        # at all, so a creature shipping its own TimeAct is never second-guessed.
+        taes, _owner = tae_paths_for_chr(anibnds, chr_id, variation)
+        work.append((chr_id, sorted(behbnds[chr_id])[0], taes, variation))
     per_chr, errors = {}, {}
     # SERIAL when asked for one job, and the check gate asks for one. `multiprocessing`
     # cannot pickle `_one` when this file is loaded as a module by path rather than

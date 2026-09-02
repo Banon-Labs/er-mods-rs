@@ -294,22 +294,50 @@ const PAD_RIGHT_SHOULDER: u16 = 0x0200;
 /// firm pull.
 const TRIGGER_PRESSED: u8 = 96;
 
-/// The four moveset face inputs, as a held/not-held bitfield in [`Input::index`] order:
-/// bit 0 `r1`, bit 1 `r2`, bit 2 `l1`, bit 3 `l2`.
+/// EVERYTHING THE MOVESET LAYER READS IN ONE FRAME, AND FROM ONE PAD READ.
 ///
-/// LEVELS, not edges -- [`FaceEdges`] turns them into presses. Keeping the two apart means the
-/// pad read stays the one untestable line and the edge logic is proved on the host.
+/// Returns `(face, page)`, both held/not-held bitfields:
+///
+/// * `face` is the four attack inputs in [`Input::index`] order -- bit 0 `r1`, bit 1 `r2`,
+///   bit 2 `l1`, bit 3 `l2`;
+/// * `page` is the two attack-set page keys in [`crate::moveset::dispatch::Hand::index`] order --
+///   bit 0 the right hand's, bit 1 the left hand's.
+///
+/// LEVELS, not edges -- [`FaceEdges`] turns both into presses. Keeping the two apart means the pad
+/// read stays the one untestable line in this file and the edge logic is proved on the host.
+///
+/// ONE `XInputGetState`, because it is the expensive call here: with no controller attached it
+/// walks the driver stack and costs on the order of a millisecond, on the game's own `FrameBegin`
+/// thread, every frame. Reading it twice to answer two questions about the same gamepad state would
+/// pay that twice for nothing -- and worse, the two reads could disagree, so a d-pad tap could land
+/// in one and not the other.
 #[cfg(windows)]
-pub(crate) fn read_face_inputs() -> u8 {
-    let mut held = 0u8;
+pub(crate) fn read_moveset_inputs(buttons: crate::settings::ButtonSettings) -> (u8, u8) {
+    let mut face = 0u8;
+    let mut pad_buttons = 0u16;
     with_pad_state(|state| {
         let pad = &state.gamepad;
-        held = u8::from(pad.buttons & PAD_RIGHT_SHOULDER != 0)
+        pad_buttons = pad.buttons;
+        face = u8::from(pad.buttons & PAD_RIGHT_SHOULDER != 0)
             | (u8::from(pad.right_trigger >= TRIGGER_PRESSED) << 1)
             | (u8::from(pad.buttons & PAD_LEFT_SHOULDER != 0) << 2)
             | (u8::from(pad.left_trigger >= TRIGGER_PRESSED) << 3);
     });
-    held | read_mouse_face_inputs()
+    let down = |chord: Option<Chord>, pad_chord: PadChord| -> bool {
+        chord.is_some_and(chord_held) || pad_chord.held_in(pad_buttons)
+    };
+    // THE HELD BIT ONLY, never `GetAsyncKeyState`'s pressed-since-last-call bit. `crate::picker`
+    // polls the same two arrow keys through `chord_held` every frame and consumes that bit, so an
+    // edge built on it would lose presses depending on which module happened to run first. A
+    // held-level edge through [`FaceEdges`] cannot.
+    let page = u8::from(down(buttons.page_right, buttons.pad_page_right))
+        | (u8::from(down(buttons.page_left, buttons.pad_page_left)) << 1);
+    (face | read_mouse_face_inputs(), page)
+}
+
+#[cfg(not(windows))]
+pub(crate) const fn read_moveset_inputs(_buttons: crate::settings::ButtonSettings) -> (u8, u8) {
+    (0, 0)
 }
 
 /// The mouse half of the same four inputs, matching the game's OWN default keyboard layout:
@@ -339,15 +367,12 @@ fn read_mouse_face_inputs() -> u8 {
     out
 }
 
-#[cfg(not(windows))]
-pub(crate) const fn read_face_inputs() -> u8 {
-    0
-}
-
-/// Rising edges for the four moveset inputs.
+/// Rising edges over a held/not-held bitfield -- the four moveset inputs, and the two attack-set
+/// page keys, which want exactly the same treatment.
 ///
 /// Edges rather than levels because an attack is a press, not a hold: a held trigger would refire
-/// the combo sixty times a second and walk the whole moveset in a fifth of a second.
+/// the combo sixty times a second and walk the whole moveset in a fifth of a second. A held page
+/// key would spin through every page in the same fifth of a second and land somewhere arbitrary.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct FaceEdges {
     held: u8,

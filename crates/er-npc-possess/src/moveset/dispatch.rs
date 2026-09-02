@@ -69,7 +69,7 @@ impl Input {
         }
     }
 
-    const fn bucket(self, buttons: ButtonSettings) -> Bucket {
+    pub(crate) const fn bucket(self, buttons: ButtonSettings) -> Bucket {
         match self {
             Self::R1 => buttons.r1,
             Self::R2 => buttons.r2,
@@ -77,6 +77,79 @@ impl Input {
             Self::L2 => buttons.l2,
         }
     }
+
+    /// Which hand's page key moves this button. `r1`/`r2` are the right hand, `l1`/`l2` the left,
+    /// matching the two armament slots vanilla's own swap keys page.
+    pub(crate) const fn hand(self) -> Hand {
+        match self {
+            Self::R1 | Self::R2 => Hand::Right,
+            Self::L1 | Self::L2 => Hand::Left,
+        }
+    }
+}
+
+/// The two attack-set pages, one per hand.
+///
+/// # Why a page exists at all
+///
+/// A creature has 8 to 60 attacks and four buttons. Repeated presses already walk a bucket in rank
+/// order, but that is a COMBO -- it advances while you are attacking and falls back to the first
+/// move the moment you stop, which is what a combo should do and is useless for "I want this button
+/// to be the OTHER attack from now on". The page is that second thing: a standing offset into the
+/// bucket that only the player moves.
+///
+/// # Why the arrow keys
+///
+/// Vanilla binds left and right arrow to the LEFT-HAND and RIGHT-HAND armament swap. A possessed
+/// creature has no armaments and no `PlayerGameData` to swap them in, so both keys do nothing for
+/// the length of a possession -- they are free, and they are already the gesture for "change what
+/// this button does". Right pages `r1`/`r2`, left pages `l1`/`l2`, so each key keeps the hand it
+/// had.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Hand {
+    Right,
+    Left,
+}
+
+impl Hand {
+    pub(crate) const ALL: [Self; 2] = [Self::Right, Self::Left];
+
+    /// Also the bit this hand's page key occupies in [`crate::input::read_page_inputs`].
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::Right => 0,
+            Self::Left => 1,
+        }
+    }
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Left => "left",
+        }
+    }
+
+    /// The two buttons this hand pages, in the order the log names them.
+    pub(crate) const fn inputs(self) -> [Input; 2] {
+        match self {
+            Self::Right => [Input::R1, Input::R2],
+            Self::Left => [Input::L1, Input::L2],
+        }
+    }
+}
+
+/// What a page key press did.
+///
+/// [`Self::OnePage`] is a refusal WITH a reason, and it is the whole difference between a key that
+/// is broken and a key that has nothing to do here: a creature whose biggest bucket on this hand
+/// holds one move has exactly one page, and cycling a single page would flash a log line and change
+/// nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageTurn {
+    /// Moved to page `page` of `pages` (both 1-based for the player).
+    Turned { page: u16, pages: u16 },
+    /// This hand has one page, so the key does nothing on this creature.
+    OnePage,
 }
 
 /// How far away the thing you are pointing at is, in the same three bands as [`Reach`].
@@ -227,6 +300,12 @@ pub(crate) struct Dispatcher {
     buttons: ButtonSettings,
     /// Per-input rank cursor. Indexed by [`Input::index`].
     cursor: [u16; 4],
+    /// Per-hand attack-set page. Indexed by [`Hand::index`]. Zero-based here, printed 1-based.
+    ///
+    /// Separate from [`Self::cursor`] and deliberately NOT reset by [`Self::on_neutral`]: the
+    /// cursor is a combo, which should fall back to the first move when the player stops, and the
+    /// page is a choice, which should not.
+    page: [u16; 2],
     /// When the last press landed, for the combo window.
     last_press_ms: Option<u64>,
     /// Animation ids pinned by `[chr.*] pin`, indexed like `cursor`.
@@ -242,10 +321,75 @@ impl Dispatcher {
             mapping,
             buttons,
             cursor: [0; 4],
+            page: [0; 2],
             last_press_ms: None,
             pins: [None; 4],
             buffer: Buffer::new(mapping.input_buffer_ms),
         }
+    }
+
+    /// How many attack sets this hand has to offer: the length of its longest bucket, at least one.
+    ///
+    /// Measured against the WHOLE bucket rather than against what the current distance band leaves,
+    /// so the number the player is shown does not change as they walk toward something. The page is
+    /// applied to the filtered list, so a page past the end of a short bucket wraps rather than
+    /// going dead -- which is also why the count is the MAX of the hand's two buckets and not the
+    /// min: taking the min would hide the longer bucket's later moves behind a shorter one.
+    pub(crate) fn pages(&self, hand: Hand) -> u16 {
+        hand.inputs()
+            .into_iter()
+            .map(|input| self.moveset.bucket(input.bucket(self.buttons)).count())
+            .max()
+            .and_then(|count| u16::try_from(count).ok())
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    /// The page this hand is on, zero-based.
+    pub(crate) const fn page(&self, hand: Hand) -> u16 {
+        self.page[hand.index()]
+    }
+
+    /// Step this hand's page one forward, wrapping. The only way the page moves.
+    pub(crate) fn turn_page(&mut self, hand: Hand) -> PageTurn {
+        let pages = self.pages(hand);
+        if pages <= 1 {
+            return PageTurn::OnePage;
+        }
+        let slot = &mut self.page[hand.index()];
+        *slot = (*slot + 1) % pages;
+        PageTurn::Turned {
+            page: *slot + 1,
+            pages,
+        }
+    }
+
+    /// The move this button LEADS WITH on the current page, ignoring range and the combo cursor.
+    ///
+    /// The thing to print when the page turns and in the derived report: it is what the next press
+    /// gives from a neutral stance, which is the question the player is actually asking. A press
+    /// made mid-combo or at an unusual distance can still land elsewhere, and the report says so
+    /// rather than pretending the page is the whole story.
+    pub(crate) fn leads_with(&self, input: Input) -> Option<Move> {
+        let bucket: Vec<&Move> = self.moveset.bucket(input.bucket(self.buttons)).collect();
+        if bucket.is_empty() {
+            return None;
+        }
+        let index = usize::from(self.page(input.hand())) % bucket.len();
+        Some(*bucket[index])
+    }
+
+    /// How many attacks -- anything that is not [`Bucket::Movement`] -- this creature has.
+    ///
+    /// Zero is a real and legitimate answer for a target dummy, and a bug for a knight, and the
+    /// caller cannot tell which. What it CAN do is say the number out loud instead of leaving the
+    /// player pressing four buttons into a walk cycle, which is why this exists at all.
+    pub(crate) fn attack_count(&self) -> usize {
+        self.moveset
+            .moves
+            .iter()
+            .filter(|entry| entry.bucket != Bucket::Movement)
+            .count()
     }
 
     pub(crate) fn moveset(&self) -> &Moveset {
@@ -254,6 +398,13 @@ impl Dispatcher {
 
     pub(crate) fn moveset_mut(&mut self) -> &mut Moveset {
         &mut self.moveset
+    }
+
+    /// The button layout this dispatcher was built with. Staged at possession start rather than
+    /// re-read per frame, so the page keys and the buckets they page cannot disagree after a
+    /// mid-possession edit to `[buttons]`.
+    pub(crate) const fn buttons(&self) -> ButtonSettings {
+        self.buttons
     }
 
     /// Apply a `[chr.*] pin = { r2 = 3046 }` entry. Unknown input names are ignored by the caller.
@@ -410,12 +561,16 @@ impl Dispatcher {
             context.now_ms.saturating_sub(last) > self.mapping.combo_window_ms.into()
         });
         let slot = self.cursor[input.index()];
-        let index = if expired {
-            0
-        } else {
-            usize::from(slot) % chosen.len()
-        };
-        self.cursor[input.index()] = u16::try_from(index + 1).unwrap_or(0);
+        let cursor = if expired { 0 } else { usize::from(slot) };
+        // THE PAGE IS AN OFFSET, THE CURSOR IS A COMBO, and they add. A fresh press on page 3
+        // starts at the third move of the bucket; a second press within the combo window walks on
+        // from there, which is what a combo does. Wrapping is `%` on the sum rather than on each
+        // half, so a page past the end of a short candidate list lands somewhere real instead of
+        // being clamped to the first move and silently ignoring the page.
+        let index = (usize::from(self.page(input.hand())) + cursor) % chosen.len();
+        // Kept inside the candidate list so the stored cursor stays a small bounded number, exactly
+        // as it was before the page was added to the sum.
+        self.cursor[input.index()] = u16::try_from((cursor + 1) % chosen.len()).unwrap_or(0);
         self.last_press_ms = Some(context.now_ms);
         Ok(chosen[index])
     }
@@ -573,6 +728,116 @@ mod tests {
         assert_eq!(Input::R2.bucket(buttons), Bucket::Heavy);
         assert_eq!(Input::L1.bucket(buttons), Bucket::Ranged);
         assert_eq!(Input::L2.bucket(buttons), Bucket::Movement);
+    }
+
+    /// The whole point of the page: it changes WHICH attack the button leads with, and it does so
+    /// on the player's schedule rather than the combo's.
+    #[test]
+    fn a_page_turn_moves_which_attack_the_button_leads_with() {
+        let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1 3002:0:2:1");
+        assert_eq!(engine.pages(Hand::Right), 3);
+        assert_eq!(engine.leads_with(Input::R1).unwrap().fire, 3000);
+        assert_eq!(
+            engine.turn_page(Hand::Right),
+            PageTurn::Turned { page: 2, pages: 3 }
+        );
+        assert_eq!(engine.leads_with(Input::R1).unwrap().fire, 3001);
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3001,
+            "a fresh press on page 2 must give the second attack, not the first"
+        );
+        // And the combo still walks ON from the page rather than restarting at rank 0.
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 100)).unwrap().fire,
+            3002
+        );
+    }
+
+    /// The page is a CHOICE and the cursor is a COMBO, so standing still must clear one and not the
+    /// other. If `on_neutral` reset the page, the key would appear to work and then silently undo
+    /// itself the moment the player stopped attacking -- the worst of the three possible bugs here,
+    /// because it looks like the feature is only sometimes bound.
+    #[test]
+    fn a_return_to_neutral_clears_the_combo_cursor_and_leaves_the_page_alone() {
+        let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1 3002:0:2:1");
+        engine.turn_page(Hand::Right);
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 0)).unwrap().fire,
+            3001
+        );
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 100)).unwrap().fire,
+            3002
+        );
+        engine.on_neutral();
+        assert_eq!(
+            engine.choose(Input::R1, context(1.0, 200)).unwrap().fire,
+            3001,
+            "the page must survive a return to neutral"
+        );
+    }
+
+    /// Wrapping, and wrapping to the number of pages the HAND has rather than to the number this
+    /// button's own bucket has.
+    #[test]
+    fn the_page_wraps_at_the_longest_bucket_on_that_hand() {
+        // Light has three, heavy has one: the right hand therefore has three sets, and `r2` shows
+        // its single heavy attack on all of them rather than going dead on pages 2 and 3.
+        let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1 3002:0:2:1 3010:1:0:1");
+        assert_eq!(engine.pages(Hand::Right), 3);
+        for expected in [2u16, 3, 1] {
+            assert_eq!(
+                engine.turn_page(Hand::Right),
+                PageTurn::Turned {
+                    page: expected,
+                    pages: 3
+                }
+            );
+            assert_eq!(engine.leads_with(Input::R2).unwrap().fire, 3010);
+        }
+    }
+
+    /// A key that cycles one page is a key that flashes a message and changes nothing. It must
+    /// refuse WITH a reason instead, so the caller can say "this creature has one set" once rather
+    /// than printing a page turn that did not happen.
+    #[test]
+    fn a_hand_with_a_single_set_refuses_the_page_key_rather_than_cycling_it() {
+        let mut engine = dispatcher("4500 3000:0:0:1 3010:1:0:1 3020:2:0:3");
+        assert_eq!(engine.pages(Hand::Right), 1);
+        assert_eq!(engine.turn_page(Hand::Right), PageTurn::OnePage);
+        assert_eq!(engine.page(Hand::Right), 0);
+        // The left hand has ranged (one) and movement (none), so it is also a single set.
+        assert_eq!(engine.turn_page(Hand::Left), PageTurn::OnePage);
+    }
+
+    /// The two hands are independent, and each key keeps the hand vanilla gave it.
+    #[test]
+    fn each_hand_pages_only_its_own_two_buttons() {
+        let mut engine = dispatcher("4500 3000:0:0:1 3001:0:1:1 3020:2:0:3 3021:2:1:3 3022:2:2:3");
+        engine.turn_page(Hand::Left);
+        assert_eq!(engine.leads_with(Input::L1).unwrap().fire, 3021);
+        assert_eq!(
+            engine.leads_with(Input::R1).unwrap().fire,
+            3000,
+            "paging the left hand must not move the right hand's set"
+        );
+        assert_eq!(Input::R1.hand(), Hand::Right);
+        assert_eq!(Input::R2.hand(), Hand::Right);
+        assert_eq!(Input::L1.hand(), Hand::Left);
+        assert_eq!(Input::L2.hand(), Hand::Left);
+    }
+
+    /// `attack_count` is what turns `light=0 heavy=0 ranged=0 movement=12` into a sentence the
+    /// player can act on. A creature with only locomotion has to answer zero here, or the "this
+    /// creature has no attacks" line never fires and the player is left pressing buttons at a walk
+    /// cycle.
+    #[test]
+    fn a_moveset_that_is_all_locomotion_reports_no_attacks() {
+        let walker = dispatcher("130 6000:3:0:0:2 6001:3:1:0:2 6002:3:2:0:2");
+        assert_eq!(walker.attack_count(), 0);
+        let fighter = dispatcher("4500 3000:0:0:1 6000:3:0:0:2");
+        assert_eq!(fighter.attack_count(), 1);
     }
 
     #[test]

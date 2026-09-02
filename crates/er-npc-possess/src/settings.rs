@@ -625,6 +625,18 @@ pub(crate) struct ButtonSettings {
     pub(crate) r2: Bucket,
     pub(crate) l1: Bucket,
     pub(crate) l2: Bucket,
+    /// Page the LEFT hand's two buttons (`l1`/`l2`) onto the next move of their buckets.
+    ///
+    /// Left arrow by default because that is the key vanilla binds to the left-hand armament
+    /// swap: a possessed creature has no armaments and no `PlayerGameData` to swap them in, so
+    /// the two swap keys are free, and they are already the gesture a player reaches for when
+    /// they want a button to do something else. `None` is unbound, which is a real setting.
+    pub(crate) page_left: Option<Chord>,
+    /// ...and the RIGHT hand's (`r1`/`r2`), on the right arrow.
+    pub(crate) page_right: Option<Chord>,
+    /// The pad spelling of the same two, defaulting to the d-pad for the same reason.
+    pub(crate) pad_page_left: PadChord,
+    pub(crate) pad_page_right: PadChord,
 }
 
 impl Default for ButtonSettings {
@@ -634,6 +646,10 @@ impl Default for ButtonSettings {
             r2: Bucket::Heavy,
             l1: Bucket::Ranged,
             l2: Bucket::Movement,
+            page_left: default_chord(PAGE_DEFAULT_LEFT),
+            page_right: default_chord(PAGE_DEFAULT_RIGHT),
+            pad_page_left: default_pad(PAGE_DEFAULT_PAD_LEFT),
+            pad_page_right: default_pad(PAGE_DEFAULT_PAD_RIGHT),
         }
     }
 }
@@ -645,15 +661,49 @@ impl ButtonSettings {
         take(&mut self.r2, doc, s, "r2", rejections, Bucket::parse);
         take(&mut self.l1, doc, s, "l1", rejections, Bucket::parse);
         take(&mut self.l2, doc, s, "l2", rejections, Bucket::parse);
+        take(
+            &mut self.page_left,
+            doc,
+            s,
+            "page_left",
+            rejections,
+            parse_optional_chord,
+        );
+        take(
+            &mut self.page_right,
+            doc,
+            s,
+            "page_right",
+            rejections,
+            parse_optional_chord,
+        );
+        take(
+            &mut self.pad_page_left,
+            doc,
+            s,
+            "pad_page_left",
+            rejections,
+            parse_pad,
+        );
+        take(
+            &mut self.pad_page_right,
+            doc,
+            s,
+            "pad_page_right",
+            rejections,
+            parse_pad,
+        );
     }
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "r1={} r2={} l1={} l2={}",
+            "r1={} r2={} l1={} l2={} page_left={} page_right={}",
             self.r1.name(),
             self.r2.name(),
             self.l1.name(),
-            self.l2.name()
+            self.l2.name(),
+            binding_text(self.page_left, self.pad_page_left),
+            binding_text(self.page_right, self.pad_page_right),
         )
     }
 }
@@ -870,6 +920,19 @@ pub(crate) const MOVE_DEFAULT_BACK: &str = "S";
 pub(crate) const MOVE_DEFAULT_LEFT: &str = "A";
 pub(crate) const MOVE_DEFAULT_RIGHT: &str = "D";
 
+/// THE ATTACK-SET PAGE KEYS, spelled once for the parser, the shipped config comment and the
+/// tests.
+///
+/// Left and right arrow because vanilla binds those to the LEFT-HAND and RIGHT-HAND armament swap
+/// -- the gesture a player already has in their fingers for "make this button do something else".
+/// A possessed creature has no armaments and no `PlayerGameData` to swap them in, so both keys are
+/// dead weight during a possession and there is nothing to collide with. The pad spelling is the
+/// d-pad for the same reason.
+pub(crate) const PAGE_DEFAULT_LEFT: &str = "Left";
+pub(crate) const PAGE_DEFAULT_RIGHT: &str = "Right";
+pub(crate) const PAGE_DEFAULT_PAD_LEFT: &str = "DPad_Left";
+pub(crate) const PAGE_DEFAULT_PAD_RIGHT: &str = "DPad_Right";
+
 pub(crate) const PICKER_DEFAULT_TOGGLE: &str = "F10";
 pub(crate) const PICKER_DEFAULT_UP: &str = "Up";
 pub(crate) const PICKER_DEFAULT_DOWN: &str = "Down";
@@ -1061,6 +1124,17 @@ impl HudSettings {
 
 fn chord_text(chord: Option<Chord>) -> String {
     chord.map_or_else(|| "(none)".to_owned(), chord_name)
+}
+
+/// A built-in pad default must parse, for the same reason [`default_chord`] exists.
+fn default_pad(spelling: &str) -> PadChord {
+    parse_pad_chord(spelling).unwrap_or_default()
+}
+
+/// One binding as the log prints it: both spellings, because a player who bound only the pad and a
+/// player who unbound both need to tell their situations apart.
+fn binding_text(chord: Option<Chord>, pad: PadChord) -> String {
+    format!("{}/{}", chord_text(chord), pad_chord_name(pad))
 }
 
 /// One `[chr.cXXXX]` table. Live, and open-ended: the parser reports the ids the FILE contains
