@@ -844,11 +844,17 @@ fn install_show_observer() -> usize {
     // the recurring check in `resolve_session`, which had to stop reading `show` for that reason.
     if !prologue_matches(address, abi.show_prologue) {
         if SHOW_HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 0 {
+            // The version is the GENERATED constant, not a literal: this line and the pins it is
+            // talking about have to name the same build, and a hand-typed "v1.9.9" beside a
+            // repinned constant is a refusal that lies about why it refused.
+            let supported = ersc::SUPPORTED_VERSION;
             crate::standalone_log(format_args!(
-                "local-invasion: ersc.dll @0x{base:x} was recognised as {} but does not carry that \
-                 build's `show` at ersc+0x{:x} -- NOT touching it. The filter stays inert. To see \
-                 where the entry points went: uv run --with capstone python3 \
-                 scripts/locate-ersc-entry-points.py",
+                "local-invasion: ersc.dll @0x{base:x} was recognised as {} but does not carry \
+                 that build's `show` at ersc+0x{:x} -- NOT touching it. The filter stays inert. \
+                 This mod is measured against Seamless Co-op v{supported} and no other version: \
+                 update to it, or, if yours is already newer, this mod has not been re-measured \
+                 against your build yet. To see where the entry points went: uv run --with \
+                 capstone python3 scripts/locate-ersc-entry-points.py",
                 abi.version, abi.show_rva,
             ));
         }

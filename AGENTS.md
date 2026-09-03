@@ -61,6 +61,23 @@ Do not launch Elden Ring through Steam from agent workflows. Forbidden launch fo
 
 Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles. For er-net-effects ME3 profiles, still include a `[[natives]]` entry that references the game-installed Seamless Co-op DLL under the Elden Ring install's `Game/SeamlessCoop/ersc.dll`; this is a runtime profile reference, not bundling or staging the DLL. **Resolve that install path, do not copy one from these notes.** This machine now runs a NATIVE LINUX Steam install -- `$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game/` -- which is what every `.me3` profile in `~/Elden/` actually references, and `$HOME/Elden/launch.sh` derives from `ME3_STEAM_DIR`. The `C:\SteamLibrary\...` path this line used to name belongs to the retired WSL2 setup: there is no `/mnt/c` here (the Windows partitions mount as `/mnt/win-c`, `/mnt/win-d`), so every such path silently resolves to nothing and a `find` over it returns empty rather than erroring -- which reads as "the file is missing" instead of "you looked in the wrong place".
 
+**ONE supported Seamless Co-op build, recorded in one place (user directive 2026-09-03).** This
+repo does not support multiple Seamless versions and does not search for whichever build happens to
+be installed. The supported version is `ERSC_SUPPORTED_VERSION` in
+`build-support/prologue_build.rs`, and it is the ONLY place the number is written -- the runtime
+refusal in `local_invasion_filter.rs` names it through the generated `ersc::SUPPORTED_VERSION`
+constant rather than a second literal. Moving to a new Seamless build is a re-measurement (see
+`scripts/locate-ersc-entry-points.py`; a signature match is a candidate, never an identification),
+followed by editing that one line. Two checks enforce it and neither degrades quietly:
+`build-support/prologue_build.rs` reads the `Seamless Co-op vX.Y.Z by Yui` banner out of the file it
+is about to ground-truth against and PANICS before comparing a single byte if it is a different
+build, and `scripts/check-ersc-version-supported.py` (wired into `check.sh`) does the same for the
+INSTALLED module and is deliberately not overridable by `ER_ERSC_DLL`. An ABSENT module is not a
+mismatch and still skips -- same line `scripts/check-game-version-supported.py` draws for the game.
+`ER_ERSC_DLL` points the build at a copy of the supported build (the gitignored
+`vendor-archive/seamless/ersc-<version>.dll` archive is the intended source) and is itself
+version-checked, so it cannot wave a mismatch through.
+
 Do not COMMIT game-derived binaries either (user directive 2026-07-02): no extracted or transformed game assets (`.gfx`, `.dcx`, `.bnd`, `.tpf`, `.sl2`, texture/font payloads) as repo files, including test fixtures. Version FINGERPRINTS (length + FNV/sha constants) and deterministic generators instead; tests that need real asset bytes read them from the local extraction corpus (env-overridable root, e.g. `ER_GFX_CORPUS_ROOT` in `crates/er-gfx/tests/common/mod.rs`) and SKIP when it is absent. Large embedded byte arrays in `.rs` sources are the same problem in different clothing -- prefer runtime derivation from the game's own in-memory data (see `er_gfx::title_05_000`) or structured edit tables over byte dumps.
 
 User-provided or configured save files are read-only sources, including repo/local `save-files` inputs and arbitrary picked `.sl2`/`.co2` paths. Runtime/profile-switch writes must go only to the game-owned active default save copy/staged tree. The narrow exception is the live game-owned `%APPDATA%/EldenRing/<steamid>/ER0000.{sl2,co2}` path itself, which must remain writable because Elden Ring owns it and may crash or fail if it is forced read-only.
