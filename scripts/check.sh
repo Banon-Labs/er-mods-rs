@@ -1650,7 +1650,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
 	-p er-better-refills -p er-inventory-sort -p er-loading-bar \
-	-p er-loading-portrait -p er-save-disable
+	-p er-loading-portrait -p er-save-disable -p er-npc-possess
+# er-npc-possess joined this batch when the crate landed. Its whole point is that everything
+# above the possession seam -- the TOML reader, the schema, the not-live `[target]` staging, the
+# hotkey edge latches and the possession state machine -- is decidable without the game, so it
+# would be exactly the kind of crate that reports nothing if it were not named here. The
+# er-refill-all pad-chord tests moved INTO er-hotkey-config at the same time (the module was
+# promoted so both DLLs share one edge detector), so that crate's count grew rather than a new
+# line appearing for them.
 
 # er-build-export -- the crate that WRITES the `?i=` share link, and the only one of the fifteen
 # unreachable crates that was in neither batch. 50 lib tests plus 37 in five integration targets,

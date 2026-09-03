@@ -23,7 +23,6 @@
 mod config;
 mod log;
 mod mark;
-mod pad;
 
 #[cfg(windows)]
 mod runtime;
