@@ -683,7 +683,7 @@ def selftest(maps):
 PROFILE_LOADS = {
     "er-quickload": 36, "er-invasion-warp": 18, "er-crash-logging": 11, "er-telemetry": 8,
     "er-quit-menu": 7, "er-save-picker": 7, "er-net-effects": 7, "er-better-refills": 7,
-    "er-ersc-sigshim": 6, "er-armament-icons": 6, "er-player-name-filter": 6,
+    "er-armament-icons": 6, "er-player-name-filter": 6,
     "er-seamless-bugfixes": 6, "er-inventory-sort": 5, "er-reload-trace": 4,
     "er-enemynpc-effects": 3, "er-loading-bar": 3, "er-save-disable": 3, "er-invasion-path": 3,
     "er-refill-all": 3, "er-input-harness": 3, "er-build-import": 2, "er-loading-portrait": 2,

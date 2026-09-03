@@ -15,10 +15,12 @@
 //!
 //! # What it does NOT do
 //!
-//! It does not gate `er-hook`'s `write_code_byte`, which is used by version-AGNOSTIC code that
-//! discovers its own addresses by scanning (`er-ersc-sigshim` rebuilds Seamless Co-op's lost AOB
-//! landmarks, in a FOREIGN module, on exactly the builds this module calls unsupported). Refusing
-//! that would break the one thing that currently works on 1.17.
+//! It does not gate `er-hook`'s `write_code_byte`, which takes an ABSOLUTE address its caller
+//! discovered by scanning rather than a 1.16.2 RVA -- there is nothing to translate, so a gate here
+//! could only refuse work that is already version-agnostic. Its motivating caller was
+//! `er-ersc-sigshim`, patching a FOREIGN module on builds this one calls unsupported; that crate
+//! was retired on 2026-09-03 when the mod dropped support for old Seamless builds. The reasoning
+//! outlives it: a scanned absolute address is not this module's business either way.
 //!
 //! `patch_3byte_stub` / `apply_xor_ret_stub` were named here too until 2026-08-30 and should not
 //! have been: they take a 1.16.2 `rva`, not a scanned address, so they have something to translate

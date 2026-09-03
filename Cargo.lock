@@ -2892,14 +2892,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-ersc-sigshim"
-version = "0.1.0"
-dependencies = [
- "er-game-base",
- "er-hook",
-]
-
-[[package]]
 name = "er-flver"
 version = "0.1.0"
 dependencies = [
