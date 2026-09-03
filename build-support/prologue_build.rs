@@ -132,9 +132,9 @@ pub const REDUNDANT_REX_PREFIX: u8 = 0x40;
 /// field offsets, and then set this. The value is checked against the file before any pin is
 /// compared, so a repin that forgets this line fails the build rather than verifying against the
 /// wrong module.
-pub const ERSC_SUPPORTED_VERSION: &str = "2.0.0";
+pub const ERSC_SUPPORTED_VERSION: &str = "2.0.1";
 
-/// The version banner Seamless Co-op builds into its own image: `Seamless Co-op v2.0.0 by Yui`.
+/// The version banner Seamless Co-op builds into its own image: `Seamless Co-op v2.0.1 by Yui`.
 ///
 /// Read rather than inferred from a path, a file size or a timestamp, all of which a user can
 /// change without changing the build. Measured 2026-09-02: the banner is UTF-16LE, NUL-terminated,
@@ -194,20 +194,20 @@ pub enum Image {
     Ersc199,
     /// `ersc.dll` **v2.0.0**, shipped 2026-09-02. See [`Image::Ersc199`] for why the version is
     /// named rather than assumed.
-    Ersc200,
+    Ersc201,
 }
 
 impl Image {
     pub fn base(self) -> u64 {
         match self {
             Self::EldenRing | Self::EldenRing1170 => 0x1_4000_0000,
-            Self::Ersc199 | Self::Ersc200 => 0x1_8000_0000,
+            Self::Ersc199 | Self::Ersc201 => 0x1_8000_0000,
         }
     }
 
     /// Whether this image is a build of Seamless Co-op's `ersc.dll`.
     fn is_ersc(self) -> bool {
-        matches!(self, Self::Ersc199 | Self::Ersc200)
+        matches!(self, Self::Ersc199 | Self::Ersc201)
     }
 
     /// The product string Seamless ships in its own version resource, as ASCII. It is compared
@@ -216,7 +216,7 @@ impl Image {
     fn version_marker(self) -> Option<&'static str> {
         match self {
             Self::Ersc199 => Some("Seamless Co-op v1.9.9 by Yui"),
-            Self::Ersc200 => Some("Seamless Co-op v2.0.0 by Yui"),
+            Self::Ersc201 => Some("Seamless Co-op v2.0.1 by Yui"),
             _ => None,
         }
     }
@@ -226,7 +226,7 @@ impl Image {
             Self::EldenRing => "eldenring-deobf.bin",
             Self::EldenRing1170 => "eldenring-deobf-1.17.bin",
             Self::Ersc199 => "ersc.dll (Seamless Co-op v1.9.9)",
-            Self::Ersc200 => "ersc.dll (Seamless Co-op v2.0.0)",
+            Self::Ersc201 => "ersc.dll (Seamless Co-op v2.0.1)",
         }
     }
 
@@ -238,7 +238,7 @@ impl Image {
             // FILES to consider, and the version marker decides which spec each file answers
             // for. One variable per version would make the caller assert the very thing this
             // code is able to measure.
-            Self::Ersc199 | Self::Ersc200 => "ER_ERSC_DLL / ER_ERSC_DLL_REFERENCE",
+            Self::Ersc199 | Self::Ersc201 => "ER_ERSC_DLL / ER_ERSC_DLL_REFERENCE",
         }
     }
 
@@ -257,7 +257,7 @@ impl Image {
     fn supported_version(self) -> Option<&'static str> {
         match self {
             Self::EldenRing | Self::EldenRing1170 | Self::Ersc199 => None,
-            Self::Ersc200 => Some(ERSC_SUPPORTED_VERSION),
+            Self::Ersc201 => Some(ERSC_SUPPORTED_VERSION),
         }
     }
 
@@ -268,7 +268,7 @@ impl Image {
     fn declared_version(self, image: &[u8]) -> Option<String> {
         match self {
             Self::EldenRing | Self::EldenRing1170 => None,
-            Self::Ersc199 | Self::Ersc200 => ersc_declared_version(image),
+            Self::Ersc199 | Self::Ersc201 => ersc_declared_version(image),
         }
     }
 
@@ -279,7 +279,7 @@ impl Image {
                 "python3 scripts/map-rvas-1162-to-1170.py <va>"
             }
             // uv, because the body mapping needs capstone and there is no system pip here.
-            Self::Ersc199 | Self::Ersc200 => {
+            Self::Ersc199 | Self::Ersc201 => {
                 "uv run --with capstone python3 scripts/locate-ersc-entry-points.py"
             }
         }
@@ -302,7 +302,7 @@ impl Image {
             // Content, not position: every candidate is read and kept only if it carries THIS
             // build's version marker. On a machine that has updated Seamless at least once, both
             // specs find a file, so both pin sets get ground-truthed in the same build.
-            Self::Ersc199 | Self::Ersc200 => {
+            Self::Ersc199 | Self::Ersc201 => {
                 let marker: Vec<u8> = self
                     .version_marker()?
                     .encode_utf16()
@@ -325,7 +325,7 @@ impl Image {
         let rva = va.checked_sub(self.base())?;
         let offset = match self {
             Self::EldenRing | Self::EldenRing1170 => usize::try_from(rva).ok()?,
-            Self::Ersc199 | Self::Ersc200 => pe_rva_to_offset(image, u32::try_from(rva).ok()?)?,
+            Self::Ersc199 | Self::Ersc201 => pe_rva_to_offset(image, u32::try_from(rva).ok()?)?,
         };
         image
             .get(offset..offset.checked_add(len)?)
@@ -367,7 +367,7 @@ impl Image {
         let ranges: Vec<(usize, usize, u64)> = match self {
             // Flat: file offset == RVA for every section, so one range covers the image.
             Self::EldenRing | Self::EldenRing1170 => vec![(0, image.len(), 0)],
-            Self::Ersc199 | Self::Ersc200 => pe_sections(image)
+            Self::Ersc199 | Self::Ersc201 => pe_sections(image)
                 .into_iter()
                 .filter(|section| {
                     section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0

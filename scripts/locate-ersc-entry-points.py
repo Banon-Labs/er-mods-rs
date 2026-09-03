@@ -259,6 +259,9 @@ def map_by_body(reference, installed, va):
 # ---------------------------------------------------------------------------------------------
 
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def steam_roots():
     roots = []
     if os.environ.get("ME3_STEAM_DIR"):
@@ -303,6 +306,17 @@ def ersc_candidates(explicit_installed, explicit_reference):
         game = os.path.join(root, "steamapps/common/ELDEN RING/Game")
         candidates.append(os.path.join(game, "SeamlessCoop", "ersc.dll"))
         candidates.append(os.path.join(game, "_SeamlessCoop", "ersc.dll"))
+    # The gitignored reference archive, added 2026-09-02. It is listed LAST on purpose: the
+    # install directories still answer first, so nothing about which file is "installed"
+    # changes. What it buys is the build the launcher has already overwritten -- the whole
+    # point of the archive is that `_SeamlessCoop/` is a courtesy the next update may not
+    # repeat, and a pin set with nothing to diff against cannot be re-measured at all.
+    # Sorted so the ordering is stable rather than filesystem order.
+    archive = os.path.join(REPO_ROOT, "vendor-archive", "seamless")
+    if os.path.isdir(archive):
+        for name in sorted(os.listdir(archive)):
+            if name.startswith("ersc-") and name.endswith(".dll"):
+                candidates.append(os.path.join(archive, name))
     seen, ordered = set(), []
     for candidate in candidates:
         real = os.path.realpath(candidate)

@@ -1,6 +1,11 @@
 [workspace]
 members = [
   "crates/er-quickload",
+  # Offline answer to the exact question the DLL now asks before it will wait on a Continue slot:
+  # which character slots does this save container actually hold? Same parser
+  # (`er_save_loader::bnd4::active_character_slots`), so a runtime refusal can be predicted and
+  # reviewed without launching the game. Host-buildable and game-free.
+  "tools/er-slot-truth",
   # One vocabulary for naming a key in a config file, plus the reload decision that makes an
   # edit take effect without a restart. Extracted after a hard-coded VK_F7 in er-invasion-warp
   # collided with another mod's default and warped a live session, with no config key on either

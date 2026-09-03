@@ -675,6 +675,35 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     if !autoload_debug_log_enabled() {
         return;
     }
+    // RUN-LENGTH COLLAPSE, AT THE WRITER RATHER THAN PER CALL SITE.
+    //
+    // `log_save_picker_mode` below already filters ITS family, and the comment there records why:
+    // 1,905 identical lines, 20% of one run's log. Filtering one caller does not bound the file,
+    // because any other caller can do the same thing -- and one did.
+    //
+    // MEASURED 2026-09-03, a 72-minute session that ended on a black screen: a single family,
+    // `title-cover-part-a: forced TitleBackViewParts/05_001_Title_Logo hidden via SetVisible
+    // detour`, wrote 508,460 lines. The log reached 269 MB and was still growing 238 KiB every 4
+    // seconds. That is a per-frame detour logging unconditionally, so the cost lands on the game
+    // thread exactly the way the FPS note below describes -- and an unbounded file will eventually
+    // take the disk with it.
+    //
+    // The filter keys on the message FAMILY (`er_game_base::repeat::family_key` collapses every
+    // digit-bearing run to `#`), so the whole 508k-line family shares one slot no matter what the
+    // pointer and counter in each line say. Nothing is lost silently: a run is restated on a
+    // 1-3-10 schedule and its total is reported, which is what keeps "it never changed" and "it
+    // only happened once" distinguishable.
+    //
+    // The note is written INLINE here rather than by recursing into this function, because the
+    // re-entrancy guard above is already held and a recursive call would be dropped.
+    static AUTOLOAD_DEBUG_REPEATS: er_game_base::repeat::RepeatFilter =
+        er_game_base::repeat::RepeatFilter::new();
+    let message = std::fmt::format(args);
+    let (repeat_note, write_message) = match AUTOLOAD_DEBUG_REPEATS.observe(&message) {
+        er_game_base::repeat::Verdict::Emit { note } => (note, true),
+        er_game_base::repeat::Verdict::Note(note) => (Some(note), false),
+        er_game_base::repeat::Verdict::Suppress => return,
+    };
     use std::io::Write;
     // FPS FIX (bd fps-fix-not-confirmed-new-suspect-perframe-debug-logging): the old path did a full file
     // OPEN + write + CLOSE on EVERY call (3 syscalls/line). The DLL logs heavily during loads/transitions
@@ -690,7 +719,12 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
         let mut guard = LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.as_mut() {
             Some(file) => {
-                let _ = writeln!(file, "{prefix} {args}");
+                if let Some(note) = repeat_note.as_deref() {
+                    let _ = writeln!(file, "{prefix} {note}");
+                }
+                if write_message {
+                    let _ = writeln!(file, "{prefix} {message}");
+                }
                 true
             }
             None => false,
@@ -730,7 +764,12 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
         return;
     };
     write_log_header(&mut file, &path);
-    let _ = writeln!(file, "{prefix} {args}");
+    if let Some(note) = repeat_note.as_deref() {
+        let _ = writeln!(file, "{prefix} {note}");
+    }
+    if write_message {
+        let _ = writeln!(file, "{prefix} {message}");
+    }
     *LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(file);
 }
 
