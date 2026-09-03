@@ -109,8 +109,19 @@ link_sibling() {
 		exit 2
 	fi
 	# Only ever replace a symlink of our own making; never touch a real directory.
+	#
+	# `pwd -P`, NOT `pwd`. bash's logical pwd echoes back the path you arrived by, symlinks and
+	# all -- so when `$real` and `$link` name the SAME path, `ln -sfn` points the link at itself
+	# and every later read of it dies with ELOOP ("Too many levels of symbolic links"), which
+	# cargo reports as `failed to load manifest for dependency eldenring`. That collision is not
+	# hypothetical: it is what happens whenever the INVOKING checkout is itself a worktree under
+	# `<repo>/.worktrees/` and ER_COMMITTED_CHECK_WORKTREE points back at the family's shared
+	# scratch dir -- then `$repo_root/../fromsoftware-rs` and `$(dirname $worktree)/fromsoftware-rs`
+	# are both `<repo>/.worktrees/fromsoftware-rs`. Measured 2026-09-03; it also POISONS the link
+	# for every later run, including the main checkout's, because the damage is on disk.
+	# `pwd -P` resolves to the real sibling and can never name the link.
 	if [[ -L "$link" || ! -e "$link" ]]; then
-		ln -sfn "$(cd -- "$real" && pwd)" "$link"
+		ln -sfn "$(cd -- "$real" && pwd -P)" "$link"
 	fi
 }
 
