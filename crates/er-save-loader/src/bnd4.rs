@@ -274,6 +274,29 @@ pub fn active_character_slots(data: &[u8]) -> Result<Vec<CharacterSlotInfo>, Bnd
         .collect())
 }
 
+/// Does the save container at `path` hold a loadable character in `slot`?
+///
+/// `Some(false)` means the container was read and that slot holds nothing. `Some(true)` means it
+/// holds one. `None` means the question could not be answered -- unreadable file, parse refusal,
+/// out-of-range slot -- and a caller must NOT treat that as a "no".
+///
+/// WHY THIS LIVES HERE RATHER THAN IN THE DLL. The autoload path needs to know, before it spends
+/// any patience on a Continue slot, whether the slot can ever fill. The live ProfileSummary cannot
+/// answer: it reads empty both while it is still filling and when the slot is genuinely vacant, so
+/// the boot waits out a long empty-tick budget to tell those apart. The container on disk already
+/// knows, and knew before the game booted -- and the parser that reads it is right here, next to
+/// [`active_character_slots`], which applies the `USER_DATA010.active_slot` bitmap rather than
+/// trusting a body that a deleted character leaves behind.
+///
+/// MEASURED 2026-09-03: `er-quickload.toml` named `slot = 1`; Seamless was loaded, so the game read
+/// `ER0000.co2`, whose only character is slot 0. Slot 1 could never fill, and the boot reached the
+/// intro cutscene before its 1800-tick budget was spent -- losing the session.
+pub fn container_holds_character(path: &std::path::Path, slot: usize) -> Option<bool> {
+    let bytes = std::fs::read(path).ok()?;
+    let slots = active_character_slots(&bytes).ok()?;
+    Some(slots.iter().any(|info| info.slot == slot))
+}
+
 /// The 16-byte stored MD5 checksum prefix of a slot entry.
 pub fn slot_md5(data: &[u8], slot: usize) -> Result<&[u8], Bnd4Error> {
     let want = format!("USER_DATA{:03}", slot);

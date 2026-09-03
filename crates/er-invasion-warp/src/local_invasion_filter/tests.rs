@@ -464,8 +464,8 @@ fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
     // address; none was taken from a byte match alone. v1.9.9 is no longer here because it is no
     // longer driven; what remains of it is `ersc::RETIRED`, checked below.
     let expected = [Measured {
-        version: "Seamless Co-op v2.0.0",
-        rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d590],
+        version: "2.0.1",
+        rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d6e0],
         fields: [0x150, 0x14c],
         states: [0x01, 0x0e, 0x23, 0x13],
     }];

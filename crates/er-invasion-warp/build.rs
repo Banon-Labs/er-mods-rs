@@ -63,11 +63,11 @@ const ERSC199_SESSION_LOCK_VA: u64 = 0x1800f4868;
 
 /// v2.0.0 entry points, measured 2026-09-02. See `local_invasion_filter.rs` for the evidence that
 /// identifies each one; none of them was taken from a prologue match alone.
-const ERSC200_SHOW_VA: u64 = 0x1800241a0;
-const ERSC200_INVADE_ACTION_VA: u64 = 0x180025850;
-const ERSC200_CANCEL_ACTION_VA: u64 = 0x1800258d0;
-const ERSC200_BUILD_LOBBY_KEY_VA: u64 = 0x1800ad590;
-const ERSC200_SESSION_LOCK_VA: u64 = 0x1800f96d8;
+const ERSC201_SHOW_VA: u64 = 0x1800241a0;
+const ERSC201_INVADE_ACTION_VA: u64 = 0x180025850;
+const ERSC201_CANCEL_ACTION_VA: u64 = 0x1800258d0;
+const ERSC201_BUILD_LOBBY_KEY_VA: u64 = 0x1800ad6e0;
+const ERSC201_SESSION_LOCK_VA: u64 = 0x1800f9828;
 
 /// `OSM+0x58`, the session object every option action loads first. UNCHANGED across the update:
 /// all five v2.0.0 actions still open `mov rdi,[rcx+0x58]`.
@@ -82,9 +82,9 @@ const ERSC_SESSION_GUARD_POISON: i32 = 0x7fff_ffff;
 const ERSC199_SESSION_MUTEX_OFFSET: i64 = 0xc0;
 const ERSC199_SESSION_GUARD_OFFSET: i64 = 0x10c;
 const ERSC199_SESSION_STATE_OFFSET: i64 = 0x110;
-const ERSC200_SESSION_MUTEX_OFFSET: i64 = 0x100;
-const ERSC200_SESSION_GUARD_OFFSET: i64 = 0x14c;
-const ERSC200_SESSION_STATE_OFFSET: i64 = 0x150;
+const ERSC201_SESSION_MUTEX_OFFSET: i64 = 0x100;
+const ERSC201_SESSION_GUARD_OFFSET: i64 = 0x14c;
+const ERSC201_SESSION_STATE_OFFSET: i64 = 0x150;
 
 /// The session-state enum, which v2.0.0 renumbered by `+1` throughout. Proven exhaustively rather
 /// than inferred from the two actions: a scan of every `mov dword [reg+STATE], imm32` in each
@@ -94,18 +94,18 @@ const ERSC200_SESSION_STATE_OFFSET: i64 = 0x150;
 /// `scripts/ersc-disas.py states 0x110 --build v199` and `... states 0x150 --build v200`.
 const ERSC199_STATE_IDLE: i32 = 0x00;
 const ERSC199_STATE_SEARCHING: i32 = 0x0d;
-const ERSC200_STATE_IDLE: i32 = 0x01;
-const ERSC200_STATE_SEARCHING: i32 = 0x0e;
-const ERSC200_STATE_CANCELLING: i32 = 0x23;
+const ERSC201_STATE_IDLE: i32 = 0x01;
+const ERSC201_STATE_SEARCHING: i32 = 0x0e;
+const ERSC201_STATE_CANCELLING: i32 = 0x23;
 
-const ERSC200_LOBBY_KEY_CTX_OFFSET: i64 = 0xc8;
+const ERSC201_LOBBY_KEY_CTX_OFFSET: i64 = 0xc8;
 
 /// Where the invade action's shared tail begins, relative to the function entry. v1.9.9 branches
 /// FORWARD to it over an inline early return; v2.0.0 falls straight into it and branches forward
-/// to a return block placed after the state write instead ([`ERSC200_INVADE_RETURN`]).
+/// to a return block placed after the state write instead ([`ERSC201_INVADE_RETURN`]).
 const ERSC199_INVADE_TAIL: u64 = 0x1e;
 /// v2.0.0's relocated early-return block, the target of the inverted idle guard.
-const ERSC200_INVADE_RETURN: u64 = 0x4e;
+const ERSC201_INVADE_RETURN: u64 = 0x4e;
 
 /// The four option actions this repo pins, with every measured number in one place. `fatal_5` and
 /// `fatal_6` are byte offsets from the function entry to the two error blocks the tail branches
@@ -121,24 +121,24 @@ const ERSC199_INVADE: ErscAction = ErscAction {
     fatal_5: 0x55,
     fatal_6: 0x5f,
 };
-const ERSC200_INVADE: ErscAction = ErscAction {
-    va: ERSC200_INVADE_ACTION_VA,
-    lock_va: ERSC200_SESSION_LOCK_VA,
-    mutex: ERSC200_SESSION_MUTEX_OFFSET,
-    guard: ERSC200_SESSION_GUARD_OFFSET,
-    state: ERSC200_SESSION_STATE_OFFSET,
-    code: ERSC200_STATE_SEARCHING,
+const ERSC201_INVADE: ErscAction = ErscAction {
+    va: ERSC201_INVADE_ACTION_VA,
+    lock_va: ERSC201_SESSION_LOCK_VA,
+    mutex: ERSC201_SESSION_MUTEX_OFFSET,
+    guard: ERSC201_SESSION_GUARD_OFFSET,
+    state: ERSC201_SESSION_STATE_OFFSET,
+    code: ERSC201_STATE_SEARCHING,
     // Eight bytes further than v1.9.9's, which is exactly the relocated return block above.
     fatal_5: 0x56,
     fatal_6: 0x60,
 };
-const ERSC200_CANCEL: ErscAction = ErscAction {
-    va: ERSC200_CANCEL_ACTION_VA,
-    lock_va: ERSC200_SESSION_LOCK_VA,
-    mutex: ERSC200_SESSION_MUTEX_OFFSET,
-    guard: ERSC200_SESSION_GUARD_OFFSET,
-    state: ERSC200_SESSION_STATE_OFFSET,
-    code: ERSC200_STATE_CANCELLING,
+const ERSC201_CANCEL: ErscAction = ErscAction {
+    va: ERSC201_CANCEL_ACTION_VA,
+    lock_va: ERSC201_SESSION_LOCK_VA,
+    mutex: ERSC201_SESSION_MUTEX_OFFSET,
+    guard: ERSC201_SESSION_GUARD_OFFSET,
+    state: ERSC201_SESSION_STATE_OFFSET,
+    code: ERSC201_STATE_CANCELLING,
     fatal_5: 0x45,
     fatal_6: 0x4f,
 };
@@ -275,14 +275,14 @@ fn main() {
         &[
             (
                 PrologueSpec {
-                    name: "V200_SHOW_PROLOGUE",
+                    name: "V201_SHOW_PROLOGUE",
                     doc: "v2.0.0 `show`. Byte-identical to the v1.9.9 function at a different\n\
                           address: v2.0.0 recompiled this function to the byte and moved it from\n\
                           `0x22d30` to `0x241a0`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc200,
-                    va: ERSC200_SHOW_VA,
+                    image: Image::Ersc201,
+                    va: ERSC201_SHOW_VA,
                     take: 0,
                     pin: &[
                         0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53,
@@ -339,7 +339,7 @@ fn main() {
             ),
             (
                 PrologueSpec {
-                    name: "V200_INVADE_PROLOGUE",
+                    name: "V201_INVADE_PROLOGUE",
                     doc: "v2.0.0 \"Invade world\" at `0x25850`, through `mov [rdi+0x150],0xe`.\n\
                           The counterpart of [`V199_INVADE_PROLOGUE`], and the v2.0.0 half of the\n\
                           version discriminator. The compiler INVERTED the idle guard here --\n\
@@ -350,13 +350,13 @@ fn main() {
                           length while the cancel action beside it mapped cleanly.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc200,
-                    va: ERSC200_INVADE_ACTION_VA,
+                    image: Image::Ersc201,
+                    va: ERSC201_INVADE_ACTION_VA,
                     take: 0,
                     pin: &[
                         0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
                         0x79, 0x58, 0x83, 0xbf, 0x50, 0x01, 0x00, 0x00, 0x01, 0x75, 0x37, 0x48,
-                        0x8d, 0xb7, 0x00, 0x01, 0x00, 0x00, 0x48, 0x89, 0xf1, 0xe8, 0x62, 0x3e,
+                        0x8d, 0xb7, 0x00, 0x01, 0x00, 0x00, 0x48, 0x89, 0xf1, 0xe8, 0xb2, 0x3f,
                         0x0d, 0x00, 0x85, 0xc0, 0x75, 0x2c, 0x81, 0xbf, 0x4c, 0x01, 0x00, 0x00,
                         0xff, 0xff, 0xff, 0x7f, 0x74, 0x2a, 0xc7, 0x87, 0x50, 0x01, 0x00, 0x00,
                         0x0e, 0x00, 0x00, 0x00,
@@ -365,37 +365,37 @@ fn main() {
                 (|asm| {
                     ersc_option_action_opening(asm)?;
                     asm.cmp(
-                        dword_ptr(rdi + ERSC200_SESSION_STATE_OFFSET),
-                        ERSC200_STATE_IDLE,
+                        dword_ptr(rdi + ERSC201_SESSION_STATE_OFFSET),
+                        ERSC201_STATE_IDLE,
                     )?;
-                    asm.jne(ERSC200_INVADE_ACTION_VA + ERSC200_INVADE_RETURN)?;
-                    ersc_option_action_tail(asm, &ERSC200_INVADE)
+                    asm.jne(ERSC201_INVADE_ACTION_VA + ERSC201_INVADE_RETURN)?;
+                    ersc_option_action_tail(asm, &ERSC201_INVADE)
                 }) as prologue_build::Assemble,
             ),
             (
                 PrologueSpec {
-                    name: "V200_CANCEL_PROLOGUE",
+                    name: "V201_CANCEL_PROLOGUE",
                     doc: "v2.0.0 \"Cancel search\" at `0x258d0`, through `mov [rdi+0x150],0x23`.\n\
                           Byte-for-byte the same shape as v1.9.9's cancel action, with the\n\
                           session field group moved `+0x40` and the state code renumbered `+1`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc200,
-                    va: ERSC200_CANCEL_ACTION_VA,
+                    image: Image::Ersc201,
+                    va: ERSC201_CANCEL_ACTION_VA,
                     take: 0,
                     pin: &[
                         0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
                         0x79, 0x58, 0x48, 0x8d, 0xb7, 0x00, 0x01, 0x00, 0x00, 0x48, 0x89, 0xf1,
-                        0xe8, 0xeb, 0x3d, 0x0d, 0x00, 0x85, 0xc0, 0x75, 0x24, 0x81, 0xbf, 0x4c,
+                        0xe8, 0x3b, 0x3f, 0x0d, 0x00, 0x85, 0xc0, 0x75, 0x24, 0x81, 0xbf, 0x4c,
                         0x01, 0x00, 0x00, 0xff, 0xff, 0xff, 0x7f, 0x74, 0x22, 0xc7, 0x87, 0x50,
                         0x01, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00,
                     ],
                 },
-                (|asm| ersc_cancel_action(asm, &ERSC200_CANCEL)) as prologue_build::Assemble,
+                (|asm| ersc_cancel_action(asm, &ERSC201_CANCEL)) as prologue_build::Assemble,
             ),
             (
                 PrologueSpec {
-                    name: "V200_BUILD_LOBBY_KEY_PROLOGUE",
+                    name: "V201_BUILD_LOBBY_KEY_PROLOGUE",
                     doc: "v2.0.0 `BuildLobbyKey` at `0xad590`. Instruction for instruction the\n\
                           same function as v1.9.9's `BuildLobbyKey`: the frame shrank\n\
                           `0x148`->`0x108`, the out-param moved from `r15` to `rsi`, and the ctx\n\
@@ -405,8 +405,8 @@ fn main() {
                           anything from a unique prologue hit.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc200,
-                    va: ERSC200_BUILD_LOBBY_KEY_VA,
+                    image: Image::Ersc201,
+                    va: ERSC201_BUILD_LOBBY_KEY_VA,
                     take: 0,
                     pin: &[
                         0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53,
@@ -423,7 +423,7 @@ fn main() {
                     asm.movaps(xmmword_ptr(rbp + 0x70), xmm6)?;
                     asm.mov(qword_ptr(rbp + 0x68), -2)?;
                     asm.mov(rsi, rdx)?;
-                    asm.cmp(qword_ptr(rcx + ERSC200_LOBBY_KEY_CTX_OFFSET), 0)?;
+                    asm.cmp(qword_ptr(rcx + ERSC201_LOBBY_KEY_CTX_OFFSET), 0)?;
                     Ok(())
                 }) as prologue_build::Assemble,
             ),

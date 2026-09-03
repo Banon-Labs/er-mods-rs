@@ -12,6 +12,32 @@ use super::*;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS;
 
+/// Does the container the game will actually read hold a character in the configured slot?
+///
+/// The parse lives in `er_save_loader::bnd4::container_holds_character`, which owns the
+/// `USER_DATA010.active_slot` bitmap and the reason it, not a decodable body, is the authority.
+/// What is shim-only is the two things that cannot leave the DLL: which container this process
+/// resolved, and the caching.
+///
+/// CACHED, and it has to be: the caller is a per-frame boot path and the container is ~29 MB, so an
+/// uncached read here would be a 29 MB read per frame ON THE GAME THREAD -- the same shape as the
+/// per-call log open that already cost framerate once. The answer cannot change during a boot
+/// (the file is whatever the game opened; the slot comes from a `OnceLock`), and `None` is cached
+/// too so an unreadable container is not retried sixty times a second.
+fn configured_slot_holds_a_character(slot: i32) -> Option<bool> {
+    static ANSWER: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    *ANSWER.get_or_init(|| {
+        let slot = usize::try_from(slot).ok()?;
+        let path = crate::configured_or_default_save_file()?;
+        let held = er_save_loader::bnd4::container_holds_character(&path, slot)?;
+        append_autoload_debug(format_args!(
+            "product-core-autoload: container truth for the configured slot -- slot={slot} holds_a_character={held} container='{}'",
+            path.display()
+        ));
+        Some(held)
+    })
+}
+
 pub(crate) unsafe fn product_continue_action_ready(
     ready: &ProductCoreAutoloadReady,
     base: usize,
@@ -321,11 +347,20 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.store(empty_ticks as usize, Ordering::SeqCst);
         if !profile_real {
             let escalated = PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED.load(Ordering::SeqCst) != null;
-            let action = er_title_flow::boot_hold::empty_profile_action(
-                empty_ticks,
-                PRODUCT_CONTINUE_WAIT_LOG_TICKS,
-                escalated,
-            );
+            // ASK THE CONTAINER BEFORE SPENDING THE PATIENCE. The 1800-tick wait exists to tell a
+            // ProfileSummary that is still filling apart from a slot that is genuinely vacant, and
+            // it is the right answer for the first case. For the second the container on disk knows
+            // already, so waiting is pure loss -- see `configured_slot_holds_a_character` for the
+            // 2026-09-03 run this cost. Unreadable (`None`) keeps the old behaviour exactly.
+            let action = if !escalated && configured_slot_holds_a_character(slot) == Some(false) {
+                er_title_flow::boot_hold::EmptyProfileAction::Escalate
+            } else {
+                er_title_flow::boot_hold::empty_profile_action(
+                    empty_ticks,
+                    PRODUCT_CONTINUE_WAIT_LOG_TICKS,
+                    escalated,
+                )
+            };
             match action {
                 er_title_flow::boot_hold::EmptyProfileAction::Escalate => {
                     // THE DEAD END ENDS HERE. Waiting longer cannot help: this branch has
