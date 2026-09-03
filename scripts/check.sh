@@ -1384,6 +1384,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-profile-summary-core
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-invasion-warp-core -p er-invasion-warp
 
+# er-hotkey-conflicts is almost entirely host-testable, and deliberately so: its product is a
+# WARNING that names modules, and the ways it can be wrong -- attributing a call to the wrong DLL,
+# conflating a whole-keyboard read with a specific key, decoding the game's binding table onto the
+# wrong scancode, a settle gate that never fires -- are all pure logic that would otherwise cost a
+# game launch to find and would surface as a confident accusation against an innocent mod. The
+# crate is windows-only to ship and the workspace pins `default-members` to er-effects-rs, so
+# nothing else in any gate would ever run these.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hotkey-conflicts --lib
+
 # er-net-effects's host-portable modules. Six of them are ungated with a comment saying
 # "so its tests run on the host" -- and until this line existed NOTHING ran them: the workspace
 # pins `default-members` to er-quickload, so a bare `cargo test` never selects this crate and the

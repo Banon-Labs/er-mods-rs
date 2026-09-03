@@ -1,0 +1,46 @@
+# Which mods in this profile are fighting over the same key, and does the game already use it.
+#
+# Standalone shell: its own `[[natives]]` entry, no product dependency, and -- the point of the
+# whole crate -- it changes NOTHING. Every detour it installs chains straight back to the
+# original and returns its value untouched. It patches no param (which breaks Seamless
+# invasions), writes no game memory and injects no input.
+[package]
+name = "er-hotkey-conflicts"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_hotkey_conflicts"
+crate-type = ["cdylib"]
+
+# Host-buildable half, and it is most of the crate: the census, the collision table, the
+# caller-attribution rule and the report renderer are pure data transforms proven by
+# `cargo test` on Linux. That matters more here than in most shells -- the thing being built is
+# a REPORT, and a report that names the wrong module is worse than no report at all.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+# Key NAMES ("F7", "]", "KP_Plus") rather than raw virtual-key numbers. Reused rather than
+# re-tabulated: a second copy of that table is a drift trap, and a warning that says `0x76`
+# instead of `F7` makes the reader do the lookup this crate exists to save them.
+er-invasion-warp-core = { path = "../er-invasion-warp-core" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# Every detour goes through the cross-DLL hook union. Three shells in this workspace already
+# detour the DirectInput `GetDeviceState` slot, and a fourth private MinHook instance on that
+# prologue would silently disable one of them -- the exact class of bug this DLL reports on.
+er-hook = { path = "../er-hook" }
+# The one-imgui-host-per-process arbitration. This DLL never hosts: a diagnostic line is not
+# worth owning the swapchain, so it registers as a GUEST or draws nothing at all.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+] }
+
+[lints]
+workspace = true
