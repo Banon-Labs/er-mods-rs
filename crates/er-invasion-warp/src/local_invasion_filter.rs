@@ -365,7 +365,7 @@ fn resolve_ersc_abi() -> Option<&'static ersc::Abi> {
             let abi = &ersc::SUPPORTED[index];
             if ABI.swap(index + 1, Ordering::SeqCst) == 0 {
                 crate::standalone_log(format_args!(
-                    "local-invasion: ersc.dll @0x{base:x} recognised as {} -- filter armed \
+                    "local-invasion: ersc.dll @0x{base:x} recognised as Seamless Co-op v{} -- filter armed \
                      (show=+0x{:x} invade=+0x{:x} cancel=+0x{:x} lobby_key=+0x{:x}, session state \
                      at S+0x{:x}, idle={:#x} searching={:#x} cancelling={:#x})",
                     abi.version,
@@ -783,8 +783,8 @@ fn install_lobby_key_observer() -> usize {
     if !prologue_matches(address, abi.build_lobby_key_prologue) {
         if LOBBY_KEY_HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 0 {
             crate::standalone_log(format_args!(
-                "local-invasion: ersc.dll @0x{base:x} was recognised as {} but does not carry that \
-                 build's lobby-key builder at ersc+0x{:x} -- NOT touching it. The lobby-key \
+                "local-invasion: ersc.dll @0x{base:x} was recognised as Seamless Co-op v{} but does not carry \
+                 that build's lobby-key builder at ersc+0x{:x} -- NOT touching it. The lobby-key \
                  comparison is unavailable; everything else is unaffected.",
                 abi.version, abi.build_lobby_key_rva,
             ));
@@ -849,7 +849,7 @@ fn install_show_observer() -> usize {
             // repinned constant is a refusal that lies about why it refused.
             let supported = ersc::SUPPORTED_VERSION;
             crate::standalone_log(format_args!(
-                "local-invasion: ersc.dll @0x{base:x} was recognised as {} but does not carry \
+                "local-invasion: ersc.dll @0x{base:x} was recognised as Seamless Co-op v{} but does not carry \
                  that build's `show` at ersc+0x{:x} -- NOT touching it. The filter stays inert. \
                  This mod is measured against Seamless Co-op v{supported} and no other version: \
                  update to it, or, if yours is already newer, this mod has not been re-measured \

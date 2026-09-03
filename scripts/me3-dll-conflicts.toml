@@ -411,7 +411,7 @@ invade during that run: `--with er-death-persist`."""
 [[conflict]]
 a = "er-quickload"
 b = "er-invasion-warp"
-kind = "hook-collision"
+kind = "corrupt-callback-pointer"
 reason = """RUNTIME-MEASURED 2026-09-02, four reproductions and a bisect. Co-loading these two kills \
 the game at ~+29.9s every time, deterministically, on the same character (--seed 2073568449, Prophet \
 RL7): `exception code=0xc000001d (STATUS_ILLEGAL_INSTRUCTION) addr=0x140010043{game+0x10043}`. That \
@@ -427,23 +427,31 @@ crash-logging, death-persist): clean past 127s. Second five (diag-harness, enemy
 hotkey-conflicts, invasion-path, invasion-warp): +29.7s. invasion-path ALONE with the product: clean \
 past 114s. invasion-warp ALONE with the product: +29.9s. One shell, and it is this one.
 
-WHAT IS ESTABLISHED, AND WHAT IS NOT. The `kind` is a best-fit label, not a measured mechanism -- \
-say so out loud, because the bisect above is airtight and the explanation below is not. ESTABLISHED: \
-the crate's own module header ("It still installs NO detours, patches nothing, and writes nothing \
-into the engine ... it owns no Present detour and no MinHook instance") and the [compatible] reason \
-this row replaced are both STALE. It installs ten union hooks -- `announce.rs:380`, \
-`lobby_publish.rs:843/884/1027`, `local_invasion_filter.rs:798/867/1932`, \
-`map_hooks/install.rs:81/126/171` -- plus a runtime-derived one at `map_gfx.rs:396` and a \
-steamclient64 vtable detour. `er_hook::register_union_hook` dedupes only WITHIN one module (er-hook's \
-statics are per-module), so a separately-loaded DLL owns a SECOND MinHook instance whose union is not \
-the product's. NOT ESTABLISHED: that a shared prologue is what crashes it. \
-`scripts/check-shared-hook-rvas.py` reports 36 shared targets across 27 shells and ALL DECLARED, so \
-it names no undeclared product/invasion-warp overlap. That gate keys on statically-resolvable \
-addresses, so it is blind to the `map_gfx.rs:396` runtime-derived target and to the steamclient64 \
-vtable slot -- absence of a hit there is not proof of no collision, but it is not evidence of one \
-either. Also unexplained by a plain trampoline collision: the armament-icons collision (first \
-[[shared]] row) presented as SILENT INERTNESS with nothing crashing, and this presents as a hard \
-fault at a fixed address and a fixed ~+29.9s.
+WHAT IS ESTABLISHED, AND WHAT IS NOT. The bisect above is airtight; the MECHANISM is still \
+unidentified, and this paragraph has already been wrong once, so read it as a record of what has \
+been ruled OUT rather than as an explanation.
+
+MEASURED 2026-09-02, second pass, with `er_crash_logging.dll` in the profile (its watchdog and \
+register capture are why this is known at all -- the product's inline VEH gave only a bare caller \
+list whose deep frames were stale garbage): **`context_rcx == context_rip == 0x140010043`**. RCX \
+holding exactly the faulting address is the signature of a call THROUGH A POINTER -- something \
+stored 0x140010043 in a callback slot and the game called it. Full context: rax=0, rdx=0xd000004d, \
+r8=0x1000ffb18, r9=0x3d20588, rsp=0x10fbc8, rbp=0, thread 384, and NO `er_*.dll` frame anywhere on \
+the stack (`me3_mod_host.dll+0x3fa508` is on it, ours are not).
+
+RULED OUT, so nobody spends the afternoon again. (1) A shared hooked prologue: \
+`check-shared-hook-rvas.py` reports 36 shared targets across 27 shells, ALL DECLARED, and none \
+pairs the product with invasion-warp. (2) A trampoline collision of the er-armament-icons kind: \
+that corrupts CODE at a hooked prologue, whereas this calls a corrupt DATA pointer, and that \
+failure presented as SILENT INERTNESS rather than a hard fault. (3) A disagreement between the two \
+DLLs about a game address: intersecting their live `ADDRESS TRANSLATED` targets (209 product, 19 \
+warp) leaves exactly two shared values, both data -- `0x142ba7d70` \
+(SCALEFORM_MEMORY_FILE_VTABLE_RVA, same name both sides) and `0x143d6d988`, whose two names are a \
+DELIBERATE ALIAS (`constants_moved.rs:767` defines GAME_SAVE_SLOT_SINGLETON_RVA as \
+er_game_base::rva::GAME_MAN_SINGLETON_RVA), not a misidentification. (4) The Ghidra 1.17 caller \
+frames explain nothing yet: `eldenring+0x1f0d69e` is FUN_141f0d660, a 94-byte SetEvent/ResetEvent \
+helper that cannot plausibly reach memcpy, so the chain past the fault is untrustworthy and only \
+the registers are evidence.
 
 DO NOT DOWNGRADE THIS ROW TO [[shared]] on the strength of "it uses the union". The union is \
 necessary and not sufficient; armament-icons is co-loadable because a runtime measurement showed the \
