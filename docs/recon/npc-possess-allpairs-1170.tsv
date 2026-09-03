@@ -1,0 +1,153 @@
+# 1.16.2	1.17	name	how
+0x1403c8c40	0x1403c8c50	ChrCtrl::UpdateAi	unique, 40B signature, 26B fixed
+0x140492cb0	0x140493210	ChrSet::SpawnSummonBuddy	unique, 41B signature, 28B fixed
+0x140403a60	0x140403dd0	ChrInsFactory::CreateCharacter	unique, 42B signature, 27B fixed
+0x14050a570	0x14050b340	WorldChrManImp::RemoveChrIns	unique, 42B signature, 30B fixed
+0x1404cd710	0x1404ce4e0	EneDatMan acquire FUN_1404cd710	unique, 40B signature, 32B fixed
+0x1404cd870	0x1404ce640	EneDatMan release FUN_1404cd870	unique, 42B signature, 33B fixed
+0x1403ef830	0x1403efa60	ChrIns::GetEneDat	unique, 39B signature, 27B fixed
+0x14048c310	0x14048c870	ChrRes ctor	caller rel32, 1 agreeing caller(s)
+0x140303ec0	0x140303ed0	CSAiFunc::TurnTo	nearest-anchor delta +0x10, 9 shape candidates
+0x14043aa30	0x14043af90	CSChrEventModule::RequestAnimation	unique, 42B signature, 27B fixed
+0x1403cf340	0x1403cf350	ComManipulator::UpdateAI (vft+0x48)	RTTI vtable slot ComManipulator+0x48
+0x1403cf2a0	0x1403cf2b0	ComManipulator tick (vft+0x50)	unique, 42B signature, 26B fixed
+0x1403d0250	0x1403d0260	FUN_1403d0250 UpdateMovement	nearest-anchor delta +0x10, 9 shape candidates
+0x1403c7800	0x1403c7810	ChrCtrl::ShouldUpdateAi	unique, 40B signature, 27B fixed
+0x1403c8da0	0x1403c8db0	ChrCtrl tick dispatcher	unique, 41B signature, 31B fixed
+0x1404016d0	0x140401a30	ChrIns::Update	caller rel32, 1 agreeing caller(s)
+0x140400960	0x140400c50	ChrIns::UpdateAiLogic	unique, 14B signature, 8B fixed
+0x1403c52a0	0x1403c52b0	ChrCtrl::Unref	nearest-anchor delta +0x10, 9 shape candidates
+0x1403c4d50	0x1403c4d60	ChrCtrl ctor	unique, 44B signature, 29B fixed
+0x1403d8660	0x1403d8670	PadManipulator ctor	unique, 40B signature, 27B fixed
+0x1403d88a0	0x1403d88b0	PadManipulator dtor FUN_1403d88a0	nearest-anchor delta +0x10, 2 shape candidates
+0x1403c6f40	0x1403c6f50	ChrCtrl::GetManipulator	unique, 17B signature, 11B fixed
+0x1404d0c30	0x1404d1a00	EnemyIns vft+0x88 Update	unique, 40B signature, 27B fixed
+0x140660120	0x140660f70	PlayerIns vft+0x88 Update	RTTI vtable slot PlayerIns+0x88
+0x1403cda90	0x1403cdaa0	PadManipulator vft+0x48 base-noop	RTTI vtable slot ChrManipulator+0x48
+0x1403d9f20	0x1403d9f30	PadManipulator vft+0x50	unique, 42B signature, 29B fixed
+0x1403daa80	0x1403daa90	PadManipulator tick FUN_1403daa80	nearest-anchor delta +0x10, 3 shape candidates
+0x1403d4280	0x1403d4290	NetAIManipulator vft+0x48	unique, 42B signature, 27B fixed
+0x1403d3b00	0x1403d3b10	NetAIManipulator vft+0x50	nearest-anchor delta +0x10, 3 shape candidates
+0x1403e08f0	0x1403e0900	RideManipulator vft+0x50	RTTI vtable slot RideManipulator+0x50
+0x140406d40	0x140407270	CSChrActionRequestModule	nearest-anchor delta +0x530, 9 shape candidates
+0x140407c60	0x140408190	CSChrActionRequestModule::UpdateFromManipulator	unique, 42B signature, 36B fixed
+0x140507ff0	0x140508dc0	WorldChrManImp::GetMainPlayerIns	unique, 42B signature, 29B fixed
+0x1403f4040	0x1403f4270	PlayerIns::IsMainPlayerIns	unique, 41B signature, 26B fixed
+0x1403b11c0	0x1403b11d0	ChrCam::Update	unique, 40B signature, 29B fixed
+0x14067a7a0	0x14067b5f0	GameMan::SetCamZoomSimpleLerp	unique, 22B signature, 15B fixed
+0x140716260	0x1407170b0	LockTgtMan per-frame update FUN_140716260	caller rel32, 2 agreeing caller(s)
+0x140508050	0x140508e20	GetMainPlayerInsOrMount FUN_140508050	unique, 41B signature, 28B fixed
+0x1403b5ac0	0x1403b5ad0	ChrExFollowCam::Update	unique, 40B signature, 24B fixed
+0x140affe40	0x140b012d0	camera update FUN_140affe40	unique, 41B signature, 32B fixed
+0x14065a330	0x14065b180	PlayerIns::UpdateSafePosition	topology size+callees+callers
+0x140659eb0	0x14065ad00	PlayerIns::UpdateBlockPosition	nearest-anchor delta +0xe50, 2 shape candidates
+0x1405110e0	0x140511ee0	WorldChrMan_PrePhysics	unique, 46B signature, 30B fixed
+0x140df35f7	0x142066514	WorldChrManDbg+0xb8 accessor FUN_140df35f7	thunk target, byte-identical mov rax,[rcx+0xb8]
+0x140513210	0x140514010	thunk to +0xb8 accessor	caller rel32, 4 agreeing caller(s)
+0x140492e20	0x140493380	ChrSet::SpawnChr	unique, 41B signature, 29B fixed
+0x140492a90	0x140492ff0	ChrSet ghost-band spawn FUN_140492a90	nearest-anchor delta +0x560, 2 shape candidates
+0x140493140	0x1404936a0	ChrSet entries[0..6] spawn FUN_140493140	unique, 42B signature, 29B fixed
+0x1404942a0	0x140494800	ChrSet::AddChrInsToGroupIdMap	nearest-anchor delta +0x560, 9 shape candidates
+0x1404ba980	0x1404baea0	SummonBuddyManager::CreateSummonChr	caller rel32, 2 agreeing caller(s)
+0x140494440	0x1404949a0	OpenFieldChrSet spawner FUN_140494440	nearest-anchor delta +0x560, 3 shape candidates
+0x1403e6e00	0x1403e6e30	ChrIns::ChrIns	caller rel32, 1 agreeing caller(s)
+0x140402800	0x140402b70	ChrNameToInt	unique, 43B signature, 38B fixed
+0x14048dc10	0x14048e170	ChrRes resource-request step FUN_14048dc10	unique, 45B signature, 31B fixed
+0x1404caaf0	0x1404cb680	EneDat asset builder FUN_1404caaf0	caller rel32, 1 agreeing caller(s)
+0x1404cd460	0x1404ce230	EneDat all-loaded poll FUN_1404cd460	unique, 33B signature, 19B fixed
+0x1403e5bc0	0x1403e5bd0	chrId to L'cNNNN' FUN_1403e5bc0	topology size+callees+callers
+0x1403e62f0	0x1403e6320	chrbnd path builder FUN_1403e62f0	caller rel32, 1 agreeing caller(s)
+0x1404cdcc0	0x1404cea90	EneDat acquire debug precedent FUN_1404cdcc0	unique, 41B signature, 19B fixed
+0x140494a50	0x140494fb0	ChrSet::RemoveChrIns	unique, 40B signature, 28B fixed
+0x140e76ea0	0x140e78ca0	CSDelayDeleteMan enqueue FUN_140e76ea0	caller rel32, 1 agreeing caller(s)
+0x1403f2a90	0x1403f2cc0	IsChrInDebugChrSet	nearest-anchor delta +0x230, 2 shape candidates
+0x1404032d0	0x140403640	ChrInsFactory ctor	nearest-anchor delta +0x370, 9 shape candidates
+0x1404032e0	0x140403650	ChrInsFactory dtor	caller rel32, 10 agreeing caller(s)
+0x1404ce0a0	0x1404cee70	EnemyIns::EnemyIns	nearest-anchor delta +0xdd0, 2 shape candidates
+0x1403f2470	0x1403f26a0	ChrIns::InitializeCharacter	nearest-anchor delta +0x230, 2 shape candidates
+0x14048fbf0	0x140490150	FD4FileCap status check FUN_14048fbf0	topology size+callees+callers
+0x140506f30	0x140507d00	WorldChrManImp buddy spawn FUN_140506f30	nearest-anchor delta +0xdd0, 2 shape candidates
+0x140494f50	0x1404954b0	buddy ChrSet init FUN_140494f50	nearest-anchor delta +0x560, 3 shape candidates
+0x1405ee180	0x1405eefd0	GetChrInsByEntityId	unique, 45B signature, 33B fixed
+0x1403f73e0	0x1403f7610	SetMountHandles	unique, 17B signature, 13B fixed
+0x14050e1a0	0x14050efa0	WorldChrMan_Respawn	unique, 46B signature, 30B fixed
+0x140e9ce30	0x140e9ec30	CSTalkDynamicChrCtrl FUN_140e9ce30	topology size+callees+callers
+0x1403ef730	0x1403ef960	GetChrCreator	unique, 42B signature, 23B fixed
+0x1403c8610	0x1403c8620	per-frame updatePos	unique, 41B signature, 28B fixed
+0x1403cd180	0x1403cd190	ChrCtrl::UpdatePositions	unique, 46B signature, 28B fixed
+0x14045f910	0x14045fe70	CSChrPhysicsModule::ForceSetPosition	unique, 34B signature, 20B fixed
+0x14045f7a0	0x14045fd00	CSChrPhysicsModule::SetOrientation	unique, 43B signature, 31B fixed
+0x140461a00	0x140461f60	EulerToQuat	unique, 47B signature, 34B fixed
+0x140454c00	0x140455160	CSChrMaterialModule::SetDisableFallDamage	caller rel32, 1 agreeing caller(s)
+0x140c456b0	0x140c46d80	caller of updatePos FUN_140c456b0	unique, 42B signature, 31B fixed
+0x1403da750	0x1403da760	net position publisher FUN_1403da750	unique, 43B signature, 28B fixed
+0x1403f0bf0	0x1403f0e20	ChrIns::GetPhysicsPosition	nearest-anchor delta +0x230, 9 shape candidates
+0x140679630	0x14067a480	GetTargetMapId	nearest-anchor delta +0xe50, 9 shape candidates
+0x14061e270	0x14061f0c0	ConvertPhysicsCoordsToBlockCoords	unique, 40B signature, 29B fixed
+0x1404e9ad0	0x1404ea8a0	ChrPackingStructure::SetLocation	unique, 30B signature, 21B fixed
+0x1403d99e0	0x1403d99f0	PadManipulator publish slot FUN_1403d99e0	unique, 41B signature, 26B fixed
+0x1403d9bb0	0x1403d9bc0	publish caller FUN_1403d9bb0	nearest-anchor delta +0x10, 9 shape candidates
+0x140c9f430	0x140ca0b00	FUN_140c9f430	unique, 44B signature, 30B fixed
+0x140c9f770	0x140ca0e40	FUN_140c9f770	unique, 44B signature, 28B fixed
+0x1403cd370	0x1403cd380	ChrManipulator::ChrManipulator	unique, 45B signature, 25B fixed
+0x1403c76d0	0x1403c76e0	ChrCtrl::SetManipulator	unique, 41B signature, 30B fixed
+0x1404e8060	0x1404e8e30	MakeChrSyncPacker	unique, 46B signature, 33B fixed
+0x1404e5860	0x1404e6630	ReplayRecorder packer FUN_1404e5860	unique, 41B signature, 31B fixed
+0x1404e4d20	0x1404e5af0	ReplayRecorder FUN_1404e4d20	caller rel32, 1 agreeing caller(s)
+0x140474550	0x140474ab0	CSChrRideModule::GetForwardingTarget	caller rel32, 3 agreeing caller(s)
+0x140509f90	0x14050ad60	GetNetChrSyncPositionUpdateBuffer	nearest-anchor delta +0xdd0, 4 shape candidates
+0x1404275e0	0x140427b30	TAE 0ChrActionFlag handler	unique, 40B signature, 35B fixed
+0x140425ba0	0x1404260f0	ActivateChrActionFlagEarly	unique, 43B signature, 33B fixed
+0x1403f3b90	0x1403f3dc0	ChrIns::IsImmuneToAttack	unique, 40B signature, 26B fixed
+0x1404483b0	0x140448910	CSChrDamageModule::CalculateDamage2	unique, 40B signature, 29B fixed
+0x140656e60	0x140657cb0	PlayerIns::IsInvincible	nearest-anchor delta +0xe50, 3 shape candidates
+0x140401bd0	0x140401f30	ChrIns::PreBehaviorSafe	unique, 45B signature, 25B fixed
+0x140405b80	0x1404060b0	actionModifiersFlags zeroer FUN_140405b80	unique, 41B signature, 30B fixed
+0x140430960	0x140430eb0	CSChrTimeActModule::RunTaeAndUpdateAnimQueue	unique, 40B signature, 30B fixed
+0x14041b740	0x14041bc70	TAE_Callback	unique, 43B signature, 34B fixed
+0x140c14370	0x140c15a40	PlayAnimationByBehaviorName	unique, 40B signature, 30B fixed
+0x1404266d0	0x140426c20	CSChrTaeAnimEvent::AttackBehavior	caller rel32, 1 agreeing caller(s)
+0x140426e60	0x1404273b0	CSChrTaeAnimEvent::BulletBehavior	unique, 41B signature, 24B fixed
+0x1404269e0	0x140426f30	CSChrTaeAnimEvent::CommonBehavior	unique, 40B signature, 29B fixed
+0x140429db0	0x14042a300	CastHighlightedMagic	nearest-anchor delta +0x550, 9 shape candidates
+0x140426ca0	0x1404271f0	SpawnFFXBySpEffect2	unique, 41B signature, 27B fixed
+0x14042f150	0x14042f6a0	CSChrTaeAnimEvent::ExecuteThreadTwo	unique, 44B signature, 25B fixed
+0x1404cf040	0x1404cfe10	EnemyIns::ResolveBehaviorId	unique, 42B signature, 29B fixed
+0x1403e9380	0x1403e9560	ChrIns::ResolveBehaviorId (base)	RTTI vtable slot ChrIns+0x320
+0x1403f4b90	0x1403f4dc0	IsValidBehaviorJudgeID	nearest-anchor delta +0x230, 3 shape candidates
+0x140652280	0x1406530d0	PlayerIns::ResolveBehaviorId	unique, 40B signature, 30B fixed
+0x140d24130	0x140d25840	LookupBehaviorParam	unique, 41B signature, 31B fixed
+0x140d240e0	0x140d257f0	BehaviorParam::GetAtkParam	unique, 34B signature, 26B fixed
+0x140d23090	0x140d24760	GetAtkParam	unique, 41B signature, 31B fixed
+0x1404fa350	0x1404fb120	SpEffect behavior offset FUN_1404fa350	unique, 40B signature, 31B fixed
+0x1405ed760	0x1405ee5b0	PlayAnimationOnChr	nearest-anchor delta +0xe50, 2 shape candidates
+0x1405e2060	0x1405e2eb0	ForceAnimationPlayback	caller rel32, 1 agreeing caller(s)
+0x140c144d0	0x140c15ba0	fireHkbEvent_C	unique, 43B signature, 28B fixed
+0x140406a60	0x140406f90	SetTurnSpeed	nearest-anchor delta +0x530, 3 shape candidates
+0x1403c3f30	0x1403c3f40	SetTurnVelocity	caller rel32, 1 agreeing caller(s)
+0x140303a70	0x140303a80	SetTurnReferenceDirection	unique, 40B signature, 25B fixed
+0x14041bce0	0x14041c220	CSChrBehaviorModule::Play_W_Init	unique, 24B signature, 15B fixed
+0x140c07a40	0x140c09110	hkbCharacter slot getter FUN_140c07a40	unique, 16B signature, 14B fixed
+0x140c13f40	0x140c15610	GLOBAL_CSHkBehManager name lookup FUN_140c13f40	nearest-anchor delta +0x16d0, 9 shape candidates
+0x1403c00f0	0x1403c0100	requestAnimationId reset FUN_1403c00f0	unique, 43B signature, 28B fixed
+0x1403c7ed0	0x1403c7ee0	ChrCtrl::SetOrientation	nearest-anchor delta +0x10, 9 shape candidates
+0x1403b1e90	0x1403b1ea0	ChrCam::UpdateManipulatorLookDirection	unique, 41B signature, 29B fixed
+0x1403cda40	0x1403cda50	manipulator look-dir writer FUN_1403cda40	nearest-anchor delta +0x10, 9 shape candidates
+0x1404e2140	0x1404e2f10	NetChrSync::ProcessOwnershipRequests22	nearest-anchor delta +0xdd0, 2 shape candidates
+0x1404e0ab0	0x1404e1880	NetChrSync::ProcessOwnershipRequests23	nearest-anchor delta +0xdd0, 2 shape candidates
+0x1404d4a00	0x1404d57d0	GetOwnershipDataByP2PEntityHandle	nearest-anchor delta +0xdd0, 2 shape candidates
+0x1404d4be0	0x1404d59b0	NetChrSyncOwnershipHolder ctor	nearest-anchor delta +0xdd0, 2 shape candidates
+0x1404de7f0	0x1404df5c0	NetChrSync::SetChrSyncLocalControlFlagOn0x18	unique, 43B signature, 31B fixed
+0x140772a80	0x140773900	CSFeManImp::UpdatePlayerComponents	caller rel32, 1 agreeing caller(s)
+0x140771bd0	0x140772a50	CSFeManImp::Update	unique, 40B signature, 32B fixed
+0x140437280	0x1404377e0	CSChrDataModule::GetMaxRecoverableHp	unique, 15B signature, 7B fixed
+0x1404372c0	0x140437820	CSChrDataModule::GethpMaxUncapped	caller rel32, 1 agreeing caller(s)
+0x140438a50	0x140438fb0	EnemyIns vitals seeder FUN_140438a50	unique, 40B signature, 32B fixed
+0x140437140	0x1404376a0	CSChrDataModule vft slot3 fpBase getter	RTTI vtable slot CSChrDataModule+0x18
+0x140437150	0x1404376b0	CSChrDataModule vft slot4 staminaBase getter	RTTI vtable slot CSChrDataModule+0x20
+0x140437ac0	0x140438020	fpMax recompute FUN_140437ac0	nearest-anchor delta +0x560, 2 shape candidates
+0x140437bc0	0x140438120	staminaMax recompute FUN_140437bc0	nearest-anchor delta +0x560, 2 shape candidates
+0x1403f0b20	0x1403f0d50	EnemyIns vft+0x168 GetPlayerGameData	RTTI vtable slot ChrIns/EnemyIns+0x168
+0x1403f4530	0x1403f4760	EnemyIns vft+0x118 IsPlayerIns (ret 0)	RTTI vtable slot ChrIns/EnemyIns+0x118
+0x140cba510	0x140cbbbe0	CSSessionManager voicechat FUN_140cba510	unique, 44B signature, 27B fixed
+0x14073cf20	0x14073dd70	QuickmatchManager FUN_14073cf20	unique, 42B signature, 33B fixed

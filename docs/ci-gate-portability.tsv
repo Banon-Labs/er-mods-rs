@@ -58,6 +58,7 @@ portable	-	check-counter-writers.py --selftest	source/AST/text analysis only
 portable	-	check-counter-writers.py	source/AST/text analysis only
 partial	image-1162,image-1170	check-oracle-singleton-globals.py --selftest	source half asserts and says 'selftest: ok'; the IMAGE half prints that it was skipped
 partial	image-1162,image-1170	check-oracle-singleton-globals.py	still audits ungated module-base arithmetic; the IMAGE half prints that it was skipped
+partial	game-install	ersc_identify.py --selftest	the five synthetic banner assertions run everywhere and say '0 failure(s)'; the four real-image assertions are replaced by 'no ersc.dll at <path>; synthetic checks only'. Measured with ER_GAME_DIR pointed at a directory that does not exist.
 portable	-	check-fromsoftware-symbols.py --selftest	source/AST/text analysis only
 portable	-	check-fromsoftware-symbols.py	source/AST/text analysis only
 portable	-	check-sibling-pin-lockstep.py --selftest	source/AST/text analysis only

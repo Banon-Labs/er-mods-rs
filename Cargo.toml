@@ -24,11 +24,6 @@ members = [
   # entry, enabled by presence, omitted from a production profile.
   "crates/er-diag-harness",
   "crates/er-ags-stub",
-  # Lets Seamless Co-op v1.9.9 boot on ELDEN RING 1.17: rebuilds the one AOB locator ersc
-  # lost to the patch (the object behind `GetWwiseSettings` grew 0x38, so its trailing
-  # `lea rcx,[rbx+0x20]` became `+0x58`) in a code cave, with the operands re-based so ersc
-  # still resolves the real allocator getter. Loads BEFORE ersc.dll.
-  "crates/er-ersc-sigshim",
   "crates/er-inventory-sort",
   "crates/er-better-refills",
   # Hotkey that marks every auto-refillable item refill / no-refill in one press, cycling.
@@ -86,6 +81,11 @@ members = [
   "crates/er-build-watermark",
   "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
+  # Which mods in this profile are fighting over the same key, and does the game already use it.
+  # A passive observer: it hooks the input-read APIs, attributes each call to the module it came
+  # from, and prints ONE warning once the profile has settled. Every detour chains straight back
+  # to the original -- it swallows no input, injects none, and writes no game memory.
+  "crates/er-hotkey-conflicts",
   # A walkable route to every other player in the session, drawn on the ground and following the
   # terrain, with a direction arrow when the navmesh cannot reach them. Standalone shell: reads
   # the roster, asks the engine's own Havok-AI navmesh, draws through the shared overlay host.

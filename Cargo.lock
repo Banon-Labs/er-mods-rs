@@ -2892,14 +2892,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-ersc-sigshim"
-version = "0.1.0"
-dependencies = [
- "er-game-base",
- "er-hook",
-]
-
-[[package]]
 name = "er-flver"
 version = "0.1.0"
 dependencies = [
@@ -2935,6 +2927,20 @@ dependencies = [
 [[package]]
 name = "er-hotkey-config"
 version = "0.1.0"
+
+[[package]]
+name = "er-hotkey-conflicts"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-build-watermark-core",
+ "er-game-base",
+ "er-hook",
+ "er-invasion-warp-core",
+ "fromsoftware-shared",
+ "hudhook",
+ "windows 0.62.2",
+]
 
 [[package]]
 name = "er-input-harness"

@@ -595,7 +595,7 @@ def selftest(rows, overrides):
             return 1
     # ...and the two shapes it must NOT reject.
     for name in ("TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754", "CTX_RIP_OFF",
-                 "GAME_MAN_FIELD_B73_OFFSET", "CALL_REL_AT"):
+                 "GAME_MAN_FIELD_B73_OFFSET", "PGD_AT"):
         if not offset_shaped(name):
             print(f"FAIL: the name-shape rule rejects {name}, which is an offset")
             return 1

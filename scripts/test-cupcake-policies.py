@@ -464,7 +464,19 @@ def main() -> int:
         # the tilde, so it reports `<cwd>/~`), and the wrapped form must not be
         # held to a stricter standard than the command it wraps.
         PolicyCase("allow-wrapped-copy-into-home", "bash -c 'cp file ~'", True),
-        PolicyCase("allow-wrapped-build", "bash -c 'cargo build --release'", True),
+        # A benign wrapped build stays allowed. The example carries a `-p`
+        # because ER-EFFECTS-REQUIRE-SCOPED-CARGO (2026-09-02) denies an
+        # unscoped cargo invocation wherever it appears, `bash -c` payloads
+        # included -- so the unscoped spelling this case used to carry now
+        # fails for a reason that has nothing to do with what the case is
+        # about. What it is about is the shell-wrapper rule not
+        # OVER-approximating: a harmless payload must survive being wrapped.
+        # Scoping the build keeps that the only thing under test.
+        PolicyCase(
+            "allow-wrapped-build",
+            "bash -c 'cargo build --release -p er-quickload'",
+            True,
+        ),
         PolicyCase("allow-echo-of-a-root-delete", "echo '" + ROOT_DELETE + "'", True),
         # --- KNOWN-OPEN RESIDUE, PINNED SO IT IS VISIBLE ---------------------
         #
