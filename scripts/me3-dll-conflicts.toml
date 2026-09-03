@@ -408,6 +408,61 @@ like "no hosts online" -- the worst possible way for a DLL to arrive uninvited o
 dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
 invade during that run: `--with er-death-persist`."""
 
+[[conflict]]
+a = "er-quickload"
+b = "er-invasion-warp"
+kind = "hook-collision"
+reason = """RUNTIME-MEASURED 2026-09-02, four reproductions and a bisect. Co-loading these two kills \
+the game at ~+29.9s every time, deterministically, on the same character (--seed 2073568449, Prophet \
+RL7): `exception code=0xc000001d (STATUS_ILLEGAL_INSTRUCTION) addr=0x140010043{game+0x10043}`. That \
+RIP is MID-INSTRUCTION -- the boundary is 0x140010041 `sub rdx, 6` (48 83 ea 06) inside the game's \
+SSE memcpy loop at 0x140010000, and decoding from +2 gives `ea ...`, a far JMP that does not exist \
+in long mode. So this is a wild control transfer landing two bytes into a hot leaf, not a Rust \
+panic: a panic=abort ud2 would fault at self+RVA, never at game+RVA.
+
+THE BISECT, so nobody has to redo it. Product alone: clean past 106s (reached ENTERING WORLD 11/11, \
+oracle_player_render_ready = true). Product + the 19 co-loadable shells: crash at +31.7s. First ten \
+of those nineteen: +29.7s. First five (armament-icons, better-refills, build-watermark, \
+crash-logging, death-persist): clean past 127s. Second five (diag-harness, enemynpc-effects, \
+hotkey-conflicts, invasion-path, invasion-warp): +29.7s. invasion-path ALONE with the product: clean \
+past 114s. invasion-warp ALONE with the product: +29.9s. One shell, and it is this one.
+
+WHAT IS ESTABLISHED, AND WHAT IS NOT. The `kind` is a best-fit label, not a measured mechanism -- \
+say so out loud, because the bisect above is airtight and the explanation below is not. ESTABLISHED: \
+the crate's own module header ("It still installs NO detours, patches nothing, and writes nothing \
+into the engine ... it owns no Present detour and no MinHook instance") and the [compatible] reason \
+this row replaced are both STALE. It installs ten union hooks -- `announce.rs:380`, \
+`lobby_publish.rs:843/884/1027`, `local_invasion_filter.rs:798/867/1932`, \
+`map_hooks/install.rs:81/126/171` -- plus a runtime-derived one at `map_gfx.rs:396` and a \
+steamclient64 vtable detour. `er_hook::register_union_hook` dedupes only WITHIN one module (er-hook's \
+statics are per-module), so a separately-loaded DLL owns a SECOND MinHook instance whose union is not \
+the product's. NOT ESTABLISHED: that a shared prologue is what crashes it. \
+`scripts/check-shared-hook-rvas.py` reports 36 shared targets across 27 shells and ALL DECLARED, so \
+it names no undeclared product/invasion-warp overlap. That gate keys on statically-resolvable \
+addresses, so it is blind to the `map_gfx.rs:396` runtime-derived target and to the steamclient64 \
+vtable slot -- absence of a hit there is not proof of no collision, but it is not evidence of one \
+either. Also unexplained by a plain trampoline collision: the armament-icons collision (first \
+[[shared]] row) presented as SILENT INERTNESS with nothing crashing, and this presents as a hard \
+fault at a fixed address and a fixed ~+29.9s.
+
+DO NOT DOWNGRADE THIS ROW TO [[shared]] on the strength of "it uses the union". The union is \
+necessary and not sufficient; armament-icons is co-loadable because a runtime measurement showed the \
+chaining works, and the measurement for this pair says the opposite. NEXT DIAGNOSTIC, before writing \
+any fix: the mechanism is still unidentified, so converting the ten sites to \
+`er_hook::register_shared_hook` is a GUESS at this point. Find what actually transfers control to \
+0x140010043 first -- the two runtime-invisible targets above are the places the RVA gate cannot \
+look. The A/B that scores any candidate fix is `scripts/er-run-branch.py --seed 2073568449 --with \
+er-quickload --with er-invasion-warp`, which must survive past 120s."""
+evidence = """crates/er-invasion-warp/src/lib.rs:195 `map_gfx::install_world_map_gfx_hook(base)`; \
+crates/er-invasion-warp/src/lib.rs:197 (local_invasion_filter's SetMultiplayJoinData game detour, \
+crates/er-invasion-warp/src/local_invasion_filter.rs:175); crates/er-invasion-warp/src/lib.rs:235-236 \
+`lobby_publish::install_hunt_hook()` / `install_pool_filter_hook()` \
+(lobby_publish.rs:843, :884, :1027); crates/er-invasion-warp/src/announce.rs:380 \
+`er_hook::register_union_hook(address, update_hook, &ORIG_UPDATE)`. Runtime: \
+~/.cache/er-me3-runs/br-20260903-031513-d204/er-quickload-crash-log.txt (invasion-warp alone with \
+the product, +29882ms) vs br-20260903-031301-03a6 (invasion-path alone, clean past 114s) vs \
+br-20260903-030425-8a64 (product alone, clean past 106s)."""
+
 [compatible]
 "er-diag-harness" = """Co-loadable with the product, and co-loadable is the whole point: this \
 shell exists to carry five detours the product USED TO install unconditionally, so every one of \
@@ -506,7 +561,6 @@ game's own `CSPcKeyConfig` binding table at `GLOBAL_CSPcKeyConfig+0x440` (to che
 against the player's configured bindings). Both are loads through the fault-safe reader."""
 "er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
 "er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
-"er-invasion-warp" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
 "er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
 writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
 QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disassemble / read either installed `ersc.dll` build, for the v2.0.0 re-pin work.
+"""Disassemble / read any archived or installed `ersc.dll` build, for Seamless re-pin work.
 
 Reads the DLLs IN PLACE (AGENTS.md forbids copying or staging `ersc.dll`). Reuses the PE
 reader and pin parser from `locate-ersc-entry-points.py` so there is one implementation of
@@ -41,8 +41,41 @@ LOC = _locate_module()
 Pe = LOC.Pe
 
 
+# `--build` names a SEAMLESS VERSION, and it is resolved by the version marker inside the
+# file -- never by which directory the file sits in.
+#
+# It used to be positional: `v200` meant "whatever `find_installed` returns" and `v199` meant
+# "the `_SeamlessCoop/` sibling". That was correct for exactly as long as v2.0.0 was the
+# installed build. The moment v2.0.1 was extracted on 2026-09-02, `--build v200` silently
+# began disassembling v2.0.1 -- same file size, so nothing looked wrong -- and every address
+# read through it would have been recorded under the wrong build. That is the failure this
+# repo's own locator already refuses to make: "Which file answers for which pin set is decided
+# by the version marker inside it, never by the directory it happens to sit in."
+#
+# So this resolves the same way, fails closed when the asked-for build is not on disk, and
+# says which builds ARE available rather than quietly handing back the wrong bytes.
+BUILD_MARKERS = {
+    "v199": "Seamless Co-op v1.9.9 by Yui",
+    "v200": "Seamless Co-op v2.0.0 by Yui",
+    "v201": "Seamless Co-op v2.0.1 by Yui",
+}
+
+
+def available_builds():
+    """`{build_name: path}` for every version marker found among the candidate files."""
+    found = {}
+    for path in LOC.ersc_candidates(None, None):
+        pe = LOC.load_pe(path)
+        if pe is None:
+            continue
+        for name, marker in BUILD_MARKERS.items():
+            if name not in found and LOC.match_marker(pe, marker):
+                found[name] = path
+    return found
+
+
 def build_paths():
-    """`(installed_v2_path, reference_v1_path)` using the same resolution the locator uses."""
+    """`(installed_path, reference_path)` -- kept for callers that want the install layout."""
     installed = LOC.find_installed(None)
     reference = None
     if installed:
@@ -56,10 +89,19 @@ def build_paths():
 
 
 def load(which):
-    installed, reference = build_paths()
-    path = installed if which == "v200" else reference
-    if not path or not os.path.isfile(path):
-        raise SystemExit(f"no {which} ersc.dll found (installed={installed} reference={reference})")
+    marker = BUILD_MARKERS.get(which)
+    if marker is None:
+        raise SystemExit(f"unknown --build {which!r}; known: {', '.join(sorted(BUILD_MARKERS))}")
+    found = available_builds()
+    path = found.get(which)
+    if not path:
+        have = ", ".join(f"{k}={v}" for k, v in sorted(found.items())) or "none"
+        raise SystemExit(
+            f"no ersc.dll carrying {marker!r} was found.\n"
+            f"  builds present: {have}\n"
+            "  archive a copy at vendor-archive/seamless/ersc-<version>.dll, or point\n"
+            "  ER_ERSC_DLL / ER_ERSC_DLL_REFERENCE at it."
+        )
     with open(path, "rb") as handle:
         return Pe(handle.read()), path
 
@@ -342,7 +384,7 @@ def main():
         ],
     )
     parser.add_argument("argument", nargs="*")
-    parser.add_argument("--build", default="v200", choices=["v200", "v199"])
+    parser.add_argument("--build", default="v201", choices=sorted(BUILD_MARKERS))
     parser.add_argument("-n", "--nbytes", default="0x120")
     parser.add_argument("--no-stop", action="store_true", help="do not stop the listing at `ret`")
     parser.add_argument("--utf16", action="store_true")
@@ -370,7 +412,12 @@ def main():
         # once in the build it came from (so it identifies a function, not a shape) and NOT AT
         # ALL in the other build (so the two versions' gates cannot both accept the same DLL).
         source, source_path = load(args.build)
-        other_name = "v199" if args.build == "v200" else "v200"
+        # "the other build" is the next-newest one actually on disk, not a hard-coded twin.
+        others = [name for name in sorted(BUILD_MARKERS) if name != args.build]
+        present = available_builds()
+        other_name = next(
+            (name for name in reversed(others) if name in present), others[-1]
+        )
         other, other_path = load(other_name)
         print(f"# from {args.build}: {source_path}\n#   {source.describe()}")
         print(f"# vs   {other_name}: {other_path}\n#   {other.describe()}\n")
