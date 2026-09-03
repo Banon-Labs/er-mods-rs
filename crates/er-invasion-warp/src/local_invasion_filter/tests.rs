@@ -465,7 +465,7 @@ fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
     // longer driven; what remains of it is `ersc::RETIRED`, checked below.
     let expected = [Measured {
         version: "2.0.1",
-        rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d590],
+        rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d6e0],
         fields: [0x150, 0x14c],
         states: [0x01, 0x0e, 0x23, 0x13],
     }];

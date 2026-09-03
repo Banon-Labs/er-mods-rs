@@ -442,6 +442,16 @@ ersc_naming_statement_tokens contains tokens if {
 ersc_bd_text_mention_only if {
 	tool_name == "Bash"
 	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, proc_scan_norm_command)
+
+	# NO SHELL CONTROL OUTSIDE QUOTES. Without this line the header above is false of the code
+	# beneath it: it claims "Anything chained, substituted, or wrapped fails the shape", but a
+	# bd invocation followed by `&&` and a real copy into a banned destination starts with bd,
+	# contains no `$(` and no backtick, so it claimed the exemption and the copy went through.
+	# Caught by test_deny_bd_home_var_chained_ersc_copy, which had been passing until the
+	# reference-archive branch landed this exemption without the check its siblings all carry.
+	# Scanning `scrubbed_command` (quotes removed) is what keeps a `;` or `|` inside the quoted
+	# memory PROSE from tripping it, which is the whole point of the exemption.
+	not regex.match(`[;|&()<>\x60\n\r]`, scrubbed_command)
 	not contains(command, "$(")
 	not contains(command, "`")
 }
