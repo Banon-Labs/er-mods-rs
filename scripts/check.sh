@@ -728,6 +728,13 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # a suite whose neighbouring delivered-shape gate spends 19.9s. It also PRODUCES the 662/662 figure
 # that reports have been quoting from a hand-run command no gate computed.
 opa test "$repo_root/.cupcake/"
+# WHAT A LOCAL RUN OF THIS FILE CANNOT SEE BY CONSTRUCTION. `compression.zstd` is stdlib only
+# from Python 3.14 (PEP 784); the dev box has it, GitHub's ubuntu-latest does not, and
+# scripts/regulation-params.py imported it bare -- so the import blew up at CI and nowhere else,
+# taking down consumers that never decompress anything (measured: PR #388, run 33793058851).
+# This blinds the interpreter with a sys.meta_path finder instead of hoping someone runs an old
+# python, so the regression is catchable HERE. See scripts/test-regulation-params-zstd-skip.py.
+python3 "$repo_root/scripts/test-regulation-params-zstd-skip.py"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # A NUL-terminator walk over a pointer we did not create is how both testers' games died on
 # 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage NON-null
