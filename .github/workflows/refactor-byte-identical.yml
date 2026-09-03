@@ -3,7 +3,7 @@ name: refactor-byte-identical
 # Builds every shipped cdylib twice -- once from the merge-base, once from the PR
 # head -- and fails when they are not byte-identical after link-time noise is
 # normalized away (see scripts/check-dll-byte-identical.py for exactly which
-# three PE fields are zeroed and why).
+# three PE fields are zeroed, which fourth string is masked, and why).
 #
 # SCOPE: only PRs that present themselves as a refactor or a move, i.e. a branch
 # name containing "refactor", or a PR title containing "move" or "refactor".
@@ -191,11 +191,20 @@ jobs:
               || echo "::warning::head build produced no $dll"
           done
 
+      # The two shas are passed so the comparator can mask the BUILD WATERMARK --
+      # crates/er-game-base/build.rs bakes `git rev-parse --short=12 HEAD` into
+      # ER_BUILD_GIT, which lands in .rdata of every DLL that links it, i.e. all of
+      # them. Two different commits therefore ALWAYS differ by those 12 bytes, which
+      # made this gate unpassable by construction until 2026-09-03. They are the
+      # same two revisions the builds above checked out, so the mask can only ever
+      # hit the string each build actually recorded.
       - name: Compare
         run: |
           set -euo pipefail
           python3 scripts/check-dll-byte-identical.py \
             --artifacts-file "$RUNNER_TEMP/artifacts" \
+            --base-build-sha "${{ steps.refs.outputs.merge_base }}" \
+            --head-build-sha "${{ steps.refs.outputs.head }}" \
             "$RUNNER_TEMP/dll-base" "$RUNNER_TEMP/dll-head" | tee "$RUNNER_TEMP/report.txt"
 
       - name: Publish report

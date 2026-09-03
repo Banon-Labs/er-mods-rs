@@ -7,6 +7,14 @@ halves are asserted here against a REAL cdylib from `target/`, because a
 synthetic PE would not exercise the debug-directory/CodeView walk that the
 normalizer depends on.
 
+The BUILD WATERMARK is the third thing tested, and it is the one that had the
+gate red on every PR: er-game-base's build.rs bakes a 12-character commit id
+into every DLL that links it, so two different commits always differ by those
+bytes. Masking it is only safe if the mask cannot grow into an exemption, so the
+cases here are paired -- the watermark alone must FAIL unmasked and PASS masked,
+a sha present in neither image must mask nothing and hide nothing, and a flipped
+.text byte must still fail with the mask correctly applied.
+
 Skips (exit 0) when no built DLL is available -- same convention as the
 corpus-dependent tests in crates/er-gfx.
 """
@@ -92,6 +100,32 @@ def flip_text_byte(checker, data: bytes) -> bytes:
     raise AssertionError("sample DLL has no .text section")
 
 
+#: Where the synthetic build watermark is planted. A real one is wherever the linker put
+#: `ER_BUILD_GIT`; the mask does not care about the offset, only about the bytes, so the test
+#: writes its own at a known place rather than hunting for the sample's. That also keeps the
+#: test independent of which commit the sample DLL happened to be built from.
+WATERMARK_SHA_A = "a56af6a06c03"
+WATERMARK_SHA_B = "0be70e7616f6"
+#: A sha of the right SHAPE that is in neither image -- the negative control for "masked nothing".
+WATERMARK_SHA_ABSENT = "ffffffffffff"
+
+
+def plant_build_watermark(checker, data: bytes, sha: str) -> bytes:
+    """Write a 12-byte ASCII commit id into .rdata, the way er-game-base's build.rs does.
+
+    Deliberately NOT at a random offset: base and head must plant theirs at the SAME place, or
+    the pair would differ in length-of-run rather than in content and the test would be measuring
+    something else.
+    """
+    pe = checker.Pe(data)
+    for name, _, _, raw_pointer, raw_size in pe.sections:
+        if name == ".rdata" and raw_size > 0x200:
+            at = raw_pointer + 0x100
+            pe.data[at : at + len(sha)] = sha.encode("ascii")
+            return bytes(pe.data)
+    raise AssertionError("sample DLL has no .rdata section big enough to plant a watermark")
+
+
 def main() -> int:
     checker = load_checker()
     failures: list[str] = []
@@ -131,7 +165,7 @@ def main() -> int:
 
         # --- link noise must NOT fail the gate ----------------------------
         noisy = write(tmp, "noisy.dll", bump_link_noise(checker, original))
-        identical, lines = checker.compare(base, noisy)
+        identical, lines, _ = checker.compare(base, noisy)
         if not identical:
             failures.append(
                 "link-time noise (timestamps + RSDS GUID) was reported as a real change: "
@@ -140,7 +174,7 @@ def main() -> int:
 
         # --- one changed code byte MUST fail the gate ---------------------
         patched = write(tmp, "patched.dll", flip_text_byte(checker, original))
-        identical, lines = checker.compare(base, patched)
+        identical, lines, _ = checker.compare(base, patched)
         if identical:
             failures.append("a flipped .text byte was normalized away -- the gate is blind to code changes")
         elif not any(".text" in line for line in lines):
@@ -148,11 +182,72 @@ def main() -> int:
 
         # --- a truncated image must fail, not crash ------------------------
         truncated = write(tmp, "truncated.dll", original[: len(original) - 4096])
-        identical, lines = checker.compare(base, truncated)
+        identical, lines, _ = checker.compare(base, truncated)
         if identical:
             failures.append("a truncated image compared equal")
         elif not any("size:" in line for line in lines):
             failures.append(f"size mismatch not reported: {lines}")
+
+        # --- THE BUILD WATERMARK ------------------------------------------
+        # er-game-base's build.rs bakes `git rev-parse --short=12 HEAD` into every DLL that
+        # links it, so two DIFFERENT commits always differ by those 12 bytes with no help from
+        # the code. Four cases, and the first two are the pair that matters: the difference is
+        # real and visible, AND it is what the mask is for. Without case 1 the mask could be
+        # masking nothing; without case 2 the gate stays unpassable.
+        wm_base = write(tmp, "wm-base.dll", plant_build_watermark(checker, original, WATERMARK_SHA_A))
+        wm_head = write(tmp, "wm-head.dll", plant_build_watermark(checker, original, WATERMARK_SHA_B))
+        sha_a = checker.build_sha_bytes(WATERMARK_SHA_A)
+        sha_b = checker.build_sha_bytes(WATERMARK_SHA_B)
+
+        # 1. unmasked, the watermark alone fails the gate -- which is the bug being fixed.
+        identical, lines, masked = checker.compare(wm_base, wm_head)
+        if identical:
+            failures.append("two different build watermarks compared equal with no mask applied")
+        elif not any(".rdata" in line for line in lines):
+            failures.append(f"watermark difference not attributed to .rdata: {lines}")
+        if masked:
+            failures.append(f"nothing was asked to be masked, yet {masked} place(s) were")
+
+        # 2. masked, the same pair passes.
+        identical, lines, masked = checker.compare(wm_base, wm_head, sha_a, sha_b)
+        if not identical:
+            failures.append(
+                "the build watermark survived masking, so the gate is still unpassable: "
+                + "; ".join(lines[:2])
+            )
+        if masked != 2:
+            failures.append(f"expected one masked watermark per image (2); masked {masked}")
+
+        # 3. the WRONG sha masks nothing and hides nothing. This is what stops the mask from
+        #    becoming a blanket "12 hex bytes anywhere are fine" allowlist.
+        absent = checker.build_sha_bytes(WATERMARK_SHA_ABSENT)
+        identical, _, masked = checker.compare(wm_base, wm_head, absent, absent)
+        if identical:
+            failures.append("masking with a sha present in neither image still passed the pair")
+        if masked:
+            failures.append(f"a sha in neither image reported {masked} mask hit(s)")
+
+        # 4. a real code change is NOT hidden by a correct mask. The whole risk of masking is
+        #    that it grows into an exemption; this is the assertion that it did not.
+        wm_head_patched = write(
+            tmp,
+            "wm-head-patched.dll",
+            flip_text_byte(checker, plant_build_watermark(checker, original, WATERMARK_SHA_B)),
+        )
+        identical, lines, _ = checker.compare(wm_base, wm_head_patched, sha_a, sha_b)
+        if identical:
+            failures.append("masking the watermark also hid a flipped .text byte")
+        elif not any(".text" in line for line in lines):
+            failures.append(f"with the watermark masked, the .text change was mis-attributed: {lines}")
+
+        # 5. the argument parser refuses anything that is not a long-enough hex sha, so a caller
+        #    passing a branch name cannot mask some short common string by accident.
+        for bad in ("main", "0be70e76", "0be70e7616fg", ""):
+            try:
+                checker.build_sha_bytes(bad)
+            except ValueError:
+                continue
+            failures.append(f"build_sha_bytes accepted {bad!r} as a build sha")
 
     if failures:
         for line in failures:
