@@ -408,9 +408,16 @@ DECISION_CASES = [
     ),
     DecisionCase(
         "allow-multi-line-build-script",
-        "cargo fmt --all\ncargo check --all-targets\necho built",
+        "cargo fmt --all\ncargo check -p er-quickload --all-targets\necho built",
         "allow",
         "an ordinary multi-line script with nothing forbidden in it",
+    ),
+    DecisionCase(
+        "deny-unscoped-cargo-on-a-separator-less-second-line",
+        "cargo fmt --all\ncargo check --all-targets\necho built",
+        "deny",
+        "the same script before it was scoped: the newline is not a separator the engine "
+        "preserves, so this is the production path require_scoped_cargo's opa suite cannot reach",
     ),
     DecisionCase(
         "allow-line-continuation-splitting-one-command",

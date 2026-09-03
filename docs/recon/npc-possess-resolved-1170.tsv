@@ -1,0 +1,23 @@
+# 1.16.2 VA	1.17 VA	how	evidence  (scripts/resolve-1170-by-caller-rel32.py)
+0x1404016d0	0x140401a30	caller rel32, 1 agreeing caller(s)	0x1404d0c30->0x1404d1a00 call#3 => 0x140401a30
+0x140513210	0x140514010	caller rel32, 4 agreeing caller(s)	0x1403c52a0->0x1403c52b0 call#6 => 0x140514010; 0x14050a570->0x14050b340 call#9 => 0x140514010; 0x140508050->0x140508e20 call#0 => 0x140514010
+0x1403e6e00	0x1403e6e30	caller rel32, 1 agreeing caller(s)	0x1404ce0a0->0x1404cee70 call#0 => 0x1403e6e30
+0x1404caaf0	0x1404cb680	caller rel32, 1 agreeing caller(s)	0x1404cd710->0x1404ce4e0 call#4 => 0x1404cb680
+0x140e76ea0	0x140e78ca0	caller rel32, 1 agreeing caller(s)	0x14050a570->0x14050b340 call#19 => 0x140e78ca0
+0x1404032e0	0x140403650	caller rel32, 10 agreeing caller(s)	0x140492a90->0x140492ff0 call#7 => 0x140403650; 0x140492cb0->0x140493210 call#7 => 0x140403650; 0x140492e20->0x140493380 call#7 => 0x140403650
+0x140474550	0x140474ab0	caller rel32, 3 agreeing caller(s)	0x140508050->0x140508e20 call#2 => 0x140474ab0; 0x1403b11c0->0x1403b11d0 call#2 => 0x140474ab0; 0x1403c8610->0x1403c8620 call#13 => 0x140474ab0
+0x1404266d0	0x140426c20	caller rel32, 1 agreeing caller(s)	0x14042f150->0x14042f6a0 call#1 => 0x140426c20
+0x140772a80	0x140773900	caller rel32, 1 agreeing caller(s)	0x140771bd0->0x140772a50 call#3 => 0x140773900
+0x1404372c0	0x140437820	caller rel32, 1 agreeing caller(s)	0x1403da750->0x1403da760 call#18 => 0x140437820
+# vtable slot read at an RTTI-derived base (scripts/find-1170-vtable-by-rtti.py)
+0x1403cf340	0x1403cf350	RTTI vtable slot	ComManipulator vft+0x48
+0x1403cda90	0x1403cdaa0	RTTI vtable slot	ChrManipulator/PadManipulator vft+0x48
+0x1403e08f0	0x1403e0900	RTTI vtable slot	RideManipulator vft+0x50
+0x1403f0b20	0x1403f0d50	RTTI vtable slot	ChrIns/EnemyIns vft+0x168
+0x1403f4530	0x1403f4760	RTTI vtable slot	ChrIns/EnemyIns vft+0x118
+0x140437140	0x1404376a0	RTTI vtable slot	CSChrDataModule vft+0x18
+0x140437150	0x1404376b0	RTTI vtable slot	CSChrDataModule vft+0x20
+0x140660120	0x140660f70	RTTI vtable slot	PlayerIns vft+0x88
+0x1403e9380	0x1403e9560	RTTI vtable slot	ChrIns vft+0x320
+0x1403cf2a0	0x1403cf2b0	RTTI vtable slot	ComManipulator vft+0x50
+0x1404d0c30	0x1404d1a00	RTTI vtable slot	EnemyIns vft+0x88

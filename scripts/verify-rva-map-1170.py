@@ -115,6 +115,10 @@ DECODE_BYTES = 0x400
 THIN_EVIDENCE = 12
 # Bytes MinHook relocates when it installs a detour. `branch_into_prologue` checks this window.
 PATCH_BYTES = 5
+# Marks the writer's own CARRIED FORWARD banner inside the file body. `preserve_unverified`
+# needs to tell that block apart from hand-written prose so a re-run does not nest a second
+# copy of it; the writer emits this exact text.
+CARRIED_BANNER_MARK = "# CARRIED FORWARD --"
 
 # THE TWO EXHAUSTIVE VERDICTS. Both mean: the comparison covered every instruction of both
 # functions, the two bodies are the same length, and the normalised streams are equal. That is
@@ -1406,6 +1410,28 @@ def preserve_unverified(path, rows):
     is a CONFLICT -- one of the two is a wrong address at a live-looking value -- and the caller
     refuses to write rather than pick.
 
+    COMMENT LINES ARE CARRIED TOO, and were NOT until 2026-09-01. That omission was the same
+    silent loss this function exists to prevent, wearing different clothing: the guard counted
+    ROWS, so `docs/recon/rva-map-1162-to-1170.verified.tsv` came through a narrow run with all
+    103 data rows intact and 181 of its 209 comment lines gone, at exit 0, with nothing on
+    stderr naming them. Measured on the 2026-09-01 ProfileSelect run: 312 lines in, 174 out.
+
+    What went is not decoration. Those interleaved blocks are where this ledger records the
+    reasoning a row cannot hold -- why 0x140aec480 was REMOVED (mid-function, +0x360 inside
+    0xaec120, and mapping it relocated the bug rather than fixing it), why 0xcf9300 is
+    deliberately ABSENT, that ersc.dll RVAs are STRUCK because 1.17 cannot move them, and the
+    four mid-function addresses whose rows were refused precisely BECAUSE they verify
+    IDENTICAL. Delete those and the next agent re-adds the row that was removed on purpose,
+    with the verifier agreeing beautifully about the wrong thing.
+
+    The LEADING comment block is the exception: everything before the first data line is the
+    header this writer regenerates (see `role_note`), so carrying it would duplicate it. From
+    the first data row onward every line is kept in its original order -- comments, blanks and
+    unreproduced rows alike -- so a block stays attached to the rows it annotates. A row this
+    run DOES reproduce moves up into the fresh section while its comment stays put; that
+    separates a note from its row, which is a readability cost and not a loss, and it is the
+    price of never deleting one.
+
     Returns `(kept_lines, conflicts)`.
     """
     if not path or not os.path.exists(path):
@@ -1414,21 +1440,49 @@ def preserve_unverified(path, rows):
     for old_va, new_va, _how, _result in rows:
         produced.setdefault(old_va, set()).add(new_va)
     kept, conflicts, seen = [], [], set()
+    body_started = False
+    in_generated_banner = False
     for line in open(path, encoding="utf-8"):
         text = line.rstrip("\n")
-        if text.startswith("#") or not text.strip():
-            continue
         fields = text.split("\t")
-        if len(fields) < 2:
+        pair = None
+        if not text.startswith("#") and text.strip() and len(fields) >= 2:
+            try:
+                old_va, new_va = int(fields[0], 16), int(fields[1], 16)
+            except ValueError:
+                pair = None
+            else:
+                if old_va < BASE:
+                    old_va += BASE
+                if new_va < BASE:
+                    new_va += BASE
+                pair = (old_va, new_va)
+        if pair is None:
+            # Two comment blocks in this file are written by THIS script and must not be carried,
+            # or each run would nest another copy of them: the leading header (see `role_note`),
+            # and the `# CARRIED FORWARD` banner, which sits in the body and so is not excluded by
+            # `body_started` alone. Everything else after the first row is hand-written prose and
+            # is kept -- see this function's docstring for what that prose is holding.
+            if CARRIED_BANNER_MARK in text:
+                in_generated_banner = True
+                # The writer prints a bare `#` separator immediately above the banner. Without
+                # dropping it too, every run carries one more of them forward and the file grows
+                # by a line each time -- which is how you find out a "verbatim" carry is not
+                # idempotent. `--tsv` twice in a row must produce the same bytes.
+                while kept and kept[-1].strip() in ("#", ""):
+                    kept.pop()
+                continue
+            if in_generated_banner:
+                if text.startswith("#"):
+                    continue
+                in_generated_banner = False
+            if not body_started:
+                continue
+            kept.append(text)
             continue
-        try:
-            old_va, new_va = int(fields[0], 16), int(fields[1], 16)
-        except ValueError:
-            continue
-        if old_va < BASE:
-            old_va += BASE
-        if new_va < BASE:
-            new_va += BASE
+        in_generated_banner = False
+        body_started = True
+        old_va, new_va = pair
         if new_va in produced.get(old_va, ()):
             continue
         if old_va in produced:
@@ -1442,6 +1496,8 @@ def preserve_unverified(path, rows):
             continue
         seen.add(text)
         kept.append(text)
+    while kept and not kept[-1].strip():
+        kept.pop()
     return kept, conflicts
 
 
@@ -1619,13 +1675,17 @@ def main():
                 "to accept this run's pair, or re-derive it -- do not let the truncate decide."
             )
             return 1
-        for text in carried:
-            print(f"  carried forward (not in this run): {text.split(chr(9), 2)[0]} {text.split(chr(9), 2)[1]}")
+        carried_rows = [t for t in carried if not t.startswith("#") and t.strip()]
+        for text in carried_rows:
+            fields = text.split("\t")
+            print(f"  carried forward (not in this run): {fields[0]} {fields[1]}")
         if carried:
+            carried_prose = len(carried) - len(carried_rows)
             print(
-                f"{len(carried)} row(s) already in {os.path.basename(args.tsv)} were not produced "
-                "by this run and are kept verbatim under '# CARRIED FORWARD'. Delete a line there "
-                "to drop it; no run of this script will restore it."
+                f"{len(carried_rows)} row(s) and {carried_prose} comment/blank line(s) already in "
+                f"{os.path.basename(args.tsv)} were not produced by this run and are kept verbatim "
+                "under '# CARRIED FORWARD'. Delete a line there to drop it; no run of this script "
+                "will restore it."
             )
         with open(args.tsv, "w", encoding="utf-8") as handle:
             handle.write(
@@ -1691,13 +1751,19 @@ def main():
             if carried:
                 handle.write(
                     "#\n"
-                    f"# CARRIED FORWARD -- {len(carried)} row(s) the run that last wrote this file\n"
-                    "# did not produce. `--tsv` TRUNCATES, so a pair verified in an earlier, narrower\n"
-                    "# run -- `verify-rva-map-1170.py 0x1407ada40 --tsv <this file>` -- would\n"
-                    "# otherwise disappear at exit 0 with nothing naming it, and the address would\n"
-                    "# read afterwards as one that was never verified. Each line below is the\n"
-                    "# verbatim row this verifier wrote when it was checked; er-game-base/build.rs\n"
-                    "# reads them exactly like the rows above. To drop one, delete its line.\n"
+                    f"# CARRIED FORWARD -- {len(carried_rows)} row(s) and "
+                    f"{len(carried) - len(carried_rows)} comment/blank line(s) the run that last\n"
+                    "# wrote this file did not produce. `--tsv` TRUNCATES, so a pair verified in an\n"
+                    "# earlier, narrower run -- `verify-rva-map-1170.py 0x1407ada40 --tsv <this\n"
+                    "# file>` -- would otherwise disappear at exit 0 with nothing naming it, and the\n"
+                    "# address would read afterwards as one that was never verified. Each row below\n"
+                    "# is the verbatim line this verifier wrote when it was checked;\n"
+                    "# er-game-base/build.rs reads them exactly like the rows above. The prose\n"
+                    "# between them is carried for the same reason and matters as much: it is where\n"
+                    "# this ledger records why a row was REMOVED, or is deliberately ABSENT, or was\n"
+                    "# refused for being mid-function despite verifying IDENTICAL. Until 2026-09-01\n"
+                    "# only rows were carried and 181 of those lines were dropped by one narrow run.\n"
+                    "# To drop one, delete its line.\n"
                 )
                 for text in carried:
                     handle.write(text + "\n")
