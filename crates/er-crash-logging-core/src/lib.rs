@@ -643,14 +643,8 @@ pub fn veh_reentrant_refusals() -> usize {
     VEH_REENTRANT_REFUSALS.load(Ordering::SeqCst)
 }
 
-#[cfg(windows)]
-std::thread_local! {
-    /// Closed while THIS thread is somewhere inside `crash_vectored_handler`.
-    static VEH_IN_PROGRESS: er_game_base::reentry::ReentryLatch =
-        const { er_game_base::reentry::ReentryLatch::new() };
-}
-
-/// `Some(token)` for the outermost VEH entry on this thread, `None` for a nested one.
+/// `Some(token)` for the outermost VEH entry on this thread ANYWHERE IN THE PROCESS, `None` for a
+/// nested one.
 ///
 /// # Why a crash logger of all things needs this
 ///
@@ -667,10 +661,30 @@ std::thread_local! {
 /// it called `abort_thread` and the process died with no crash record, no minidump, and the one
 /// line that named the real fault buried under 215 copies of the amplifier.
 ///
+/// # Why it has to be process-wide, not the per-module `thread_local!` it started as
+///
+/// That first fix latched a `thread_local!` declared in THIS crate -- and every DLL that links
+/// this crate gets its own copy of it. So a fault raised while module A is describing a fault is
+/// still a *first* entry for modules B, C and D, each of which describes it, each of which can
+/// fault again. The amplifier came back multiplied by the number of loggers loaded.
+///
+/// MEASURED 2026-09-02, same game build, 24 native DLLs: one `0xc000001d` at `game+0x10043`, then
+/// 214 identical `0xc0000005` inside ntdll's unwinder, `rsp` from `0x10f560` down to `0x13810`,
+/// the faulting thread dead and the session wedged with its window still up. FOUR crash logs each
+/// recorded the same storm -- `er-quickload` 213, `er-net-effects` 214, `er-loading-bar` 64,
+/// `er-loading-portrait` 64 -- which is the 2026-08-28 latch working exactly as designed, four
+/// times over, on four private copies of the flag.
+///
+/// [`er_game_base::reentry::process_wide`] puts the table in a named section every module in the
+/// process maps, so the second logger to see a nested fault refuses it like the first one did. It
+/// stays keyed by thread id, so a genuine concurrent fault on another thread is still described.
+///
 /// A nested entry returns `EXCEPTION_CONTINUE_SEARCH` having touched nothing.
 #[cfg(windows)]
-fn enter_veh() -> Option<er_game_base::reentry::ReentryToken> {
-    er_game_base::reentry::ReentryLatch::enter(&VEH_IN_PROGRESS, &VEH_REENTRANT_REFUSALS)
+fn enter_veh() -> Option<er_game_base::reentry::process_wide::ProcessWideToken> {
+    er_game_base::reentry::process_wide::enter(&VEH_REENTRANT_REFUSALS, unsafe {
+        GetCurrentThreadId()
+    })
 }
 
 #[cfg(windows)]

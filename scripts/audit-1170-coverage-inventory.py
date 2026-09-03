@@ -645,10 +645,10 @@ def collect(maps):
 # scripts/locate-ersc-entry-points.py to re-measure before trusting a name here.
 FOREIGN_CASES = [
     (0x243E0, "ersc.dll", "V199_INVADE_ACTION_RVA -- ersc \"Invade world\", the RETIRED fingerprint"),
-    (0x241A0, "ersc.dll", "V200_SHOW_RVA -- ersc!show, Seamless v2.0.0"),
-    (0x25850, "ersc.dll", "V200_INVADE_ACTION_RVA -- ersc \"Invade world\", v2.0.0"),
-    (0x258D0, "ersc.dll", "V200_CANCEL_ACTION_RVA -- ersc \"Cancel search\", v2.0.0"),
-    (0xAD590, "ersc.dll", "V200_BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey, v2.0.0"),
+    (0x241A0, "ersc.dll", "V201_SHOW_RVA -- ersc!show, Seamless v2.0.1"),
+    (0x25850, "ersc.dll", "V201_INVADE_ACTION_RVA -- ersc \"Invade world\", v2.0.1"),
+    (0x258D0, "ersc.dll", "V201_CANCEL_ACTION_RVA -- ersc \"Cancel search\", v2.0.1"),
+    (0xAD6E0, "ersc.dll", "V201_BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey, v2.0.1"),
 ]
 NOT_ADDRESS_CASES = [
     (0x4000000, "GAME_TEXT_RVA_LIMIT -- plausibility bound in trace_first_game_caller_rva"),
@@ -708,7 +708,7 @@ def selftest(maps):
     # than silently reclassifying that build's RVAs as the game's. This gate has already earned
     # its keep once: it went red on 2026-09-02 when v1.9.9 left `ersc::SUPPORTED`, which is the
     # behaviour wanted -- the fixtures move deliberately, in the same commit, or not at all.
-    for name in ("V199_INVADE_ACTION_RVA", "V200_SHOW_RVA"):
+    for name in ("V199_INVADE_ACTION_RVA", "V201_SHOW_RVA"):
         if foreign_syms.get(name) != "ersc.dll":
             failures.append(
                 f"a constant declared inside `mod ersc` is not attributed to ersc.dll: {name}"

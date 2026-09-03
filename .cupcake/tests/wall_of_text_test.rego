@@ -107,3 +107,73 @@ test_contributes_nothing_on_stop if {
 test_defines_no_halt if {
 	not guard.halt
 }
+
+# --- (3) the WORD budget arm ------------------------------------------------------------------
+#
+# Paragraph count is blind to a single paragraph that simply keeps going. On 2026-09-03 one
+# 281-word paragraph carried four subjects and closed on a pronoun the agent could not resolve when
+# the user answered "it". These pin the arm that catches that shape.
+
+words_event(para_sig, words_sig) := {
+	"hook_event_name": "UserPromptSubmit",
+	"signals": {
+		"last_assistant_wall_of_text": para_sig,
+		"last_assistant_prose_words": words_sig,
+	},
+}
+
+has_words_correction(ctxs) if {
+	some c in ctxs
+	startswith(c, "MEASURED: your PREVIOUS answer was one paragraph but")
+}
+
+# The case the paragraph arm cannot see: one paragraph, far too many words.
+test_one_long_paragraph_is_corrected if {
+	ctxs := guard.add_context with input as words_event("", "PROSEWORDS:281:The fallback is the in-game missing-save picker")
+	has_words_correction(ctxs)
+}
+
+# The measured number is quoted, never invented.
+test_word_correction_quotes_the_measurement if {
+	ctxs := guard.add_context with input as words_event("", "PROSEWORDS:281:The fallback is the in-game missing-save picker")
+	some c in ctxs
+	contains(c, "281 words of prose")
+	contains(c, "The fallback is the in-game missing-save picker")
+}
+
+# Both arms firing at once would hand the model two corrections for one turn. The paragraph arm is
+# the stronger statement (multiple paragraphs are unread outright), so it wins and this one stands
+# down.
+test_paragraph_arm_suppresses_the_word_arm if {
+	ctxs := guard.add_context with input as words_event("WALLOFTEXT:3:A three paragraph answer", "PROSEWORDS:400:A three paragraph answer")
+	has_correction(ctxs)
+	not has_words_correction(ctxs)
+}
+
+# Within budget the signal is empty and nothing is added beyond the standing rule.
+test_short_answer_gets_no_word_correction if {
+	ctxs := guard.add_context with input as words_event("", "")
+	has_standing_rule(ctxs)
+	not has_words_correction(ctxs)
+}
+
+# Same no-fabrication contract the paragraph arm has: an unparseable or truncated tag stays quiet
+# rather than rendering half a sentence with a missing number.
+test_malformed_word_tag_is_ignored if {
+	ctxs := guard.add_context with input as words_event("", "PROSEWORDS:281")
+	not has_words_correction(ctxs)
+}
+
+test_untagged_word_signal_does_not_fabricate if {
+	ctxs := guard.add_context with input as words_event("", "lots of words honestly")
+	not has_words_correction(ctxs)
+}
+
+# UserPromptSubmit-only, like everything else here: a Stop verdict is rendered to the user verbatim.
+test_word_arm_contributes_nothing_on_stop if {
+	ctxs := guard.add_context with input as {
+		"hook_event_name": "Stop",
+		"signals": {"last_assistant_prose_words": "PROSEWORDS:400:A long single paragraph"},
+	}
+	count(ctxs) == 0
+}

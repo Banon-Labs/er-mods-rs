@@ -78,6 +78,23 @@ mismatch and still skips -- same line `scripts/check-game-version-supported.py` 
 `vendor-archive/seamless/ersc-<version>.dll` archive is the intended source) and is itself
 version-checked, so it cannot wave a mismatch through.
 
+**The one exception, added 2026-09-02 by user directive: a gitignored REFERENCE ARCHIVE.**
+Both Seamless builds now live at `vendor-archive/seamless/` (`ersc-1.9.9.dll`,
+`ersc-2.0.0.dll`), which `.gitignore` covers, so they are never committed, never named by
+a `.me3` profile, never staged into `target/`, and never released. That is the same
+category as `eldenring-deobf*.bin`: a read-only RE input this repo keeps untracked. The
+reason it has to exist is concrete -- v2.0.0 replaced v1.9.9 on 2026-09-02 and the
+launcher *happened* to leave the old build at `Game/_SeamlessCoop/`; the next launcher run
+may not, and every Seamless address this repo pins was measured against a specific build,
+so losing the previous one leaves the next update with nothing to diff against. Prefer the
+archive over the game-install backup path. The guard enforces the carve-out with a
+fail-closed shape (`ersc_reference_archive_copy_command` in
+`.cupcake/policies/claude/bash_elden_ring_launch_guard.rego`): the WHOLE command must be a
+single quoted `cp`, no chaining, no substitution, no redirects, source ending `/ersc.dll`,
+destination `vendor-archive/seamless/ersc-<version>.dll`. A `mkdir -p ... && cp ...` is
+correctly refused -- run the `mkdir` as its own command first. Every other destination
+denies exactly as before.
+
 Do not COMMIT game-derived binaries either (user directive 2026-07-02): no extracted or transformed game assets (`.gfx`, `.dcx`, `.bnd`, `.tpf`, `.sl2`, texture/font payloads) as repo files, including test fixtures. Version FINGERPRINTS (length + FNV/sha constants) and deterministic generators instead; tests that need real asset bytes read them from the local extraction corpus (env-overridable root, e.g. `ER_GFX_CORPUS_ROOT` in `crates/er-gfx/tests/common/mod.rs`) and SKIP when it is absent. Large embedded byte arrays in `.rs` sources are the same problem in different clothing -- prefer runtime derivation from the game's own in-memory data (see `er_gfx::title_05_000`) or structured edit tables over byte dumps.
 
 User-provided or configured save files are read-only sources, including repo/local `save-files` inputs and arbitrary picked `.sl2`/`.co2` paths. Runtime/profile-switch writes must go only to the game-owned active default save copy/staged tree. The narrow exception is the live game-owned `%APPDATA%/EldenRing/<steamid>/ER0000.{sl2,co2}` path itself, which must remain writable because Elden Ring owns it and may crash or fail if it is forced read-only.

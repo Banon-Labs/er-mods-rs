@@ -160,17 +160,22 @@ pub struct Abi {
 /// installed those bytes are our own; a fingerprint taken there measures our patch and concludes
 /// Seamless is a stranger, which is a bug this module has already had once.
 pub const SUPPORTED: &[Abi] = &[Abi {
-    version: "Seamless Co-op v2.0.0",
-    show_rva: V200_SHOW_RVA,
-    invade_action_rva: V200_INVADE_ACTION_RVA,
-    cancel_action_rva: V200_CANCEL_ACTION_RVA,
-    build_lobby_key_rva: V200_BUILD_LOBBY_KEY_RVA,
-    show_prologue: V200_SHOW_PROLOGUE,
-    invade_prologue: V200_INVADE_PROLOGUE,
-    cancel_prologue: V200_CANCEL_PROLOGUE,
-    build_lobby_key_prologue: V200_BUILD_LOBBY_KEY_PROLOGUE,
-    session_state_offset: V200_SESSION_STATE_OFFSET,
-    session_guard_offset: V200_SESSION_GUARD_OFFSET,
+    // NOT a literal. The runtime armed against v2.0.1 on 2026-09-02 while this field still read
+    // "v2.0.0", so the log line announced the wrong Seamless build beside correctly re-pinned
+    // addresses -- the exact second-copy-of-the-version-number that AGENTS.md forbids, and the
+    // most misleading possible place for it, since this string is what a reader trusts to say
+    // which build the addresses on the same line belong to.
+    version: SUPPORTED_VERSION,
+    show_rva: V201_SHOW_RVA,
+    invade_action_rva: V201_INVADE_ACTION_RVA,
+    cancel_action_rva: V201_CANCEL_ACTION_RVA,
+    build_lobby_key_rva: V201_BUILD_LOBBY_KEY_RVA,
+    show_prologue: V201_SHOW_PROLOGUE,
+    invade_prologue: V201_INVADE_PROLOGUE,
+    cancel_prologue: V201_CANCEL_PROLOGUE,
+    build_lobby_key_prologue: V201_BUILD_LOBBY_KEY_PROLOGUE,
+    session_state_offset: V201_SESSION_STATE_OFFSET,
+    session_guard_offset: V201_SESSION_GUARD_OFFSET,
     state_idle: 0x01,
     state_searching: 0x0e,
     state_cancelling: 0x23,
@@ -220,12 +225,12 @@ pub const RETIRED: &[Retired] = &[Retired {
 pub const V199_INVADE_ACTION_RVA: usize = 0x2_43e0;
 
 /// Seamless v2.0.0, measured 2026-09-02. See this module's docs for what identifies each one.
-pub const V200_SHOW_RVA: usize = 0x2_41a0;
-pub const V200_INVADE_ACTION_RVA: usize = 0x2_5850;
-pub const V200_CANCEL_ACTION_RVA: usize = 0x2_58d0;
-pub const V200_BUILD_LOBBY_KEY_RVA: usize = 0xa_d590;
-pub const V200_SESSION_STATE_OFFSET: usize = 0x150;
-pub const V200_SESSION_GUARD_OFFSET: usize = 0x14c;
+pub const V201_SHOW_RVA: usize = 0x2_41a0;
+pub const V201_INVADE_ACTION_RVA: usize = 0x2_5850;
+pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
+pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
+pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
+pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;
 
 /// `LOBBY_KEY_HEX_LEN` lowercase hex characters: a SHA-256 digest, so 32 bytes rendered as 64
 /// characters. Unchanged across the update -- both builds load the same SHA-256 IV.

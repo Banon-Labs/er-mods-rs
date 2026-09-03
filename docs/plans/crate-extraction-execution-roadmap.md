@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 50,138 |
+| all `experiments/**` | 76 | 50,198 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -142,7 +142,7 @@ somebody's in-flight edit.
 | `own_load/loaders/switch_reload.rs` | 633 | stale-RVA call-site closure |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 829 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,769 | dead-counter census |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,223 | stale-RVA call-site closure |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,248 | stale-RVA call-site closure |
 | `lifecycle/task_tick.rs` | 438 | dead-counter census |
 | `input_block.rs` | 1,400 | dead-counter census |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,502 | dead-counter census |
@@ -244,7 +244,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 |---|---:|---|---|
 | `can_move_probe.rs` | 552 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 17 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 733 | product continue/load policy | D5 |
+| `continue_load/product_continue.rs` | 768 | product continue/load policy | D5 |
 | `continue_load/slot_resolution.rs` | 819 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 468 | product gate policy | D1 |
@@ -288,7 +288,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 1,055 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,223 | title-flow and product modal families | R22 |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,248 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,575 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 829 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |

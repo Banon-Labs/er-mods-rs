@@ -356,7 +356,41 @@ def audit(vocab: dict | None = None) -> dict:
     # name an address precisely to assert the workspace does NOT use it.
     wanted: dict[str, dict[str, set[int]]] = {}
     unresolved: dict[str, set[str]] = {}
-    for path in sorted(ROOT.glob("crates/**/*.rs")):
+    all_paths = sorted(ROOT.glob("crates/**/*.rs"))
+    # FILES THAT ARE A FOREIGN MODULE ARE NOT PRICED AGAINST THE GAME MAP.
+    #
+    # `er-invasion-warp` resolves four RVAs against Seamless Co-op's base, not the game's:
+    # `GetModuleHandleA("ersc.dll")` + `0x241a0` / `0x25850` / `0x258d0` / `0xad6e0`. Priced against
+    # the 1.17 eldenring.exe map they are of course absent, and this gate reported
+    # `er-invasion-warp 0/5 ZERO COVERAGE -- every call it makes is refused at runtime and the
+    # feature is silently inert`. That verdict was a category error in the GATE: the addresses are
+    # correct, they simply describe a different module.
+    #
+    # The rule is not invented here. `audit-1170-coverage-inventory.py` already owns it, and its
+    # own selftest asserts it (`a constant declared inside mod ersc is not attributed to ersc.dll`),
+    # including the `mod ersc;`-beside-`ersc.rs` file form that a 2026-09-02 refactor introduced.
+    # Importing it rather than re-deriving it means one definition of "foreign", so the two gates
+    # cannot drift into disagreeing about which module an address belongs to.
+    #
+    # Failing open is deliberate: if the sibling cannot be imported, every file stays game-priced,
+    # which is the stricter reading. A gate that silently stopped checking would be worse than one
+    # that occasionally over-reports.
+    foreign: dict[str, str] = {}
+    try:
+        import importlib.util as _ilu
+
+        _spec = _ilu.spec_from_file_location(
+            "audit_1170_coverage_inventory", ROOT / "scripts" / "audit-1170-coverage-inventory.py"
+        )
+        if _spec and _spec.loader:
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            foreign = _mod.foreign_module_files([str(p) for p in all_paths])
+    except Exception:
+        foreign = {}
+    for path in all_paths:
+        if str(path) in foreign:
+            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         spans = rva_usage.test_module_spans(text)
         if spans:
