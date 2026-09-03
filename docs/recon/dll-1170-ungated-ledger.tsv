@@ -9,11 +9,11 @@ er-armament-icons	0	0
 er-better-refills	0	0
 er-build-import	0	0
 er-build-watermark	0	0
-er-enemynpc-effects	0	0
 er-crash-logging	0	0
 er-death-persist	0	0
 er-diag-harness	0	0
-er-ersc-sigshim	0	0
+er-enemynpc-effects	0	0
+er-hotkey-conflicts	0	0
 er-input-harness	0	0
 er-invasion-path	0	0
 er-invasion-warp	0	0
@@ -22,7 +22,7 @@ er-loading-bar	0	0
 er-loading-portrait	0	0
 er-net-effects	0	0
 er-player-name-filter	0	0
-er-quickload	0	1
+er-quickload	0	0
 er-quit-menu	0	0
 er-refill-all	0	0
 er-reload-trace	0	0

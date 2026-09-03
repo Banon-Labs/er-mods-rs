@@ -12,46 +12,27 @@ use super::*;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS;
 
-/// Does the save container the game is actually going to read hold a character in `slot`?
+/// Does the container the game will actually read hold a character in the configured slot?
 ///
-/// `Some(false)` means the container was read and that slot holds nothing. `Some(true)` means it
-/// holds a character. `None` means the question could not be answered -- no resolvable container,
-/// unreadable bytes, a parse refusal -- and the caller must fall back to the fingerprint wait
-/// rather than act on an answer it does not have.
-///
-/// WHY THE FINGERPRINT WAIT IS NOT ENOUGH ON ITS OWN. `profile_slot_fingerprint` reads the LIVE
-/// ProfileSummary, which is empty both while it is still filling and when the slot is genuinely
-/// vacant. Those two look identical for the first read, so the caller waits
-/// `EMPTY_PROFILE_ESCALATE_TICKS` (1800) consecutive empty reads before it dares reject the slot.
-/// That patience is correct for "still filling" and pure loss for "vacant": the container on disk
-/// already knows, and it knew before the game booted.
-///
-/// MEASURED 2026-09-03. `er-quickload.toml` said `slot=1`. Seamless was loaded, so the game read
-/// `ER0000.co2`, whose only character is slot 0 ("de", level 9) -- `.sl2` is the container with a
-/// slot 1 (Dark Moon Bean, level 150), and it was not the one in play. Slot 1 of `.co2` can never
-/// fill, but the boot spent its patience finding that out the slow way: `waiting 1/1800` at
-/// +14524ms, `waiting 31/1800` at +15119ms, and the run ended before 1800 was ever reached. The
-/// user got the intro cutscene and lost the session. A slot index that does not exist in the
-/// container is knowable immediately and must never be waited on.
+/// The parse lives in `er_save_loader::bnd4::container_holds_character`, which owns the
+/// `USER_DATA010.active_slot` bitmap and the reason it, not a decodable body, is the authority.
+/// What is shim-only is the two things that cannot leave the DLL: which container this process
+/// resolved, and the caching.
 ///
 /// CACHED, and it has to be: the caller is a per-frame boot path and the container is ~29 MB, so an
-/// uncached `fs::read` here would do a 29 MB read per frame on the GAME THREAD -- the same shape as
-/// the per-call log open that tanked the framerate in `append_autoload_debug`. The answer also
-/// cannot change during a boot: the file is whatever the game opened, and the slot comes from a
-/// `OnceLock`-backed config. `None` is cached too, so an unreadable container is not retried 60
-/// times a second either.
+/// uncached read here would be a 29 MB read per frame ON THE GAME THREAD -- the same shape as the
+/// per-call log open that already cost framerate once. The answer cannot change during a boot
+/// (the file is whatever the game opened; the slot comes from a `OnceLock`), and `None` is cached
+/// too so an unreadable container is not retried sixty times a second.
 fn configured_slot_holds_a_character(slot: i32) -> Option<bool> {
     static ANSWER: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
     *ANSWER.get_or_init(|| {
         let slot = usize::try_from(slot).ok()?;
         let path = crate::configured_or_default_save_file()?;
-        let bytes = fs::read(&path).ok()?;
-        let slots = er_save_loader::bnd4::active_character_slots(&bytes).ok()?;
-        let held = slots.iter().any(|info| info.slot == slot);
+        let held = er_save_loader::bnd4::container_holds_character(&path, slot)?;
         append_autoload_debug(format_args!(
-            "product-core-autoload: container truth for the configured slot -- slot={slot} holds_a_character={held} container='{}' occupied={:?}",
-            path.display(),
-            slots.iter().map(|info| info.slot).collect::<Vec<_>>()
+            "product-core-autoload: container truth for the configured slot -- slot={slot} holds_a_character={held} container='{}'",
+            path.display()
         ));
         Some(held)
     })

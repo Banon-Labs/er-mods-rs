@@ -446,6 +446,16 @@ fn install() {
     spawn_game_task();
 }
 
+/// Sink for `er_hook` address/detour lines and for panic reports, routed into this DLL's own log.
+///
+/// Thin on purpose: `conflict_log` already owns the file, the timestamps and the single-slot
+/// rotation, so this only adapts the `fmt::Arguments` signature `er_hook` and `panic_report`
+/// expect.
+#[cfg(windows)]
+fn log_sink(args: core::fmt::Arguments<'_>) {
+    crate::log::conflict_log(args);
+}
+
 #[cfg(windows)]
 #[unsafe(no_mangle)]
 /// # Safety
@@ -457,6 +467,15 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a REFUSED ADDRESS IS SILENT
+        // here: every cdylib links its own copy of er-hook, so the default no-op sink is this
+        // module's own, and `scripts/check-hook-log-sink.py` fails the build precisely because a
+        // DLL that installs detours with no sink cannot tell you which address it declined.
+        // `report_panics_to` rides along for the same reason -- a `rust_panic` inside a cdylib
+        // loaded into the game is otherwise anonymous, leaving a 0xe06d7363 record that names the
+        // MODULE and nothing else.
+        er_game_base::panic_report::report_panics_to("er-hotkey-conflicts", log_sink);
+        er_hook::set_hook_logger(log_sink);
         START.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-hotkey-conflicts-install".to_owned())

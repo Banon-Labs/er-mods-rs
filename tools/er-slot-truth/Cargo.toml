@@ -6,3 +6,6 @@ publish = false
 
 [dependencies]
 er-save-loader = { path = "../../crates/er-save-loader" }
+
+[lints]
+workspace = true
