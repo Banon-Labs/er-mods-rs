@@ -1320,6 +1320,7 @@ shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
 shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
 shellcheck "$repo_root/scripts/beads-prime.sh"
 shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
+shellcheck "$repo_root/scripts/git-strip-path-from-history.sh"
 
 # The stale-run sentinel kills a live game when an edit feeds a DLL that run loaded, so BOTH
 # directions are load-bearing: a name it cannot match is a run it cannot stop, and a path it
