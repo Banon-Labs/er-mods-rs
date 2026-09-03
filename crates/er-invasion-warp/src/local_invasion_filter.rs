@@ -21,7 +21,7 @@
 //! # Why nothing in `ersc.dll` is hooked
 //!
 //! Asked directly whether the filter could avoid repeatedly cancelling, the binary answered no --
-//! and answered something better instead. Static read of the shipped `ersc.dll` (v1.9.9),
+//! and answered something better instead. Static read of the shipped `ersc.dll`,
 //! 2026-08-05:
 //!
 //! * `ersc+0x243e0` ("Invade world") is nine instructions: take the mutex at `S+0xC0`, bail if
@@ -73,10 +73,7 @@
 //! byte-checking the invade action, an entry point this module calls but never hooks, so its bytes
 //! stay the shipped ones. Exactly one has to match; zero or two both refuse. The table shape stays
 //! because Seamless will update again and the next build is another entry, not a rewrite.
-//!
-//! A build we USED to drive lives on in [`ersc::RETIRED`], carrying only its fingerprint, so the
-//! refusal can say "update Seamless Co-op" instead of "unrecognised build" -- the first is an
-//! instruction a player can follow, the second reads as a defect in this mod.
+
 //!
 //! # Fail-closed direction
 //!
@@ -383,25 +380,6 @@ fn resolve_ersc_abi() -> Option<&'static ersc::Abi> {
         }
         outcome => {
             if ABI.swap(ABI_REFUSED, Ordering::SeqCst) == 0 {
-                // Before calling it unrecognised, check whether it is a build we USED to drive.
-                // "Update Seamless Co-op" is something a player can act on; "unrecognised build"
-                // reads as a defect in this mod and gets reported as one.
-                if let Some(retired) = ersc::RETIRED.iter().find(|retired| {
-                    prologue_matches(base + retired.invade_action_rva, retired.invade_prologue)
-                }) {
-                    crate::standalone_log(format_args!(
-                        "local-invasion: ersc.dll @0x{base:x} is {}, which this mod NO LONGER \
-                         SUPPORTS -- it drives the latest Seamless Co-op only. Update Seamless \
-                         Co-op to {} and the filter arms itself. Until then it stays inert and \
-                         will NOT cancel anything. Note that the two builds cannot see each \
-                         other's sessions in any case: v2.0.0 changed the lobby-key salt.",
-                        retired.version,
-                        ersc::SUPPORTED
-                            .first()
-                            .map_or("a supported build", |abi| abi.version),
-                    ));
-                    return None;
-                }
                 let known: Vec<&str> = ersc::SUPPORTED.iter().map(|abi| abi.version).collect();
                 let complaint = if outcome.is_some() {
                     "matches MORE THAN ONE of the builds below, so the discriminator is not \
@@ -845,7 +823,7 @@ fn install_show_observer() -> usize {
     if !prologue_matches(address, abi.show_prologue) {
         if SHOW_HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 0 {
             // The version is the GENERATED constant, not a literal: this line and the pins it is
-            // talking about have to name the same build, and a hand-typed "v1.9.9" beside a
+            // talking about have to name the same build, and a hand-typed version beside a
             // repinned constant is a refusal that lies about why it refused.
             let supported = ersc::SUPPORTED_VERSION;
             crate::standalone_log(format_args!(
@@ -927,8 +905,8 @@ fn session_guard_poisoned(abi: &ersc::Abi, session: usize) -> bool {
 ///
 /// The replacement rests on a fact from the static scan rather than on inference: across the whole
 /// unpacked `.text`, the searching code is written to the state field at EXACTLY ONE site, inside
-/// the Invade-world action. That held in v1.9.9 (`0x110 = 0x0d`, 4839 functions) and still holds in
-/// v2.0.0 at the renumbered value (`0x150 = 0x0e`, 4903 functions). So a transition into it means
+/// the Invade-world action -- `0x150 = 0x0e`, over 4903 functions, and it held across the last
+/// update at the pre-renumber value too. So a transition into it means
 /// that action ran and nothing else, and the only remaining question is who ran it. Ours are
 /// claimed by [`note_state_after_our_action`] before this ever sees them, so an unclaimed one is
 /// the user pressing the option -- which is precisely, and only, when riding along is wanted.
@@ -981,8 +959,8 @@ fn note_state_after_our_action(session: SeamlessSession, what: &str) {
 ///   * reaching idle -> the attempt is over; how long it lasted decides the delay
 ///
 /// That state is the progress marker rather than a later one because it is the first step past the
-/// fast-fail path: the measured v1.9.9 spin ran `0x0d -> 0x0e -> 0x11 -> 0x14 -> idle` and never
-/// touched `0x12`, while every healthy attempt in the same run passed through it within ~150 ms.
+/// fast-fail path: the measured spin ran four states back to idle without ever touching the
+/// marker, while every healthy attempt in the same run passed through it within ~150 ms.
 ///
 /// v2.0.0 renumbered the enum `+1`, so this is the one number carried across by inference rather
 /// than read out of an instruction -- and carrying it is what keeps the marker CORRECT: `0x12`
@@ -1819,9 +1797,9 @@ fn watch_for_stall(session: SeamlessSession) {
 ///
 /// # Why "not idle" and not "== SEARCHING"
 ///
-/// Searching is only the FIRST state of an attempt. The v1.9.9 sequence runs `0x0d` through
-/// `0x0e`, `0x11`, the `0x12` offer, `0x13`, `0x14`, and a cancel unwinds via `0x22`/`0x23` (add
-/// one to each on v2.0.0) -- and the player is just as committed at every one of them as at the
+/// Searching is only the FIRST state of an attempt. The sequence runs `0x0e` through `0x0f`,
+/// `0x12`, the `0x13` offer, `0x14`, `0x15`, and a cancel unwinds via `0x23`/`0x24`
+/// -- and the player is just as committed at every one of them as at the
 /// first. Gating on `SEARCHING` alone would unblock the warp the instant a host was found, which
 /// is the worst possible moment for it: the destination has been decided and the player is about
 /// to be moved there by Seamless.

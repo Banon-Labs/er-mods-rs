@@ -28,7 +28,8 @@ const PLACE_NAME_LOOKUP_VA: u64 = 0x140d10b60;
 // ---------------------------------------------------------------------------------------------
 // Seamless Co-op's `ersc.dll`, at its preferred base `0x180000000`
 //
-// TWO builds are described here, v1.9.9 and v2.0.0, because `ersc.dll` is third-party: the user
+// ONE build is described here, because `ersc.dll` is third-party and this mod supports the
+// latest of it only. The user
 // installs and updates it on their own schedule and may downgrade, and both builds are present on
 // a machine that has updated once (the launcher leaves the previous one in `_SeamlessCoop/`).
 // `local_invasion_filter.rs` picks between the two AT RUNTIME by byte-checking the invade action,
@@ -56,11 +57,6 @@ const PLACE_NAME_LOOKUP_VA: u64 = 0x140d10b60;
 // builds because it is literally the same code at a different address -- and it is also the one
 // function this module HOOKS, so its bytes stop being the shipped bytes once the detour is in.
 
-const ERSC199_INVADE_ACTION_VA: u64 = 0x1800243e0;
-/// The `std::mutex`-ish lock both option actions take on the session sub-object, and the unlock
-/// they tail-jump to. Named because the pins encode the `call`'s rel32 to it.
-const ERSC199_SESSION_LOCK_VA: u64 = 0x1800f4868;
-
 /// v2.0.0 entry points, measured 2026-09-02. See `local_invasion_filter.rs` for the evidence that
 /// identifies each one; none of them was taken from a prologue match alone.
 const ERSC200_SHOW_VA: u64 = 0x1800241a0;
@@ -75,35 +71,16 @@ const ERSC_NEXT_OBJECT_OFFSET: i64 = 0x58;
 /// The value both builds' guard field refuses to proceed past.
 const ERSC_SESSION_GUARD_POISON: i32 = 0x7fff_ffff;
 
-/// The session field group, which moved as a BLOCK: v2.0.0 shifted the mutex sub-object, the
-/// guard and the state by exactly `+0x40` and kept their relative spacing (`guard = mutex+0x4c`,
-/// `state = mutex+0x50`) identical. That is one measurement with three consequences, not three
-/// independent ones.
-const ERSC199_SESSION_MUTEX_OFFSET: i64 = 0xc0;
-const ERSC199_SESSION_GUARD_OFFSET: i64 = 0x10c;
-const ERSC199_SESSION_STATE_OFFSET: i64 = 0x110;
 const ERSC200_SESSION_MUTEX_OFFSET: i64 = 0x100;
 const ERSC200_SESSION_GUARD_OFFSET: i64 = 0x14c;
 const ERSC200_SESSION_STATE_OFFSET: i64 = 0x150;
 
-/// The session-state enum, which v2.0.0 renumbered by `+1` throughout. Proven exhaustively rather
-/// than inferred from the two actions: a scan of every `mov dword [reg+STATE], imm32` in each
-/// build's real code finds SEVEN distinct values whose site counts match one-for-one under a
-/// uniform `+1` (`0x1`x1, `0x3`x1, `0x6`x1, `0x9`x1, `0xd`x1, `0x22`x7, `0x23`x1 becoming `0x2`,
-/// `0x4`, `0x7`, `0xa`, `0xe`, `0x23`x7, `0x24`). Reproduce with
-/// `scripts/ersc-disas.py states 0x110 --build v199` and `... states 0x150 --build v200`.
-const ERSC199_STATE_IDLE: i32 = 0x00;
-const ERSC199_STATE_SEARCHING: i32 = 0x0d;
 const ERSC200_STATE_IDLE: i32 = 0x01;
 const ERSC200_STATE_SEARCHING: i32 = 0x0e;
 const ERSC200_STATE_CANCELLING: i32 = 0x23;
 
 const ERSC200_LOBBY_KEY_CTX_OFFSET: i64 = 0xc8;
 
-/// Where the invade action's shared tail begins, relative to the function entry. v1.9.9 branches
-/// FORWARD to it over an inline early return; v2.0.0 falls straight into it and branches forward
-/// to a return block placed after the state write instead ([`ERSC200_INVADE_RETURN`]).
-const ERSC199_INVADE_TAIL: u64 = 0x1e;
 /// v2.0.0's relocated early-return block, the target of the inverted idle guard.
 const ERSC200_INVADE_RETURN: u64 = 0x4e;
 
@@ -111,16 +88,6 @@ const ERSC200_INVADE_RETURN: u64 = 0x4e;
 /// `fatal_6` are byte offsets from the function entry to the two error blocks the tail branches
 /// to; both sit past the end of the pinned window, so they are named as offsets read off the
 /// disassembly rather than as encoded displacements.
-const ERSC199_INVADE: ErscAction = ErscAction {
-    va: ERSC199_INVADE_ACTION_VA,
-    lock_va: ERSC199_SESSION_LOCK_VA,
-    mutex: ERSC199_SESSION_MUTEX_OFFSET,
-    guard: ERSC199_SESSION_GUARD_OFFSET,
-    state: ERSC199_SESSION_STATE_OFFSET,
-    code: ERSC199_STATE_SEARCHING,
-    fatal_5: 0x55,
-    fatal_6: 0x5f,
-};
 const ERSC200_INVADE: ErscAction = ErscAction {
     va: ERSC200_INVADE_ACTION_VA,
     lock_va: ERSC200_SESSION_LOCK_VA,
@@ -128,7 +95,7 @@ const ERSC200_INVADE: ErscAction = ErscAction {
     guard: ERSC200_SESSION_GUARD_OFFSET,
     state: ERSC200_SESSION_STATE_OFFSET,
     code: ERSC200_STATE_SEARCHING,
-    // Eight bytes further than v1.9.9's, which is exactly the relocated return block above.
+    // Exactly the relocated return block above.
     fatal_5: 0x56,
     fatal_6: 0x60,
 };
@@ -276,7 +243,7 @@ fn main() {
             (
                 PrologueSpec {
                     name: "V200_SHOW_PROLOGUE",
-                    doc: "v2.0.0 `show`. Byte-identical to the v1.9.9 function at a different\n\
+                    doc: "`show`, the option-menu builder. Its bytes did not change when the\n\
                           address: v2.0.0 recompiled this function to the byte and moved it from\n\
                           `0x22d30` to `0x241a0`.",
                     visibility: "pub",
@@ -297,54 +264,12 @@ fn main() {
             ),
             (
                 PrologueSpec {
-                    name: "V199_INVADE_PROLOGUE",
-                    doc: "v1.9.9 \"Invade world\", through the state write. Runs from the option\n\
-                          action opening, past `cmp [rdi+0x110],0` and its `je` over the inline\n\
-                          early return, into the shared mutex/guard tail, and ends on\n\
-                          `mov [rdi+0x110],0xd` -- the ONE site in the whole unpacked `.text`\n\
-                          that puts that value in that field. This is the version discriminator:\n\
-                          it occurs exactly once in v1.9.9 and nowhere at all in v2.0.0, and\n\
-                          unlike `show` it is called but never hooked, so its bytes stay the\n\
-                          shipped bytes for the life of the process.",
-                    visibility: "pub",
-                    shape: Shape::Slice,
-                    image: Image::Ersc199,
-                    va: ERSC199_INVADE_ACTION_VA,
-                    take: 0,
-                    pin: &[
-                        0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
-                        0x79, 0x58, 0x83, 0xbf, 0x10, 0x01, 0x00, 0x00, 0x00, 0x74, 0x07, 0x48,
-                        0x83, 0xc4, 0x28, 0x5f, 0x5e, 0xc3, 0x48, 0x8d, 0xb7, 0xc0, 0x00, 0x00,
-                        0x00, 0x48, 0x89, 0xf1, 0xe8, 0x5b, 0x04, 0x0d, 0x00, 0x85, 0xc0, 0x75,
-                        0x24, 0x81, 0xbf, 0x0c, 0x01, 0x00, 0x00, 0xff, 0xff, 0xff, 0x7f, 0x74,
-                        0x22, 0xc7, 0x87, 0x10, 0x01, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00,
-                    ],
-                },
-                (|asm| {
-                    ersc_option_action_opening(asm)?;
-                    // v1.9.9 shape: proceed only when the session is idle, with the early return
-                    // INLINE right after the branch. v2.0.0 inverted this (see below), which is
-                    // exactly why a masked body search found no match for this function there.
-                    asm.cmp(
-                        dword_ptr(rdi + ERSC199_SESSION_STATE_OFFSET),
-                        ERSC199_STATE_IDLE,
-                    )?;
-                    asm.je(ERSC199_INVADE_ACTION_VA + ERSC199_INVADE_TAIL)?;
-                    asm.add(rsp, 0x28)?;
-                    asm.pop(rdi)?;
-                    asm.pop(rsi)?;
-                    asm.ret()?;
-                    ersc_option_action_tail(asm, &ERSC199_INVADE)
-                }) as prologue_build::Assemble,
-            ),
-            (
-                PrologueSpec {
                     name: "V200_INVADE_PROLOGUE",
                     doc: "v2.0.0 \"Invade world\" at `0x25850`, through `mov [rdi+0x150],0xe`.\n\
-                          The counterpart of [`V199_INVADE_PROLOGUE`], and the v2.0.0 half of the\n\
+                          The invade action, and the version discriminator: it occurs\n\
                           version discriminator. The compiler INVERTED the idle guard here --\n\
-                          `cmp [rdi+0x150],1; jne <return block moved to the end>` where v1.9.9\n\
-                          had `cmp [rdi+0x110],0; je <continue>` -- and `je`/`jne` differ in the\n\
+                          `cmp [rdi+0x150],1; jne <return block moved to the end>`, where the\n\
+                          preceding build tested the opposite sense -- and `je`/`jne` differ in the\n\
                           OPCODE byte, which a masked search keeps. That one byte at offset 21 is\n\
                           why locating this function by body signature reported no match at any\n\
                           length while the cancel action beside it mapped cleanly.",
@@ -376,7 +301,7 @@ fn main() {
                 PrologueSpec {
                     name: "V200_CANCEL_PROLOGUE",
                     doc: "v2.0.0 \"Cancel search\" at `0x258d0`, through `mov [rdi+0x150],0x23`.\n\
-                          Byte-for-byte the same shape as v1.9.9's cancel action, with the\n\
+                          The only UNGUARDED option action in the build, with the\n\
                           session field group moved `+0x40` and the state code renumbered `+1`.",
                     visibility: "pub",
                     shape: Shape::Slice,
@@ -397,9 +322,9 @@ fn main() {
                 PrologueSpec {
                     name: "V200_BUILD_LOBBY_KEY_PROLOGUE",
                     doc: "v2.0.0 `BuildLobbyKey` at `0xad590`. Instruction for instruction the\n\
-                          same function as v1.9.9's `BuildLobbyKey`: the frame shrank\n\
-                          `0x148`->`0x108`, the out-param moved from `r15` to `rsi`, and the ctx\n\
-                          field moved `+0xb8`->`+0xc8`. Its frame size is why the 19-byte v1.9.9\n\
+                          same function it has always been, recompiled: a `0x108` frame, the\n\
+                          out-param in `rsi`, the ctx field at `+0xc8`. Its frame size is why a\n\
+                          19-byte\n\
                           prologue matched a DIFFERENT function (`0x1a6d0`, which also frames\n\
                           `0x148`) and missed this one -- the cautionary case for pinning\n\
                           anything from a unique prologue hit.",
