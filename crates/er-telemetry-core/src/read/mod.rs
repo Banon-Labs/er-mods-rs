@@ -12,7 +12,7 @@
 //! DECOUPLING CONTRACT: this module depends only on `er-game-base`
 //! (`game_module_base`, `safe_read_*`, `vtable_in_game_image`) + `eldenring`
 //! typed singletons + `fromsoftware-shared` (the `FromStatic` singleton trait),
-//! never on the product (`er-effects-rs`) crate or any product static. Each
+//! never on the product (`er-quickload`) crate or any product static. Each
 //! oracle is gated by its OWN game-dir marker file, checked once and cached,
 //! DEFAULT OFF -- when its marker is absent the oracle costs a single atomic load
 //! and performs zero file I/O, so a plain product run carries no diagnostic cost
@@ -31,7 +31,7 @@ mod title_binding;
 /// check; callers cache the first result (DEFAULT OFF). Env vars do NOT propagate
 /// through me3/Proton to the game process, so a `.exists()` marker in the game
 /// directory is the reliable per-category enable (same rationale as
-/// `renderdoc_slow_ms`'s `er-effects-rdoc-slow-ms.txt`).
+/// `renderdoc_slow_ms`'s `er-quickload-rdoc-slow-ms.txt`).
 #[cfg(windows)]
 fn marker_exists(name: &str) -> bool {
     if let Some(dir) = er_game_base::log::game_directory_path()

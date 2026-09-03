@@ -37,7 +37,7 @@ const STEER_DIR = `.workflow-steering/${RUN_LABEL}`
 const GLOBAL_STEER = `${STEER_DIR}/steer.md`
 
 // Absolute repo root so agents (whose cwd may reset) always resolve the path.
-const REPO = '/home/choza/projects/er-effects-rs'
+const REPO = '/home/choza/projects/er-mods-rs'
 const ABS_STEER_DIR = `${REPO}/${STEER_DIR}`
 const ABS_GLOBAL_STEER = `${REPO}/${GLOBAL_STEER}`
 

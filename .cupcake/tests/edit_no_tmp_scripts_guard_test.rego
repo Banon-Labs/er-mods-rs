@@ -55,7 +55,7 @@ test_allow_tmp_json_artifact if {
 }
 
 test_allow_repo_script if {
-	not denied(write_event("/home/choza/projects/er-effects-rs/scripts/check-er-net-effects.ps1"))
+	not denied(write_event("/home/choza/projects/er-mods-rs/scripts/check-er-net-effects.ps1"))
 }
 
 test_allow_bash_read_tmp_script_path_without_authoring_verb if {

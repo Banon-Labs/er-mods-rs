@@ -92,7 +92,7 @@ def main() -> int:
     write(
         "src/return_title.rs",
         "fn reload_b73_hold_enabled() -> bool {\n"
-        '    game_dir().join("er-effects-reload-b73hold.txt").exists()\n'
+        '    game_dir().join("er-quickload-reload-b73hold.txt").exists()\n'
         "}\n"
         "fn apply_fix(p: *mut u8) {\n"
         "    if reload_b73_hold_enabled() && stuck() {\n"
@@ -108,7 +108,7 @@ def main() -> int:
     write(
         "src/diag.rs",
         "fn log_ids() {\n"
-        '    if game_dir().join("er-effects-grsysmsg-log-x.txt").exists() {\n'
+        '    if game_dir().join("er-quickload-grsysmsg-log-x.txt").exists() {\n'
         '        append_autoload_debug("gr sys msg id seen");\n'
         "    }\n"
         "}\n",
@@ -116,24 +116,24 @@ def main() -> int:
     (FIXTURE_ROOT / "src" / "return_title.rs").unlink()
     write_baseline({})
     assert rules_for(checker) == {"marker-gate-forbidden"}, rules_for(checker)
-    write_baseline({"er-effects-grsysmsg-log-x.txt": "passive GR_System_Message id log; no game behavior."})
+    write_baseline({"er-quickload-grsysmsg-log-x.txt": "passive GR_System_Message id log; no game behavior."})
     assert rules_for(checker) == set(), rules_for(checker)
 
     # 2b. An EMPTY rationale is not enough -> still forbidden.
-    write_baseline({"er-effects-grsysmsg-log-x.txt": "  "})
+    write_baseline({"er-quickload-grsysmsg-log-x.txt": "  "})
     assert rules_for(checker) == {"marker-gate-forbidden"}, rules_for(checker)
 
     # 3. A BEHAVIORAL fn cannot sneak into diagnostic_gates: even if listed, it is rejected.
     write(
         "src/inline.rs",
         "fn tick(p: *mut u8) {\n"
-        '    if game_dir().join("er-effects-inline-fix.txt").exists() {\n'
+        '    if game_dir().join("er-quickload-inline-fix.txt").exists() {\n'
         "        unsafe { core::ptr::write_volatile(p, 7u8); }\n"
         "    }\n"
         "}\n",
     )
     (FIXTURE_ROOT / "src" / "diag.rs").unlink()
-    write_baseline({"er-effects-inline-fix.txt": "claims to be diagnostic but writes memory."})
+    write_baseline({"er-quickload-inline-fix.txt": "claims to be diagnostic but writes memory."})
     assert rules_for(checker) == {"marker-gate-diagnostic-is-behavioral"}, rules_for(checker)
     (FIXTURE_ROOT / "src" / "inline.rs").unlink()
 
@@ -154,7 +154,7 @@ def main() -> int:
     write(
         "src/data_file.rs",
         "fn wanted_slot() -> Option<u32> {\n"
-        '    let raw = std::fs::read_to_string(game_dir().join("er-effects-switch-slot.txt")).ok()?;\n'
+        '    let raw = std::fs::read_to_string(game_dir().join("er-quickload-switch-slot.txt")).ok()?;\n'
         "    raw.trim().parse().ok()\n"
         "}\n",
     )
@@ -166,19 +166,19 @@ def main() -> int:
     write(
         "src/diag2.rs",
         "fn log_ids() {\n"
-        '    if game_dir().join("er-effects-grsysmsg-log-x.txt").exists() {\n'
+        '    if game_dir().join("er-quickload-grsysmsg-log-x.txt").exists() {\n'
         '        append_autoload_debug("id");\n'
         "    }\n"
         "}\n",
     )
     write_baseline(
-        {"er-effects-grsysmsg-log-x.txt": "passive log."},
-        deprecated={"sanctioned_marker_gate_names": ["er-effects-grsysmsg-log-x.txt"]},
+        {"er-quickload-grsysmsg-log-x.txt": "passive log."},
+        deprecated={"sanctioned_marker_gate_names": ["er-quickload-grsysmsg-log-x.txt"]},
     )
     assert rules_for(checker) == {"marker-gate-allowlist-not-deprecated"}, rules_for(checker)
     write_baseline(
-        {"er-effects-grsysmsg-log-x.txt": "passive log."},
-        deprecated={"migrate_to_default": ["er-effects-grsysmsg-log-x.txt"]},
+        {"er-quickload-grsysmsg-log-x.txt": "passive log."},
+        deprecated={"migrate_to_default": ["er-quickload-grsysmsg-log-x.txt"]},
     )
     assert rules_for(checker) == {"marker-gate-allowlist-not-deprecated"}, rules_for(checker)
     (FIXTURE_ROOT / "src" / "diag2.rs").unlink()

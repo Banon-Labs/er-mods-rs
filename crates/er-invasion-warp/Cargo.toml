@@ -35,7 +35,7 @@ er-gfx = { path = "../er-gfx" }
 
 [target.'cfg(windows)'.dependencies.er-hook]
 # The shared MinHook union. Every detour this DLL installs MUST go through it: two MinHook
-# instances patching one prologue corrupt each other's trampolines, and er_effects_rs.dll may be
+# instances patching one prologue corrupt each other's trampolines, and er_quickload.dll may be
 # loaded in the same process.
 path = "../er-hook"
 

@@ -6,9 +6,9 @@
 # then reads the switch-character oracle. Tears down on: ER self-exit (crash = FAIL), a post-reload
 # oracle verdict, or a hard deadline. Bounded, agent-owned teardown.
 set -u
-REPO=/home/banon/projects/er-effects-rs
+REPO=/home/banon/projects/er-mods-rs
 ART="${ARTIFACT_DIR:-$REPO/target/runtime-probe/system-quit-repro-selfdrive}"
-TELEM="$ART/er-effects-telemetry.json"
+TELEM="$ART/er-quickload-telemetry.json"
 ORACLE="$REPO/scripts/switch-character-oracle.py"
 DEADLINE_S=${DEADLINE_S:-80}
 POLL_S=${POLL_S:-3}

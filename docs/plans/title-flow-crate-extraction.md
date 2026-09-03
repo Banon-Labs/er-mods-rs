@@ -20,7 +20,7 @@ three calibrations, the stable-world proof) lives in `title_tick_cover.rs` -- a 
 1. **Already crate-shared, no work**: er-telemetry-core counters (~110 symbols), typed game access
    (`eldenring`/`fromsoftware-shared`), fault-safe reads + base/rva (`er-game-base`), MinHook
    (`er-hook`).
-2. **Constants (~350 symbols from `er-effects-rs/src/constants/`)**: move the title/switch-owned
+2. **Constants (~350 symbols from `er-quickload/src/constants/`)**: move the title/switch-owned
    ones into this crate's `constants.rs`; symbols shared with remaining root code get re-export
    shims in the root so nothing else changes.
 3. **Host boundary (`host::install_host` fn-pointer pattern, exactly like er-loading-portrait-core)**:

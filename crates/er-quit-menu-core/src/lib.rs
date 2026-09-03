@@ -2,7 +2,7 @@
 //!
 //! S7 has moved the pure decision core for rows, save-destination identity/commit helper
 //! decisions, and save-flow confirm-box decisions into this crate. Runtime-native hook surfaces
-//! still live in `er-effects-rs` shims until S8/S9.
+//! still live in `er-quickload` shims until S8/S9.
 //!
 //! Planned contents, moved from the root DLL in slices (line counts are from the extraction plan,
 //! and the per-file product/diagnostic split is in the plan doc -- several of these files move
@@ -53,13 +53,25 @@ pub use host::*;
 
 // S7 decision-core modules moved from the product DLL. Product callsites keep
 // stable shim names until the hooked surfaces move in S8.
+pub mod profile_rows;
+#[cfg(windows)]
+pub mod quit_dialog_layout;
+#[cfg(windows)]
+pub mod row_identity;
+pub mod row_text;
 pub mod rows;
 pub mod save_dest_commit;
 pub mod save_dest_identity;
 pub mod save_flow_boxes;
 
 #[cfg(windows)]
+pub mod build_url_clipboard;
+#[cfg(windows)]
 pub mod dim;
+#[cfg(windows)]
+pub mod generate_build_link_row;
+#[cfg(windows)]
+pub mod save_dest_commit_runtime;
 #[cfg(windows)]
 pub use dim::*;
 #[cfg(windows)]

@@ -20,7 +20,7 @@ worktree `.worktrees/portrait-stats-crate`
    - `crates/er-loading-portrait` -- thin standalone ME3-loadable cdylib
      shell (own DllMain, VEH crash logger, log file), individually shippable.
      Follows `er-loading-bar` exactly (cdylib+rlib, host-testable).
-   - `er-effects-rs` keeps bundling the feature by depending on
+   - `er-quickload` keeps bundling the feature by depending on
      `er-loading-portrait-core`, product behavior unchanged (same arming, no new
      env gates -- bd `no-new-env-gated-features`).
 
@@ -95,9 +95,14 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
    teardown) become dead -- update the script logic, don't leave dead branches.
    `y22i-windows-ab-probe.py` is A-only -- delete it. Do NOT touch
    `check-runtime-probe-contract.py` / `check-autoload-happy-path.py` unless
-   an oracle they read is actually removed; if `oracle_title_portrait_visible_surface_bound`
-   is removed with the title-cover portrait bits, change the contract checker
-   and `test-runtime-probe-contract.py` together in one commit.
+   an oracle they read is actually removed. DONE 2026-08-31 for
+   `oracle_title_portrait_visible_surface_bound`: it was removed (its counter had
+   no write site anywhere), and `check-runtime-probe-contract.py` +
+   `test-runtime-probe-contract.py` were repointed at
+   `oracle_portrait_onto_draw_hits` -- the capture predicate's real gate -- in the
+   same commit. Note the trap that instruction only half-covers: leaving the dead
+   name in a REMOVAL COMMENT still satisfies a substring contract check, so the
+   requirement has to move, not just the code.
 5. A-only deps to drop from the root crate if verified dead after deletion:
    `er-tpf` (forge-only per map), `Win32_Graphics_Direct3D_Fxc` (A's HLSL
    compile).
@@ -128,7 +133,7 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
   DLL registers a portrait+stats-only provider and, on Wine, uses
   `er_d3d12_compositor::install_loading_bar_present_compositor` as its host
   exactly like `er-loading-bar`.
-- The standalone DLL must never be loaded alongside `er_effects_rs.dll` in one
+- The standalone DLL must never be loaded alongside `er_quickload.dll` in one
   me3 profile (double Present detour / double MinHook) -- document this in its
   Cargo.toml like the er-save-suppress warning.
 

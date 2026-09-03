@@ -88,7 +88,7 @@ pub fn install_native_overlay() {
         return;
     }
     let _ = std::thread::Builder::new()
-        .name("er-effects-native-overlay".to_owned())
+        .name("er-quickload-native-overlay".to_owned())
         .spawn(|| {
             let _ = std::panic::catch_unwind(|| unsafe { native_overlay_run() });
         });
@@ -163,7 +163,7 @@ unsafe fn native_overlay_run() {
         CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             class_name,
-            w!("er-effects loading"),
+            w!("er-quickload loading"),
             WS_POPUP,
             0,
             0,

@@ -1,12 +1,12 @@
 //! Shared MinHook FFI wrapper + cross-DLL hook union.
 //!
-//! Extracted verbatim from `er-effects-rs/src/mh.rs` (consolidation only, behavior-preserving):
+//! Extracted verbatim from `er-quickload/src/mh.rs` (consolidation only, behavior-preserving):
 //! the MinHook-generic FFI (`MH_*` externs, `MH_STATUS`), the `MhHook` wrapper, and the hook union
 //! (`register_union_hook` + the cross-DLL chaining) now live here so the three game cdylibs share one
 //! copy and MinHook's C source is compiled once (build.rs) instead of in each crate.
 //!
 //! The product-specific `#[no_mangle] er_effects_union_register` C export is deliberately NOT here --
-//! it stays defined in `er-effects-rs` so only `er_effects_rs.dll` exports that cross-DLL symbol.
+//! it stays defined in `er-quickload` so only `er_quickload.dll` exports that cross-DLL symbol.
 // PARITY: this crate transcribes MinHook's C ABI, so its names, casing and the items it
 // declares-but-does-not-call are the upstream header's shape rather than this repo's.
 // A per-item allow would mean annotating essentially every line of a binding file.
@@ -17,11 +17,17 @@ use std::ptr::null_mut;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Whether an absolute address is a legitimate place to write into the RUNNING image, asked of
+/// that image's own function table. It is what a RUNTIME-DERIVED address gets instead of a
+/// version translation -- see the module docs for why an AOB hit needs the second question and
+/// cannot answer the first.
+mod detour_site;
+
 // ============================================================================
 // LOGGING SEAM. `mh.rs` logged union-chain and registry-collision events through the product DLL's
 // `telemetry::append_autoload_debug`. That sink is product-specific, so this shared crate calls
 // through a function pointer the product installs at startup via `set_hook_logger`. Default is a
-// no-op (no logger installed). `er-effects-rs` installs its telemetry sink in DllMain BEFORE any hook
+// no-op (no logger installed). `er-quickload` installs its telemetry sink in DllMain BEFORE any hook
 // is registered, so every line the old in-product union code emitted is still emitted, to the same
 // log. Crates that only use the raw `MH_*` externs (er-reload-trace, er-input-harness) never
 // touch the union and never install a logger; the seam stays inert for them.
@@ -32,11 +38,20 @@ static HOOK_LOGGER: AtomicUsize = AtomicUsize::new(0);
 
 /// Install the sink for union/registry log lines. Call once, early (before any hook registration) to
 /// preserve the exact logging the in-product `mh.rs` union produced.
+///
+/// It also installs the SAME sink for `er-game-base`'s address-resolution lines, rather than
+/// leaving that a second call every caller has to remember. Every cdylib statically links its own
+/// copy of both crates, so an uninstalled sink is silent PER DLL -- and on 2026-08-28 that cost a
+/// diagnosis: `er-armament-icons` logged `MH_ERROR_UNSUPPORTED_FUNCTION`, which is both MinHook's
+/// genuine "cannot hook this" AND the code `MhHook::new` returns when the build gate REFUSES an
+/// address. With no sink installed there was no line saying which, for an address that is in the
+/// verified translation table and so should not have been refused at all. One sink, one call.
 pub fn set_hook_logger(logger: HookLogFn) {
     HOOK_LOGGER.store(logger as usize, Ordering::Release);
+    er_game_base::game_build::set_address_logger(logger);
 }
 
-fn hook_log(args: std::fmt::Arguments<'_>) {
+pub(crate) fn hook_log(args: std::fmt::Arguments<'_>) {
     let raw = HOOK_LOGGER.load(Ordering::Acquire);
     if raw != 0 {
         // SAFETY: `raw` is only ever a `HookLogFn` stored by `set_hook_logger`.
@@ -115,6 +130,90 @@ pub unsafe fn register_union_hook(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
+    // Resolved BEFORE anything else: `target` is the union's identity key, so a translated
+    // address must be the key too -- otherwise one feature unions on the 1.16.2 address and
+    // another on the 1.17 one, and MinHook ends up with two instances on the same function.
+    let target = match resolve_target(target, &format!("register_union_hook 0x{target:x}")) {
+        Some(resolved) => resolved,
+        None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
+    };
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+}
+
+/// [`register_union_hook`] for an address the caller DERIVED AT RUNTIME on the running build.
+///
+/// The precondition, in one line: the caller found this address by scanning or reading the image
+/// that is actually loaded -- an AOB hit in `.text`, a function pointer read out of a live vtable
+/// -- so it is already correct for this build and there is nothing to translate.
+///
+/// # Why this is not [`register_union_hook`] with the gate turned off
+///
+/// It is a DIFFERENT gate, not a missing one. The translating entry point asks a table keyed by
+/// 1.16.2 RVAs where an address moved to; a 1.17 address is not one of that table's keys, so the
+/// honest answer for a scanned address is REFUSED -- and on 2026-08-30 that refusal was turning
+/// off `er-armament-icons`' and `er-invasion-warp`' GFx tag-parse hooks for an address the scan
+/// had got RIGHT. Adding a ledger row would have been worse: the scan already returns the 1.17
+/// address, so a row would translate it a second time, `+0x1e00` into the middle of a live body.
+///
+/// What replaces the translation is `detour_site::write_site_is_sound`, which asks the RUNNING
+/// image's own `.pdata` whether this is a function entry (or an unwind-less leaf) with room for
+/// MinHook's five bytes, and refuses an address inside another function's body. A wrong absolute
+/// address is exactly as fatal as a stale one, so something has to ask.
+///
+/// # Safety
+/// Same contract as [`register_union_hook`], plus: `target` must have been derived from the
+/// running image. Passing a constant here is a bug this cannot detect -- it would be a 1.16.2
+/// address asserted to be a 1.17 one.
+pub unsafe fn register_union_hook_runtime_derived(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    #[cfg(windows)]
+    {
+        let what = format!("register_union_hook_runtime_derived 0x{target:x}");
+        if !detour_site::write_site_is_sound(target, detour_site::DETOUR_PATCH_BYTES, &what) {
+            return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+        }
+    }
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+}
+
+/// [`register_union_hook`] on an address that has ALREADY been resolved for the running build.
+///
+/// RESOLUTION IS NOT IDEMPOTENT, and assuming it was is what made this split necessary. The
+/// translation table is keyed by 1.16.2 RVA and its VALUES are 1.17 RVAs, so feeding a translated
+/// address back in asks "where did 0x11d0b80 move to" -- a question with no entry, whose honest
+/// answer is REFUSED. Measured 2026-08-28: `register_shared_hook` resolved, then handed the result
+/// to `register_shared_hook_with_budget`, which resolved again; `er-armament-icons` lost its
+/// file-open observer at 0x1411ced80 to `MH_ERROR_UNSUPPORTED_FUNCTION` even though that address is
+/// in the verified table and its 1.17 prologue is byte-identical and perfectly hookable.
+///
+/// # It stays PRIVATE, and the two ways in are the point
+///
+/// "Already correct for the running build" is true for two different reasons, and a caller has to
+/// say WHICH, because the checks they owe are different:
+///
+/// * [`register_union_hook`] resolved a 1.16.2 constant through the translation table, which is
+///   also what audits the destination as a detour target;
+/// * [`register_union_hook_runtime_derived`] took an address out of the running image, where there
+///   is nothing to translate, and audits it against that image's own function table instead.
+///
+/// A `pub` un-audited entry point here would be a third way -- one that skips BOTH -- and it would
+/// look exactly like the two legitimate ones at a call site. The shared path no longer resolves
+/// twice either: `register_shared_hook_with_budget` resolves once per branch, after the branch.
+///
+/// # Safety
+/// Same contract as [`register_union_hook`], plus: `target` must already be correct for the
+/// running build.
+///
+/// NOT `#[cfg(windows)]`, because its caller `register_union_hook` is not either -- gating only the
+/// callee is a host build error, not a smaller binary.
+unsafe fn register_union_hook_resolved(
+    target: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         s => return Err(s),
@@ -131,6 +230,10 @@ pub unsafe fn register_union_hook(
         }
         orig_slot.store(entry.trampoline, Ordering::Release); // new -> game orig
         entry.handlers.push((handler_addr, orig_slot));
+        // The registry has to see chained handlers too, or the union looks like it owns an address
+        // through exactly one handler no matter how many are on it -- and a later bare `MhHook`
+        // collision would name only the first.
+        registry_note_union_chain(target, handler_addr);
         hook_log(format_args!(
             "HOOK UNION: game addr 0x{target:x} now chains {} handlers (added {})",
             entry.handlers.len(),
@@ -143,14 +246,21 @@ pub unsafe fn register_union_hook(
         return Err(MH_STATUS::MH_ERROR_MEMORY_ALLOC);
     }
     let mut trampoline = null_mut();
-    unsafe {
+    let create_status = unsafe {
         MH_CreateHook(
             target as *mut c_void,
             DISPATCHERS[slot] as *mut c_void,
             &mut trampoline,
         )
-    }
-    .ok()?;
+    };
+    // RECORDED AS THE HANDLER, NOT AS THE DISPATCHER. `DISPATCHERS[slot]` is a pool entry whose
+    // offset says nothing to a reader; the handler is the feature. This is also the mirror case of
+    // the empty-owner-set bug: when a BARE detour already holds this prologue, MinHook answers
+    // `MH_ERROR_ALREADY_CREATED` here and, before 2026-08-31, the union simply returned the error
+    // with no registry line at all -- the union losing to a bare hook was as anonymous as a bare
+    // hook losing to the union.
+    registry_record(target, handler_addr, create_status, HookOwner::Union);
+    create_status.ok()?;
     // ARM THE SLOT BEFORE ENABLING THE DETOUR. These two stores used to happen AFTER
     // `MH_EnableHook`, leaving a window in which the dispatcher was live but its head was still 0
     // -- and `union_dispatch` returns 0 for a null head WITHOUT calling the game. On a rarely-hit
@@ -187,7 +297,7 @@ pub unsafe fn register_union_hook(
 // `MH_ERROR_ALREADY_CREATED`: the loser reports installed, never runs, and every feature behind
 // it looks unimplemented -- nothing crashes and nothing logs an error.
 //
-// That is measured, not hypothetical. `er-effects-rs` and `er-armament-icons` both detour
+// That is measured, not hypothetical. `er-quickload` and `er-armament-icons` both detour
 // `TITLE_SCALEFORM_FILE_OPEN_RVA` (0x11ced80); in an eleven-native profile the product reported
 // `file_open_observer_installed = true` with `file_open_hits = 0` for an entire session and every
 // GFx swap it owns went silently vanilla, while the same build loaded ALONE reported 113 hits
@@ -201,7 +311,7 @@ pub unsafe fn register_union_hook(
 // ============================================================================
 
 /// C-ABI shape of the product DLL's `er_effects_union_register` export
-/// (`crates/er-effects-rs/src/mh.rs`): `(target, handler, *mut orig_slot) -> 0 ok | -1 null slot |
+/// (`crates/er-quickload/src/mh.rs`): `(target, handler, *mut orig_slot) -> 0 ok | -1 null slot |
 /// positive `MH_STATUS` on MinHook failure`.
 pub type UnionRegisterFn = unsafe extern "system" fn(usize, UnionFn, *mut usize) -> i32;
 
@@ -210,7 +320,7 @@ pub type UnionRegisterFn = unsafe extern "system" fn(usize, UnionFn, *mut usize)
 /// may be about to lose a trampoline race".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookRoute {
-    /// Chained into `er_effects_rs.dll`'s single union -- the product is co-loaded.
+    /// Chained into `er_quickload.dll`'s single union -- the product is co-loaded.
     ProductUnion,
     /// This DLL's own union -- the product is absent, or this IS the product.
     LocalUnion,
@@ -218,7 +328,14 @@ pub enum HookRoute {
 
 /// The product DLL as me3 loads it, matched by base name rather than by path.
 #[cfg(windows)]
-const PRODUCT_DLL_NAME: &[u8] = b"er_effects_rs.dll\0";
+const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
+// DELIBERATELY STILL `er_effects_`, after the 2026-08-26 rename of the crate to `er-quickload`
+// and the repo to `er-mods-rs`. This name is an ABI, not branding: seven crates resolve it out of
+// the product DLL by string through GetProcAddress, and users install these DLLs one at a time
+// from separate releases. Renaming it would make an already-downloaded `er_invasion_warp.dll`
+// fail to find the union next to a freshly built product, fall back to its own MinHook instance,
+// and corrupt the shared trampoline -- with nothing in any gate to say so. The exports that DID
+// move (`er_quickload_loading_screen_data`) have exactly one consumer, built in the same pass.
 #[cfg(windows)]
 const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
 
@@ -289,6 +406,9 @@ pub unsafe fn register_shared_hook(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<HookRoute, MH_STATUS> {
+    // UNRESOLVED, deliberately -- see [`register_shared_hook_with_budget`], which owns the single
+    // resolve and must own it AFTER the branch, because the two branches resolve in different
+    // images.
     unsafe {
         register_shared_hook_with_budget(
             target,
@@ -308,6 +428,25 @@ pub unsafe fn register_shared_hook(
 /// long before `CSTaskImp` exists -- so one probe is already the right answer there, and the
 /// polling budget would only be a stall on the game thread when the product is genuinely absent.
 ///
+/// # THE SINGLE RESOLVE, AND WHY IT HAPPENS AFTER THE BRANCH (2026-08-30)
+///
+/// `target` arrives UNRESOLVED and each branch resolves it exactly once, in the image that will
+/// own the detour. This used to resolve first and hand the RESOLVED address to both branches --
+/// and the product branch then resolved it a SECOND time, inside `er_quickload.dll`, because the
+/// `er_effects_union_register` export calls [`register_union_hook`] like any other caller.
+///
+/// A second resolve normally misses and `already_translated_in` hands the address back unchanged,
+/// which is why this survived. But a 1.17 destination can also be some OTHER row's 1.16.2 source,
+/// and then the second lookup does not miss -- it TRANSLATES AGAIN, to a third, unrelated
+/// function. Measured on er-reload-trace's own hook set: `native_submit` `0x7ac890 -> 0x7ad710`,
+/// and `0x7ad710` is itself a tracked source, `-> 0x7ae590`. Three detour rows have that collision
+/// shape (`0x6156c0`, `0x7ad710`, `0xbbbd90`), and `already_translated_in`'s own doc names two of
+/// them, because from a bare address the two cases are INDISTINGUISHABLE: the table cannot tell
+/// whether it is being asked about a source or about a destination that happens to look like one.
+///
+/// That is why the fix is structural rather than a smarter table. Resolve once, at one layer, and
+/// leave no path that hands an already-resolved address to something that resolves again.
+///
 /// # Safety
 /// Same contract as [`register_shared_hook`].
 #[cfg(windows)]
@@ -319,6 +458,10 @@ pub unsafe fn register_shared_hook_with_budget(
     sleep_ms: u32,
 ) -> Result<HookRoute, MH_STATUS> {
     if let Some(register) = resolve_product_union_register(tries, sleep_ms) {
+        hook_log(format_args!(
+            "HOOK SHARED (0x{target:x}): handing the UNRESOLVED address to er_quickload.dll's \
+             union, which owns the single resolve for this branch"
+        ));
         // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
         // own static is sound; our image outlives every dispatch.
         let slot_ptr = orig_slot.as_ptr();
@@ -330,7 +473,16 @@ pub unsafe fn register_shared_hook_with_budget(
             code => Err(mh_status_from_i32(code)),
         };
     }
-    unsafe { register_union_hook(target, handler, orig_slot) }.map(|()| HookRoute::LocalUnion)
+    // The product is absent, so THIS image owns the one resolve.
+    let target = match resolve_target(
+        target,
+        &format!("register_shared_hook_with_budget 0x{target:x}"),
+    ) {
+        Some(resolved) => resolved,
+        None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
+    };
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+        .map(|()| HookRoute::LocalUnion)
 }
 
 /// Reconstruct an [`MH_STATUS`] from the `i32` the cross-DLL export returns.
@@ -361,7 +513,108 @@ fn mh_status_from_i32(code: i32) -> MH_STATUS {
 /// turns that invisible race into an explicit LOGGED COLLISION at install time, naming the game offset
 /// and both detours -- so a contested address (the root of the menu flakiness) is visible immediately
 /// instead of surfacing as a flaky runtime bug. Idea + design credit: user, 2026-07-16.
-static HOOK_REGISTRY: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+///
+/// # UNION-INSTALLED HOOKS ARE RECORDED HERE TOO (2026-08-31)
+///
+/// Until that date they were not, and the collision line therefore named an EMPTY owner set in
+/// exactly the configuration it exists to explain. Measured in run `br-20260831-160354-2513`: the
+/// union took `0x14067c050` and `0x14067c0e0` at boot (+1172ms/+1288ms) for the menu trace's
+/// `b80_loadsavedata_67b200` / `b80_deserialize_67b290` observers; the system-quit in-world load
+/// guard and RequestLoadSlot guard then bare-`MhHook::new`'d those same two addresses, got
+/// `MH_ERROR_ALREADY_CREATED`, and the registry reported `already hooked by detour(s) []`. The
+/// counterparty was in the same log five thousand lines earlier under a different message, so the
+/// one field a reader needs was blank precisely where they needed it -- and two save-safety guards
+/// were silently absent from a load path with nothing naming what had taken their address.
+///
+/// Rows now carry [`HookOwner`], so a collision says whether the incumbent is a bare detour (a
+/// genuine contest -- one of the two never runs) or the union (chainable -- the newcomer should be
+/// registering through it rather than through MinHook).
+static HOOK_REGISTRY: Mutex<Vec<HookRegistration>> = Mutex::new(Vec::new());
+
+/// One recorded registration: which game address, whose detour, and by which installer.
+struct HookRegistration {
+    target: usize,
+    detour: usize,
+    owner: HookOwner,
+}
+
+/// WHICH INSTALLER CLAIMED AN ADDRESS -- and therefore what a second claim on it means.
+///
+/// The distinction is the whole reason the owner is recorded. Two BARE detours on one address is a
+/// contest MinHook settles by silently dropping one. A bare detour arriving at an address the UNION
+/// already owns is not a contest to be won: it is a call-site bug with a mechanical fix (register
+/// through the union and chain), and naming the incumbent is what tells the two cases apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookOwner {
+    /// A bare [`MhHook`] detour, holding MinHook's single slot for this address by itself.
+    Bare,
+    /// A handler registered through the union. The dispatcher holds the MinHook slot and every
+    /// union handler on the address CHAINS, so more of them is normal rather than a collision.
+    Union,
+}
+
+impl HookOwner {
+    /// How an owner is named in the collision/duplicate lines. `Bare` renders as the plain offset
+    /// the pre-2026-08-31 message used, so the ordinary case reads exactly as it always did.
+    fn label(self, detour: usize, off: &dyn Fn(usize) -> String) -> String {
+        match self {
+            HookOwner::Bare => off(detour),
+            HookOwner::Union => format!("union handler {}", off(detour)),
+        }
+    }
+}
+
+/// What a registration means given what is already recorded at the same address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegistryVerdict {
+    /// Nothing else holds this address and MinHook did not object: no line to print.
+    Fresh,
+    /// Every prior claim is the SAME detour by the SAME installer -- one owner installed twice.
+    Duplicate,
+    /// A DIFFERENT detour already holds this address, or MinHook says one does.
+    Collision,
+}
+
+/// Classify a registration against the address's existing rows.
+///
+/// Split out from [`registry_record`] so the rule is testable on the host: the recording half
+/// needs `dll_base`, which is a Win32 call, while the DECISION -- the part that was wrong -- is
+/// pure. `MH_ERROR_ALREADY_CREATED` forces a collision even with no prior row, because that is
+/// MinHook reporting an owner this registry never saw (a hook installed before the logger existed,
+/// or by a different MinHook instance in another DLL).
+fn registry_verdict(
+    prior: &[(usize, HookOwner)],
+    detour: usize,
+    owner: HookOwner,
+    create_status: MH_STATUS,
+) -> RegistryVerdict {
+    // A DUPLICATE IS NOT A COLLISION, and conflating them costs an investigation. When every
+    // prior registration at this address names the SAME detour from the SAME installer, one owner
+    // registered twice -- its handler is live either way, and the fix is at the caller (an install
+    // that races itself, e.g. two `Once` gates calling one install fn). A collision is two
+    // DIFFERENT detours contesting one address, where the loser's handler genuinely never fires
+    // and the fix is the shared/union registry. Measured 2026-08-30: `title-cover-part-a`'s
+    // named-child binder logged the collision wording against ITSELF at 0x14074b140 and read
+    // exactly like the real `title-cover-part-b` conflict from the run before it.
+    if !prior.is_empty() && prior.iter().all(|(d, o)| *d == detour && *o == owner) {
+        return RegistryVerdict::Duplicate;
+    }
+    if !prior.is_empty() || create_status == MH_STATUS::MH_ERROR_ALREADY_CREATED {
+        return RegistryVerdict::Collision;
+    }
+    RegistryVerdict::Fresh
+}
+
+/// Render the incumbent list for a collision line, naming each owner's INSTALLER as well as its
+/// offset. An empty list here now means genuinely nothing recorded (MinHook knows an owner this
+/// process never registered), rather than "a union hook that was never written down".
+fn render_prior_owners(prior: &[(usize, HookOwner)], off: &dyn Fn(usize) -> String) -> String {
+    prior
+        .iter()
+        .map(|(d, o)| o.label(*d, off))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Our DLL's load base, so detours can be reported as `dll+0xNNN` (identifiable against the map/disasm)
 /// instead of an absolute pointer that shifts every launch.
@@ -394,21 +647,58 @@ fn as_dll_off(p: usize) -> String {
     }
 }
 
-fn registry_record(target: usize, detour: usize, create_status: MH_STATUS) {
+/// Record one registration and log what it means. `owner` says which installer is claiming the
+/// address; see [`HookOwner`] for why a bare-vs-union incumbent is the load-bearing distinction.
+fn registry_record(target: usize, detour: usize, create_status: MH_STATUS, owner: HookOwner) {
     if let Ok(mut reg) = HOOK_REGISTRY.lock() {
-        let prior: Vec<String> = reg
+        let prior: Vec<(usize, HookOwner)> = reg
             .iter()
-            .filter(|(t, _)| *t == target)
-            .map(|(_, d)| as_dll_off(*d))
+            .filter(|row| row.target == target)
+            .map(|row| (row.detour, row.owner))
             .collect();
-        reg.push((target, detour));
-        if !prior.is_empty() || create_status == MH_STATUS::MH_ERROR_ALREADY_CREATED {
-            hook_log(format_args!(
-                "HOOK REGISTRY COLLISION: game addr 0x{target:x} already hooked by detour(s) [{}], NOW ALSO detour {} (MH_CreateHook={create_status:?}) -- only ONE binds, the loser's handler never fires (silent native-Windows race source)",
-                prior.join(", "),
-                as_dll_off(detour)
-            ));
+        let verdict = registry_verdict(&prior, detour, owner, create_status);
+        // A ROW MEANS MINHOOK ACCEPTED A CREATE AT THIS ADDRESS FOR THIS DETOUR -- so a create that
+        // FAILED must not leave one. Before 2026-08-31 every attempt was recorded, so the loser of a
+        // collision became a permanent phantom "owner" and a third registrant was told the address
+        // belongs to a detour that was never bound. Silence about a real owner and confidence about
+        // a fictional one are the same defect from opposite ends.
+        if create_status == MH_STATUS::MH_OK {
+            reg.push(HookRegistration {
+                target,
+                detour,
+                owner,
+            });
         }
+        drop(reg);
+        let off: &dyn Fn(usize) -> String = &as_dll_off;
+        match verdict {
+            RegistryVerdict::Fresh => {}
+            RegistryVerdict::Duplicate => hook_log(format_args!(
+                "HOOK REGISTRY DUPLICATE: game addr 0x{target:x} registered again by the SAME detour {} (MH_CreateHook={create_status:?}) -- one owner installed twice, nothing is lost and the first registration is live; fix the caller, this is NOT a contested address",
+                owner.label(detour, off)
+            )),
+            RegistryVerdict::Collision => hook_log(format_args!(
+                "HOOK REGISTRY COLLISION: game addr 0x{target:x} already hooked by detour(s) [{}], NOW ALSO {} (MH_CreateHook={create_status:?}) -- only ONE binds, the loser's handler never fires (silent native-Windows race source); an incumbent named `union handler` is CHAINABLE, so register through the union instead of MinHook",
+                render_prior_owners(&prior, off),
+                owner.label(detour, off)
+            )),
+        }
+    }
+}
+
+/// Record a union handler that CHAINED onto an address the union already owns.
+///
+/// Deliberately silent: chaining is the union's designed behaviour and
+/// [`register_union_hook_resolved`] already logs `HOOK UNION: ... now chains N handlers` for it.
+/// What this adds is the ROW, so that a later bare `MhHook::new` on the same address can be told
+/// who it is colliding with instead of reporting an empty owner set.
+fn registry_note_union_chain(target: usize, handler: usize) {
+    if let Ok(mut reg) = HOOK_REGISTRY.lock() {
+        reg.push(HookRegistration {
+            target,
+            detour: handler,
+            owner: HookOwner::Union,
+        });
     }
 }
 
@@ -462,6 +752,72 @@ impl MH_STATUS {
     }
 }
 
+// ============================================================================
+// BUILD GATE (2026-08-28). Every game address in this workspace is a 1.16.2 RVA. ELDEN RING 1.17
+// moved code, and a detour installed at a stale RVA does not fail -- it lands mid-function and
+// corrupts the game: `0x1407ada40` is a real prologue in 1.16.2 and `xor r15d, r15d` in 1.17, and
+// hooking it killed a boot with an access violation whose backtrace blames game code.
+//
+// MinHook cannot catch this. It refuses only what it cannot DECODE (several hooks did come back
+// MH_ERROR_UNSUPPORTED_FUNCTION on 1.17); mid-function bytes that happen to decode are installed
+// happily. So the check has to be "is this the build these addresses came from", asked once, here,
+// where every detour in every DLL of this workspace passes through.
+//
+// Scope is the DETOUR installers plus the two RVA-taking byte primitives. `patch_3byte_stub` and
+// `apply_xor_ret_stub` were ungated until 2026-08-30 on the theory that validating the overwritten
+// byte was gate enough; it is not. They take a 1.16.2 `rva`, and on 1.17 all three call sites hit a
+// byte that is simply different, so each aborted reporting a signature mismatch while the map knew
+// exactly where the function had gone. They now resolve first and REFUSE when nothing knows.
+//
+// `write_code_byte` stays ungated on purpose: it takes an ABSOLUTE address that its callers
+// discover themselves, so there is no RVA to translate and a gate could only refuse work that is
+// already version-agnostic. The caller that established this was `er-ersc-sigshim`, retired
+// 2026-09-03 with support for old Seamless builds; the property is about the argument, not it.
+// ============================================================================
+
+// Verified 1.16.2 -> 1.17 address pairs, generated by `build.rs` from
+// `docs/recon/rva-map-1162-to-1170.verified.tsv`.
+
+/// Where a detour should actually go, given the build that is running.
+///
+/// Three answers, and the middle one is the point of this whole migration:
+///
+/// * the address as given -- the running build is the one the RVA came from, or the address is
+///   outside the game image (a Win32 detour, correct on every build);
+/// * a TRANSLATED address -- the running build moved the function, and this pair was verified as
+///   the same function: `scripts/map-rvas-1162-to-1170.py` found it by masked signature and
+///   `scripts/verify-rva-map-1170.py` then confirmed the normalised instruction sequences are
+///   identical over the body, not just the prologue;
+/// * `None` -- the build moved the function and nothing here knows where to. Refusing is the only
+///   safe answer: `0x1407ada40` is a real prologue in 1.16.2 and `xor r15d, r15d` in 1.17, and
+///   detouring it killed a boot.
+///
+/// A translation is logged with both addresses, because a hook silently landing somewhere other
+/// than where the source says is exactly the kind of thing a reader of a crash log needs told.
+fn resolve_target(target: usize, what: &str) -> Option<usize> {
+    // The table and the decision both live in `er-game-base`, because a stale address is just as
+    // reachable as a direct CALL as it is as a detour, and one copy of the rule is the only way
+    // both paths can agree. The hook log keeps its own line so a reader of the hook log is not
+    // sent to a second file to find out that an address was moved.
+    // The DETOUR resolver, not the call one. A row good enough to call is not automatically a
+    // safe place for MinHook to write five bytes; see `resolve_detour_address`.
+    let resolved = er_game_base::game_build::resolve_detour_address(target, what);
+    match resolved {
+        Some(address) if address != target => {
+            hook_log(format_args!(
+                "HOOK TRANSLATED ({what}): 0x{target:x} -> 0x{address:x}"
+            ));
+        }
+        None => hook_log(format_args!(
+            "HOOK REFUSED ({what}): {} -- this address has no verified mapping for the running \
+             build, so installing here would detour whatever code now occupies it",
+            er_game_base::game_build::describe_build()
+        )),
+        Some(_) => {}
+    }
+    resolved
+}
+
 /// Original address, hook function address, and trampoline for a given hook.
 pub struct MhHook {
     addr: *mut c_void,
@@ -474,9 +830,59 @@ impl MhHook {
     ///
     /// Installs native code detours; caller must ensure ABI and lifetime are valid.
     pub unsafe fn new(addr: *mut c_void, hook_impl: *mut c_void) -> Result<Self, MH_STATUS> {
+        let addr =
+            match resolve_target(addr as usize, &format!("MhHook::new 0x{:x}", addr as usize)) {
+                Some(resolved) => resolved as *mut c_void,
+                None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
+            };
+        unsafe { Self::create(addr, hook_impl) }
+    }
+
+    /// [`MhHook::new`] for an address the caller DERIVED AT RUNTIME on the running build.
+    ///
+    /// The precondition, in one line: the caller found this address by scanning or reading the
+    /// image that is actually loaded -- an AOB hit in `.text`, a function pointer read out of a
+    /// live vtable -- so it is already correct for this build and there is nothing to translate.
+    ///
+    /// This is the [`MhHook`] half of [`register_union_hook_runtime_derived`], and the reasoning
+    /// is all there: translation is REFUSED for a scanned address rather than skipped, adding a
+    /// ledger row for one would translate it a second time, and what stands in for the version
+    /// gate is the running image's own `.pdata` -- entry or unwind-less leaf with room for
+    /// MinHook's five bytes, never an address inside another function's body.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`MhHook::new`], plus: `addr` must have been derived from the running
+    /// image. Passing a constant here is a bug this cannot detect -- it would be a 1.16.2 address
+    /// asserted to be a 1.17 one.
+    pub unsafe fn new_runtime_derived(
+        addr: *mut c_void,
+        hook_impl: *mut c_void,
+    ) -> Result<Self, MH_STATUS> {
+        #[cfg(windows)]
+        {
+            let what = format!("MhHook::new_runtime_derived 0x{:x}", addr as usize);
+            if !detour_site::write_site_is_sound(
+                addr as usize,
+                detour_site::DETOUR_PATCH_BYTES,
+                &what,
+            ) {
+                return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+            }
+        }
+        unsafe { Self::create(addr, hook_impl) }
+    }
+
+    /// The MinHook call itself, shared by both entry points so they can differ ONLY in how `addr`
+    /// was established. Duplicating these four lines is how the two would drift apart.
+    ///
+    /// # Safety
+    ///
+    /// `addr` must already be correct for the running build, by whichever of the two routes.
+    unsafe fn create(addr: *mut c_void, hook_impl: *mut c_void) -> Result<Self, MH_STATUS> {
         let mut trampoline = null_mut();
         let status = unsafe { MH_CreateHook(addr, hook_impl, &mut trampoline) };
-        registry_record(addr as usize, hook_impl as usize, status);
+        registry_record(addr as usize, hook_impl as usize, status, HookOwner::Bare);
         status.ok_context("MH_CreateHook")?;
 
         Ok(Self {
@@ -506,7 +912,7 @@ impl MhHook {
 }
 
 // ============================================================================
-// RAW CODE-PATCH PRIMITIVES (moved from `er-effects-rs/src/experiments/mem.rs`,
+// RAW CODE-PATCH PRIMITIVES (moved from `er-quickload/src/experiments/mem.rs`,
 // docs/plans/experiments-crate-targets.md S5). Behaviour-preserving move: the bodies are the
 // product's, and every log string is unchanged. They belong here because they are the same
 // "reach into the game image and rewrite bytes" capability MinHook itself provides, and both
@@ -552,9 +958,136 @@ unsafe extern "system" {
     fn FlushInstructionCache(process: isize, base: *const c_void, size: usize) -> i32;
 }
 
+/// Bytes touched by [`write_code_byte`]. Named so the protection, the store, and the cache flush
+/// visibly agree on one length.
+const ONE_CODE_BYTE: usize = 1;
+
+/// The page operations a code-byte write performs, behind a seam. [`Win32CodePage`] is the only
+/// production implementation; the seam exists because the two ways this primitive can be wrong are
+/// both invisible to a compile check -- a page left `PAGE_EXECUTE_READWRITE` after the write, and a
+/// refused protection change that stores the byte anyway -- so the SEQUENCE is asserted on the host
+/// instead of only in a game. `er-scaleform-hooks` keeps its native hook owner testable the same
+/// way.
+trait CodePageOps {
+    /// `VirtualProtect`: returns whether the protection change was allowed, writing the previous
+    /// protection into `old_protect`.
+    fn protect(&mut self, addr: usize, len: usize, new_protect: u32, old_protect: &mut u32)
+    -> bool;
+
+    /// # Safety
+    ///
+    /// `addr` must be writable for the duration of the call.
+    unsafe fn store(&mut self, addr: usize, value: u8);
+
+    /// Flush the instruction cache so threads already inside this code see the new byte.
+    fn flush(&mut self, addr: usize, len: usize);
+}
+
+/// Shared body of [`write_code_byte`]: unlock, store, relock to the PREVIOUS protection, flush.
+///
+/// Returns whether the protection change was allowed. A refused change returns before the store,
+/// so nothing is written and no protection is left changed.
+///
+/// # Safety
+///
+/// With [`Win32CodePage`], `address` must be a byte of currently-mapped code in this process that
+/// is safe to overwrite; the store is an unsynchronised write into executable memory.
+unsafe fn write_code_byte_with<O: CodePageOps>(ops: &mut O, address: usize, value: u8) -> bool {
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    if !ops.protect(
+        address,
+        ONE_CODE_BYTE,
+        PAGE_EXECUTE_READWRITE,
+        &mut old_protect,
+    ) {
+        hook_log(format_args!(
+            "write_code_byte: VirtualProtect failed at 0x{address:x}"
+        ));
+        return false;
+    }
+    unsafe { ops.store(address, value) };
+    let mut restored = PAGE_PROTECT_UNSET;
+    ops.protect(address, ONE_CODE_BYTE, old_protect, &mut restored);
+    ops.flush(address, ONE_CODE_BYTE);
+    true
+}
+
+/// The production [`CodePageOps`]: Win32 `VirtualProtect` + `FlushInstructionCache` against the
+/// current process.
+#[cfg(windows)]
+struct Win32CodePage;
+
+#[cfg(windows)]
+impl CodePageOps for Win32CodePage {
+    fn protect(
+        &mut self,
+        addr: usize,
+        len: usize,
+        new_protect: u32,
+        old_protect: &mut u32,
+    ) -> bool {
+        let allowed = unsafe { VirtualProtect(addr as *mut c_void, len, new_protect, old_protect) };
+        allowed != WIN32_FALSE
+    }
+
+    unsafe fn store(&mut self, addr: usize, value: u8) {
+        unsafe { *(addr as *mut u8) = value };
+    }
+
+    fn flush(&mut self, addr: usize, len: usize) {
+        unsafe { FlushInstructionCache(CURRENT_PROCESS_PSEUDO_HANDLE, addr as *const c_void, len) };
+    }
+}
+
+/// Write a single byte of executable code at `address`, with the protection dance the write needs:
+/// `PAGE_EXECUTE_READWRITE`, the store, the original protection back, then an instruction-cache
+/// flush so threads already inside that code see the new byte.
+///
+/// Returns whether `VirtualProtect` allowed the write. It deliberately does NOT report whether the
+/// byte landed: a caller patching game code should read it back, because another mod can own the
+/// same address, and a successful `VirtualProtect` says nothing about that.
+///
+/// Unlike [`patch_3byte_stub`] and [`apply_xor_ret_stub`], this neither RESOLVES the address for
+/// the running build nor validates the byte it overwrites. Those two take a 1.16.2 RVA and so can
+/// do both; this one takes an absolute address its caller discovered at runtime -- often in a
+/// foreign module -- so there is nothing to translate, and the caller owns the check.
+///
+/// # Safety
+///
+/// `address` must be a byte of currently-mapped code in this process that is safe to overwrite.
+/// The store is unsynchronised: it is a single byte, so it cannot tear, but a thread may execute
+/// the patched instruction at any point during the call.
+#[cfg(windows)]
+pub unsafe fn write_code_byte(address: usize, value: u8) -> bool {
+    unsafe { write_code_byte_with(&mut Win32CodePage, address, value) }
+}
+
 /// Write a self-contained 3-byte return stub at `base+rva` after validating the expected first
 /// byte. RWX via VirtualProtect, write, restore, icache flush. Returns true on success. Shared by
 /// the gate-force patches (foreground / sign-in / user-index).
+///
+/// # Why the address is RESOLVED first (2026-08-30)
+///
+/// `rva` is a 1.16.2 RVA like every other address in this workspace, and the expected-first-byte
+/// check was doing double duty as a version gate. It is not one. Measured against
+/// `eldenring-deobf-1.17.bin`: at the stale 1.16.2 RVAs the three callers use, 1.17 holds `40 53`,
+/// `02 00` and `d5 00` where `0x40`, `0x40` and `0x4c` were expected -- so all three patches abort
+/// and report `byte ... is 0x02, expected 0x40`, which READS AS A STALE SIGNATURE and sends the
+/// reader hunting for a changed prologue. The real cause is that the function moved, and the map
+/// already knows where: 0xe56310 -> 0xe58110, 0x24129b0 -> 0x24151c0, 0x240f490 -> 0x2411ca0, each
+/// `IDENTICAL` over 71-90 instructions, and each destination starts with the byte the caller
+/// expects. Resolving first turns three silently dead features back on and makes an unmappable
+/// address say REFUSED instead of impersonating a signature change.
+///
+/// The byte check stays and still earns its place: it is what confirms the resolved destination is
+/// the entry the caller means. `resolve_game_address` (not `resolve_detour_address`) is the right
+/// question here -- this writes three self-contained bytes and relocates nothing, so it does not
+/// need MinHook's five-relocatable-bytes audit.
+///
+/// It is no longer the ONLY check, though, because on its own it is far too weak to be one: the
+/// resolved address is also audited by `detour_site::write_site_is_sound` for three bytes, which
+/// refuses an address inside another function's declared body. See the comment at that call for
+/// why a single REX prefix passes by coincidence.
 #[cfg(windows)]
 pub fn patch_3byte_stub(
     base: usize,
@@ -563,12 +1096,26 @@ pub fn patch_3byte_stub(
     stub: [u8; STUB_LEN],
     label: &str,
 ) -> bool {
-    let target = (base + rva) as *mut u8;
+    let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
+        hook_log(format_args!(
+            "{label}: REFUSED -- rva 0x{rva:x} has no verified mapping for the running build, so \
+             writing a 3-byte stub there would overwrite whatever now occupies it"
+        ));
+        return false;
+    };
+    // ONE BYTE IS NOT A SIGNATURE, so the site is audited before it is trusted. `expected_first`
+    // is `0x48`, `0x40`, `0x40` and `0x4c` at the four live call sites -- REX prefixes, which open
+    // a large fraction of the image, so on a build that moved the function the check passes BY
+    // COINCIDENCE far more often than it fails and three bytes go into unrelated code. Measured
+    // 2026-08-30: at their stale 1.16.2 RVAs on 1.17, all four targets are MID-FUNCTION.
+    if !detour_site::write_site_is_sound(address, STUB_LEN as u32, label) {
+        return false;
+    }
+    let target = address as *mut u8;
     let existing = unsafe { *target };
     if existing != expected_first {
         hook_log(format_args!(
-            "{label}: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
-            base + rva
+            "{label}: ABORT -- byte at 0x{address:x} is 0x{existing:x}, expected 0x{expected_first:x}"
         ));
         return false;
     }
@@ -617,12 +1164,26 @@ pub fn apply_xor_ret_stub(
     stub: [u8; STUB_LEN],
     label: &str,
 ) {
-    let target = (base + rva) as *mut u8;
+    // RESOLVED FIRST, for the reason spelled out on `patch_3byte_stub`: the expected-first-byte
+    // check is an entry-point confirmation, not a version gate, and on a build that moved the
+    // function it reports a byte mismatch that reads as a changed signature.
+    let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
+        hook_log(format_args!(
+            "online-disable: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the \
+             running build, so writing xor eax,eax;ret there would neuter whatever now occupies it"
+        ));
+        return;
+    };
+    // Audited before the byte check, for the reason spelled out on [`patch_3byte_stub`]: one REX
+    // prefix is not a signature, and a mid-function address passes it routinely.
+    if !detour_site::write_site_is_sound(address, STUB_LEN as u32, label) {
+        return;
+    }
+    let target = address as *mut u8;
     let existing = unsafe { *target };
     if existing != expected_first {
         hook_log(format_args!(
-            "online-disable: ABORT {label} -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
-            base + rva
+            "online-disable: ABORT {label} -- byte at 0x{address:x} is 0x{existing:x}, expected 0x{expected_first:x}"
         ));
         return;
     }
@@ -656,7 +1217,283 @@ pub fn apply_xor_ret_stub(
         )
     };
     hook_log(format_args!(
-        "online-disable: patched {label} 0x{:x} -> xor eax,eax;ret (forces offline)",
-        base + rva
+        "online-disable: patched {label} 0x{address:x} -> xor eax,eax;ret (forces offline)"
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A page operation, recorded rather than performed.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Op {
+        Protect {
+            addr: usize,
+            len: usize,
+            new_protect: u32,
+        },
+        Store {
+            addr: usize,
+            value: u8,
+        },
+        Flush {
+            addr: usize,
+            len: usize,
+        },
+    }
+
+    /// Stands in for a real code page. `original_protect` is what it reports as the page's previous
+    /// protection, so a test can assert that exact value is handed back on the second call.
+    struct FakePage {
+        ops: Vec<Op>,
+        original_protect: u32,
+        protect_allowed: bool,
+    }
+
+    impl FakePage {
+        fn allowing(original_protect: u32) -> Self {
+            Self {
+                ops: Vec::new(),
+                original_protect,
+                protect_allowed: true,
+            }
+        }
+
+        fn refusing() -> Self {
+            Self {
+                ops: Vec::new(),
+                original_protect: 0,
+                protect_allowed: false,
+            }
+        }
+    }
+
+    impl CodePageOps for FakePage {
+        fn protect(
+            &mut self,
+            addr: usize,
+            len: usize,
+            new_protect: u32,
+            old_protect: &mut u32,
+        ) -> bool {
+            self.ops.push(Op::Protect {
+                addr,
+                len,
+                new_protect,
+            });
+            if !self.protect_allowed {
+                return false;
+            }
+            *old_protect = self.original_protect;
+            true
+        }
+
+        unsafe fn store(&mut self, addr: usize, value: u8) {
+            self.ops.push(Op::Store { addr, value });
+        }
+
+        fn flush(&mut self, addr: usize, len: usize) {
+            self.ops.push(Op::Flush { addr, len });
+        }
+    }
+
+    const PAGE_EXECUTE_READ: u32 = 0x20;
+    const TEST_ADDR: usize = 0x1234_5678;
+    const TEST_BYTE: u8 = 0xcc;
+
+    /// The whole sequence, in order: unlock to RWX, store, relock, flush.
+    #[test]
+    fn writes_between_unlocking_and_relocking_then_flushes() {
+        let mut page = FakePage::allowing(PAGE_EXECUTE_READ);
+
+        let wrote = unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+        assert!(wrote);
+        assert_eq!(
+            page.ops,
+            vec![
+                Op::Protect {
+                    addr: TEST_ADDR,
+                    len: ONE_CODE_BYTE,
+                    new_protect: PAGE_EXECUTE_READWRITE,
+                },
+                Op::Store {
+                    addr: TEST_ADDR,
+                    value: TEST_BYTE,
+                },
+                Op::Protect {
+                    addr: TEST_ADDR,
+                    len: ONE_CODE_BYTE,
+                    new_protect: PAGE_EXECUTE_READ,
+                },
+                Op::Flush {
+                    addr: TEST_ADDR,
+                    len: ONE_CODE_BYTE,
+                },
+            ]
+        );
+    }
+
+    /// The hazard: a patched page left writable-and-executable for the rest of the process. The
+    /// relock must name the protection the page actually had, not a guess and not RWX.
+    #[test]
+    fn does_not_leave_the_page_executable_and_writable() {
+        for original in [PAGE_EXECUTE_READ, 0x02, 0x04, 0x80] {
+            let mut page = FakePage::allowing(original);
+
+            unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+            let last_protect = page
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Protect { new_protect, .. } => Some(*new_protect),
+                    _ => None,
+                })
+                .next_back()
+                .expect("a protection change");
+            assert_eq!(
+                last_protect, original,
+                "page relocked to the wrong protection"
+            );
+            assert_ne!(last_protect, PAGE_EXECUTE_READWRITE, "page left RWX");
+        }
+    }
+
+    /// A refused protection change must abort before the store. Writing anyway would fault, or
+    /// worse, succeed on a page that was already writable and hide the refusal.
+    #[test]
+    fn refused_protection_change_writes_nothing() {
+        let mut page = FakePage::refusing();
+
+        let wrote = unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+        assert!(!wrote);
+        assert_eq!(
+            page.ops,
+            vec![Op::Protect {
+                addr: TEST_ADDR,
+                len: ONE_CODE_BYTE,
+                new_protect: PAGE_EXECUTE_READWRITE,
+            }],
+            "nothing may follow a refused VirtualProtect"
+        );
+    }
+
+    /// What the `ONE_CODE_BYTE` doc claims: the protection, the store and the flush cover the same
+    /// one byte at the same address. A length that disagreed would unlock or flush a range the
+    /// caller never asked about.
+    #[test]
+    fn every_page_operation_covers_the_same_single_byte() {
+        let mut page = FakePage::allowing(PAGE_EXECUTE_READ);
+
+        unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
+
+        assert_eq!(ONE_CODE_BYTE, size_of::<u8>());
+        for op in &page.ops {
+            let (addr, len) = match op {
+                Op::Protect { addr, len, .. } | Op::Flush { addr, len } => (*addr, *len),
+                Op::Store { addr, .. } => (*addr, ONE_CODE_BYTE),
+            };
+            assert_eq!(addr, TEST_ADDR, "{op:?} touched a different address");
+            assert_eq!(len, ONE_CODE_BYTE, "{op:?} covered a different length");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // REGISTRY OWNERSHIP. The recording half needs `dll_base` (a Win32 call), so these drive the
+    // pure decision + rendering halves and inject the offset formatter. What they pin is the
+    // defect from run `br-20260831-160354-2513`: a bare detour colliding with a union-owned
+    // address reported `already hooked by detour(s) []`.
+    // ------------------------------------------------------------------
+
+    /// Stand-in for `as_dll_off` that does not touch `GetModuleHandleExW`.
+    fn fake_off(p: usize) -> String {
+        format!("dll+0x{p:x}")
+    }
+
+    const INCUMBENT_DETOUR: usize = 0xdef60;
+    const NEWCOMER_DETOUR: usize = 0xdf1d0;
+
+    #[test]
+    fn a_union_incumbent_is_named_rather_than_reported_as_an_empty_set() {
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Union)];
+        assert_eq!(
+            registry_verdict(
+                &prior,
+                NEWCOMER_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Collision
+        );
+        let off: &dyn Fn(usize) -> String = &fake_off;
+        assert_eq!(
+            render_prior_owners(&prior, off),
+            "union handler dll+0xdef60",
+            "the incumbent's installer must be named, not just its offset"
+        );
+    }
+
+    #[test]
+    fn a_bare_incumbent_still_renders_as_the_plain_offset() {
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Bare)];
+        let off: &dyn Fn(usize) -> String = &fake_off;
+        assert_eq!(render_prior_owners(&prior, off), "dll+0xdef60");
+    }
+
+    #[test]
+    fn one_owner_installing_twice_is_a_duplicate_not_a_collision() {
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Bare)];
+        assert_eq!(
+            registry_verdict(
+                &prior,
+                INCUMBENT_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Duplicate
+        );
+    }
+
+    #[test]
+    fn the_same_detour_under_a_different_installer_is_a_collision() {
+        // Same function pointer, but one came through the union and one through a bare `MhHook`:
+        // they are contesting the MinHook slot, so calling it a duplicate would say "nothing is
+        // lost" about a case where something is.
+        let prior = [(INCUMBENT_DETOUR, HookOwner::Union)];
+        assert_eq!(
+            registry_verdict(
+                &prior,
+                INCUMBENT_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Collision
+        );
+    }
+
+    #[test]
+    fn an_uncontested_first_registration_logs_nothing() {
+        assert_eq!(
+            registry_verdict(&[], NEWCOMER_DETOUR, HookOwner::Bare, MH_STATUS::MH_OK),
+            RegistryVerdict::Fresh
+        );
+    }
+
+    #[test]
+    fn already_created_with_no_recorded_owner_is_still_a_collision() {
+        // MinHook knows an owner this registry never saw -- another DLL's instance, or a hook
+        // installed before the log sink existed. An empty owner list now means exactly that.
+        assert_eq!(
+            registry_verdict(
+                &[],
+                NEWCOMER_DETOUR,
+                HookOwner::Bare,
+                MH_STATUS::MH_ERROR_ALREADY_CREATED,
+            ),
+            RegistryVerdict::Collision
+        );
+    }
 }

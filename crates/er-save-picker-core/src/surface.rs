@@ -148,9 +148,7 @@ mod tests {
 
     #[test]
     fn an_existing_target_confirms_and_a_free_name_commits() {
-        let dir = std::env::temp_dir().join("er-save-dest-route");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+        let dir = crate::picker_scratch_dir("dest-route");
         let existing = dir.join("ER0000.sl2");
         std::fs::write(&existing, b"already here").expect("temp file must be writable");
         assert_eq!(

@@ -7,7 +7,7 @@ set -euo pipefail
 # game boots to the title and WAITS for the USER to drive a NATIVE menu load (Title -> Load Game ->
 # select save -> confirm). A software INT3 breakpoint armed at MountEblArchive (RVA 0x1efc00, deobf
 # VA 0x1401efc00) fires DURING that native load; the DLL's VEH logs every hit's register/stack/caller
-# context to the GAME DIR er-effects-crash.log. That caller chain is the evidence we need to replicate
+# context to the GAME DIR er-quickload-crash.log. That caller chain is the evidence we need to replicate
 # the m28 EBL mount on the menu-free SetState5 path.
 #
 # SAVE-SAFE: no SetState5, no own-load, no autoload, no input block. The user loads their own save the
@@ -27,18 +27,45 @@ source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/golden-mount-trace-$(date +%Y%m%d-%H%M%S)}"
 PID_FILE="${PID_FILE:-$ARTIFACT_DIR/me3-launch.pid}"
-TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-effects-telemetry.json}"
+TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-quickload-telemetry.json}"
 BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
-DEPLOYED_DLL="${DEPLOYED_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
+DEPLOYED_DLL="${DEPLOYED_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll}"
+
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last --
+# and several sessions launch concurrently in this repo, which makes that the normal case rather
+# than a race. A copy at teardown cannot fix it (this run already clobbered the last one's file at
+# launch) and never runs at all when the game crashes, which is exactly the run worth keeping.
+CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-quickload-crash-log.txt}"
+AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-quickload-autoload-debug.log}"
+TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/er-quickload-continue-trace.log}"
+INPUT_TRACE_PATH="${INPUT_TRACE_PATH:-$ARTIFACT_DIR/er-quickload-input-trace.jsonl}"
+PROFILE_PATH="${PROFILE_PATH:-$ARTIFACT_DIR/er-quickload-profile.jsonl}"
+RELOAD_TRACE_PATH="${RELOAD_TRACE_PATH:-$ARTIFACT_DIR/er-reload-trace.log}"
+INPUT_HARNESS_LOG_PATH="${INPUT_HARNESS_LOG_PATH:-$ARTIFACT_DIR/er-input-harness.log}"
+INPUT_HARNESS_PHASES_PATH="${INPUT_HARNESS_PHASES_PATH:-$ARTIFACT_DIR/er-input-harness-phases.jsonl}"
+DIAG_HARNESS_PATH="${DIAG_HARNESS_PATH:-$ARTIFACT_DIR/er-diag-harness.log}"
+TIMESERIES_PATH="${TIMESERIES_PATH:-$ARTIFACT_DIR/er-telemetry-timeseries.jsonl}"
+CPU_PROFILE_PATH="${CPU_PROFILE_PATH:-$ARTIFACT_DIR/er-cpu-profile.txt}"
+ARMAMENT_ICONS_PATH="${ARMAMENT_ICONS_PATH:-$ARTIFACT_DIR/er-armament-icons.log}"
+SAVE_DISABLE_LOG_PATH="${SAVE_DISABLE_LOG_PATH:-$ARTIFACT_DIR/er-save-disable.log}"
+SAVE_DISABLE_TELEMETRY_PATH="${SAVE_DISABLE_TELEMETRY_PATH:-$ARTIFACT_DIR/er-save-disable-telemetry.json}"
+LOADING_PORTRAIT_PATH="${LOADING_PORTRAIT_PATH:-$ARTIFACT_DIR/er-loading-portrait.log}"
+LOADING_PORTRAIT_CRASH_LOG_PATH="${LOADING_PORTRAIT_CRASH_LOG_PATH:-$ARTIFACT_DIR/er-loading-portrait-crash-log.txt}"
 
 # Game-dir control files this scout writes/manages.
-BREAKPOINTS_FILE="$GAME_DIR/er-effects-breakpoints.txt"
-CRASH_LOG_ON_FILE="$GAME_DIR/er-effects-crash-log.txt"
-CRASH_LOG="$GAME_DIR/er-effects-crash.log"
-AUTOLOAD_PATH="$GAME_DIR/er-effects-autoload.txt"
-AUTOLOAD_BACKUP="$GAME_DIR/er-effects-autoload.txt.golden-mount-trace.bak"
-BLOCK_INPUT_FILE="$GAME_DIR/er-effects-block-input.txt"
+BREAKPOINTS_FILE="$GAME_DIR/er-quickload-breakpoints.txt"
+CRASH_LOG_ON_FILE="$GAME_DIR/er-quickload-crash-log.txt"
+# THE SW-BP EVIDENCE FILE, AND IT WAS READING THE WRONG NAME. This was `$GAME_DIR/er-quickload-
+# crash.log` -- a name the DLL stopped writing on 2026-06-22, when `crash_log_path()` settled on the
+# canonical `er-quickload-crash-log.txt`. Every `grep -a 'sw-bp'` below therefore ran against a file
+# that does not exist and reported nothing rather than failing. It now follows the redirect, so the
+# INT3 hits land in this run's own directory and the post-run grep reads what the DLL actually wrote.
+CRASH_LOG="$CRASH_LOG_PATH"
+AUTOLOAD_PATH="$GAME_DIR/er-quickload-autoload.txt"
+AUTOLOAD_BACKUP="$GAME_DIR/er-quickload-autoload.txt.golden-mount-trace.bak"
+BLOCK_INPUT_FILE="$GAME_DIR/er-quickload-block-input.txt"
 
 # Breakpoint RVA (deobf base 0x140000000): MountEblArchive 0x1401efc00. The DLL's sw-bp VEH now dumps
 # a DEEP RAW stack (40 qwords) at each hit, so the user-load mount's full caller chain -- including the
@@ -58,10 +85,10 @@ Usage: $0 [--dry-run]
 
 Prepares and launches the GOLDEN mount-trace scout: a direct/offline eldenring.exe me3 launch with
 NO autoload, an INT3 breakpoint at MountEblArchive (RVA 0x$MOUNT_EBL_ARCHIVE_RVA), so the USER can drive
-one native menu load and the DLL logs the m28 EBL-mount caller chain to the game-dir er-effects-crash.log.
+one native menu load and the DLL logs the m28 EBL-mount caller chain to the game-dir er-quickload-crash.log.
 
 Required for real execution (recommended: source .envs/golden-mount-trace.env):
-  ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1
+  ER_QUICKLOAD_AUTHORIZED_DIRECT_RUNTIME=1
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1
 EOF
 }
@@ -127,11 +154,13 @@ arm_scout_files() {
   for _rva in ${BREAKPOINTS_RVAS:-$MOUNT_EBL_ARCHIVE_RVA}; do
     printf '%s\n' "$_rva" >> "$BREAKPOINTS_FILE"
   done
-  cp -f "$BREAKPOINTS_FILE" "$ARTIFACT_DIR/er-effects-breakpoints.txt"
+  cp -f "$BREAKPOINTS_FILE" "$ARTIFACT_DIR/er-quickload-breakpoints.txt"
   # 1b) UI overlay OFF: no extra render hooks/overhead for a clean trace run.
-  : > "$GAME_DIR/er-effects-no-overlay.txt"
-  # 2) Crash log on (file channel; reliable through Proton). Do NOT truncate er-effects-crash.log --
-  #    the new sw-bp lines APPEND to whatever the user already has.
+  : > "$GAME_DIR/er-quickload-no-overlay.txt"
+  # 2) Crash log on (file channel; reliable through Proton). The sentinel is vestigial --
+  #    `crash_logger_enabled()` has returned an unconditional `true` since 2026-07-08 -- but the file
+  #    is still touched so an older staged DLL behaves the same. The LOG itself is redirected into
+  #    this run's directory, so there is nothing of the user's to preserve or truncate here.
   [[ -f "$CRASH_LOG_ON_FILE" ]] || : > "$CRASH_LOG_ON_FILE"
   # 3) No autoload: the USER drives the native menu. Move the existing autoload request aside so our
   #    own-load/SetState5 path never arms; restore on exit so the user's config survives.
@@ -195,17 +224,17 @@ if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
 {"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe-no-autoload","autoload":"none-user-drives-menu","breakpoint_rva":"0x$MOUNT_EBL_ARCHIVE_RVA","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"crash_log":"$CRASH_LOG"}
 EOF
-  echo "dry-run ok: would arm INT3 at RVA 0x$MOUNT_EBL_ARCHIVE_RVA (MountEblArchive), move aside er-effects-autoload.txt, stage the DLL as an me3 native, launch eldenring.exe through me3 with NO autoload, wait <=${RUNTIME_TIMEOUT_SECONDS}s for the user to drive a native load, then tear down the owned launcher pid + exact eldenring.exe runtime pids and restore the user's autoload.txt"
+  echo "dry-run ok: would arm INT3 at RVA 0x$MOUNT_EBL_ARCHIVE_RVA (MountEblArchive), move aside er-quickload-autoload.txt, stage the DLL as an me3 native, launch eldenring.exe through me3 with NO autoload, wait <=${RUNTIME_TIMEOUT_SECONDS}s for the user to drive a native load, then tear down the owned launcher pid + exact eldenring.exe runtime pids and restore the user's autoload.txt"
   exit 0
 fi
 
-[[ "${ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME:-0}" == "1" ]] || fatal "set ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 for the exact runtime invocation (source .envs/golden-mount-trace.env)"
+[[ "${ER_QUICKLOAD_AUTHORIZED_DIRECT_RUNTIME:-0}" == "1" ]] || fatal "set ER_QUICKLOAD_AUTHORIZED_DIRECT_RUNTIME=1 for the exact runtime invocation (source .envs/golden-mount-trace.env)"
 [[ "${AUTO_ALLOW_MANUAL_RUNTIME_PROBE:-0}" == "1" ]] || fatal "set AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 for the manual runtime probe (source .envs/golden-mount-trace.env)"
 
 # Stage the current DLL as an me3 native (LazyLoader removed 2026-07-04). The staged DLL already
 # carries the sw-bp + anti-anti-debug facility.
-cp -f "$DEPLOYED_DLL" "$ARTIFACT_DIR/er_effects_rs.dll"
-me3_write_profile "$ARTIFACT_DIR/er-effects-trace.me3" "$ARTIFACT_DIR/er_effects_rs.dll"
+cp -f "$DEPLOYED_DLL" "$ARTIFACT_DIR/er_quickload.dll"
+me3_write_profile "$ARTIFACT_DIR/er-quickload-trace.me3" "$ARTIFACT_DIR/er_quickload.dll"
 
 arm_scout_files
 
@@ -227,10 +256,26 @@ export ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH"
 # never overrun the cap even if the user walks away; the EXIT trap tears the game + restores state.
 (
   cd "$GAME_DIR"
-  ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
-  ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
-  ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
-  "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-effects-trace.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
+  ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \
+  ER_QUICKLOAD_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
+  ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+  ER_QUICKLOAD_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
+  ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$INPUT_TRACE_PATH" \
+  ER_QUICKLOAD_PROFILE_PATH="$PROFILE_PATH" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$RELOAD_TRACE_PATH" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$INPUT_HARNESS_LOG_PATH" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$INPUT_HARNESS_PHASES_PATH" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$DIAG_HARNESS_PATH" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$TIMESERIES_PATH" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$CPU_PROFILE_PATH" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARMAMENT_ICONS_PATH" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$SAVE_DISABLE_LOG_PATH" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$SAVE_DISABLE_TELEMETRY_PATH" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$LOADING_PORTRAIT_PATH" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$LOADING_PORTRAIT_CRASH_LOG_PATH" \
+  "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-quickload-trace.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )
 
 launcher_pid="$(cat "$PID_FILE" 2>/dev/null || echo)"

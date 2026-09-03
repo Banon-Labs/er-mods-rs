@@ -75,7 +75,7 @@ Wine/Proton: frida.attach() sees nothing. frida-gadget.dll is loaded into the ga
 [[natives]] entry and listens on 127.0.0.1:27042; connect to it as a REMOTE DEVICE. Use a
 gadget-bearing profile, e.g. /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3
 
-    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-ersc-session-trace.py
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-ersc-session-trace.py
 """
 
 from __future__ import annotations
@@ -86,9 +86,22 @@ import os
 import sys
 import threading
 
+#: The Seamless Co-op build every RVA, offset and state constant below was measured against.
+#:
+#: This is a GATE, checked in `main()` before the process is touched -- not a note. Seamless is
+#: third-party and the user updates it independently; v2.0.0 (2026-09-02) moved `show`
+#: 0x22d30->0x241a0, `cancel` 0x24460->0x258d0, the session state field +0x110->+0x150, its guard
+#: +0x10c->+0x14c, and changed the cancel constant 0x22->0x23. Only `show()` verifies a prologue
+#: before hooking, so on a moved build the other five hooks attach to whatever now occupies the
+#: offset and report plausible nonsense.
+#:
+#: Bumping this is a claim that every constant below has been RE-MEASURED against the new build,
+#: not merely that the new build boots. `scripts/locate-ersc-entry-points.py` is the measurement.
+MEASURED_ERSC_VERSION = "1.9.9"
+
 GADGET = "127.0.0.1:27042"
 DEFAULT_OUT = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/ersc-session-trace.jsonl"
 )
 
@@ -630,6 +643,25 @@ def main() -> int:
         print(f"REFUSING: {args.out} is inside the repo.", file=sys.stderr)
         return 2
 
+    # Every RVA, session-field offset and state constant in this file was measured against ONE
+    # Seamless Co-op build. Refuse before touching the process rather than after, because the
+    # failure mode here is not a crash. `--auto-cancel` CALLS `ersc+0x24460`; on a build where
+    # that offset holds something else, this makes an indirect call to an arbitrary address
+    # inside a live co-op session, with arguments shaped for a different function. Everything
+    # else silently mis-reads: `S+0x110` on a build that moved the field to `+0x150` returns a
+    # neighbouring member and prints a confident, wrong state name.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import ersc_identify
+    except ImportError as why:  # pragma: no cover - the helper sits beside this file
+        print(f"REFUSING: cannot import ersc_identify to check the build: {why}", file=sys.stderr)
+        return 2
+    try:
+        ersc_identify.require_version(MEASURED_ERSC_VERSION)
+    except ersc_identify.WrongBuild as why:
+        print(f"REFUSING: {why}", file=sys.stderr)
+        return 2
+
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except (AttributeError, ValueError):
@@ -641,7 +673,7 @@ def main() -> int:
         print(
             "ERROR: frida is not importable. uv provisions it per-run:\n"
             "  uv run --with frida python3 "
-            "/home/banon/projects/er-effects-rs/scripts/frida-ersc-session-trace.py",
+            "/home/banon/projects/er-mods-rs/scripts/frida-ersc-session-trace.py",
             file=sys.stderr,
         )
         return 7

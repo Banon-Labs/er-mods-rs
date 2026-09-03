@@ -338,6 +338,7 @@ fn install_save_job_body_observer() -> bool {
     let bound = match verify(
         SL_SAVE_JOB_BODY_RVA,
         SL_SAVE_JOB_BODY_SIG,
+        SL_SAVE_JOB_BODY_SIG_MASK,
         "SLSaveSessionJobBody",
     ) {
         Some(address) => {

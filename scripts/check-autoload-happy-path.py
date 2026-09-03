@@ -8,11 +8,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# `experiments` is a directory module (crates/er-effects-rs/src/experiments/{mod,save_redirect,trace,
+# `experiments` is a directory module (crates/er-quickload/src/experiments/{mod,save_redirect,trace,
 # startup_hooks,input_block,own_load,...}.rs). The autoload happy-path tokens and
 # function bodies may live in any submodule, so treat the whole module as one
 # concatenated source for these fail-closed string/fn-body checks.
-RUNTIME_SRC = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+RUNTIME_SRC = REPO_ROOT / "crates" / "er-quickload" / "src"
 EXPERIMENTS_DIR = RUNTIME_SRC / "experiments"
 EXPERIMENTS = RUNTIME_SRC / "experiments.rs"  # legacy single-file fallback
 # The title/autoload/switch cluster moved into the er-title-flow crate
@@ -80,12 +80,20 @@ def read_module_tree(root_file: Path, module_dir: Path | None = None) -> str:
     return "\n".join(parts)
 
 
+def read_title_flow() -> str:
+    """The er-title-flow crate, which now owns part of what these checks assert on.
+
+    The title/autoload cluster is being extracted crate by crate, so a name this gate pins can
+    legitimately move from `er-quickload/src` into `er-title-flow/src` without anything about the
+    feature changing. Both the `experiments` and the `lib` blobs therefore include this crate: a
+    substring assertion that stops matching because a declaration moved is the checker reporting a
+    refactor as feature removal, which is exactly what `read_module_tree` was introduced to stop.
+    """
+    return read_module_tree(TITLE_FLOW_DIR / "lib.rs", TITLE_FLOW_DIR)
+
+
 def read_experiments() -> str:
-    return (
-        read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR)
-        + "\n"
-        + read_module_tree(TITLE_FLOW_DIR / "lib.rs", TITLE_FLOW_DIR)
-    )
+    return read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR) + "\n" + read_title_flow()
 
 
 def rust_fn_body(source: str, name: str) -> str:
@@ -113,12 +121,43 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def classifier_reaches(body: str, source: str, *tokens: str) -> bool:
+    """Does `body` establish `tokens`, either inline or through a named helper it calls?
+
+    THE CHECK MUST FOLLOW AN EXTRACTION, OR IT PUNISHES ONE. These assertions read a function body
+    for the constants that prove the Continue classifier considers both accept predicates and the
+    `_Do_call` identity. On 2026-08-30 those comparisons were extracted into
+    `accept_predicate_is_idle`, `accept_predicate_is_native` and `continue_job_identity_matches` --
+    named, documented, and each screening a REFUSED (zero) resolution before comparing, which the
+    four copies they replaced did not. Reading only the caller's body, this gate scored that as
+    three regressions.
+
+    So a token counts when it appears in the body OR in the body of a helper the body calls. The
+    invariant is unchanged -- the classifier must still be built from these constants -- and the
+    separate assertions below hold each helper to resolving them for the running build rather than
+    adding them to a raw module base, which is the defect this whole migration is about.
+    """
+    reachable = body
+    for helper in CONTINUE_CLASSIFIER_HELPERS:
+        if f"{helper}(" in body:
+            reachable += rust_fn_body(source, helper)
+    return all(token in reachable for token in tokens)
+
+
 def calls_in_order(source: str, first: str, second: str) -> bool:
     """Whether two exact call sites exist in this order in one runtime function body."""
     first_at = source.find(first)
     second_at = source.find(second)
     return first_at >= 0 and second_at >= 0 and first_at < second_at
 
+
+# The named predicates the Continue classifier is allowed to be spelled through. Each one resolves
+# its RVAs for the running build and refuses a zero resolution before comparing.
+CONTINUE_CLASSIFIER_HELPERS = (
+    "accept_predicate_is_idle",
+    "accept_predicate_is_native",
+    "continue_job_identity_matches",
+)
 
 READINESS_HELPERS = {
     "product_core_autoload_ready",
@@ -269,6 +308,10 @@ def main() -> int:
     constants = read_module_tree(CONSTANTS, RUNTIME_SRC / "constants")
     if constants:
         lib += "\n" + constants
+    # The autoload_state / return_title / own_load_pump constant tables moved out of
+    # `RUNTIME_SRC/constants` into er-title-flow; the RVAs, offsets and hook-original statics the
+    # `lib` assertions below pin are declared there now.
+    lib += "\n" + read_title_flow()
     runtime_source = lib + "\n" + experiments
     stage = read(STAGE_SCRIPT)
     telemetry = read_module_tree(TELEMETRY, RUNTIME_SRC / "telemetry")
@@ -330,15 +373,31 @@ def main() -> int:
     require("PRODUCT_AUTOLOAD_ARMED.store" in arm_body, "product arm must latch PRODUCT_AUTOLOAD_ARMED", failures)
     require("append_autoload_debug" not in arm_body, "product arm must not perform early debug/file I/O", failures)
     # DEPRECATE-ENV-MARKER-GATE-ALLOWLISTS-2026-07-19: env/marker feature gates are forbidden. The
-    # direct_menu_load/product_core experiment is now a DISABLED experiment (experimental_direct_menu_
-    # load_enabled() returns false with no env/marker read), which keeps it out of the product path
-    # even more strongly than the former env/file gate. Assert it is NOT env/marker-gated.
-    direct_menu_load_gate = rust_fn_body(experiments, "experimental_direct_menu_load_enabled")
+    # direct_menu_load/product_core experiment is a DISABLED experiment (the gate is a literal false
+    # with no env/marker read), which keeps it out of the product path even more strongly than the
+    # former env/file gate. Assert it is NOT env/marker-gated.
+    #
+    # The product-side `fn experimental_direct_menu_load_enabled` was deleted as permanently-false
+    # dead code; er-title-flow still declares the seam field, so what has to stay literal-false is
+    # now the BOOTSTRAP WIRING, not a function body. Check whichever of the two exists -- the
+    # er-title-flow shim body remains reachable here, and the wiring check is what actually pins the
+    # value the shim returns.
+    direct_menu_load_gate = optional_rust_fn_body(experiments, "experimental_direct_menu_load_enabled")
+    if direct_menu_load_gate is not None:
+        require(
+            "std::env::var" not in direct_menu_load_gate
+            and "er-quickload-" not in direct_menu_load_gate,
+            "direct_menu_load/product_core experiment must not be env/marker-gated; it is a disabled "
+            "experiment, neither product default nor a runtime knob",
+            failures,
+        )
     require(
-        "std::env::var" not in direct_menu_load_gate
-        and "er-effects-" not in direct_menu_load_gate,
-        "direct_menu_load/product_core experiment must not be env/marker-gated; it is a disabled "
-        "experiment, neither product default nor a runtime knob",
+        "experimental_direct_menu_load_enabled: || false," in read_module_tree(
+            RUNTIME_SRC / "lib.rs", RUNTIME_SRC / "lib_parts"
+        )
+        or direct_menu_load_gate is not None,
+        "the er-title-flow experimental_direct_menu_load_enabled seam must be wired to a literal "
+        "false; the direct_menu_load/product_core experiment is disabled, not a runtime knob",
         failures,
     )
 
@@ -353,7 +412,7 @@ def main() -> int:
         "!save_override_telemetry_only()" in title_cover_gate
         and "autoload_disabled()" in title_cover_gate
         and "std::env::var" not in title_cover_gate
-        and "er-effects-" not in title_cover_gate,
+        and "er-quickload-" not in title_cover_gate,
         "title native visual suppression must be default-on for real autoload runs without a new env/file gate",
         failures,
     )
@@ -368,9 +427,17 @@ def main() -> int:
         "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
         failures,
     )
+    # The factory is pinned as the SHARED constant, not as a second literal. It used to be pinned
+    # here as `0x7acbf0`, which is 0xf0 into `FUN_1407acb00` and lands on the third byte of a
+    # `mov` -- a "RE-proven anchor" that was neither an instruction boundary nor a function entry.
+    # The cause is recorded beside the constant: a `-0xf0` Ghidra-dump shift applied where the
+    # 1.16.2 shift is zero. Pinning the alias means this gate now checks that the two agree
+    # instead of keeping a copy that can drift on its own.
     require(
         "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0" in lib
-        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0" in lib
+        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize =" in lib
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA as usize" in lib
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA: u32 = 0x007acb00" in lib
         and "TITLE_NATIVE_MENU_VISUAL_NAME: &str = \"05_000_Title\"" in lib,
         "title native visual suppression must pin the RE-proven BeginTitle wrapper/factory/05_000_Title anchors",
         failures,
@@ -409,8 +476,14 @@ def main() -> int:
         failures,
     )
 
+    # `menu_window_latch_enabled` was DELETED as permanently-false dead code (its whole body was the
+    # literal `false`, so the hook it gated could only ever install via `product_autoload_enabled()`).
+    # A deleted gate satisfies "not part of the product core path" outright, so this is an optional
+    # lookup rather than a hard one -- it re-arms the moment anyone reintroduces the gate.
     for legacy_gate in ("live_dialog_enabled", "menu_window_latch_enabled"):
-        body = rust_fn_body(experiments, legacy_gate)
+        body = optional_rust_fn_body(experiments, legacy_gate)
+        if body is None:
+            continue
         require(
             "product_autoload_enabled()" not in body,
             f"{legacy_gate} must remain opt-in and not be part of the product core path",
@@ -448,8 +521,12 @@ def main() -> int:
     )
     continue_item_body = rust_fn_body(experiments, "product_continue_item_action")
     require(
-        "MENU_ITEM_ACCEPT_IDLE_RVA" in continue_item_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in continue_item_body
+        classifier_reaches(
+            continue_item_body,
+            experiments,
+            "MENU_ITEM_ACCEPT_IDLE_RVA",
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+        )
         and "constant false idle predicate" in continue_item_body
         and "return None" in continue_item_body,
         "product Continue item validation must reject the constant-false idle accept predicate before native submit",
@@ -459,8 +536,12 @@ def main() -> int:
     require(
         "captured semantic native Continue item" in menu_update_body
         and "semantic_continue_item" in menu_update_body
-        and "MENU_TITLE_CONTINUE_DOCALL_RVA" in menu_update_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in menu_update_body
+        and classifier_reaches(
+            menu_update_body,
+            experiments,
+            "MENU_TITLE_CONTINUE_DOCALL_RVA",
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+        )
         and "captured first title item as native Continue" not in menu_update_body,
         "product Continue capture must latch a semantic Continue item, not the first ticked MenuWindowJob",
         failures,
@@ -480,13 +561,35 @@ def main() -> int:
         and "cap_menu_window_job_native_ctor_b_7acb00" in experiments
         and "MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG" in lib
         and "MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item" in native_ctor_b_body
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in native_ctor_b_body
+        and classifier_reaches(
+            native_ctor_b_body,
+            experiments,
+            "MENU_ITEM_ACCEPT_NATIVE_RVA",
+            "0x007ad810",
+        )
         and "MENU_CONTINUE_ITEM" in native_ctor_b_body
-        and "0x007ad810" in native_ctor_b_body
-        and "0x007add70" not in native_ctor_b_body,
+        and "0x007add70" not in native_ctor_b_body
+        and "0x007add70" not in rust_fn_body(experiments, "accept_predicate_is_native"),
         "product diagnostics must hook native-accept MenuWindowJob constructor B without accepting idle rows",
         failures,
     )
+    # THE EXTRACTION IS ONLY AN IMPROVEMENT IF THE HELPER IS BETTER THAN WHAT IT REPLACED. Each
+    # Continue classifier must resolve its addresses for the RUNNING build and must refuse a zero
+    # resolution before comparing -- `game_data_addr` answers 0 for a refusal, and as a COMPARISON
+    # target a zero matches every unset field, which is worse than never matching at all.
+    for helper in CONTINUE_CLASSIFIER_HELPERS:
+        helper_body = rust_fn_body(experiments, helper)
+        require(
+            "game_data_addr" in helper_body
+            and (
+                "!= 0" in helper_body
+                or "!= TITLE_OWNER_SCAN_START_ADDRESS" in helper_body
+            ),
+            f"{helper} must resolve its RVAs for the running build and reject a zero resolution "
+            "before comparing",
+            failures,
+        )
+
     idle_ctor_body = rust_fn_body(experiments, "menu_window_job_idle_ctor_hook")
     require(
         "MENU_WINDOW_JOB_IDLE_CTOR_RVA" in lib
@@ -753,20 +856,20 @@ def main() -> int:
     # after the me3 production smoke passed: run me3-product-smoke-20260704-110507).
     require('profileVersion = "v1"' in stage, "release staging must write a v1 me3 ModProfile", failures)
     require("[[natives]]" in stage, "release staging profile must load the DLL as an me3 native", failures)
-    require("path = 'er_effects_rs.dll'" in stage, "release staging profile must reference the DLL relative to the profile (relocatable payload)", failures)
+    require("path = 'er_quickload.dll'" in stage, "release staging profile must reference the DLL relative to the profile (relocatable payload)", failures)
     require("dinput8.dll" not in stage, "release staging must not ship the removed LazyLoader proxy", failures)
     require("lazyLoad.ini" not in stage, "release staging must not ship the removed LazyLoader config", failures)
     require("dllModFolderName" not in stage, "release staging must not recreate the LazyLoader dllMods layout", failures)
     require("er_skip_splash_screens.dll" not in stage, "release staging must not include stale skip-splash DLLs", failures)
-    require("er-effects-autoload.txt.example" in stage, "release staging must include an autoload request example", failures)
+    require("er-quickload-autoload.txt.example" in stage, "release staging must include an autoload request example", failures)
     require(
         re.search(r"method=direct_menu_load", stage) is None,
         "release staging autoload example must not arm experimental direct_menu_load/product_core by default",
         failures,
     )
     require(
-        "er-effects-native-continue.txt.example" in stage
-        and "er-effects-pab-advance.txt.example" in stage,
+        "er-quickload-native-continue.txt.example" in stage
+        and "er-quickload-pab-advance.txt.example" in stage,
         "release staging must document the supported native Continue + PAB zero-input gates",
         failures,
     )
@@ -877,9 +980,14 @@ def main() -> int:
         and "idle_continue_insert_match" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_HITS" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA" in experiments
-        and "MENU_CONTINUE_IDLE_INSERT_CALLER_RVA" in experiments
-        and "MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA" in experiments
-        and "MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA" in experiments
+        # The idle-insert caller attribution used to be three raw 1.16.2 constants
+        # (`MENU_CONTINUE_IDLE_INSERT_CALLER_RVA` / `_START_RVA` / `_END_RVA`) compared straight
+        # against a live stack frame. Those are mid-function return addresses, which the
+        # 1.16.2 -> 1.17 address map structurally cannot carry, so on a moved build they matched
+        # nothing and said nothing. They are now a containing function plus offsets, resolved
+        # through these two helpers -- which is what this gate should be asserting is wired.
+        and "menu_continue_idle_insert_call_site" in experiments
+        and "menu_continue_idle_insert_caller_band" in experiments
         and "callstack_contains_game_rva" in experiments
         and "TASK_ENQUEUE_GENERIC_HITS" in experiments
         and "TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA" in experiments

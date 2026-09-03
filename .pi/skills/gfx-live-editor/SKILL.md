@@ -32,8 +32,8 @@ Use these files as the reference implementation:
 - editor server/web UI: `scripts/profile-05-010-editor.py`
 - rebuild helper: `scripts/rebuild-profile-05-010-layout.sh`
 - GFX generator integration: `crates/er-gfx/examples/make_05_010_stats.rs`
-- runtime MemoryFile serving: `crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs`
-- DLL runtime bridge: `crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/profile_05_010_editor_runtime.rs`
+- runtime MemoryFile serving: `crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs`
+- DLL runtime bridge: `crates/er-quickload/src/experiments/startup_hooks/quit_menu/profile_05_010_editor_runtime.rs`
 - hook wiring examples: `profile_row_populate_hook` / `profile_current_row_populate_hook` in the quit-menu startup hooks.
 
 For a new surface, create parallel names instead of overloading `05_010` paths:
@@ -124,12 +124,12 @@ Required checks:
 1. `python3 scripts/<surface>-editor.py --self-test`
 2. `cargo fmt --all -- --check` or `cargo fmt --all` then check the diff
 3. relevant `cargo test -p er-gfx <surface-filter> -- --nocapture`
-4. `cargo xwin check -p er-effects-rs --target x86_64-pc-windows-msvc`
+4. `cargo xwin check -p er-quickload --target x86_64-pc-windows-msvc`
 5. `scripts/rebuild-<surface>-layout.sh`
 6. headless browser/CDP smoke for the editor
 7. release DLL build when runtime code changed
 8. approved Elden Ring relaunch; do not validate a newly built DLL in an already-running process
-9. module proof with `linux_x86_debug_attach_list_modules`: loaded `er_effects_rs.dll` path must be the intended worktree DLL
+9. module proof with `linux_x86_debug_attach_list_modules`: loaded `er_quickload.dll` path must be the intended worktree DLL
 10. telemetry/debug logs are fresh for this process and show the expected feature counters, GFX serve fingerprint, or build/hash evidence
 11. navigate to the target screen; wait for `status.txt` ack from the real DLL
 12. save in `live_runtime`; verify ack sequence advances, protocol version matches, active surface and selected kind/name match, and applied/unsupported counts are meaningful

@@ -21,7 +21,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SIGNAL = REPO_ROOT / ".cupcake" / "signals" / "last_assistant_idle_hold.sh"
 
-PROJECT_DIR = "/fake/project/er-effects-rs"
+PROJECT_DIR = "/fake/project/er-quickload"
 
 
 def user(text: str) -> dict:

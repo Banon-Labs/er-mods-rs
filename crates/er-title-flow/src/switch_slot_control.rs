@@ -3,7 +3,7 @@
 // same `title` module (experiments/title.rs), so module scope is identical to the original.
 /// Path of the harness control file carrying the next switch's target slot (a decimal slot index).
 fn switch_slot_control_path() -> Option<std::path::PathBuf> {
-    game_directory_path().map(|d| d.join("er-effects-switch-slot.txt"))
+    game_directory_path().map(|d| d.join("er-quickload-switch-slot.txt"))
 }
 
 /// Eligibility of the in-world session for a programmatic switch, plus a best-effort MoveMapStep step
@@ -22,7 +22,7 @@ unsafe fn switch_world_resident_state(base: usize) -> (bool, i32) {
     // deterministic control-file poller defer forever (9873x, 'eligible=false') once sq-repro -- which
     // used to open the menu via nav -- was disabled, even though the char was fully movable. bd
     // DECISIVE-poller-eligibility-menujob-overconservative-arm-is-menufree-2026-07-21.
-    let _menu_job = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+    let _menu_job = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
         .filter(|&m| m > 0x10000)
         .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) })
         .unwrap_or(0);
@@ -66,13 +66,13 @@ pub unsafe fn switch_slot_arm_programmatic(base: usize, slot: i32) {
     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);
     // Clear the stale CSMenuMan->disableSaveMenu (+0x13c) so the teardown is not gated (switch-2 safety).
     if let Some(csmm) =
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.filter(|&m| m > 0x10000)
+        unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }.filter(|&m| m > 0x10000)
     {
         unsafe {
             *((csmm + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) as *mut u8) = 0;
         }
     }
-    let menudata = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+    let menudata = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
         .filter(|&m| m > 0x10000)
         .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
         .filter(|&d| d > 0x10000);

@@ -59,11 +59,11 @@ connects to it as a REMOTE DEVICE. Launch with a gadget-bearing profile:
 RUN IT (frida is provisioned per-run by uv; nothing is installed system-wide):
 
     uv run --with frida python3 \
-        /home/banon/projects/er-effects-rs/scripts/frida-invasion-mechanism-trace.py
+        /home/banon/projects/er-mods-rs/scripts/frida-invasion-mechanism-trace.py
 
 SELFTEST (no game, no frida -- proves the verdict logic):
 
-    python3 /home/banon/projects/er-effects-rs/scripts/frida-invasion-mechanism-trace.py --selftest
+    python3 /home/banon/projects/er-mods-rs/scripts/frida-invasion-mechanism-trace.py --selftest
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ import threading
 
 GADGET = "127.0.0.1:27042"
 DEFAULT_OUT = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/invasion-mechanism-trace.jsonl"
 )
 
@@ -811,7 +811,7 @@ def main() -> int:
         print(
             "ERROR: frida is not importable. uv provisions it per-run:\n"
             "  uv run --with frida python3 "
-            "/home/banon/projects/er-effects-rs/scripts/frida-invasion-mechanism-trace.py",
+            "/home/banon/projects/er-mods-rs/scripts/frida-invasion-mechanism-trace.py",
             file=sys.stderr,
         )
         return 7

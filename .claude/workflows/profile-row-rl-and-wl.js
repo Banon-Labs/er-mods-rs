@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/home/banon/projects/er-effects-rs'
+const REPO = '/home/banon/projects/er-mods-rs'
 
 const HOUSE_RULES = `
 You are investigating the repo at ${REPO} (branch research/quit-menu-load-ui-parity). READ-ONLY.
@@ -55,7 +55,7 @@ Field geometry lives in crates/er-gfx/profile_05_010_layout.toml, which IS the s
   ErCharStats        x=-230  w=484  align=center  (renders "VIG 50 MND 10 END 50 STR 21 ...")
   ErStats            x=-324  w=587  align=left    (BLANK on character rows; used by browse rows)
 
-Known RE, recorded in crates/er-effects-rs/src/constants/stats_panel_text.rs:118-151 \u2014 READ THAT
+Known RE, recorded in crates/er-quickload/src/constants/stats_panel_text.rs:118-151 \u2014 READ THAT
 COMMENT BLOCK FIRST, it is dense and load-bearing:
   * StaticText_110502 is ENGINE-populated. The named-child binder hands every child name to the FMG
     static-text pass FUN_14074c540, which matches the "StaticText_" prefix from the table at
@@ -130,9 +130,9 @@ ${CONTEXT}
 YOUR LANE: how do we make the caption render "RL" instead of "Level"?
 
 Investigate, in order:
-1. Read crates/er-effects-rs/src/constants/stats_panel_text.rs around lines 100-200 in full.
+1. Read crates/er-quickload/src/constants/stats_panel_text.rs around lines 100-200 in full.
 2. Find every place the DLL already writes text into a ProfileSelect row field. Start from
-   crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs
+   crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs
    (it is large \u2014 find the SetText helpers, the row text pass, apply_row_slot_info_visibility around
    line 1240, and profile_editor_live_text_for_field around line 777). Establish EXACTLY which
    mechanism successfully writes ErStats / ErCharStats / DriveCell_* today, and whether that same

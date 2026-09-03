@@ -30,11 +30,11 @@ The game must therefore be launched with a gadget-bearing profile, e.g.
 /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3.
 
 RUN IT (uv provisions frida per-run; nothing is installed system-wide):
-    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --list
-    uv run --with frida python3 /home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --module ersc.dll
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-dump-module.py --list
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-dump-module.py --module ersc.dll
 
 SELFTEST (no game, no frida -- proves the assembly logic before a live run is spent on it):
-    python3 /home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --selftest
+    python3 /home/banon/projects/er-mods-rs/scripts/frida-dump-module.py --selftest
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ def main() -> int:
             "ERROR: frida is not importable. It is deliberately not installed system-wide here; "
             "uv provisions it per-run:\n"
             "  uv run --with frida python3 "
-            "/home/banon/projects/er-effects-rs/scripts/frida-dump-module.py --list",
+            "/home/banon/projects/er-mods-rs/scripts/frida-dump-module.py --list",
             file=sys.stderr,
         )
         return 7

@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +34,13 @@ IGNORED_FILES = {
     # drained" or "the display woke". The no-sleep rule targets runtime probes.
     Path("scripts/vm-sendkeys.py"),
     Path("scripts/vanilla-control-probe.py"),
+    # Per-DLL runtime sweep. Its `time.sleep` is the WATCH WINDOW -- the measurement itself --
+    # not synchronization: the question it answers is "is this DLL's thread-group leader still
+    # alive N seconds after launch", and N is the datum. Its stop conditions are real semaphores
+    # (/proc leader state `Z`, or the process disappearing), never a timer; the window only bounds
+    # how long a surviving game is watched. There is no readiness primitive for "nothing has gone
+    # wrong yet", which is precisely what a boot verdict asserts.
+    Path("scripts/sweep-dll-1170-runtime.py"),
     # Sampling profiler / flight recorder, NOT a runtime probe that waits on a readiness
     # signal. Its `time.sleep` is the sample PERIOD -- the measurement instrument itself --
     # not synchronization: the tool exists to record a thread's state at a fixed rate right
@@ -48,6 +57,11 @@ IGNORED_FILES = {
     # contents -- and their deadlines are backstops, never the synchronisation.
     Path("scripts/frida-lobby-watch-members.py"),
     Path("scripts/frida-hunt-drive-query.py"),
+    # Stack sampler for a wedged game, same class as wine-thread-death-watch.py above: its
+    # `time.sleep` is the CPU SAMPLE PERIOD, and its stop condition is an observed state (the
+    # process flatlining, or its leader going Z), never a timer. There is no readiness primitive
+    # for "the game has stopped doing work" -- measuring whether it has IS the tool.
+    Path("scripts/er-wedge-stacks.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",
@@ -82,6 +96,17 @@ PYTHON_SUBPROCESS_FUNCTIONS = {
     "check_call",
     "check_output",
     "call",
+}
+
+
+# Files allowed to call `thread::yield_now()` directly, and why each one is not the hazard the
+# `rust-unbounded-yield-spin` rule exists to catch.
+YIELD_SPIN_ALLOWED = {
+    # The helper itself: one yield per backed-off round IS the fix.
+    Path("crates/er-game-base/src/wait.rs"),
+    # Already bounded by an `Instant` deadline a few milliseconds out, not by hope.
+    Path("crates/er-loading-portrait-core/src/portrait_shared.rs"),
+    Path("crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_swap_profile_table.rs"),
 }
 
 
@@ -122,6 +147,15 @@ RULES = [
         re.compile(r"\b(?:std::)?thread::sleep\s*\("),
         {".rs"},
         "Replace thread sleep with a readiness/event handshake, task-frame callback, channel receive, or explicit driver acknowledgement.",
+    ),
+    Rule(
+        "rust-unbounded-yield-spin",
+        re.compile(r"\b(?:std::)?thread::yield_now\s*\(\s*\)"),
+        {".rs"},
+        "Use er_game_base::wait::poll_until (bounded) or ::back_off (user-space spin between "
+        "yields). A bare yield_now() per attempt is a wineserver round trip per attempt: on "
+        "2026-08-29 two such loops starved the wineserver and the game managed 104 CPU ticks in "
+        "three minutes -- no window, no crash, nothing in any log.",
     ),
     Rule(
         "rust-async-sleep",
@@ -220,22 +254,56 @@ def tracked_relative_paths() -> set[Path] | None:
     return {Path(name) for name in names if name}
 
 
+def candidate_relative_paths(tracked: set[Path] | None) -> Iterator[Path]:
+    """Repo-relative paths to filter, taken from the cheapest source that is complete.
+
+    When git answered, the tracked set IS the answer: every path this gate can possibly scan is a
+    tracked one (the untracked-scratch filter below used to discard the rest anyway), so walking the
+    filesystem to rediscover them is pure waste. Measured 2026-08-31 at loadavg ~9 on 16 cores:
+    `REPO_ROOT.rglob("*")` enumerates 1,117,583 entries and `source_files()` took 69.2s, against
+    2.1s for the scan it feeds -- 97% of this gate's wall clock spent walking `.worktrees`, `.claude`
+    and `target` to find 1112 files that `git ls-files` lists in 0.011s. That is the same defect
+    `audit-fromsoft-candidates.py` was found to have on the same day.
+
+    When git is UNAVAILABLE, fall back to the filesystem walk so the gate fails OPEN and still scans
+    everything -- it must never silently narrow itself just because git is missing. That walk PRUNES
+    the ignored directories as it descends rather than filtering their contents afterwards, which is
+    what `rglob` forced. Pruning cannot change the result: an entry under an ignored directory has
+    that directory in `relative.parts` and was already discarded. It is purely the difference between
+    reading `target/` and `.worktrees/` and then throwing them away, and never reading them at all.
+    """
+    if tracked is not None:
+        return iter(tracked)
+    return walk_untracked_fallback()
+
+
+def walk_untracked_fallback() -> Iterator[Path]:
+    for directory, subdirectories, filenames in os.walk(REPO_ROOT):
+        subdirectories[:] = [name for name in subdirectories if name not in IGNORED_DIRECTORIES]
+        base = Path(directory)
+        for name in filenames:
+            yield (base / name).relative_to(REPO_ROOT)
+
+
 def source_files() -> list[Path]:
     tracked = tracked_relative_paths()
     paths: list[Path] = []
-    for path in REPO_ROOT.rglob("*"):
-        if not path.is_file():
+    for relative in candidate_relative_paths(tracked):
+        # Suffix first: it is a pure string test, so on the git-less fallback path it rejects the
+        # overwhelming majority of entries before they cost a stat() syscall.
+        if relative.suffix not in SOURCE_SUFFIXES:
             continue
-        relative = path.relative_to(REPO_ROOT)
         if relative in IGNORED_FILES:
             continue
         if any(part in IGNORED_DIRECTORIES for part in relative.parts):
             continue
-        # Skip untracked scratch: not part of the committed tree, so it must not gate a tracked commit.
-        if tracked is not None and relative not in tracked:
+        path = REPO_ROOT / relative
+        # `git ls-files` reports the INDEX, so a tracked path can be absent from the working tree
+        # (deleted but not yet committed); a broken symlink reaches here from either source. Both
+        # were excluded by the old walk's `is_file()` and are excluded by this one.
+        if not path.is_file():
             continue
-        if path.suffix in SOURCE_SUFFIXES:
-            paths.append(path)
+        paths.append(path)
     return sorted(paths)
 
 
@@ -411,6 +479,8 @@ def scan_file(path: Path) -> list[Finding]:
             continue
         for rule in RULES:
             if suffix not in rule.applies_to:
+                continue
+            if rule.code == "rust-unbounded-yield-spin" and relative in YIELD_SPIN_ALLOWED:
                 continue
             if rule.pattern.search(searchable):
                 findings.append(Finding(relative, line_number, rule, line))

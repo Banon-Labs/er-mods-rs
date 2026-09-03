@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
-"""Build a user-facing er-effects-rs release helper package.
+"""Build a user-facing er-quickload release helper package.
 
 This package intentionally excludes the actual DLL and all save files. It contains
 only docs/examples/launcher glue so it is safe to share without bundling binaries
 or user/game save data.
+
+er-artifact-redirect: single-slot -- the generated `run-er-quickload-release.sh` sets no `ER_QUICKLOAD_*`, so an end user's logs land beside eldenring.exe under one predictable set of names they can attach to a bug report, instead of a tree of timestamped run directories.
+
+That exemption is stated here rather than left silent because the previous shape of this audit
+could not tell "deliberately single-slot" from "compliant": this generator produces no `me3 launch`
+command of its own (the launch lives inside the heredoc string it writes), so it appeared in no
+report at all -- which reads exactly like a clean tree.
+
+WHAT IT COSTS THE USER, SAID PLAINLY. `er_game_base::log::begin_fresh_run` keeps ONE previous
+generation as `<name>.prev`, so a user's second launch after a crash overwrites the crash they were
+trying to report. Whether the shipped launcher should mint a per-run directory (and where -- next
+to the game, or under the user's data dir) is a PRODUCT decision about what an end user should
+find, not a bug in this generator, and it is deliberately not made here.
 """
 
 from __future__ import annotations
@@ -20,9 +33,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = REPO_ROOT / "target" / "deliverables"
-DEFAULT_NAME = "er-effects-user-release"
+DEFAULT_NAME = "er-quickload-user-release"
 FORBIDDEN_EXACT_NAMES = {
-    "er_effects_rs.dll",
+    "er_quickload.dll",
     "ersc.dll",
     "ER0000.sl2",
     "ER0000.co2",
@@ -90,28 +103,28 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
     (stage_dir / "README.md").write_text(
         textwrap.dedent(
             f"""
-            # er-effects-rs user release helper package
+            # er-quickload user release helper package
 
             Package: `{package_name}`  
             Source commit: `{commit}`
 
             This package intentionally does **not** contain:
 
-            - `er_effects_rs.dll`
+            - `er_quickload.dll`
             - Elden Ring save files (`.sl2`, `.co2`, `.bak`)
             - Seamless Co-op's `ersc.dll` or any other DLL
 
             ## What this package contains
 
-            - `run-er-effects-release.sh` — Linux/Proton ME3 launcher helper.
+            - `run-er-quickload-release.sh` — Linux/Proton ME3 launcher helper.
             - `quicksave.me3.template` — example product-DLL ME3 profile with no empty savefile override.
             - `save-picker-standalone.me3.template` — example standalone boot save-picker profile.
-            - `er-effects.toml.example` — optional game-directory config template.
+            - `er-quickload.toml.example` — optional game-directory config template.
             - `SHA256SUMS.txt` and `PACKAGE-MANIFEST.txt` — package audit artifacts.
 
             ## Build the DLL yourself
 
-            From the `er-effects-rs` repo:
+            From the `er-quickload` repo:
 
             ```bash
             cargo xwin build --release --target x86_64-pc-windows-msvc
@@ -120,7 +133,7 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             That creates the product DLL at:
 
             ```text
-            /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
+            /home/banon/projects/er-mods-rs/target/x86_64-pc-windows-msvc/release/er_quickload.dll
             ```
 
             The standalone boot save-picker surface/staging DLL is built separately:
@@ -132,7 +145,7 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             It creates:
 
             ```text
-            /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_save_picker.dll
+            /home/banon/projects/er-mods-rs/target/x86_64-pc-windows-msvc/release/er_save_picker.dll
             ```
 
             This standalone picker DLL validates/plans picked saves through `er-save-redirect` and
@@ -144,15 +157,15 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             Run this package's helper and point it at your locally-built DLL:
 
             ```bash
-            ./run-er-effects-release.sh \
-              --dll /home/banon/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll \
+            ./run-er-quickload-release.sh \
+              --dll /home/banon/projects/er-mods-rs/target/x86_64-pc-windows-msvc/release/er_quickload.dll \
               --steam-dir "$HOME/.local/share/Steam"
             ```
 
             Optional arguments:
 
             ```bash
-            --slot 0                         # writes slot to the game-directory er-effects.toml
+            --slot 0                         # writes slot to the game-directory er-quickload.toml
             --save-file /path/to/ER0000.sl2  # optional explicit save path; save is never copied into the package
             --boot-background-image /path/to/background.png
             --me3 /path/to/me3
@@ -160,7 +173,7 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             ```
 
             The helper generates a runtime-only ME3 profile under `.generated/` next to itself and
-            writes `er-effects.toml` in the game directory. Those generated files are local machine
+            writes `er-quickload.toml` in the game directory. Those generated files are local machine
             state and are not part of the release package.
             """
         ).strip()
@@ -178,9 +191,9 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             game = "eldenring"
 
             [[natives]]
-            # Replace this with the absolute path to your locally-built er_effects_rs.dll,
-            # or use run-er-effects-release.sh to generate a profile automatically.
-            path = '/absolute/path/to/er_effects_rs.dll'
+            # Replace this with the absolute path to your locally-built er_quickload.dll,
+            # or use run-er-quickload-release.sh to generate a profile automatically.
+            path = '/absolute/path/to/er_quickload.dll'
             """
         ).lstrip(),
         encoding="utf-8",
@@ -203,11 +216,11 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
         encoding="utf-8",
     )
 
-    (stage_dir / "er-effects.toml.example").write_text(
+    (stage_dir / "er-quickload.toml.example").write_text(
         textwrap.dedent(
             """
-            # Optional: copy to er-effects.toml next to eldenring.exe in the game directory,
-            # or let run-er-effects-release.sh generate it there.
+            # Optional: copy to er-quickload.toml next to eldenring.exe in the game directory,
+            # or let run-er-quickload-release.sh generate it there.
             # All keys are optional.
 
             # slot = 0
@@ -228,7 +241,7 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
     )
 
     write_executable(
-        stage_dir / "run-er-effects-release.sh",
+        stage_dir / "run-er-quickload-release.sh",
         textwrap.dedent(
             r'''#!/usr/bin/env bash
             set -euo pipefail
@@ -245,10 +258,10 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
 
             usage() {
               cat <<'USAGE'
-            Usage: ./run-er-effects-release.sh --dll /path/to/er_effects_rs.dll [options]
+            Usage: ./run-er-quickload-release.sh --dll /path/to/er_quickload.dll [options]
 
             Required:
-              --dll PATH                      Locally-built er_effects_rs.dll; not bundled here
+              --dll PATH                      Locally-built er_quickload.dll; not bundled here
 
             Options:
               --steam-dir DIR                 Steam root for ME3, e.g. "$HOME/.local/share/Steam"
@@ -260,8 +273,8 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
               --game NAME                     ME3 game name (default: eldenring)
               -h, --help                      Show this help
 
-            This helper writes .generated/er-effects.generated.me3 and a game-directory er-effects.toml,
-            then runs ME3. It does not set ER_EFFECTS_* product behavior env vars.
+            This helper writes .generated/er-quickload.generated.me3 and a game-directory er-quickload.toml,
+            then runs ME3. It does not set ER_QUICKLOAD_* product behavior env vars.
             USAGE
             }
 
@@ -286,10 +299,10 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
               esac
             done
 
-            [[ -n "$DLL_PATH" ]] || { echo "missing required --dll /path/to/er_effects_rs.dll" >&2; usage >&2; exit 2; }
+            [[ -n "$DLL_PATH" ]] || { echo "missing required --dll /path/to/er_quickload.dll" >&2; usage >&2; exit 2; }
             DLL_PATH="$(realpath "$DLL_PATH")"
             [[ -f "$DLL_PATH" ]] || { echo "DLL not found: $DLL_PATH" >&2; exit 2; }
-            [[ "$(basename "$DLL_PATH")" == "er_effects_rs.dll" ]] || { echo "expected DLL named er_effects_rs.dll: $DLL_PATH" >&2; exit 2; }
+            [[ "$(basename "$DLL_PATH")" == "er_quickload.dll" ]] || { echo "expected DLL named er_quickload.dll: $DLL_PATH" >&2; exit 2; }
             if [[ -n "$SAVE_FILE" ]]; then
               SAVE_FILE="$(realpath "$SAVE_FILE")"
               [[ -f "$SAVE_FILE" ]] || { echo "save file not found: $SAVE_FILE" >&2; exit 2; }
@@ -308,8 +321,8 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             [[ -f "$GAME_DIR/eldenring.exe" ]] || { echo "eldenring.exe not found in game directory: $GAME_DIR" >&2; exit 2; }
 
             GENERATED_DIR="$ROOT/.generated"
-            PROFILE_PATH="$GENERATED_DIR/er-effects.generated.me3"
-            CONFIG_PATH="$GAME_DIR/er-effects.toml"
+            PROFILE_PATH="$GENERATED_DIR/er-quickload.generated.me3"
+            CONFIG_PATH="$GAME_DIR/er-quickload.toml"
             mkdir -p "$GENERATED_DIR"
 
             python3 - "$PROFILE_PATH" "$CONFIG_PATH" "$DLL_PATH" "$GAME" "$SLOT" "$SAVE_FILE" "$BOOT_BACKGROUND_IMAGE" <<'PY'
@@ -336,7 +349,7 @@ def write_package_files(stage_dir: Path, package_name: str, commit: str) -> None
             )
 
             lines = [
-                '# Generated by run-er-effects-release.sh.',
+                '# Generated by run-er-quickload-release.sh.',
                 '# This file is local machine state; do not redistribute with saves or DLLs.',
             ]
             if slot:

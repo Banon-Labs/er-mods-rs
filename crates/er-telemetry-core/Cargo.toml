@@ -9,7 +9,7 @@ name = "er_telemetry_core"
 
 # er-telemetry-core is the telemetry subsystem lifted out of the product DLL. It
 # depends ONLY on er-game-base + upstream/sibling game libs, NEVER on product
-# (er-effects-rs) code. Product depends on THIS crate, not the reverse.
+# (er-quickload) code. Product depends on THIS crate, not the reverse.
 [target.'cfg(windows)'.dependencies]
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

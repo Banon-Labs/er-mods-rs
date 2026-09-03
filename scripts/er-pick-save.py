@@ -30,7 +30,7 @@ CORPUS ROOT
 `--root`, else `$ER_SAVE_CORPUS_ROOT`, else `<repo>/save-files`. The older enumerator in this
 directory still defaults to a `/mnt/a/...` WSL path that does not exist on this machine, so
 every run of it silently found nothing; the default here is the corpus that is actually
-present. Staged redirect subtrees (`er-effects-save-redirect-stage/`) are skipped -- they are
+present. Staged redirect subtrees (`er-quickload-save-redirect-stage/`) are skipped -- they are
 private copies the DLL writes, not sources.
 
 Usage:
@@ -55,7 +55,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORACLE_SCRIPT = REPO_ROOT / "scripts" / "save-slot-oracle.py"
 SAVE_REDIRECT_LIB = REPO_ROOT / "crates" / "er-save-redirect" / "src" / "lib.rs"
-STAGE_DIR_MARKER = "er-effects-save-redirect-stage"
+STAGE_DIR_MARKER = "er-quickload-save-redirect-stage"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -118,10 +118,34 @@ def eligible_saves(root: Path, container: str, expected_bytes: int) -> list[Path
 
 
 def occupied_slots(module, path: Path) -> list[dict]:
-    """Decode every slot of one save; return the occupied ones with their identity."""
+    """Decode every slot of one save; return the occupied ones with their identity.
+
+    OCCUPANCY IS THE `USER_DATA010.active_slot` BITMAP, not "the body decodes".
+
+    Deleting a character clears that bitmap and leaves the `USER_DATA00N` body in place, so a
+    deleted slot still decodes to a plausible name, level, runes and stats. Testing the body alone
+    therefore offers slots the game will not load, and this tool's whole contract is that the
+    character is KNOWN before anything launches (AGENTS.md's Autoload Identity Launch Gate).
+
+    MEASURED 2026-09-03: `save-files/50-Merchant-Unleveled/ER0000.sl2` decoded as TEN occupied
+    slots here while its bitmap holds exactly one, "Invader Merchant" level 50 in slot 0. The
+    APPDATA container decoded as ten against a bitmap of four. Worse, `--seed 2073568449` -- the
+    seed the `er-quickload` x `er-invasion-warp` conflict bisect ran four times -- picks slot 8 of
+    that Merchant file, a stale body in a container with one live character. Every one of those
+    "reproductions" was an invalid-slot launch, which is the boot path that faults at
+    `game+0x10043`; the bisect blamed a DLL for what its own save picker had set up.
+
+    An unreadable bitmap yields None and is treated as "cannot answer": the file is skipped
+    entirely rather than falling back to the body-only test that caused this.
+    """
     data = path.read_bytes()
+    bitmap = module.active_slot_bitmap(data)
+    if bitmap is None:
+        return []
     results = []
     for slot in range(module.SLOT_COUNT):
+        if not bitmap[slot]:
+            continue
         try:
             decoded = module.decode_save_slot(data, path, slot)
         except Exception:  # a slot that will not decode is not a launch target
@@ -227,6 +251,52 @@ def selftest() -> int:
 
     expected = expected_save_bytes()
     check(expected == 0x1BA03D0, f"the product's size invariant is read live ({expected})")
+
+    # THE REGRESSION THIS TOOL SHIPPED WITH, pinned so it cannot come back.
+    #
+    # Occupancy used to mean "the body decodes to a name and a level > 0". Deleting a character
+    # clears the `USER_DATA010.active_slot` bitmap and LEAVES the body, so every deleted slot was
+    # offered as a launch target. `--seed 2073568449` picked slot 8 of a container holding one
+    # character, and the four-run conflict bisect that ran on that seed was therefore four
+    # invalid-slot launches blamed on a DLL.
+    #
+    # Synthetic rather than corpus-dependent: two decodable slots, a bitmap that admits only the
+    # first. A tool that reports both has lost the rule again.
+    class _FakeModule:
+        SLOT_COUNT = 2
+
+        @staticmethod
+        def active_slot_bitmap(_data: bytes) -> list[bool]:
+            return [True, False]
+
+        @staticmethod
+        def decode_save_slot(_data: bytes, _path: Path, slot: int) -> dict:
+            return {"decoded_fields": {"name": f"Live{slot}", "level": 10 + slot}}
+
+        @staticmethod
+        def name_empty_like(name: str) -> bool:
+            return not name.strip()
+
+    class _FakePath:
+        @staticmethod
+        def read_bytes() -> bytes:
+            return b""
+
+    picked = occupied_slots(_FakeModule, _FakePath)
+    check(
+        [entry["slot"] for entry in picked] == [0],
+        "a slot the active_slot bitmap denies is NOT offered, even though its body decodes",
+    )
+
+    class _UnreadableBitmap(_FakeModule):
+        @staticmethod
+        def active_slot_bitmap(_data: bytes) -> None:
+            return None
+
+    check(
+        occupied_slots(_UnreadableBitmap, _FakePath) == [],
+        "an unreadable bitmap skips the file rather than falling back to the body-only test",
+    )
 
     try:
         root = resolve_root(None)

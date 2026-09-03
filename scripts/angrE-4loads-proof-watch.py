@@ -28,7 +28,7 @@ only a backstop. Screenshots are never consulted.
 
 Usage: python3 scripts/angrE-4loads-proof-watch.py [target_loads=4] [cap_seconds=1200] \
            [persist_seconds=12] [stall_seconds=150] [sustain_seconds=20]
-Env: ER_EFFECTS_TELEMETRY_PATH, ER_EFFECTS_CRASH_LOG_PATH (defaults under the Windows game dir).
+Env: ER_QUICKLOAD_TELEMETRY_PATH, ER_QUICKLOAD_CRASH_LOG_PATH (defaults under the Windows game dir).
 """
 import json
 import os
@@ -38,8 +38,8 @@ import time
 import threading
 
 GAME_DIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-TEL = os.environ.get("ER_EFFECTS_TELEMETRY_PATH", os.path.join(GAME_DIR, "er-effects-telemetry.json"))
-CRASH_LOG = os.environ.get("ER_EFFECTS_CRASH_LOG_PATH", os.path.join(GAME_DIR, "er-effects-crash-log.txt"))
+TEL = os.environ.get("ER_QUICKLOAD_TELEMETRY_PATH", os.path.join(GAME_DIR, "er-quickload-telemetry.json"))
+CRASH_LOG = os.environ.get("ER_QUICKLOAD_CRASH_LOG_PATH", os.path.join(GAME_DIR, "er-quickload-crash-log.txt"))
 
 TARGET = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 CAP = int(sys.argv[2]) if len(sys.argv) > 2 else 1200

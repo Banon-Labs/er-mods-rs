@@ -169,7 +169,16 @@ unsafe fn maybe_swap_world_map(base: usize, file: usize) {
         return;
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + MEMORY_FILE_VTABLE_RVA {
+    // RESOLVED, and never satisfied by zero -- same defect and same fix as the identical guard in
+    // `er-armament-icons::gfx_equip_hook`. The `MemoryFile` vtable moved 0x2ba4c80 -> 0x2ba7d70 on
+    // 1.17, so this comparison could not match and the map-movie swap stopped happening silently;
+    // and `game_data_addr` answers 0 on a refusal, which `unwrap_or(0)` above would have matched.
+    let memory_file_vtable = er_game_base::mem::game_data_addr(
+        base,
+        MEMORY_FILE_VTABLE_RVA,
+        "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+    );
+    if memory_file_vtable == 0 || vtable != memory_file_vtable {
         return; // not a MemoryFile -- an image or font stream
     }
     let data = unsafe { safe_read_usize(file + MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
@@ -375,8 +384,20 @@ pub unsafe fn install_world_map_gfx_hook(base: usize) -> usize {
         ));
         return 0;
     };
+    // `scan_unique` found this address by matching `PARSE_SIG` inside the RUNNING image's `.text`,
+    // so it is already a 1.17 address. `register_union_hook` would translate it against a table
+    // keyed by 1.16.2 RVAs -- a table that structurally cannot contain a runtime-derived address --
+    // and answer REFUSED, which is what was turning this hook off on 1.17 for an address the scan
+    // had got right. A ledger row would be worse than the refusal: the address would be translated
+    // a second time and land mid-function. The runtime-derived entry point skips the version
+    // TRANSLATION and keeps the validation -- `detour_site::write_site_is_sound` asks the running
+    // image's own `.pdata` whether this is a function entry with room for MinHook's five bytes.
     match unsafe {
-        er_hook::register_union_hook(address, parse_hook as er_hook::UnionFn, &ORIG_PARSE)
+        er_hook::register_union_hook_runtime_derived(
+            address,
+            parse_hook as er_hook::UnionFn,
+            &ORIG_PARSE,
+        )
     } {
         Ok(()) => {
             crate::standalone_log(format_args!(

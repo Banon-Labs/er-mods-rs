@@ -10,11 +10,11 @@
 # True(disarmed) vs False(armed) pins the product hold that deadlocks the armed native Continue; the
 # stream-overlap window is the dip mechanism in both arms.
 #
-# Crash logging is held default-on + CONSTANT in both arms (ER_EFFECTS_CRASH_LOG=1); RE-instrumentation
+# Crash logging is held default-on + CONSTANT in both arms (ER_QUICKLOAD_CRASH_LOG=1); RE-instrumentation
 # markers are left ABSENT. No product-feature toggle differs except MOD_ARMED itself.
 set -uo pipefail
 
-REPO="/home/choza/projects/er-effects-rs"
+REPO="/home/choza/projects/er-mods-rs"
 GAME_DIR="${GAME_DIR:-/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game}"
 CORPUS="${BOOT_FILE:-/mnt/a/Code Projects/Elden Ring Save Manager/data/save-files/100-Lilbro/ER0000.sl2}"
 ROOT="${AB_ROOT:-$REPO/target/runtime-probe/title-rebuild-ab-$(date +%H%M%S)}"
@@ -32,7 +32,7 @@ run_arm() { # $1=name ; remaining args = extra VAR=val env for the run
   shift
   echo "== ARM: $name =="
   rm -f "$GAME_DIR"/er-oracle-title-binding.jsonl "$GAME_DIR"/er-oracle-stream-overlap.jsonl
-  env "$@" ER_EFFECTS_CRASH_LOG=1 TEARDOWN_ON_TITLE_REBUILD=1 "BOOT_FILE=$CORPUS" \
+  env "$@" ER_QUICKLOAD_CRASH_LOG=1 TEARDOWN_ON_TITLE_REBUILD=1 "BOOT_FILE=$CORPUS" \
     ARTIFACT_DIR="$ROOT/$name" \
     bash "$REPO/scripts/run-vanilla-reload-agentdriven.sh" >"$ROOT/$name/run.log" 2>&1 || true
   cp -f "$GAME_DIR"/er-oracle-title-binding.jsonl "$ROOT/$name/" 2>/dev/null || true

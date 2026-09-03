@@ -9,7 +9,7 @@ Run: uv run --with capstone python3 scripts/scan-textid-bytes.py
 import struct
 import sys
 
-BIN = "/home/banon/projects/er-effects-rs/eldenring-deobf.bin"
+BIN = "/home/banon/projects/er-mods-rs/eldenring-deobf.bin"
 IMAGE_BASE = 0x140000000
 
 IDS = {

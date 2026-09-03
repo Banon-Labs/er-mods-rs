@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Reinforce the agreement/acknowledgement ban every turn (and catch interrupted-turn slips)
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: LOW
 #   id: ER-EFFECTS-NO-AUTHORITY-AGREEMENT-REMINDER

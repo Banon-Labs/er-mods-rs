@@ -175,6 +175,11 @@ impl ImguiRenderLoop for PathOverlay {
         // the process, so returning early here draws nothing for every OTHER overlay too.
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
         draw(ui);
+        // The watermark is NOT a guest -- it never registers one, because its loser path assumes
+        // whichever module hosts will carry its rows directly. `er-net-effects` and the watermark's
+        // own render loop both do; this one did not, so a run where THIS module won the overlay had
+        // no watermark at all and `er-build-watermark.log` fell silent after its claim line.
+        er_build_watermark_core::draw_rows(ui, path_log);
     }
 }
 
@@ -190,14 +195,39 @@ pub(crate) fn install(hmodule_raw: usize) {
         ));
         return;
     }
-    if !er_build_watermark_core::claim_owner() {
-        INSTALLED.store(0, Ordering::SeqCst);
-        path_log(format_args!(
-            "overlay: a module owns the overlay but refused a guest -- paths cannot be drawn. It \
-             is almost certainly built against a different hudhook/imgui than this DLL; rebuild \
-             the whole profile from one tree."
-        ));
-        return;
+    // The claim below waits for the game's window before touching the mutex, and every other
+    // would-be host waits on that same window. The probe above therefore ran before anyone could
+    // have designated themselves host, so losing the mutex here means one appeared in between --
+    // ask again rather than giving up on a stale answer.
+    match er_build_watermark_core::claim_overlay_ownership() {
+        er_build_watermark_core::OverlayClaim::Won => {}
+        er_build_watermark_core::OverlayClaim::LostToAnotherModule => {
+            if er_build_watermark_core::overlay_host::register_with_host_retrying(guest_draw) {
+                // INSTALLED stays set: this module is joined to an overlay and must not run the
+                // install path again.
+                path_log(format_args!(
+                    "overlay: another module won the overlay while this one waited for the \
+                     window; registered as a GUEST (no second Present hook)"
+                ));
+            } else {
+                INSTALLED.store(0, Ordering::SeqCst);
+                path_log(format_args!(
+                    "overlay: a module owns the overlay but would not accept a guest -- paths \
+                     cannot be drawn. The host speaks a different overlay ABI than this DLL's \
+                     {:#06x}; rebuild the whole profile from one tree.",
+                    er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG
+                ));
+            }
+            return;
+        }
+        er_build_watermark_core::OverlayClaim::NoWindow => {
+            INSTALLED.store(0, Ordering::SeqCst);
+            path_log(format_args!(
+                "overlay: this process never got a sized top-level window, so there is nothing \
+                 to draw paths on and no host to join. Not an ABI problem."
+            ));
+            return;
+        }
     }
     let hmodule = hudhook::windows::Win32::Foundation::HINSTANCE(hmodule_raw as *mut c_void);
     match hudhook::Hudhook::builder()

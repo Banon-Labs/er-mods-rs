@@ -20,7 +20,7 @@ mod hang;
 /// Publish the live `CS::LoadingScreenData*` for the hang watchdog's loading-screen oracle.
 ///
 /// Re-exported because `mod hang` is private: the function is documented as the entry point for a
-/// host DLL that is not `er_effects_rs.dll`, and such a host is by definition another crate.
+/// host DLL that is not `er_quickload.dll`, and such a host is by definition another crate.
 pub use hang::publish_loading_screen_data;
 
 const DEFAULT_LOG_FILE: &str = "er-crash-log.txt";
@@ -629,8 +629,71 @@ unsafe fn pe_size_of_image(base: usize) -> Option<usize> {
     unsafe { safe_read_usize(optional + PE_SIZE_OF_IMAGE_IN_OPTIONAL) }.map(|v| v & 0xffff_ffff)
 }
 
+/// Nested `crash_vectored_handler` entries the re-entrancy latch refused.
+///
+/// THE VEH stack-overflow semaphore for this shell. Non-zero means describing one fault faulted
+/// again on the same thread. See [`enter_veh`].
+#[cfg(windows)]
+static VEH_REENTRANT_REFUSALS: AtomicUsize = AtomicUsize::new(0);
+
+/// Nested VEH entries the latch refused. Non-zero says the report you are reading is the
+/// outermost of a pile and the FIRST record is the real fault.
+#[cfg(windows)]
+pub fn veh_reentrant_refusals() -> usize {
+    VEH_REENTRANT_REFUSALS.load(Ordering::SeqCst)
+}
+
+/// `Some(token)` for the outermost VEH entry on this thread ANYWHERE IN THE PROCESS, `None` for a
+/// nested one.
+///
+/// # Why a crash logger of all things needs this
+///
+/// Describing a fault reads memory the fault just said is not trustworthy -- the faulting thread's
+/// stack, its registers' pointees, the loader list -- so the reporting path can fault in turn, and
+/// a VEH is re-entered for its OWN faults, on the SAME thread, on top of the frame it is already
+/// in. The record budget does not bound that: it is checked once per entry and each entry costs a
+/// whole handler frame, so the stack runs out first.
+///
+/// MEASURED 2026-08-28 in the sibling handler in `er-quickload` on ELDEN RING 1.17: one execute
+/// fault, then 215 identical copies of a NULL read raised while reporting it, `rsp` marching down
+/// by exactly `0x1260` a line until the 1 MiB main-thread stack was gone. Wine then could not even
+/// raise the overflow -- `virtual_setup_exception` needs stack to build the exception frame -- so
+/// it called `abort_thread` and the process died with no crash record, no minidump, and the one
+/// line that named the real fault buried under 215 copies of the amplifier.
+///
+/// # Why it has to be process-wide, not the per-module `thread_local!` it started as
+///
+/// That first fix latched a `thread_local!` declared in THIS crate -- and every DLL that links
+/// this crate gets its own copy of it. So a fault raised while module A is describing a fault is
+/// still a *first* entry for modules B, C and D, each of which describes it, each of which can
+/// fault again. The amplifier came back multiplied by the number of loggers loaded.
+///
+/// MEASURED 2026-09-02, same game build, 24 native DLLs: one `0xc000001d` at `game+0x10043`, then
+/// 214 identical `0xc0000005` inside ntdll's unwinder, `rsp` from `0x10f560` down to `0x13810`,
+/// the faulting thread dead and the session wedged with its window still up. FOUR crash logs each
+/// recorded the same storm -- `er-quickload` 213, `er-net-effects` 214, `er-loading-bar` 64,
+/// `er-loading-portrait` 64 -- which is the 2026-08-28 latch working exactly as designed, four
+/// times over, on four private copies of the flag.
+///
+/// [`er_game_base::reentry::process_wide`] puts the table in a named section every module in the
+/// process maps, so the second logger to see a nested fault refuses it like the first one did. It
+/// stays keyed by thread id, so a genuine concurrent fault on another thread is still described.
+///
+/// A nested entry returns `EXCEPTION_CONTINUE_SEARCH` having touched nothing.
+#[cfg(windows)]
+fn enter_veh() -> Option<er_game_base::reentry::process_wide::ProcessWideToken> {
+    er_game_base::reentry::process_wide::enter(&VEH_REENTRANT_REFUSALS, unsafe {
+        GetCurrentThreadId()
+    })
+}
+
 #[cfg(windows)]
 unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin) -> i32 {
+    // FIRST, before `info` is dereferenced: a fault raised while describing a fault must not
+    // re-enter this handler. See `enter_veh`.
+    let Some(_not_nested) = enter_veh() else {
+        return EXCEPTION_CONTINUE_SEARCH;
+    };
     let Some(snapshot) = (unsafe { ExceptionSnapshot::from_raw(info) }) else {
         return EXCEPTION_CONTINUE_SEARCH;
     };

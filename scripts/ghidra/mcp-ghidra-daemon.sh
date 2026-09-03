@@ -36,10 +36,6 @@ GH_MAPORCH="${GHIDRA_MAPORCH_DIR:-$HOME/ghidra_maporch}"
 [[ -d "$GH_MAPORCH" ]] || GH_MAPORCH="/home/banon/ghidra_maporch"
 RUN_DIR="$GH_MAPORCH/mcp"
 TMP="${GHIDRA_TMPDIR:-$GH_MAPORCH/tmp}"
-LOG="$RUN_DIR/daemon.log"
-STOPFILE="$RUN_DIR/STOP"
-PIDFILE="$RUN_DIR/daemon.pid"
-
 PROJ_DIR="${GHIDRA_PROJ_DIR:-$GH_MAPORCH/proj}"
 PROJ_NAME="${GHIDRA_PROJ_NAME:-ermaporch}"
 PORT=8765
@@ -58,11 +54,34 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Per-port run state, so two dumps (1.16.2 on 8765, 1.17 on 8766) can be live at once -- which is
+# the whole point during a version migration: the same question asked of both images in one session.
+# Port 8765 deliberately keeps the ORIGINAL unsuffixed filenames, so a daemon started before this
+# change stays manageable rather than being orphaned by its pidfile moving out from under it.
+SUF=""
+[[ "$PORT" != "8765" ]] && SUF="-$PORT"
+LOG="$RUN_DIR/daemon${SUF}.log"
+STOPFILE="$RUN_DIR/STOP${SUF}"
+PIDFILE="$RUN_DIR/daemon${SUF}.pid"
+
 mkdir -p "$RUN_DIR" "$TMP"
 export TMPDIR="$TMP"
 export GHIDRA_JAVA_OPTIONS="-Djava.io.tmpdir=$TMP"
 
-is_running() { pgrep -f "MCPServeHeadless.java" >/dev/null 2>&1; }
+# Liveness for THIS port only. The pidfile is authoritative: `setsid bash -c "exec ..."` execs into
+# the JVM, so $! is the java process itself. A bare `pgrep -f MCPServeHeadless.java` matches EVERY
+# daemon, which previously made do_start refuse to bring up a second dump ("already running") and
+# made do_stop's pkill fallback take down both.
+daemon_pid() {
+  local p
+  [[ -f "$PIDFILE" ]] && p="$(cat "$PIDFILE" 2>/dev/null)" || p=""
+  if [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; then printf '%s\n' "$p"; return 0; fi
+  # Fallback for a pidfile lost to a reboot/manual start: match the port ARGUMENT, not the class.
+  p="$(pgrep -f "MCPServeHeadless.java $PORT " 2>/dev/null | head -1 || true)"
+  [[ -n "$p" ]] && { printf '%s\n' "$p"; return 0; }
+  return 1
+}
+is_running() { daemon_pid >/dev/null 2>&1; }
 port_up()    { ss -ltn 2>/dev/null | grep -q ":$PORT "; }
 
 # Self-heal exec bits on the install's native helper binaries (decompile, sleigh, demanglers,
@@ -82,7 +101,7 @@ do_start() {
   # Heal exec bits even when the daemon is already live: the decompile process is spawned
   # per-request, so restoring +x fixes decompilation WITHOUT a restart (verified 2026-07-28).
   fix_native_exec_bits
-  if is_running; then echo "already running (pid $(pgrep -f MCPServeHeadless.java | tr '\n' ' '))"; return 0; fi
+  if is_running; then echo "already running on :$PORT (pid $(daemon_pid))"; return 0; fi
   rm -f "$STOPFILE"
   echo "starting MCP daemon: $PROJ_NAME on port $PORT ${RO:-(writable)}"
   # Isolate the postScript in a CLEAN script dir. Ghidra builds ONE OSGi bundle for the ENTIRE
@@ -113,16 +132,19 @@ do_stop() {
   if ! is_running; then echo "not running"; rm -f "$STOPFILE"; return 0; fi
   echo "stopping (clean) ..."
   touch "$STOPFILE"
-  local stop_pid; stop_pid="$(pgrep -f 'MCPServeHeadless.java' | head -1 || true)"
+  local stop_pid; stop_pid="$(daemon_pid || true)"
   if [[ -n "$stop_pid" ]]; then
     # Wait (bounded, literal cap) for the daemon to exit after the stop-file is dropped; `tail --pid`
     # returns the instant the process is gone. No polling sleeps.
     timeout 20 tail --pid="$stop_pid" -f /dev/null >/dev/null 2>&1 || true
   fi
   if ! is_running; then echo "stopped"; rm -f "$STOPFILE"; return 0; fi
-  echo "clean stop timed out; killing" >&2
-  pkill -f "MCPServeHeadless.java" || true
-  rm -f "$STOPFILE"
+  echo "clean stop timed out; killing :$PORT only" >&2
+  # NEVER `pkill -f MCPServeHeadless.java` here -- that matches every daemon and would take down
+  # the other version's dump alongside this one.
+  local kill_pid; kill_pid="$(daemon_pid || true)"
+  [[ -n "$kill_pid" ]] && kill -9 "$kill_pid" 2>/dev/null || true
+  rm -f "$STOPFILE" "$PIDFILE"
 }
 
 case "$CMD" in
@@ -130,6 +152,6 @@ case "$CMD" in
   stop)    do_stop ;;
   restart) do_stop; do_start ;;
   status)
-    if is_running; then echo "running (pid $(pgrep -f MCPServeHeadless.java | tr '\n' ' ')); port $PORT $(port_up && echo up || echo DOWN)"; else echo "stopped"; fi ;;
+    if is_running; then echo "running (pid $(daemon_pid)); port $PORT $(port_up && echo up || echo DOWN)"; else echo "stopped (port $PORT)"; fi ;;
   *) echo "usage: $0 {start|stop|status|restart} [--proj-dir DIR] [--proj-name NAME] [--port N] [--readonly]" >&2; exit 2 ;;
 esac

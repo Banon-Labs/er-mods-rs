@@ -69,7 +69,7 @@ pane semaphore. So a fully agent-driven native quit-to-menu exists today.
 **Why the vanilla baseline still isn't captured:** in the samechar-3x *product* run the harness is in
 COMPANION mode (`drive.rs` DriveMode) — it does NOT drive the menu (the product's reload machinery +
 control-file does). The vanilla baseline needs the *opposite* wiring: a **telemetry-only product**
-(`ER_EFFECTS_TELEMETRY_ONLY=1` disarms the autoload → boots to title, still emits every `oracle_*`) plus
+(`ER_QUICKLOAD_TELEMETRY_ONLY=1` disarms the autoload → boots to title, still emits every `oracle_*`) plus
 the input-harness in a **boot+reload DRIVE mode** (`FullBootReload`/`NativeReloadOnly`, selected by the
 `er-harness-drive-mode.txt` marker that the product runner deliberately clears) so the *harness* drives
 title→Continue→play→System→Quit→Continue through the game's own native input. That is the vanilla

@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Ban unjustified idle/hold announcements while a background task runs
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-IDLE-HOLD

@@ -24,7 +24,7 @@ allow if {
 
 deny contains message if {
 	input.env_gate_count > 0
-	message := "reload trace DLL must not contain std::env::var or ER_EFFECTS_* runtime env gates"
+	message := "reload trace DLL must not contain std::env::var or ER_QUICKLOAD_* runtime env gates"
 }
 
 deny contains message if {
@@ -55,6 +55,11 @@ deny contains message if {
 deny contains message if {
 	input.has_minhook != true
 	message := "reload trace DLL must use MinHook trampolines for pass-through instrumentation"
+}
+
+deny contains message if {
+	input.raw_minhook_ffi_count > 0
+	message := "reload trace DLL must not call the raw MinHook FFI (MH_CreateHook/MH_EnableHook) directly; route every hook through er_hook::register_union_hook/register_shared_hook so cross-build address resolution and cross-DLL collision handling apply"
 }
 
 deny contains message if {

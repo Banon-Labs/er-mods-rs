@@ -1,6 +1,6 @@
 //! Standalone ELDEN RING save-disable DLL.
 //!
-//! Deliberately decoupled from the product `er-effects-rs` cdylib: separate crate,
+//! Deliberately decoupled from the product `er-quickload` cdylib: separate crate,
 //! separate ME3 `[[natives]]` entry, separate log and telemetry files, no shared
 //! state. The product already manipulates save-adjacent state during System->Quit
 //! (it clears `CSMenuMan->disableSaveMenu` at +0x13c); keeping this DLL independent
@@ -20,7 +20,7 @@
 //! every native observer sees the state a real successful save leaves. Loads are
 //! untouched, so Continue and Load Game still read the real file.
 //!
-//! **NEVER load this DLL together with `er_effects_rs.dll` in one me3 profile.** The
+//! **NEVER load this DLL together with `er_quickload.dll` in one me3 profile.** The
 //! product DLL now installs the same `er-save-suppress` hooks itself; each DLL carries
 //! its own MinHook instance, so loading both would double-detour `0x140e6fb50` /
 //! `0x140e6e430` and corrupt each other's trampolines. The census probe profile stays
@@ -36,6 +36,15 @@
 //! proves the SL submit is the only *known* write path, and the census is what would
 //! catch an unknown one.
 
+// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
+// warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-save-disable`
+// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
+// target is unaffected: this allow does not exist there.
+// scripts/check-save-disable-warnings.py still holds the windows build to zero warnings.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 #[cfg(windows)]
 mod hooks;
 mod telemetry;
@@ -43,11 +52,10 @@ mod witness;
 
 use std::{
     fmt,
-    path::PathBuf,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use er_game_base::log::{append_line, game_directory_path};
+use er_game_base::log::{append_line, redirected_artifact_path};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -91,10 +99,19 @@ pub(crate) fn hooks_installed() -> usize {
     HOOKS_INSTALLED.load(Ordering::SeqCst)
 }
 
+/// Append one census line, into THIS run's directory when the launcher named one.
+///
+/// The game-directory copy of this log is SINGLE-SLOT: `er_game_base::log::begin_fresh_run`
+/// keeps exactly one previous generation, so two launches lose the run before last, and
+/// several sessions launch concurrently in this repo. Worse, `run-save-census-probe.sh` used
+/// to `rm -f` the live file before launching, and the rotation removes a stale `.prev`
+/// unconditionally when the live file is absent -- so that swept away TWO runs' census
+/// evidence at once, neither of them the deleting run's. The redirect is what lets a launcher
+/// hand each run its own directory; the game-directory fallback stays because the env has to
+/// survive `launch.sh` -> me3 -> Proton and a log written nowhere reads as "the DLL never
+/// loaded", which is the exact false negative this census exists to rule out.
 pub(crate) fn log_message(args: fmt::Arguments<'_>) {
-    let path = game_directory_path()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(LOG_FILE_NAME);
+    let path = redirected_artifact_path("ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH", LOG_FILE_NAME);
     let seq = LOG_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
     append_line(&path, format_args!("[{seq:06}] {args}"));
 }
@@ -113,6 +130,13 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-save-disable", log_message);
+        er_hook::set_hook_logger(log_message);
         START.call_once(spawn_census_task);
     }
     DLL_MAIN_SUCCESS
@@ -131,9 +155,11 @@ fn spawn_census_task() {
         .name("er-save-disable".to_owned())
         .spawn(|| {
             let mut attempts = 0_u64;
-            let base = loop {
-                match er_game_base::mem::game_module_base() {
-                    Ok(base) => break base,
+            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
+            let found =
+                er_game_base::wait::poll_until(|| match er_game_base::mem::game_module_base() {
+                    Ok(base) => Some(base),
                     Err(err) => {
                         if attempts == 0 || attempts.is_multiple_of(4096) {
                             log_message(format_args!(
@@ -141,9 +167,14 @@ fn spawn_census_task() {
                             ));
                         }
                         attempts = attempts.saturating_add(1);
-                        std::thread::yield_now();
+                        None
                     }
-                }
+                });
+            let Some(base) = found else {
+                log_message(format_args!(
+                    "install: no game module base; nothing installed"
+                ));
+                return;
             };
             witness::set_game_base(base);
             // Wire the shared suppression core's seams to THIS DLL's surfaces before

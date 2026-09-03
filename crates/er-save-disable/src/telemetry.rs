@@ -26,16 +26,27 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use er_game_base::log::game_directory_path;
+use er_game_base::log::redirected_artifact_path;
 
 use crate::witness;
 
 const TELEMETRY_FILE_NAME: &str = "er-save-disable-telemetry.json";
 
+/// Where this run's census semaphore goes: the launcher's redirect, else beside the game.
+///
+/// This one matters more than the text log, because it is the run-stopping oracle. In the game
+/// directory it keeps ZERO previous generations -- [`write_snapshot`] publishes with a
+/// write-tmp-then-rename, so the previous run's verdict is gone the instant this run installs,
+/// with no `.prev` behind it. A harness reading the fixed game-directory path during a
+/// concurrent session therefore scores somebody else's census as its own. Redirecting the
+/// WRITER at launch is the only fix that survives a killed run: a copy at teardown never
+/// happens for the run whose evidence matters most, and by teardown this run has already
+/// overwritten the last one's file anyway.
 fn telemetry_path() -> PathBuf {
-    game_directory_path()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(TELEMETRY_FILE_NAME)
+    redirected_artifact_path(
+        "ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH",
+        TELEMETRY_FILE_NAME,
+    )
 }
 
 /// Serialize the current census and replace the telemetry file atomically.

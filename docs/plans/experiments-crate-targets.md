@@ -15,7 +15,7 @@ slices have now MERGED and the directory is **1,796 lines smaller than SS0.1 mea
 number in SS0.1 and SS5 for a file those slices touched is stale by construction; SS0.2 re-pins the
 ones that still matter and states, item by item, exactly what is left of the S4 block.
 
-**Scope: `crates/er-effects-rs/src/experiments/**` EXCLUDING `startup_hooks/`.** startup_hooks is
+**Scope: `crates/er-quickload/src/experiments/**` EXCLUDING `startup_hooks/`.** startup_hooks is
 owned by a separate concurrent analysis -- see SS8.
 
 ---
@@ -534,7 +534,7 @@ SCRATCH=${SCRATCH:-$(mktemp -d)}
 
 # 1. Build the BEFORE DLL and stash it.
 cargo xwin build --release --target x86_64-pc-windows-msvc
-cp -f target/x86_64-pc-windows-msvc/release/er_effects_rs.dll "$SCRATCH"/before.dll
+cp -f target/x86_64-pc-windows-msvc/release/er_quickload.dll "$SCRATCH"/before.dll
 
 # 2. Apply the 12 deletions.
 
@@ -544,7 +544,7 @@ cargo xwin build --release --target x86_64-pc-windows-msvc
 # 4. THE GATE. Exit 0 with .text identical => provably no behavior change, NO RUNTIME RUN REQUIRED.
 python3 scripts/dll-code-fingerprint.py \
   "$SCRATCH"/before.dll \
-  target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
+  target/x86_64-pc-windows-msvc/release/er_quickload.dll
 
 # 5. Full quality gate.
 bash scripts/check.sh
@@ -752,13 +752,13 @@ file and must be coordinated:
 ### Unresolved
 
 1. **`gpu_frame_timing.rs` (424 lines) -- cannot be classified.** It is 100% control-file gated
-   (`er-effects-gpu-frame-oracle.txt`) and its own doc records that the ECL piggyback device-removed
+   (`er-quickload-gpu-frame-oracle.txt`) and its own doc records that the ECL piggyback device-removed
    the game ~28s in on native, so rule 4 says STAY. But its counters **are** read to emit oracles at
    `telemetry/runtime_oracles/write_game_module_oracles.rs:233,235`, so deleting it would trip
    `check-oracle-writers.py` in reverse unless the oracle emission goes too. That is a call for
    whoever owns the framerate-parity goal.
 
-2. **`input_trace.rs` (925 lines) -- blocked, not decided.** Rule-4 gated (`ER_EFFECTS_INPUT_TRACE` or
+2. **`input_trace.rs` (925 lines) -- blocked, not decided.** Rule-4 gated (`ER_QUICKLOAD_INPUT_TRACE` or
    a marker file), *and* its 294-line semaphore reader depends on
    `startup_hooks/loading_cover/loading_cover_save_slot.rs`. Revisit after startup_hooks lands.
 

@@ -23,7 +23,7 @@ so a newly shippable DLL cannot be silently omitted from either release type.
 With the [GitHub CLI](https://cli.github.com/) (logged in via `gh auth login`):
 
 ```bash
-gh attestation verify er_effects_rs.dll --repo Banon-Labs/er-effects-rs
+gh attestation verify er_quickload.dll --repo Banon-Labs/er-mods-rs
 ```
 
 Substitute the path of whichever DLL you downloaded. A successful verification
@@ -37,8 +37,8 @@ plus `--custom-trusted-root`; see `gh attestation verify --help`.
 To additionally pin the exact workflow that signed it:
 
 ```bash
-gh attestation verify er_effects_rs.dll --repo Banon-Labs/er-effects-rs \
-  --signer-workflow Banon-Labs/er-effects-rs/.github/workflows/release.yml
+gh attestation verify er_quickload.dll --repo Banon-Labs/er-mods-rs \
+  --signer-workflow Banon-Labs/er-mods-rs/.github/workflows/release.yml
 ```
 
 ## What is (and is not) attested

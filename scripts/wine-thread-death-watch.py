@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture WHY/WHERE a thread of a live Wine/Proton process dies.
 
-Aimed at the er-effects-rs wedge: the game boots, our DLL opens a synchronous
+Aimed at the er-quickload wedge: the game boots, our DLL opens a synchronous
 `GetOpenFileNameW` on a DLL-owned thread, and ~12.5s later the game's *initial*
 thread terminates (`/proc/<pid>/status` -> `State: Z`) while ~60 other threads park
 forever in ordinary waits.  A post-mortem stack capture is worthless there: the thread
@@ -14,7 +14,7 @@ Two independent tiers, deliberately ordered by risk to the live game:
       target -- it cannot perturb or stop the game.  Samples the focus thread (default:
       the initial thread, tid == pid) at a high rate, keeping a ring buffer of its
       kernel wait state *and* a scan of its stack for return addresses inside
-      eldenring.exe / er_effects_rs.dll.  The instant the focus thread dies, it dumps
+      eldenring.exe / er_quickload.dll.  The instant the focus thread dies, it dumps
       the last N samples -- i.e. where the thread was immediately before it died -- plus
       a full snapshot of every surviving thread.
       CANNOT see a thread that dies while in state R (running in userspace): `/proc`
@@ -67,7 +67,41 @@ DEFAULT_BREAK_SYMBOLS = (
 )
 # Optional: the chokepoint every user-mode Windows exception passes through *before* the
 # thread unwinds away.  Catches a Rust panic's raise and a stack overflow at the fault site.
-EXCEPTION_SYMBOLS = ("KiUserExceptionDispatcher",)
+#
+# THE `+0x25` IS LOAD-BEARING; BREAKING AT THE SYMBOL ITSELF CAPTURES NOTHING.
+#
+# Wine's KiUserExceptionDispatcher does NOT receive the exception record and context in
+# registers -- it BUILDS them from its own stack frame.  Disassembled from Proton
+# Experimental's ntdll.dll (export rva 0x10b00):
+#
+#     +0x00  cld
+#     +0x01  mov  <hook slot>(%rip),%rax
+#     +0x08  test %rax,%rax
+#     +0x0b  je   +0x1a
+#     +0x0d  mov  %rsp,%rdx                 <- CONTEXT
+#     +0x10  lea  0x4f0(%rsp),%rcx          <- EXCEPTION_RECORD
+#     +0x18  call *%rax                     (debugger hook, only when the slot is set)
+#     +0x1a  mov  %rsp,%rdx                 }  the same two args, rebuilt for the real call
+#     +0x1d  lea  0x4f0(%rsp),%rcx          }
+#     +0x25  call <dispatch>                <- BREAK HERE: rcx/rdx are finally the real args
+#     +0x2a  int3                           (the dispatch does not return)
+#
+# MEASURED 2026-09-03: breaking at `+0x00` produced two captures reading
+# `rcx=0x1339f8b5a1680000`, `rdx=0x0` -- the faulting thread's leftover register values, because
+# at the `cld` neither argument exists yet.  That looked like a target quirk and was actually the
+# breakpoint being one prologue too early, so a whole run's evidence was empty.
+#
+# `+0x2a` is NOT the fix even though it is what shows up as a stack frame in our crash logs: it is
+# the `int3` after a non-returning call, i.e. a return address that is never returned to.
+#
+# If a future Proton reshuffles this prologue, re-derive the offset rather than nudging the number:
+# the invariant is "immediately before the dispatch call", not the literal 0x25.
+#
+# The `*(...)` is gdb LOCATION SYNTAX and is required: a bare `NAME+0x25` is parsed as a function
+# NAME, and gdb answers `Function "KiUserExceptionDispatcher+0x25" not defined.` then leaves the
+# breakpoint PENDING -- armed-looking in the log, never resolved, catching nothing. Measured
+# 2026-09-03, one wasted run. The `*` makes it an expression location instead.
+EXCEPTION_SYMBOLS = ("*(KiUserExceptionDispatcher+0x25)",)
 
 # Signals gdb must hand straight back to Wine.
 #
@@ -201,7 +235,36 @@ class MemReader:
 
     def __init__(self, pid: int):
         self.pid = pid
-        self.fd = os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+        self.fd = self._open_through_a_live_thread(pid)
+
+    @staticmethod
+    def _open_through_a_live_thread(pid: int) -> int:
+        """`/proc/<pid>/mem`, falling back to a live thread's when the LEADER is a zombie.
+
+        `/proc/<pid>/mem` IS `/proc/<pid>/task/<leader>/mem`, so once the thread-group leader
+        becomes a zombie that open fails with ESRCH -- while the process is alive and every other
+        thread is readable. This tool's whole subject is a game whose initial thread dies and
+        leaves ~60 threads running, i.e. exactly that state, and the failure was silent: it
+        printed "not readable ... Kernel/yama denies it for non-Proton processes" and disabled
+        stack scans, which reads as a permissions problem rather than "you asked the corpse".
+        Measured 2026-08-29.
+        """
+        try:
+            return os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+        except OSError:
+            pass
+        for task in sorted(glob.glob(f"/proc/{pid}/task/*")):
+            try:
+                with open(f"{task}/stat", encoding="utf-8") as handle:
+                    if handle.read().split()[2] == "Z":
+                        continue
+            except (OSError, IndexError):
+                continue
+            try:
+                return os.open(f"{task}/mem", os.O_RDONLY)
+            except OSError:
+                continue
+        raise OSError(f"no readable thread memory for pid {pid}")
 
     def read(self, addr: int, size: int) -> bytes:
         os.lseek(self.fd, addr, os.SEEK_SET)
@@ -218,7 +281,7 @@ def pe_size_of_image(mem: MemReader, base: int) -> int | None:
     """SizeOfImage straight out of the live PE header.
 
     Needed because Wine/me3 leave most of a PE image's sections as anonymous mappings
-    (inode 0), so /proc/maps alone under-reports an image's extent -- er_effects_rs.dll
+    (inode 0), so /proc/maps alone under-reports an image's extent -- er_quickload.dll
     shows only its 1-page file-backed header, and eldenring.exe only 2 lines.
     """
     try:
@@ -560,6 +623,25 @@ class DeathBP(gdb.Breakpoint):
                 'rdx': hex(int(gdb.parse_and_eval('$rdx')) & (2**64 - 1)),
                 'wall': time.time(),
             }}
+            # DEREFERENCE THE EXCEPTION RECORD. At the KiUserExceptionDispatcher breakpoint rcx
+            # IS the PEXCEPTION_RECORD (rsp+0x4f0) and rdx the PCONTEXT -- that is the whole reason
+            # the breakpoint sits at +0x25 rather than the symbol. Without this the capture records
+            # two pointers and the run still cannot say WHICH fault it caught.
+            # EXCEPTION_RECORD: ExceptionCode +0x00 (u32), ExceptionFlags +0x04,
+            # ExceptionRecord +0x08, ExceptionAddress +0x10, NumberParameters +0x18.
+            try:
+                inf0 = gdb.selected_inferior()
+                erp = int(gdb.parse_and_eval('$rcx')) & (2**64 - 1)
+                head = bytes(inf0.read_memory(erp, 0x20))
+                code = int.from_bytes(head[0:4], 'little')
+                addr = int.from_bytes(head[0x10:0x18], 'little')
+                rec['exception_code'] = hex(code)
+                rec['exception_address'] = hex(addr)
+                owner = which(addr)
+                if owner:
+                    rec['exception_module'] = '%s+0x%x' % owner
+            except Exception as exc:
+                rec['exception_record'] = 'unreadable: %s' % exc
             try:
                 rec['unix_bt'] = gdb.execute('bt 12', to_string=True)
             except Exception as exc:
@@ -710,9 +792,9 @@ def selftest() -> int:
 
     print("== 3. module attribution ==")
     mods = [{"name": "eldenring.exe", "start": 0x140000000, "end": 0x145E01800},
-            {"name": "er_effects_rs.dll", "start": 0x6FFFF9ED0000, "end": 0x6FFFFA087000}]
+            {"name": "er_quickload.dll", "start": 0x6FFFF9ED0000, "end": 0x6FFFFA087000}]
     check("in-image address attributed", attribute(mods, 0x1409B2F00) == ("eldenring.exe", 0x9B2F00))
-    check("dll address attributed", attribute(mods, 0x6FFFF9ED1234)[0] == "er_effects_rs.dll")
+    check("dll address attributed", attribute(mods, 0x6FFFF9ED1234)[0] == "er_quickload.dll")
     check("outside address rejected", attribute(mods, 0x7F0000000000) is None)
 
     print("== 4. return-address validation ==")
@@ -946,7 +1028,7 @@ def main() -> int:
     parser.add_argument("--scan-bytes", type=lambda v: int(v, 0), default=0x8000,
                         help="bytes of stack to scan upward from SP")
     parser.add_argument("--max-frames", type=int, default=48)
-    parser.add_argument("--modules", nargs="*", default=["eldenring.exe", "er_effects_rs.dll"],
+    parser.add_argument("--modules", nargs="*", default=["eldenring.exe", "er_quickload.dll"],
                         help="module names whose addresses are worth reporting")
     parser.add_argument("--max-seconds", type=float, default=300.0,
                         help="hard backstop; the real stop signal is the thread dying")

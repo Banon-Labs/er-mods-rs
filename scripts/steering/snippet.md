@@ -9,7 +9,7 @@ working reference and `README.md` for the channel convention.
 
 ```js
 const RUN_LABEL = (args && args.runLabel) || 'run'
-const REPO = '/home/choza/projects/er-effects-rs'
+const REPO = '/home/choza/projects/er-mods-rs'
 const ABS_STEER_DIR = `${REPO}/.workflow-steering/${RUN_LABEL}`
 const ABS_GLOBAL_STEER = `${ABS_STEER_DIR}/steer.md`
 

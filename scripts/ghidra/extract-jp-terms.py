@@ -77,7 +77,7 @@ class MCP:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--out", default="/home/banon/projects/er-effects-rs/scripts/ghidra/jp-terms.json")
+    ap.add_argument("--out", default="/home/banon/projects/er-mods-rs/scripts/ghidra/jp-terms.json")
     ap.add_argument("--limit", type=int, default=5000)
     args = ap.parse_args()
 

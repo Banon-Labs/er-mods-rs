@@ -137,7 +137,6 @@ def helper_checks() -> None:
         "oracle_own_load_wbr_max_phase": "0x2",
         "oracle_own_load_stream_io_inflight": "0x0",
         "oracle_own_load_stream_mms_state": 3,
-        "oracle_own_m28_dispatch_fired": 0,
         "oracle_player_present": False,
     }
     if not armed(stalled_state) or watermark(stalled_state) is None:

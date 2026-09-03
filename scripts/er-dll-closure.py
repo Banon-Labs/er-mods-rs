@@ -176,7 +176,7 @@ def resolve_base(base_ref: str, fetch: bool) -> tuple[str, str]:
     return merge_base, head
 
 
-PRODUCT_PACKAGE = "er-effects-rs"
+PRODUCT_PACKAGE = "er-quickload"
 
 
 def find_conflicts(packages: set[str], table: dict) -> list[dict]:
@@ -330,7 +330,7 @@ def compute(
     # PRODUCT FIRST, then the rest alphabetically. me3 loads natives in profile order, and the
     # companions resolve the product's `er_effects_union_register` export to chain onto prologues it
     # already owns (scripts/me3-launch-lib.sh says the same). A plain `sorted()` put
-    # `er-armament-icons` ahead of `er-effects-rs`, so the companion's install thread could run
+    # `er-armament-icons` ahead of `er-quickload`, so the companion's install thread could run
     # before the product image was even loaded -- it would then find no export, fall back to its own
     # MinHook instance, and recreate the collision the [[shared]] entry exists to prevent. The
     # companion still polls briefly, so this is belt-and-braces rather than the sole guarantee.
@@ -493,7 +493,7 @@ def selftest() -> int:
     )
     shipped = {package for package, _ in shipped_pairs()}
     check(
-        affected_packages({"er-game-base"}, live) & shipped >= {"er-effects-rs"},
+        affected_packages({"er-game-base"}, live) & shipped >= {"er-quickload"},
         "a change to er-game-base reaches the product DLL",
     )
 

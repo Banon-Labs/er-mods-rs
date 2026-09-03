@@ -1,5 +1,18 @@
 use crate::prelude::*;
 
+/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function and
+/// nothing verified where to.
+///
+/// Every portrait call below used to transmute a hand-built `base + rva`, which on ELDEN RING 1.17
+/// calls the 1.16.2 address -- whatever now occupies it -- with nothing to refuse it. A mapped
+/// constant is no safer that way: the map knows the new address, and `base + rva` never asks it.
+/// A refusal costs one portrait frame; the alternative executes an arbitrary address on the
+/// render path.
+#[cfg(windows)]
+fn portrait_fn(rva: usize, what: &'static str) -> Option<usize> {
+    er_game_base::mem::game_rva_named(rva as u32, what).ok()
+}
+
 /// Read a `BoneData` quaternion (4 f32 at `addr`) with fault-guarded reads; `None` on unmapped memory.
 ///
 /// # Safety
@@ -143,7 +156,7 @@ pub fn install_lookat_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(UPDATE_BONE_MODEL_SPACE_RVA as u32) else {
+    let Ok(target) = game_rva_for_hook(UPDATE_BONE_MODEL_SPACE_RVA as u32) else {
         return;
     };
     match unsafe {
@@ -451,9 +464,10 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // proven: find_d3d12_resource(off)==find_d3d12_resource(srv_gx)), so clearing it every frame WIPES the
     // rendered head before GFx samples it -> the now-loading background reads mostly-black. Once our own
     // table is built, SKIP the clear so the last-rendered portrait persists in the sampleable texture.
-    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
-        let draw_step: unsafe extern "system" fn() =
-            unsafe { core::mem::transmute(base + PROFILE_DRAW_STEP_RVA) };
+    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0
+        && let Some(address) = portrait_fn(PROFILE_DRAW_STEP_RVA, "PROFILE_DRAW_STEP_RVA")
+    {
+        let draw_step: unsafe extern "system" fn() = unsafe { core::mem::transmute(address) };
         unsafe { draw_step() };
         PROFILE_LOOKAT_RENDER_DRIVES.fetch_add(1, Ordering::SeqCst);
     }
@@ -495,14 +509,22 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
         if r == 0 || r == null {
             PORTRAIT_PUMP_BLOCK_R.fetch_add(1, Ordering::SeqCst);
         } else if unsafe { safe_read_usize(r) }.unwrap_or(0)
-            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+            )
         {
             PORTRAIT_PUMP_BLOCK_VTABLE.fetch_add(1, Ordering::SeqCst);
         }
         if r != 0
             && r != null
             && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                == er_game_base::mem::game_data_addr(
+                    base,
+                    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
+                    "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
+                )
         {
             let off = unsafe {
                 safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
@@ -610,7 +632,14 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 // Fence check MUST come after the busy-flag store (Dekker order): the teardown
                 // either already sees us busy and is waiting (we bail out immediately), or it
                 // raised the fence first and we never touch the renderer this frame.
-                let cs_cloth = unsafe { safe_read_usize(base + CS_CLOTH_GLOBAL_RVA) }.unwrap_or(0);
+                let cs_cloth = unsafe {
+                    safe_read_usize(er_game_base::mem::game_data_addr(
+                        base,
+                        CS_CLOTH_GLOBAL_RVA,
+                        "CS_CLOTH_GLOBAL_RVA",
+                    ))
+                }
+                .unwrap_or(0);
                 if PROFILE_RENDERER_TEARDOWN_FENCE.load(Ordering::SeqCst) != 0 {
                     PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
                     PROFILE_DRIVE_FENCE_SKIPS.fetch_add(1, Ordering::SeqCst);
@@ -638,10 +667,14 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                         // starves the overlay. portrait_alpha0_clear + the GX RVAs stay for the
                         // next phase.)
                         let _ = crate::portrait_alpha0_clear;
-                        let _ = &PROFILE_ALPHA0_CLEARS;
-                        let update: unsafe extern "system" fn(usize, usize) =
-                            unsafe { core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA) };
-                        unsafe { update(r, td) };
+                        if let Some(address) = portrait_fn(
+                            PROFILE_MODEL_UPDATE_TASK_RVA,
+                            "PROFILE_MODEL_UPDATE_TASK_RVA",
+                        ) {
+                            let update: unsafe extern "system" fn(usize, usize) =
+                                unsafe { core::mem::transmute(address) };
+                            unsafe { update(r, td) };
+                        }
                         // The draw task is the fn per_frame_push_hook detours; calling the hook
                         // directly applies the look-at then runs the original body via its
                         // trampoline.
@@ -753,10 +786,20 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                         let l755 = unsafe { safe_read_u8(r + 0x755) }.unwrap_or(0xff);
                         let l756 = unsafe { safe_read_u8(r + 0x756) }.unwrap_or(0xff);
                         let fd_neq = {
-                            let get_buf: unsafe extern "system" fn(usize, u8) -> usize =
-                                unsafe { core::mem::transmute(base + PROFILE_FACEDATA_BUFFER_RVA) };
-                            let buf =
-                                unsafe { get_buf(r + PROFILE_RENDERER_FACEDATA_OBJ_OFFSET, 1) };
+                            let get_buf_addr = portrait_fn(
+                                PROFILE_FACEDATA_BUFFER_RVA,
+                                "PROFILE_FACEDATA_BUFFER_RVA",
+                            )
+                            .unwrap_or(0);
+                            // No verified address means the comparison cannot be made; "not
+                            // different" is the answer that changes nothing downstream.
+                            let buf = if get_buf_addr == 0 {
+                                0
+                            } else {
+                                let get_buf: unsafe extern "system" fn(usize, u8) -> usize =
+                                    unsafe { core::mem::transmute(get_buf_addr) };
+                                unsafe { get_buf(r + PROFILE_RENDERER_FACEDATA_OBJ_OFFSET, 1) }
+                            };
                             if buf != 0 && buf != null {
                                 let a = unsafe {
                                     std::slice::from_raw_parts(
@@ -791,10 +834,15 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                         if PORTRAIT_ANIM_BOUND_RENDERER.load(Ordering::SeqCst) != r
                             || PORTRAIT_ANIM_BOUND_LOC.load(Ordering::SeqCst) != loc
                         {
-                            let sentinel =
-                                unsafe { safe_read_usize(base + PROFILE_ANIM_NULL_HANDLE_RVA) }
-                                    .unwrap_or(0)
-                                    & 0xffff_ffff;
+                            let sentinel = unsafe {
+                                safe_read_usize(er_game_base::mem::game_data_addr(
+                                    base,
+                                    PROFILE_ANIM_NULL_HANDLE_RVA,
+                                    "PROFILE_ANIM_NULL_HANDLE_RVA",
+                                ))
+                            }
+                            .unwrap_or(0)
+                                & 0xffff_ffff;
                             PORTRAIT_ANIM_SENTINEL.store(sentinel, Ordering::SeqCst);
                             let handle_at = |r: usize| {
                                 unsafe { safe_read_usize(r + PROFILE_ANIM_HANDLE_OFFSET) }
@@ -808,8 +856,14 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                             let mut outcome = 2usize;
                             let mut bound_id = -1i32;
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let bind_addr =
+                                    portrait_fn(PROFILE_ANIM_BIND_RVA, "PROFILE_ANIM_BIND_RVA")
+                                        .unwrap_or(0);
+                                if bind_addr == 0 {
+                                    return;
+                                }
                                 let bind: unsafe extern "system" fn(usize, *const i32, u8, u8) =
-                                    unsafe { core::mem::transmute(base + PROFILE_ANIM_BIND_RVA) };
+                                    unsafe { core::mem::transmute(bind_addr) };
                                 for &id in PORTRAIT_IDLE_ANIM_IDS.iter() {
                                     PORTRAIT_ANIM_BIND_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
                                     unsafe { bind(r, &id, 1, 0) };
@@ -995,6 +1049,25 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // frames AND the copy has never succeeded AND nothing published -- frame-exact, no grace fudge, and
     // it does NOT false-trip the boot window (whose copy succeeds the frame it drives). Anchoring on the
     // drive frame instead (proven 2026-07-06 run seamless-fastfail) tripped the healthy boot on frame 1.
+    //
+    // CURRENTLY UNREACHABLE, AND DELIBERATELY LEFT THAT WAY (run br-20260831-160354-2513). BOTH of
+    // its distinguishing arms read 0 unconditionally on this build:
+    //   * `PROFILE_DRIVE_FRAMES_WINDOW` only increments in the pose-drive block above, which sits
+    //     behind `off_resources_ready` -- shut for the entire run
+    //     (`oracle_portrait_pump_block_off_resource = 710`, and eleven `profile-drive-resource-skip`
+    //     lines at #1,#2,#3,#4,#8,#16,#32,#64,#128,#256,#512). So the trigger never arms.
+    //   * `PROFILE_RT_SRV_COPIES_WINDOW` read 0 at EVERY window close of that run, including the
+    //     two windows that published 181 and 268 clean portraits. So the "copy succeeded == the
+    //     render landed" premise this gate is built on does not hold here: publishing plainly does
+    //     not depend on that copy.
+    // Repointing the first arm at `PROFILE_RENDER_DRIVE_HITS` (the tick that really feeds publishes)
+    // WITHOUT first fixing the second would make this fire on tick 1 of every healthy window --
+    // exactly the frame-1 false trip the comment above records as already having been made once.
+    // The window-close BACKSTOP in `loading_portrait_window_reset` has been repointed instead: it is
+    // evaluated once, after the window, where `published == 0` is a settled fact rather than a
+    // not-yet. Re-arming this mid-window gate needs a live run that first establishes why
+    // `copy_offscreen_rt_to_srv` never reports success; the cumulative count is now printed on the
+    // window-reset line (`copies_total=`) so the next run answers it without new instrumentation.
     if PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.load(Ordering::SeqCst) == 0
         && PROFILE_PUBLISH_CLEAN_WINDOW.load(Ordering::SeqCst) == 0
         && PROFILE_DRIVE_FRAMES_WINDOW.load(Ordering::SeqCst) > PORTRAIT_PUBLISH_FAIL_GRACE_DRIVES

@@ -26,10 +26,10 @@ fix ENGAGED:
 Fully agent-driven, no menu navigation and no simulated input: each switch is armed by writing the
 product's own control files, the same code path the user's ProfileSelect click reaches
 (poll_switch_slot_control_file -> switch_slot_arm_programmatic):
-    er-effects-switch-save-file.txt   the target save FILE (Windows path) -- cross-save only
-    er-effects-switch-slot.txt        the target slot, mtime-triggered -- this is "the menu click"
+    er-quickload-switch-save-file.txt   the target save FILE (Windows path) -- cross-save only
+    er-quickload-switch-slot.txt        the target slot, mtime-triggered -- this is "the menu click"
 
-load1 is the game-dir er-effects.toml boot autoload, left untouched.
+load1 is the game-dir er-quickload.toml boot autoload, left untouched.
 
 Per the loading-screen-portrait protocol, scripts/capture-er-window.py fires at the portrait moment
 of every switch. The agent never reads those images; they are user evidence. Stop/continue decisions
@@ -37,7 +37,7 @@ come only from the RAM oracles above, telemetry-freeze detection, process exit, 
 
 Usage:
   python3 scripts/run-b78-guard-standdown-proof.py \
-      --chain '0,/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2:0' \
+      --chain '0,/home/banon/projects/er-mods-rs/save-files/150-Banon/ER0000.sl2:0' \
       --label pr127
 """
 
@@ -56,6 +56,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import artifact_env  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 GAME_DIR = Path(
     os.environ.get(
@@ -64,11 +67,11 @@ GAME_DIR = Path(
     )
 )
 LAUNCHER = Path(os.environ.get("ER_LAUNCHER", str(Path.home() / "Elden/launch.sh")))
-TELEMETRY = GAME_DIR / "er-effects-telemetry.json"
-DEBUG_LOG = GAME_DIR / "er-effects-autoload-debug.log"
-SWITCH_SLOT = GAME_DIR / "er-effects-switch-slot.txt"
-SWITCH_SAVE = GAME_DIR / "er-effects-switch-save-file.txt"
-BOOT_TOML = GAME_DIR / "er-effects.toml"
+TELEMETRY = GAME_DIR / "er-quickload-telemetry.json"
+DEBUG_LOG = GAME_DIR / "er-quickload-autoload-debug.log"
+SWITCH_SLOT = GAME_DIR / "er-quickload-switch-slot.txt"
+SWITCH_SAVE = GAME_DIR / "er-quickload-switch-save-file.txt"
+BOOT_TOML = GAME_DIR / "er-quickload.toml"
 CAPTURE = REPO / "scripts/capture-er-window.py"
 CAP_FILE = REPO / ".auto/runtime_timeout_cap_seconds"
 SLOT_DUMPER = REPO / "scripts/dump-save-slots.py"
@@ -105,18 +108,27 @@ class GameDirWatch:
     IN_CREATE = 0x00000100
     IN_NONBLOCK = 0o4000
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, *directories: Path) -> None:
+        """Watch EVERY directory the DLL might write into, not just the game directory.
+
+        Since 2026-08-31 the artifacts are redirected into this run's own directory, so an inotify
+        watch on the game directory alone would sit quiet through a perfectly healthy run and the
+        readiness primitive would time out on a game that was writing the whole time. The game
+        directory stays watched because the redirect has to survive `launch.sh` -> me3 -> Proton,
+        and when it does not the DLL falls back there.
+        """
         self._libc = ctypes.CDLL("libc.so.6", use_errno=True)
         self.fd = self._libc.inotify_init1(self.IN_NONBLOCK)
         if self.fd < 0:
             raise OSError("inotify_init1 failed")
-        if (
-            self._libc.inotify_add_watch(
+        watched = 0
+        for directory in directories:
+            if self._libc.inotify_add_watch(
                 self.fd, str(directory).encode(), self.IN_MODIFY | self.IN_CREATE
-            )
-            < 0
-        ):
-            raise OSError(f"inotify_add_watch failed on {directory}")
+            ) >= 0:
+                watched += 1
+        if watched == 0:
+            raise OSError(f"inotify_add_watch failed on all of {directories}")
 
     def wait(self, budget_s: float) -> bool:
         ready, _, _ = select.select([self.fd], [], [], budget_s)
@@ -256,7 +268,7 @@ def slot_identity(save: str, slot: int) -> tuple[str, int]:
 
 
 def boot_target() -> tuple[str, int]:
-    """The boot autoload comes from the game-dir er-effects.toml, which this driver never edits."""
+    """The boot autoload comes from the game-dir er-quickload.toml, which this driver never edits."""
     save, slot = None, 0
     for line in BOOT_TOML.read_text().splitlines():
         if line.strip().startswith("save_file"):
@@ -280,6 +292,27 @@ def parse_chain(spec: str, boot_save: str) -> list[dict]:
             out.append({"save": boot_save, "slot": int(item), "cross": False})
     return out
 
+
+
+def redirect_artifacts(art: Path) -> dict[str, str]:
+    """Send this run's DLL artifacts into `art`, and point OUR OWN readers at the same place.
+
+    A game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames `<name>`
+    to `<name>.prev` and truncates on the first write of each process, so two launches lose the run
+    before last -- and several sessions launch concurrently here, which makes that normal rather
+    than a race. Redirecting at LAUNCH is the only fix that works: a copy at teardown can preserve
+    only this run's own output (the previous one was clobbered before the copy existed) and never
+    runs at all when the game crashes, which is the run whose evidence matters most.
+
+    THE READERS MOVE WITH THE WRITER. `TELEMETRY` and `DEBUG_LOG` are rebound here rather than left
+    on the game directory, because a reader on the old path finds nothing for a redirected run and
+    reports it as SILENT -- a false negative indistinguishable from a broken feature.
+    """
+    global TELEMETRY, DEBUG_LOG
+    env = artifact_env(art)
+    TELEMETRY = Path(env["ER_QUICKLOAD_TELEMETRY_PATH"])
+    DEBUG_LOG = Path(env["ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH"])
+    return {**os.environ, **env}
 
 def rotate_outputs(art: Path) -> None:
     """A previous run's telemetry reads as satisfied preconditions. Move it aside BEFORE launch."""
@@ -348,14 +381,15 @@ def main() -> int:
     proc = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
-        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         cwd=str(LAUNCHER.parent),
+        env=redirect_artifacts(art),
         stdout=open(art / "launcher.log", "w"),
         stderr=subprocess.STDOUT,
     )
     log(f"launched {LAUNCHER} pid={proc.pid} (product me3 profile; game-dir toml untouched)")
-    watch = GameDirWatch(GAME_DIR)
+    watch = GameDirWatch(art, GAME_DIR)
 
     def teardown(reason: str) -> None:
         (art / "teardown.txt").write_text(

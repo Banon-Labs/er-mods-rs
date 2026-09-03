@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
+# er-artifact-redirect: this script GENERATES the two user-facing launchers below, and their
+# redirect lines are the ones a user's run actually uses. The `me3 launch` commands live inside
+# the heredocs that write them, which the audit's shape detector treats as data rather than a
+# command (correctly -- see stage-autoload-release.sh, whose usage() text is not a launch). This
+# marker opts the generator in so both halves are checked against the live knob table.
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TARGET_TRIPLE="x86_64-pc-windows-msvc"
-DLL_PATH="$REPO_ROOT/target/$TARGET_TRIPLE/release/er_effects_rs.dll"
+DLL_PATH="$REPO_ROOT/target/$TARGET_TRIPLE/release/er_quickload.dll"
 OUT_DIR="$REPO_ROOT/target/deliverables"
-PACKAGE_NAME="er-effects-me3-poc"
+PACKAGE_NAME="er-quickload-me3-poc"
 DO_BUILD=0
 
 usage() {
@@ -13,13 +18,13 @@ usage() {
 Usage: scripts/build-me3-poc-package.sh [--build] [--dll PATH] [--out-dir DIR] [--name NAME]
 
 Build a minimal ME3 POC zip containing:
-  er_effects_rs.dll
-  er-effects.toml
-  er-effects-poc.me3
-  run-er-effects-poc.ps1
-  run-er-effects-poc.sh
+  er_quickload.dll
+  er-quickload.toml
+  er-quickload-poc.me3
+  run-er-quickload-poc.ps1
+  run-er-quickload-poc.sh
 
-The launchers write the required DLL-adjacent er-effects.toml, set telemetry/log
+The launchers write the required DLL-adjacent er-quickload.toml, set telemetry/log
 env vars, generate an absolute-path ME3 profile next to themselves, then call ME3
 with that profile. They require the user to pass a save file path at launch time;
 the save file is intentionally not bundled.
@@ -53,28 +58,28 @@ ZIP_PATH="$OUT_DIR/$PACKAGE_NAME-$COMMIT.zip"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
-cp -f "$DLL_PATH" "$STAGE_DIR/er_effects_rs.dll"
+cp -f "$DLL_PATH" "$STAGE_DIR/er_quickload.dll"
 
-cat > "$STAGE_DIR/er-effects-poc.me3" <<'EOF_PROFILE'
+cat > "$STAGE_DIR/er-quickload-poc.me3" <<'EOF_PROFILE'
 profileVersion = "v1"
 
 [[supports]]
 game = "eldenring"
 
 [[natives]]
-# The launch scripts generate er-effects-poc.generated.me3 with an absolute DLL path.
+# The launch scripts generate er-quickload-poc.generated.me3 with an absolute DLL path.
 # This static config is kept as the smallest human-readable ME3 profile for the bundle.
-path = 'er_effects_rs.dll'
+path = 'er_quickload.dll'
 EOF_PROFILE
 
-cat > "$STAGE_DIR/er-effects.toml" <<'EOF_CONFIG'
-# Required: this file must live next to er_effects_rs.dll.
+cat > "$STAGE_DIR/er-quickload.toml" <<'EOF_CONFIG'
+# Required: this file must live next to er_quickload.dll.
 # The launch scripts overwrite save_file/slot before launching.
 save_file = "CHANGE_ME_TO_A_COPY_OF_ER0000.sl2"
 slot = 0
 EOF_CONFIG
 
-cat > "$STAGE_DIR/run-er-effects-poc.ps1" <<'EOF_PS'
+cat > "$STAGE_DIR/run-er-quickload-poc.ps1" <<'EOF_PS'
 param(
     [Parameter(Mandatory=$true)]
     [string]$SaveFile,
@@ -87,7 +92,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DllPath = (Resolve-Path (Join-Path $Root "er_effects_rs.dll")).Path
+$DllPath = (Resolve-Path (Join-Path $Root "er_quickload.dll")).Path
 $SavePath = (Resolve-Path $SaveFile).Path
 $LogDir = Join-Path $Root "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -96,8 +101,8 @@ function Convert-ToTomlBasicString([string]$Value) {
     return '"' + (($Value -replace '\\', '\\\\') -replace '"', '\"') + '"'
 }
 
-$ProfilePath = Join-Path $Root "er-effects-poc.generated.me3"
-$ConfigPath = Join-Path $Root "er-effects.toml"
+$ProfilePath = Join-Path $Root "er-quickload-poc.generated.me3"
+$ConfigPath = Join-Path $Root "er-quickload.toml"
 $DllToml = Convert-ToTomlBasicString $DllPath
 $SaveToml = Convert-ToTomlBasicString $SavePath
 @"
@@ -110,18 +115,39 @@ game = "$Game"
 path = $DllToml
 "@ | Set-Content -Encoding UTF8 -Path $ProfilePath
 @"
-# Required: this file must live next to er_effects_rs.dll.
-# ER_EFFECTS_SAVE_FILE / ER_EFFECTS_AUTOLOAD_SLOT may override these values.
+# Required: this file must live next to er_quickload.dll.
+# ER_QUICKLOAD_SAVE_FILE / ER_QUICKLOAD_AUTOLOAD_SLOT may override these values.
 save_file = $SaveToml
 slot = $Slot
 "@ | Set-Content -Encoding UTF8 -Path $ConfigPath
 
-$env:ER_EFFECTS_TELEMETRY_PATH = Join-Path $LogDir "er-effects-telemetry.json"
-$env:ER_EFFECTS_BOOTSTRAP_PATH = Join-Path $LogDir "bootstrap.jsonl"
-$env:ER_EFFECTS_BOOTSTRAP_STATE_PATH = Join-Path $LogDir "bootstrap-state.json"
-$env:ER_EFFECTS_CRASH_LOG = "1"
-$env:ER_EFFECTS_CRASH_LOG_PATH = Join-Path $LogDir "er-effects-crash-log.txt"
-$env:ER_EFFECTS_AUTOLOAD_DEBUG_PATH = Join-Path $LogDir "er-effects-autoload-debug.log"
+# EVERY per-run artifact goes to $LogDir. Anything left beside the game exe is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone. Add a line here
+# (and to the bash launcher below) for any future log rather than copying it out afterwards.
+# ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH also relocates the portrait-capture-slot*.bin dumps.
+$env:ER_QUICKLOAD_TELEMETRY_PATH = Join-Path $LogDir "er-quickload-telemetry.json"
+$env:ER_QUICKLOAD_BOOTSTRAP_PATH = Join-Path $LogDir "bootstrap.jsonl"
+$env:ER_QUICKLOAD_BOOTSTRAP_STATE_PATH = Join-Path $LogDir "bootstrap-state.json"
+$env:ER_QUICKLOAD_CRASH_LOG = "1"
+$env:ER_QUICKLOAD_CRASH_LOG_PATH = Join-Path $LogDir "er-quickload-crash-log.txt"
+$env:ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH = Join-Path $LogDir "er-quickload-autoload-debug.log"
+$env:ER_QUICKLOAD_TRACE_CONTINUE_PATH = Join-Path $LogDir "er-quickload-continue-trace.log"
+$env:ER_QUICKLOAD_INPUT_TRACE_PATH = Join-Path $LogDir "er-quickload-input-trace.jsonl"
+$env:ER_QUICKLOAD_PROFILE_PATH = Join-Path $LogDir "er-quickload-profile.jsonl"
+# The companion shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
+# launcher could move them; the reload trace alone runs at ~655 MB/hour. Set even when this profile
+# loads only the product, so adding a companion native later does not silently start leaking.
+$env:ER_QUICKLOAD_RELOAD_TRACE_PATH = Join-Path $LogDir "er-reload-trace.log"
+$env:ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH = Join-Path $LogDir "er-input-harness.log"
+$env:ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH = Join-Path $LogDir "er-input-harness-phases.jsonl"
+$env:ER_QUICKLOAD_DIAG_HARNESS_PATH = Join-Path $LogDir "er-diag-harness.log"
+$env:ER_QUICKLOAD_TIMESERIES_PATH = Join-Path $LogDir "er-telemetry-timeseries.jsonl"
+$env:ER_QUICKLOAD_CPU_PROFILE_PATH = Join-Path $LogDir "er-cpu-profile.txt"
+$env:ER_QUICKLOAD_ARMAMENT_ICONS_PATH = Join-Path $LogDir "er-armament-icons.log"
+$env:ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH = Join-Path $LogDir "er-save-disable.log"
+$env:ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH = Join-Path $LogDir "er-save-disable-telemetry.json"
+$env:ER_QUICKLOAD_LOADING_PORTRAIT_PATH = Join-Path $LogDir "er-loading-portrait.log"
+$env:ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH = Join-Path $LogDir "er-loading-portrait-crash-log.txt"
 
 $Args = @()
 if ($SteamDir -ne "") { $Args += @("--steam-dir", $SteamDir) }
@@ -135,33 +161,33 @@ Write-Host "Logs: $LogDir"
 exit $LASTEXITCODE
 EOF_PS
 
-cat > "$STAGE_DIR/run-er-effects-poc.sh" <<'EOF_SH'
+cat > "$STAGE_DIR/run-er-quickload-poc.sh" <<'EOF_SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ME3_PATH="${ME3_PATH:-me3}"
 GAME="${GAME:-eldenring}"
-SLOT="${ER_EFFECTS_AUTOLOAD_SLOT:-0}"
+SLOT="${ER_QUICKLOAD_AUTOLOAD_SLOT:-0}"
 STEAM_DIR="${ME3_STEAM_DIR:-}"
 
 usage() {
   cat <<'USAGE'
-Usage: ./run-er-effects-poc.sh /path/to/ER0000.sl2
+Usage: ./run-er-quickload-poc.sh /path/to/ER0000.sl2
 
 Optional env:
   ME3_PATH=/path/to/me3
   ME3_STEAM_DIR=/path/to/Steam
   GAME=eldenring
-  ER_EFFECTS_AUTOLOAD_SLOT=0  # optional env override; script also writes slot to er-effects.toml
+  ER_QUICKLOAD_AUTOLOAD_SLOT=0  # optional env override; script also writes slot to er-quickload.toml
 USAGE
 }
 
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
 SAVE_FILE="$(realpath "$1")"
-DLL_PATH="$ROOT/er_effects_rs.dll"
-PROFILE_PATH="$ROOT/er-effects-poc.generated.me3"
-CONFIG_PATH="$ROOT/er-effects.toml"
+DLL_PATH="$ROOT/er_quickload.dll"
+PROFILE_PATH="$ROOT/er-quickload-poc.generated.me3"
+CONFIG_PATH="$ROOT/er-quickload.toml"
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
 [[ -f "$DLL_PATH" ]] || { echo "missing DLL: $DLL_PATH" >&2; exit 2; }
@@ -186,20 +212,41 @@ profile.write_text(
     encoding='utf-8',
 )
 config.write_text(
-    '# Required: this file must live next to er_effects_rs.dll.\n'
-    '# ER_EFFECTS_SAVE_FILE / ER_EFFECTS_AUTOLOAD_SLOT may override these values.\n'
+    '# Required: this file must live next to er_quickload.dll.\n'
+    '# ER_QUICKLOAD_SAVE_FILE / ER_QUICKLOAD_AUTOLOAD_SLOT may override these values.\n'
     f'save_file = {json.dumps(save)}\n'
     f'slot = {slot}\n',
     encoding='utf-8',
 )
 PY
 
-export ER_EFFECTS_TELEMETRY_PATH="$LOG_DIR/er-effects-telemetry.json"
-export ER_EFFECTS_BOOTSTRAP_PATH="$LOG_DIR/bootstrap.jsonl"
-export ER_EFFECTS_BOOTSTRAP_STATE_PATH="$LOG_DIR/bootstrap-state.json"
-export ER_EFFECTS_CRASH_LOG=1
-export ER_EFFECTS_CRASH_LOG_PATH="$LOG_DIR/er-effects-crash-log.txt"
-export ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$LOG_DIR/er-effects-autoload-debug.log"
+# EVERY per-run artifact goes to $LOG_DIR. Anything left beside the game exe is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone. Add a line here
+# (and to the PowerShell launcher above) for any future log rather than copying it out afterwards.
+# ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH also relocates the portrait-capture-slot*.bin dumps.
+export ER_QUICKLOAD_TELEMETRY_PATH="$LOG_DIR/er-quickload-telemetry.json"
+export ER_QUICKLOAD_BOOTSTRAP_PATH="$LOG_DIR/bootstrap.jsonl"
+export ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$LOG_DIR/bootstrap-state.json"
+export ER_QUICKLOAD_CRASH_LOG=1
+export ER_QUICKLOAD_CRASH_LOG_PATH="$LOG_DIR/er-quickload-crash-log.txt"
+export ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$LOG_DIR/er-quickload-autoload-debug.log"
+export ER_QUICKLOAD_TRACE_CONTINUE_PATH="$LOG_DIR/er-quickload-continue-trace.log"
+export ER_QUICKLOAD_INPUT_TRACE_PATH="$LOG_DIR/er-quickload-input-trace.jsonl"
+export ER_QUICKLOAD_PROFILE_PATH="$LOG_DIR/er-quickload-profile.jsonl"
+# The companion shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
+# launcher could move them; the reload trace alone runs at ~655 MB/hour. Set even when this profile
+# loads only the product, so adding a companion native later does not silently start leaking.
+export ER_QUICKLOAD_RELOAD_TRACE_PATH="$LOG_DIR/er-reload-trace.log"
+export ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$LOG_DIR/er-input-harness.log"
+export ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$LOG_DIR/er-input-harness-phases.jsonl"
+export ER_QUICKLOAD_DIAG_HARNESS_PATH="$LOG_DIR/er-diag-harness.log"
+export ER_QUICKLOAD_TIMESERIES_PATH="$LOG_DIR/er-telemetry-timeseries.jsonl"
+export ER_QUICKLOAD_CPU_PROFILE_PATH="$LOG_DIR/er-cpu-profile.txt"
+export ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$LOG_DIR/er-armament-icons.log"
+export ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$LOG_DIR/er-save-disable.log"
+export ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$LOG_DIR/er-save-disable-telemetry.json"
+export ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$LOG_DIR/er-loading-portrait.log"
+export ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$LOG_DIR/er-loading-portrait-crash-log.txt"
 
 args=()
 if [[ -n "$STEAM_DIR" ]]; then
@@ -214,20 +261,20 @@ echo "Save: $SAVE_FILE"
 echo "Logs: $LOG_DIR"
 exec "$ME3_PATH" "${args[@]}"
 EOF_SH
-chmod +x "$STAGE_DIR/run-er-effects-poc.sh"
+chmod +x "$STAGE_DIR/run-er-quickload-poc.sh"
 
 cat > "$STAGE_DIR/README.txt" <<'EOF_README'
-Minimal er-effects-rs + ME3 POC
+Minimal er-quickload + ME3 POC
 
 Windows PowerShell:
-  .\run-er-effects-poc.ps1 -SaveFile "C:\path\to\ER0000.sl2" -Me3Path "C:\path\to\me3.exe"
+  .\run-er-quickload-poc.ps1 -SaveFile "C:\path\to\ER0000.sl2" -Me3Path "C:\path\to\me3.exe"
 
 Linux:
-  ME3_PATH=/path/to/me3 ME3_STEAM_DIR="$HOME/.local/share/Steam" ./run-er-effects-poc.sh /path/to/ER0000.sl2
+  ME3_PATH=/path/to/me3 ME3_STEAM_DIR="$HOME/.local/share/Steam" ./run-er-quickload-poc.sh /path/to/ER0000.sl2
 
-The launchers write er-effects.toml next to er_effects_rs.dll, set telemetry/log
-env vars, generate an absolute-path ME3 profile, then run ME3 with er_effects_rs.dll
-as a native. ER_EFFECTS_SAVE_FILE and ER_EFFECTS_AUTOLOAD_SLOT remain optional
+The launchers write er-quickload.toml next to er_quickload.dll, set telemetry/log
+env vars, generate an absolute-path ME3 profile, then run ME3 with er_quickload.dll
+as a native. ER_QUICKLOAD_SAVE_FILE and ER_QUICKLOAD_AUTOLOAD_SLOT remain optional
 overrides for the TOML values.
 EOF_README
 

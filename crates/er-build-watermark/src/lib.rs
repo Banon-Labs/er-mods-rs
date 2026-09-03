@@ -59,6 +59,11 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         let module_base = module as usize;
         START.call_once(|| {
+            // Before anything that can panic. The renderer this shell installs compiles its
+            // shaders at first Present, inside a callback the game owns, and a failure there
+            // unwinds straight through to an abort: on 2026-08-29 that killed a boot 229 ms
+            // after the first backbuffer draw and left nothing on disk but the module name.
+            er_game_base::panic_report::report_panics_to("er-build-watermark", watermark_log);
             watermark_log(format_args!(
                 "loaded module_base=0x{module_base:x}; standalone build-watermark shell (no \
                  detours, no game writes)"

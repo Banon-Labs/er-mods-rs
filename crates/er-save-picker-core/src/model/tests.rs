@@ -207,11 +207,13 @@ fn synthetic_save_container(slots: &[Option<(&str, u32)>]) -> Vec<u8> {
 }
 
 /// An empty temp directory of our own, so a listing test sees exactly the files it wrote.
+///
+/// "Of our own" has to mean of our own PROCESS too, which is what [`crate::picker_scratch_dir`]
+/// adds: `%TEMP%` is shared by every process, so a name keyed only by `tag` was the same
+/// directory in two concurrent test binaries and each wiped the other's files. This wrapper is
+/// now only a namespace for the tests below.
 fn scratch_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("er-save-picker-accepts-{tag}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
-    dir
+    crate::picker_scratch_dir(&format!("accepts-{tag}"))
 }
 
 fn write_file(dir: &Path, leaf: &str, bytes: &[u8]) -> PathBuf {
@@ -382,9 +384,15 @@ fn the_listing_and_the_predicate_agree_file_for_file() {
 
 /// A directory that genuinely exists, so the drive-resume tests exercise the real existence
 /// filter instead of an invented path. Returns `(created_dir, its drive root)`.
+///
+/// It must also genuinely exist for the duration of the test that asked for it, and that is the
+/// part [`crate::picker_scratch_dir`] supplies by keying the name to this PROCESS. One of these
+/// tests (`cycling_drives_falls_back_to_the_root_when_the_remembered_folder_is_gone`) DELETES the
+/// directory on purpose to prove the fallback; with a name shared across processes it was
+/// deleting a concurrent test binary's directory as well as its own, and its own `remove_dir_all`
+/// then failed outright when the other binary won that race.
 fn real_dir_and_root(tag: &str) -> (PathBuf, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("er-save-picker-{tag}"));
-    std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
+    let dir = crate::picker_scratch_dir(&format!("dir-{tag}"));
     let mut root = dir.as_path();
     while let Some(parent) = root.parent() {
         if parent.as_os_str().is_empty() {

@@ -11,7 +11,7 @@ outside the imprint's timing budget (a stall). This is what lets the oracle tear
 
 Modes:
   post-hoc:  --imprint imprint.json --live timeseries.jsonl
-  live:      --imprint imprint.json --telemetry <er-effects-telemetry.json> --live-out ts.jsonl
+  live:      --imprint imprint.json --telemetry <er-quickload-telemetry.json> --live-out ts.jsonl
              polls the telemetry file, appends a timeseries, and prints the divergence line the instant
              the run misses the expected next transition beyond its time budget (drives teardown).
 
@@ -189,7 +189,7 @@ def main() -> int:
         help="post-hoc: filter the live run to deser==N before comparing (e.g. 1 = load2)",
     )
     ap.add_argument("--live", help="post-hoc: a completed timeseries.jsonl to compare")
-    ap.add_argument("--telemetry", help="live: the er-effects-telemetry.json to poll")
+    ap.add_argument("--telemetry", help="live: the er-quickload-telemetry.json to poll")
     ap.add_argument("--live-out", help="live: timeseries output path")
     ap.add_argument("--poll-s", type=float, default=0.5)
     ap.add_argument("--max-ms", type=float, default=300000)

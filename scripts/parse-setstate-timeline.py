@@ -8,7 +8,7 @@ if len(sys.argv) > 1:
     log = sys.argv[1]
 else:
     cands = sorted(
-        glob.glob("target/runtime-probe/onscreen-capture-*/er-effects-autoload-debug.log"),
+        glob.glob("target/runtime-probe/onscreen-capture-*/er-quickload-autoload-debug.log"),
         key=os.path.getmtime,
     )
     if not cands:

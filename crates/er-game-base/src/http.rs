@@ -1,4 +1,4 @@
-//! A single blocking HTTPS GET, via WinHTTP.
+//! Blocking HTTPS via WinHTTP: a GET, and a JSON POST.
 //!
 //! WinHTTP rather than a Rust TLS stack because it is what Wine actually implements: a
 //! standalone probe built exactly like this completed the full handshake inside the game's
@@ -140,16 +140,81 @@ pub fn get(host: &str, path: &str, user_agent: &str) -> Result<String, HttpError
     get_inner(host, path, user_agent, MAX_BODY_BYTES)
 }
 
+/// POST `body` as JSON to `https://{host}{path}` and return the response body.
+///
+/// `headers` is the extra request-header block, CRLF-separated and WITHOUT a trailing CRLF --
+/// `Content-Type` is added here, so a caller supplies only what is its own (an authorization
+/// header, say). Pass an empty string for none.
+///
+/// Blocking, with the same thread rules as [`get`]: never from `DllMain`, never from a frame.
+///
+/// # Errors
+///
+/// Returns [`HttpError`] identifying the step that failed.
+pub fn post_json(
+    host: &str,
+    path: &str,
+    user_agent: &str,
+    headers: &str,
+    body: &str,
+) -> Result<String, HttpError> {
+    request(
+        host,
+        path,
+        user_agent,
+        "POST",
+        headers,
+        Some(body),
+        MAX_BODY_BYTES,
+    )
+}
+
 fn get_inner(
     host: &str,
     path: &str,
     user_agent: &str,
     max_body_bytes: usize,
 ) -> Result<String, HttpError> {
+    request(host, path, user_agent, "GET", "", None, max_body_bytes)
+}
+
+/// One request, whatever the verb.
+///
+/// The GET and the POST differ in three places -- the verb, the header block, and whether a body
+/// is sent -- so they share a body rather than being copied apart, which is how the two would end
+/// up disagreeing about which status codes count as success.
+fn request(
+    host: &str,
+    path: &str,
+    user_agent: &str,
+    verb: &str,
+    headers: &str,
+    body: Option<&str>,
+    max_body_bytes: usize,
+) -> Result<String, HttpError> {
     let agent = wide(user_agent);
     let host_w = wide(host);
     let path_w = wide(path);
-    let verb = wide("GET");
+    let verb = wide(verb);
+    // The header block WinHTTP is handed. Content-Type is ours to state: every body this sends is
+    // JSON, and a server that is told nothing guesses.
+    let header_block = if body.is_some() {
+        let mut block = String::from("Content-Type: application/json");
+        if !headers.is_empty() {
+            block.push_str("\r\n");
+            block.push_str(headers);
+        }
+        block
+    } else {
+        headers.to_owned()
+    };
+    let header_w = wide(&header_block);
+    let header_len = if header_block.is_empty() {
+        0
+    } else {
+        header_block.encode_utf16().count() as u32
+    };
+    let body_bytes = body.unwrap_or("").as_bytes();
 
     // Safety: every pointer below outlives the call that uses it, and each handle is
     // wrapped in `Owned` before any fallible step can return.
@@ -193,7 +258,23 @@ fn get_inner(
         }
 
         // The TLS handshake happens here; a Wine TLS failure surfaces at this call.
-        if WinHttpSendRequest(req.0, core::ptr::null(), 0, core::ptr::null(), 0, 0, 0) == 0 {
+        let header_ptr = if header_len == 0 {
+            core::ptr::null()
+        } else {
+            header_w.as_ptr()
+        };
+        let (body_ptr, body_len) = if body_bytes.is_empty() {
+            (core::ptr::null(), 0)
+        } else {
+            (
+                body_bytes.as_ptr().cast::<c_void>(),
+                body_bytes.len() as u32,
+            )
+        };
+        if WinHttpSendRequest(
+            req.0, header_ptr, header_len, body_ptr, body_len, body_len, 0,
+        ) == 0
+        {
             return Err(HttpError::Win32 {
                 step: "WinHttpSendRequest",
                 code: GetLastError(),
@@ -222,7 +303,9 @@ fn get_inner(
                 code: GetLastError(),
             });
         }
-        if status != 200 {
+        // Any 2xx. `POST /inventories` answers 201, and treating that as a failure would report
+        // an upload that in fact stored the build.
+        if !(200..300).contains(&status) {
             return Err(HttpError::Status(status));
         }
 

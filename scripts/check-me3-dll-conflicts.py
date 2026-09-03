@@ -55,6 +55,15 @@ VALID_KINDS = {
     # game tasks -- all driving one piece of game state with no shared lock. Nothing is detoured,
     # so it looks harmless to every other check here; the damage is two owners of one mutation.
     "duplicate-owner",
+    # A function-pointer slot the game later CALLS holds a value that is not a function entry.
+    # Distinct from `hook-collision`, which corrupts CODE at a hooked prologue and presents as
+    # silent inertness: this corrupts DATA and presents as a hard fault at a fixed address, with
+    # `rcx == rip` at the fault because the call went through the pointer. Added 2026-09-02 for
+    # er-quickload X er-invasion-warp rather than mislabel it `hook-collision`, which is what it
+    # was first recorded as and what the register capture then falsified. Use this kind when the
+    # pair is REPRODUCIBLE but the writer of the bad pointer is not yet identified -- the honest
+    # label for "we know it dies and we know how, not why".
+    "corrupt-callback-pointer",
 }
 
 # How a [[shared]] pair was made safe on the address they both detour. One value today, and it is

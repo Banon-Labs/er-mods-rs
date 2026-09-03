@@ -9,7 +9,7 @@
 # is never asked to drive).
 #
 # WIRING (differs from run-samechar-3x-threedll.sh):
-#   1. er-effects-telemetry-only.txt  -> ER_EFFECTS_TELEMETRY_ONLY: DISARMS the product autoload (product
+#   1. er-quickload-telemetry-only.txt  -> ER_QUICKLOAD_TELEMETRY_ONLY: DISARMS the product autoload (product
 #      product_autoload_gates.rs), so the game boots to the NATIVE title and the product loads NO character
 #      of its own -- it only emits the rich oracle_* telemetry. With the 2026-07-23 present-hook decoupling
 #      (bd present-cadence-gx-instrumentation-coupled-...), the present detour still installs under
@@ -18,7 +18,7 @@
 #   2. er-harness-drive-mode.txt = "full" -> input-harness FullBootReload DRIVE mode (drive.rs): the
 #      HARNESS drives title->Continue->play->System->Quit->Continue via the raw pad device (Up/Confirm,
 #      TabLeft to the Quit tab, Down/Confirm), each step gated on its own pane semaphore. NOT companion mode.
-#   3. NO er-effects.toml redirect: the game reads the REAL APPDATA active save (pure vanilla), not a
+#   3. NO er-quickload.toml redirect: the game reads the REAL APPDATA active save (pure vanilla), not a
 #      staged/redirected source. Whatever character is last-active in APPDATA is the vanilla Continue target.
 #   4. capture-samechar-3x.py --observe-only: records the full timeseries with NO probe/verdict/fps
 #      teardowns (the harness drives; the capture just observes) -> the vanilla native reload sequence.
@@ -29,7 +29,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/vanilla-reload-agentdriven-$(date +%Y%m%d-%H%M%S)}"
-PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace.dll"
 HARNESS_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_input_harness.dll"
 TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
@@ -60,9 +60,17 @@ fi
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
-for d in "$PRODUCT_DLL" "$TRACE_DLL" "$HARNESS_DLL" "$TELEM_DLL"; do
-	[[ -f "$d" ]] || fail "DLL not built: $d (cargo xwin build --release --target x86_64-pc-windows-msvc)"
-done
+# FRESHNESS, NOT EXISTENCE. The loop here used to assert only that four files exist -- but the
+# profile below points me3 straight at target/.../release, so existence says nothing about which
+# code loads. This run produces the VANILLA BASELINE that oracle-steadystate-diff.py subtracts
+# from every later product run; a baseline captured against a stale harness or telemetry DLL
+# poisons every comparison drawn from it afterwards, silently and for as long as the file is kept.
+# All four are checked: the product is present here even in telemetry-only mode.
+# shellcheck source=scripts/er-dll-freshness.sh
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/er-dll-freshness.sh"
+require_fresh_dlls "$PRODUCT_DLL" "$TRACE_DLL" "$HARNESS_DLL" "$TELEM_DLL" ||
+	fail "refusing to launch against DLLs that are not this source tree (see above)"
 if tasklist.exe 2>/dev/null | grep -qiE 'eldenring\.exe|start_protected_game\.exe'; then
 	fail "An Elden Ring process is already running. Tear it down before launching (never a blanket kill)."
 fi
@@ -74,7 +82,7 @@ mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
 
 # --- stage the 4 DLLs + a 4-native me3 profile (product FIRST for the union export) ---
-PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
+PRODUCT_GAMEDIR="$GAME_DIR/er_quickload.dll"
 TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
 HARNESS_GAMEDIR="$GAME_DIR/er_input_harness.dll"
 TELEM_GAMEDIR="$GAME_DIR/er_telemetry.dll"
@@ -82,7 +90,32 @@ cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 cp -f "$HARNESS_DLL" "$HARNESS_GAMEDIR"
 cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
-rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl"
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last, and
+# several sessions launch concurrently here. A copy after the run cannot fix it -- by then this run
+# clobbered the previous one's file -- and a crashed run never reaches the copy at all. This line used
+# to `rm -f "$GAME_DIR/er-telemetry-timeseries.jsonl"`, which was ANOTHER run's evidence.
+LAUNCH_ENV_VARS=(
+	"ER_QUICKLOAD_TELEMETRY_PATH=$ARTIFACT_DIR/er-quickload-telemetry.json"
+	"ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH=$ARTIFACT_DIR/er-quickload-autoload-debug.log"
+	"ER_QUICKLOAD_CRASH_LOG_PATH=$ARTIFACT_DIR/er-quickload-crash-log.txt"
+	"ER_QUICKLOAD_TRACE_CONTINUE_PATH=$ARTIFACT_DIR/er-quickload-continue-trace.log"
+	"ER_QUICKLOAD_INPUT_TRACE_PATH=$ARTIFACT_DIR/er-quickload-input-trace.jsonl"
+	"ER_QUICKLOAD_BOOTSTRAP_PATH=$ARTIFACT_DIR/er-quickload-bootstrap.jsonl"
+	"ER_QUICKLOAD_BOOTSTRAP_STATE_PATH=$ARTIFACT_DIR/er-quickload-bootstrap-state.json"
+	"ER_QUICKLOAD_PROFILE_PATH=$ARTIFACT_DIR/er-quickload-profile.jsonl"
+	"ER_QUICKLOAD_RELOAD_TRACE_PATH=$ARTIFACT_DIR/er-reload-trace.log"
+	"ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH=$ARTIFACT_DIR/er-input-harness.log"
+	"ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH=$ARTIFACT_DIR/er-input-harness-phases.jsonl"
+	"ER_QUICKLOAD_DIAG_HARNESS_PATH=$ARTIFACT_DIR/er-diag-harness.log"
+	"ER_QUICKLOAD_TIMESERIES_PATH=$ARTIFACT_DIR/er-telemetry-timeseries.jsonl"
+	"ER_QUICKLOAD_CPU_PROFILE_PATH=$ARTIFACT_DIR/er-cpu-profile.txt"
+	"ER_QUICKLOAD_ARMAMENT_ICONS_PATH=$ARTIFACT_DIR/er-armament-icons.log"
+	"ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH=$ARTIFACT_DIR/er-save-disable.log"
+	"ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH=$ARTIFACT_DIR/er-save-disable-telemetry.json"
+	"ER_QUICKLOAD_LOADING_PORTRAIT_PATH=$ARTIFACT_DIR/er-loading-portrait.log"
+	"ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH=$ARTIFACT_DIR/er-loading-portrait-crash-log.txt"
+)
 
 PROFILE="$ARTIFACT_DIR/vanilla-reload-agentdriven.me3"
 # NOTE: the old RENDERDOC=1 me3-native path (stage renderdoc.dll as the first native so it hooks ER's
@@ -114,8 +147,8 @@ PROFILE="$ARTIFACT_DIR/vanilla-reload-agentdriven.me3"
 # decoupled detour) but loads no character. The NATIVE Continue is driven by the harness below.
 # MOD_ARMED=1: skip telemetry-only so the PRODUCT is ARMED (autoload + full composite) -- the mod-side of
 # the Milestone-1 A/B diff (vanilla=disarmed run vs mod=armed run, same native reload). Default: disarmed.
-[[ -z "${MOD_ARMED:-}" ]] && : >"$GAME_DIR/er-effects-telemetry-only.txt"
-[[ -n "${NO_COMPOSITE:-}" ]] && : >"$GAME_DIR/er-effects-measure-no-composite.txt"
+[[ -z "${MOD_ARMED:-}" ]] && : >"$GAME_DIR/er-quickload-telemetry-only.txt"
+[[ -n "${NO_COMPOSITE:-}" ]] && : >"$GAME_DIR/er-quickload-measure-no-composite.txt"
 # harness drive mode (DRIVE_MODE env, default 'full'): 'full' drives the whole
 # boot->Continue->play->System->Quit->Continue reload; 'boot' drives boot->Continue and holds in-world
 # (no quit) -- use 'boot' for a CLEAN vanilla in-world steady-state window when the reload nav derails.
@@ -125,10 +158,10 @@ echo -n "${DRIVE_MODE:-full}" >"$GAME_DIR/er-harness-drive-mode.txt"
 [[ -n "${HOLD_VKID:-}" ]] && echo -n "${HOLD_VKID}" >"$GAME_DIR/er-harness-probe-hold-id.txt"
 [[ -n "${OS_INPUT:-}" ]] && : >"$GAME_DIR/er-harness-os-input.txt"
 [[ -n "${NATIVE_QUIT:-}" ]] && : >"$GAME_DIR/er-harness-native-quit.txt"
-if [[ -n "${DIAG_NO_AUTOLOAD:-}" ]]; then : >"$GAME_DIR/er-effects-diag-no-autoload.txt"; else rm -f "$GAME_DIR/er-effects-diag-no-autoload.txt"; fi
+if [[ -n "${DIAG_NO_AUTOLOAD:-}" ]]; then : >"$GAME_DIR/er-quickload-diag-no-autoload.txt"; else rm -f "$GAME_DIR/er-quickload-diag-no-autoload.txt"; fi
 # CLEAN-A/B: DISABLE_SWITCH_OWNLOAD=1 skips the menu-free own_load_switch_reload_fire so the harness's
 # menu-driven Continue is the sole reload path (isolates menu-free vs menu-driven; bd STEP4-RUNTIME-TRACE).
-if [[ -n "${DISABLE_SWITCH_OWNLOAD:-}" ]]; then : >"$GAME_DIR/er-effects-disable-switch-reload-ownload.txt"; else rm -f "$GAME_DIR/er-effects-disable-switch-reload-ownload.txt"; fi
+if [[ -n "${DISABLE_SWITCH_OWNLOAD:-}" ]]; then : >"$GAME_DIR/er-quickload-disable-switch-reload-ownload.txt"; else rm -f "$GAME_DIR/er-quickload-disable-switch-reload-ownload.txt"; fi
 # FORCE-DRIVE: the harness normally stands down to Passive when the product DLL is loaded (companion
 # design). This vanilla capture loads the product for its telemetry but needs the HARNESS to drive, so
 # override that stand-down (bd VANILLA-BASELINE-blocked-harness-forces-passive-when-product-loaded).
@@ -136,24 +169,26 @@ if [[ -n "${DISABLE_SWITCH_OWNLOAD:-}" ]]; then : >"$GAME_DIR/er-effects-disable
 # Save source: default = pure APPDATA vanilla save (whatever is last-active). If BOOT_FILE is set,
 # write an in-memory READ-ONLY redirect to it (e.g. the angrE 100-Lilbro corpus save) so D_van is
 # measured on the SAME character as D_mod -- and WITHOUT writing the live APPDATA save (save-safer).
-[[ -f "$GAME_DIR/er-effects.toml" ]] && cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
+[[ -f "$GAME_DIR/er-quickload.toml" ]] && cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
 if [[ -n "${BOOT_FILE:-}" ]]; then
 	[[ -f "$BOOT_FILE" ]] || {
 		echo "BOOT_FILE not found: $BOOT_FILE" >&2
 		exit 1
 	}
-	echo "save_file = '$(win_path "$BOOT_FILE")'" >"$GAME_DIR/er-effects.toml"
+	echo "save_file = '$(win_path "$BOOT_FILE")'" >"$GAME_DIR/er-quickload.toml"
 	echo "==   SAVE REDIRECT (read-only, D_van same-char as D_mod): $BOOT_FILE"
 else
-	rm -f "$GAME_DIR/er-effects.toml"
+	rm -f "$GAME_DIR/er-quickload.toml"
 fi
 # Sweep stale probe/switch markers so a prior run cannot pollute this vanilla capture.
-rm -f "$GAME_DIR"/er-effects-system-quit-repro.txt "$GAME_DIR"/er-effects-system-quit-load-switch.txt \
-	"$GAME_DIR"/er-effects-switch-slot.txt "$GAME_DIR"/er-effects-switch-save-file.txt \
-	"$GAME_DIR"/er-effects-prove-movement.txt 2>/dev/null
-rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-input-harness.log \
-	"$GAME_DIR"/er-effects-telemetry.json "$GAME_DIR"/er-effects-input-trace.jsonl* 2>/dev/null
-
+rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-system-quit-load-switch.txt \
+	"$GAME_DIR"/er-quickload-switch-slot.txt "$GAME_DIR"/er-quickload-switch-save-file.txt \
+	"$GAME_DIR"/er-quickload-prove-movement.txt 2>/dev/null
+# THE GAME_DIR LOG SWEEP IS GONE ON PURPOSE. It used to clear er-quickload-*.log, er-reload-trace.log,
+# er-input-harness.log and the telemetry json out of the game directory, which destroyed TWO
+# generations of somebody ELSE's run at a time: `begin_fresh_run` removes `<name>.prev`
+# unconditionally when the live file is absent. Every log this run writes is redirected into a fresh
+# per-run ARTIFACT_DIR, so the clean slate is free.
 # SAFETY (bd never-blanket-kill-eldenring): only tear down the PIDs THIS run spawns.
 win_pids_for() {
 	tasklist.exe /FI "IMAGENAME eq $1" /FO CSV /NH 2>/dev/null |
@@ -162,7 +197,8 @@ win_pids_for() {
 PRE_ER_PIDS=" $(win_pids_for eldenring.exe) "
 PRE_ME3_PIDS=" $(win_pids_for me3.exe) $(win_pids_for me3-launcher.exe) "
 
-# shellcheck disable=SC2317
+# Invoked only through the EXIT trap below, which shellcheck cannot see.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
 	local pid
 	for pid in $(win_pids_for eldenring.exe); do
@@ -172,14 +208,14 @@ cleanup() {
 		[[ "$PRE_ME3_PIDS" == *" $pid "* ]] || taskkill.exe /F /PID "$pid" >/dev/null 2>&1
 	done
 	# Restore: remove vanilla markers so a later product run is not accidentally telemetry-only / driven.
-	rm -f "$GAME_DIR/er-effects-measure-no-composite.txt" "$GAME_DIR/er-effects-telemetry-only.txt" "$GAME_DIR/er-harness-drive-mode.txt" \
+	rm -f "$GAME_DIR/er-quickload-measure-no-composite.txt" "$GAME_DIR/er-quickload-telemetry-only.txt" "$GAME_DIR/er-harness-drive-mode.txt" \
 		"$GAME_DIR/er-harness-force-drive.txt" "$GAME_DIR/er-harness-probe-hold-id.txt" "$GAME_DIR/er-harness-os-input.txt" "$GAME_DIR/er-harness-native-quit.txt" 2>/dev/null
 	# Only the teardown-on-title-rebuild path creates the read-side oracle markers; remove them so a later
 	# run is not accidentally left emitting oracle streams. Guarded so the default / A/B-driver path (which
 	# sets the .on markers itself and shares them across arms) is untouched.
 	[[ "${TEARDOWN_ON_TITLE_REBUILD:-0}" == "1" ]] &&
 		rm -f "$GAME_DIR/er-oracle-title-binding.on" "$GAME_DIR/er-oracle-stream-overlap.on" "$GAME_DIR/er-oracle-dialog-active.on" 2>/dev/null
-	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+	[[ -f "$ARTIFACT_DIR/er-quickload.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-quickload.toml.bak" "$GAME_DIR/er-quickload.toml"
 }
 trap cleanup EXIT
 
@@ -196,19 +232,20 @@ echo "======================================================================"
 # is present at ER's D3D12 device creation (the ONLY point it can hook -- inject-after-boot cannot hook an
 # already-created device, verified run62; me3-native DLL load stalls boot, run59). --opt-hook-children
 # propagates the hook through me3 -> me3-launcher -> eldenring (grandchild). The telemetry DLL's
-# trigger_capture (re-check enabled) then fires at the slow reload frame (er-effects-rdoc-slow-ms.txt).
+# trigger_capture (re-check enabled) then fires at the slow reload frame (er-quickload-rdoc-slow-ms.txt).
 # Accepts a slower boot (RenderDoc serializes D3D12); give a long window. bd VERIFIED-game-is-NATIVE-WINDOWS.
 if [[ "${RDC_CAPTURE:-0}" == "1" ]]; then
 	RDCMD="${RENDERDOCCMD:-/mnt/c/Program Files/RenderDoc/renderdoccmd.exe}"
 	[[ -f "$RDCMD" ]] || fail "RDC_CAPTURE=1 but renderdoccmd.exe not found at '$RDCMD'"
 	rm -f "$GAME_DIR"/er_cap_frame*.rdc
-	[[ -f "$GAME_DIR/er-effects-rdoc-slow-ms.txt" ]] || echo -n "15" >"$GAME_DIR/er-effects-rdoc-slow-ms.txt"
+	[[ -f "$GAME_DIR/er-quickload-rdoc-slow-ms.txt" ]] || echo -n "15" >"$GAME_DIR/er-quickload-rdoc-slow-ms.txt"
 	"$RDCMD" capture --opt-hook-children \
 		--capture-file 'C:\SteamLibrary\steamapps\common\ELDEN RING\Game\er_cap_frame' \
+		env "${LAUNCH_ENV_VARS[@]}" \
 		"$(wslpath -w "$ME3")" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" \
 		>"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 else
-	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+	env "${LAUNCH_ENV_VARS[@]}" "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 fi
 
 if [[ "${TEARDOWN_ON_TITLE_REBUILD:-0}" == "1" ]]; then
@@ -240,11 +277,15 @@ else
 	RC=$?
 fi
 
-[[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"
-[[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"
+# FALLBACK ONLY -- both are redirected into ARTIFACT_DIR at launch. These cover the case where the
+# env did not survive me3 -> Proton and the DLL fell back to the game directory.
+[[ -f "$ARTIFACT_DIR/er-input-harness.log" ]] ||
+	{ [[ -f "$GAME_DIR/er-input-harness.log" ]] && cp -f "$GAME_DIR/er-input-harness.log" "$ARTIFACT_DIR/er-input-harness.log"; }
+[[ -f "$ARTIFACT_DIR/er-reload-trace.log" ]] ||
+	{ [[ -f "$GAME_DIR/er-reload-trace.log" ]] && cp -f "$GAME_DIR/er-reload-trace.log" "$ARTIFACT_DIR/er-reload-trace.log"; }
 {
 	echo "git_head: $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-	for d in er_effects_rs.dll er_reload_trace.dll er_input_harness.dll er_telemetry.dll; do
+	for d in er_quickload.dll er_reload_trace.dll er_input_harness.dll er_telemetry.dll; do
 		f="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/$d"
 		[[ -f "$f" ]] && echo "$d: mtime=$(date -r "$f" +%Y%m%d-%H%M%S) sha=$(sha256sum "$f" | cut -c1-16)"
 	done

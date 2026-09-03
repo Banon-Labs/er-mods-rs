@@ -1,9 +1,17 @@
 """Minimal PE reader + capstone disassembler helper for Seamless Co-op's ersc.dll.
 
-ersc.dll is Themida-wrapped, but only the entry stub and the `.themida` section
-(VA 0x18023a000, 0x546000 bytes) are packed -- the original `.text` section
-(RVA 0x1000, 0x18c626 bytes) is PLAINTEXT on disk and disassembles cleanly, and
-the original `.pdata` (RVA 0x21d000) still carries the RUNTIME_FUNCTION table.
+ersc.dll is WinLicense/Themida-wrapped, but only the entry stub and the packer's
+VM section are packed -- the original `.text` is PLAINTEXT on disk and
+disassembles cleanly, and the original `.pdata` still carries the
+RUNTIME_FUNCTION table. This reader parses the section table fresh on every run,
+so it needs none of those addresses hard-coded and survives a Seamless update.
+
+Do NOT reintroduce the concrete numbers this paragraph used to carry (`.themida`
+at VA 0x18023a000 / 0x546000 bytes, `.text` 0x18c626 bytes). They described
+v1.9.9 only: v2.0.0 renamed that section `.themida` -> `ERSC`, grew it to
+0xaf0000, and grew `.text` to 0x191496. Run `scripts/ersc_identify.py` to see
+what the INSTALLED build actually looks like. The rename is also why nothing here
+should ever match a section by NAME -- test executable-and-writable instead.
 
 Run under uv so capstone is provisioned:
     uv run --with capstone python3 scripts/ersc_pe.py --help

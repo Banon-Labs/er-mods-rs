@@ -41,8 +41,8 @@ index 0000000..586d9d0
 +)
 +
 +// defaultJPDictPath is used when GHIDRA_JP_DICT is unset. It points at the
-+// version-controlled dictionary in the er-effects-rs repo so it is easy to grow.
-+const defaultJPDictPath = "/home/banon/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json"
++// version-controlled dictionary in the er-quickload repo so it is easy to grow.
++const defaultJPDictPath = "/home/banon/projects/er-mods-rs/scripts/ghidra/jp-en-dict.json"
 +
 +// renderResult turns the Ghidra server's raw JSON-RPC result into human-readable
 +// MCP text. The old code returned string(raw), which dumped the JSON verbatim --

@@ -98,8 +98,10 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
         return Err(ReflectError::Truncated);
     }
     let words: Vec<u32> = spirv
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect();
     if words[0] != MAGIC {
         return Err(ReflectError::BadMagic);
@@ -372,8 +374,10 @@ pub fn block_byte_sizes(spirv: &[u8]) -> Vec<(u32, u32, u64)> {
         return Vec::new();
     }
     let words: Vec<u32> = spirv
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect();
     if words[0] != MAGIC {
         return Vec::new();

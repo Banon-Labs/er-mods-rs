@@ -5,7 +5,7 @@
 //! write_oracle / game_man_snapshot / bootstrap / save_policy_logs) is migrated
 //! here file-group by file-group as the ~900-symbol ownership inversion described
 //! in the extraction plan is completed. This crate depends ONLY on er-game-base +
-//! upstream game libs, never on er-effects-rs (product).
+//! upstream game libs, never on er-quickload (product).
 //!
 //! Per-tick product data enters via [`TelemetryFrameInput`] rather than a direct
 //! read of the product's `EffectsState` behind its `Arc<Mutex<>>` lock, so
@@ -17,7 +17,7 @@ pub mod log_channels;
 mod read;
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The handful of per-frame product-owned values telemetry actually reads,
 /// built by the product BEFORE calling into telemetry (so telemetry never
@@ -32,13 +32,16 @@ pub struct TelemetryFrameInput {
 }
 
 /// CWD-relative artifact written by the standalone telemetry-only DLL. Distinct
-/// from the product's `er-effects-telemetry.json` so a combined run keeps both.
+/// from the product's `er-quickload-telemetry.json` so a combined run keeps both.
 const STANDALONE_JSON: &str = "er-telemetry-timeseries.jsonl";
 
+/// This run's timeseries: the launcher's redirect if it set one, else beside `eldenring.exe`.
+///
+/// Without the knob the file was single-slot in the game directory, so two launches lost the run
+/// before last — and the tick stamps are per-run, which makes a stale timeseries worse than a
+/// missing one. Resolution lives in `er_game_base::log`, shared with every other per-run artifact.
 fn standalone_json_path() -> PathBuf {
-    er_game_base::log::game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(STANDALONE_JSON)
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_TIMESERIES_PATH", STANDALONE_JSON)
 }
 
 /// Read-side-only telemetry tick for the standalone `er-telemetry`.
@@ -282,10 +285,10 @@ fn renderdoc_slow_ms() -> f32 {
     if c != u32::MAX {
         return f32::from_bits(c);
     }
-    // Prefer a GAME-DIR MARKER file (er-effects-rdoc-slow-ms.txt): env does NOT propagate through
+    // Prefer a GAME-DIR MARKER file (er-quickload-rdoc-slow-ms.txt): env does NOT propagate through
     // me3/Proton to the game process (bd CORRECTION-RenderDoc...), so a marker is the reliable way to set a
     // low threshold that captures the FAST vanilla/mod reload (16-18ms) for the per-pass GPU A/B diff.
-    let v = std::fs::read_to_string("er-effects-rdoc-slow-ms.txt")
+    let v = std::fs::read_to_string("er-quickload-rdoc-slow-ms.txt")
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
         .or_else(|| {
@@ -469,9 +472,13 @@ mod profiler {
                 100.0 * *c as f64 / total as f64
             ));
         }
-        let path = er_game_base::log::game_directory_path()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("er-cpu-profile.txt");
+        // Redirectable like every other per-run artifact, and it needs it MORE than most: this
+        // one is a bare `fs::write`, so it keeps zero previous generations — the run before this
+        // one is gone the instant this one dumps, with no `.prev` to fall back on.
+        let path = er_game_base::log::redirected_artifact_path(
+            "ER_QUICKLOAD_CPU_PROFILE_PATH",
+            "er-cpu-profile.txt",
+        );
         let _ = std::fs::write(path, s);
     }
 }
@@ -481,54 +488,187 @@ mod profiler {
     pub fn note_frame(_base: usize, _task_delta: f32) {}
 }
 
+/// Fields every sample carries even when unchanged: the row's identity and its time axis. A row
+/// that could not be placed on the clock is not a sample of anything.
+const ALWAYS_SAMPLED: [&str; 2] = ["oracle_standalone_ticks", "oracle_tick_ms"];
+
+/// Render one JSONL record, omitting fields byte-identical to the previously written record.
+///
+/// The omission is keyed on the VALUE, never on the field name: a field is dropped only when the
+/// exact bytes this record would have written are the bytes the last record already carries, so a
+/// reader that carries values forward reconstructs the full series losslessly, and a reader that
+/// filters (all three in `scripts/`) sees exactly the transitions.
+fn render_sample(fields: &[(&str, String)]) -> String {
+    static PREVIOUS: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+    let mut previous = PREVIOUS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    render_sample_against(fields, &mut previous)
+}
+
+/// The whole of [`render_sample`] except for where the previous record is kept. Split out so the
+/// tests own their `previous` instead of racing each other through one process-wide static -- the
+/// elision is a function of the last record, and a test that cannot choose the last record is
+/// testing whichever test got there first.
+fn render_sample_against(fields: &[(&str, String)], previous: &mut Option<Vec<String>>) -> String {
+    // Length mismatch means the field list changed under a running process (it cannot, but a
+    // stale vector would silently mis-pair names to values, which is worse than a fat record).
+    let last = previous.as_ref().filter(|last| last.len() == fields.len());
+    let mut body = String::from("{");
+    for (index, (name, value)) in fields.iter().enumerate() {
+        let unchanged = last.is_some_and(|last| last[index] == *value);
+        if unchanged && !ALWAYS_SAMPLED.contains(name) {
+            continue;
+        }
+        if body.len() > 1 {
+            body.push(',');
+        }
+        body.push('"');
+        body.push_str(name);
+        body.push_str("\":");
+        body.push_str(value);
+    }
+    body.push_str("}\n");
+    *previous = Some(fields.iter().map(|(_, value)| value.clone()).collect());
+    body
+}
+
+/// `oracle_flip_*` for "the CSFlipperImp global has no mapping on this build", as against `-1.0`
+/// for "it resolved and the object is not there yet". See [`singleton_field`] for why the two are
+/// worth separating.
+const UNRESOLVED_F32: f32 = -2.0;
+/// `oracle_play_time_ms` for "GameDataMan has no mapping on this build", as against `-1` for
+/// "resolved, no character loaded". Both are non-positive, so every existing reader treats them
+/// alike; only a human or a future gate reading the series can tell them apart, which is the point.
+const UNRESOLVED_I64: i64 = -2;
+/// Render a singleton pointer oracle: its address, or `"unmapped"` when the RVA has no mapping for
+/// the running build.
+///
+/// # Why not just print `0x0`
+///
+/// Because that is what happened, and it hid for a whole run. `oracle_game_man_ptr` and
+/// `oracle_cs_menu_man_ptr` were `"0x0"` in all 4,350 records of `br-20260831-160354-2513` -- not
+/// because the game had no GameMan or CSMenuMan, but because the reads were aimed at 1.16.2
+/// addresses that 1.17 leaves blank. `"0x0"` is also the honest answer for a global the game has
+/// not built yet, so nothing downstream could tell a dead address from an early sample, and the
+/// two fields sat there looking like ordinary boot noise for the length of the file.
+///
+/// A distinct token cannot be mistaken for either. It is a string, and every reader of these two
+/// fields today is a human reading the series, so it costs no parser.
+fn singleton_field(pointer: Option<usize>) -> String {
+    match pointer {
+        None => "\"unmapped\"".to_string(),
+        Some(address) => format!("\"0x{address:x}\""),
+    }
+}
+
 pub fn standalone_tick() {
     let n = counters::STANDALONE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // Throttle disk writes to every 4th tick -- dense enough to sample the game frame time across a
-    // ~3s vanilla-reload playable window (at 20fps that is ~0.2s between writes), still a snapshot.
-    const WRITE_EVERY: u64 = 4;
-    if !n.is_multiple_of(WRITE_EVERY) {
-        return;
+    // Throttle disk writes so the series stays dense enough to sample the game frame time across a
+    // ~3s vanilla-reload playable window -- ~0.2s between writes -- but no denser.
+    //
+    // THE FLOOR IS IN TIME, NOT IN TICKS. This used to be `every 4th tick`, a frame-count proxy for
+    // that 0.2s which tightens exactly when the game is healthy: 0.2s at 20fps, 0.067s at 60fps. So
+    // the file grew three times denser than its own stated requirement precisely when nothing
+    // interesting was happening. Measured on run `br-20260831-160354-2513`: 4,350 records at a
+    // 115ms median -- already denser than the design target -- for 4.43 MB across 514s (31 MB/h),
+    // plus a 29 MB `.prev` beside it. A wall-clock floor delivers the documented spacing at any
+    // framerate.
+    const MIN_SAMPLE_SPACING_MS: u64 = 200;
+    let tick_ms = tick_ms();
+    {
+        static LAST_SAMPLE_MS: AtomicU64 = AtomicU64::new(0);
+        let last = LAST_SAMPLE_MS.load(Ordering::SeqCst);
+        // `0` is the never-sampled sentinel, so the first tick always writes and establishes the
+        // epoch. `saturating_sub` keeps a backwards clock from wedging the series shut forever.
+        if last != 0 && tick_ms.saturating_sub(last) < MIN_SAMPLE_SPACING_MS {
+            return;
+        }
+        LAST_SAMPLE_MS.store(tick_ms.max(1), Ordering::SeqCst);
     }
 
     let base = er_game_base::mem::game_module_base().unwrap_or(0);
-    let read_singleton = |rva: usize| -> usize {
+    // EVERY SINGLETON READ ASKS WHERE THE GLOBAL LIVES ON THIS BUILD. This closure was
+    // `safe_read_usize(base + rva)` until 2026-08-31, and that one line is why four of the fields
+    // below were byte-identical in all 4,350 records of run `br-20260831-160354-2513`.
+    //
+    // A raw `base + rva` is a read of the 1.16.2 slot, and every `.data` global moved on 1.17:
+    // GameDataMan 0x3d5df38 -> 0x3d61f98, GameMan 0x3d69918 -> 0x3d6d988, CSMenuMan
+    // 0x3d6b7b0 -> 0x3d6f820, CSFlipperImp 0x4589ad8 -> 0x458db58. The reads did not FAIL -- they
+    // succeeded against whatever now occupies the stale address, and the series recorded exactly
+    // what that was: `oracle_game_data_man_ptr` was `0x6e614d6e6f697463` in every single record,
+    // which is little-endian ASCII `"ctionMan"` -- eight bytes out of the middle of the RTTI type
+    // name `.?AVNWSteamConnectionManager@DLNW3@@`, which 1.17 parks where GameDataMan used to be.
+    // The other three stale slots landed in still-blank `.data` and read `0x0`, which is
+    // indistinguishable from a global the game has not created yet. That is the whole hazard: a
+    // wrong pointer oracle does not go quiet, it goes CONSTANT, and a constant is invisible.
+    //
+    // `game_data_addr` translates through the verified 1.16.2 -> 1.17 map and answers `0` for an
+    // address with no mapping, which `safe_read_usize` then fails on -- so the next stale RVA
+    // reaches the UNMAPPED sentinels below instead of a plausible number.
+    let read_singleton = |rva: usize, what: &'static str| -> Option<usize> {
         if base == 0 {
-            return 0;
+            return None;
         }
-        unsafe { er_game_base::mem::safe_read_usize(base + rva) }.unwrap_or(0)
+        let address = er_game_base::mem::game_data_addr(base, rva, what);
+        if address == 0 {
+            return None;
+        }
+        unsafe { er_game_base::mem::safe_read_usize(address) }
     };
-    let game_data_man = read_singleton(er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA);
-    let game_man = read_singleton(er_game_base::rva::GAME_MAN_SINGLETON_RVA);
-    let cs_menu_man = read_singleton(er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA);
+    // `None` = the module base or the RVA could not be resolved; `Some(0)` = resolved, and the
+    // game has genuinely not populated the global yet. Keeping those apart is the point.
+    let game_data_man = read_singleton(
+        er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA,
+        "GAME_DATA_MAN_GLOBAL_RVA",
+    );
+    let game_man = read_singleton(
+        er_game_base::rva::GAME_MAN_SINGLETON_RVA,
+        "GAME_MAN_SINGLETON_RVA",
+    );
+    let cs_menu_man = read_singleton(
+        er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA,
+        "CS_MENU_MAN_GLOBAL_RVA",
+    );
 
     // VANILLA-RELOAD FPS COMPARISON (2026-07-22): read the game's own frame timer. CSFlipperImp
-    // singleton at base+0x4589ad8; task_delta (+0x268) = the game loop frame time (1/task_delta = fps),
-    // fixed_spf (+0x1c) = the flip target (0.0167=60). play_time (GameDataMan+0xa0, u32 ms) rises only
-    // while the world simulates -> the in-world/playable gate. Lets a telemetry-only run measure a
-    // user-driven native reload's playable fps to compare against our reload path. bd
-    // USER-chose-vanilla-reload-comparison-2026-07-22.
+    // singleton at 1.16.2 base+0x4589ad8; task_delta (+0x268) = the game loop frame time
+    // (1/task_delta = fps), fixed_spf (+0x1c) = the flip target (0.0167=60). play_time
+    // (GameDataMan+0xa0, u32 ms) rises only while the world simulates -> the in-world/playable
+    // gate. Lets a telemetry-only run measure a user-driven native reload's playable fps to
+    // compare against our reload path. bd USER-chose-vanilla-reload-comparison-2026-07-22.
+    //
+    // Both OFFSETS are 1.17-confirmed and neither moved: `GetPlayTime` (1.16.2 `0x1402565d0`,
+    // 1.17 `0x1402565a0`) is `mov rax,[GameDataMan]; ...; mov eax,[rax+0xa0]` in BOTH images,
+    // byte-identical apart from the rip displacement. Only the GLOBAL moved.
     const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
     const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize = 0xa0;
-    let flipper = read_singleton(CS_FLIPPER_SINGLETON_RVA);
-    let read_f32 = |ptr: usize, off: usize| -> f32 {
-        if ptr == 0 {
-            return -1.0;
+    let flipper = read_singleton(CS_FLIPPER_SINGLETON_RVA, "CS_FLIPPER_SINGLETON_RVA");
+    // `-2.0` = the CSFlipperImp global could not be resolved for this build; `-1.0` = it resolved
+    // and the object is not there (or the field read faulted). Every reader of these fields
+    // (`analyze-core-contention.py`, `report-harness-phases.py`, `analyze-vanilla-reload-fps.py`)
+    // filters on a POSITIVE value, so the second sentinel costs them nothing and buys a run's
+    // telemetry the ability to say which of the two happened.
+    let read_f32 = |ptr: Option<usize>, off: usize| -> f32 {
+        match ptr {
+            None => UNRESOLVED_F32,
+            Some(0) => -1.0,
+            Some(p) => unsafe { er_game_base::mem::safe_read_usize(p + off) }
+                .map_or(-1.0, |v| f32::from_bits((v & 0xffff_ffff) as u32)),
         }
-        unsafe { er_game_base::mem::safe_read_usize(ptr + off) }
-            .map_or(-1.0, |v| f32::from_bits((v & 0xffff_ffff) as u32))
     };
     let flip_task_delta = read_f32(flipper, 0x268);
     // Feed the game-thread CPU sampler: this tick runs ON the game thread, so record its id + frame time.
     profiler::note_frame(base, flip_task_delta);
     let flip_fixed_spf = read_f32(flipper, 0x1c);
-    let play_time_ms: i64 = if game_data_man == 0 {
-        -1
-    } else {
-        unsafe {
-            er_game_base::mem::safe_read_usize(game_data_man + GAME_DATA_MAN_PLAY_TIME_A0_OFFSET)
+    let play_time_ms: i64 = match game_data_man {
+        None => UNRESOLVED_I64,
+        Some(0) => -1,
+        Some(gdm) => {
+            unsafe { er_game_base::mem::safe_read_usize(gdm + GAME_DATA_MAN_PLAY_TIME_A0_OFFSET) }
+                .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
         }
-        .map_or(-1, |v| i64::from((v & 0xffff_ffff) as u32))
     };
 
     // Per-core + this-process CPU, to test whether single-core contention (H-B) drives the load2 20fps.
@@ -559,36 +699,85 @@ pub fn standalone_tick() {
     let winreconfig_early_apply_ms = counters::WINRECONFIG_EARLY_APPLY_MS.load(Ordering::SeqCst);
     let winreconfig_early_apply_rect =
         counters::WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst);
-    let body = format!(
-        "{{\"oracle_standalone_ticks\":{n},\
-\"oracle_game_module_base\":\"0x{base:x}\",\
-\"oracle_game_data_man_ptr\":\"0x{game_data_man:x}\",\
-\"oracle_game_man_ptr\":\"0x{game_man:x}\",\
-\"oracle_cs_menu_man_ptr\":\"0x{cs_menu_man:x}\",\
-\"oracle_flip_task_delta\":{flip_task_delta:.6},\
-\"oracle_flip_fixed_spf\":{flip_fixed_spf:.6},\
-\"oracle_play_time_ms\":{play_time_ms},\
-\"oracle_tick_ms\":{tick_ms},\
-\"oracle_core_max_busy\":{core_max_busy:.1},\
-\"oracle_cores_saturated\":{cores_saturated},\
-\"oracle_ncores\":{ncores},\
-\"oracle_proc_cpu_cores\":{proc_cpu_cores:.3},\
-\"oracle_renderdoc_captures\":{renderdoc_captures},\
-\"oracle_winreconfig_create_window_calls\":{winreconfig_create_window_calls},\
-\"oracle_winreconfig_set_window_pos_calls\":{winreconfig_set_window_pos_calls},\
-\"oracle_winreconfig_set_window_long_calls\":{winreconfig_set_window_long_calls},\
-\"oracle_winreconfig_move_window_calls\":{winreconfig_move_window_calls},\
-\"oracle_winreconfig_change_display_calls\":{winreconfig_change_display_calls},\
-\"oracle_winreconfig_last_set_pos_size\":{winreconfig_last_set_pos_size},\
-\"oracle_winreconfig_last_set_pos_flags\":{winreconfig_last_set_pos_flags},\
-\"oracle_winreconfig_last_move_size\":{winreconfig_last_move_size},\
-\"oracle_winreconfig_last_change_display_size\":{winreconfig_last_change_display_size},\
-\"oracle_winreconfig_last_change_display_flags\":{winreconfig_last_change_display_flags},\
-\"oracle_winreconfig_early_apply_result\":{winreconfig_early_apply_result},\
-\"oracle_winreconfig_early_apply_ms\":{winreconfig_early_apply_ms},\
-\"oracle_winreconfig_early_apply_rect\":{winreconfig_early_apply_rect}}}\n",
-        tick_ms = tick_ms()
-    );
+    // ONE FIELD PER ROW, SO A FIELD THAT DID NOT MOVE COSTS NOTHING. `render_sample` omits any
+    // field whose rendered value is byte-identical to the previously WRITTEN record. Measured on
+    // run `br-20260831-160354-2513`: of 27 fields across 4,350 records, 18 never changed once and
+    // the 13 `oracle_winreconfig_*` counters alone were 58% of every line's bytes while changing
+    // at most twice all run. Every reader in the repo reaches these through `dict.get(...)` with a
+    // filter (`scripts/analyze-core-contention.py`, `analyze-vanilla-reload-fps.py`,
+    // `report-harness-phases.py`), so an absent field reads as "no new sample", which is exactly
+    // what it means. A field that genuinely varies per sample is never elided, so this tightens
+    // itself now that the singleton reads below go through the resolver: six of those 18 frozen
+    // fields were frozen BECAUSE the reads were unresolved, not because nothing was happening.
+    let fields = [
+        ("oracle_standalone_ticks", n.to_string()),
+        ("oracle_game_module_base", format!("\"0x{base:x}\"")),
+        ("oracle_game_data_man_ptr", singleton_field(game_data_man)),
+        ("oracle_game_man_ptr", singleton_field(game_man)),
+        ("oracle_cs_menu_man_ptr", singleton_field(cs_menu_man)),
+        ("oracle_flip_task_delta", format!("{flip_task_delta:.6}")),
+        ("oracle_flip_fixed_spf", format!("{flip_fixed_spf:.6}")),
+        ("oracle_play_time_ms", play_time_ms.to_string()),
+        ("oracle_tick_ms", tick_ms.to_string()),
+        ("oracle_core_max_busy", format!("{core_max_busy:.1}")),
+        ("oracle_cores_saturated", cores_saturated.to_string()),
+        ("oracle_ncores", ncores.to_string()),
+        ("oracle_proc_cpu_cores", format!("{proc_cpu_cores:.3}")),
+        ("oracle_renderdoc_captures", renderdoc_captures.to_string()),
+        (
+            "oracle_winreconfig_create_window_calls",
+            winreconfig_create_window_calls.to_string(),
+        ),
+        (
+            "oracle_winreconfig_set_window_pos_calls",
+            winreconfig_set_window_pos_calls.to_string(),
+        ),
+        (
+            "oracle_winreconfig_set_window_long_calls",
+            winreconfig_set_window_long_calls.to_string(),
+        ),
+        (
+            "oracle_winreconfig_move_window_calls",
+            winreconfig_move_window_calls.to_string(),
+        ),
+        (
+            "oracle_winreconfig_change_display_calls",
+            winreconfig_change_display_calls.to_string(),
+        ),
+        (
+            "oracle_winreconfig_last_set_pos_size",
+            winreconfig_last_set_pos_size.to_string(),
+        ),
+        (
+            "oracle_winreconfig_last_set_pos_flags",
+            winreconfig_last_set_pos_flags.to_string(),
+        ),
+        (
+            "oracle_winreconfig_last_move_size",
+            winreconfig_last_move_size.to_string(),
+        ),
+        (
+            "oracle_winreconfig_last_change_display_size",
+            winreconfig_last_change_display_size.to_string(),
+        ),
+        (
+            "oracle_winreconfig_last_change_display_flags",
+            winreconfig_last_change_display_flags.to_string(),
+        ),
+        (
+            "oracle_winreconfig_early_apply_result",
+            winreconfig_early_apply_result.to_string(),
+        ),
+        (
+            "oracle_winreconfig_early_apply_ms",
+            winreconfig_early_apply_ms.to_string(),
+        ),
+        (
+            "oracle_winreconfig_early_apply_rect",
+            winreconfig_early_apply_rect.to_string(),
+        ),
+    ];
+    let body = render_sample(&fields);
     // APPEND one JSON line per write -> a timeseries jsonl the agent reads AFTER the run (no polling,
     // no sleep). body already ends in '\n'.
     //
@@ -604,4 +793,104 @@ pub fn standalone_tick() {
     // stream-overlap). Each no-ops unless its own game-dir marker is present, so a
     // plain run carries zero extra cost and one A/B enables exactly what it needs.
     read::tick(base, play_time_ms, flip_task_delta);
+}
+
+#[cfg(test)]
+mod sample_rendering_tests {
+    use super::*;
+
+    /// One rendering context: its own `previous`, so tests cannot contaminate each other.
+    #[derive(Default)]
+    struct Series(Option<Vec<String>>);
+
+    impl Series {
+        fn push(&mut self, ticks: &str, tick_ms: &str, busy: &str, winreconfig: &str) -> String {
+            render_sample_against(&fields(ticks, tick_ms, busy, winreconfig), &mut self.0)
+        }
+    }
+
+    fn fields(
+        ticks: &str,
+        tick_ms: &str,
+        busy: &str,
+        winreconfig: &str,
+    ) -> Vec<(&'static str, String)> {
+        vec![
+            ("oracle_standalone_ticks", ticks.to_owned()),
+            ("oracle_tick_ms", tick_ms.to_owned()),
+            ("oracle_core_max_busy", busy.to_owned()),
+            (
+                "oracle_winreconfig_create_window_calls",
+                winreconfig.to_owned(),
+            ),
+        ]
+    }
+
+    /// The bound: a field that did not move is not written again. This is the whole 58% of the
+    /// record that the winreconfig counters used to cost while changing at most twice per run.
+    #[test]
+    fn a_field_that_did_not_change_is_omitted() {
+        let mut series = Series::default();
+        let first = series.push("4", "1000", "36.4", "1");
+        assert!(first.contains("oracle_winreconfig_create_window_calls"));
+        let second = series.push("8", "1200", "37.5", "1");
+        assert!(
+            !second.contains("oracle_winreconfig_create_window_calls"),
+            "an unchanged counter was written again: {second}"
+        );
+        assert!(
+            second.contains("\"oracle_core_max_busy\":37.5"),
+            "a field that DID change must always be written: {second}"
+        );
+    }
+
+    /// NON-VACUITY guard against eliding by NAME: the same field must come back the moment its
+    /// value moves, or the series silently freezes at whatever it read first.
+    #[test]
+    fn a_field_that_changes_after_a_flat_stretch_reappears() {
+        let mut series = Series::default();
+        series.push("4", "1000", "1.0", "1");
+        for step in 0..50 {
+            let flat = series.push("8", "1200", "1.0", "1");
+            assert!(!flat.contains("winreconfig"), "step {step}: {flat}");
+        }
+        let moved = series.push("12", "1400", "1.0", "2");
+        assert!(
+            moved.contains("\"oracle_winreconfig_create_window_calls\":2"),
+            "a changed field stayed elided after a flat stretch: {moved}"
+        );
+    }
+
+    /// The identity and time columns are what let a reader place a row at all, so they survive
+    /// even when they repeat (they cannot in practice; the assertion is what keeps it that way).
+    #[test]
+    fn the_identity_and_time_columns_are_never_elided() {
+        let mut series = Series::default();
+        series.push("4", "1000", "1.0", "1");
+        let repeat = series.push("4", "1000", "1.0", "1");
+        assert!(repeat.contains("oracle_standalone_ticks"), "{repeat}");
+        assert!(repeat.contains("oracle_tick_ms"), "{repeat}");
+    }
+
+    /// Every emitted row must still parse as one JSON object -- the elision must never leave a
+    /// dangling comma or an empty `{,}`.
+    #[test]
+    fn every_rendered_row_is_wellformed_json() {
+        let mut series = Series::default();
+        for row in [
+            series.push("4", "1000", "1.0", "1"),
+            series.push("4", "1000", "1.0", "1"),
+            series.push("8", "2000", "9.5", "3"),
+        ] {
+            let body = row.trim().trim_start_matches('{').trim_end_matches('}');
+            assert!(!body.starts_with(','), "leading comma: {row}");
+            assert!(!body.ends_with(','), "trailing comma: {row}");
+            assert!(!body.contains(",,"), "empty field: {row}");
+            assert_eq!(
+                body.split(',').count(),
+                body.matches("\":").count(),
+                "field count does not match separator count: {row}"
+            );
+        }
+    }
 }

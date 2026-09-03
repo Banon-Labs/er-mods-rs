@@ -1,0 +1,154 @@
+# 1.16.2 VA	name	source bd memory	claimed 1.17 VA (from memory, "-" if none)
+0x1403c8c40	ChrCtrl::UpdateAi	npc-possess-1170-verified-call-addresses	0x1403c8c50
+0x140492cb0	ChrSet::SpawnSummonBuddy	npc-possess-1170-verified-call-addresses	0x140493210
+0x140403a60	ChrInsFactory::CreateCharacter	npc-possess-1170-verified-call-addresses	0x140403dd0
+0x14050a570	WorldChrManImp::RemoveChrIns	npc-possess-1170-verified-call-addresses	0x14050b340
+0x1404cd710	EneDatMan acquire FUN_1404cd710	npc-possess-1170-verified-call-addresses	0x1404ce4e0
+0x1404cd870	EneDatMan release FUN_1404cd870	npc-possess-1170-verified-call-addresses	0x1404ce640
+0x1403ef830	ChrIns::GetEneDat	npc-possess-1170-verified-call-addresses	0x1403efa60
+0x14048c310	ChrRes ctor	npc-possess-1170-verified-call-addresses	-
+0x140303ec0	CSAiFunc::TurnTo	npc-possess-architecture-settled	-
+0x14043aa30	CSChrEventModule::RequestAnimation	npc-possess-architecture-settled	-
+0x1403cf340	ComManipulator::UpdateAI (vft+0x48)	npc-possess-architecture-settled	-
+0x1403cf2a0	ComManipulator tick (vft+0x50)	npc-possess-architecture-settled	-
+0x1403d0250	FUN_1403d0250 UpdateMovement	npc-possess-architecture-settled	-
+0x1403c7800	ChrCtrl::ShouldUpdateAi	npc-possess-architecture-settled	-
+0x1403c8da0	ChrCtrl tick dispatcher	manipulator-tick-slot50-caller	0x1403c8db0
+0x1404016d0	ChrIns::Update	manipulator-tick-slot50-caller	0x140401a30
+0x140400960	ChrIns::UpdateAiLogic	chrctrl-updateai-chrmanipulator-override	-
+0x1403c52a0	ChrCtrl::Unref	npc-possess-architecture-settled	-
+0x1403c4d50	ChrCtrl ctor	npc-possess-architecture-settled	-
+0x1403d8660	PadManipulator ctor	npc-possess-architecture-settled	-
+0x1403d88a0	PadManipulator dtor FUN_1403d88a0	manipulator-tick-slot50-caller	-
+0x1403c6f40	ChrCtrl::GetManipulator	chrctrl-updateai-chrmanipulator-override	-
+0x1404d0c30	EnemyIns vft+0x88 Update	manipulator-tick-slot50-caller	0x1404d1a00
+0x140660120	PlayerIns vft+0x88 Update	manipulator-tick-slot50-caller	0x140660f70
+0x1403cda90	PadManipulator vft+0x48 base-noop	chrctrl-updateai-chrmanipulator-override	-
+0x1403d9f20	PadManipulator vft+0x50	chrctrl-updateai-chrmanipulator-override	-
+0x1403daa80	PadManipulator tick FUN_1403daa80	chrctrl-updateai-chrmanipulator-override	-
+0x1403d4280	NetAIManipulator vft+0x48	chrctrl-updateai-chrmanipulator-override	-
+0x1403d3b00	NetAIManipulator vft+0x50	chrctrl-updateai-chrmanipulator-override	-
+0x1403e08f0	RideManipulator vft+0x50	chrctrl-updateai-chrmanipulator-override	-
+0x140406d40	CSChrActionRequestModule	chrctrl-updateai-chrmanipulator-override	-
+0x140407c60	CSChrActionRequestModule::UpdateFromManipulator	chrctrl-updateai-chrmanipulator-override	-
+0x140507ff0	WorldChrManImp::GetMainPlayerIns	possession-camoverridechrins	0x140508dc0
+0x1403f4040	PlayerIns::IsMainPlayerIns	possession-camoverridechrins	0x1403f4270
+0x1403b11c0	ChrCam::Update	possession-camoverridechrins	0x1403b11d0
+0x14067a7a0	GameMan::SetCamZoomSimpleLerp	possession-camoverridechrins	0x14067b5f0
+0x140716260	LockTgtMan per-frame update FUN_140716260	possession-camoverridechrins	-
+0x140508050	GetMainPlayerInsOrMount FUN_140508050	possession-camoverridechrins	-
+0x1403b5ac0	ChrExFollowCam::Update	possession-camoverridechrins	-
+0x140affe40	camera update FUN_140affe40	possession-camoverridechrins	-
+0x14065a330	PlayerIns::UpdateSafePosition	possession-camoverridechrins	-
+0x140659eb0	PlayerIns::UpdateBlockPosition	possession-camoverridechrins	-
+0x1405110e0	WorldChrMan_PrePhysics	possession-camoverridechrins	-
+0x140df35f7	WorldChrManDbg+0xb8 accessor FUN_140df35f7	possession-camoverridechrins	-
+0x140513210	thunk to +0xb8 accessor	possession-camoverridechrins	-
+0x140492e20	ChrSet::SpawnChr	er-spawn-chrins-native-path-1162	-
+0x140492a90	ChrSet ghost-band spawn FUN_140492a90	er-spawn-chrins-native-path-1162	-
+0x140493140	ChrSet entries[0..6] spawn FUN_140493140	er-spawn-chrins-native-path-1162	-
+0x1404942a0	ChrSet::AddChrInsToGroupIdMap	er-spawn-chrins-native-path-1162	-
+0x1404ba980	SummonBuddyManager::CreateSummonChr	er-spawn-chrins-native-path-1162	-
+0x140494440	OpenFieldChrSet spawner FUN_140494440	er-spawn-chrins-native-path-1162	-
+0x1403e6e00	ChrIns::ChrIns	er-spawn-chrins-native-path-1162	-
+0x140402800	ChrNameToInt	er-spawn-chrins-native-path-1162	-
+0x14048dc10	ChrRes resource-request step FUN_14048dc10	er-spawn-chrins-native-path-1162	-
+0x1404caaf0	EneDat asset builder FUN_1404caaf0	er-spawn-chrins-native-path-1162	-
+0x1404cd460	EneDat all-loaded poll FUN_1404cd460	er-spawn-chrins-native-path-1162	-
+0x1403e5bc0	chrId to L'cNNNN' FUN_1403e5bc0	er-spawn-chrins-native-path-1162	-
+0x1403e62f0	chrbnd path builder FUN_1403e62f0	er-spawn-chrins-native-path-1162	-
+0x1404cdcc0	EneDat acquire debug precedent FUN_1404cdcc0	er-spawn-chrins-native-path-1162	-
+0x140494a50	ChrSet::RemoveChrIns	er-spawn-chrins-native-path-1162	-
+0x140e76ea0	CSDelayDeleteMan enqueue FUN_140e76ea0	er-spawn-chrins-native-path-1162	-
+0x140433fe0	thunk_FUN_140433fe0	er-spawn-chrins-native-path-1162	-
+0x1403f2a90	IsChrInDebugChrSet	er-spawn-chrins-native-path-1162	-
+0x1404032d0	ChrInsFactory ctor	er-spawn-chrins-native-path-1162	-
+0x1404032e0	ChrInsFactory dtor	er-spawn-chrins-native-path-1162	-
+0x1404ce0a0	EnemyIns::EnemyIns	er-spawn-chrins-native-path-1162	-
+0x1403f2470	ChrIns::InitializeCharacter	er-spawn-chrins-native-path-1162	-
+0x14048fbf0	FD4FileCap status check FUN_14048fbf0	er-spawn-chrins-native-path-1162	-
+0x140506f30	WorldChrManImp buddy spawn FUN_140506f30	er-spawn-verify-prior-art-and-1170	-
+0x140494f50	buddy ChrSet init FUN_140494f50	er-spawn-verify-prior-art-and-1170	0x1404954b0
+0x1405ee180	GetChrInsByEntityId	er-spawn-verify-prior-art-and-1170	-
+0x1403f73e0	SetMountHandles	er-spawn-verify-prior-art-and-1170	-
+0x14050e1a0	WorldChrMan_Respawn	er-spawn-verify-prior-art-and-1170	-
+0x140e9ce30	CSTalkDynamicChrCtrl FUN_140e9ce30	er-spawn-verify-prior-art-and-1170	-
+0x1403ef730	GetChrCreator	er-spawn-verify-prior-art-and-1170	-
+0x1403c8610	per-frame updatePos	per-frame-chrins-move-without-fall-damage	0x1403c8620
+0x1403cd180	ChrCtrl::UpdatePositions	per-frame-chrins-move-without-fall-damage	0x1403cd190
+0x14045f910	CSChrPhysicsModule::ForceSetPosition	per-frame-chrins-move-without-fall-damage	0x14045fe70
+0x14045f7a0	CSChrPhysicsModule::SetOrientation	per-frame-chrins-move-without-fall-damage	0x14045fd00
+0x140461a00	EulerToQuat	per-frame-chrins-move-without-fall-damage	-
+0x140454c00	CSChrMaterialModule::SetDisableFallDamage	per-frame-chrins-move-without-fall-damage	-
+0x140c456b0	caller of updatePos FUN_140c456b0	per-frame-chrins-move-without-fall-damage	-
+0x1403da750	net position publisher FUN_1403da750	player-net-position-publish-path	0x1403da760
+0x1403f0bf0	ChrIns::GetPhysicsPosition	player-net-position-publish-path	0x1403f0e20
+0x140679630	GetTargetMapId	player-net-position-publish-path	-
+0x14061e270	ConvertPhysicsCoordsToBlockCoords	player-net-position-publish-path	0x14061f0c0
+0x1404e9ad0	ChrPackingStructure::SetLocation	player-net-position-publish-path	0x1404ea8a0
+0x1403d99e0	PadManipulator publish slot FUN_1403d99e0	player-net-position-publish-path	-
+0x1403d9bb0	publish caller FUN_1403d9bb0	player-net-position-publish-path	-
+0x140c9f430	FUN_140c9f430	player-net-position-publish-path	-
+0x140c9f770	FUN_140c9f770	player-net-position-publish-path	-
+0x1403cd370	ChrManipulator::ChrManipulator	player-net-position-publish-path	-
+0x1403c76d0	ChrCtrl::SetManipulator	player-net-position-publish-path	0x1403c76e0
+0x1404e8060	MakeChrSyncPacker	player-net-position-publish-path	-
+0x1404e5860	ReplayRecorder packer FUN_1404e5860	player-net-position-publish-path	-
+0x1404e4d20	ReplayRecorder FUN_1404e4d20	player-net-position-publish-path	-
+0x140474550	CSChrRideModule::GetForwardingTarget	player-net-position-publish-path	-
+0x140509f90	GetNetChrSyncPositionUpdateBuffer	player-net-position-publish-path	-
+0x1404275e0	TAE 0ChrActionFlag handler	er-iframes-are-tae-event0-jumptable-8	-
+0x140425ba0	ActivateChrActionFlagEarly	er-iframes-are-tae-event0-jumptable-8	-
+0x1403f3b90	ChrIns::IsImmuneToAttack	er-iframes-are-tae-event0-jumptable-8	-
+0x1404483b0	CSChrDamageModule::CalculateDamage2	er-iframes-are-tae-event0-jumptable-8	-
+0x140656e60	PlayerIns::IsInvincible	er-iframes-are-tae-event0-jumptable-8	-
+0x140401bd0	ChrIns::PreBehaviorSafe	er-iframes-are-tae-event0-jumptable-8	-
+0x140405b80	actionModifiersFlags zeroer FUN_140405b80	er-iframes-are-tae-event0-jumptable-8	-
+0x140430960	CSChrTimeActModule::RunTaeAndUpdateAnimQueue	er-iframes-are-tae-event0-jumptable-8	-
+0x14041b740	TAE_Callback	er-iframes-are-tae-event0-jumptable-8	-
+0x140c14370	PlayAnimationByBehaviorName	er-iframes-are-tae-event0-jumptable-8	-
+0x1404266d0	CSChrTaeAnimEvent::AttackBehavior	creature-attack-trigger-and-enumeration-join	-
+0x140426e60	CSChrTaeAnimEvent::BulletBehavior	creature-attack-trigger-and-enumeration-join	-
+0x1404269e0	CSChrTaeAnimEvent::CommonBehavior	creature-tae-walk-trigger-and-heading	-
+0x140429db0	CastHighlightedMagic	creature-tae-walk-trigger-and-heading	-
+0x140426ca0	SpawnFFXBySpEffect2	creature-tae-walk-trigger-and-heading	-
+0x14042f150	CSChrTaeAnimEvent::ExecuteThreadTwo	creature-tae-walk-trigger-and-heading	-
+0x1404cf040	EnemyIns::ResolveBehaviorId	creature-attack-trigger-and-enumeration-join	-
+0x1403e9380	ChrIns::ResolveBehaviorId (base)	creature-attack-trigger-and-enumeration-join	-
+0x1403f4b90	IsValidBehaviorJudgeID	creature-attack-trigger-and-enumeration-join	-
+0x140652280	PlayerIns::ResolveBehaviorId	creature-attack-trigger-and-enumeration-join	-
+0x140d24130	LookupBehaviorParam	creature-attack-trigger-and-enumeration-join	-
+0x140d240e0	BehaviorParam::GetAtkParam	creature-attack-trigger-and-enumeration-join	-
+0x140d23090	GetAtkParam	creature-attack-trigger-and-enumeration-join	-
+0x1404fa350	SpEffect behavior offset FUN_1404fa350	creature-attack-trigger-and-enumeration-join	-
+0x1405ed760	PlayAnimationOnChr	creature-attack-trigger-and-enumeration-join	-
+0x1405e2060	ForceAnimationPlayback	creature-attack-trigger-and-enumeration-join	-
+0x140c144d0	fireHkbEvent_C	creature-attack-trigger-and-enumeration-join	-
+0x140406a60	SetTurnSpeed	creature-turn-rate-is-npcparam-not-animation	-
+0x1403c3f30	SetTurnVelocity	creature-turn-rate-is-npcparam-not-animation	-
+0x140303a70	SetTurnReferenceDirection	creature-tae-walk-trigger-and-heading	-
+0x14041bce0	CSChrBehaviorModule::Play_W_Init	creature-tae-walk-trigger-and-heading	-
+0x140c07a40	hkbCharacter slot getter FUN_140c07a40	creature-tae-walk-trigger-and-heading	-
+0x140c13f40	GLOBAL_CSHkBehManager name lookup FUN_140c13f40	creature-tae-walk-trigger-and-heading	-
+0x1403c00f0	requestAnimationId reset FUN_1403c00f0	creature-tae-walk-trigger-and-heading	-
+0x1403c7ed0	ChrCtrl::SetOrientation	creature-tae-walk-trigger-and-heading	-
+0x1403b1e90	ChrCam::UpdateManipulatorLookDirection	creature-tae-walk-trigger-and-heading	-
+0x1403cda40	manipulator look-dir writer FUN_1403cda40	creature-tae-walk-trigger-and-heading	-
+0x1404e2140	NetChrSync::ProcessOwnershipRequests22	enemy-chrsync-ownership-is-arbitrated-packet22	0x1404e2f10
+0x1404e0ab0	NetChrSync::ProcessOwnershipRequests23	enemy-chrsync-ownership-is-arbitrated-packet22	-
+0x1404d4a00	GetOwnershipDataByP2PEntityHandle	enemy-chrsync-ownership-is-arbitrated-packet22	-
+0x1404d4be0	NetChrSyncOwnershipHolder ctor	enemy-chrsync-ownership-is-arbitrated-packet22	-
+0x1404de7f0	NetChrSync::SetChrSyncLocalControlFlagOn0x18	enemy-chrsync-ownership-is-arbitrated-packet22	0x1404df5c0
+0x140772a80	CSFeManImp::UpdatePlayerComponents	possession-hud-vitals-postpass	-
+0x140771bd0	CSFeManImp::Update	possession-hud-vitals-postpass	0x140772a50
+0x140437280	CSChrDataModule::GetMaxRecoverableHp	possession-hud-vitals-postpass	0x1404377e0
+0x1404372c0	CSChrDataModule::GethpMaxUncapped	possession-hud-vitals-postpass	0x140437820
+0x140438a50	EnemyIns vitals seeder FUN_140438a50	possession-hud-vitals-postpass	0x140438fb0
+0x140437140	CSChrDataModule vft slot3 fpBase getter	possession-hud-vitals-postpass	-
+0x140437150	CSChrDataModule vft slot4 staminaBase getter	possession-hud-vitals-postpass	-
+0x140437ac0	fpMax recompute FUN_140437ac0	possession-hud-vitals-postpass	-
+0x140437bc0	staminaMax recompute FUN_140437bc0	possession-hud-vitals-postpass	-
+0x1403f0b20	EnemyIns vft+0x168 GetPlayerGameData	enemyins-in-mainplayerins-is-type-confusion	-
+0x1403f4530	EnemyIns vft+0x118 IsPlayerIns (ret 0)	enemyins-in-mainplayerins-is-type-confusion	-
+0x140cba510	CSSessionManager voicechat FUN_140cba510	possession-hud-vitals-postpass	-
+0x14073cf20	QuickmatchManager FUN_14073cf20	possession-hud-vitals-postpass	-

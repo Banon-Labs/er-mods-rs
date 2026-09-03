@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Derive semaphore gates from a passive controller-input trace.
 
-Reads er-effects-input-trace.jsonl (written by the DLL's input-trace mode: pad-edge rows with
+Reads er-quickload-input-trace.jsonl (written by the DLL's input-trace mode: pad-edge rows with
 embedded semaphore snapshots + change-detected sem rows) and, for every button PRESS, answers:
 "what semaphore state was the user waiting for before this press?"
 
@@ -23,7 +23,7 @@ Default trace path: the native-Windows game dir copy.
 import json
 import sys
 
-DEFAULT_TRACE = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/er-effects-input-trace.jsonl"
+DEFAULT_TRACE = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/er-quickload-input-trace.jsonl"
 
 # Volatile fields excluded from gate deltas (they change every frame / are advisory context).
 VOLATILE = {"stable_frames", "mms_blocks"}

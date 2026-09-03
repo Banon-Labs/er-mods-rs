@@ -15,8 +15,9 @@
 # promises are unenforceable by prose; only a Stop hook that refuses the stop closes this.
 #
 # THE VIOLATION IS THE CONJUNCTION OF FOUR FACTS. All four must hold, and any one missing is fine:
-#   1. the turn's FINAL prose block contains a first-person future commitment to a CONCRETE action
-#      ("I'll re-run the gate", "I'm going to patch it", "let me check the offsets");
+#   1. the turn's FINAL prose block contains a first-person commitment to a CONCRETE action
+#      ("I'll re-run the gate", "I'm going to patch it", "let me check the offsets", and -- the shape
+#      that walked through the guard on 2026-09-01 -- the bare present continuous "I'm closing it");
 #   2. no tool_use follows that prose in the turn -- nothing executed it;
 #   3. nothing is carrying it: no watcher (detached shell / Monitor / SendMessage) in the turn, and
 #      no live background job that the promise actually WAITS ON ("once it lands", "whatever it
@@ -78,12 +79,28 @@ scrubbed = re.sub(r'"[^"]*"', " ", scrubbed)
 # --- (1) first-person future commitment --------------------------------------------------------
 # The openers an assistant actually uses to commit itself. "let's" is deliberately absent: it
 # proposes joint action rather than committing the agent.
+#
+# THE BARE PRESENT CONTINUOUS ("I'm closing it") IS LAST, AND IT IS NOT COSMETIC. The guard shipped
+# without it and a turn walked straight through the hole: "I'm closing it rather than pushing an
+# empty merge commit to make an empty PR green" -- no `gh pr close` ran, the PR stayed open, and the
+# user had to notice and ask. Because the opener never matched, the other three facts were never even
+# evaluated. Present continuous is the MORE seductive way to make an unkept promise than "I'll",
+# precisely because it reads to a human as already underway.
+#
+# ORDER MATTERS. Python alternation takes the FIRST alternative that matches at a position, not the
+# longest, so the bare form must come after "i'm going to" / "i'm about to" -- ahead of them it would
+# swallow their prefix and hand `committed_verb` the word "going", which is deliberately not an
+# action. Everything that keeps this narrow lives in `committed_verb`: the next non-filler word must
+# be the -ING form of a verb already on the concrete-action allowlist, so the stative uses this
+# repo's prose is full of ("I'm treating that as unproven", "I'm reporting it rather than fixing it",
+# "I'm not sure", "I'm quoting the failure below") resolve to no action verb and stay silent.
 OPENER_RE = re.compile(
     r"\b(?:i['’]?ll"
     r"|i\s+will"
     r"|i['’]?m\s+going\s+to|i\s+am\s+going\s+to"
     r"|i['’]?m\s+about\s+to|i\s+am\s+about\s+to"
-    r"|let\s+me)\b",
+    r"|let\s+me"
+    r"|i['’]?m|i\s+am)\b",
     re.IGNORECASE,
 )
 
@@ -121,12 +138,42 @@ ACTIONS = {
     "screenshot", "audit", "lint", "format", "benchmark", "profile", "instrument", "emit",
     "register", "enable", "disable", "toggle", "configure", "tune", "adjust", "tweak", "resolve",
     "ship", "harden", "delegate", "dispatch", "spawn", "teardown", "follow",
+    # TERMINAL ACTIONS. `open` and `reopen` were here from the start and `close` was not, which is an
+    # oversight rather than a decision -- and it is half of why "I'm closing it rather than pushing an
+    # empty merge commit to make an empty PR green" walked through the guard on 2026-09-01: even with
+    # the opener fixed there was no verb on the list for it to commit to. `gh pr close` is a tool call
+    # like any other. The siblings are added with it because they name the same terminal act on a
+    # branch/PR/script, though only "close" is evidenced in the transcript corpus (4 uses after a
+    # first-person opener; abandon/archive/withdraw/retire: zero).
+    "close", "archive", "retire", "withdraw", "abandon",
     # In-game input IS agent work in this repo (standing order: the agent drives every input), so a
     # promise to press/drive/navigate/inject is a promise of a tool call like any other.
     "press", "drive", "navigate", "inject",
 }
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z’'\-]*")
+
+
+def base_of_gerund(word):
+    """The concrete-action verb an -ING form inflects, or None.
+
+    Deliberately NOT a stemmer and deliberately NOT a second vocabulary: it proposes the three
+    regular English spellings and accepts one only if it is already on ACTIONS. That is what keeps
+    the tense change from widening the guard -- "reporting" proposes "report"/"reporte", neither is
+    an action, so it is silent; "hoping" proposes "hop"/"hope" and is silent for the same reason,
+    without needing to know that "hope" is a hedge. A free-running stemmer would instead have to be
+    told, in a second list, every word it must not invent a promise out of.
+    """
+    if not word.endswith("ing") or len(word) < 6:
+        return None
+    stem = word[:-3]
+    candidates = [stem, stem + "e"]
+    if len(stem) > 2 and stem[-1] == stem[-2]:
+        candidates.append(stem[:-1])  # commit -> committing, run -> running
+    for cand in candidates:
+        if cand in ACTIONS:
+            return cand
+    return None
 
 
 def committed_verb(tail):
@@ -145,6 +192,13 @@ def committed_verb(tail):
         # transcripts). Merged forms are enumerated in ACTIONS instead.
         if word.startswith("re-") and word[3:] in ACTIONS:
             return word
+        # Present continuous: "I'm closing it", "I'm reverting it", "I'm landing it". Same verb, same
+        # allowlist, one tense later -- and the same hyphenated-re- rule ("re-recording").
+        base = base_of_gerund(word)
+        if base:
+            return base
+        if word.startswith("re-") and base_of_gerund(word[3:]):
+            return word
         return None
     return None
 
@@ -158,11 +212,18 @@ def clause(text, start):
     return " ".join(text[start:end].split())[:110]
 
 
+# The LAST committing sentence, not the first. Which one fires is unchanged either way -- any one of
+# them is the violation -- but the halt QUOTES this clause back at the agent, so it should be the
+# promise nearest where the turn actually stopped. Measured when the bare present continuous was
+# added (2026-09-01): on a real halted turn the first match moved from the closing sentence "I'll
+# revert the marker spawn to the wrapper..." back to an incidental table cell earlier in the same
+# message ("why I'm not guessing | I'm re-running it with..."), which is a worse instruction to hand
+# back. Broadening the opener set makes an early incidental match likelier; taking the last one
+# cancels that out.
 promise = None
 for m in OPENER_RE.finditer(scrubbed):
     if committed_verb(scrubbed[m.end():m.end() + 120]):
         promise = clause(scrubbed, m.start())
-        break
 if not promise:
     sys.exit(0)
 

@@ -4,7 +4,7 @@
 Attaches to a RUNNING offline `eldenring.exe` and, through a small JS agent, lets us
 dynamically CALL a native game stepper function (or read/write memory) on the LIVE
 low-fps reload state -- then observe the framerate effect via the DLL's telemetry
-(`refresh_per_present` in er-effects-telemetry.json). Hot-reload = just re-run this with
+(`refresh_per_present` in er-quickload-telemetry.json). Hot-reload = just re-run this with
 different --call args (or use `frida -p <pid> -l frida-nudge.agent.js` for a REPL); no DLL
 rebuild, no relaunch.
 

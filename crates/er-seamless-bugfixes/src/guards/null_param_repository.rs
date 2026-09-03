@@ -88,7 +88,11 @@ include!(concat!(
 /// Resolve the singleton slot for this process. Called before the hook is enabled.
 pub(crate) fn publish_repository_slot(base: usize) {
     SOLO_PARAM_REPOSITORY_SLOT.store(
-        base + SOLO_PARAM_REPOSITORY_GLOBAL_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            SOLO_PARAM_REPOSITORY_GLOBAL_RVA,
+            "SOLO_PARAM_REPOSITORY_GLOBAL_RVA",
+        ),
         core::sync::atomic::Ordering::SeqCst,
     );
 }

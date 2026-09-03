@@ -12,18 +12,27 @@ source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/product-continue-direct-$(date +%Y%m%d-%H%M%S)}"
 PID_FILE="${PID_FILE:-$ARTIFACT_DIR/me3-launch.pid}"
-TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-effects-telemetry.json}"
+TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-quickload-telemetry.json}"
 BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
 # CONSOLIDATED per-run DLL log outputs: keep the crash log + autoload debug log in the SAME
 # timestamped artifact dir as telemetry/bootstrap, instead of accumulating across runs in the game
-# dir under divergent names. The DLL honors ER_EFFECTS_CRASH_LOG_PATH / ER_EFFECTS_AUTOLOAD_DEBUG_PATH.
-CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-effects-crash-log.txt}"
-AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-effects-autoload-debug.log}"
-# Boot profiler (opt-in via ER_EFFECTS_PROFILE=1): per-run CPU sample stream in the artifact dir.
-PROFILE_PATH="${PROFILE_PATH:-$ARTIFACT_DIR/er-effects-profile.jsonl}"
+# dir under divergent names. The DLL honors ER_QUICKLOAD_CRASH_LOG_PATH / ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH.
+#
+# "Instead of accumulating" understates it. A GAME_DIR log does not accumulate -- it is SINGLE-SLOT:
+# the DLL rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone, and a
+# harness that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two
+# launches destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to BOTH launch
+# env blocks below) for any future log rather than copying it out at teardown -- a copy after the
+# run cannot recover a file this run clobbered at launch, and a crashed run never reaches it.
+CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-quickload-crash-log.txt}"
+AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-quickload-autoload-debug.log}"
+TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/er-quickload-continue-trace.log}"
+INPUT_TRACE_PATH="${INPUT_TRACE_PATH:-$ARTIFACT_DIR/er-quickload-input-trace.jsonl}"
+# Boot profiler (opt-in via ER_QUICKLOAD_PROFILE=1): per-run CPU sample stream in the artifact dir.
+PROFILE_PATH="${PROFILE_PATH:-$ARTIFACT_DIR/er-quickload-profile.jsonl}"
 HYPR_PLACER_PID_FILE="${HYPR_PLACER_PID_FILE:-$ARTIFACT_DIR/hypr-window-placer.pid}"
-AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
+AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-quickload-autoload.txt}"
 AUTOLOAD_REQUEST="${AUTOLOAD_REQUEST:-}"
 # Single source of truth for the runtime-probe wall-clock cap (seconds). Read from the canonical
 # file; fail safe to the historical 60 if it is somehow unreadable.
@@ -31,29 +40,29 @@ RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 RUNTIME_YK0J_UNRESOLVABLE_PROBE="${RUNTIME_YK0J_UNRESOLVABLE_PROBE:-0}"
-YK0J_SOURCE="${ER_EFFECTS_YK0J_SOURCE:-}"
+YK0J_SOURCE="${ER_QUICKLOAD_YK0J_SOURCE:-}"
 RUNTIME_WATCH_TARGET="${RUNTIME_WATCH_TARGET:-world-stable}"
 DRY_RUN=0
 
 VISUAL_RESOURCE_MUTATION_ENVS=(
-  ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX
-  ER_EFFECTS_TITLE_05_000_MEMORY_GFX
+  ER_QUICKLOAD_TITLE_RESOURCE_MEMORY_GFX
+  ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX
 )
 
 # SAVE-SOURCE SELECTION. Default mode still stages a configured gold save for older probes.
-# Default to the same save source as the user/product launcher: no ER_EFFECTS_SAVE_FILE, no staged
+# Default to the same save source as the user/product launcher: no ER_QUICKLOAD_SAVE_FILE, no staged
 # gold save, and no appdata wipe. The older staged-save/explicit-save_file probe path is deprecated
 # for release/autoload validation because it exercises different DLL internals and has produced
 # softlocks that do not reproduce under ~/Elden/launch.sh. Use the staged path only for save-redirect
-# internals by explicitly setting ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 and
+# internals by explicitly setting ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 and
 # RUNTIME_USE_DEFAULT_SAVE=0.
 DEFAULT_PROBE_GOLD_SAVE="$REPO_ROOT/save-files/150-Banon/ER0000.sl2"
 # Runtime probes must not require the operator/user to supply a save path. Prefer an explicit
-# ER_EFFECTS_GOLD_SAVE when provided; otherwise fall back to the repo-local established probe save.
-GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-$DEFAULT_PROBE_GOLD_SAVE}"
+# ER_QUICKLOAD_GOLD_SAVE when provided; otherwise fall back to the repo-local established probe save.
+GOLD_SAVE="${ER_QUICKLOAD_GOLD_SAVE:-$DEFAULT_PROBE_GOLD_SAVE}"
 RUNTIME_TELEMETRY_ONLY="${RUNTIME_TELEMETRY_ONLY:-0}"
 RUNTIME_USE_DEFAULT_SAVE="${RUNTIME_USE_DEFAULT_SAVE:-1}"
-ALLOW_DEPRECATED_STAGED_SAVE_PROBE="${ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE:-0}"
+ALLOW_DEPRECATED_STAGED_SAVE_PROBE="${ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE:-0}"
 # A real fixed-slot ER0000.sl2 BND4 is ~28MB even with empty slots; reject anything implausibly small.
 GOLD_SAVE_MIN_BYTES="${GOLD_SAVE_MIN_BYTES:-1048576}"
 # Root of the per-account default save dirs. Their SAVE FILES are wiped before launch AND on teardown
@@ -73,7 +82,7 @@ wipe_appdata_saves() {
 }
 
 # Path to the freshly-built DLL that the me3 mod host loads as the run's sole native.
-BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
+BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll}"
 
 # DEPLOY HYGIENE (setup): copy the freshly-built DLL into the per-run artifact dir and write the
 # me3 profile referencing it, so EVERY launch through this script runs the just-built DLL from an
@@ -81,7 +90,7 @@ BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effe
 # the old game-dir deploy). Fails closed if the build is missing.
 stage_me3_payload() {
   [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale DLL)"
-  cp -f "$BUILT_DLL" "$ARTIFACT_DIR/er_effects_rs.dll"
+  cp -f "$BUILT_DLL" "$ARTIFACT_DIR/er_quickload.dll"
   # SEAMLESS MODE: load the user's installed Seamless Co-op alongside our DLL, referenced IN PLACE by
   # absolute path from the per-run profile (never copied/staged -- the Do-not-bundle rule). Fails
   # closed when the install is missing so a "seamless" run can never silently be vanilla (the exact
@@ -92,11 +101,11 @@ stage_me3_payload() {
     [[ -f "$seamless_native" ]] || fatal "RUNTIME_EXPECTED_MODE=seamless but Seamless Co-op is not installed at $seamless_native (set SEAMLESS_ERSC_DLL to the installed ersc.dll)"
     echo "deploy: seamless mode -- profile references installed $seamless_native in place (not copied)"
   fi
-  me3_write_profile "$ME3_PROFILE" "$ARTIFACT_DIR/er_effects_rs.dll" "$seamless_native"
-  if [[ -n "${ER_EFFECTS_TOML_SOURCE:-}" ]]; then
-    require_file "$ER_EFFECTS_TOML_SOURCE"
-    cp -f "$ER_EFFECTS_TOML_SOURCE" "$ARTIFACT_DIR/er-effects.toml"
-    echo "deploy: staged DLL-adjacent runtime config -> $ARTIFACT_DIR/er-effects.toml"
+  me3_write_profile "$ME3_PROFILE" "$ARTIFACT_DIR/er_quickload.dll" "$seamless_native"
+  if [[ -n "${ER_QUICKLOAD_TOML_SOURCE:-}" ]]; then
+    require_file "$ER_QUICKLOAD_TOML_SOURCE"
+    cp -f "$ER_QUICKLOAD_TOML_SOURCE" "$ARTIFACT_DIR/er-quickload.toml"
+    echo "deploy: staged DLL-adjacent runtime config -> $ARTIFACT_DIR/er-quickload.toml"
   fi
   echo "deploy: staged fresh DLL + me3 profile -> $ME3_PROFILE"
 }
@@ -106,13 +115,13 @@ usage() {
 Usage: $0 [--dry-run] [--autoload-request PATH]
 
 Launches the approved direct/offline eldenring.exe runtime path (through me3, which
-drives the Steam compat tool directly with er_effects_rs.dll as an me3 native) and runs
+drives the Steam compat tool directly with er_quickload.dll as an me3 native) and runs
 .auto/runtime_probe.sh as the bounded readiness watcher. By default this uses the same
-real/default APPDATA save source as ~/Elden/launch.sh; the old staged-save/ER_EFFECTS_SAVE_FILE
-probe path is deprecated and requires ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1.
+real/default APPDATA save source as ~/Elden/launch.sh; the old staged-save/ER_QUICKLOAD_SAVE_FILE
+probe path is deprecated and requires ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1.
 
 YK0J targeted proof:
-  RUNTIME_YK0J_UNRESOLVABLE_PROBE=1 ER_EFFECTS_YK0J_SOURCE=/read-only/ER0000.sl2 \\
+  RUNTIME_YK0J_UNRESOLVABLE_PROBE=1 ER_QUICKLOAD_YK0J_SOURCE=/read-only/ER0000.sl2 \\
     $0 [--dry-run]
   This keeps the source read-only, forces exactly one Rust-side own-load rejection while the native
   game reads the private active stage, targets player-load, and validates the structured oracle.
@@ -181,13 +190,13 @@ preflight() {
       fatal "RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s): ${conflicting_visual_envs[*]}; use a non-telemetry visual probe mode instead"
     fi
   fi
-  if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" && "${ER_EFFECTS_ALLOW_NO_TEARDOWN_AUTOPILOT:-0}" != "1" ]]; then
-    local repro_env="${ER_EFFECTS_SYSTEM_QUIT_REPRO:-}"
+  if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" && "${ER_QUICKLOAD_ALLOW_NO_TEARDOWN_AUTOPILOT:-0}" != "1" ]]; then
+    local repro_env="${ER_QUICKLOAD_SYSTEM_QUIT_REPRO:-}"
     if [[ -n "${repro_env//[[:space:]]/}" && "$repro_env" != "0" ]]; then
-      fatal "RUNTIME_NO_TEARDOWN=1 is for user-controlled/manual inspection; refusing ER_EFFECTS_SYSTEM_QUIT_REPRO=$repro_env unless ER_EFFECTS_ALLOW_NO_TEARDOWN_AUTOPILOT=1 is also set"
+      fatal "RUNTIME_NO_TEARDOWN=1 is for user-controlled/manual inspection; refusing ER_QUICKLOAD_SYSTEM_QUIT_REPRO=$repro_env unless ER_QUICKLOAD_ALLOW_NO_TEARDOWN_AUTOPILOT=1 is also set"
     fi
-    if [[ -f "$GAME_DIR/er-effects-system-quit-repro.txt" ]]; then
-      fatal "RUNTIME_NO_TEARDOWN=1 is for user-controlled/manual inspection; refusing game-dir er-effects-system-quit-repro.txt unless ER_EFFECTS_ALLOW_NO_TEARDOWN_AUTOPILOT=1 is also set"
+    if [[ -f "$GAME_DIR/er-quickload-system-quit-repro.txt" ]]; then
+      fatal "RUNTIME_NO_TEARDOWN=1 is for user-controlled/manual inspection; refusing game-dir er-quickload-system-quit-repro.txt unless ER_QUICKLOAD_ALLOW_NO_TEARDOWN_AUTOPILOT=1 is also set"
     fi
   fi
 
@@ -208,7 +217,7 @@ preflight() {
   if [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]]; then
     [[ "$RUNTIME_TELEMETRY_ONLY" == "0" ]] || fatal "YK0J unresolvable-save proof cannot run telemetry-only"
     [[ "$RUNTIME_EXPECTED_MODE" == "vanilla" ]] || fatal "YK0J unresolvable-save proof currently requires RUNTIME_EXPECTED_MODE=vanilla"
-    [[ -n "$YK0J_SOURCE" ]] || fatal "YK0J unresolvable-save proof requires ER_EFFECTS_YK0J_SOURCE"
+    [[ -n "$YK0J_SOURCE" ]] || fatal "YK0J unresolvable-save proof requires ER_QUICKLOAD_YK0J_SOURCE"
     [[ -f "$YK0J_SOURCE" ]] || fatal "YK0J source not found: $YK0J_SOURCE"
     YK0J_SOURCE=$(realpath -e "$YK0J_SOURCE")
     local yk0j_bytes yk0j_mode
@@ -222,7 +231,7 @@ preflight() {
     RUNTIME_WATCH_TARGET="player-load"
   fi
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" != "1" && "$ALLOW_DEPRECATED_STAGED_SAVE_PROBE" != "1" ]]; then
-    fatal "deprecated staged-save/ER_EFFECTS_SAVE_FILE probe path is disabled for release/autoload validation; use ~/Elden/launch.sh or default-save mode (RUNTIME_USE_DEFAULT_SAVE=1). Set ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
+    fatal "deprecated staged-save/ER_QUICKLOAD_SAVE_FILE probe path is disabled for release/autoload validation; use ~/Elden/launch.sh or default-save mode (RUNTIME_USE_DEFAULT_SAVE=1). Set ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
   fi
   # This probe exercises default/staged save resolution, native Continue, and own-load. It cannot
   # exercise System->Quit reload, world-map markers, Seamless session tracing, or invasion hunt.
@@ -273,7 +282,7 @@ PY
     fi
   elif [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
     [[ -n "$GOLD_SAVE" ]] || fatal "no probe save configured and default probe save path is empty (expected $DEFAULT_PROBE_GOLD_SAVE)"
-    [[ -f "$GOLD_SAVE" ]] || fatal "probe save not found: $GOLD_SAVE (default expected at $DEFAULT_PROBE_GOLD_SAVE; set ER_EFFECTS_GOLD_SAVE only to override)"
+    [[ -f "$GOLD_SAVE" ]] || fatal "probe save not found: $GOLD_SAVE (default expected at $DEFAULT_PROBE_GOLD_SAVE; set ER_QUICKLOAD_GOLD_SAVE only to override)"
     local gold_bytes
     gold_bytes=$(stat -c '%s' "$GOLD_SAVE" 2>/dev/null || echo 0)
     (( gold_bytes >= GOLD_SAVE_MIN_BYTES )) || fatal "gold save too small ($gold_bytes bytes < $GOLD_SAVE_MIN_BYTES): $GOLD_SAVE -- not a real save"
@@ -365,13 +374,15 @@ trap cleanup EXIT INT TERM HUP
 
 preflight
 ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
-ME3_PROFILE="$ARTIFACT_DIR/er-effects-me3.me3"
+ME3_PROFILE="$ARTIFACT_DIR/er-quickload-me3.me3"
 PID_FILE=$(realpath -m "$PID_FILE")
 TELEMETRY_PATH=$(realpath -m "$TELEMETRY_PATH")
 BOOTSTRAP_PATH=$(realpath -m "$BOOTSTRAP_PATH")
 BOOTSTRAP_STATE_PATH=$(realpath -m "$BOOTSTRAP_STATE_PATH")
 CRASH_LOG_PATH=$(realpath -m "$CRASH_LOG_PATH")
 AUTOLOAD_DEBUG_PATH=$(realpath -m "$AUTOLOAD_DEBUG_PATH")
+TRACE_CONTINUE_PATH=$(realpath -m "$TRACE_CONTINUE_PATH")
+INPUT_TRACE_PATH=$(realpath -m "$INPUT_TRACE_PATH")
 PROFILE_PATH=$(realpath -m "$PROFILE_PATH")
 HYPR_PLACER_PID_FILE=$(realpath -m "$HYPR_PLACER_PID_FILE")
 mkdir -p "$ARTIFACT_DIR"
@@ -395,7 +406,7 @@ fi
 
 # Reset stale per-run evidence BEFORE launch so the readiness watcher cannot read a PRIOR run's
 # completion and tear the new game down instantly. Observed 2026-06-21: a reused ARTIFACT_DIR left
-# an old er-effects-telemetry.json at cold_char_mount_phase=5, so every rerun false-positived
+# an old er-quickload-telemetry.json at cold_char_mount_phase=5, so every rerun false-positived
 # "cold_char_mount_complete" within ~1s (brief white window) before the new process executed
 # anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
 # once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
@@ -415,22 +426,22 @@ stage_me3_payload
 # SAVE SOURCE: telemetry-only loads nothing; default-save mode intentionally uses the real/default
 # Steam-user save; otherwise stage an isolated configured save copy and point the DLL at it.
 if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
-  export ER_EFFECTS_TELEMETRY_ONLY=1
+  export ER_QUICKLOAD_TELEMETRY_ONLY=1
   echo "save-source: TELEMETRY-ONLY (no character load; default save dir not read)"
 elif [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]]; then
-  export ER_EFFECTS_SAVE_FILE="$YK0J_SOURCE"
-  export ER_EFFECTS_PROBE_OWN_LOAD_UNRESOLVABLE=1
-  unset ER_EFFECTS_AUTOLOAD_SLOT ER_EFFECTS_TELEMETRY_ONLY
-  echo "save-source: YK0J read-only source -> $ER_EFFECTS_SAVE_FILE; DLL private stage remains the active native target; structured one-rejection proof armed"
+  export ER_QUICKLOAD_SAVE_FILE="$YK0J_SOURCE"
+  export ER_QUICKLOAD_PROBE_OWN_LOAD_UNRESOLVABLE=1
+  unset ER_QUICKLOAD_AUTOLOAD_SLOT ER_QUICKLOAD_TELEMETRY_ONLY
+  echo "save-source: YK0J read-only source -> $ER_QUICKLOAD_SAVE_FILE; DLL private stage remains the active native target; structured one-rejection proof armed"
 elif [[ "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
-  unset ER_EFFECTS_SAVE_FILE ER_EFFECTS_AUTOLOAD_SLOT ER_EFFECTS_TELEMETRY_ONLY
-  echo "save-source: DEFAULT USER SAVE (no ER_EFFECTS_SAVE_FILE, no configured slot; DLL will use active Steam default ER0000.sl2 and best active profile slot)"
+  unset ER_QUICKLOAD_SAVE_FILE ER_QUICKLOAD_AUTOLOAD_SLOT ER_QUICKLOAD_TELEMETRY_ONLY
+  echo "save-source: DEFAULT USER SAVE (no ER_QUICKLOAD_SAVE_FILE, no configured slot; DLL will use active Steam default ER0000.sl2 and best active profile slot)"
 else
   # Stage into an EldenRing/<steamid>/ subtree: the DLL redirects the whole
   # %APPDATA%\Roaming\EldenRing directory handle (the game decides "save present?" by enumerating it,
   # never opening ER0000.sl2 by path), so the staged tree must mirror that structure with the ACTIVE
   # account's SteamID so the game's <steamid> path resolves into our copy.
-  ACTIVE_STEAMID="${ER_EFFECTS_ACTIVE_STEAMID:-76561197986456766}"
+  ACTIVE_STEAMID="${ER_QUICKLOAD_ACTIVE_STEAMID:-76561197986456766}"
   STAGED_ROOT="$ARTIFACT_DIR/save"
   # Stage matching the game's own case (EldenRing/<steamid>/ER0000.sl2, as the vanilla-created file).
   # The DLL redirects the %APPDATA% ROOT via SHGetFolderPathW, so the game builds these exact paths
@@ -453,8 +464,8 @@ else
   # (bd offline-notice-fix-works-revealed-save-update-gate-2026-06-23). Make the ISOLATED staged copy
   # writable so that write lands on the copy (save-safe: the user's gold is never touched).
   chmod u+w "$STAGED_SAVE"
-  export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE"
-  # SEAMLESS MODE: ER_EFFECTS_SAVE_FILE must target the .co2 -- and this override must come AFTER the
+  export ER_QUICKLOAD_SAVE_FILE="$STAGED_SAVE"
+  # SEAMLESS MODE: ER_QUICKLOAD_SAVE_FILE must target the .co2 -- and this override must come AFTER the
   # .sl2 export above or it gets clobbered (run seamless-co2unified-smoke-20260706-150810 armed on .sl2
   # for exactly that ordering slip). The DLL arms its save-swap snapshot/commit and the own-load feed
   # deserialize on this path, and under Seamless the game deserializes + autosaves + re-reads the
@@ -462,16 +473,16 @@ else
   # table re-read never sees, so mid-load stats/portrait show the PRIOR character even when the load
   # itself lands (runs 150435/150810).
   if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" ]]; then
-    export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE_DIR/ER0000.co2"
-    echo "save-source: seamless mode -- ER_EFFECTS_SAVE_FILE targets $ER_EFFECTS_SAVE_FILE"
+    export ER_QUICKLOAD_SAVE_FILE="$STAGED_SAVE_DIR/ER0000.co2"
+    echo "save-source: seamless mode -- ER_QUICKLOAD_SAVE_FILE targets $ER_QUICKLOAD_SAVE_FILE"
   fi
   # Steer the native Continue (most-recent) path to the gold character's slot: the DLL calls the
   # game's set_save_slot(GOLD_SLOT) before firing Continue so continue_load(-1) resolves to it. Unset
   # GOLD_SLOT (or -1) leaves the game's true most-recent selection.
-  if [[ -n "${ER_EFFECTS_GOLD_SLOT:-}" && "${ER_EFFECTS_GOLD_SLOT}" != "-1" ]]; then
-    export ER_EFFECTS_AUTOLOAD_SLOT="$ER_EFFECTS_GOLD_SLOT"
+  if [[ -n "${ER_QUICKLOAD_GOLD_SLOT:-}" && "${ER_QUICKLOAD_GOLD_SLOT}" != "-1" ]]; then
+    export ER_QUICKLOAD_AUTOLOAD_SLOT="$ER_QUICKLOAD_GOLD_SLOT"
   fi
-  echo "save-source: staged gold save -> $STAGED_SAVE (ER_EFFECTS_SAVE_FILE); slot=${ER_EFFECTS_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
+  echo "save-source: staged gold save -> $STAGED_SAVE (ER_QUICKLOAD_SAVE_FILE); slot=${ER_QUICKLOAD_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
 
   # DISPLAY CONFIG: the redirected %APPDATA%\EldenRing root also redirects graphicsconfig.xml.
   # For on-screen probes, default to the user's real appdata GraphicsConfig.xml so direct/offline
@@ -480,7 +491,7 @@ else
   # reconfiguration jump across Hyprland monitor coordinate origins. Staged WRITABLE so any in-game
   # settings write lands on the per-run copy and is discarded at teardown.
   DEFAULT_GRAPHICS_CONFIG="$APPDATA_ER_ROOT/GraphicsConfig.xml"
-  GRAPHICS_CONFIG_SOURCE="${ER_EFFECTS_GRAPHICS_CONFIG_SOURCE:-${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"
+  GRAPHICS_CONFIG_SOURCE="${ER_QUICKLOAD_GRAPHICS_CONFIG_SOURCE:-${ER_QUICKLOAD_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"
   if [[ -f "$GRAPHICS_CONFIG_SOURCE" ]]; then
     STAGED_GRAPHICS_CONFIG="$STAGED_ROOT/EldenRing/graphicsconfig.xml"
     mkdir -p "$STAGED_ROOT/EldenRing"
@@ -524,8 +535,8 @@ start_hypr_window_placer() {
   # live XWayland/Wine window across monitor/workspace coordinate spaces before the game
   # finished reconfiguring its startup window, producing invalid crops and off-screen
   # coordinates such as x=-3069 on the 3072px-offset monitor layout.
-  if [[ "${ER_EFFECTS_HYPR_PLACE_WINDOW:-0}" != "0" ]]; then
-    fatal "ER_EFFECTS_HYPR_PLACE_WINDOW is disabled: runtime probes must observe Elden Ring's natural mapped geometry, not move/resize it"
+  if [[ "${ER_QUICKLOAD_HYPR_PLACE_WINDOW:-0}" != "0" ]]; then
+    fatal "ER_QUICKLOAD_HYPR_PLACE_WINDOW is disabled: runtime probes must observe Elden Ring's natural mapped geometry, not move/resize it"
   fi
   echo "hypr-place: disabled; not moving/resizing Elden Ring"
 }
@@ -556,32 +567,58 @@ if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
   # exec -> this launcher BECOMES the foreground me3 CLI, which owns the compat-tool/wine tree;
   # it holds the game until quit. me3 sets its own STEAM_COMPAT_* env internally.
   exec env \
-    ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
-    ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
-    ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
-    ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
-    ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
-    ER_EFFECTS_PROFILE_PATH="$PROFILE_PATH" \
-    ER_EFFECTS_PROFILE="${ER_EFFECTS_PROFILE:-}" \
-    ER_EFFECTS_PROFILE_RIP="${ER_EFFECTS_PROFILE_RIP:-}" \
-    ER_EFFECTS_PROFILE_INTERVAL_MS="${ER_EFFECTS_PROFILE_INTERVAL_MS:-}" \
-    ER_EFFECTS_PROFILE_RIP_EVERY="${ER_EFFECTS_PROFILE_RIP_EVERY:-}" \
+    ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \
+    ER_QUICKLOAD_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
+    ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+    ER_QUICKLOAD_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
+    ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+    ER_QUICKLOAD_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" \
+    ER_QUICKLOAD_INPUT_TRACE_PATH="$INPUT_TRACE_PATH" \
+    ER_QUICKLOAD_PROFILE_PATH="$PROFILE_PATH" \
+    ER_QUICKLOAD_PROFILE="${ER_QUICKLOAD_PROFILE:-}" \
+    ER_QUICKLOAD_PROFILE_RIP="${ER_QUICKLOAD_PROFILE_RIP:-}" \
+    ER_QUICKLOAD_PROFILE_INTERVAL_MS="${ER_QUICKLOAD_PROFILE_INTERVAL_MS:-}" \
+    ER_QUICKLOAD_PROFILE_RIP_EVERY="${ER_QUICKLOAD_PROFILE_RIP_EVERY:-}" \
+    ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+    ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+    ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+    ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+    ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+    ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+    ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+    ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+    ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+    ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+    ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
     VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-}" \
     "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ME3_PROFILE" > "$ARTIFACT_DIR/me3-launch.out" 2>&1
 fi
 
 (
   cd "$GAME_DIR"
-  ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
-  ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
-  ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
-  ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
-  ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
-  ER_EFFECTS_PROFILE_PATH="$PROFILE_PATH" \
-  ER_EFFECTS_PROFILE="${ER_EFFECTS_PROFILE:-}" \
-  ER_EFFECTS_PROFILE_RIP="${ER_EFFECTS_PROFILE_RIP:-}" \
-  ER_EFFECTS_PROFILE_INTERVAL_MS="${ER_EFFECTS_PROFILE_INTERVAL_MS:-}" \
-  ER_EFFECTS_PROFILE_RIP_EVERY="${ER_EFFECTS_PROFILE_RIP_EVERY:-}" \
+  ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \
+  ER_QUICKLOAD_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
+  ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+  ER_QUICKLOAD_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
+  ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$INPUT_TRACE_PATH" \
+  ER_QUICKLOAD_PROFILE_PATH="$PROFILE_PATH" \
+  ER_QUICKLOAD_PROFILE="${ER_QUICKLOAD_PROFILE:-}" \
+  ER_QUICKLOAD_PROFILE_RIP="${ER_QUICKLOAD_PROFILE_RIP:-}" \
+  ER_QUICKLOAD_PROFILE_INTERVAL_MS="${ER_QUICKLOAD_PROFILE_INTERVAL_MS:-}" \
+  ER_QUICKLOAD_PROFILE_RIP_EVERY="${ER_QUICKLOAD_PROFILE_RIP_EVERY:-}" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
   VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-}" \
   "${gamescope_prefix[@]}" "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ME3_PROFILE" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )

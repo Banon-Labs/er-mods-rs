@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: One paragraph of prose per turn, injected before the answer instead of scolded after it
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: LOW
 #   id: ER-EFFECTS-WALL-OF-TEXT
@@ -48,7 +48,7 @@
 #     costs a transcript scan on every tool call.
 #   routing:
 #     required_events: ["UserPromptSubmit"]
-#     required_signals: ["last_assistant_wall_of_text"]
+#     required_signals: ["last_assistant_wall_of_text", "last_assistant_prose_words"]
 package cupcake.policies.claude.wall_of_text
 
 import rego.v1
@@ -71,9 +71,45 @@ correction_for(h) := msg if {
 	msg := concat("", ["MEASURED: your PREVIOUS answer ran to ", h.count, " paragraphs of prose in one unbroken run, beginning '", h.opener, "'. The user read the first one and skimmed the rest, so paragraphs 2..", h.count, " were not delivered -- if anything load-bearing was in them, it did not reach them. Do not re-send it and do not apologise for it. Answer THIS prompt in a single paragraph, and if something from the unread part still matters, that is what belongs in the one paragraph you get."])
 }
 
+# (3) Measured correction: ONE paragraph, but too many words in it -- the case (2) is blind to.
+#
+# Paragraph count treats a 281-word single paragraph as clean. On 2026-09-03 exactly that shape
+# carried four subjects and closed on a pronoun; the user replied "it", nothing in the sentence
+# uniquely answered to it, and the agent could not resolve its own prose. Their diagnosis is the
+# rule: "If a user says it, and you have more than one subject it could apply to, that is a problem
+# with YOUR prose being overloaded." A long turn also forces any unambiguous reply to be long, which
+# charges the user for the overload. So bound the words, not just the breaks.
+add_context contains context if {
+	input.hook_event_name == "UserPromptSubmit"
+	not hit
+	some w in [words_hit]
+	context := words_correction_for(w)
+}
+
+words_correction_for(w) := msg if {
+	msg := concat("", ["MEASURED: your PREVIOUS answer was one paragraph but ", w.words, " words of prose, beginning '", w.opener, "'. That length is how a turn ends up carrying several subjects at once, and then a plain reply like 'it' has no unique antecedent and YOU cannot resolve your own sentence -- which is your defect, not the user's brevity. Answer THIS prompt on ONE subject. If a second thing is genuinely live, put it in a table row or leave it for its own turn; never let it trail in prose where a pronoun can reach it. Do not re-send the long version and do not apologise for it."])
+}
+
+words_hit := w if {
+	startswith(words_raw, "PROSEWORDS:")
+	parts := split(words_raw, ":")
+	count(parts) >= 3
+	w := {"words": parts[1], "opener": concat(":", array.slice(parts, 2, count(parts)))}
+}
+
+words_raw := trim(words_matched, " \t\r\n")
+
+words_matched := s if {
+	s := input.signals.last_assistant_prose_words
+	is_string(s)
+} else := s if {
+	s := input.signals.last_assistant_prose_words.output
+} else := ""
+
 # Parse the tagged signal into {count, opener}. Untagged-but-non-empty is treated as clean: unlike a
 # banned phrase, a raw value here carries no measurement to quote, and a guessed number in the
-# correction would be a fabricated fact. Empty -> hit undefined -> standing rule only.
+# correction would be a fabricated fact. Empty -> hit undefined -> standing rule only. `words_hit`
+# above follows the same contract for PROSEWORDS.
 hit := h if {
 	startswith(raw, "WALLOFTEXT:")
 	parts := split(raw, ":")

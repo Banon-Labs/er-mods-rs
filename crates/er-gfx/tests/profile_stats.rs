@@ -38,7 +38,7 @@ const PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX: i32 = 540;
 const LOAD_CHARACTER_RENDERED_VERTICAL_TOLERANCE_PX: i32 = 4;
 /// Worst-case filename characters the save-file view can show in `PlayerName` before the name
 /// reaches the metadata line. This is the MEASURED floor, and it is too low: `ER0000.sl2` is 10 and
-/// fits, but a dated backup like `er-effects-save-20260807.sl2` is 28 and does not.
+/// fits, but a dated backup like `er-quickload-save-20260807.sl2` is 28 and does not.
 ///
 /// It is a regression gate, NOT a statement that the file view is well laid out. `PlayerName` is one
 /// box shared by the merged character header and the save-file name, and it has been `x -520 w1200`
@@ -1031,7 +1031,7 @@ fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
     // A FILE row: the metadata line is populated, the drive cells are hidden (and blanked as
     // redundant content hygiene), and the timestamp is staged into Location.
     let file_row = [
-        ("PlayerName", "er-effects-save-20260807.sl2", None),
+        ("PlayerName", "er-quickload-save-20260807.sl2", None),
         (
             STATS_FIELD_NAME,
             "10 CHAR / Hero L7 / Hero L7 / Vagabond L45 +7",
@@ -1149,7 +1149,7 @@ fn stats_panel_output_keeps_save_picker_rendered_text_inside_the_visible_row_con
     let samples = [
         ("PlayerName", "[..] save-files", None),
         ("PlayerName", "DRIVES", None),
-        ("PlayerName", "er-effects-save-", None),
+        ("PlayerName", "er-quickload-save-", None),
         ("PlayerName", "ER0000.sl2", None),
         ("DriveCell_0", "C:", None),
         ("DriveCell_1", "S:", None),

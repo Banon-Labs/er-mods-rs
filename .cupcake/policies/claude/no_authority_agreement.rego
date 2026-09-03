@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Ban authority-coded agreement + unbacked feedback-acknowledgement prose
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-AUTHORITY-AGREEMENT

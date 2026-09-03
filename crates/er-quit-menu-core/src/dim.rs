@@ -401,7 +401,7 @@ pub mod picker_dim {
             return;
         }
         let _ = std::thread::Builder::new()
-            .name("er-effects-picker-dim".to_owned())
+            .name("er-quickload-picker-dim".to_owned())
             .spawn(|| {
                 // A panic on the overlay thread must not leave a visible dim over a game the user
                 // can still play, so the bail-out path clears the armed latch on the way out.
@@ -882,7 +882,7 @@ pub mod picker_dim {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
                 class_name,
-                w!("er-effects picker dim"),
+                w!("er-quickload picker dim"),
                 WS_POPUP,
                 0,
                 0,

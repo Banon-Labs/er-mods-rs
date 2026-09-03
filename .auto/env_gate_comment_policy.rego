@@ -3,8 +3,8 @@ package auto.env_gate_comment
 import rego.v1
 
 # Env FEATURE GATES are forbidden (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19).
-# An "env gate" is any read of std::env::var("ER_EFFECTS_...") in
-# crates/er-effects-rs/src/**/*.rs. User directive: "we don't want any env gated features."
+# An "env gate" is any read of std::env::var("ER_QUICKLOAD_...") in
+# crates/er-quickload/src/**/*.rs. User directive: "we don't want any env gated features."
 #
 # The former grandfathering allowlists (sanctioned_env_vars, sanctioned_env_gate_locations,
 # baseline) in .auto/env_gate_comment_baseline.json are DEPRECATED and must stay EMPTY; the

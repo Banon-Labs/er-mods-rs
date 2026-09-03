@@ -9,7 +9,7 @@ RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 POLICY_PATH="$REPO_ROOT/.auto/runtime_experiment_policy.rego"
 SEAMLESS_DLL_PATH="$GAME_DIR/SeamlessCoop/ersc.dll"
-SEAMLESS_STAGED_PATH="${SEAMLESS_STAGED_PATH:-$GAME_DIR/SeamlessCoop/ersc.dll.er-effects-staged}"
+SEAMLESS_STAGED_PATH="${SEAMLESS_STAGED_PATH:-$GAME_DIR/SeamlessCoop/ersc.dll.er-quickload-staged}"
 HOST_PROCESS_TRACE_PATH="${HOST_PROCESS_TRACE_PATH:-${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe}/host-process-lifetime.jsonl}"
 host_process_sampler_pid=""
 
@@ -18,7 +18,20 @@ cleanup_runtime() {
     kill "$host_process_sampler_pid" 2>/dev/null || true
     wait "$host_process_sampler_pid" 2>/dev/null || true
   fi
-  if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" && -f "$SEAMLESS_STAGED_PATH" && ! -f "$SEAMLESS_DLL_PATH" ]]; then
+  # Put back whatever THIS script staged away, whichever mode asked for it.
+  #
+  # This condition used to also require `RUNTIME_EXPECTED_MODE == "seamless"`, which made it
+  # unreachable: staging only ever happens in `vanilla` mode (see stage_runtime_mode_payload),
+  # so the two conditions were mutually exclusive. The default mode is `vanilla`, so an ordinary
+  # probe moved the user's `ersc.dll` aside and then exited without putting it back -- silently
+  # uninstalling Seamless Co-op from the game directory. The next launch is a co-op profile with
+  # no co-op DLL, which presents as "Seamless broke", not as "a probe moved your file".
+  #
+  # The restore is guarded on the FILES instead of on the mode, which is what the operation
+  # actually depends on: a staged copy exists and nothing occupies the live path. That also makes
+  # it self-healing -- a run killed before this trap fired leaves the staged file behind, and the
+  # next run of any mode restores it.
+  if [[ -f "$SEAMLESS_STAGED_PATH" && ! -f "$SEAMLESS_DLL_PATH" ]]; then
     mkdir -p "$(dirname "$SEAMLESS_DLL_PATH")"
     mv -f "$SEAMLESS_STAGED_PATH" "$SEAMLESS_DLL_PATH"
   fi
@@ -213,12 +226,12 @@ setup_runtime_payload() {
   # Crash logging ON BY DEFAULT for every probe (file channel -- reliable through Proton, unlike
   # env vars; the DLL reads the flag from the exe dir). Installs the vectored AV handler (logs the
   # faulting RVA + caller stack of an access violation, e.g. a wrong-arg native call) + the
-  # process-exit hooks, into er-effects-crash.log. Opt out by exporting
+  # process-exit hooks, into er-quickload-crash.log. Opt out by exporting
   # RUNTIME_DISABLE_CRASH_LOG=1. The product DLL stays opt-in; this is probe-only.
   if [[ "${RUNTIME_DISABLE_CRASH_LOG:-0}" == "1" ]]; then
-    rm -f "$GAME_DIR/er-effects-crash-log.txt"
+    rm -f "$GAME_DIR/er-quickload-crash-log.txt"
   else
-    : > "$GAME_DIR/er-effects-crash-log.txt"
+    : > "$GAME_DIR/er-quickload-crash-log.txt"
   fi
   # me3 is the ONLY loader (LazyLoader removed 2026-07-04): the me3 mod host loads the DLL from a
   # [[natives]] profile entry written by the launcher script. A leftover dinput8 proxy would
@@ -264,7 +277,7 @@ fi
 # Agent-owned System->Quit self-drive probes must not let the generic world-stable oracle tear the
 # process down before the scripted menu movement reaches its explicit DONE state. The runtime cap still
 # bounds failed/stuck probes, but success now means the harness movement completed exactly.
-if [[ "${ER_EFFECTS_SYSTEM_QUIT_REPRO:-0}" == "1" ]]; then
+if [[ "${ER_QUICKLOAD_SYSTEM_QUIT_REPRO:-0}" == "1" ]]; then
   watch_extra_args+=(--wait-for-sq-repro-complete)
 fi
 

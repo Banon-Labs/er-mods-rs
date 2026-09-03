@@ -39,7 +39,7 @@ import threading
 
 GADGET = "127.0.0.1:27042"
 DEFAULT_OUT = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-lobby-keys.jsonl"
 )
 
