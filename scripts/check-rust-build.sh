@@ -47,9 +47,21 @@ fi
 # only exists on the target the module actually builds for reaches CI untouched. That is exactly
 # how `clippy::manual_is_multiple_of` in er-refill-all's runtime.rs got through a clean local run
 # and failed CI (2026-08-25). Workspace-wide, because the gap applies to every DLL crate.
+#
+# --all-targets ADDED 2026-09-03, CLOSING A GAP IN THE OPPOSITE DIRECTION. Without it this
+# line lints lib and bin targets only, so `#[cfg(test)]` modules, benches and examples were
+# linted by NOTHING -- and the moment scripts/check-committed-compiles.sh started linting
+# with --all-targets at pre-push, it found three lint errors sitting on a green main that
+# this gate had never been able to see: needless_update in er-build-export's test helper,
+# manual_contains and assertions_on_constants in er-game-base.
+#
+# That is the worse shape of the two failures described above. Those are "CI catches what a
+# local run misses"; this was "neither catches it, and the suite reports green". It also
+# inverted the contract between the two: a pre-push hook is meant to be the fast SUBSET of
+# CI, never the only place a whole class of defect can be found.
 if command -v cargo-xwin >/dev/null 2>&1; then
-	echo "[check-rust-build] cargo xwin clippy --workspace --target $target"
-	cargo xwin clippy --workspace --manifest-path "$repo_root/Cargo.toml" --target "$target"
+	echo "[check-rust-build] cargo xwin clippy --workspace --all-targets --target $target"
+	cargo xwin clippy --workspace --all-targets --manifest-path "$repo_root/Cargo.toml" --target "$target"
 else
 	echo "[check-rust-build] cargo-xwin not found; skipping windows-target clippy" >&2
 fi
