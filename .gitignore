@@ -80,3 +80,11 @@ crates/er-build-export/tests/reference/node_modules/
 # What the build actually consumes is the small selected subset, which IS tracked:
 # docs/recon/rva-map-1162-to-1170.needed.tsv and .data.tsv.
 docs/recon/rva-map-1162-to-1170.functions.tsv
+
+# Third-party reference DLLs kept for reverse engineering, never committed and never
+# shipped. Seamless Co-op v2.0.0 replaced v1.9.9 on 2026-09-02; the launcher left the
+# old build behind, and the next launcher run may not. Every ersc.dll address this repo
+# pins was measured against a specific build, so losing the previous one means the next
+# Seamless update has nothing to diff against. Same category as eldenring-deobf*.bin:
+# a read-only RE input, not a bundled artifact.
+vendor-archive/
