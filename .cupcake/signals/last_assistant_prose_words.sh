@@ -25,9 +25,19 @@
 #
 # THRESHOLD, measured rather than guessed. Over 113 prose runs in the session that prompted this,
 # `median = 20` words and `mean = 61`: ordinary mid-turn narration is short by nature and is never
-# at risk. Every run the user objected to sat in a distinct band, 228-323 words. 120 is set between
-# those populations -- roughly double the mean, well under the smallest offender -- so it cannot fire
-# on the common case and cannot miss the class that caused the correction.
+# at risk. Every run the user objected to sat in a distinct band, 228-323 words.
+#
+# SET TO 120 FIRST, AND 120 WAS TOO LOOSE -- corrected the same day. It was chosen as "between the
+# two populations", which is the right method for catching the 281-word case and the wrong one for
+# the actual complaint. With 120 in force the next several answers landed at roughly 110-130 words:
+# comfortably under the ceiling, still "normal human reading length", and the user objected again in
+# exactly the same terms. A budget set just below the worst offenders does not shorten anything, it
+# just relocates the median to sit under the bar.
+#
+# 60 is the measured MEAN of this session's own prose runs, so it is not a guess either -- it is the
+# length the agent already writes when it is not padding. It leaves room for one answer and its
+# proof and nothing else, which is the point: past that, content has to move into a table or wait
+# for its own turn.
 #
 # WHAT IS MEASURED: the same longest CONTIGUOUS prose run `last_assistant_wall_of_text` measures,
 # via the same `scripts/cupcake_turn_scan` helpers, so the two signals can never disagree about what
@@ -47,7 +57,7 @@ try:
 except Exception:
     sys.exit(0)  # fail open: a missing helper must never wedge a session
 
-BUDGET = int(os.environ.get("CUPCAKE_PROSE_WORD_BUDGET", "120"))
+BUDGET = int(os.environ.get("CUPCAKE_PROSE_WORD_BUDGET", "60"))
 
 path = scan.latest_transcript()
 if not path:

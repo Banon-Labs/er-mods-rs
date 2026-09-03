@@ -460,7 +460,24 @@ any fix: the mechanism is still unidentified, so converting the ten sites to \
 `er_hook::register_shared_hook` is a GUESS at this point. Find what actually transfers control to \
 0x140010043 first -- the two runtime-invisible targets above are the places the RVA gate cannot \
 look. The A/B that scores any candidate fix is `scripts/er-run-branch.py --seed 2073568449 --with \
-er-quickload --with er-invasion-warp`, which must survive past 120s."""
+er-quickload --with er-invasion-warp`, which must survive past 120s.
+
+CORRECTION 2026-09-03 -- THE BISECT PINNED A CO-FACTOR, NOT THE CAUSE. Every crashing run above \
+also carried `slot = 1` in the game-directory `er-quickload.toml`, and slot 1 DOES NOT EXIST in \
+the container the game actually reads: with Seamless loaded that is `ER0000.co2`, whose only \
+character is slot 0. `er-invasion-warp` was the variable the bisect MOVED, so it took the blame; \
+the invalid slot was constant across every arm and was never varied at all. Two runs of the SAME \
+pair, same DLLs, now survive: one with the new container-truth refusal arming the picker instead \
+of loading the impossible slot (clean past +88s), and one with `slot = 0` so no refusal is even \
+needed (clean past +79s, `holds_a_character=true`). Against six crashes at ~30-35s with slot 1, \
+that is a different explanation than this row was written for.
+
+THE ROW IS DELIBERATELY LEFT IN PLACE ANYWAY. Two clean runs do not outweigh six crashes hard \
+enough to start co-loading a pair on a user's machine, and only ONE of the two isolates the slot \
+(the other has the refusal firing, which changes the boot path). Demoting needs the `slot = 0` run \
+repeated -- ideally on the original `--seed 2073568449` character, so the A/B above is comparing \
+like with like -- after which this row should be REPLACED by a `[compatible]` entry rather than \
+softened into a vaguer warning."""
 evidence = """crates/er-invasion-warp/src/lib.rs:195 `map_gfx::install_world_map_gfx_hook(base)`; \
 crates/er-invasion-warp/src/lib.rs:197 (local_invasion_filter's SetMultiplayJoinData game detour, \
 crates/er-invasion-warp/src/local_invasion_filter.rs:175); crates/er-invasion-warp/src/lib.rs:235-236 \
