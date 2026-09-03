@@ -162,8 +162,10 @@ portable	-	check-ledger-section-kind.py --selftest	source/AST/text analysis only
 portable	-	check-1170-translation-collisions.py --selftest	source/AST/text analysis only
 portable	-	check-1170-translation-collisions.py	source/AST/text analysis only
 portable	-	check-double-resolved-hook-targets.py --selftest	source/AST/text analysis only
-blocked	image-1162,image-1170	verify-data-rvas-by-rtti.py --selftest	one line: 'SKIP: missing <image>'. No RTTI is verified
+blocked	image-1162,image-1170,rva-map-tsv	verify-data-rvas-by-rtti.py --selftest	one line: 'SKIP: missing <image>'. No RTTI is verified. rva-map-tsv added 2026-09-01: without the whole-image map TRACE_MENU_TASK_UPDATE_TABLE_RVA's FNPTR anchor cannot be computed, the row falls to NO-ANCHOR and the UNANCHORED pin fails -- a false red, not a finding. The plain run below does not need it
 blocked	image-1162,image-1170	verify-data-rvas-by-rtti.py	one line: 'SKIP: missing <image>'. No RTTI is verified
+blocked	image-1162,image-1170	map-rvas-1162-to-1170.py --selftest	exits 1 with 'missing image: <path>' before the selftest runs; nothing is asserted
+blocked	ghidra-8765,ghidra-8767	confirm-1170-pair-in-dumps.py --selftest	one line: 'skipped: no <build> Ghidra MCP daemon on :<port>'. No pair is confirmed or refused
 blocked	image-1162,!uv	check-singleton-field-offsets.py --selftest	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'
 blocked	image-1162,!uv	check-singleton-field-offsets.py	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'
 blocked	image-1162,image-1170	check-object-field-offsets-1170.py --selftest	refuses to run: a green selftest without the images would be vacuous
@@ -194,6 +196,10 @@ portable	-	audit-ungated-image-writes.py	source/AST/text analysis only
 portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces in tmp plus a source-only read of the live crates
 portable	-	check-test-target-coverage.py --prove-selftest-catches-regression	source/AST/text analysis only
 portable	-	check-test-target-coverage.py	source/AST/text analysis only
+portable	-	check-moveset-table.py --selftest	synthetic tables built in memory; needs nothing
+portable	-	er-moveset-coverage.py --selftest	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0 and the real assertion 'c4351 reduced to locomotion is caught'; output matches the developer tree except for the temp path of its own synthetic table
+portable	-	er-moveset-coverage.py --check	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0, output BYTE-IDENTICAL to the developer tree (408 creatures, 37 classifying zero attacks); the table and corpus it reads are both tracked, so it needs no game image
+partial	chr-corpus	check-moveset-table.py	grammar and invariant half asserts on the committed table; the regenerate-and-diff half prints SKIP
 portable	-	check-me3-shell-coverage.py --selftest	source/AST/text analysis only
 portable	-	check-me3-shell-coverage.py	source/AST/text analysis only
 portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only
@@ -203,7 +209,7 @@ portable	-	check-shared-hook-rvas.py	source/AST/text analysis only
 portable	-	er_run_lib.py	source/AST/text analysis only
 blocked	git-baseline	er-dll-closure.py --selftest	calls git merge-base origin/main HEAD; on a shallow clone three --with/--without cases FAIL rather than skip
 partial	build-artifact	er-dll-provenance.py --selftest	10 closure cases still run; 'fingerprint checks not exercised'
-blocked	build-artifact	er-dll-freshness.sh --selftest	needs a linked er_crash_logging.dll to attest
+blocked	crash-logging-dll	er-dll-freshness.sh --selftest	needs a linked er_crash_logging.dll to attest -- named by FILE, not by 'some dll exists': a partly-built tree passed build-artifact and the gate then exited 1 about the missing build
 partial	save-corpus	er-pick-save.py --selftest	argument and size-invariant cases still PASS; 'skip no save corpus found'
 portable	-	er-gen-me3-profile.py --selftest	source/AST/text analysis only
 portable	-	er-run-reaper.py --selftest	source/AST/text analysis only

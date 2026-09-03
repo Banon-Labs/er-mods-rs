@@ -1133,6 +1133,27 @@ python3 "$repo_root/scripts/check-double-resolved-hook-targets.py" --selftest
 # without the two gitignored images.
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" --selftest
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
+# THE MAPPER'S OWN SELFTEST, wired 2026-09-01; it had existed for weeks and was invoked by nothing.
+# It asserts three things no other gate does. (1) The two mappings established by reading the LIVE
+# 1.17 process are re-derived from bytes alone. (2) `0x1409a5810` is the 39th of 51 shape matches
+# for `0x1409a4670`, which is why `CANDIDATE_CEILING` is not 9 -- the old cap ended the candidate
+# list thirty short of the answer and the table recorded the loss as "UNRESOLVED: 9 shape matches".
+# (3) The four ProfileSelect/System-Quit addresses er-effects-rs-4uw5.13 was filed about resolve
+# ONE AT A TIME, which they can only do from the anchor rows in
+# docs/recon/rva-map-1162-to-1170.verified.tsv -- so deleting one of those rows goes red here
+# naming the address, rather than quietly taking a region's coverage with it. Negative control run
+# 2026-09-01: with the eight anchor rows removed, 0x875590 and 0x920c90 both go UNMAPPED and this
+# exits 1. Re-execs itself under `uv` when capstone is absent, so the step stays spelled `python3`.
+python3 "$repo_root/scripts/map-rvas-1162-to-1170.py" --selftest
+# THE INDEPENDENT OPINION ON THOSE SAME ANCHORS. Everything above reads the two flat images with
+# one decoder under one normalisation, so a wrong destination that decodes into the right shape is
+# invisible to all of it. This asks both Ghidra dumps instead -- 1.16.2 on :8765, 1.17 on :8767 --
+# whether each half of a pair is a declared function ENTRY and whether the call graph carries
+# across. Its refusals are the control: six destinations that are wrong in a named way (0x10 past
+# the entry, or another anchor's entry) must all be refused, and the clause that refuses a
+# differing size with too few carried callees exists BECAUSE the swapped cases passed without it.
+# Skips at exit 0 when either daemon is down.
+python3 "$repo_root/scripts/confirm-1170-pair-in-dumps.py" --selftest
 # THE FIELD-OFFSET GATE (2026-08-30). The three ways to be wrong about a 1.17 address are not
 # equally loud. A stale DETOUR target is REFUSED by er-hook and logged; an unmapped CALL/data RVA
 # resolves to 0 and the caller says so; a stale STRUCT FIELD OFFSET returns the NEIGHBOURING
@@ -1617,6 +1638,28 @@ python3 "$repo_root/scripts/check-test-target-coverage.py" --selftest
 python3 "$repo_root/scripts/check-test-target-coverage.py" --prove-selftest-catches-regression
 python3 "$repo_root/scripts/check-test-target-coverage.py"
 
+# THE SHIPPED MOVESET TABLE, crates/er-npc-possess/data/moveset.tbl. Two gates in one script:
+# the grammar/invariant checks always run, and the full regeneration-and-diff runs only where the
+# unpacked chr corpus exists. It SKIPS loudly rather than passing quietly when it does not -- the
+# corpus is game-derived and will never be in the repo, so CI can prove the table is well-formed
+# and self-consistent but not that it is what the generator produces. Set ER_CHR_CORPUS_ROOT (or
+# pass --root) on a machine with an extraction to get the real check.
+python3 "$repo_root/scripts/check-moveset-table.py" --selftest
+python3 "$repo_root/scripts/check-moveset-table.py"
+
+# ...AND THAT THE TABLE ACTUALLY GIVES CREATURES THEIR ATTACKS. The regeneration diff above proves
+# the shipped file is what the generator produces; it says nothing about whether the generator is
+# producing the right answer, and for a third of the roster it was not. The generator joined the
+# behaviour graph against `<chr>.tae` by chr id on BOTH sides, and 133 creatures do not own their
+# TimeAct -- c4351 Godrick Knight's anibnd is a skeleton and nothing else, because the whole 435x
+# family plays out of c4350.tae. Every attack those creatures can fire was denied
+# `no-damage-window` and then trimmed by the in-span rule, so they shipped as twelve W_Step walk
+# clips with `denied=0`, which reads as "this creature has no attacks" everywhere it is reported.
+# This gate opens the TimeAct that describes each attackless creature and fails when it finds
+# attack-band animations the table is not offering. Corpus-gated and SKIPS loudly, like the above.
+python3 "$repo_root/scripts/er-moveset-coverage.py" --selftest
+python3 "$repo_root/scripts/er-moveset-coverage.py" --check
+
 # EVERY REMAINING HOST-TESTABLE CRATE, IN TWO BATCHES. Up to this line the crates above were
 # added one at a time, each by somebody who tripped over the fact that theirs had never run --
 # `default-members = ["crates/er-quickload"]` means a bare `cargo test` selects ONE of 64
@@ -1736,12 +1779,8 @@ python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 python3 "$repo_root/scripts/er_run_lib.py"
 python3 "$repo_root/scripts/er-dll-closure.py" --selftest
 python3 "$repo_root/scripts/er-dll-provenance.py" --selftest
-# ...and the launch-time half of it, shared by five launch scripts as `require_fresh_dlls`. Its
-# selftest was written and left unwired, which is the same decorative green the gates above exist
-# to refuse. Positive-controlled 2026-08-31 rather than taken on trust: disabling the refusal, and
-# silently skipping an artifact name the workspace does not build, each turn it red; so does making
-# er-dll-provenance's `verify` always agree or its source hash a constant.
-bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
+# (The launch-time half of that pair, `er-dll-freshness.sh --selftest`, would sit here with its
+# siblings but CANNOT: it needs a linked DLL to exist. It runs after check-rust-build.sh below.)
 python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
@@ -1759,6 +1798,20 @@ python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
 bash "$repo_root/scripts/check-rust-build.sh"
+
+# THE LAUNCH-TIME FRESHNESS GATE, shared by five launch scripts as `require_fresh_dlls`. Its
+# selftest was written and left unwired, which is the same decorative green the gates above exist
+# to refuse. Positive-controlled 2026-08-31 rather than taken on trust: disabling the refusal, and
+# silently skipping an artifact name the workspace does not build, each turn it red; so does making
+# er-dll-provenance's `verify` always agree or its source hash a constant.
+#
+# IT LIVES HERE, below the link, and not with the other launch-pipeline selftests ~20 lines above,
+# because it needs a real linked DLL: the provenance record it exercises fingerprints the artifact's
+# CODE SECTION, so it parses a PE header and a placeholder file raises instead of standing in.
+# Measured 2026-09-01 in a fresh agent worktree with an empty target/ -- it went red with "no built
+# DLL at .../er_crash_logging.dll" while the change under test was fine, which is a gate teaching
+# people to read past it. Above the link this step is a property of the CHECKOUT, not of the code.
+bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
 
 # DOES THE COMMITTED STATE COMPILE -- not "does my working tree compile", which is the only
 # question every gate above this one, this file included, is able to ask. A pathspec commit is
