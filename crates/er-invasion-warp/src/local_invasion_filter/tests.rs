@@ -459,23 +459,16 @@ struct Measured {
 /// The exact addresses and numbers, so a change to any of them is a deliberate edit to a test
 /// that says where its value came from -- not a silent drift.
 #[test]
-fn the_pinned_abis_are_the_ones_measured_out_of_the_two_seamless_builds() {
-    // v1.9.9, measured 2026-08-05. v2.0.0, measured 2026-09-02 -- see this module's `ersc`
-    // docs for what identifies each v2.0.0 address; none was taken from a byte match alone.
-    let expected = [
-        Measured {
-            version: "Seamless Co-op v1.9.9",
-            rvas: [0x2_2d30, 0x2_43e0, 0x2_4460, 0xa_bc20],
-            fields: [0x110, 0x10c],
-            states: [0x00, 0x0d, 0x22, 0x12],
-        },
-        Measured {
-            version: "Seamless Co-op v2.0.0",
-            rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d590],
-            fields: [0x150, 0x14c],
-            states: [0x01, 0x0e, 0x23, 0x13],
-        },
-    ];
+fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
+    // v2.0.0, measured 2026-09-02 -- see this module's `ersc` docs for what identifies each
+    // address; none was taken from a byte match alone. v1.9.9 is no longer here because it is no
+    // longer driven; what remains of it is `ersc::RETIRED`, checked below.
+    let expected = [Measured {
+        version: "Seamless Co-op v2.0.0",
+        rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d590],
+        fields: [0x150, 0x14c],
+        states: [0x01, 0x0e, 0x23, 0x13],
+    }];
     assert_eq!(ersc::SUPPORTED.len(), expected.len());
     for (
         abi,
@@ -518,18 +511,27 @@ fn the_pinned_abis_are_the_ones_measured_out_of_the_two_seamless_builds() {
 
 /// v2.0.0 renumbered the whole session-state enum by `+1`, proven by a scan of every immediate
 /// store to the state field in both builds: seven distinct values, matching site counts, one
-/// uniform shift. This pins that relationship so a future edit to one code without the other
-/// has to argue with a test rather than slip through.
+/// uniform shift. That shift is the PROVENANCE of every number in the supported ABI, so it stays
+/// pinned even though v1.9.9 is no longer a build this mod drives -- a future edit to a state
+/// code has to argue with the derivation rather than slip through.
+///
+/// The v1.9.9 numbers are literals here, deliberately. They are the input to a measurement, not
+/// an ABI anything can be driven with, so a test is where they belong now.
 #[test]
-fn the_v200_state_enum_is_the_v199_one_shifted_by_exactly_one() {
-    let [old, new] = [&ersc::SUPPORTED[0], &ersc::SUPPORTED[1]];
+fn the_supported_state_enum_is_the_retired_one_shifted_by_exactly_one() {
+    /// v1.9.9 idle/searching/cancelling/offer-received, measured 2026-08-05.
+    const RETIRED_STATES: [u32; 4] = [0x00, 0x0d, 0x22, 0x12];
+    /// v1.9.9 session state and guard offsets, from the same measurement.
+    const RETIRED_FIELDS: [usize; 2] = [0x110, 0x10c];
+
+    let new = &ersc::SUPPORTED[0];
     for (name, before, after) in [
-        ("idle", old.state_idle, new.state_idle),
-        ("searching", old.state_searching, new.state_searching),
-        ("cancelling", old.state_cancelling, new.state_cancelling),
+        ("idle", RETIRED_STATES[0], new.state_idle),
+        ("searching", RETIRED_STATES[1], new.state_searching),
+        ("cancelling", RETIRED_STATES[2], new.state_cancelling),
         (
             "offer received",
-            old.state_offer_received,
+            RETIRED_STATES[3],
             new.state_offer_received,
         ),
     ] {
@@ -537,10 +539,10 @@ fn the_v200_state_enum_is_the_v199_one_shifted_by_exactly_one() {
     }
     // And the field group moved as a block, keeping its internal spacing: guard = mutex+0x4c,
     // state = mutex+0x50, so state - guard is invariant across the move.
-    assert_eq!(new.session_state_offset - old.session_state_offset, 0x40);
-    assert_eq!(new.session_guard_offset - old.session_guard_offset, 0x40);
+    assert_eq!(new.session_state_offset - RETIRED_FIELDS[0], 0x40);
+    assert_eq!(new.session_guard_offset - RETIRED_FIELDS[1], 0x40);
     assert_eq!(
-        old.session_state_offset - old.session_guard_offset,
+        RETIRED_FIELDS[0] - RETIRED_FIELDS[1],
         new.session_state_offset - new.session_guard_offset,
     );
 }
@@ -556,7 +558,8 @@ fn the_v200_state_enum_is_the_v199_one_shifted_by_exactly_one() {
 #[test]
 fn the_version_discriminator_actually_discriminates() {
     const SHARED_OPTION_ACTION_OPENING: usize = 14;
-    let [old, new] = [&ersc::SUPPORTED[0], &ersc::SUPPORTED[1]];
+    let old = &ersc::RETIRED[0];
+    let new = &ersc::SUPPORTED[0];
 
     // Same address would mean the gate cannot even look in two places.
     assert_ne!(old.invade_action_rva, new.invade_action_rva);

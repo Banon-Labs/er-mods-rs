@@ -64,10 +64,19 @@
 //!
 //! # Which Seamless build
 //!
-//! `ersc.dll` is third-party and the user updates it on their own schedule, so there is one
-//! [`ersc::Abi`] per build this repo has measured and [`resolve_ersc_abi`] picks between them by
-//! byte-checking the invade action -- an entry point this module calls but never hooks, so its
-//! bytes stay the shipped ones. Exactly one has to match; zero or two both refuse.
+//! THE LATEST SEAMLESS CO-OP ONLY. `ersc.dll` is third-party and the user updates it on their own
+//! schedule; chasing every past build with its own address set is unbounded work on a moving
+//! target, and it buys a co-op player nothing, because v2.0.0 changed the lobby-key salt and so
+//! clients of different builds cannot see each other's sessions anyway.
+//!
+//! [`resolve_ersc_abi`] therefore picks from [`ersc::SUPPORTED`] -- currently one entry -- by
+//! byte-checking the invade action, an entry point this module calls but never hooks, so its bytes
+//! stay the shipped ones. Exactly one has to match; zero or two both refuse. The table shape stays
+//! because Seamless will update again and the next build is another entry, not a rewrite.
+//!
+//! A build we USED to drive lives on in [`ersc::RETIRED`], carrying only its fingerprint, so the
+//! refusal can say "update Seamless Co-op" instead of "unrecognised build" -- the first is an
+//! instruction a player can follow, the second reads as a defect in this mod.
 //!
 //! # Fail-closed direction
 //!
@@ -374,6 +383,25 @@ fn resolve_ersc_abi() -> Option<&'static ersc::Abi> {
         }
         outcome => {
             if ABI.swap(ABI_REFUSED, Ordering::SeqCst) == 0 {
+                // Before calling it unrecognised, check whether it is a build we USED to drive.
+                // "Update Seamless Co-op" is something a player can act on; "unrecognised build"
+                // reads as a defect in this mod and gets reported as one.
+                if let Some(retired) = ersc::RETIRED.iter().find(|retired| {
+                    prologue_matches(base + retired.invade_action_rva, retired.invade_prologue)
+                }) {
+                    crate::standalone_log(format_args!(
+                        "local-invasion: ersc.dll @0x{base:x} is {}, which this mod NO LONGER \
+                         SUPPORTS -- it drives the latest Seamless Co-op only. Update Seamless \
+                         Co-op to {} and the filter arms itself. Until then it stays inert and \
+                         will NOT cancel anything. Note that the two builds cannot see each \
+                         other's sessions in any case: v2.0.0 changed the lobby-key salt.",
+                        retired.version,
+                        ersc::SUPPORTED
+                            .first()
+                            .map_or("a supported build", |abi| abi.version),
+                    ));
+                    return None;
+                }
                 let known: Vec<&str> = ersc::SUPPORTED.iter().map(|abi| abi.version).collect();
                 let complaint = if outcome.is_some() {
                     "matches MORE THAN ONE of the builds below, so the discriminator is not \

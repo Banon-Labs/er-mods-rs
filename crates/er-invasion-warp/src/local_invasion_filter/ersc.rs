@@ -3,12 +3,19 @@
 //!
 //! # Why this is a table rather than four constants
 //!
-//! `ersc.dll` is third-party. The user installs it, updates it whenever they like, and may
-//! downgrade; the Seamless launcher leaves the previous build in `_SeamlessCoop/` beside the new
-//! one, so both are usually present on disk. v2.0.0 shipped 2026-09-02 and moved every address
-//! this module pins AND the fields those addresses operate on. A single constant set can only
-//! ever be right about one build, so there is one [`Abi`] per build and [`super::resolve_ersc_abi`]
-//! picks between them -- refusing, as before, on a module that matches neither.
+//! `ersc.dll` is third-party. The user installs it and updates it whenever they like, and v2.0.0
+//! (2026-09-02) moved every address this module pins AND the fields those addresses operate on.
+//! A single constant set can only ever be right about one build, and the build it is right about
+//! changes without warning -- so the addresses live in an [`Abi`] record that
+//! [`super::resolve_ersc_abi`] selects by fingerprint, refusing anything it cannot identify.
+//!
+//! **[`SUPPORTED`] holds exactly one entry, and that is a product decision: this mod drives the
+//! LATEST Seamless Co-op only.** The table is not vestigial -- Seamless will update again, and the
+//! next build is a new entry measured the way this one was. v1.9.9, which this module did drive
+//! until 2026-09-02, is kept in [`RETIRED`] as a fingerprint and nothing else.
+//!
+//! Nobody loses a co-op session to that decision: v2.0.0 changed the lobby-key salt, so v1.9.9 and
+//! v2.0.0 clients are already invisible to each other whatever this mod does.
 //!
 //! # What v2.0.0 moved, and how each address was identified
 //!
@@ -139,56 +146,36 @@ pub struct Abi {
     pub state_offer_received: u32,
 }
 
-/// Every Seamless build this module knows how to drive.
+/// Every Seamless build this module knows how to drive: the latest one.
 ///
-/// [`super::resolve_ersc_abi`] requires EXACTLY ONE of these to match
-/// the loaded module and refuses otherwise -- zero matches means an unrecognised build, and
-/// two would mean the discriminator does not discriminate. That is not a theoretical
-/// guard: measured 2026-09-02, each [`Abi::invade_prologue`] occurs exactly once in the
-/// build it describes and NOT AT ALL in the other, so the "two matched" arm is unreachable
-/// for these two entries and stays as the check that keeps a third entry honest.
+/// [`super::resolve_ersc_abi`] requires EXACTLY ONE of these to match the loaded module and
+/// refuses otherwise -- zero matches means a build this repo has not measured, and two would mean
+/// the discriminator does not discriminate. With a single entry the "two matched" arm cannot fire;
+/// it stays because the entry after the next Seamless update has to earn its place, and a pin too
+/// weak to tell itself from its predecessor must fail loudly rather than silently win a race.
 ///
 /// The discriminator is the INVADE action rather than `show` for two independent reasons.
-/// `show` is byte-identical between the two builds -- it is the same code at a different
-/// address, so it cannot tell them apart at all. And this module HOOKS `show`, so once the
-/// detour is installed those bytes are our own; a fingerprint taken there measures our patch
-/// and concludes Seamless is a stranger, which is a bug this module has already had once.
-pub const SUPPORTED: &[Abi] = &[
-    Abi {
-        version: "Seamless Co-op v1.9.9",
-        show_rva: V199_SHOW_RVA,
-        invade_action_rva: V199_INVADE_ACTION_RVA,
-        cancel_action_rva: V199_CANCEL_ACTION_RVA,
-        build_lobby_key_rva: V199_BUILD_LOBBY_KEY_RVA,
-        show_prologue: V199_SHOW_PROLOGUE,
-        invade_prologue: V199_INVADE_PROLOGUE,
-        cancel_prologue: V199_CANCEL_PROLOGUE,
-        build_lobby_key_prologue: V199_BUILD_LOBBY_KEY_PROLOGUE,
-        session_state_offset: V199_SESSION_STATE_OFFSET,
-        session_guard_offset: V199_SESSION_GUARD_OFFSET,
-        state_idle: 0x00,
-        state_searching: 0x0d,
-        state_cancelling: 0x22,
-        state_offer_received: 0x12,
-    },
-    Abi {
-        version: "Seamless Co-op v2.0.0",
-        show_rva: V200_SHOW_RVA,
-        invade_action_rva: V200_INVADE_ACTION_RVA,
-        cancel_action_rva: V200_CANCEL_ACTION_RVA,
-        build_lobby_key_rva: V200_BUILD_LOBBY_KEY_RVA,
-        show_prologue: V200_SHOW_PROLOGUE,
-        invade_prologue: V200_INVADE_PROLOGUE,
-        cancel_prologue: V200_CANCEL_PROLOGUE,
-        build_lobby_key_prologue: V200_BUILD_LOBBY_KEY_PROLOGUE,
-        session_state_offset: V200_SESSION_STATE_OFFSET,
-        session_guard_offset: V200_SESSION_GUARD_OFFSET,
-        state_idle: 0x01,
-        state_searching: 0x0e,
-        state_cancelling: 0x23,
-        state_offer_received: 0x13,
-    },
-];
+/// `show` was byte-identical between v1.9.9 and v2.0.0 -- the same code at a different address, so
+/// it could not tell them apart at all. And this module HOOKS `show`, so once the detour is
+/// installed those bytes are our own; a fingerprint taken there measures our patch and concludes
+/// Seamless is a stranger, which is a bug this module has already had once.
+pub const SUPPORTED: &[Abi] = &[Abi {
+    version: "Seamless Co-op v2.0.0",
+    show_rva: V200_SHOW_RVA,
+    invade_action_rva: V200_INVADE_ACTION_RVA,
+    cancel_action_rva: V200_CANCEL_ACTION_RVA,
+    build_lobby_key_rva: V200_BUILD_LOBBY_KEY_RVA,
+    show_prologue: V200_SHOW_PROLOGUE,
+    invade_prologue: V200_INVADE_PROLOGUE,
+    cancel_prologue: V200_CANCEL_PROLOGUE,
+    build_lobby_key_prologue: V200_BUILD_LOBBY_KEY_PROLOGUE,
+    session_state_offset: V200_SESSION_STATE_OFFSET,
+    session_guard_offset: V200_SESSION_GUARD_OFFSET,
+    state_idle: 0x01,
+    state_searching: 0x0e,
+    state_cancelling: 0x23,
+    state_offer_received: 0x13,
+}];
 
 // The addresses and field offsets are NAMED CONSTANTS rather than literals inside the table
 // above, and that is not a style choice: `scripts/check-expression-constants.py` derives its
@@ -198,13 +185,39 @@ pub const SUPPORTED: &[Abi] = &[
 // because two builds are described here and an unprefixed `SHOW_RVA` could only be one of
 // them.
 
-/// Seamless v1.9.9, measured 2026-08-05.
-pub const V199_SHOW_RVA: usize = 0x2_2d30;
+/// A build this module once drove and no longer will.
+///
+/// Kept for ONE purpose: so that a user who has not updated Seamless is told exactly that,
+/// instead of being told their `ersc.dll` is unrecognised. The distinction is the whole value --
+/// "update Seamless Co-op" is an instruction someone can act on, "unrecognised build" reads as a
+/// bug in this mod and gets reported as one. Nothing in here is ever used to drive anything: a
+/// retired build carries only the fingerprint that identifies it.
+pub struct Retired {
+    /// Printed to the log verbatim.
+    pub version: &'static str,
+    /// Where [`Self::invade_prologue`] is expected, relative to the module base.
+    pub invade_action_rva: usize,
+    /// The same discriminator [`Abi::invade_prologue`] is, and measured the same way -- it occurs
+    /// exactly once in v1.9.9 and nowhere at all in v2.0.0, so recognising a retired build cannot
+    /// misfire on a supported one.
+    pub invade_prologue: &'static [u8],
+}
+
+/// Builds that are recognised only to be refused by name. See [`Retired`].
+///
+/// v1.9.9 is here rather than in [`SUPPORTED`] by product decision, not by measurement: this mod
+/// supports the latest Seamless Co-op only. The measurement happens to agree that the split costs
+/// nothing to a co-op player -- v2.0.0 changed the lobby-key salt, so v1.9.9 and v2.0.0 clients
+/// cannot see each other's sessions regardless of what this mod does.
+pub const RETIRED: &[Retired] = &[Retired {
+    version: "Seamless Co-op v1.9.9",
+    invade_action_rva: V199_INVADE_ACTION_RVA,
+    invade_prologue: V199_INVADE_PROLOGUE,
+}];
+
+/// Seamless v1.9.9, measured 2026-08-05. Only the invade action survives the retirement of that
+/// build: it is what [`RETIRED`] recognises it BY, and nothing here drives it any more.
 pub const V199_INVADE_ACTION_RVA: usize = 0x2_43e0;
-pub const V199_CANCEL_ACTION_RVA: usize = 0x2_4460;
-pub const V199_BUILD_LOBBY_KEY_RVA: usize = 0xa_bc20;
-pub const V199_SESSION_STATE_OFFSET: usize = 0x110;
-pub const V199_SESSION_GUARD_OFFSET: usize = 0x10c;
 
 /// Seamless v2.0.0, measured 2026-09-02. See this module's docs for what identifies each one.
 pub const V200_SHOW_RVA: usize = 0x2_41a0;

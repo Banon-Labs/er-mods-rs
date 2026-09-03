@@ -56,11 +56,7 @@ const PLACE_NAME_LOOKUP_VA: u64 = 0x140d10b60;
 // builds because it is literally the same code at a different address -- and it is also the one
 // function this module HOOKS, so its bytes stop being the shipped bytes once the detour is in.
 
-/// v1.9.9 entry points, measured 2026-08-05.
-const ERSC199_SHOW_VA: u64 = 0x180022d30;
 const ERSC199_INVADE_ACTION_VA: u64 = 0x1800243e0;
-const ERSC199_CANCEL_ACTION_VA: u64 = 0x180024460;
-const ERSC199_BUILD_LOBBY_KEY_VA: u64 = 0x1800abc20;
 /// The `std::mutex`-ish lock both option actions take on the session sub-object, and the unlock
 /// they tail-jump to. Named because the pins encode the `call`'s rel32 to it.
 const ERSC199_SESSION_LOCK_VA: u64 = 0x1800f4868;
@@ -98,14 +94,10 @@ const ERSC200_SESSION_STATE_OFFSET: i64 = 0x150;
 /// `scripts/ersc-disas.py states 0x110 --build v199` and `... states 0x150 --build v200`.
 const ERSC199_STATE_IDLE: i32 = 0x00;
 const ERSC199_STATE_SEARCHING: i32 = 0x0d;
-const ERSC199_STATE_CANCELLING: i32 = 0x22;
 const ERSC200_STATE_IDLE: i32 = 0x01;
 const ERSC200_STATE_SEARCHING: i32 = 0x0e;
 const ERSC200_STATE_CANCELLING: i32 = 0x23;
 
-/// `BuildLobbyKey`'s first act is to check a pointer field on its `ctx` argument. That field moved
-/// with the rest of the object.
-const ERSC199_LOBBY_KEY_CTX_OFFSET: i64 = 0xb8;
 const ERSC200_LOBBY_KEY_CTX_OFFSET: i64 = 0xc8;
 
 /// Where the invade action's shared tail begins, relative to the function entry. v1.9.9 branches
@@ -139,16 +131,6 @@ const ERSC200_INVADE: ErscAction = ErscAction {
     // Eight bytes further than v1.9.9's, which is exactly the relocated return block above.
     fatal_5: 0x56,
     fatal_6: 0x60,
-};
-const ERSC199_CANCEL: ErscAction = ErscAction {
-    va: ERSC199_CANCEL_ACTION_VA,
-    lock_va: ERSC199_SESSION_LOCK_VA,
-    mutex: ERSC199_SESSION_MUTEX_OFFSET,
-    guard: ERSC199_SESSION_GUARD_OFFSET,
-    state: ERSC199_SESSION_STATE_OFFSET,
-    code: ERSC199_STATE_CANCELLING,
-    fatal_5: 0x45,
-    fatal_6: 0x4f,
 };
 const ERSC200_CANCEL: ErscAction = ErscAction {
     va: ERSC200_CANCEL_ACTION_VA,
@@ -293,32 +275,8 @@ fn main() {
         &[
             (
                 PrologueSpec {
-                    name: "V199_SHOW_PROLOGUE",
-                    doc: "v1.9.9 `show(void* OSM, int groupId)`: eight callee-saved pushes and a\n\
-                          0x188 frame. NOT the version discriminator, for two separate reasons --\n\
-                          `show` is byte-identical in v2.0.0 (it is the same code at a different\n\
-                          address), and this module HOOKS it, so after installation the bytes\n\
-                          here are our own detour rather than Seamless's.",
-                    visibility: "pub",
-                    shape: Shape::Slice,
-                    image: Image::Ersc199,
-                    va: ERSC199_SHOW_VA,
-                    take: 0,
-                    pin: &[
-                        0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53,
-                        0x48, 0x81, 0xec, 0x88, 0x01, 0x00, 0x00,
-                    ],
-                },
-                (|asm| {
-                    ersc_callee_saved_pushes(asm)?;
-                    asm.sub(rsp, 0x188)?;
-                    Ok(())
-                }) as prologue_build::Assemble,
-            ),
-            (
-                PrologueSpec {
                     name: "V200_SHOW_PROLOGUE",
-                    doc: "v2.0.0 `show`. Identical bytes to [`V199_SHOW_PROLOGUE`] at a different\n\
+                    doc: "v2.0.0 `show`. Byte-identical to the v1.9.9 function at a different\n\
                           address: v2.0.0 recompiled this function to the byte and moved it from\n\
                           `0x22d30` to `0x241a0`.",
                     visibility: "pub",
@@ -416,30 +374,9 @@ fn main() {
             ),
             (
                 PrologueSpec {
-                    name: "V199_CANCEL_PROLOGUE",
-                    doc: "v1.9.9 \"Cancel search\", through `mov [rdi+0x110],0x22`. No state\n\
-                          precondition -- the only unguarded option action in the build, and the\n\
-                          reason a masked body search could still find this one in v2.0.0.",
-                    visibility: "pub",
-                    shape: Shape::Slice,
-                    image: Image::Ersc199,
-                    va: ERSC199_CANCEL_ACTION_VA,
-                    take: 0,
-                    pin: &[
-                        0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
-                        0x79, 0x58, 0x48, 0x8d, 0xb7, 0xc0, 0x00, 0x00, 0x00, 0x48, 0x89, 0xf1,
-                        0xe8, 0xeb, 0x03, 0x0d, 0x00, 0x85, 0xc0, 0x75, 0x24, 0x81, 0xbf, 0x0c,
-                        0x01, 0x00, 0x00, 0xff, 0xff, 0xff, 0x7f, 0x74, 0x22, 0xc7, 0x87, 0x10,
-                        0x01, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00,
-                    ],
-                },
-                (|asm| ersc_cancel_action(asm, &ERSC199_CANCEL)) as prologue_build::Assemble,
-            ),
-            (
-                PrologueSpec {
                     name: "V200_CANCEL_PROLOGUE",
                     doc: "v2.0.0 \"Cancel search\" at `0x258d0`, through `mov [rdi+0x150],0x23`.\n\
-                          Byte-for-byte the same shape as [`V199_CANCEL_PROLOGUE`] with the\n\
+                          Byte-for-byte the same shape as v1.9.9's cancel action, with the\n\
                           session field group moved `+0x40` and the state code renumbered `+1`.",
                     visibility: "pub",
                     shape: Shape::Slice,
@@ -458,40 +395,9 @@ fn main() {
             ),
             (
                 PrologueSpec {
-                    name: "V199_BUILD_LOBBY_KEY_PROLOGUE",
-                    doc: "v1.9.9 `BuildLobbyKey(ctx, std::string* out)`, through the first thing\n\
-                          it examines. The eight pushes, a 0x148 frame, the xmm6 spill and stack\n\
-                          cookie, `mov r15,rdx` saving the out-param, then\n\
-                          `cmp qword [rcx+0xb8],0` -- the ctx field that has to be non-null.",
-                    visibility: "pub",
-                    shape: Shape::Slice,
-                    image: Image::Ersc199,
-                    va: ERSC199_BUILD_LOBBY_KEY_VA,
-                    take: 0,
-                    pin: &[
-                        0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53,
-                        0x48, 0x81, 0xec, 0x48, 0x01, 0x00, 0x00, 0x48, 0x8d, 0xac, 0x24, 0x80,
-                        0x00, 0x00, 0x00, 0x0f, 0x29, 0xb5, 0xb0, 0x00, 0x00, 0x00, 0x48, 0xc7,
-                        0x85, 0xa8, 0x00, 0x00, 0x00, 0xfe, 0xff, 0xff, 0xff, 0x49, 0x89, 0xd7,
-                        0x48, 0x83, 0xb9, 0xb8, 0x00, 0x00, 0x00, 0x00,
-                    ],
-                },
-                (|asm| {
-                    ersc_callee_saved_pushes(asm)?;
-                    asm.sub(rsp, 0x148)?;
-                    asm.lea(rbp, qword_ptr(rsp + 0x80))?;
-                    asm.movaps(xmmword_ptr(rbp + 0xb0), xmm6)?;
-                    asm.mov(qword_ptr(rbp + 0xa8), -2)?;
-                    asm.mov(r15, rdx)?;
-                    asm.cmp(qword_ptr(rcx + ERSC199_LOBBY_KEY_CTX_OFFSET), 0)?;
-                    Ok(())
-                }) as prologue_build::Assemble,
-            ),
-            (
-                PrologueSpec {
                     name: "V200_BUILD_LOBBY_KEY_PROLOGUE",
                     doc: "v2.0.0 `BuildLobbyKey` at `0xad590`. Instruction for instruction the\n\
-                          same function as [`V199_BUILD_LOBBY_KEY_PROLOGUE`]: the frame shrank\n\
+                          same function as v1.9.9's `BuildLobbyKey`: the frame shrank\n\
                           `0x148`->`0x108`, the out-param moved from `r15` to `rsi`, and the ctx\n\
                           field moved `+0xb8`->`+0xc8`. Its frame size is why the 19-byte v1.9.9\n\
                           prologue matched a DIFFERENT function (`0x1a6d0`, which also frames\n\
