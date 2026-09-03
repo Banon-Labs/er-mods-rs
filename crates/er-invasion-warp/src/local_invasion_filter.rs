@@ -799,11 +799,16 @@ fn install_show_observer() -> usize {
     // the recurring check in `resolve_session`, which had to stop reading `show` for that reason.
     if !prologue_matches(address, ersc::SHOW_PROLOGUE) {
         if SHOW_HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 0 {
+            // The version is the GENERATED constant, not a literal: this line and the pins it is
+            // talking about have to name the same build, and a hand-typed "v1.9.9" beside a
+            // repinned constant is a refusal that lies about why it refused.
+            let supported = ersc::SUPPORTED_VERSION;
             crate::standalone_log(format_args!(
                 "local-invasion: ersc.dll @0x{base:x} does not match the RVAs this build was \
-                 measured against (Seamless Co-op v1.9.9) -- NOT touching it. The filter stays \
-                 inert. To see where the entry points went: uv run --with capstone python3 \
-                 scripts/locate-ersc-entry-points.py"
+                 measured against (Seamless Co-op v{supported}) -- NOT touching it. The filter \
+                 stays inert. Update Seamless Co-op to v{supported}, or, if it is already newer, \
+                 this mod has not been re-measured against your build yet. To see where the entry \
+                 points went: uv run --with capstone python3 scripts/locate-ersc-entry-points.py"
             ));
         }
         return 0;

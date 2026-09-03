@@ -1204,6 +1204,16 @@ python3 "$repo_root/scripts/check-native-call-rva-coverage.py"
 # Both halves of that comparison are readable off the disk, so it never needed a game to catch.
 python3 "$repo_root/scripts/check-game-version-supported.py" --selftest
 python3 "$repo_root/scripts/check-game-version-supported.py"
+# THE SAME QUESTION FOR SEAMLESS CO-OP, which needs its own gate because its answer is not a
+# version-named file this repo produces. On 2026-09-02 v2.0.0 replaced v1.9.9 under an unchanged
+# file name and moved everything -- `show` left 0x180022d30, the session state field went
+# S+0x110 -> S+0x150, the state enum was renumbered by +1 -- and nothing announced it. A DLL built
+# against v1.9.9 loads into v2.0.0 without complaint and silently does nothing. This workspace
+# supports ONE Seamless build, recorded as ERSC_SUPPORTED_VERSION in
+# build-support/prologue_build.rs; the gate reads that constant and the banner in the INSTALLED
+# module and asks the only useful question, which is whether they are the same build.
+python3 "$repo_root/scripts/check-ersc-version-supported.py" --selftest
+python3 "$repo_root/scripts/check-ersc-version-supported.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/.githooks/pre-push"

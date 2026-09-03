@@ -176,6 +176,8 @@ blocked	rva-map-tsv	check-native-call-rva-coverage.py --selftest	its ledger pin 
 blocked	rva-map-tsv	check-native-call-rva-coverage.py	its ledger pin names the gitignored .pdata alignment
 blocked	game-install	check-game-version-supported.py --selftest	'PE reader not exercised' -- the selftest reads the INSTALLED exe, it has no synthetic PE
 blocked	game-install	check-game-version-supported.py	'SKIP: no game at ...' -- the installed build is the entire subject
+partial	game-install	check-ersc-version-supported.py --selftest	both parsers still assert on synthetic banners and the real constant; 'installed reader not exercised'
+blocked	game-install	check-ersc-version-supported.py	'SKIP: no Seamless Co-op at ...' -- the installed build is the entire subject
 portable	-	check-markdown-code-blocks.py	source/AST/text analysis only
 portable	-	er-stale-run-sentinel.sh --selftest	source/AST/text analysis only
 portable	-	er-launch-gate.py --selftest	source/AST/text analysis only

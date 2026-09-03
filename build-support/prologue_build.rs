@@ -29,23 +29,53 @@
 // The pin is therefore not redundant with ground truth: it is the half that survives on a
 // machine, or in CI, that has no game files.
 //
-// # Whose file is it? -- why a mismatch is fatal for one image and advisory for another
+// # ONE supported version per module, recorded here, checked before anything else
 //
-// A ground-truth mismatch means "the bytes at the VA I pinned are not the bytes I assembled".
-// That sentence has two very different causes depending on WHOSE binary the VA points into:
+// Every image named below is pinned to exactly ONE build, and this workspace supports that build
+// and no other. There is no candidate list, no "try these addresses and see which one takes", and
+// no best-effort adaptation to whatever the machine happens to hold. The only question asked of an
+// installed module is the boolean one: *is this the build we recorded, yes or no*.
 //
-// * **A game image** (`eldenring-deobf*.bin`) is version-named and produced by this workspace.
-//   `Image::EldenRing` *is* 1.16.2 and `Image::EldenRing1170` *is* 1.17; there is no such thing as
-//   a surprise build hiding behind those names. A mismatch there is a defect in this repo, and it
-//   still panics.
-// * **`ersc.dll` is third-party.** Seamless Co-op is installed and updated by the user, on their
-//   schedule, with no input from this repo. On 2026-09-02 v2.0.0 replaced v1.9.9 and moved `show`
-//   from `0x180022d30` to `0x1800241a0` -- so the pinned VA started reading a float bit pattern
-//   (`ff ff ff 7f ...`), a build script panicked, and `cargo check --workspace` failed for the
-//   whole repo until someone hand-measured a new address. That is the wrong failure mode: a file
-//   the user is free to replace at any moment must not be able to hold the build hostage. For
-//   such an image a mismatch is a `cargo:warning` that says where the bytes moved to and how to
-//   re-measure, and the build continues on the pin alone.
+// The two halves of an image's identity, and why they are not the same question:
+//
+// * **Which build is this file?** A game image answers by its NAME: `eldenring-deobf.bin` *is*
+//   1.16.2 and `eldenring-deobf-1.17.bin` *is* 1.17, because this workspace produces them and
+//   names them. `ersc.dll` cannot answer that way -- it is third-party, it always has the same
+//   file name, and the user replaces it on their own schedule -- so it answers by CONTENT: the
+//   `Seamless Co-op vX.Y.Z by Yui` banner Seamless builds into its own image.
+//   [`ERSC_SUPPORTED_VERSION`] is the recorded answer, and it is the single value to change when
+//   this workspace moves to a new Seamless build.
+// * **Are our bytes right for it?** That is ground truth, and it may only be asked once the first
+//   question has been answered YES. Comparing a v1.9.9 pin against a v2.0.0 file is not ground
+//   truth failing, it is ground truth being impossible: the diff it prints is a fact about a
+//   module nobody claimed those addresses described.
+//
+// So [`generate`] identifies before it compares, and BOTH answers are fatal when they are wrong:
+//
+// * **Wrong version installed.** The machine has Seamless, and it is not the build this tree was
+//   measured against. A DLL built here would be inert on that machine at best -- the runtime gates
+//   fail closed -- and its addresses name the wrong fields of a live multiplayer session at worst.
+//   The build says so, in full, naming both versions and the ways out. It does not warn and carry
+//   on: a `cargo:warning` scrolls past inside a green build, and the person who then pays for it
+//   is a player wondering why a feature does nothing.
+// * **Right version, wrong bytes.** The file IS the recorded build and our constants disagree with
+//   it. That is a defect in this repo -- the pins are wrong for the version they claim -- and it
+//   panics for every image alike, `ersc.dll` included.
+//
+// **A module that is absent is not a mismatch.** No `ersc.dll`, no game image, no `ER_ERSC_DLL`:
+// nothing to disagree with, so ground truth SKIPS with a `cargo:warning` and the pin carries the
+// verification alone. That is what keeps this buildable in CI and on a machine that has never
+// installed Seamless, and it is the same line `scripts/check-game-version-supported.py` draws --
+// "a missing game is not a failed gate, it is a machine without the game."
+//
+// # The escape hatch, and the gate that it cannot slip past
+//
+// `ER_ERSC_DLL` names the file to ground-truth against, so a developer whose install has moved on
+// can still build by pointing it at a copy of the supported build. It is deliberately narrow: it
+// changes which file the CONSTANTS are checked against, and it is itself version-checked, so it
+// cannot be used to wave a mismatch through. It also says nothing about what the machine will
+// actually load -- that question belongs to `scripts/check-ersc-version-supported.py`, which reads
+// the INSTALLED module and is not overridable by this variable.
 //
 // When the pinned VA does not hold, [`generate`] searches the module's real code sections for the
 // assembled bytes under the generated mask, so the diagnostic carries the address the function
@@ -78,6 +108,47 @@ pub const PROLOGUE_BYTE_IGNORED: u8 = 0x00;
 /// one, so this prefix byte -- the only raw byte in the whole generator -- is named here and
 /// emitted with `db`. [`rex_push`] is the only user.
 pub const REDUNDANT_REX_PREFIX: u8 = 0x40;
+
+/// The ONE Seamless Co-op build this workspace supports, and the only place that number is
+/// written down.
+///
+/// # Why a single value and not a list
+///
+/// Every `ersc.dll` fact this repo holds -- an RVA, a struct field offset, a state code, a byte
+/// signature -- was measured against one build, and the numbers do not survive an update: v2.0.0
+/// moved `show` from `0x180022d30` to `0x1800241a0`, shifted the session object's state field from
+/// `S+0x110` to `S+0x150`, and renumbered the session-state enum by `+1` throughout. A set of
+/// addresses from one build used with the field offsets of another does not fail loudly at
+/// runtime; it reads and writes the wrong members of a live multiplayer session. So there is no
+/// version to fall back to and nothing to search: there is the recorded build, and everything
+/// else.
+///
+/// # What changing it means
+///
+/// Moving to a new Seamless build is a re-measurement, not an edit to this line. Re-derive the
+/// entry points (`uv run --with capstone python3 scripts/locate-ersc-entry-points.py`), READ each
+/// candidate rather than trusting a signature match -- v2.0.0's 19-byte `BUILD_LOBBY_KEY` pin
+/// matches exactly one v2.0.0 address and it is the WRONG function -- re-pin the constants and the
+/// field offsets, and then set this. The value is checked against the file before any pin is
+/// compared, so a repin that forgets this line fails the build rather than verifying against the
+/// wrong module.
+pub const ERSC_SUPPORTED_VERSION: &str = "1.9.9";
+
+/// The version banner Seamless Co-op builds into its own image: `Seamless Co-op v2.0.0 by Yui`.
+///
+/// Read rather than inferred from a path, a file size or a timestamp, all of which a user can
+/// change without changing the build. Measured 2026-09-02: the banner is UTF-16LE, NUL-terminated,
+/// and occurs EXACTLY ONCE in each build (`0x1dcaf4` in v1.9.9, `0x1e19dc` in v2.0.0), with no
+/// ASCII copy anywhere in either file.
+const ERSC_VERSION_BANNER: &str = "Seamless Co-op v";
+
+/// How far past the banner prefix the walk to the NUL terminator may go, in bytes.
+///
+/// The banner is ~24 bytes of payload; this bound exists so a corrupt or hostile image cannot turn
+/// "find the terminator" into a walk of the whole 13 MB file. Stripping NULs to fake an ASCII
+/// search instead of walking code units is the mistake this avoids: the string pooled immediately
+/// after the banner then merges into it, and both real builds report `v2.0.0 by YuiThis`.
+const ERSC_VERSION_BANNER_LIMIT: usize = 128;
 
 /// Which module a prologue lives in, and therefore which base its VA is relative to and which
 /// file can ground-truth it.
@@ -133,15 +204,30 @@ impl Image {
         }
     }
 
-    /// Whether a ground-truth MISMATCH downgrades to a `cargo:warning` instead of failing.
+    /// The one build of this module the workspace supports, for an image that has to prove which
+    /// build it is from its own CONTENT.
     ///
-    /// True only for a module this repo does not own and cannot version-name. See the module
-    /// docs: `ersc.dll` is whatever Seamless build the user last installed, so "the bytes at the
-    /// VA are different" is news about their machine, not a defect in this commit. A missing
-    /// image already skips for every `Image`; this is the same reasoning applied to an image that
-    /// is present but is a build we never measured.
-    fn ground_truth_is_advisory(self) -> bool {
-        matches!(self, Self::Ersc)
+    /// `None` for the game images, and that is not a gap: they are version-NAMED, so the file the
+    /// build script opened has already answered the question by being called
+    /// `eldenring-deobf.bin` rather than `eldenring-deobf-1.17.bin`. A flat dump carries no
+    /// version resource to read anyway.
+    fn supported_version(self) -> Option<&'static str> {
+        match self {
+            Self::EldenRing | Self::EldenRing1170 => None,
+            Self::Ersc => Some(ERSC_SUPPORTED_VERSION),
+        }
+    }
+
+    /// The version this image says it is, or `None` when it carries no version banner at all.
+    ///
+    /// Only meaningful for an image with a [`Self::supported_version`]; the game dumps have
+    /// nothing to read and answer `None`, which is why the caller checks `supported_version`
+    /// first and never reaches here for them.
+    fn declared_version(self, image: &[u8]) -> Option<String> {
+        match self {
+            Self::EldenRing | Self::EldenRing1170 => None,
+            Self::Ersc => ersc_declared_version(image),
+        }
     }
 
     /// The one-line command that re-measures this image's addresses by hand.
@@ -326,6 +412,50 @@ fn steam_roots() -> Vec<PathBuf> {
         roots.push(home.join(".steam/steam"));
     }
     roots
+}
+
+/// The `X.Y.Z` Seamless Co-op writes into its own [`ERSC_VERSION_BANNER`], or `None` when the
+/// image carries no such banner.
+///
+/// Deliberately independent of the PE section table: the banner is a plain string constant, and
+/// making its discovery depend on a parse that a repacked or corrupt image can defeat would turn
+/// "which build is this" into "did the section table parse" -- two questions with very different
+/// right answers. A whole-file search cannot be defeated that way and costs one pass.
+///
+/// The trailing ` by Yui` is dropped because it is an author credit, not part of the version, and
+/// pinning it would make a future rename read as a version mismatch. What is NOT dropped is the
+/// shape check: the token has to look like a dotted number, so a hit in compressed or encrypted
+/// bytes cannot be reported as a version.
+fn ersc_declared_version(image: &[u8]) -> Option<String> {
+    let prefix: Vec<u8> = ERSC_VERSION_BANNER
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let start = image
+        .windows(prefix.len())
+        .position(|window| window == prefix)?;
+    let body = start.checked_add(prefix.len())?;
+    // `len() - 1` so the two-byte terminator read below always has a second byte.
+    let limit = image
+        .len()
+        .saturating_sub(1)
+        .min(body.saturating_add(ERSC_VERSION_BANNER_LIMIT));
+    let mut end = body;
+    while end < limit && image.get(end..end + 2) != Some(&[0, 0]) {
+        end += 2;
+    }
+    let (pairs, _remainder) = image.get(body..end)?.as_chunks::<2>();
+    let units: Vec<u16> = pairs.iter().copied().map(u16::from_le_bytes).collect();
+    let version = String::from_utf16(&units)
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .to_string();
+    let dotted_number = !version.is_empty()
+        && version
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.');
+    dotted_number.then_some(version)
 }
 
 /// Minimal PE section walk: RVA -> file offset. Returns `None` for anything that does not parse
@@ -626,10 +756,11 @@ fn rip_relative_mask(spec: &PrologueSpec, instructions: &[Instruction], bytes: &
 
 /// The message for "the pinned VA does not hold the bytes this spec describes".
 ///
-/// It is one function so the advisory (`cargo:warning`) and the fatal (`panic!`) paths cannot
-/// drift apart in what they tell the reader, and so the answer to "what do I do now" is in the
-/// message rather than in someone's memory of a build that broke months ago. Three things every
-/// reader needs: what was expected, what is actually there, and WHERE the expected bytes went.
+/// This one is reached only once the file has PROVEN it is the recorded build (see
+/// [`describe_version_mismatch`], which runs first and stops the build if it has not), so it says
+/// what it means: our constants are wrong for a version we claim to support. Three things every
+/// reader needs are here rather than in someone's memory of a build that broke months ago: what
+/// was expected, what is actually there, and WHERE the expected bytes went.
 fn describe_mismatch(
     spec: &PrologueSpec,
     path: &Path,
@@ -670,19 +801,64 @@ fn describe_mismatch(
             },
         )),
     }
-    if spec.image.ground_truth_is_advisory() {
-        report.push_str(
-            "  Ground truth is SKIPPED, not failed: this module is third-party and the user \
-             updates it whenever they like, so it may not break the build. The pinned bytes still \
-             apply and the runtime gate that uses them fails closed on a module it cannot \
-             recognise.\n",
-        );
+    if let Some(version) = spec.image.supported_version() {
+        report.push_str(&format!(
+            "  The file IS the supported build (v{version}), so this is not a Seamless update: \
+             the constant is wrong for the version it claims to describe.\n"
+        ));
     }
     report.push_str(&format!(
         "  To re-measure by hand: {}",
         spec.image.remeasure_hint()
     ));
     report
+}
+
+/// The message for "this file is a different build of the module than the one we support".
+///
+/// A separate report from [`describe_mismatch`] because it is a different fact with a different
+/// audience and a different fix. A byte mismatch is addressed to whoever changed this repo; this
+/// one is usually addressed to someone whose Seamless Co-op updated itself, and telling them
+/// "assembled `f3 0f 1e fa ...` but the file has `00 48 8b 85 ...`" answers a question they did
+/// not ask. It says which build they have, which one this tree supports, and the three ways out.
+///
+/// `found` is `None` when the file carries no version banner at all -- an unreadable identity is
+/// treated as an unsupported one, the same call `er_game_base::game_build::is_supported_build`
+/// makes for a game whose version resource will not parse: "cannot tell" and "wrong build" have
+/// the same consequence for an address measured against a different one.
+fn describe_version_mismatch(image: Image, path: &Path, want: &str, found: Option<&str>) -> String {
+    let label = image.label();
+    let is = match found {
+        Some(version) => format!("is v{version}"),
+        None => "carries no version banner, so it cannot be identified at all".to_string(),
+    };
+    format!(
+        "{label} at {} {is}; this workspace supports v{want} and no other version.\n\
+         \n\
+         Every {label} address, struct field offset and state code in this tree was measured \
+         against v{want}. They do not carry across an update: v2.0.0 moved the session object's \
+         state field from S+0x110 to S+0x150 and renumbered the state enum by +1, so a correct \
+         address from one build used with the field offsets of another reads and writes the wrong \
+         members of a live multiplayer session. That is why this stops the build instead of \
+         guessing.\n\
+         \n\
+         Three ways forward, in the order you probably want them:\n\
+         \n\
+         1. Re-measure this tree onto the installed build:\n\
+         \x20     {}\n\
+         \x20  Then re-pin the constants AND the field offsets, and set ERSC_SUPPORTED_VERSION\n\
+         \x20  in build-support/prologue_build.rs to the new version. A signature match is a\n\
+         \x20  candidate, never an identification -- read each one before pinning it.\n\
+         2. Point the build at a copy of the supported build:\n\
+         \x20     {}=<path to a v{want} {label}>\n\
+         \x20  That verifies the constants and nothing else. It does not change what the game\n\
+         \x20  will load, and scripts/check-ersc-version-supported.py reads the INSTALLED\n\
+         \x20  module and is not overridable by it.\n\
+         3. Install v{want} of the module.\n",
+        path.display(),
+        image.remeasure_hint(),
+        image.env_override(),
+    )
 }
 
 /// `[(start, len)]` for each masked run, for the generated doc comment.
@@ -804,18 +980,124 @@ fn render(spec: &PrologueSpec, bytes: &[u8], mask: &[u8]) -> String {
     out
 }
 
+/// One image the specs name, with its file and contents once it has passed identification.
+/// `None` means the file is not on this machine, which is not a failure -- see [`generate`].
+type LoadedImage = (Image, Option<(PathBuf, Vec<u8>)>);
+
+/// Locate, read and IDENTIFY every distinct image the specs name, once each.
+///
+/// Once each matters twice over. It is where "fail early" comes from -- identification happens
+/// before a single spec is compared, so a machine holding an unsupported Seamless build gets one
+/// report about versions rather than four reports about bytes, in a build that then succeeds. And
+/// it is the difference between reading `ersc.dll` once and reading its 13 MB once per spec, which
+/// is what the per-spec `fs::read` this replaced actually did.
+///
+/// Panics only on the case it exists to catch: a file that is present, readable, and a build this
+/// workspace does not support. Absent and unreadable both answer `None`, because neither is a
+/// disagreement -- they are a machine that cannot answer the question.
+fn load_images(specs: &[(PrologueSpec, Assemble)], manifest_dir: &Path) -> Vec<LoadedImage> {
+    let mut loaded: Vec<LoadedImage> = Vec::new();
+    for (spec, _) in specs {
+        if loaded.iter().any(|(image, _)| *image == spec.image) {
+            continue;
+        }
+        let Some(path) = spec.image.locate(manifest_dir) else {
+            loaded.push((spec.image, None));
+            continue;
+        };
+        // The image is a build input from here on: without this, swapping `ersc.dll` leaves a
+        // stale verdict cached and neither the skip warning nor the version failure reappears.
+        println!("cargo:rerun-if-changed={}", path.display());
+        let Ok(bytes) = fs::read(&path) else {
+            // Present but unreadable: a permission or I/O problem on the developer's machine, not
+            // a statement about which build it is. Same verdict as absent.
+            loaded.push((spec.image, None));
+            continue;
+        };
+        if let Some(want) = spec.image.supported_version() {
+            let found = spec.image.declared_version(&bytes);
+            assert!(
+                found.as_deref() == Some(want),
+                "{}",
+                describe_version_mismatch(spec.image, &path, want, found.as_deref())
+            );
+        }
+        loaded.push((spec.image, Some((path, bytes))));
+    }
+    loaded
+}
+
+/// The file and bytes of `image`, or `None` when this machine does not have it.
+fn loaded(images: &[LoadedImage], image: Image) -> Option<(&Path, &[u8])> {
+    images
+        .iter()
+        .find(|(candidate, _)| *candidate == image)?
+        .1
+        .as_ref()
+        .map(|(path, bytes)| (path.as_path(), bytes.as_slice()))
+}
+
+/// The `SUPPORTED_VERSION` constant emitted alongside the prologues, so the version a consuming
+/// crate NAMES in a refusal cannot drift from the one the build script checked.
+///
+/// Emitted only for a file whose specs name an image with a recorded version, and at most one such
+/// image per file: two would make `SUPPORTED_VERSION` ambiguous, and a constant that silently
+/// describes whichever image happened to come first is worse than not having one.
+fn render_supported_version(specs: &[(PrologueSpec, Assemble)]) -> String {
+    let mut versioned: Vec<Image> = Vec::new();
+    for (spec, _) in specs {
+        if spec.image.supported_version().is_some() && !versioned.contains(&spec.image) {
+            versioned.push(spec.image);
+        }
+    }
+    match versioned.as_slice() {
+        [] => String::new(),
+        [image] => {
+            let label = image.label();
+            let version = image
+                .supported_version()
+                .expect("only images with a recorded version are collected above");
+            format!(
+                "/// The one build of `{label}` every constant in this file was measured against,\n\
+                 /// and which this crate's `build.rs` verified the file on this machine to be.\n\
+                 ///\n\
+                 /// Generated so that a runtime refusal can NAME the supported version without a\n\
+                 /// second copy of the number going stale beside the first. See\n\
+                 /// `build-support/prologue_build.rs`.\n\
+                 #[allow(dead_code)]\n\
+                 pub const SUPPORTED_VERSION: &str = \"{version}\";\n\n"
+            )
+        }
+        many => panic!(
+            "{} images with recorded versions in one generated file ({}); SUPPORTED_VERSION \
+             could only name one of them",
+            many.len(),
+            many.iter()
+                .map(|image| image.label())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 /// Assemble every spec, verify it, and write the constants to `OUT_DIR/<out_file>`.
 ///
-/// Panics on any pin mismatch, and on a ground-truth mismatch against an image this repo
-/// version-names. Two things are NOT mismatches and only warn: a missing image, and a mismatch
-/// against a third-party module the user owns (see [`Image::ground_truth_is_advisory`] and the
-/// module docs). In both of those cases the build continues on the pin alone.
+/// Order matters and is the point of the function: every image is IDENTIFIED before any spec is
+/// compared against it. A file that is present but is a build this workspace does not support
+/// stops the build there, with a report about versions; only a file that has proven it is the
+/// recorded build gets its bytes read, and then a disagreement is a defect in this repo and
+/// panics for every image alike.
+///
+/// The one thing that is not a failure is ABSENCE. No image, no `ER_ERSC_DLL`, no game dump:
+/// nothing to disagree with, so ground truth skips with a `cargo:warning` and the pin carries the
+/// verification on its own. See the module docs.
 pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR for build scripts"),
     );
     let mut generated = String::new();
     let mut unverified: Vec<&'static str> = Vec::new();
+    let images = load_images(specs, &manifest_dir);
 
     for (spec, body) in specs {
         let Assembled {
@@ -834,43 +1116,40 @@ pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
             hex(spec.pin),
             spec.va
         );
-        match spec.image.locate(&manifest_dir) {
-            Some(path) => {
-                // The image is a build input from here on: without this, swapping `ersc.dll`
-                // leaves a stale verdict cached and the warning below never reappears.
-                println!("cargo:rerun-if-changed={}", path.display());
-                let image = fs::read(&path).unwrap_or_default();
-                match spec.image.bytes_at(&image, spec.va, bytes.len()) {
-                    Some(actual) if actual == bytes => {}
-                    Some(actual) => {
-                        // Searched with `full`, not `bytes`: see [`Assembled`]. The constant is
-                        // truncated for the runtime gate, and the truncated part is what tells
-                        // this function apart from every other one with the same opening.
-                        let found = spec.image.find_by_content(&image, &full, &full_mask);
-                        let report = describe_mismatch(spec, &path, &bytes, &actual, &found);
-                        if spec.image.ground_truth_is_advisory() {
-                            // One directive PER LINE: `cargo:warning=` is a single-line
-                            // instruction, and cargo silently discards everything after the first
-                            // newline in its value. A multi-line report emitted as one directive
-                            // loses exactly the half that says where the bytes went.
-                            for line in report.lines() {
-                                println!("cargo:warning={line}");
-                            }
-                        } else {
-                            panic!("{report}");
-                        }
-                    }
-                    // Unreadable, not a PE, or a VA outside every section -- the file cannot
-                    // answer, which is the same verdict as not having it. `fs::read` failing
-                    // lands here too, via the empty `image`.
-                    None => unverified.push(spec.name),
+        match loaded(&images, spec.image) {
+            Some((path, image)) => match spec.image.bytes_at(image, spec.va, bytes.len()) {
+                Some(actual) if actual == bytes => {}
+                Some(actual) => {
+                    // Searched with `full`, not `bytes`: see [`Assembled`]. The constant is
+                    // truncated for the runtime gate, and the truncated part is what tells
+                    // this function apart from every other one with the same opening.
+                    let found = spec.image.find_by_content(image, &full, &full_mask);
+                    panic!("{}", describe_mismatch(spec, path, &bytes, &actual, &found));
                 }
-            }
+                // The pinned VA is not inside this file at all: past the end of a flat dump, or
+                // outside every section of a PE. For a version-checked image that is the loudest
+                // possible disagreement -- the file HAS proven it is the build we support, and
+                // the address we pinned is not in it -- so it fails rather than skipping.
+                None if spec.image.supported_version().is_some() => panic!(
+                    "{}: 0x{:x} is not inside {}, which has already identified itself as the \
+                     supported build. The pin does not describe this module.\n  To re-measure by \
+                     hand: {}",
+                    spec.name,
+                    spec.va,
+                    path.display(),
+                    spec.image.remeasure_hint()
+                ),
+                // A version-NAMED image that cannot answer: a truncated or unreadable dump. Same
+                // verdict as not having it.
+                None => unverified.push(spec.name),
+            },
             None => unverified.push(spec.name),
         }
         generated.push_str(&render(spec, &bytes, &mask));
         generated.push('\n');
     }
+
+    generated.insert_str(0, &render_supported_version(specs));
 
     if !unverified.is_empty() {
         let images: Vec<&str> = {
