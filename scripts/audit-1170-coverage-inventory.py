@@ -633,15 +633,14 @@ def collect(maps):
 # Co-op's, the next three are bounds that were being ranked as migration work above real
 # functions, and the last two are the control -- an exclusion that also ate real addresses would
 # look like progress.
-# BOTH Seamless builds, because `er-invasion-warp` pins one address set per build and picks
-# between them at runtime -- see `ersc::SUPPORTED`. The v2.0.0 row is the one that matters most
-# here: those addresses were measured on 2026-09-02 and are as plausible-looking a set of game
-# `.text` RVAs as the v1.9.9 ones ever were.
+# The SUPPORTED build's four addresses, plus the one v1.9.9 address that outlived it. This mod
+# drives the latest Seamless Co-op only (2026-09-02), so `ersc::SUPPORTED` holds v2.0.0 alone and
+# v1.9.9 survives in `ersc::RETIRED` as an invade-action FINGERPRINT -- enough to name the build in
+# a refusal, and nothing else. That retired RVA still has to classify as ersc.dll: it is exactly as
+# plausible-looking a game `.text` address as it was while it was being driven, and misfiling it
+# would put Seamless work back into the 1.17 game-migration queue.
 FOREIGN_CASES = [
-    (0x22D30, "ersc.dll", "V199_SHOW_RVA -- ersc!show, the option-menu builder"),
-    (0x243E0, "ersc.dll", "V199_INVADE_ACTION_RVA -- ersc \"Invade world\""),
-    (0x24460, "ersc.dll", "V199_CANCEL_ACTION_RVA -- ersc \"Cancel search\""),
-    (0xABC20, "ersc.dll", "V199_BUILD_LOBBY_KEY_RVA -- ersc BuildLobbyKey"),
+    (0x243E0, "ersc.dll", "V199_INVADE_ACTION_RVA -- ersc \"Invade world\", the RETIRED fingerprint"),
     (0x241A0, "ersc.dll", "V200_SHOW_RVA -- ersc!show, Seamless v2.0.0"),
     (0x25850, "ersc.dll", "V200_INVADE_ACTION_RVA -- ersc \"Invade world\", v2.0.0"),
     (0x258D0, "ersc.dll", "V200_CANCEL_ACTION_RVA -- ersc \"Cancel search\", v2.0.0"),
@@ -700,9 +699,12 @@ def selftest(maps):
         failures.append("enum-alias constants are invisible: TITLE_TOP_DIALOG_IS_IN_STATE_RVA")
     if syms.get("GET_CURRENT_MAP_ID_RVA") != 0x5EEFB0:
         failures.append("plain literal constants are invisible: GET_CURRENT_MAP_ID_RVA")
-    # One per build, so a future edit that drops a whole Seamless version's constants out of the
-    # foreign table fails here rather than silently reclassifying that build's RVAs as the game's.
-    for name in ("V199_SHOW_RVA", "V200_SHOW_RVA"):
+    # One name per Seamless build the tree still declares -- the supported one and the retired
+    # fingerprint -- so a future edit that drops either out of the foreign table fails here rather
+    # than silently reclassifying that build's RVAs as the game's. This gate has already earned
+    # its keep once: it went red on 2026-09-02 when v1.9.9 left `ersc::SUPPORTED`, which is the
+    # behaviour wanted -- the fixtures move deliberately, in the same commit, or not at all.
+    for name in ("V199_INVADE_ACTION_RVA", "V200_SHOW_RVA"):
         if foreign_syms.get(name) != "ersc.dll":
             failures.append(
                 f"a constant declared inside `mod ersc` is not attributed to ersc.dll: {name}"
