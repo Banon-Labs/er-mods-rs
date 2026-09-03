@@ -6,8 +6,8 @@ refactor / a move should not change what the game loads, so the DLLs built from
 the merge-base and from the PR head are compared byte for byte.
 
 BUILD NOISE IS NORMALIZED FIRST, AND ONLY BUILD NOISE. Two clean builds of
-*identical* source differ in exactly three PE fields, none of which is derived
-from the code:
+*identical* source differ in three PE fields, none of which is derived from the
+code:
 
     - the COFF header TimeDateStamp          (wall-clock link time)
     - IMAGE_DEBUG_DIRECTORY.TimeDateStamp    (same)
@@ -20,6 +20,30 @@ source, differed in 10 bytes, all inside those three fields
 make the gate red on an empty diff -- it would be measuring the linker's clock.
 The OptionalHeader CheckSum is zeroed for the same reason: it is a function of
 the bytes we just zeroed.
+
+...AND A FOURTH, WHICH THAT MEASUREMENT WAS STRUCTURALLY UNABLE TO SEE. The probe
+above builds the SAME COMMIT twice; this gate builds TWO DIFFERENT ONES. Between
+those two, one more thing changes with no help from the code:
+crates/er-game-base/build.rs bakes `git rev-parse --short=12 HEAD` into
+`ER_BUILD_GIT`, which the build watermark draws on screen, so every DLL that links
+er-game-base carries a 12-byte ASCII commit id in .rdata -- and that is EVERY
+shipped DLL. It therefore differs on every PR that has any commit at all, which
+made this gate unpassable by construction rather than by anything an author did.
+
+MEASURED, PR #392 run 33794571494: all 26 shipped cdylibs CHANGED, every one of
+them by exactly 24 bytes in 2 runs of 12, every run in .rdata, and the report
+printed the two strings for each -- 'a56af6a06c03' (the merge-base) against
+'0be70e7616f6' (the head). The PR's only Rust changes were inside `#[cfg(test)]`
+modules and a test-support crate, so the release cdylibs could not have differed
+for any other reason. A gate that is red on a diff which cannot reach the
+artifact is not measuring the artifact.
+
+So the two build ids are masked, and ONLY those two: each image has its OWN
+recorded sha replaced by a fixed placeholder of the same length. They are passed
+in explicitly (--base-build-sha / --head-build-sha) rather than pattern-matched,
+because "any 12 hex bytes" would be an allowlist for real .rdata content, and
+this is not one -- it is two exact strings the caller already knows. Omit them
+and nothing is masked.
 
 Nothing else is normalized. There is no allowlist, no tolerance, no per-file
 exemption -- every remaining byte counts, which is the point of the gate.
@@ -40,6 +64,13 @@ import subprocess
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+#: How much of the sha crates/er-game-base/build.rs bakes into `ER_BUILD_GIT`. It spells this as
+#: `--short=12`; the two must agree or the mask silently matches nothing.
+BUILD_SHA_LENGTH = 12
+#: What a masked build id is replaced WITH. Same length, so no offset moves and the comparison
+#: stays byte-for-byte; not hex, so a masked run is obvious in any dump of the normalized image.
+BUILD_SHA_PLACEHOLDER = b"@" * BUILD_SHA_LENGTH
 
 IMAGE_DIRECTORY_ENTRY_DEBUG = 6
 IMAGE_DEBUG_TYPE_CODEVIEW = 2
@@ -122,6 +153,37 @@ class Pe:
         return bytes(self.data)
 
 
+def build_sha_bytes(sha: str | None) -> bytes | None:
+    """The exact ASCII run er-game-base's build.rs writes, or None when not supplied.
+
+    Refuses anything that is not a hex sha long enough to truncate: a caller that passes a branch
+    name or a short sha would otherwise mask a shorter, commoner string, and a mask that hits the
+    wrong bytes is the one failure mode this whole file exists to avoid.
+    """
+    if sha is None:
+        return None
+    cleaned = sha.strip().lower()
+    if len(cleaned) < BUILD_SHA_LENGTH or any(c not in "0123456789abcdef" for c in cleaned):
+        raise ValueError(
+            f"--*-build-sha must be a hex commit id of at least {BUILD_SHA_LENGTH} "
+            f"characters; got {sha!r}"
+        )
+    return cleaned[:BUILD_SHA_LENGTH].encode("ascii")
+
+
+def mask_build_sha(data: bytes, sha: bytes | None) -> tuple[bytes, int]:
+    """Replace this image's own recorded build id, reporting how many times it was found.
+
+    The count is returned rather than swallowed so a mask that matched NOTHING can be said out
+    loud. Zero is not automatically wrong -- a DLL that does not link er-game-base carries no
+    build id -- but a run where every DLL reports zero means the sha being masked is not the sha
+    that was built, and the gate would then be passing for the wrong reason.
+    """
+    if sha is None:
+        return data, 0
+    return data.replace(sha, BUILD_SHA_PLACEHOLDER), data.count(sha)
+
+
 def printable_context(data: bytes, offset: int, radius: int = 60) -> str:
     """Best-effort: the printable run containing `offset`, for diagnosing .rdata hits."""
     start = offset
@@ -148,15 +210,21 @@ def differing_runs(left: bytes, right: bytes) -> list[tuple[int, int]]:
     return runs
 
 
-def compare(base_path: pathlib.Path, head_path: pathlib.Path) -> tuple[bool, list[str]]:
-    """Return (identical, report_lines) for one DLL pair."""
+def compare(
+    base_path: pathlib.Path,
+    head_path: pathlib.Path,
+    base_sha: bytes | None = None,
+    head_sha: bytes | None = None,
+) -> tuple[bool, list[str], int]:
+    """Return (identical, report_lines, build_ids_masked) for one DLL pair."""
     base_pe = Pe(base_path.read_bytes())
     head_pe = Pe(head_path.read_bytes())
-    base = base_pe.normalize()
-    head = head_pe.normalize()
+    base, base_hits = mask_build_sha(base_pe.normalize(), base_sha)
+    head, head_hits = mask_build_sha(head_pe.normalize(), head_sha)
+    masked = base_hits + head_hits
 
     if base == head:
-        return True, []
+        return True, [], masked
 
     lines: list[str] = []
     if len(base) != len(head):
@@ -183,7 +251,7 @@ def compare(base_path: pathlib.Path, head_path: pathlib.Path) -> tuple[bool, lis
             context = printable_context(blob, start)
             if context:
                 lines.append(f"        {label}: {context!r}")
-    return False, lines
+    return False, lines, masked
 
 
 def shipped_artifacts(artifacts_file: pathlib.Path | None) -> list[str]:
@@ -215,16 +283,42 @@ def main() -> int:
         default=None,
         help="file of DLL filenames to compare (default: derive from scripts/me3-dll-list.py)",
     )
+    parser.add_argument(
+        "--base-build-sha",
+        default=None,
+        help="commit the BASE DLLs were built from; its first "
+        f"{BUILD_SHA_LENGTH} hex characters are the ER_BUILD_GIT string masked out of them",
+    )
+    parser.add_argument(
+        "--head-build-sha",
+        default=None,
+        help="the same for the HEAD DLLs",
+    )
     args = parser.parse_args()
+
+    base_sha = build_sha_bytes(args.base_build_sha)
+    head_sha = build_sha_bytes(args.head_build_sha)
 
     artifacts = shipped_artifacts(args.artifacts_file)
     if not artifacts:
         print("[dll-byte-identical] FAIL: empty artifact list -- nothing would be compared")
         return 1
     print(f"[dll-byte-identical] comparing {len(artifacts)} shipped cdylibs")
+    if base_sha and head_sha:
+        print(
+            f"[dll-byte-identical] masking the build watermark: base "
+            f"{base_sha.decode()} / head {head_sha.decode()} -> {BUILD_SHA_PLACEHOLDER.decode()}"
+        )
+    else:
+        print(
+            "[dll-byte-identical] NOT masking the build watermark (no --base-build-sha/"
+            "--head-build-sha); every DLL linking er-game-base will differ by its 12-byte "
+            "ER_BUILD_GIT string alone"
+        )
 
     missing: list[str] = []
     changed: list[str] = []
+    masked_total = 0
     for artifact in artifacts:
         base_path = args.base_dir / artifact
         head_path = args.head_dir / artifact
@@ -233,7 +327,8 @@ def main() -> int:
             print(f"  MISSING  {artifact}  (absent from the {where} build)")
             missing.append(artifact)
             continue
-        identical, lines = compare(base_path, head_path)
+        identical, lines, masked = compare(base_path, head_path, base_sha, head_sha)
+        masked_total += masked
         if identical:
             print(f"  ok       {artifact}")
         else:
@@ -243,6 +338,16 @@ def main() -> int:
             changed.append(artifact)
 
     print()
+    # SAID OUT LOUD, because a mask that matched nothing is indistinguishable from a mask that
+    # was not needed -- and the difference decides whether a green run means anything.
+    if (base_sha or head_sha) and not masked_total:
+        print(
+            "[dll-byte-identical] WARNING: the build watermark was never found. Either these "
+            "DLLs do not link er-game-base, or the shas passed in are not the ones that were "
+            "built -- in which case nothing was masked and a PASS here proves less than it looks."
+        )
+    elif masked_total:
+        print(f"[dll-byte-identical] build watermark masked in {masked_total} place(s)")
     if not missing and not changed:
         print(f"[dll-byte-identical] PASS: all {len(artifacts)} DLLs byte-identical")
         return 0
