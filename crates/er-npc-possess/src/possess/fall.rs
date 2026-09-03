@@ -203,7 +203,9 @@ const COLOCATION_LOG_EVERY: u64 = 60;
 /// An alarm (see [`drift_below_m`]) is NOT throttled by this -- a body that has left the floor is
 /// worth a line on the frame it happens, and it is rare by definition.
 pub(crate) fn colocation_line_due() -> bool {
-    COLOCATION_TICKS.fetch_add(1, Ordering::Relaxed) % COLOCATION_LOG_EVERY == 0
+    COLOCATION_TICKS
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(COLOCATION_LOG_EVERY)
 }
 
 /// Start a fresh throttle, so the first frame of every possession says something.
