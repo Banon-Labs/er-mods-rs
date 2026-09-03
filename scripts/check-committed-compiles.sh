@@ -27,7 +27,7 @@
 #   * --workspace, because the workspace sets `default-members = ["crates/er-quickload"]`. A bare
 #     `cargo xwin check`/`build` selects that one package, exits 0 in a fraction of a second having
 #     compiled nothing else, and reads exactly like a successful incremental build. That bare form
-#     is what scripts/ci-local-check.sh ends with, and it is decorative for this purpose:
+#     is what the pre-push path used to end with, and it is decorative for this purpose:
 #     er-save-suppress is a workspace member that nothing in default-members reaches.
 #   * --all-targets, so `#[cfg(test)]` modules, benches and examples are compiled too. A lib-only
 #     check reports OK over a test module that names a helper the commit does not carry -- the
@@ -47,7 +47,7 @@
 #     cost is a one-time cache rebuild, because clippy's fingerprints differ from check's.
 #
 #     WHY IT HAD TO CHANGE: `clippy` appeared ZERO times across the entire pre-push path --
-#     scripts/hooks/pre-push, scripts/ci-local-check.sh and this file -- while the workspace root
+#     scripts/hooks/pre-push, the pre-push gate suite and this file -- while the workspace root
 #     sets `[workspace.lints.clippy]` to deny. So every lint denial in this repo was enforced
 #     exclusively by CI, and `cargo check` is happy with code `cargo clippy` rejects. Measured on
 #     PR #388, run 33793058851: `clippy::manual_is_multiple_of` at
@@ -127,7 +127,7 @@ link_sibling() {
 
 link_vendor() {
 	# vendor/ is gitignored, so a worktree starts without MinHook while the checkout it was made
-	# from already has it. Same self-heal scripts/ci-local-check.sh does, for the same reason.
+	# from already has it. Same self-heal scripts/check.sh does, for the same reason.
 	#
 	# Two places are searched, and the second is not optional. `$repo_root` is whichever checkout
 	# invoked this script -- and when that is itself an agent worktree (`.claude/worktrees/...`,

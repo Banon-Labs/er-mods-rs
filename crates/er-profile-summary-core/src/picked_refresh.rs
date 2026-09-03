@@ -61,7 +61,7 @@ use crate::live_records::{
     profile_slot_fingerprint, record_identity, system_quit_profile_summary_ptr,
 };
 use crate::reassert_policy::{
-    REASSERT_MAX_REWRITES, ReassertStep, RecordIdentity, fnv1a64_utf16, reassert_step,
+    REASSERT_MAX_REWRITES, ReassertStep, RecordIdentity, name_hash_utf16, reassert_step,
 };
 use crate::refresh_policy::{RefreshStep, refresh_step};
 use crate::save_bytes_records::write_profile_summary_records_from_save_bytes;
@@ -240,7 +240,7 @@ fn body_identity(bytes: &[u8], slot: i32) -> Option<RecordIdentity> {
         .level;
     let level = u32::try_from(level).ok()?;
     let identity = RecordIdentity {
-        name_hash: fnv1a64_utf16(&name.encode_utf16().collect::<Vec<u16>>()),
+        name_hash: name_hash_utf16(&name.encode_utf16().collect::<Vec<u16>>()),
         level,
     };
     identity.is_character().then_some(identity)

@@ -26,6 +26,8 @@
 //! never looked again. Whoever writes last wins, so the only durable answer is to keep checking for
 //! a bounded window and re-assert on drift.
 
+use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64_extend};
+
 /// One record's identity, as cheaply as a live read can establish it.
 ///
 /// Name plus level, never the map: a record's `+0x30` is written from `GetCurrentMapId` when the
@@ -48,23 +50,25 @@ impl RecordIdentity {
     }
 }
 
-/// FNV-1a 64 of an empty unit sequence: the hash a zeroed or terminator-first name produces.
-pub const EMPTY_NAME_HASH: u64 = 0xcbf2_9ce4_8422_2325;
-
-/// FNV-1a 64 over UTF-16 code units, little-endian byte order.
+/// The hash a zeroed or terminator-first name produces: no units hashed, i.e. the offset basis.
 ///
-/// Both sides of the comparison are hashed here, so the only property that matters is that it is
-/// the SAME function for the live record's units and the container body's re-encoded name.
+/// Taken from the shared owner rather than written out again. `scripts/check-fnv1a-owner.py`
+/// rejects a second copy of the basis or the prime anywhere outside `er-game-base`, because two
+/// copies of a constant are two things that can disagree -- and this file learned that the hard
+/// way: its first version spelled both literals locally, passed a truncated local gate read, and
+/// went red in CI.
+pub const EMPTY_NAME_HASH: u64 = FNV1A64_OFFSET_BASIS;
+
+/// The name hash both sides of the drift comparison use: FNV-1a 64 over UTF-16 code units in
+/// little-endian byte order, through `er_game_base::fnv1a`.
+///
+/// The only property that matters is that it is the SAME function for the live record's units and
+/// for the container body's re-encoded name, so it delegates rather than reimplementing.
 #[must_use]
-pub fn fnv1a64_utf16(units: &[u16]) -> u64 {
-    const OFFSET: u64 = EMPTY_NAME_HASH;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
+pub fn name_hash_utf16(units: &[u16]) -> u64 {
+    let mut hash = FNV1A64_OFFSET_BASIS;
     for unit in units {
-        for byte in unit.to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
+        hash = fnv1a64_extend(hash, &unit.to_le_bytes());
     }
     hash
 }
@@ -135,14 +139,14 @@ mod tests {
     fn ident(name: &str, level: u32) -> RecordIdentity {
         let units: Vec<u16> = name.encode_utf16().collect();
         RecordIdentity {
-            name_hash: fnv1a64_utf16(&units),
+            name_hash: name_hash_utf16(&units),
             level,
         }
     }
 
     #[test]
     fn the_empty_name_hash_constant_is_the_hash_of_no_units() {
-        assert_eq!(fnv1a64_utf16(&[]), EMPTY_NAME_HASH);
+        assert_eq!(name_hash_utf16(&[]), EMPTY_NAME_HASH);
         assert!(!RecordIdentity::default().is_character());
     }
 
@@ -226,8 +230,8 @@ mod tests {
         // pairs from the measured container, and both must read as different characters.
         for (body, stored) in [("Prophet", "Pro"), ("Astrologer", "Astro")] {
             assert_ne!(
-                fnv1a64_utf16(&body.encode_utf16().collect::<Vec<_>>()),
-                fnv1a64_utf16(&stored.encode_utf16().collect::<Vec<_>>()),
+                name_hash_utf16(&body.encode_utf16().collect::<Vec<_>>()),
+                name_hash_utf16(&stored.encode_utf16().collect::<Vec<_>>()),
                 "{body} vs {stored}"
             );
         }

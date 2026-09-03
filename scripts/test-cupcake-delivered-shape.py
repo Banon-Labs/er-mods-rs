@@ -694,7 +694,7 @@ def check_production_path() -> list[str]:
 # an agent was REPAIRING core.hooksPath after the er-effects-rs -> er-mods-rs
 # rename left it pointing at an absolute path that no longer existed. Git had
 # silently run NO hooks since 39a919e0: not the main-push guard, not
-# ci-local-check.sh. The guard was blocking the fix for a total, silent failure of
+# the pre-push gate suite. The guard was blocking the fix for a total, silent failure of
 # the guard layer, which is the worst direction a false positive can point.
 #
 # These cases live HERE rather than only in `opa test` because the interpreter

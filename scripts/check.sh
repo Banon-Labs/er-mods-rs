@@ -36,6 +36,7 @@ set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
+
 # --- who may run this, and how many at once -------------------------------------------------
 # BOTH REFUSALS BELOW ARE MEASUREMENTS, NOT POLICY PREFERENCES. On 2026-09-02 three subagents
 # dispatched to do reverse engineering each ran ~72 minutes. The research was not the cost: the
@@ -392,6 +393,18 @@ _check_summary() {
 	echo "per-step state (passed / FAILED / INCONCLUSIVE / SKIPPED / NOT RUN):"
 	printf '%s' "$table"
 
+	# DID THIS SUITE DAMAGE THE CHECKOUT IT WAS CHECKING? Snapshotted by the preflight below the
+	# preamble marker. Counted as a failure before the rc decision, because a suite that disarms
+	# the hooks or bares the repo has done more harm than any finding it could have reported.
+	#
+	# `declare -F` because scripts/test-check-sh-accumulates.py lifts THIS function out of THIS
+	# file and runs it over synthetic suites that never source the guard -- an unconditional call
+	# there fails every one of its cases on a missing function. It cannot silently skip in a real
+	# run: the preflight asserts the function exists immediately after sourcing it, and refuses.
+	if declare -F gate_config_report >/dev/null; then
+		gate_config_report || failed=$((failed + 1))
+	fi
+
 	if [[ $_check_reached_end -ne 1 ]]; then
 		echo
 		echo "!! THE SUITE DID NOT REACH THE END. The $not_run step(s) marked NOT RUN above have"
@@ -429,6 +442,62 @@ _check_summary() {
 }
 trap _check_summary EXIT
 # -------------------------------------------------------------------------------------------
+
+# --- preflight, inherited from scripts/ci-local-check.sh, DELETED 2026-09-03 -----------------
+#
+# BELOW the accumulation preamble on purpose: scripts/test-check-sh-accumulates.py lifts
+# everything above the marker line and drives it over synthetic suites in a temp directory,
+# where neither vendor/minhook nor the guard file exists. Preflight that refuses in that
+# fixture would fail all sixteen of its cases for reasons unrelated to accumulation.
+# That file was the pre-push hook's own 13-gate list while this file held 153, so a gate added
+# here became push-invisible the moment it was written and CI was the first place it ever ran.
+# One violation reached origin that way (check-fnv1a-owner.py, PR #398). The hook now runs THIS
+# file, which makes the two sets the same set by construction rather than by anyone maintaining a
+# list. Two things it carried had to survive the deletion, and they are both preambles, not gates.
+
+# 1. MINHOOK, because a `git worktree` checkout starts without it. `vendor/` is gitignored, so an
+#    agent sandbox under `.claude/worktrees/` or a `.worktrees/` lab has no MinHook while the main
+#    checkout it was made from already does -- and this file is now what a push runs, so the first
+#    thing such a worktree would otherwise learn is that its push is refused. The shared git dir
+#    names that main checkout exactly, so link its vendor tree in rather than re-cloning ~1MB of C.
+#    Fail closed and unchanged when the link cannot be made: a missing MinHook breaks the
+#    cross-compile gates below, and a skipped cross-compile is not a pass.
+if [[ ! -f "$repo_root/vendor/minhook/src/buffer.c" ]]; then
+	_check_main_checkout=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+	_check_main_checkout=${_check_main_checkout%/.git}
+	if [[ -n "$_check_main_checkout" ]] && [[ "$_check_main_checkout" != "$repo_root" ]] &&
+		[[ -f "$_check_main_checkout/vendor/minhook/src/buffer.c" ]]; then
+		mkdir -p "$repo_root/vendor"
+		ln -sfn "$_check_main_checkout/vendor/minhook" "$repo_root/vendor/minhook"
+		echo "[check.sh] git worktree: linked vendor/minhook -> $_check_main_checkout/vendor/minhook" >&2
+	fi
+fi
+if [[ ! -f "$repo_root/vendor/minhook/src/buffer.c" ]]; then
+	cat >&2 <<'EOF'
+check.sh: REFUSED -- missing vendor/minhook/src/buffer.c
+
+CI checks it out with:
+  git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
+
+A git worktree normally self-heals here by linking the main checkout's vendor directory; reaching
+this message from one means that checkout has no MinHook either, so clone it there first.
+EOF
+	exit 2
+fi
+
+# 2. THE GATE MUST NOT DAMAGE THE THING IT GATES. The logic lives in its own file because
+#    scripts/test-check-config-guard.sh drives it against fixture repositories and must drive the
+#    REAL text rather than a copy that can drift; the reasoning and the 2026-08-31 measurement are
+#    in that file's header. The verdict is applied by _check_summary, below.
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+source "$repo_root/scripts/check-gate-config-guard.sh"
+# The summary calls this through `declare -F` so the accumulation fixture can lift it; that is a
+# tolerance for the fixture, NOT for a real run, so refuse here if the source did not define it.
+if ! declare -F gate_config_report >/dev/null || ! declare -F gate_config_snapshot >/dev/null; then
+	echo "check.sh: REFUSED -- scripts/check-gate-config-guard.sh defined no gate_config_* functions." >&2
+	exit 2
+fi
+gate_config_snapshot "$repo_root"
 
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
 # THE METER ON THE METERS. Almost every gate below is prefaced by its own `--selftest`, and the
@@ -1341,8 +1410,8 @@ shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/check-committed-compiles.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
-shellcheck "$repo_root/scripts/ci-local-check.sh"
-shellcheck "$repo_root/scripts/test-ci-local-check-config-guard.sh"
+shellcheck "$repo_root/scripts/check-gate-config-guard.sh"
+shellcheck "$repo_root/scripts/test-check-config-guard.sh"
 shellcheck "$repo_root/scripts/measure-git-hook-env.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
 shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
@@ -1834,7 +1903,7 @@ bash "$repo_root/scripts/check-committed-compiles.sh"
 
 # ...and whether any of this runs on a commit at all. This clone's core.hooksPath was the
 # ABSOLUTE pre-rename path left behind by 39a919e0, so for a while NO hook ran -- not the
-# main-push guard, not ci-local-check.sh -- and nothing said so, because a hook git cannot find
+# main-push guard, not this suite -- and nothing said so, because a hook git cannot find
 # is indistinguishable from a hook that passed. That is this suite's own defect applied to the
 # gates themselves. It asserts the value is set, that it resolves to a real directory holding an
 # executable pre-push, and that it is RELATIVE: an absolute path is correct right up until the
@@ -1847,9 +1916,9 @@ bash "$repo_root/scripts/check-git-hooks-installed.sh"
 # main checkout's -- scripts/measure-git-hook-env.sh measures both, which is why this looked
 # unreachable for a day), `git -C <fixture>` does not override it, and the fixture commands landed
 # on the SHARED config -- core.bare = true, core.hooksPath gone, a push through the hole. The
-# offending script now scrubs its environment; ci-local-check.sh carries a trap that catches the
-# CLASS, and this proves that trap still fires in both directions.
-bash "$repo_root/scripts/test-ci-local-check-config-guard.sh"
+# offending script now scrubs its environment; scripts/check-gate-config-guard.sh catches the
+# CLASS for this whole suite, and this proves it still fires in both directions.
+bash "$repo_root/scripts/test-check-config-guard.sh"
 
 
 # Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one

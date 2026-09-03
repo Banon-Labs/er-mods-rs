@@ -19,7 +19,7 @@ use er_game_base::profile_summary::{
 };
 
 use crate::host::game_data_man_ptr_or_null;
-use crate::reassert_policy::{RecordIdentity, fnv1a64_utf16};
+use crate::reassert_policy::{RecordIdentity, name_hash_utf16};
 use crate::slot_identity::record_is_real_character;
 
 /// A null game pointer. Named after the product constant the moved code read
@@ -156,7 +156,7 @@ pub unsafe fn record_identity(slot: i32) -> RecordIdentity {
         .map(|value| value as u32)
         .unwrap_or(0);
     RecordIdentity {
-        name_hash: fnv1a64_utf16(&units[..len]),
+        name_hash: name_hash_utf16(&units[..len]),
         level,
     }
 }

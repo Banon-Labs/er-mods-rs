@@ -17,7 +17,7 @@
 #
 # WHAT WAS THERE BEFORE, AND WHAT IT COST. A 537-byte pre-push written on 2026-07-27, when the
 # main-push guard was the whole gate. It refused pushes to main and did nothing else: no
-# scripts/check-committed-compiles.sh, no scripts/ci-local-check.sh. It then sat in .git/hooks for
+# scripts/check-committed-compiles.sh, no gate suite. It then sat in .git/hooks for
 # five weeks while the real gate grew around it. On 2026-08-31 core.hooksPath was unset for about
 # an hour and a half, and a push reached origin through that stub. It happened to be green.
 # Nothing had checked, and nothing said so.
