@@ -22,7 +22,48 @@ import subprocess
 import sys
 import tempfile
 
-from compression import zstd
+# `compression.zstd` IS PYTHON 3.14 AND NEWER ONLY (PEP 784), AND THIS IMPORT USED TO BE BARE.
+#
+# The dev box runs 3.14, so it resolved here and every local run was green. GitHub's
+# ubuntu-latest ships an older 3.x, where the same line raises
+# `ModuleNotFoundError: No module named 'compression'` -- at IMPORT time, before any argument
+# parsing, so it took down every consumer that merely imports this module for its PARAM
+# readers and never decompresses anything. Measured on PR #388, run 33793058851: it reached
+# check.sh through check-moveset-table.py -> er-moveset-table-gen.py -> er-param-read.py:16
+# -> here, and both the gate and its own `--selftest` died with a raw traceback that reads
+# like a real failure rather than a missing interpreter feature.
+#
+# The worst part was the selftest: a gate whose self-test depends on an interpreter the
+# runner does not have cannot detect its own unavailability, so it reads as proof when it is
+# silence. Deferring the failure to the one function that actually needs zstd lets an absent
+# decompressor be reported the way this file already reports an absent regulation -- see
+# `missing_regulation` in diff-regulation-params.py: a PRINTED skip, never a silent exit 0.
+try:
+    from compression import zstd
+except ModuleNotFoundError as _zstd_import_error:  # pragma: no cover - interpreter-dependent
+    zstd = None
+    ZSTD_UNAVAILABLE = (
+        f"this interpreter has no `compression.zstd` ({_zstd_import_error}); it is stdlib "
+        f"in Python 3.14+ (PEP 784) and this is "
+        f"{sys.version_info.major}.{sys.version_info.minor}"
+    )
+else:
+    ZSTD_UNAVAILABLE = None
+
+
+class ZstdUnavailable(RuntimeError):
+    """Raised instead of decompressing when the interpreter has no zstd.
+
+    A distinct type so a caller can tell "I could not look" apart from "I looked and the
+    answer is no" -- the same distinction ER_ALLOW_MISSING_REGULATION draws for the game
+    file. Catch this to SKIP; do not catch it to pass.
+    """
+
+
+def require_zstd():
+    """Fail loudly, and only at the point of use, when zstd is missing."""
+    if zstd is None:
+        raise ZstdUnavailable(ZSTD_UNAVAILABLE)
 
 # SoulsFormats `RegulationKey.EldenRing`.
 REGULATION_KEY = "99BFFC366A6BC8C6F5827D093602D676C42892A01C207FB024D3AF4E493FEF99"
@@ -71,6 +112,7 @@ def dcx_unpack(dcx):
     data_offset = struct.unpack_from(">I", dcx, 0x14)[0]
     if dcx[0x24:0x28] != b"DCP\0" or dcx[0x28:0x2C] != b"ZSTD":
         raise SystemExit(f"unexpected DCX compression {dcx[0x24:0x2C]!r}")
+    require_zstd()
     out = zstd.decompress(dcx[data_offset : data_offset + compressed])
     if len(out) != uncompressed or out[:4] != b"BND4":
         raise SystemExit(f"DCX payload is {len(out)} bytes of {out[:4]!r}, wanted {uncompressed} of BND4")
