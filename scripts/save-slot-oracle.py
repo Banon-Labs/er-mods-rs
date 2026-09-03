@@ -235,6 +235,57 @@ def bnd4_entries(data: bytes) -> list[dict[str, Any]]:
     return entries
 
 
+# `USER_DATA010.active_slot`: the AUTHORITATIVE per-slot occupancy bitmap, mirroring
+# `er_save_loader::bnd4::active_slots`. Offsets are that decoder's, byte for byte.
+USER_DATA010_NAME = "USER_DATA010"
+USER_DATA010_MENU_SAVE_LOAD_LEN_OFF = 0x150
+USER_DATA010_MENU_SAVE_LOAD_DATA_AFTER_LEN_OFF = 0x154
+# Every BND4 entry's PLAINTEXT body begins after a leading MD5, and the offsets above are into
+# that body -- not into the entry. Skipping this is not a subtle drift: it lands on `menu_len = 0`
+# and reads ten zero bytes, i.e. "no character in this file at all", for a container that plainly
+# has one.
+ENTRY_MD5_LEN = 0x10
+
+
+def active_slot_bitmap(data: bytes) -> list[bool] | None:
+    """Which slots the GAME considers occupied, or None when the bitmap is unreadable.
+
+    WHY A BITMAP AND NOT "the body decodes to a name and a level".
+
+    Deleting a character does not erase its `USER_DATA00N` body -- it clears this bitmap. So a
+    deleted slot still decodes to a perfectly plausible name, level, runes and stats, and any
+    occupancy test built on the body alone reports characters the game will not load.
+
+    MEASURED 2026-09-03. `save-files/50-Merchant-Unleveled/ER0000.sl2` decodes as TEN occupied
+    slots by name+level; its bitmap says `[0]`, one character, "Invader Merchant" level 50. The
+    APPDATA `ER0000.sl2` decodes as ten and its bitmap says `[0,1,2,3]`. Every seeded launch this
+    tool produced was therefore free to pick a slot that does not exist -- and
+    `--seed 2073568449`, the seed the `er-quickload` x `er-invasion-warp` conflict bisect ran on
+    four times, picks slot 8 of that Merchant file: a stale body in a container with one live
+    character. Those four "reproductions" were invalid-slot launches, which is exactly the boot
+    path that was later found to fault at `game+0x10043`.
+
+    Returns None rather than guessing when the entry, the length prefix or the ten bytes are not
+    there: an unreadable bitmap must not silently downgrade to the old body-only behaviour, and
+    every caller here treats None as "cannot answer" instead of "nothing is occupied".
+    """
+    for entry in bnd4_entries(data):
+        if entry["name"] != USER_DATA010_NAME:
+            continue
+        body_start = entry["offset"] + ENTRY_MD5_LEN
+        menu_len = read_u32_le(data, body_start + USER_DATA010_MENU_SAVE_LOAD_LEN_OFF)
+        if menu_len is None:
+            return None
+        active_off = body_start + USER_DATA010_MENU_SAVE_LOAD_DATA_AFTER_LEN_OFF + menu_len
+        raw = data[active_off : active_off + SLOT_COUNT]
+        if len(raw) != SLOT_COUNT:
+            return None
+        if any(byte not in (0, 1) for byte in raw):
+            return None  # not the bitmap we think it is; refuse rather than misreport
+        return [byte == 1 for byte in raw]
+    return None
+
+
 def extract_slot(data: bytes, slot: int) -> tuple[bytes, dict[str, Any]]:
     entries = bnd4_entries(data)
     if entries:

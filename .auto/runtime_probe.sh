@@ -18,7 +18,20 @@ cleanup_runtime() {
     kill "$host_process_sampler_pid" 2>/dev/null || true
     wait "$host_process_sampler_pid" 2>/dev/null || true
   fi
-  if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" && -f "$SEAMLESS_STAGED_PATH" && ! -f "$SEAMLESS_DLL_PATH" ]]; then
+  # Put back whatever THIS script staged away, whichever mode asked for it.
+  #
+  # This condition used to also require `RUNTIME_EXPECTED_MODE == "seamless"`, which made it
+  # unreachable: staging only ever happens in `vanilla` mode (see stage_runtime_mode_payload),
+  # so the two conditions were mutually exclusive. The default mode is `vanilla`, so an ordinary
+  # probe moved the user's `ersc.dll` aside and then exited without putting it back -- silently
+  # uninstalling Seamless Co-op from the game directory. The next launch is a co-op profile with
+  # no co-op DLL, which presents as "Seamless broke", not as "a probe moved your file".
+  #
+  # The restore is guarded on the FILES instead of on the mode, which is what the operation
+  # actually depends on: a staged copy exists and nothing occupies the live path. That also makes
+  # it self-healing -- a run killed before this trap fired leaves the staged file behind, and the
+  # next run of any mode restores it.
+  if [[ -f "$SEAMLESS_STAGED_PATH" && ! -f "$SEAMLESS_DLL_PATH" ]]; then
     mkdir -p "$(dirname "$SEAMLESS_DLL_PATH")"
     mv -f "$SEAMLESS_STAGED_PATH" "$SEAMLESS_DLL_PATH"
   fi

@@ -235,11 +235,41 @@ def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_retu
 # while appearing to corroborate. The region-delta method already exists and says so plainly --
 # `docs/recon/rva-map-1162-to-1170.functions.tsv`, paired by masked-signature identity ACROSS
 # `.pdata` -- and that is where an address of this shape should be looked up.
+#
+# ONE KNOB, TWO INDEPENDENT FIXES, MERGED 2026-09-03. `main` reached the same diagnosis from the
+# same bd ticket on the same day and raised the cap to `MAX_SHAPE_CANDIDATES = 512`, which is the
+# same knob under another name; the merge keeps ONE, and keeps this one, because 512 still
+# TRUNCATES -- it hands pass 2 the 512 lowest-addressed matches and says nothing -- whereas
+# reaching 2048 here is a refusal. Both names cannot survive: `scripts/check.sh` and
+# `docs/recon/rva-map-1162-to-1170.verified.tsv` both name `CANDIDATE_CEILING` and its 2048, and a
+# second constant would be a second answer to "how many is too many". `main`'s measurements are
+# not discarded with its name -- they are folded into `find_unique` below, including the one that
+# licenses any ceiling at all: the widest LEGITIMATE list ever observed is 83.
 CANDIDATE_CEILING = 2048
 
 
 def find_unique(haystack, pattern, mask):
-    """Every offset where `pattern` matches under `mask`, up to `CANDIDATE_CEILING` of them."""
+    """Every offset where `pattern` matches under `mask`, up to `CANDIDATE_CEILING` of them.
+
+    THE CAP MUST NOT TRUNCATE IN IMAGE ORDER, and until 2026-09-01 it did. It was 9, and
+    `bytes.find` walks the image low-to-high, so what reached the second pass was "the first nine
+    matches in the 1.17 image", not "the matches". Any function whose shape recurs nine or more
+    times BELOW its own address was unresolvable no matter how good the regional anchor was: the
+    right answer had already been cut off before the anchor was consulted, and the note read
+    `9 shape matches, none at the nearest anchor's delta`, which reads like a disagreement and was
+    a truncation.
+
+    Measured on the ProfileSelect activate function `0x1409a4670`: its 46-byte signature matches 51
+    places in 1.17 and the true counterpart `0x1409a5810` -- `IDENTICAL-WHOLE` over 381
+    instructions, both `.pdata` extents `0x5a6` -- is hit 39 in image order. The same truncation was
+    hiding `0x140875590`, `0x1409a4ed0` and `0x140920c90`, the other three addresses
+    bd er-effects-rs-4uw5.13 was filed about; all four are the `ANCHORED_MAPPINGS` fixture above.
+
+    AND THIS IS WHY A CEILING IS STILL SAFE: across the whole work list the widest list a genuine
+    signature produced is 83, at the ladder's shortest 16-byte rung. `CANDIDATE_CEILING` sits an
+    order of magnitude past that, so nothing legitimate can fall off the end -- a list that reaches
+    it is a statement about the compiler's shapes, not about a function, and `map_one` refuses it
+    rather than truncating it."""
     anchor_at = next((i for i, keep in enumerate(mask) if keep), None)
     if anchor_at is None:
         return []

@@ -10,7 +10,7 @@ blocked on. Update it as items close rather than starting a second list somewher
 | Component | Evidence |
 | --- | --- |
 | me3 0.11.0 + dearxan | A zero-native profile boots 1.17 normally; the loader was never the problem. |
-| Seamless Co-op v1.9.9, via `er-ersc-sigshim` | Two AOB landmarks rebuilt; game reaches the title screen and ersc detours the relocated function. |
+| Seamless Co-op v2.0.0 | The only supported Seamless build (2026-09-03). Whether it boots 1.17 unaided is NOT established here -- the AOB strings are packed in the shipped DLL, so a static check cannot answer it, and the decisive evidence is a run. What IS established: nothing in this repo can help it, which supersedes the `er-ersc-sigshim` route, which rebuilt two AOB landmarks so that v1.9.9 could start on 1.17 -- that crate was RETIRED 2026-09-03 when the mod dropped support for older Seamless builds, and it could never have fired on v2.0.0 anyway: it refused any build other than the one its fixups were measured against. |
 | The build gate (`er-hook` + `er-game-base::game_build`) | 51 game-image detours refuse with a logged reason instead of corrupting the image; boot survives. |
 | Win32 / DirectInput detours | Resolved through `GetProcAddress`, never version-sensitive. 15 install normally. |
 | `eldenring-deobf-1.17.bin` | Generated offline by dearxan (1597 stubs, 1371 decrypted regions). Bit-reproducible from the installed `eldenring.exe`, and 99.909% of it is byte-identical to that executable -- every one of the 89,309 changed bytes lies inside a region dearxan declared, and no byte outside one moved. See "Did 1.17 add a new obfuscation technique" below. |
@@ -35,7 +35,7 @@ number, so the next agent can find out it has moved instead of trusting a date. 
 | 1 | ~~Ghidra dump / MCP is 1.16.2 only~~ **RESOLVED 2026-08-30** | A 1.17 dump is imported as `ermaporch1170` and served on **:8767**, alongside 1.16.2 on :8765. Verified 2026-08-31: `getContext` returns `pc_eldenring_runtime.1.17.0.exe`, 366,673 functions, against 367,183 on :8765. It carries **zero curated symbols** -- `searchFunctionsByName` (the parameter is `query`, not `searchTerm`) totals 1.16.2 vs 1.17: Scadutree 5/0, CSFeManImp 3/0, MoveMap 23/0, FreeList 6/0, TitleTopDialog 1/0. Everything is `FUN_<addr>` | nothing for STRUCTURE. **Names, types and RTTI are still 1.16.2-only** and must be carried across by pairing -- that is the residue, and it is a different problem from "there is no dump" |
 | 2 | 19 unresolved addresses in the RVA map | Still 19, of 51 rows in `docs/recon/rva-map-1162-to-1170.tsv` (re-counted 2026-08-31). Shape-matched but ambiguous, deliberately left blank | hand RE per address. No longer blocked on #1: :8767 gives the call graph these need |
 | 3 | ~~1 mapping refused on evidence: `MOVEMAPSTEP_STEP_MOVEMAP_RVA`~~ **RESOLVED 2026-08-31** | `PATCH-SITE-IDENTICAL`, in both `VERIFIED_1162_TO_1170` and `DETOUR_SAFE_1162_TO_1170`. The two inserted instructions are `mov rcx,rbx; call CS::MoveMapStep::_UpdateHorseType` at index 873 of 975, 0x1055 bytes past a prologue that is `48 8b c4 55 56 57 41 54` in both builds -- see "Function lengths" below | nothing; pinned in `PATCH_SITE_ACKNOWLEDGED` (`er-game-base/build.rs`) so the next insertion fails the build |
-| 4 | Struct layouts | two confirmed drifts: `PlayerGameData` +8 (`+0xab5` -> `+0xabd`, corroborated in `er-ersc-sigshim/src/fixups.rs`), the Wwise settings object +0x38. The rest is unaudited | hand RE. :8767 does NOT close this: it has structure, not types -- a field name or a struct layout still only exists on :8765, for the previous build |
+| 4 | Struct layouts | two confirmed drifts: `PlayerGameData` +8 (`+0xab5` -> `+0xabd`, corroborated by the retired `er-ersc-sigshim` fixups, whose Scadutree rewrite depended on it), the Wwise settings object +0x38. The rest is unaudited | hand RE. :8767 does NOT close this: it has structure, not types -- a field name or a struct layout still only exists on :8765, for the previous build |
 | 5 | `fromsoftware-rs` bindings (path dependency) | field offsets are 1.16.2-shaped. The RVA half IS done: `rva_ww_270.rs` exists with 96 fields and **zero** of them are `0` (checked 2026-08-31 -- see the zero-field trap below), and `scripts/check-game-version-supported.py` passes: `installed game 2.7.0.0 is in the RVA bundle's supported set ['2.6.2.0', '2.6.2.1', '2.7.0.0']` | #4 |
 | 6 | Generated prologue windows (`build.rs` + `check-prologue-bytes`) | mostly fine: the sweep that found exactly ONE breakage, `er-save-suppress::QUIT_PHASE_SETTLE_SIG` (now respelled), covered **36 specs in `er-quickload/build.rs`** -- NOT the whole set. Re-counted 2026-08-31: **84 `PrologueSpec` sites** across five `build.rs` files (er-quickload 36, er-save-suppress 22, er-invasion-warp 12, er-seamless-bugfixes 8, er-player-name-filter 6). `Image::EldenRing1170` is used by 4 specs (3 in er-quickload, 1 in er-save-suppress); the rest are register-only prologues whose encoding is version-invariant | re-running the sweep over all 84, plus 5 specs whose 1.16.2 RVA is in no map |
 | 7 | `dump-exec.bin` + `scripts/dump-deobf-shift.py` | **RETIRED. Do not run it.** Its dump side is 1.16.1, so it maps 1.16.1-dump onto a 1.16.2 image whose real shift is zero, and it invents a nonzero one. Re-verified 2026-08-31 against `.pdata`: `0x142413860` IS a function start in `eldenring-deobf.bin`, and the `+0x10` answer `0x142413870` is 16 bytes into its prologue; `0x142410830`, which the tool flagged as a "+0x10 estimate", is also already a function start. Both of its published answers land mid-instruction | nothing. Use `map-rvas-1162-to-1170.py`, or read :8767 directly |
@@ -473,10 +473,22 @@ Two footnotes the inventory prints that are worth not rediscovering:
 * 6 of the resolvable addresses translate for a CALL and are refused for a DETOUR. Mapping cannot
   fix those; they need entry/verdict evidence.
 * 4 of the addresses are **not `eldenring.exe` addresses at all** -- `0x22d30`, `0x243e0`,
-  `0x24460`, `0xabc20` belong to `ersc.dll`. No ELDEN RING patch moves them and none of them is
-  migration work. Three of the four are `SHOW_RVA`, `INVADE_ACTION_RVA` and `CANCEL_ACTION_RVA`,
-  which the "eleven mechanical ones" table below flagged with "check what module they are relative
-  to before touching them". That question is answered: `ersc.dll`.
+  `0x24460`, `0xabc20` belong to `ersc.dll`. None of them is ELDEN RING migration work. Three of
+  the four are `SHOW_RVA`, `INVADE_ACTION_RVA` and `CANCEL_ACTION_RVA`, which the "eleven
+  mechanical ones" table below flagged with "check what module they are relative to before
+  touching them". That question is answered: `ersc.dll`.
+
+  **This bullet used to end "No ELDEN RING patch moves them", and that was read as "they do not
+  move". Seamless Co-op v2.0.0 moved every one of them on 2026-09-02.** The clause was true and
+  useless: `ersc.dll` has its own release schedule, so being immune to a GAME patch says nothing
+  about stability. Measured against the v1.9.9 the pins came from -- `show` `0x22d30` ->
+  `0x241a0`, `cancel` `0x24460` -> `0x258d0`, `invade` `0x243e0` -> **no match at any signature
+  length**, `BuildLobbyKey` `0xabc20` -> **ambiguous, three candidates**. The session ABI moved
+  with them (`S+0x110` -> `S+0x150`, `S+0x10c` -> `S+0x14c`, the option sub-object `+0xc0` ->
+  `+0x100`), cancel now writes `0x23` where it wrote `0x22`, and nothing in v2.0.0 writes `0xd`
+  at all. The lesson to carry forward is that a foreign module needs a version check, not an
+  exemption from one: `scripts/ersc_identify.py` reports which build is installed and
+  `scripts/locate-ersc-entry-points.py` maps a v1.9.9 function body onto it.
 
 ### The eleven mechanical ones -- eight of them are done
 
@@ -494,7 +506,7 @@ tree 2026-08-31, only two of the eleven are still in the shape described.
 | `SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA` | **gone** |
 | `TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA` | **converted** -- now derives from `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA` |
 | `FREELIST_SHUTDOWN_ASSERT_RVA` | **converted** -- `FREELIST_SHUTDOWN_ASSERT_FN_RVA + FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET` |
-| `SHOW_RVA` / `INVADE_ACTION_RVA` / `CANCEL_ACTION_RVA` | **answered** -- they are `ersc.dll` RVAs (`0x2_2d30`, `0x2_43e0`, `0x2_4460`), not `eldenring.exe`, and no ELDEN RING patch moves them |
+| `SHOW_RVA` / `INVADE_ACTION_RVA` / `CANCEL_ACTION_RVA` | **answered, then moved** -- they are `ersc.dll` RVAs (`0x2_2d30`, `0x2_43e0`, `0x2_4460`), not `eldenring.exe`. Immune to ELDEN RING patches, NOT to Seamless ones: v2.0.0 (2026-09-02) moved show to `0x2_41a0` and cancel to `0x2_58d0`, and `invade` matches nothing. See the footnote above |
 | `GX_COMMAND_QUEUE_RVA` | **still a bare mid-function literal**, `0x8012a8` in `er-loading-portrait-core/src/resource_readback.rs`. Containing fn `0x8012a0 -> 0x802120`, offset `+0x8` |
 | `GX_CMD_QUEUE_WRAPPER_RVA_MIN` | **still a bare mid-function literal**, `0x1aea900` in `er-title-flow/src/constants_autoload_state.rs`. Containing fn `0x1aea880 -> 0x1aec680`, offset `+0x80` |
 

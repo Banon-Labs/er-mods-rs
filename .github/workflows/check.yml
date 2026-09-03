@@ -82,8 +82,94 @@ env:
   SHELLCHECK_VERSION: v0.11.0
 
 jobs:
-  check:
+  # WHICH LINUX RUNNER `check` LANDS ON, decided per run instead of hard-coded.
+  #
+  # The org has one self-hosted runner, `Zerk`, on a laptop -- labels
+  # `self-hosted, Linux, X64, local-linux, banon-laptop, zerk`. A laptop is not a service: it is
+  # asleep, rebooting, or simply shut most of the time, and a job pinned to a runner that is not
+  # there does not fail, it QUEUES -- silently, until someone notices the PR has no verdict. So the
+  # choice is made from a liveness signal, and the answer when the signal is anything other than
+  # "fresh" is `ubuntu-latest`.
+  #
+  # THIS JOB DELIBERATELY RUNS ON `ubuntu-latest` ITSELF. It is the thing that decides whether the
+  # local runner is usable, so it cannot be scheduled on the local runner without being able to
+  # deadlock on its own question.
+  #
+  # WHAT IT WILL ACTUALLY DO TODAY: fall back, every time. Measured 2026-09-03, three independent
+  # reasons, none of them fixable from inside this file:
+  #   1. `er-mods-rs` is a PUBLIC repo, and `Zerk` sits in runner group `Default`, which reports
+  #      `"allows_public_repositories": false`. The only group with that flag true,
+  #      `windows-defender`, has zero runners. Nothing schedules until Zerk moves to a group that
+  #      admits public repos -- which is a SECURITY decision, not a config chore: a self-hosted
+  #      runner on a public repo means a fork's pull request executes attacker-authored code on
+  #      that laptop.
+  #   2. `vars.BANON_ZERK_HEARTBEAT_EPOCH` has `"visibility": "private"`, so it evaluates to the
+  #      empty string in a public repo no matter how fresh the real heartbeat is.
+  #   3. The org's shared selector lives in the PRIVATE `Banon-Labs/.github`; a public caller
+  #      cannot reuse a private callee, which is why the ~20 lines below are inlined rather than
+  #      `uses:`-ed.
+  #
+  # It is wired now anyway because all three are toggles elsewhere: the day any of them changes,
+  # this file already routes correctly with no edit, and until then it costs one ~5-second job.
+  choose-runner:
     runs-on: ubuntu-latest
+    outputs:
+      runs_on_json: ${{ steps.pick.outputs.runs_on_json }}
+      reason: ${{ steps.pick.outputs.reason }}
+    steps:
+      - id: pick
+        env:
+          # Read through env rather than interpolated into the script: a variable's value is
+          # attacker-influenced in the general case, and `${{ }}` inside `run:` is textual
+          # substitution into the shell -- the standard script-injection shape.
+          HEARTBEAT_EPOCH: ${{ vars.BANON_ZERK_HEARTBEAT_EPOCH }}
+        run: |
+          set -euo pipefail
+          # The org-standard label array, proven in production: Banon-Labs/linux-x86-debug run
+          # 33699908675 landed four jobs on Zerk reporting exactly these labels. `local-linux` is
+          # deliberately NOT among them -- it is a real label on Zerk, but there is also a runner
+          # GROUP of that name holding zero runners, and the two are unrelated. The neighbouring
+          # `krek` repo pinned `[self-hosted, linux, x64, local-linux]` and every one of its runs
+          # was cancelled without ever being assigned a runner.
+          local_json='["self-hosted","Linux","X64","banon-laptop"]'
+          fallback_json='["ubuntu-latest"]'
+          # How stale a heartbeat may be and still mean "awake". 180s is the org's existing window.
+          freshness_window=180
+          now=$(date +%s)
+
+          if [ -z "${HEARTBEAT_EPOCH:-}" ]; then
+            # Absent is NOT "stale by a lot" -- it is "the question was not answered", which today
+            # is the private-variable case above. Same action, different reason, and the reason is
+            # what someone reading a run needs.
+            echo "runs_on_json=$fallback_json" >> "$GITHUB_OUTPUT"
+            echo "reason=no heartbeat variable readable from this repo (private var in a public repo?) -- using ubuntu-latest" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "$HEARTBEAT_EPOCH" in
+            ''|*[!0-9]*)
+              echo "runs_on_json=$fallback_json" >> "$GITHUB_OUTPUT"
+              echo "reason=heartbeat is not an integer epoch -- using ubuntu-latest" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          age=$(( now - HEARTBEAT_EPOCH ))
+          # A heartbeat from the FUTURE is a broken clock somewhere, not a live runner. Treating a
+          # negative age as "very fresh" would pin every job to a laptop on the strength of a bug.
+          if [ "$age" -lt 0 ] || [ "$age" -gt "$freshness_window" ]; then
+            echo "runs_on_json=$fallback_json" >> "$GITHUB_OUTPUT"
+            echo "reason=heartbeat ${age}s old (window ${freshness_window}s) -- using ubuntu-latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "runs_on_json=$local_json" >> "$GITHUB_OUTPUT"
+            echo "reason=heartbeat ${age}s old -- using the self-hosted runner" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: echo "runner choice -- ${{ steps.pick.outputs.reason }}"
+
+  check:
+    needs: choose-runner
+    runs-on: ${{ fromJSON(needs.choose-runner.outputs.runs_on_json) }}
     # NO `timeout-minutes` HERE, and that is enforced, not a preference: scripts/check-no-timeouts.py
     # rejects any YAML `timeout-minutes` above its 30-second cap, on the grounds that a wall-clock
     # bound is not a synchronisation primitive. The job's real bound is internal -- every gate is

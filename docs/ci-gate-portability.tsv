@@ -58,6 +58,7 @@ portable	-	check-counter-writers.py --selftest	source/AST/text analysis only
 portable	-	check-counter-writers.py	source/AST/text analysis only
 partial	image-1162,image-1170	check-oracle-singleton-globals.py --selftest	source half asserts and says 'selftest: ok'; the IMAGE half prints that it was skipped
 partial	image-1162,image-1170	check-oracle-singleton-globals.py	still audits ungated module-base arithmetic; the IMAGE half prints that it was skipped
+partial	game-install	ersc_identify.py --selftest	the five synthetic banner assertions run everywhere and say '0 failure(s)'; the four real-image assertions are replaced by 'no ersc.dll at <path>; synthetic checks only'. Measured with ER_GAME_DIR pointed at a directory that does not exist.
 portable	-	check-fromsoftware-symbols.py --selftest	source/AST/text analysis only
 portable	-	check-fromsoftware-symbols.py	source/AST/text analysis only
 portable	-	check-sibling-pin-lockstep.py --selftest	source/AST/text analysis only
@@ -178,6 +179,8 @@ blocked	rva-map-tsv	check-native-call-rva-coverage.py --selftest	its ledger pin 
 blocked	rva-map-tsv	check-native-call-rva-coverage.py	its ledger pin names the gitignored .pdata alignment
 blocked	game-install	check-game-version-supported.py --selftest	'PE reader not exercised' -- the selftest reads the INSTALLED exe, it has no synthetic PE
 blocked	game-install	check-game-version-supported.py	'SKIP: no game at ...' -- the installed build is the entire subject
+partial	game-install	check-ersc-version-supported.py --selftest	both parsers still assert on synthetic banners and the real constant; 'installed reader not exercised'
+blocked	game-install	check-ersc-version-supported.py	'SKIP: no Seamless Co-op at ...' -- the installed build is the entire subject
 portable	-	check-markdown-code-blocks.py	source/AST/text analysis only
 portable	-	er-stale-run-sentinel.sh --selftest	source/AST/text analysis only
 portable	-	er-launch-gate.py --selftest	source/AST/text analysis only
@@ -193,6 +196,8 @@ portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces
 portable	-	check-test-target-coverage.py --prove-selftest-catches-regression	source/AST/text analysis only
 portable	-	check-test-target-coverage.py	source/AST/text analysis only
 portable	-	check-moveset-table.py --selftest	synthetic tables built in memory; needs nothing
+portable	-	er-moveset-coverage.py --selftest	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0 and the real assertion 'c4351 reduced to locomotion is caught'; output matches the developer tree except for the temp path of its own synthetic table
+portable	-	er-moveset-coverage.py --check	measured 2026-09-03 in a tracked-files-only checkout of the merged tree: exit 0, output BYTE-IDENTICAL to the developer tree (408 creatures, 37 classifying zero attacks); the table and corpus it reads are both tracked, so it needs no game image
 partial	chr-corpus	check-moveset-table.py	grammar and invariant half asserts on the committed table; the regenerate-and-diff half prints SKIP
 portable	-	check-me3-shell-coverage.py --selftest	source/AST/text analysis only
 portable	-	check-me3-shell-coverage.py	source/AST/text analysis only

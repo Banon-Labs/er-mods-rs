@@ -39,6 +39,13 @@ other no matter what this DLL does:
    (`BuildLobbyKey` @ RVA `0x0ABC20`). So any mod that edits `regulation.bin` makes you invisible
    to everyone who has not made the byte-identical edit. That is the single most common reason two
    people who "did everything right" never see each other.
+
+   The *rule* still holds on Seamless Co-op v2.0.0 -- both players needing identical params is the
+   mod's design, not an artifact of one build -- but the **address does not**. `0x0ABC20` was
+   measured against v1.9.9; in v2.0.0 the search finds three candidates and cannot pick one, so
+   treat the RVA as unverified and re-measure with `scripts/locate-ersc-entry-points.py` before
+   any tool acts on it. "Both players on the same Seamless VERSION" belongs on this list for the
+   same reason: the build identity is part of the fingerprint.
 2. **The same matchmaking bracket.** There is a `matchmaking_breakin_lobby_...` term carrying a
    value like `5_3` -- measured, both sides asked for and carried `5_3`. It tracks character
    level/weapon level. A wildly different character may never match.

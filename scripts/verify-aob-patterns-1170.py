@@ -153,26 +153,6 @@ REGISTRY = [
         "note": "Same function as armament-icons/PARSE_SIG; independent copy of the literal.",
     },
     {
-        "id": "ersc-sigshim/ALLOCATOR_SHAPE",
-        "source": "crates/er-ersc-sigshim/src/fixups.rs",
-        "symbol": "ALLOCATOR_SHAPE",
-        "literals": [0],
-        "consumer": "unique-or-refuse",
-        "pattern": "E8 ? ? ? ? 48 8B 15 ? ? ? ? 48 8D 4B ?",
-        "expect": {"1162": 1, "1170": 1},
-        "note": "Seamless Co-op's allocator landmark; exactly_one() refuses 0 or >1.",
-    },
-    {
-        "id": "ersc-sigshim/SCADUTREE_SHAPE",
-        "source": "crates/er-ersc-sigshim/src/fixups.rs",
-        "symbol": "SCADUTREE_SHAPE",
-        "literals": [0],
-        "consumer": "unique-or-refuse",
-        "pattern": "80 B9 ? ? 00 00 00 74 08 0F B6 81 ? ? 00 00 C3 0F B6 81 ? ? 00 00 C3",
-        "expect": {"1162": 1, "1170": 1},
-        "note": "GetScadutreeBlessing; its entry is RE-SHAPED, so a wrong hit would rewrite live code.",
-    },
-    {
         "id": "quickload/ANTI_ANTIDEBUG check1",
         "source": "crates/er-quickload/src/constants/anti_debug.rs",
         "symbol": "ANTI_ANTIDEBUG_CHECKS",
@@ -214,15 +194,6 @@ REGISTRY = [
     },
 ]
 
-# `er-ersc-sigshim`'s cave allocator scans the SAME `.text` for a run of 0xCC padding.  It is not
-# a 1.16.2-derived signature -- 0xCC padding is a property of the de-Arxan'd image, not of a build
-# -- so it is checked for AVAILABILITY (does a long enough run still exist?) rather than identity.
-CAVE_FILL = 0xCC
-CAVE_MARGIN = 1
-CAVE_NEEDS = (
-    ("ersc-sigshim/ALLOCATOR_LEN", 16),
-    ("ersc-sigshim/SCADUTREE_LEN", 25),
-)
 
 # --- runtime-built needle registry ------------------------------------------------------------
 # These scans compare a qword read out of live memory against `base + RVA`, resolved through
@@ -351,24 +322,6 @@ def find_all(data, start, size, want, mask, cap=4096):
         if all(not mask[j] or data[off + j] == want[j] for j in range(n)):
             hits.append(off)
     return hits
-
-
-def cave_runs(data, start, size, needed):
-    """How many runs of CAVE_FILL in [start, start+size) are long enough for `needed` bytes."""
-    total = needed + CAVE_MARGIN * 2
-    count = 0
-    i = start
-    end = start + size
-    while i < end:
-        if data[i] != CAVE_FILL:
-            i += 1
-            continue
-        run = i
-        while i < end and data[i] == CAVE_FILL:
-            i += 1
-        if i - run >= total:
-            count += 1
-    return count
 
 
 # --- source extraction (the anti-drift half) --------------------------------------------------
@@ -523,20 +476,6 @@ def run_patterns(require_images):
         if verdict in ("MULTI-ON-1170", "MULTI-BOTH-DIFFERENT"):
             bad += 1
         if verdict == "ZERO-ON-1170" and entry["consumer"] != "unique-or-refuse":
-            bad += 1
-    print("\n== structural scans (no 1.16.2-derived signature) ==")
-    for label, needed in CAVE_NEEDS:
-        counts = {
-            b: cave_runs(img.data, img.text[0][0], img.text[0][1], needed)
-            for b, img in images.items()
-        }
-        ok = counts["1170"] > 0
-        print(
-            f"  ersc-sigshim cave for {label} ({needed} bytes): "
-            f"1.16.2 runs={counts['1162']}  1.17 runs={counts['1170']}  "
-            f"{'available' if ok else 'NONE LEFT'}"
-        )
-        if not ok:
             bad += 1
     return bad
 
@@ -987,11 +926,6 @@ def selftest():
     check("classify shotgun stable", classify(181, 181), "MULTI-BOTH-EQUAL")
     check("classify shotgun drifted", classify(181, 174), "MULTI-BOTH-DIFFERENT")
     check("classify already fragile", classify(0, 1), "ZERO-ON-1162")
-
-    # Cave runs: 0xCC padding long enough for `needed` + a margin at each end.
-    data = b"\x90" + b"\xcc" * 6 + b"\x90" + b"\xcc" * 3 + b"\x90"
-    check("cave run counted", cave_runs(data, 0, len(data), 4), 1)
-    check("cave run too short", cave_runs(data, 0, len(data), 5), 0)
 
     # Source extraction handles a multi-line const and a table of tuples.
     sample = ROOT / "target" / "verify-aob-selftest.rs"

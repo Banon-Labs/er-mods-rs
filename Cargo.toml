@@ -1,6 +1,11 @@
 [workspace]
 members = [
   "crates/er-quickload",
+  # Offline answer to the exact question the DLL now asks before it will wait on a Continue slot:
+  # which character slots does this save container actually hold? Same parser
+  # (`er_save_loader::bnd4::active_character_slots`), so a runtime refusal can be predicted and
+  # reviewed without launching the game. Host-buildable and game-free.
+  "tools/er-slot-truth",
   # One vocabulary for naming a key in a config file, plus the reload decision that makes an
   # edit take effect without a restart. Extracted after a hard-coded VK_F7 in er-invasion-warp
   # collided with another mod's default and warped a live session, with no config key on either
@@ -24,11 +29,6 @@ members = [
   # entry, enabled by presence, omitted from a production profile.
   "crates/er-diag-harness",
   "crates/er-ags-stub",
-  # Lets Seamless Co-op v1.9.9 boot on ELDEN RING 1.17: rebuilds the one AOB locator ersc
-  # lost to the patch (the object behind `GetWwiseSettings` grew 0x38, so its trailing
-  # `lea rcx,[rbx+0x20]` became `+0x58`) in a code cave, with the operands re-based so ersc
-  # still resolves the real allocator getter. Loads BEFORE ersc.dll.
-  "crates/er-ersc-sigshim",
   "crates/er-inventory-sort",
   "crates/er-better-refills",
   # Hotkey that marks every auto-refillable item refill / no-refill in one press, cycling.
@@ -91,6 +91,11 @@ members = [
   "crates/er-build-watermark",
   "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
+  # Which mods in this profile are fighting over the same key, and does the game already use it.
+  # A passive observer: it hooks the input-read APIs, attributes each call to the module it came
+  # from, and prints ONE warning once the profile has settled. Every detour chains straight back
+  # to the original -- it swallows no input, injects none, and writes no game memory.
+  "crates/er-hotkey-conflicts",
   # A walkable route to every other player in the session, drawn on the ground and following the
   # terrain, with a direction arrow when the navmesh cannot reach them. Standalone shell: reads
   # the roster, asks the engine's own Havok-AI navmesh, draws through the shared overlay host.

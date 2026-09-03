@@ -102,9 +102,6 @@ XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD	OS-ABI	XINPUT_GAMEPAD.sThumbLY = 6
 MOUSE_BUTTON0_OFFSET	OS-ABI	DIMOUSESTATE.rgbButtons = 12
 
 # ---- Byte offsets inside an instruction encoding, not inside an object.
-CALL_REL_AT	MACHINE-CODE	rel32 operand of `call rel32` starts at byte 1
-MOV_REL_AT	MACHINE-CODE	displacement of the RIP-relative mov in the matched shape
-LEA_DISP_AT	MACHINE-CODE	displacement of the RIP-relative lea in the matched shape
 JMP_REL_OFF	MACHINE-CODE	rel32 operand of `jmp rel32` starts at byte 1
 JMP_NEXT_OFF	MACHINE-CODE	length of `jmp rel32`, the next-instruction anchor for its rel32
 ADDRCX8_REL_OFF	MACHINE-CODE	displacement byte index within the matched `add rcx,8` shape
