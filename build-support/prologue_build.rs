@@ -254,9 +254,7 @@ impl Image {
                 "python3 scripts/map-rvas-1162-to-1170.py <va>"
             }
             // uv, because the body mapping needs capstone and there is no system pip here.
-            Self::Ersc200 => {
-                "uv run --with capstone python3 scripts/locate-ersc-entry-points.py"
-            }
+            Self::Ersc200 => "uv run --with capstone python3 scripts/locate-ersc-entry-points.py",
         }
     }
 
