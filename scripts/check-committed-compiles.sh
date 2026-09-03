@@ -23,7 +23,7 @@
 # sitting in the author's checkout is invisible to it, which is the whole point.
 #
 # WHAT IT COMPILES, and why every word of that invocation is load-bearing:
-#   cargo xwin check --workspace --all-targets --keep-going --target x86_64-pc-windows-msvc
+#   cargo xwin clippy --workspace --all-targets --keep-going --target x86_64-pc-windows-msvc
 #   * --workspace, because the workspace sets `default-members = ["crates/er-quickload"]`. A bare
 #     `cargo xwin check`/`build` selects that one package, exits 0 in a fraction of a second having
 #     compiled nothing else, and reads exactly like a successful incremental build. That bare form
@@ -42,6 +42,19 @@
 #   * --keep-going, so one broken crate does not hide the state of the rest. Without it the run
 #     stops at er-save-suppress and never reaches er-quickload, so the report understates the
 #     damage.
+#   * clippy RATHER THAN check, since 2026-09-03. `cargo clippy` runs everything `cargo check`
+#     runs and then applies the lints, so nothing is lost and it is one pass, not two -- the only
+#     cost is a one-time cache rebuild, because clippy's fingerprints differ from check's.
+#
+#     WHY IT HAD TO CHANGE: `clippy` appeared ZERO times across the entire pre-push path --
+#     scripts/hooks/pre-push, scripts/ci-local-check.sh and this file -- while the workspace root
+#     sets `[workspace.lints.clippy]` to deny. So every lint denial in this repo was enforced
+#     exclusively by CI, and `cargo check` is happy with code `cargo clippy` rejects. Measured on
+#     PR #388, run 33793058851: `clippy::manual_is_multiple_of` at
+#     crates/er-npc-possess/src/possess/fall.rs:206 reached origin, went red in CI, and no local
+#     gate had anything to say about it -- not because anyone bypassed the hook, but because the
+#     hook ran and did not ask the question. rustc was 1.98.0 on both sides; this was never a
+#     toolchain skew.
 #
 # NO BYPASS. There is no --force, no skip flag and no environment escape, by design: the other
 # gates in this repo have none either, and a compile gate that can be waved through is the gate
@@ -161,12 +174,12 @@ run_one() {
 	subject=$(git -C "$repo_root" log -1 --format=%s "$sha")
 	echo "[committed-compiles] $rev -> ${sha:0:8}  $subject"
 	pin_worktree "$sha"
-	echo "[committed-compiles] cargo xwin check --workspace --all-targets --keep-going --target $target"
+	echo "[committed-compiles] cargo xwin clippy --workspace --all-targets --keep-going --target $target"
 	status=0
 	( cd "$worktree" && CARGO_TARGET_DIR="$target_dir" \
-		cargo xwin check --workspace --all-targets --keep-going --target "$target" ) || status=$?
+		cargo xwin clippy --workspace --all-targets --keep-going --target "$target" ) || status=$?
 	if [[ "$status" != 0 ]]; then
-		echo "[committed-compiles] FAIL: commit ${sha:0:8} does not compile (exit $status)" >&2
+		echo "[committed-compiles] FAIL: commit ${sha:0:8} does not compile or fails clippy (exit $status)" >&2
 		return 1
 	fi
 	echo "[committed-compiles] ok: ${sha:0:8}"
@@ -241,15 +254,24 @@ done
 if [[ ${#failed[@]} -ne 0 ]]; then
 	cat >&2 <<EOF
 
-[committed-compiles] REFUSING: ${#failed[@]} commit(s) do not compile: ${failed[*]}
+[committed-compiles] REFUSING: ${#failed[@]} commit(s) fail: ${failed[*]}
 
-This is the "consumer without its producer" shape. Your working tree compiles because it still
-holds the file the commit is missing. Find it with:
+READ THE cargo OUTPUT ABOVE FIRST -- this gate now asks two questions, and they have opposite
+fixes. Do not reach for the second diagnosis when the error says lint.
 
-    git status --short                 # the producer is probably an untracked or modified file here
-    git show --stat <rev>              # what the commit actually contains
+  A LINT error (\`error: <lint text>\` ending in a clippy note such as
+  \`-D clippy::all\`) means the code compiles and the workspace's own
+  [workspace.lints.clippy] denial rejects it. Fix the code, or add a scoped
+  \`#[allow(...)]\` with a reason. Your working tree has the same defect.
 
-then amend or add a follow-up commit that carries the closure, and run this gate again.
+  A RESOLUTION error (unresolved import, no such module, cannot find) is the
+  "consumer without its producer" shape: your working tree compiles because it
+  still holds a file the commit does not carry. Find it with
+
+      git status --short     # the producer is probably untracked or modified here
+      git show --stat <rev>  # what the commit actually contains
+
+  then amend or add a follow-up commit carrying the closure.
 EOF
 	exit 1
 fi
