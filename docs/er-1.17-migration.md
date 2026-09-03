@@ -59,15 +59,53 @@ uv run --with capstone python3 scripts/map-rvas-1162-to-1170.py --selftest
 The mapper reports how each answer was reached, and the distinction matters:
 
 * `unique, NNB signature` -- one masked match in the whole image. Strong.
-* `nearest-anchor delta` -- the shape occurs more than once and the winner was chosen because its
-  delta matches the closest uniquely-mapped address. Weaker; the shift changes over spans as short
-  as 0xb00 bytes, so an anchor further away than that is not evidence.
+* `nearest-anchor delta (unique)` -- the shape occurs more than once and the winner was chosen
+  because its delta matches the closest address THIS RUN mapped uniquely. Weaker; the shift
+  changes over spans as short as 0xb00 bytes, so an anchor further away than that is not evidence.
+* `nearest-anchor delta (ledger)` -- same, but the delta came from a pair in
+  `docs/recon/rva-map-1162-to-1170.verified.tsv`, which has been compared instruction by
+  instruction over its whole body. Better evidence than a same-run byte match, and available even
+  when only one address is being mapped.
 * `UNRESOLVED` -- shape matches exist but none agrees with the local delta. Left blank on purpose:
   a blank costs a Ghidra lookup, a wrong address costs a mid-function detour and a dead boot.
 
-`--selftest` asserts the mapper re-derives the two mappings this repo established by hand from the
-live 1.17 process (`GetScadutreeBlessing` and the `GetWwiseSettings` allocator landmark). A matcher
-that cannot reproduce a known answer has no business proposing an unknown one.
+**Anchors are why a region resolves, and the ledger is where they live** (2026-09-01,
+`er-effects-rs-4uw5.13`). Pass 2 used to draw anchors only from other addresses in the same
+invocation, so mapping ONE address could never use one. It now reads the verified ledger as well.
+Measured over every `.pdata` entry of three regions, one address at a time
+(`scripts/measure-1170-anchor-coverage.py`, which reproduces this for any range):
+
+| region | before | after | what changed |
+| --- | --- | --- | --- |
+| `0x87xxxx` | 67/278 (24.1%) | 271/278 (97.5%) | four anchor rows added; the region had none |
+| `0x92xxxx` | 37/501 (7.4%) | 355/501 (70.9%) | four anchor rows added; the region had none |
+| `0x9axxxx` | 24/342 (7.0%) | 265/342 (77.5%) | no new rows -- six were already there, unread |
+
+The residue is not short of anchors, and a greedy search over every address the matcher resolves
+alone confirms it: in all three regions, no further anchor resolves even one more entry. 227 of the
+230 remaining addresses produce a masked signature matching the `CANDIDATE_CEILING` of 2048 places
+-- compiler-generated unwind funclets and vtable stubs, whose shape is the compiler's rather than
+the function's. The mapper refuses those outright. It could resolve them from the region delta
+alone, and deliberately does not: when a shape occurs thousands of times, "the bytes at the
+predicted address have that shape too" is nearly free and would corroborate nothing while appearing
+to. `docs/recon/rva-map-1162-to-1170.functions.tsv` pairs by region delta and says so in its own
+header; that is where an address of this shape belongs.
+
+`--selftest` asserts three things: that the mapper re-derives the two mappings this repo
+established by hand from the live 1.17 process (`GetScadutreeBlessing` and the `GetWwiseSettings`
+allocator landmark); that `0x1409a5810` is the 39th of 51 shape matches for `0x1409a4670`, which is
+why the candidate list is no longer cut at 9; and that the four ProfileSelect/System-Quit addresses
+resolve ONE AT A TIME, which they can only do from the ledger's anchor rows. A matcher that cannot
+reproduce a known answer has no business proposing an unknown one.
+
+A pair headed for the ledger gets a second opinion that shares none of the above machinery:
+
+```bash
+# Both Ghidra dumps, asked whether each half is a declared function ENTRY and whether the
+# call graph carries across. Skips at exit 0 if either daemon is down.
+python3 scripts/confirm-1170-pair-in-dumps.py 0x1409a4670:0x1409a5810
+python3 scripts/confirm-1170-pair-in-dumps.py --selftest
+```
 
 ## Three private address helpers that looked gated and were not
 
