@@ -37,13 +37,21 @@ INSTALLS = re.compile(r"set_hook_logger\s*\(|set_address_logger\s*\(")
 # A crate only needs a sink if it actually installs detours. `MhHook`/`register_*_hook` are the
 # entry points that can refuse; a crate that merely reads memory has nothing to report.
 HOOKS = re.compile(r"MhHook::new|register_union_hook|register_shared_hook")
+# `r"..."` / `r#"..."#` openers, and a char literal -- both only so `strip_comments` below cannot
+# be desynchronised by a quote or a slash inside one. A lifetime (`'a`) deliberately does not match.
+RAW_STRING = re.compile(r"r(#*)\"")
+CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 # Crates exempted with the reason each was checked and found not to need one.
+#
+# AN EXEMPTION IS NOT REVOKED BY ARMING A DETOUR. The audit reads `elif name in EXEMPT`, so a crate
+# listed here passes whether or not HOOKS matches -- a comment above once claimed the opposite, and
+# believing it is how a real detour would go silent. Keep this list as short as the evidence
+# allows; `er-quit-menu` was removed from it on 2026-09-01 when comment-stripping showed its only
+# `MhHook` mention was prose, so the exemption had become a standing hole guarding nothing.
 EXEMPT = {
     # Standalone shells: they arm nothing, and their `append_log` takes a directory argument, so a
-    # zero-argument sink would need a wrapper for no present diagnostic value. If any of them ever
-    # arms a detour, HOOKS matches and this gate stops being satisfied by the exemption.
+    # zero-argument sink would need a wrapper for no present diagnostic value.
     "er-invasion-warp": "standalone shell -- catalog sampler + warp driver, no detours",
-    "er-quit-menu": "standalone shell -- scaffolding, nothing armed",
     "er-save-picker": "standalone shell -- stands down when the product DLL is present",
     # Its only MhHook targets come from proc_addr(b"user32.dll", ...), which is OUTSIDE the game
     # image. resolve_game_address returns such an address unchanged on every build, so this DLL
@@ -57,6 +65,62 @@ def crate_dirs():
         path = os.path.join(CRATES, name)
         if os.path.isdir(os.path.join(path, "src")):
             yield name, path
+
+
+def strip_comments(text):
+    """Blank out Rust comments so the matchers below read CODE, not prose.
+
+    Both patterns are bare identifiers, so before this existed a module doc comment saying "if a
+    later layer needs to steal an input it must go through er_hook::register_shared_hook" made the
+    scanner classify a DLL that installs no detour at all as a hooking one -- and then fail it for
+    not installing a sink it has nothing to report through. Measured on er-npc-possess, 2026-09-01.
+    Deleting the sentence would have been the wrong fix: the gate is meant to key on what a crate
+    DOES, and a comment is the one place a name appears without doing anything.
+
+    String literals are tracked (plain, raw, and char literals) only so a `//` or `/*` inside one
+    cannot desynchronise the scan -- their CONTENTS are kept, because a hook call has never been
+    written inside a string and dropping them would be a way to hide one.
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            out.append(" " * (end - i))
+            i = end
+        elif ch == "/" and i + 1 < n and text[i + 1] == "*":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            # Newlines are preserved so a later line/column report stays truthful.
+            out.append("".join(c if c == "\n" else " " for c in text[i:j]))
+            i = j
+        elif ch == "r" and (m := RAW_STRING.match(text, i)):
+            close = '"' + "#" * (len(m.group(1)))
+            end = text.find(close, m.end())
+            end = n if end == -1 else end + len(close)
+            out.append(text[i:end])
+            i = end
+        elif ch == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i : j + 1])
+            i = j + 1
+        elif ch == "'" and (m := CHAR_LITERAL.match(text, i)):
+            out.append(m.group(0))
+            i = m.end()
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def sources(crate_path):
@@ -79,7 +143,9 @@ def audit():
     for name, path in crate_dirs():
         if not is_cdylib(path):
             continue
-        text = "".join(open(f, encoding="utf-8", errors="replace").read() for f in sources(path))
+        text = strip_comments(
+            "".join(open(f, encoding="utf-8", errors="replace").read() for f in sources(path))
+        )
         if not HOOKS.search(text):
             skipped.append(name)
             continue
@@ -109,8 +175,20 @@ def selftest():
     assert not INSTALLS.search("// call set_hook_logger somewhere"), "a comment is not an install"
     assert HOOKS.search("unsafe { MhHook::new(addr, f) }"), "MhHook is a hooking DLL"
     assert not HOOKS.search("safe_read_usize(base + RVA)"), "a memory read is not a hook"
-    hooking = [n for n, p in crate_dirs() if is_cdylib(p) and HOOKS.search(
-        "".join(open(f, encoding="utf-8", errors="replace").read() for f in sources(p)))]
+
+    # A NAME IN PROSE IS NOT A CALL. This is what made a hook-free DLL fail the gate.
+    assert not HOOKS.search(strip_comments("//! go through er_hook::register_shared_hook\n"))
+    assert not HOOKS.search(strip_comments("/* MhHook::new was here once */"))
+    assert not INSTALLS.search(strip_comments("// er_hook::set_hook_logger(sink);"))
+    # ...and the code around a comment survives it, including a nested block comment and the
+    # quotes/slashes that could desynchronise the scan.
+    assert HOOKS.search(strip_comments('let url = "https://x"; /* a /* b */ */ MhHook::new(a, b)'))
+    assert HOOKS.search(strip_comments("let q = \'\"\'; MhHook::new(a, b)"))
+    assert HOOKS.search(strip_comments('let s = r#"// not a comment"#; MhHook::new(a, b)'))
+    assert strip_comments("a // b\nc").count("\n") == 1, "line count must survive"
+
+    hooking = [n for n, p in crate_dirs() if is_cdylib(p) and HOOKS.search(strip_comments(
+        "".join(open(f, encoding="utf-8", errors="replace").read() for f in sources(p))))]
     assert hooking, "the tree has hooking cdylibs; finding none means the walk is broken"
     print(f"selftest OK ({len(hooking)} hooking cdylib(s) visible)")
     return 0
