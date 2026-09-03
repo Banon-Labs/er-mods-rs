@@ -3293,6 +3293,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-slot-truth"
+version = "0.1.0"
+dependencies = [
+ "er-save-loader",
+]
+
+[[package]]
 name = "er-soulsformats"
 version = "0.1.0"
 dependencies = [

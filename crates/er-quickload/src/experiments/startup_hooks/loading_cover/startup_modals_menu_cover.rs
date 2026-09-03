@@ -1134,9 +1134,34 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
             }
         }
     };
+    // RELEASE THE FORCE-HIDE ONCE THE COVER IS DONE WITH IT.
+    //
+    // This used to force `visible = 0` unconditionally and forever. `boot_view_cover_release_ready`
+    // already decides when the cover has served its purpose and latches the moment in
+    // `BOOT_VIEW_RELEASE_READY_MS`, but nothing downstream of the cover consulted it, so the logo
+    // stayed suppressed for the rest of the process no matter what the game asked for.
+    //
+    // MEASURED 2026-09-03: a session whose world unloaded one heartbeat after loading (an
+    // invasion-warp `warp=1 -> Committed` that never came back) then sat on a black screen for 72
+    // minutes with this detour still answering every native `SetVisible(logo, 1)` with a 0, ~107
+    // times a second, 508,460 times in total. With no world and no title, nothing was left to draw.
+    //
+    // After release, honour what the game asked for. Before release, keep forcing hidden -- that is
+    // the whole point of the cover, and the pre-release behaviour is unchanged.
+    let cover_released =
+        er_telemetry_core::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst) != 0;
+    let effective_visible = if cover_released {
+        u8::try_from(requested_visible).unwrap_or(1)
+    } else {
+        0
+    };
     let set_visible: unsafe extern "system" fn(usize, u8) =
         unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(target) };
-    unsafe { set_visible(logo, 0) };
+    unsafe { set_visible(logo, effective_visible) };
+    if cover_released {
+        // Not a forced hide, so it does not belong in the forced-hide count or its log family.
+        return;
+    }
     let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
     TITLE_LOGO_GFX_HIDE_LAST_LOGO.store(logo, Ordering::SeqCst);

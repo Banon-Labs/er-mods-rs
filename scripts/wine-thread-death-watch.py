@@ -67,7 +67,37 @@ DEFAULT_BREAK_SYMBOLS = (
 )
 # Optional: the chokepoint every user-mode Windows exception passes through *before* the
 # thread unwinds away.  Catches a Rust panic's raise and a stack overflow at the fault site.
-EXCEPTION_SYMBOLS = ("KiUserExceptionDispatcher",)
+#
+# THE `+0x25` IS LOAD-BEARING; BREAKING AT THE SYMBOL ITSELF CAPTURES NOTHING.
+#
+# Wine's KiUserExceptionDispatcher does NOT receive the exception record and context in
+# registers -- it BUILDS them from its own stack frame.  Disassembled from Proton
+# Experimental's ntdll.dll (export rva 0x10b00):
+#
+#     +0x00  cld
+#     +0x01  mov  <hook slot>(%rip),%rax
+#     +0x08  test %rax,%rax
+#     +0x0b  je   +0x1a
+#     +0x0d  mov  %rsp,%rdx                 <- CONTEXT
+#     +0x10  lea  0x4f0(%rsp),%rcx          <- EXCEPTION_RECORD
+#     +0x18  call *%rax                     (debugger hook, only when the slot is set)
+#     +0x1a  mov  %rsp,%rdx                 }  the same two args, rebuilt for the real call
+#     +0x1d  lea  0x4f0(%rsp),%rcx          }
+#     +0x25  call <dispatch>                <- BREAK HERE: rcx/rdx are finally the real args
+#     +0x2a  int3                           (the dispatch does not return)
+#
+# MEASURED 2026-09-03: breaking at `+0x00` produced two captures reading
+# `rcx=0x1339f8b5a1680000`, `rdx=0x0` -- the faulting thread's leftover register values, because
+# at the `cld` neither argument exists yet.  That looked like a target quirk and was actually the
+# breakpoint being one prologue too early, so a whole run's evidence was empty.
+#
+# `+0x2a` is NOT the fix even though it is what shows up as a stack frame in our crash logs: it is
+# the `int3` after a non-returning call, i.e. a return address that is never returned to.
+#
+# gdb resolves `SYMBOL+N` directly, so the offset rides along with the symbol name.  If a future
+# Proton reshuffles this prologue, re-derive it rather than nudging the number: the invariant is
+# "immediately before the dispatch call", not the literal 0x25.
+EXCEPTION_SYMBOLS = ("KiUserExceptionDispatcher+0x25",)
 
 # Signals gdb must hand straight back to Wine.
 #

@@ -620,6 +620,28 @@ enum NoSession {
     SessionUnreadable,
 }
 
+impl NoSession {
+    /// Which of the four it was, for the trace.
+    ///
+    /// `join-progress` used to print a bare `ersc=<unresolved>`, which collapses four completely
+    /// different situations into one word: Seamless not loaded at all, loaded but an unmeasured
+    /// build, loaded and measured but the menu was never opened, and a stale session pointer. Only
+    /// the last two are interesting and only one of them is a fault, so the bare form sent every
+    /// reader who saw it -- me included, on 2026-09-03 -- looking for a resolver bug that may not
+    /// exist. MEASURED that day: `ersc=<unresolved>` on every join-progress line of a run whose
+    /// startup had already logged `recognised as Seamless Co-op v2.0.1 -- filter armed`, i.e. two
+    /// of the four were already excluded by a line further up the same file and the trace still
+    /// would not say which of the remaining two it was.
+    fn label(self) -> &'static str {
+        match self {
+            Self::ErscAbsent => "<absent>",
+            Self::ErscUnrecognised => "<unmeasured-build>",
+            Self::MenuNeverOpened => "<menu-never-opened>",
+            Self::SessionUnreadable => "<session-unreadable>",
+        }
+    }
+}
+
 /// Resolve the option-menu object and its session, validating structurally.
 ///
 /// Validation is on the SHAPE this module actually depends on -- `OSM+0x58` reads as a pointer, and
@@ -2211,11 +2233,12 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // not depend on ERSC being resolvable, and the baseline of what they read during ordinary play
     // is exactly as valuable as what they read mid-attempt. Gating them behind `resolve_session`
     // would have recorded nothing at all until the player opened the Seamless menu.
-    trace_join_progress(
-        resolve_session().ok().and_then(|s| {
-            read_session_state(s.abi, s.session).map(|state| (state, s.abi.state_idle))
-        }),
-    );
+    trace_join_progress(match resolve_session() {
+        Ok(s) => read_session_state(s.abi, s.session)
+            .map(|state| (state, s.abi.state_idle))
+            .ok_or("<state-unreadable>"),
+        Err(reason) => Err(reason.label()),
+    });
     // Everything below is Seamless-side and purely observational until a rejected match has
     // actually armed a re-search, so a run without Seamless loaded costs one failed module lookup.
     let Ok(session) = resolve_session() else {
@@ -2255,8 +2278,8 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
 /// only mean anything together: v2.0.0 renumbered the enum, so `0` is idle on one build and an
 /// active state on the other.
 #[cfg(windows)]
-fn trace_join_progress(session: Option<(u32, u32)>) {
-    let ersc_state = session.map(|(state, _)| state);
+fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
+    let ersc_state = session.ok().map(|(state, _)| state);
     let idle_state = session.map_or(u32::MAX, |(_, idle)| idle);
     let Some(progress) = read_join_progress() else {
         return;
@@ -2298,9 +2321,9 @@ fn trace_join_progress(session: Option<(u32, u32)>) {
     };
     crate::standalone_log(format_args!(
         "join-progress: ersc={} {progress}{since_join}",
-        match ersc_state {
-            Some(state) => format!("{state:#04x}"),
-            None => "<unresolved>".to_owned(),
+        match session {
+            Ok((state, _)) => format!("{state:#04x}"),
+            Err(reason) => reason.to_owned(),
         }
     ));
 }
