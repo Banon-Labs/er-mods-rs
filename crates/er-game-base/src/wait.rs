@@ -129,10 +129,12 @@ mod tests {
         // MAX_YIELDS rounds of the real backoff would burn a wall-clock minute in a unit test, so
         // the bound itself is asserted rather than walked: the loop is `for _ in 0..MAX_YIELDS`,
         // and what must be true is that the constant is finite and the function returns None.
-        assert!(
-            MAX_YIELDS > 0,
-            "an unbounded wait is the bug this exists to prevent"
-        );
+        const {
+            assert!(
+                MAX_YIELDS > 0,
+                "an unbounded wait is the bug this exists to prevent"
+            )
+        };
         let got: Option<u32> = poll_until_bounded(|| None, 3);
         assert_eq!(got, None);
     }

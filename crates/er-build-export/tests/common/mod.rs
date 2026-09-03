@@ -127,7 +127,6 @@ pub fn representative_build() -> BuildExportDoc {
             total: 14,
             level: 12,
         },
-        ..Items::default()
     };
 
     doc

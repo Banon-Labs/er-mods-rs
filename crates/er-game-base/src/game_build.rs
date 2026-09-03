@@ -1681,7 +1681,7 @@ mod tests {
             "an address the ledger has no room for must still cost its first line"
         );
         assert!(
-            homeless.iter().any(|line| *line == RefusalLine::WentQuiet),
+            homeless.contains(&RefusalLine::WentQuiet),
             "the overflow path must go quiet too, or a full ledger restores the unbounded write"
         );
         assert_eq!(overflow.load(Ordering::Relaxed), 40);
