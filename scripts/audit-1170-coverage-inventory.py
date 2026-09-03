@@ -639,6 +639,10 @@ def collect(maps):
 # a refusal, and nothing else. That retired RVA still has to classify as ersc.dll: it is exactly as
 # plausible-looking a game `.text` address as it was while it was being driven, and misfiling it
 # would put Seamless work back into the 1.17 game-migration queue.
+# What these rows assert is ATTRIBUTION -- "this address belongs to ersc.dll, not eldenring.exe" --
+# never "this is what still lives at that offset in the DLL on your disk". Seamless is third-party
+# and updates on its own schedule: run scripts/ersc_identify.py to see which build is installed and
+# scripts/locate-ersc-entry-points.py to re-measure before trusting a name here.
 FOREIGN_CASES = [
     (0x243E0, "ersc.dll", "V199_INVADE_ACTION_RVA -- ersc \"Invade world\", the RETIRED fingerprint"),
     (0x241A0, "ersc.dll", "V200_SHOW_RVA -- ersc!show, Seamless v2.0.0"),
@@ -763,7 +767,7 @@ def selftest(maps):
 PROFILE_LOADS = {
     "er-quickload": 36, "er-invasion-warp": 18, "er-crash-logging": 11, "er-telemetry": 8,
     "er-quit-menu": 7, "er-save-picker": 7, "er-net-effects": 7, "er-better-refills": 7,
-    "er-ersc-sigshim": 6, "er-armament-icons": 6, "er-player-name-filter": 6,
+    "er-armament-icons": 6, "er-player-name-filter": 6,
     "er-seamless-bugfixes": 6, "er-inventory-sort": 5, "er-reload-trace": 4,
     "er-enemynpc-effects": 3, "er-loading-bar": 3, "er-save-disable": 3, "er-invasion-path": 3,
     "er-refill-all": 3, "er-input-harness": 3, "er-build-import": 2, "er-loading-portrait": 2,

@@ -20,7 +20,6 @@
  "er-crash-logging-core|CACHED_ADDR|crates/er-crash-logging-core/src/lib.rs": 1,
  "er-crash-logging-core|UNGATED_ARITH|crates/er-crash-logging-core/src/lib.rs": 2,
  "er-death-persist|UPSTREAM_STATIC|crates/er-death-persist/src/lib.rs": 2,
- "er-ersc-sigshim|RAW_CODE_PATCH|crates/er-ersc-sigshim/src/cave.rs": 1,
  "er-game-base|UNGATED_ARITH|crates/er-game-base/src/mem.rs": 2,
  "er-hook|RAW_CODE_PATCH|crates/er-hook/src/lib.rs": 2,
  "er-input-harness|CACHED_ADDR|crates/er-input-harness/src/pad_inject.rs": 1,
