@@ -1,9 +1,12 @@
 /// Route ONE direct-file (picked / loose `save_file`) autoload tick, and give the native Continue
 /// row a chance to become usable before deciding.
 ///
-/// `refresh_direct_source_profile_summary` is idempotent and self-throttling -- it returns straight
-/// away once the live `CS::ProfileSummary` already describes the picked container -- so calling it
-/// per tick costs an atomic load on the settled path. The decision itself is the pure
+/// `refresh_direct_source_profile_summary` is idempotent and self-throttling, and on the settled
+/// path it is no longer free: it watches the target slot's record for DRIFT, because the game's own
+/// boot `CS::ProfileSummary::Deserialize` can overwrite the body-derived records after we write
+/// them and put another character on the loading screen (bd er-effects-rs-ccud). That watch is two
+/// guarded reads and a hash of at most seventeen UTF-16 units per tick; the correction behind it is
+/// bounded. The decision itself is still the pure
 /// [`crate::autoload_route::title_autoload_route`], which carries the reasoning and the tests.
 fn direct_source_autoload_route() -> crate::autoload_route::TitleAutoloadRoute {
     refresh_direct_source_profile_summary();

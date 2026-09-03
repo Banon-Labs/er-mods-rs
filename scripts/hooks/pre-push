@@ -35,5 +35,19 @@ if [[ ${#pushed_shas[@]} -gt 0 ]]; then
 	bash scripts/check-committed-compiles.sh "${pushed_shas[@]}"
 fi
 
-printf 'pre-push: running scripts/ci-local-check.sh\n' >&2
-exec bash scripts/ci-local-check.sh
+# PARITY WITH CI, NOT A SUBSET OF IT (user directive 2026-09-03).
+#
+# This line used to run scripts/ci-local-check.sh, a hand-maintained 13-script list, while
+# scripts/check.sh -- the file CI's `check` job runs -- referenced 153. Nothing compared the two,
+# so a gate appended to check.sh became push-invisible the instant it was written, and the first
+# place it ever ran was a red CI job twelve minutes after the push. That is exactly how a
+# check-fnv1a-owner.py violation reached origin on PR #398: the hook ran, passed its 13 gates, and
+# let through a commit the full suite rejects in five minutes.
+#
+# The subset was justified as speed. It is not faster: it saves a few minutes per push and costs a
+# 12-minute CI round trip, a red PR and a second push whenever it is wrong -- and nothing measured
+# how often it was wrong. CI already solved this for itself (see .github/workflows/check.yml: it
+# runs check.sh precisely so its gate set is DERIVED rather than re-listed); the hook was the last
+# place still holding a copy of the list. Now there is no list to drift, because there is one file.
+printf 'pre-push: running scripts/check.sh (the same suite CI runs)\n' >&2
+exec bash scripts/check.sh

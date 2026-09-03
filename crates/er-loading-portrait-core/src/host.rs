@@ -71,8 +71,21 @@ pub struct PortraitHost {
     pub boot_view_epoch_ms: fn() -> u64,
     /// Highest-level real save slot, or -1 (`OWN_STEPPER_SLOT_NONE`) when none.
     pub best_active_slot: unsafe fn() -> i32,
+    /// The slot this boot is CONFIGURED to autoload (`er-quickload.toml` / its per-run sidecar),
+    /// or `None` when nothing configured one. A hint, never an observation -- the portrait window
+    /// deliberately refuses it (bd b1d6). The STATS panel takes it only ahead of
+    /// `best_active_slot`, whose answer is the highest-level slot and is unrelated to the load.
+    pub configured_autoload_slot: fn() -> Option<i32>,
     /// Populate the per-slot stats cache from the on-disk `.sl2` (once per session).
     pub ensure_profile_slot_stats_cached: unsafe fn(usize) -> bool,
+    /// The NAME of the character in save `slot` as decoded from the container's slot BODY, or
+    /// `None`. Body-derived on purpose: the live record is filled from the container's
+    /// `USER_DATA010` table, which can name a different character than the body that loads
+    /// (bd er-effects-rs-ccud). Same cache as the attributes below.
+    pub profile_slot_name: fn(i32) -> Option<String>,
+    /// The Rune Level of the character in save `slot` from the same body-derived cache as
+    /// [`Self::profile_slot_name`], or `None`.
+    pub profile_slot_level: fn(i32) -> Option<i32>,
     /// The eight attributes of the character in save `slot`, or `None`.
     pub profile_slot_attributes: fn(i32) -> Option<[i32; STATS_ATTR_COUNT]>,
     /// The STORED effective max vitals `[hp, fp, stamina]` of the character in save
@@ -130,8 +143,17 @@ fn default_boot_view_epoch_ms() -> u64 {
 unsafe fn default_best_active_slot() -> i32 {
     -1
 }
+fn default_configured_autoload_slot() -> Option<i32> {
+    None
+}
 unsafe fn default_ensure_profile_slot_stats_cached(_base: usize) -> bool {
     false
+}
+fn default_profile_slot_name(_slot: i32) -> Option<String> {
+    None
+}
+fn default_profile_slot_level(_slot: i32) -> Option<i32> {
+    None
 }
 fn default_profile_slot_attributes(_slot: i32) -> Option<[i32; STATS_ATTR_COUNT]> {
     None
@@ -177,7 +199,10 @@ impl PortraitHost {
             save_picker_overlay_active: default_gate_off,
             boot_view_epoch_ms: default_boot_view_epoch_ms,
             best_active_slot: default_best_active_slot,
+            configured_autoload_slot: default_configured_autoload_slot,
             ensure_profile_slot_stats_cached: default_ensure_profile_slot_stats_cached,
+            profile_slot_name: default_profile_slot_name,
+            profile_slot_level: default_profile_slot_level,
             profile_slot_attributes: default_profile_slot_attributes,
             profile_slot_vitals: default_profile_slot_vitals,
             profile_slot_weapon_level: default_profile_slot_weapon_level,
@@ -262,8 +287,17 @@ pub(crate) fn boot_view_epoch_ms() -> u64 {
 pub(crate) unsafe fn best_active_slot() -> i32 {
     unsafe { (host().best_active_slot)() }
 }
+pub(crate) fn configured_autoload_slot() -> Option<i32> {
+    (host().configured_autoload_slot)()
+}
 pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
     unsafe { (host().ensure_profile_slot_stats_cached)(base) }
+}
+pub(crate) fn profile_slot_name(slot: i32) -> Option<String> {
+    (host().profile_slot_name)(slot)
+}
+pub(crate) fn profile_slot_level(slot: i32) -> Option<i32> {
+    (host().profile_slot_level)(slot)
 }
 pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUNT]> {
     (host().profile_slot_attributes)(slot)

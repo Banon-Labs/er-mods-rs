@@ -394,6 +394,18 @@ pub enum StatsSlotSource {
     /// This loading window's committed portrait target, i.e. the character on screen. Includes the
     /// user's boot pick, which reaches it through the window latch.
     PortraitWindow(i32),
+    /// The slot this boot is CONFIGURED to autoload, before anything has observed a load.
+    ///
+    /// Deliberately ranked below the window and deliberately NOT a portrait source. A configured
+    /// hint is not an observation, and the portrait window pays for that distinction by rendering
+    /// nothing until a register names a slot (see `portrait_loaded_slot_confirmed`). The stats
+    /// panel's alternative is not "nothing" though -- it is `BestActiveFallback`, a scan that
+    /// returns the HIGHEST-LEVEL slot and has no relationship to the load at all. Measured
+    /// 2026-09-03 (run br-20260903-204517-82d2): slot 4 was configured and loading, and the panel
+    /// rendered slot 0's `angrE RL 100` for the 1.2s before the window latched, because angrE is
+    /// level 100. Between two guesses, the one that names the slot the loader was told to use is
+    /// the one that turns out right.
+    ConfiguredAutoload(i32),
     /// Nothing named a slot: the caller must scan for the best active one.
     BestActiveFallback,
 }
@@ -404,10 +416,14 @@ pub enum StatsSlotSource {
 /// The panel and the portrait must never disagree, so the second term is the WINDOW target rather
 /// than a fresh precedence evaluation -- otherwise the face and the stats under it could name two
 /// different characters within one loading screen.
+///
+/// `configured_autoload` is the third term and applies only while the first two are silent, which
+/// on a boot autoload is the window between the config being read and a register naming the slot.
 #[must_use]
 pub fn loading_screen_stats_slot_source(
     switch_selected_wire: usize,
     window_target: Option<i32>,
+    configured_autoload: Option<i32>,
     slot_count: i32,
 ) -> StatsSlotSource {
     let valid = |slot: i32| (0..slot_count).contains(&slot);
@@ -417,8 +433,11 @@ pub fn loading_screen_stats_slot_source(
             return StatsSlotSource::SwitchSelection(selected);
         }
     }
-    match window_target.filter(|&slot| valid(slot)) {
-        Some(slot) => StatsSlotSource::PortraitWindow(slot),
+    if let Some(slot) = window_target.filter(|&slot| valid(slot)) {
+        return StatsSlotSource::PortraitWindow(slot);
+    }
+    match configured_autoload.filter(|&slot| valid(slot)) {
+        Some(slot) => StatsSlotSource::ConfiguredAutoload(slot),
         None => StatsSlotSource::BestActiveFallback,
     }
 }
