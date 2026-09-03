@@ -493,7 +493,25 @@ WHAT THAT DOES AND DOES NOT SETTLE. It removes the last evidence that this pair 
 a VALID slot: every crash on record now has an invalid slot in it. It does not prove the pair is \
 safe -- that still needs the repeat, which is now finally runnable because the seed picks a real \
 character. Until that run exists the row stays, because refusing a pair costs a feature and \
-co-loading a bad one costs a session."""
+co-loading a bad one costs a session.
+
+THE REPEAT RAN, AND IT FALSIFIES THE WHOLE CORRECTION ABOVE. 2026-09-03, same pair, VALID slot -- \
+`container truth for the configured slot -- slot=0 holds_a_character=true ... occupied=[0]` -- and \
+the game died at `+30436ms` with `exception code=0xc000001d ... addr=0x140010043{game+0x10043}`, \
+the same fault at the same ~30s. So the slot is EXONERATED and this pair is genuinely bad, exactly \
+as the row said before the correction was written.
+
+WHY THE CORRECTION LOOKED RIGHT, so the reasoning error is not repeated. Two runs survived past \
++79s and +88s and both were read as "valid slot, no crash". The second is worthless as evidence: \
+it had the refusal firing, which changes the boot path. The first genuinely had a valid slot -- and \
+the crash is not deterministic per-boot in the way six-for-six suggested, so ONE clean run proves \
+nothing. Two data points were treated as a refutation of six because they arrived after a plausible \
+mechanism had already been formed, which is the failure mode, not the sample size.
+
+WHAT SURVIVES FROM THE CORRECTION: the `er-pick-save.py` bitmap bug is real and independently \
+worth having fixed (`--seed 2073568449` was picking slot 8 of a container with one character), but \
+it does NOT explain this crash and must not be cited as a cause. The mechanism for `game+0x10043` \
+remains UNIDENTIFIED, and the row remains `unresolvable` on its original six-crash evidence."""
 evidence = """crates/er-invasion-warp/src/lib.rs:195 `map_gfx::install_world_map_gfx_hook(base)`; \
 crates/er-invasion-warp/src/lib.rs:197 (local_invasion_filter's SetMultiplayJoinData game detour, \
 crates/er-invasion-warp/src/local_invasion_filter.rs:175); crates/er-invasion-warp/src/lib.rs:235-236 \
