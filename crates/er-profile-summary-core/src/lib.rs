@@ -45,6 +45,11 @@ pub use slot_identity::*;
 pub mod refresh_policy;
 pub use refresh_policy::*;
 
+/// Pure, host-testable: has something overwritten the body-derived records with a different
+/// character, and may we re-assert them?
+pub mod reassert_policy;
+pub use reassert_policy::*;
+
 #[cfg(windows)]
 pub mod face_data;
 #[cfg(windows)]

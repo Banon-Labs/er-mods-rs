@@ -2967,6 +2967,27 @@ pub static PICKED_SUMMARY_REFRESH_STATE: AtomicUsize = AtomicUsize::new(0);
 /// Bitmask of slots whose records the re-read rewrote (bit N = slot N).
 pub static PICKED_SUMMARY_REFRESH_SLOT_MASK: AtomicUsize = AtomicUsize::new(0);
 
+// ---- record drift watch: did something overwrite the body-derived records? -----------------------
+//
+// The container carries two descriptions of a slot -- the `USER_DATA010` summary table the game
+// deserializes, and the BODY that actually loads -- and they can disagree (measured: 6 of 10 slots
+// on `100-Lilbro/ER0000.co2`, run br-20260903-204517-82d2). This DLL writes the body-derived
+// version; the game's own boot read can then overwrite it with the stale one, and the loading
+// screen renders whoever the record names. These make that overwrite visible and counted.
+
+/// Ticks on which the drift watch found the target slot's record naming a DIFFERENT character than
+/// the container's body gives it. **A correct run reports 0.**
+pub static PICKED_SUMMARY_RECORD_DRIFTS: AtomicUsize = AtomicUsize::new(0);
+/// Body-derived record rewrites performed BECAUSE of drift (capped by `REASSERT_MAX_REWRITES`).
+pub static PICKED_SUMMARY_REASSERTS: AtomicUsize = AtomicUsize::new(0);
+/// FNV-1a 64 of the target slot's name in the container BODY, plus its level -- the identity the
+/// drift watch defends. `0` until a container has been read.
+pub static PICKED_SUMMARY_BODY_NAME_HASH: AtomicU64 = AtomicU64::new(0);
+/// Rune Level of the target slot in the container BODY. `0` until a container has been read.
+pub static PICKED_SUMMARY_BODY_LEVEL: AtomicUsize = AtomicUsize::new(0);
+/// `PICKED_SUMMARY_REFRESH_TICKS` at the refresh that armed the watch, plus 1 (`0` = unarmed).
+pub static PICKED_SUMMARY_WATCH_ARMED_TICK: AtomicUsize = AtomicUsize::new(0);
+
 /// Calls into the TITLE-TIME save deserialize `0x14067b290` from the full-read chain.
 ///
 /// **A correct run reports 0.** Non-zero means a save was deserialized at the boot title rather

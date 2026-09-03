@@ -506,14 +506,14 @@ fn a_picked_slot_other_than_zero_drives_the_stats_panel() {
     // 18446744073709551615 -- so the switch term must not claim the answer.
     const SWITCH_UNSET: usize = usize::MAX;
     assert_eq!(
-        loading_screen_stats_slot_source(SWITCH_UNSET, None, SLOTS),
+        loading_screen_stats_slot_source(SWITCH_UNSET, None, None, SLOTS),
         StatsSlotSource::BestActiveFallback
     );
 
     // +1061ms: boot window latches slot 0 from the autoload hint (no source named a slot).
     let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
     assert_eq!(
-        loading_screen_stats_slot_source(SWITCH_UNSET, boot.slot, SLOTS),
+        loading_screen_stats_slot_source(SWITCH_UNSET, boot.slot, None, SLOTS),
         StatsSlotSource::PortraitWindow(0)
     );
 
@@ -522,7 +522,7 @@ fn a_picked_slot_other_than_zero_drives_the_stats_panel() {
     let picked = portrait_window_target_slot_authoritative(boot.slot, false, resolved, true);
     assert!(picked.promoted_by_pick);
     assert_eq!(
-        loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, SLOTS),
+        loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, None, SLOTS),
         StatsSlotSource::PortraitWindow(1),
         "the stats panel must describe the character the user picked, not the boot guess"
     );
@@ -532,7 +532,7 @@ fn a_picked_slot_other_than_zero_drives_the_stats_panel() {
         let boot = portrait_window_target_slot_authoritative(None, false, Some(0), false);
         let picked = portrait_window_target_slot_authoritative(boot.slot, false, Some(slot), true);
         assert_eq!(
-            loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, SLOTS),
+            loading_screen_stats_slot_source(SWITCH_UNSET, picked.slot, None, SLOTS),
             StatsSlotSource::PortraitWindow(slot)
         );
     }
@@ -544,7 +544,7 @@ fn a_picked_slot_other_than_zero_drives_the_stats_panel() {
 fn the_switch_selection_outranks_the_window_and_its_sentinels_do_not() {
     const SLOTS: i32 = 10;
     assert_eq!(
-        loading_screen_stats_slot_source(3, Some(7), SLOTS),
+        loading_screen_stats_slot_source(3, Some(7), None, SLOTS),
         StatsSlotSource::SwitchSelection(3)
     );
     for sentinel in [
@@ -554,18 +554,18 @@ fn the_switch_selection_outranks_the_window_and_its_sentinels_do_not() {
         i32::MAX as usize,
     ] {
         assert_eq!(
-            loading_screen_stats_slot_source(sentinel, Some(7), SLOTS),
+            loading_screen_stats_slot_source(sentinel, Some(7), None, SLOTS),
             StatsSlotSource::PortraitWindow(7),
             "sentinel {sentinel} must fall through, never resolve to a slot"
         );
     }
     // An out-of-range window target is not a slot either.
     assert_eq!(
-        loading_screen_stats_slot_source(usize::MAX, Some(SLOTS), SLOTS),
+        loading_screen_stats_slot_source(usize::MAX, Some(SLOTS), None, SLOTS),
         StatsSlotSource::BestActiveFallback
     );
     assert_eq!(
-        loading_screen_stats_slot_source(usize::MAX, Some(-1), SLOTS),
+        loading_screen_stats_slot_source(usize::MAX, Some(-1), None, SLOTS),
         StatsSlotSource::BestActiveFallback
     );
 }
@@ -915,4 +915,44 @@ fn an_empty_container_yields_neither_bits_nor_characters() {
     let scan = scan_live_records([empty_slot(); 10]);
     assert_eq!(scan.orphaned_mask, 0);
     assert_eq!(scan.characters, 0);
+}
+
+/// THE CONFIGURED AUTOLOAD SLOT OUTRANKS THE HIGHEST-LEVEL SCAN (run br-20260903-204517-82d2).
+///
+/// Slot 4 (`Hero` RL7) was the configured autoload slot and the one that loaded. For the 1.2s
+/// before the portrait window latched, `read_loading_screen_stats` had no switch selection and no
+/// window target, fell through to `BestActiveFallback`, and `best_active_slot()` -- "the ACTIVE
+/// slot holding the most-progressed real character (highest level)" -- answered slot 0, `angrE`
+/// RL 100. The user watched a stats panel for a character that was not loading.
+#[test]
+fn the_configured_autoload_slot_beats_the_highest_level_scan() {
+    const SLOTS: i32 = 10;
+    const SWITCH_UNSET: usize = usize::MAX;
+    assert_eq!(
+        loading_screen_stats_slot_source(SWITCH_UNSET, None, Some(4), SLOTS),
+        StatsSlotSource::ConfiguredAutoload(4),
+        "the configured slot is the one the loader was told to use"
+    );
+    // ...but only while nothing has OBSERVED a slot. Both stronger terms still win outright, so
+    // the panel can never disagree with the face the window committed to.
+    assert_eq!(
+        loading_screen_stats_slot_source(SWITCH_UNSET, Some(2), Some(4), SLOTS),
+        StatsSlotSource::PortraitWindow(2)
+    );
+    assert_eq!(
+        loading_screen_stats_slot_source(6, Some(2), Some(4), SLOTS),
+        StatsSlotSource::SwitchSelection(6)
+    );
+    // An unconfigured or nonsense configured slot keeps the old scan rather than inventing one.
+    assert_eq!(
+        loading_screen_stats_slot_source(SWITCH_UNSET, None, None, SLOTS),
+        StatsSlotSource::BestActiveFallback
+    );
+    for bad in [-1, SLOTS, i32::MIN, i32::MAX] {
+        assert_eq!(
+            loading_screen_stats_slot_source(SWITCH_UNSET, None, Some(bad), SLOTS),
+            StatsSlotSource::BestActiveFallback,
+            "configured slot {bad} is not a slot"
+        );
+    }
 }
