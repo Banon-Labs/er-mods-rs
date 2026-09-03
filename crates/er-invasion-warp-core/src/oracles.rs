@@ -632,6 +632,34 @@ pub fn warp_arrival_within_tolerance(requested: [f32; 3], settled: [f32; 3]) -> 
 mod tests {
     use super::*;
 
+    /// SERIALISES THE THREE TESTS THAT MUTATE THIS MODULE'S PROCESS-GLOBAL PUBLISH STATE.
+    ///
+    /// `publish_document`, `publish_lobby_oracles`, `publish_hunt_oracles` and
+    /// `republish_if_location_matchmaking_changed` all read and write statics --
+    /// `LAST_DOCUMENT_STATUS`, `LAST_DOCUMENT_MATCHMAKING`, and the `INVASION_WARP_*` counters.
+    /// Rust runs the tests in one binary across several threads, so without this the three of
+    /// them interleave on that shared state.
+    ///
+    /// MEASURED, 2026-09-02: `a_counter_that_moves_after_the_sampler_latches...` failed on
+    /// "an unchanged counter set must not rewrite the document" in one `check.sh` run and passed
+    /// in the previous run on the identical tree. The interleaving is exactly that assertion's
+    /// blind spot -- `the_telemetry_document_carries_all_four_location_matchmaking_counters`
+    /// calls `publish_lobby_oracles(5, 2)`, and when that lands between the other test's
+    /// `publish_document` and its first republish check, the counters HAVE changed and the
+    /// republish correctly returns true. The test was right; its isolation was missing.
+    ///
+    /// A plain `Mutex` rather than a lock crate: the only requirement is mutual exclusion, and
+    /// poisoning is recovered from below so one genuine failure reports itself once instead of
+    /// cascading into two more.
+    static PUBLISH_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take [`PUBLISH_STATE`], surviving a poisoning left by an earlier failing test.
+    fn publish_state_guard() -> std::sync::MutexGuard<'static, ()> {
+        PUBLISH_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn every_oracle_name_is_distinct_and_prefixed() {
         let names = [
@@ -670,6 +698,7 @@ mod tests {
 
     #[test]
     fn a_counter_that_moves_after_the_sampler_latches_still_reaches_the_document() {
+        let _serialised = publish_state_guard();
         // THE MEASURED BUG, 2026-08-06. The document was written only by the catalog sampler,
         // which stops at `Latched`. A hunt filter added minutes later left the file reporting
         // zero, and the driver reading it concluded the detour had declined -- a false negative
@@ -694,6 +723,7 @@ mod tests {
 
     #[test]
     fn a_republish_carries_the_samplers_real_phase_not_an_invented_one() {
+        let _serialised = publish_state_guard();
         // Reusing the last real status matters: a document claiming `latched` while the sampler
         // was still `waiting` would misreport the catalog oracle to fix the hunt one.
         publish_document("waiting", "catalog not ready");
@@ -775,6 +805,7 @@ mod tests {
 
     #[test]
     fn the_telemetry_document_carries_all_four_location_matchmaking_counters() {
+        let _serialised = publish_state_guard();
         publish_lobby_oracles(5, 2);
         publish_hunt_oracles(true, 3);
         let document = catalog_oracle_json("sampling", "unit test");
