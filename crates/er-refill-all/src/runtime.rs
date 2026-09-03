@@ -51,11 +51,12 @@ use er_game_base::{
     rva::{GAME_DATA_MAN_GLOBAL_RVA, REPLANISH_ITEMS_FROM_CHEST_RVA, SHOULD_REPLENISH_ITEM_RVA},
 };
 
+use er_hotkey_config::pad::{PadEdge, pad_chord_name};
+
 use crate::{
     config,
     log::refill_log,
     mark::{INSERT_CEILING, MarkOutcome, next_target_state},
-    pad::{PadEdge, pad_chord_name},
 };
 
 /// `CS::ItemReplenishStateTracker::SetState(tracker*, int* itemId, bool state)`. The absolute

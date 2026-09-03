@@ -80,6 +80,18 @@ DEP_PROBES = {
     "build-artifact": lambda root: any(
         (root / "target/x86_64-pc-windows-msvc/release").glob("*.dll")
     ),
+    # THE ONE ARTIFACT A GATE NAMES BY FILE, and it needs its own probe because
+    # `build-artifact` is an ANY-dll test and that is not the same question.
+    # `er-dll-freshness.sh --selftest` attests er_crash_logging.dll specifically (the smallest
+    # forward closure of the shipped shells, so the cheapest source hash to recompute), and it
+    # exits 1 with "no built DLL at ..." when that file is absent. Measured 2026-09-01 in a fresh
+    # worktree: check.sh linked 25 shells LATER in the file than this gate runs, some other run
+    # had left other DLLs behind, so `build-artifact` was true, the gate ran, and it went red
+    # about a missing build rather than about a stale attestation. A gate that cannot run should
+    # be skipped by the ledger, not fail with build advice.
+    "crash-logging-dll": lambda root: (
+        root / "target/x86_64-pc-windows-msvc/release/er_crash_logging.dll"
+    ).exists(),
     # er-game-base's build.rs output, `address_map_1170.rs`, under target/**/out/. Any `cargo
     # check` of the workspace produces it; a bare checkout has it nowhere. This is DISTINCT from
     # build-artifact (a linked release .dll): a `cargo check` makes the first and not the second.
@@ -104,6 +116,17 @@ DEP_PROBES = {
         root / "third_party/ER-Save-File-Readers/testdata/vagabond/save_slots/0.sl2"
     ).exists()
     or bool(os.environ.get("ER_SAVE_CORPUS_ROOT")),
+    # The unpacked per-character corpus (behbnd / anibnd / tae, one directory tree per chr).
+    # Game-derived and enormous, so it is never in the repo. The moveset-table gate regenerates
+    # `crates/er-npc-possess/data/moveset.tbl` against it where it exists and runs its
+    # grammar/invariant half everywhere. The default path is the same literal
+    # `scripts/er-moveset-table-gen.py` uses, which is the source of truth for it.
+    "chr-corpus": lambda root: Path(
+        os.environ.get(
+            "ER_CHR_CORPUS_ROOT",
+            "/home/banon/er-extract/LOOK_HERE_WITCHY_RECURSIVE_20260713/sharded/chr",
+        )
+    ).is_dir(),
     # The Ghidra MCP daemons: local processes over multi-GB projects.
     "ghidra-8765": lambda root: _port_open(8765),
     "ghidra-8767": lambda root: _port_open(8767),

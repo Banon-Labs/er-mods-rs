@@ -592,6 +592,90 @@ the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_sha
 product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
+"er-npc-possess" = """Co-loadable with every other shell here. It claims exactly ONE prologue and \
+nothing else: `CS::CSFeManImp::UpdatePlayerComponents` (1.16.2 `0x140772a80`, 1.17 `0x140773900`), \
+the per-frame HUD vitals pass, detoured so the HP/FP/stamina bars read the possessed creature \
+instead of the body the player walked in as. No other shell in this suite hooks that function or \
+its caller. Everything else it does happens from one recurring `FrameBegin` task.
+
+THE ONE OTHER HOOK, and only once the player asks for something to be DRAWN: hudhook's DX12 \
+`Present`, through `er_build_watermark_core::overlay_host` -- the same host-or-guest arbitration \
+er-build-watermark, er-net-effects and er-invasion-path go through, so the process still has \
+exactly one `Present` hook whoever loaded first. Two things ask, and both are still lazy: opening \
+the in-game creature picker, and starting a possession (which puts the attack-set panel in the \
+corner -- `[hud] pages`, on by default). Pressing nothing and possessing nothing means installing \
+nothing. Both panels draw from `crate::overlay`, which owns the single join; the second trigger \
+exists because `[target] mode = \"lock_on\"` is the default and never opens the picker, so a \
+possession-only session would otherwise have no overlay to draw the panel on. `Present` is a \
+swapchain vtable slot rather than a game prologue, so it needs no [[shared]] row -- the overlay \
+host is the arbitration.
+
+WHAT IT DOES FROM THAT TASK, kept current as the layers land -- the sentence above is the \
+co-loadability claim and the ones here are what it rests on, so they are not the same claim twice. \
+It polls `GetAsyncKeyState` and `XInputGetState`; while something is possessed it WRITES game \
+memory (`ChrCtrl+0x3b0`, `WorldChrManDbg+0xb8`, `ChrExFollowCam+0x468`, and a handful of fields on \
+two `ChrIns`); and it RESOLVES THREE game function addresses, all through `game_rva_named` so an \
+unrecognised build goes quiet rather than jumping into whatever now occupies those bytes. Those \
+three are `PlayAnimationByBehaviorName` (the 2,252 dodges, which have no `W_Event%04d` name for the \
+field write to spell), `WorldChrManImp::SpawnDynamicChr` and `WorldChrManImp::RemoveChrIns` (the \
+`mode = "spawn"` creature, created and removed through the same entries `CSTalkDynamicChrCtrl` \
+uses). Resolving an address to CALL is not claiming a prologue: nothing is patched and no other \
+shell's detour is disturbed. Grabs added neither an address nor a detour -- a grab is an ordinary \
+attack whose `AtkParam_Npc.throwTypeId` is non-zero, and the game's own throw system does the \
+rest. Every write is made only while something is possessed and is undone by `possess::teardown` \
+on release, death, despawn and `DLL_PROCESS_DETACH`.
+
+THE ONE PARAM ROW, AND WHY IT IS NOT THE KIND OF PARAM EDIT THAT BREAKS SEAMLESS. The camera layer \
+patches ONE `LockCamParam` row IN MEMORY for the length of a single possession -- three floats -- \
+and writes the row's original bytes back on release. `regulation.bin` on disk is never opened, so \
+this is not the file-level regulation edit that makes Seamless refuse a session. The row is chosen \
+by `[camera].param_row` (1000 by default, one of the 73 rows the shipped regulation never \
+references) and is re-checked at every possession against the LIVE `NpcParam.lockCameraParamId` and \
+`RideParam.rideCamParamId` tables, so a player running a regulation mod that DOES use it gets a \
+refusal naming the row rather than a stolen camera. It is still a shared write: a second mod \
+patching the same row while a possession is in flight would fight it, which is exactly what the \
+setting exists to resolve.
+
+THAT PROLOGUE IS UNSHARED, AND CHECKED RATHER THAN ASSUMED. No other shell in `me3_shells` \
+detours `UpdatePlayerComponents` or its sole caller `CSFeManImp::Update` (1.16.2 `0x140771bd0`): a \
+scan of every crate for those four RVAs -- both builds, both functions -- returns only \
+er-npc-possess itself. The three shells that live nearest this neighbourhood do not touch it. \
+er-armament-icons READS a param offset it ground-truthed against this function's skill-icon \
+builder and hooks the GFx tile/file-open paths instead; er-player-name-filter hooks the name \
+PRODUCERS reached from `CSFeManImp::UpdateEnemyTags`, a sibling pass; er-save-suppress only \
+observes `CSFeManImp::Update` in prose. `audit-1170-hook-targets.py` OVERLAP is what keeps that \
+true against a future addition landing within 16 bytes.
+
+IT IS A BARE `MhHook` ON PURPOSE, AND MUST STAY ONE. The function's signature is \
+`void UpdatePlayerComponents(CSFeManImp*, float)` -- Ghidra's recovered signature, confirmed in \
+the prologue (`movaps xmm6,xmm1` feeding a `subss` against a delta-time accumulator) and at the \
+call site (`movaps xmm1,xmm6` before the call). `er_hook`'s `UnionFn` is four `usize`s and its own \
+docs say "Not for float-arg or >4-stack-arg targets", so routing this through the hook union would \
+let the compiler clobber `xmm1` before the trampoline ran and feed the HUD's timing accumulator \
+garbage. If a SECOND DLL ever wants this prologue, the fix is not to move this one into the union \
+-- it is to widen the union to a float-carrying signature first, and add a [[shared]] row here.
+
+THE OTHER THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
+DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \
+er-enemynpc-effects -- through the hook union, recorded in the [[shared]] rows above. A fourth \
+claimant is exactly the shape of the collision this table exists for, so this DLL deliberately \
+does not become one: it needs to OBSERVE a keypress, not SUPPRESS it, and polling from the game's \
+own frame task answers that without touching the prologue. `er-refill-all` reads its hotkey the \
+same way for the same reason.
+
+WHAT WOULD CHANGE THAT. A later layer of this mod may need to take an input away from the game \
+rather than merely see it -- driving a possessed character means the player's stick must stop \
+steering the Tarnished. That is a `GetDeviceState` claim, and when it lands it must go through \
+`er_hook::register_shared_hook` (never a bare `MhHook`, which is a second MinHook instance on a \
+prologue three DLLs already share) and gain a [[shared]] row here.
+
+HOTKEY DEFAULTS ARE NOT SHARED WITH ANOTHER SHELL. Keyboard F9 and pad LS+RS; er-refill-all ships \
+Select+Start with no keyboard default, er-enemynpc-effects ships ctrl+alt+c. All three are \
+re-bindable in their own TOML while the game runs, which is the whole reason er-hotkey-config \
+exists. The picker adds F10 plus the four arrow keys and ships every pad binding EMPTY, which is \
+the same no-suppression fact stated as a default: it can see those keys but cannot take them from \
+the game. Whether they collide is a judgement rather than a reading of Elden Ring's binding \
+table, which is why all five are rebindable while the game runs."""
 "er-net-effects" = """Keyboard-selected network SpEffects. Its DirectInput keyboard and mouse \
 `GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
 above); nothing else it installs is claimed by another shell."""

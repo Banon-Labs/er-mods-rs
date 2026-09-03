@@ -1,6 +1,6 @@
-//! Controller chords, which `er-hotkey-config` does not cover.
+//! Controller chords -- the pad half of the hotkey vocabulary.
 //!
-//! That crate's [`Chord`](er_hotkey_config::keys::Chord) is `modifiers + one trigger key`, carried
+//! This crate's [`Chord`](crate::keys::Chord) is `modifiers + one trigger key`, carried
 //! in both Win32 virtual-key and DirectInput scancode numbering. A gamepad has neither numbering
 //! and no notion of a modifier: "Select + Start" is two ordinary buttons held together, so the
 //! natural representation is a BITMASK over `XINPUT_GAMEPAD.wButtons` and every button in it is
@@ -15,10 +15,13 @@
 //! must therefore edge-detect against the previous poll's `wButtons`, and a press shorter than one
 //! poll interval is genuinely invisible. Polling from the game's own menu update (which is where
 //! this DLL reads it) means one poll per rendered frame, so that window is a frame.
-
-// `PadEdge` and `held_in` are consumed by `runtime`, which is windows-only, plus the tests.
-// Scoped to this module and to `dead_code` alone -- not a crate-level blanket.
-#![cfg_attr(not(windows), allow(dead_code))]
+//!
+//! # Why it lives here and not in a DLL
+//!
+//! It was crate-private to `er-refill-all` until `er-npc-possess` needed the identical thing.
+//! Copying it would have made two edge detectors with two chances to reintroduce the
+//! phantom-press-on-rebind bug the tests below pin down, in a crate whose entire reason for
+//! existing is that hotkey handling kept being reinvented differently each time.
 
 /// `XINPUT_GAMEPAD.wButtons` bits. Named here rather than imported so the parser and its tests
 /// build on the host, where the windows-only side of the crate is compiled out.
@@ -91,7 +94,7 @@ const PAD_BUTTONS: &[(&str, u16)] = &[
 
 /// Why a pad chord could not be read, in the words the log line uses.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PadParseError {
+pub enum PadParseError {
     Empty,
     UnknownButton(String),
 }
@@ -107,10 +110,10 @@ impl std::fmt::Display for PadParseError {
 
 /// A set of buttons that must be held together. Zero means "no pad binding".
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PadChord(pub(crate) u16);
+pub struct PadChord(pub u16);
 
 impl PadChord {
-    pub(crate) const fn is_bound(self) -> bool {
+    pub const fn is_bound(self) -> bool {
         self.0 != 0
     }
 
@@ -119,13 +122,13 @@ impl PadChord {
     /// A SUBSET test, not equality: requiring an exact match would mean the chord failed whenever
     /// the player happened to be holding anything else -- and on a pad, resting a thumb on a stick
     /// or nudging the d-pad is not "pressing another button" to the person doing it.
-    pub(crate) const fn held_in(self, buttons: u16) -> bool {
+    pub const fn held_in(self, buttons: u16) -> bool {
         self.is_bound() && buttons & self.0 == self.0
     }
 }
 
 /// `"select+start"` -> the two bits, in any order, any case, spaces ignored.
-pub(crate) fn parse_pad_chord(raw: &str) -> Result<PadChord, PadParseError> {
+pub fn parse_pad_chord(raw: &str) -> Result<PadChord, PadParseError> {
     let mut mask = 0u16;
     let mut named = 0usize;
     for part in raw.split('+') {
@@ -154,7 +157,7 @@ pub(crate) fn parse_pad_chord(raw: &str) -> Result<PadChord, PadParseError> {
 ///
 /// Canonical spelling, not the player's: echoing their text back would show that the file was read
 /// but not that it was UNDERSTOOD, and those are the two cases a log line here has to separate.
-pub(crate) fn pad_chord_name(chord: PadChord) -> String {
+pub fn pad_chord_name(chord: PadChord) -> String {
     if !chord.is_bound() {
         return "(none)".to_owned();
     }
@@ -187,13 +190,13 @@ pub(crate) fn pad_chord_name(chord: PadChord) -> String {
 ///
 /// Holds the previous poll's `wButtons` because XInput has no "pressed since last call" bit.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct PadEdge {
+pub struct PadEdge {
     chord: PadChord,
     was_held: bool,
 }
 
 impl PadEdge {
-    pub(crate) const fn new(chord: PadChord) -> Self {
+    pub const fn new(chord: PadChord) -> Self {
         Self {
             chord,
             was_held: false,
@@ -211,7 +214,7 @@ impl PadEdge {
     /// This is the pad's version of the keyboard rebind rule. The keyboard needs a DISCARDED
     /// `GetAsyncKeyState` read as well, because its low bit has been accumulating since process
     /// start; XInput keeps no such per-thread state, so one honest sample is the whole fix.
-    pub(crate) fn rebind(&mut self, chord: PadChord, buttons: u16) -> bool {
+    pub fn rebind(&mut self, chord: PadChord, buttons: u16) -> bool {
         if chord == self.chord {
             return false;
         }
@@ -221,7 +224,7 @@ impl PadEdge {
     }
 
     /// Feed one `wButtons` sample. True exactly once per press of the whole chord.
-    pub(crate) fn feed(&mut self, buttons: u16) -> bool {
+    pub fn feed(&mut self, buttons: u16) -> bool {
         let held = self.chord.held_in(buttons);
         let edge = held && !self.was_held;
         self.was_held = held;

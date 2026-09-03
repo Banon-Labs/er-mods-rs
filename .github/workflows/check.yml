@@ -301,7 +301,7 @@ jobs:
       #
       # --workspace IS THE LOAD-BEARING FLAG. The workspace sets
       # `default-members = ["crates/er-quickload"]`, so a bare `cargo xwin check`/`build` -- the
-      # form scripts/ci-local-check.sh ends with -- selects that one package and exits 0 in a
+      # form the pre-push path used to end with -- selects that one package and exits 0 in a
       # fraction of a second having compiled nothing else, which reads exactly like a successful
       # incremental build. Both commits that broke the branch landed a CONSUMER without its
       # PRODUCER in crates outside er-quickload's dependency closure at that commit

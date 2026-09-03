@@ -7,14 +7,14 @@
 #   * This clone's `core.hooksPath` was the ABSOLUTE path
 #     /home/banon/projects/er-effects-rs/.githooks, left behind by commit 39a919e0, which renamed
 #     the repository directory to er-mods-rs. Git resolved its hooks directory to somewhere that no
-#     longer existed, so NO hook ran at all -- not the main-push guard, not scripts/ci-local-check.sh
+#     longer existed, so NO hook ran at all -- not the main-push guard, not the gate suite
 #     -- and nothing said so, because a hook that cannot be found is indistinguishable from a hook
 #     that passed.
 #
 #   * Later the same day `core.hooksPath` was UNSET for about ninety minutes. Git then used its
 #     fallback, $GIT_COMMON_DIR/hooks, which is not version-controlled and which held a 537-byte
 #     block-main-only pre-push from 2026-07-27 -- no scripts/check-committed-compiles.sh, no
-#     scripts/ci-local-check.sh. A push reached origin through it. It happened to be green.
+#     the gate suite. A push reached origin through it. It happened to be green.
 #
 # So this asserts, in the order they fail:
 #   1. core.hooksPath is set at all;
@@ -100,7 +100,7 @@ check_fallback() {
 # these hooks are edited often and legitimately, and a gate that forces a digest to be
 # regenerated on every edit gets switched off instead of updated. Every entry here is a script
 # whose ABSENCE is the whole failure -- the 2026-07-27 fallback ran neither
-# check-committed-compiles.sh nor ci-local-check.sh and looked installed for five weeks.
+# check-committed-compiles.sh nor the gate suite and looked installed for five weeks.
 # A hook name with no entry gets the byte-identity checks only; add its calls here when it grows
 # any.
 hook_required_invocations() {
@@ -109,7 +109,7 @@ hook_required_invocations() {
 		printf '%s\n' \
 			scripts/git-pre-push-block-main.sh \
 			scripts/check-committed-compiles.sh \
-			scripts/ci-local-check.sh
+			scripts/check.sh
 		;;
 	pre-commit)
 		printf '%s\n' \
@@ -314,7 +314,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 	# The fixture's pre-push must satisfy check (c) or every POSITIVE arm below turns red for the
 	# wrong reason, so it NAMES the three scripts the real hook runs. It does not run them: what is
 	# under test here is the checker, not the gate.
-	fixture_hook=$'#!/usr/bin/env bash\n# stands in for the real hook, which runs:\n#   scripts/git-pre-push-block-main.sh\n#   scripts/check-committed-compiles.sh\n#   scripts/ci-local-check.sh\nexit 0\n'
+	fixture_hook=$'#!/usr/bin/env bash\n# stands in for the real hook, which runs:\n#   scripts/git-pre-push-block-main.sh\n#   scripts/check-committed-compiles.sh\n#   scripts/check.sh\nexit 0\n'
 	# The MUTANT, in the measured shape of the hazard: `bd hooks install` honours an existing
 	# core.hooksPath and writes shims like this one into it -- here, into version control.
 	beads_shim=$'#!/bin/sh\n# beads git hook (managed by bd)\nexec bd hooks run pre-push "$@"\n'

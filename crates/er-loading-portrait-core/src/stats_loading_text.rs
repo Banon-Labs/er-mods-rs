@@ -120,10 +120,12 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     let slot = match crate::portrait_identity::loading_screen_stats_slot_source(
         sel,
         portrait_loaded_slot_confirmed(),
+        configured_autoload_slot(),
         TITLE_PROFILE_SLOT_COUNT as i32,
     ) {
         crate::portrait_identity::StatsSlotSource::SwitchSelection(slot)
-        | crate::portrait_identity::StatsSlotSource::PortraitWindow(slot) => slot,
+        | crate::portrait_identity::StatsSlotSource::PortraitWindow(slot)
+        | crate::portrait_identity::StatsSlotSource::ConfiguredAutoload(slot) => slot,
         // Only reached when nothing named a slot; the scan is unsafe and is paid for here alone.
         crate::portrait_identity::StatsSlotSource::BestActiveFallback => unsafe {
             best_active_slot()
@@ -143,9 +145,20 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     }
     let rec = profile_summary_record_address(summary, slot_u);
     let (units, len) = unsafe { read_utf16_name_units(rec) };
-    let name = String::from_utf16_lossy(&units[..len]);
-    let level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
+    let record_name = String::from_utf16_lossy(&units[..len]);
+    let record_level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
     let map = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(0);
+    // WHOSE NAME AND LEVEL: THE BODY'S, NOT THE RECORD'S (bd er-effects-rs-ccud).
+    //
+    // The record is filled by `CS::ProfileSummary::Deserialize` from the container's `USER_DATA010`
+    // table; the character that actually loads comes from the slot BODY, and a container can
+    // disagree with itself -- measured 2026-09-03, 6 of 10 slots, including `slot 4 body 'Hero'
+    // lvl 7` against `USER_DATA010 'Vagabond' lvl 9`. The user watched `Vagabond RL 9` sit above
+    // `Hero`'s own attributes for a whole loading screen, because the attributes below already come
+    // from the body cache while these two lines did not. The record still GATES the read (below):
+    // it is what catches picker-row garbage, and a slot with no body cache still falls back to it.
+    let name = profile_slot_name(slot).unwrap_or_else(|| record_name.clone());
+    let level = profile_slot_level(slot).unwrap_or(record_level);
     // THE RECORD MUST BE A CHARACTER BEFORE ANY OF IT IS RENDERED (2026-08-30).
     //
     // These bytes are GAME-OWNED and this mod writes them. The in-game save picker stages its
@@ -168,12 +181,13 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     // So refuse the whole read and draw NOTHING, as the portrait already refuses to publish a head
     // it cannot attribute. The counter is what keeps that blank distinguishable from the feature
     // being switched off.
-    let verdict = crate::portrait_identity::profile_record_character_verdict(&name, level, map);
+    let verdict =
+        crate::portrait_identity::profile_record_character_verdict(&record_name, record_level, map);
     if !verdict.is_character() {
         let n = STATS_RECORD_NOT_A_CHARACTER.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= 4 || n.is_power_of_two() {
             append_autoload_debug(format_args!(
-                "stats-text: DECLINED slot {slot_u} -- its live ProfileSummary record is not a character ({}) name={name:?} level={level} map=0x{map:08x} #{n}; drawing nothing rather than a wrong panel",
+                "stats-text: DECLINED slot {slot_u} -- its live ProfileSummary record is not a character ({}) name={record_name:?} level={record_level} map=0x{map:08x} #{n}; drawing nothing rather than a wrong panel",
                 verdict.tag()
             ));
         }

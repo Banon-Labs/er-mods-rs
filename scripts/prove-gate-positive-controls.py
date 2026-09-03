@@ -1191,7 +1191,7 @@ def _hooks_content():
         "# fixture stand-in; the real hook runs these three:\n"
         "bash scripts/git-pre-push-block-main.sh\n"
         "bash scripts/check-committed-compiles.sh\n"
-        "exec bash scripts/ci-local-check.sh\n"
+        "exec bash scripts/check.sh\n"
     )
     beads_shim = "#!/bin/sh\n# beads git hook (managed by bd)\nexec bd hooks run pre-push \"$@\"\n"
 

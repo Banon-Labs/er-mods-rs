@@ -19,6 +19,7 @@ use er_game_base::profile_summary::{
 };
 
 use crate::host::game_data_man_ptr_or_null;
+use crate::reassert_policy::{RecordIdentity, name_hash_utf16};
 use crate::slot_identity::record_is_real_character;
 
 /// A null game pointer. Named after the product constant the moved code read
@@ -123,4 +124,39 @@ pub unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usize) {
         profile_level,
         profile_name_len,
     )
+}
+
+/// The NAME + LEVEL identity of one live record, for the drift watch.
+///
+/// Separate from [`profile_slot_fingerprint`] because that answers "is this a character" and hands
+/// back a name LENGTH -- two different names of the same length read as identical to it, which is
+/// exactly the comparison this must not get wrong. The name is hashed rather than returned so the
+/// caller can hold it in an atomic and compare it every tick without allocating.
+///
+/// # Safety
+///
+/// No precondition: every read is fault-guarded, so an unallocated summary or an out-of-range slot
+/// returns the default (not-a-character) identity rather than faulting.
+pub unsafe fn record_identity(slot: i32) -> RecordIdentity {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    if !(PROFILE_SLOT_INDEX_ZERO..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        return RecordIdentity::default();
+    }
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == NULL {
+        return RecordIdentity::default();
+    }
+    let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
+    if summary == NULL {
+        return RecordIdentity::default();
+    }
+    let rec = profile_summary_record_address(summary, slot as usize);
+    let (units, len) = unsafe { read_utf16_name_units(rec) };
+    let level = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }
+        .map(|value| value as u32)
+        .unwrap_or(0);
+    RecordIdentity {
+        name_hash: name_hash_utf16(&units[..len]),
+        level,
+    }
 }

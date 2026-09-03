@@ -9,7 +9,7 @@
 #   2. scripts/hooks-fallback-shim -> $GIT_COMMON_DIR/hooks/<name>, for each hook in scripts/hooks/.
 #      This is the directory git uses when core.hooksPath is UNSET, and it is not version
 #      controlled. It held a 537-byte block-main-only pre-push from 2026-07-27 which ran neither
-#      scripts/check-committed-compiles.sh nor scripts/ci-local-check.sh; on 2026-08-31 a push
+#      scripts/check-committed-compiles.sh nor scripts/check.sh; on 2026-08-31 a push
 #      reached origin through it while core.hooksPath was briefly gone. core.hooksPath is not a
 #      key this repo owns alone -- beads writes it too (`bd hooks install|uninstall`, `bd doctor`;
 #      see the header of scripts/hooks-fallback-shim for the binary's own strings) -- so the

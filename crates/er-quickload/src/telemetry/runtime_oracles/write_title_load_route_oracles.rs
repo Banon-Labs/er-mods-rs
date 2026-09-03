@@ -20,6 +20,16 @@
 ///     tried.
 ///   * `oracle_picked_summary_slot_mask` is which slots the re-read rewrote (bit N = slot N).
 ///
+/// The drift pair is the loading-screen identity oracle (bd er-effects-rs-ccud):
+///   * `oracle_picked_summary_record_drifts` MUST be 0 for a run whose records were never
+///     overwritten after we wrote them. Non-zero means something -- the game's own boot
+///     `CS::ProfileSummary::Deserialize` is the known one -- replaced the body-derived records with
+///     the container's stale `USER_DATA010` table, which is what puts a DIFFERENT character's face
+///     and stats on the loading screen.
+///   * `oracle_picked_summary_reasserts` counts the corrections made in response, capped at
+///     `REASSERT_MAX_REWRITES`. `reasserts == drifts` means every drift was corrected; a value
+///     above the cap means the correction lost and the screen is showing record identity.
+///
 /// `oracle_title_time_deser_last_slot` is -1 when no title-time deserialize ever ran.
 fn write_title_load_route_oracles(body: &mut String) {
     use er_telemetry_core::counters as ttctr;
@@ -27,10 +37,13 @@ fn write_title_load_route_oracles(body: &mut String) {
     let last_slot = ttctr::TITLE_TIME_DESER_LAST_SLOT.load(TtOrd::SeqCst);
     let last_slot_i: i64 = last_slot as i64 - 1;
     body.push_str(&format!(
-        "  \"oracle_title_time_deser_calls\": {},\n  \"oracle_title_time_deser_last_slot\": {last_slot_i},\n  \"oracle_picked_summary_state\": {},\n  \"oracle_picked_summary_attempts\": {},\n  \"oracle_picked_summary_slot_mask\": {},\n",
+        "  \"oracle_title_time_deser_calls\": {},\n  \"oracle_title_time_deser_last_slot\": {last_slot_i},\n  \"oracle_picked_summary_state\": {},\n  \"oracle_picked_summary_attempts\": {},\n  \"oracle_picked_summary_slot_mask\": {},\n  \"oracle_picked_summary_record_drifts\": {},\n  \"oracle_picked_summary_reasserts\": {},\n  \"oracle_picked_summary_body_level\": {},\n",
         ttctr::TITLE_TIME_DESER_CALLS.load(TtOrd::SeqCst),
         ttctr::PICKED_SUMMARY_REFRESH_STATE.load(TtOrd::SeqCst),
         ttctr::PICKED_SUMMARY_REFRESH_ATTEMPTS.load(TtOrd::SeqCst),
         ttctr::PICKED_SUMMARY_REFRESH_SLOT_MASK.load(TtOrd::SeqCst),
+        ttctr::PICKED_SUMMARY_RECORD_DRIFTS.load(TtOrd::SeqCst),
+        ttctr::PICKED_SUMMARY_REASSERTS.load(TtOrd::SeqCst),
+        ttctr::PICKED_SUMMARY_BODY_LEVEL.load(TtOrd::SeqCst),
     ));
 }

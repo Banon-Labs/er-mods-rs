@@ -142,10 +142,22 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 	}
 
 	# er-crash-logging has the smallest forward closure of the shipped shells, so its source
-	# hash is the cheapest to recompute; any built DLL would do.
+	# hash is the cheapest to recompute; any built DLL would do. A REAL one is required, and a
+	# placeholder file was tried and does not work: `er-dll-provenance.py write` fingerprints the
+	# artifact's CODE through `dll-code-fingerprint.py`, which parses the PE header and raises on
+	# anything that is not one.
+	#
+	# SO THE ORDER MATTERS, and check.sh now runs this AFTER `check-rust-build.sh` links the 26
+	# shells rather than ~900 lines before it. Measured 2026-09-01: in a fresh agent worktree --
+	# empty target/, nothing built yet -- this exited 1 with "no built DLL" while the change under
+	# test was fine, red at check.sh line 1643 for want of an artifact produced at line 1660. A
+	# gate that goes red on a clean checkout for a reason unrelated to the change is one people
+	# learn to read past.
 	_erdf_src="$_ERDF_ROOT/target/x86_64-pc-windows-msvc/release/er_crash_logging.dll"
 	if [[ ! -f "$_erdf_src" ]]; then
 		echo "er-dll-freshness --selftest: no built DLL at $_erdf_src"
+		echo "  It needs a real PE: the provenance record it exercises fingerprints the code"
+		echo "  section, so a placeholder file fails to parse rather than standing in."
 		echo "  Build one first: scripts/er-build-dlls.sh er-crash-logging"
 		exit 1
 	fi

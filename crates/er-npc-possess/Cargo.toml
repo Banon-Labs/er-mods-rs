@@ -1,0 +1,53 @@
+[package]
+name = "er-npc-possess"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_npc_possess"
+crate-type = ["cdylib"]
+
+# The "become an NPC" mod: the config file, the hotkeys, the possession engine, the moveset and
+# the in-game creature picker. It claims NO GAME PROLOGUE -- the input is polled from a FrameBegin
+# game task (`GetAsyncKeyState` + `XInputGetState`), the same hook-free path `er-refill-all`
+# uses -- so it needs no hook-union row. The one hook it can install is hudhook's `Present`, on
+# the swapchain rather than the game image, and only once the picker is opened.
+#
+# Tier A only (zero external deps, host-buildable): the config parser, the reload decision, the
+# possession state machine and the engine seam are all `cargo test`-able on Linux.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+# The `repr(C, align(16))` FloatVector4 and its alignment test. Shared rather than redeclared: the
+# alignment is not decoration -- `CSChrPhysicsModule::ForceSetPosition`, which the co-location
+# proxy drain calls, loads its argument with MOVAPS and #GPs on an unaligned address -- and a
+# duplicated `repr` whose whole point is an invariant nobody would notice was missing is exactly
+# the kind of copy that goes wrong silently.
+er-invasion-warp-core = { path = "../er-invasion-warp-core" }
+# Key names, the reload decision, and the pad-chord type. Host-buildable, so the config and
+# binding logic stay covered by `cargo test`.
+er-hotkey-config = { path = "../er-hotkey-config" }
+
+[target.'cfg(windows)'.dependencies]
+# The MinHook wrapper, for the crate's ONE detour: CSFeManImp::UpdatePlayerComponents, which is
+# what points the HP/FP/stamina bars at the possessed creature. Windows-only because it compiles
+# MinHook's C source; the HUD layer's offsets, arithmetic and report are host-testable siblings
+# that do not depend on it.
+er-hook = { path = "../er-hook" }
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# The one-imgui-host-per-process arbitration, for the in-game creature picker. This DLL HOSTS the
+# overlay if it is the first to want one and draws as a GUEST otherwise; either way exactly one
+# `Present` hook exists in the process. The install is lazy -- nothing happens until the picker
+# is opened -- so a session that never presses that key still hooks nothing at all.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[lints]
+workspace = true

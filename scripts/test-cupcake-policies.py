@@ -47,13 +47,13 @@ OPA_TEST_TIMEOUT_SECONDS = 10.0
 # AssertionError raised by an unrelated runner.
 #
 # COVERAGE, checked rather than assumed: when this call was removed, neither
-# `.github/workflows/check.yml` nor `scripts/ci-local-check.sh` ran check.sh, so simply deleting
+# `.github/workflows/check.yml` nor the pre-push hook ran check.sh, so simply deleting
 # it would have silently dropped delivered-shape coverage from CI. Both were given the gate
 # directly instead, in both its forms -- `--selftest` (proves it rejects a fictional fixture) and
 # live (the real contract) are not the same run and neither substitutes for the other.
 # check.yml has since been changed to run check.sh itself, and its hand-copied gate steps -- these
 # two among them -- were removed with it, because a hand-copied subset is what let ~215 gates go
-# unrun in CI in the first place. ci-local-check.sh still does not run check.sh, so its copy is
+# unrun in CI in the first place. Both now run check.sh (2026-09-03), so its copy is
 # still the only delivered-shape coverage there and must stay.
 
 # Assembled rather than written whole, so this FILE is not itself denied by the

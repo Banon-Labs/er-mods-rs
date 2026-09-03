@@ -26,8 +26,24 @@
 //! would also re-deserialize GameSettings, the key config and the net-penalty state at the title),
 //! this rebuilds the records directly from the staged container's own bytes, through the SAME
 //! writer the System>Quit foreign-save preview already uses -- name, level, play time, rune memory,
-//! map, `PlaceName`, `FaceData` and `ChrAsm` per slot, occupancy included. The staged container is
-//! what the game itself will read, so the records and the bodies agree by construction.
+//! map, `PlaceName`, `FaceData` and `ChrAsm` per slot, occupancy included. It builds them from each
+//! slot's BODY, which is what deserializes into the character.
+//!
+//! # The records and the bodies do NOT "agree by construction"
+//!
+//! This doc used to claim they did, on the grounds that both come from the staged container. A
+//! container holds two independent descriptions of a slot -- the `USER_DATA010` table the game's
+//! own read deserializes, and the body -- and they can disagree; measured 2026-09-03 on
+//! `100-Lilbro/ER0000.co2`, 6 of 10 slots did, including the one that was loading (`slot 4 body
+//! 'Hero' lvl 7` vs `USER_DATA010 'Vagabond' lvl 9`). Two things follow, and both are implemented
+//! below rather than assumed:
+//!
+//! * a record that fingerprints REAL is not evidence that the summary is CORRECT, so the native
+//!   fast path verifies against the body instead of accepting realness as final;
+//! * our rewrite is not necessarily the last write. The game's boot ProfileSummary read landed
+//!   617ms after ours in run br-20260903-204517-82d2 and replaced every record, and the loading
+//!   screen then showed `Vagabond`'s face, name and level under `Hero`'s load. See
+//!   [`crate::reassert_policy`] for the bounded drift watch that answers it (bd er-effects-rs-ccud).
 //!
 //! It deliberately does NOT call the profile-renderer refresh: that AVs when the renderer table has
 //! not been built yet (`0x9aa6d4`, observed), and at the boot title it has not.
@@ -41,7 +57,12 @@ use crate::host::{
     active_save_file_for_system_quit, append_autoload_debug, direct_save_file_source_active,
     load_profile_slot_caches_from_bytes, native_fullread_slot,
 };
-use crate::live_records::{profile_slot_fingerprint, system_quit_profile_summary_ptr};
+use crate::live_records::{
+    profile_slot_fingerprint, record_identity, system_quit_profile_summary_ptr,
+};
+use crate::reassert_policy::{
+    REASSERT_MAX_REWRITES, ReassertStep, RecordIdentity, name_hash_utf16, reassert_step,
+};
 use crate::refresh_policy::{RefreshStep, refresh_step};
 use crate::save_bytes_records::write_profile_summary_records_from_save_bytes;
 
@@ -53,10 +74,15 @@ pub const PICKED_SUMMARY_STATE_NATIVE_READ: usize = 1;
 /// [`PICKED_SUMMARY_REFRESH_STATE`]: this DLL re-read the staged container at the title.
 pub const PICKED_SUMMARY_STATE_REREAD: usize = 2;
 
+pub use er_telemetry_core::counters::PICKED_SUMMARY_BODY_LEVEL;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_BODY_NAME_HASH;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_REASSERTS;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_RECORD_DRIFTS;
 pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_ATTEMPTS;
 pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_SLOT_MASK;
 pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_STATE;
 pub use er_telemetry_core::counters::PICKED_SUMMARY_REFRESH_TICKS;
+pub use er_telemetry_core::counters::PICKED_SUMMARY_WATCH_ARMED_TICK;
 
 /// Does the slot a direct-file (picked / loose `save_file`) source will load hold a REAL character
 /// in the live `CS::ProfileSummary`?
@@ -83,18 +109,19 @@ pub fn refresh_direct_source_profile_summary() -> bool {
     }
     let state = PICKED_SUMMARY_REFRESH_STATE.load(Ordering::SeqCst);
     if state != 0 {
+        // NOT DONE -- WATCHING. The refresh used to return here and never look again, which is
+        // what let the game's own boot ProfileSummary read overwrite our body-derived records
+        // 617ms later and put another character's face and stats on the loading screen (run
+        // br-20260903-204517-82d2, bd er-effects-rs-ccud).
+        unsafe { watch_target_record_for_drift() };
         return true;
     }
-    if direct_source_slot_summary_real() {
-        // The boot picker's ordinary path: the held save-data ShowProgressJob passed through after
-        // the pick and the game read the redirected container itself. Nothing to rebuild.
-        PICKED_SUMMARY_REFRESH_STATE.store(PICKED_SUMMARY_STATE_NATIVE_READ, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "picked-summary: live ProfileSummary already describes the picked container (slot {} fingerprints real) -- native Continue row is usable, no re-read needed",
-            native_fullread_slot()
-        ));
-        return true;
-    }
+    // The old fast path accepted `direct_source_slot_summary_real()` as final: a record that
+    // fingerprints REAL was taken to mean the game's own read had populated the summary correctly.
+    // It means no such thing. `USER_DATA010` -- the table that read deserializes -- and the slot
+    // BODY that actually loads are two independent descriptions of a slot, and a container can
+    // disagree with itself (measured: 6 of 10 slots). So the container is read either way, and the
+    // rewrite is skipped only once the BODY and the record have been compared and agree.
     let tick = PICKED_SUMMARY_REFRESH_TICKS.fetch_add(1, Ordering::SeqCst);
     let attempts = PICKED_SUMMARY_REFRESH_ATTEMPTS.load(Ordering::SeqCst);
     let RefreshStep::Attempt(attempt) = refresh_step(tick, attempts) else {
@@ -149,25 +176,40 @@ unsafe fn attempt_profile_summary_reread(attempt: usize) -> bool {
         ));
         return false;
     }
-    // Captured BEFORE the rewrite: the writer uses it as a structural template for any slot whose
-    // visual blocks it cannot locate in the container.
-    let snapshot =
-        unsafe { core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES) }
-            .to_vec();
-    let (mask, _stats) =
-        unsafe { write_profile_summary_records_from_save_bytes(base, summary, &snapshot, &bytes) };
-    if mask == 0 {
+    let slot = native_fullread_slot();
+    // THE IDENTITY THE BODY GIVES THIS SLOT -- captured before anything is written, and kept, because
+    // it is what the drift watch defends for the rest of the boot. The body is the truth about what
+    // will load; `USER_DATA010` is only what the game's own summary read believes.
+    let body = body_identity(&bytes, slot);
+    arm_record_watch(body);
+    if let Some(body) = body {
+        let live = unsafe { record_identity(slot) };
+        if live == body {
+            // The game's own boot read already agrees with the body, so there is nothing to correct
+            // and the destructive ten-record rewrite is skipped. The caches are still refilled from
+            // these bytes -- the rows and the loading-screen stats line read those, not the records.
+            let decoded = load_profile_slot_caches_from_bytes(&bytes, "autoload picked save");
+            PICKED_SUMMARY_REFRESH_STATE.store(PICKED_SUMMARY_STATE_NATIVE_READ, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "picked-summary: live ProfileSummary AGREES with the container body for target slot {slot} (level={} name_hash=0x{:016x}) -- native Continue row is usable, no rewrite needed; caches={decoded}/10",
+                body.level, body.name_hash
+            ));
+            return true;
+        }
+        append_autoload_debug(format_args!(
+            "picked-summary: attempt {attempt} -- target slot {slot} record (level={} name_hash=0x{:016x}) DISAGREES with the container body (level={} name_hash=0x{:016x}); rewriting the records from the bodies",
+            live.level, live.name_hash, body.level, body.name_hash
+        ));
+    }
+    let Some((mask, decoded)) = (unsafe { rewrite_records_from_bytes(base, summary, &bytes) })
+    else {
         append_autoload_debug(format_args!(
             "picked-summary: attempt {attempt} FAILED -- staged container '{}' has no readable character slots; the native Continue row stays unusable",
             path.display()
         ));
         return false;
-    }
-    // The rows and the loading-screen stats line read these caches, not the records, so a rebuilt
-    // summary with stale caches shows the picked character's level under the previous save's name.
-    let decoded = load_profile_slot_caches_from_bytes(&bytes, "autoload picked save");
+    };
     PICKED_SUMMARY_REFRESH_SLOT_MASK.store(mask, Ordering::SeqCst);
-    let slot = native_fullread_slot();
     let (real, map, level, name_len) = unsafe { profile_slot_fingerprint(slot) };
     if !real {
         append_autoload_debug(format_args!(
@@ -182,4 +224,163 @@ unsafe fn attempt_profile_summary_reread(attempt: usize) -> bool {
         path.display()
     ));
     true
+}
+
+/// The name+level a container's slot BODY gives, or `None` when the slot holds no readable
+/// character. This is the same pair `record_identity` reads out of the live record, hashed the same
+/// way, so the two are directly comparable.
+fn body_identity(bytes: &[u8], slot: i32) -> Option<RecordIdentity> {
+    let slot = usize::try_from(slot).ok()?;
+    let name = er_save_loader::stats::all_slot_names(bytes)
+        .get(slot)?
+        .clone()?;
+    let level = er_save_loader::stats::all_slot_stats(bytes)
+        .get(slot)?
+        .as_ref()?
+        .level;
+    let level = u32::try_from(level).ok()?;
+    let identity = RecordIdentity {
+        name_hash: name_hash_utf16(&name.encode_utf16().collect::<Vec<u16>>()),
+        level,
+    };
+    identity.is_character().then_some(identity)
+}
+
+/// Publish the identity the drift watch defends, and arm the watch at the current tick.
+fn arm_record_watch(body: Option<RecordIdentity>) {
+    let body = body.unwrap_or_default();
+    PICKED_SUMMARY_BODY_NAME_HASH.store(body.name_hash, Ordering::SeqCst);
+    PICKED_SUMMARY_BODY_LEVEL.store(body.level as usize, Ordering::SeqCst);
+    // +1 so that "armed" is distinguishable from tick 0, which is a real tick.
+    PICKED_SUMMARY_WATCH_ARMED_TICK.store(
+        PICKED_SUMMARY_REFRESH_TICKS.load(Ordering::SeqCst) + 1,
+        Ordering::SeqCst,
+    );
+}
+
+/// The identity the watch is defending, or `None` while nothing has read a container.
+fn watched_body_identity() -> Option<RecordIdentity> {
+    let body = RecordIdentity {
+        name_hash: PICKED_SUMMARY_BODY_NAME_HASH.load(Ordering::SeqCst),
+        level: PICKED_SUMMARY_BODY_LEVEL.load(Ordering::SeqCst) as u32,
+    };
+    body.is_character().then_some(body)
+}
+
+/// Rewrite all ten records from a container's bodies. Returns `(slot mask, caches decoded)`, or
+/// `None` when the container yielded no writable slot.
+///
+/// # Safety
+///
+/// `summary` must be the LIVE `CS::ProfileSummary` allocation and `base` the running game module
+/// base: this zeroes and rewrites ten records through raw pointers. Game thread only.
+unsafe fn rewrite_records_from_bytes(
+    base: usize,
+    summary: usize,
+    bytes: &[u8],
+) -> Option<(usize, usize)> {
+    // Captured BEFORE the rewrite: the writer uses it as a structural template for any slot whose
+    // visual blocks it cannot locate in the container.
+    let snapshot =
+        unsafe { core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES) }
+            .to_vec();
+    let (mask, _stats) =
+        unsafe { write_profile_summary_records_from_save_bytes(base, summary, &snapshot, bytes) };
+    if mask == 0 {
+        return None;
+    }
+    // The rows and the loading-screen stats line read these caches, not the records, so a rebuilt
+    // summary with stale caches shows the picked character's level under the previous save's name.
+    let decoded = load_profile_slot_caches_from_bytes(bytes, "autoload picked save");
+    Some((mask, decoded))
+}
+
+/// Has something overwritten the target slot's record with a different character since the refresh?
+///
+/// Called on every autoload tick once the refresh has resolved. The check itself is two guarded
+/// reads and a hash of at most seventeen UTF-16 units -- cheap enough per frame; the CORRECTION is
+/// the expensive part and is capped by `REASSERT_MAX_REWRITES`.
+///
+/// # Safety
+///
+/// No precondition: every game read is fault-guarded and the rewrite re-resolves the summary
+/// pointer itself. Game thread only, like everything else that writes these records.
+unsafe fn watch_target_record_for_drift() {
+    let tick = PICKED_SUMMARY_REFRESH_TICKS.fetch_add(1, Ordering::SeqCst);
+    let armed = PICKED_SUMMARY_WATCH_ARMED_TICK.load(Ordering::SeqCst);
+    if armed == 0 {
+        return;
+    }
+    let slot = native_fullread_slot();
+    let live = unsafe { record_identity(slot) };
+    let rewrites = PICKED_SUMMARY_REASSERTS.load(Ordering::SeqCst);
+    match reassert_step(
+        watched_body_identity(),
+        live,
+        rewrites,
+        tick.saturating_sub(armed - 1),
+    ) {
+        ReassertStep::Hold => {}
+        ReassertStep::Exhausted => {
+            if PICKED_SUMMARY_REASSERTS.swap(REASSERT_MAX_REWRITES + 1, Ordering::SeqCst)
+                <= REASSERT_MAX_REWRITES
+            {
+                append_autoload_debug(format_args!(
+                    "picked-summary: record drift on slot {slot} persists after {REASSERT_MAX_REWRITES} re-asserts -- giving up; the loading-screen portrait and stats will describe record identity (level={} name_hash=0x{:016x}), not the body that loads",
+                    live.level, live.name_hash
+                ));
+            }
+        }
+        ReassertStep::Rewrite(n) => {
+            let drifts = PICKED_SUMMARY_RECORD_DRIFTS.fetch_add(1, Ordering::SeqCst) + 1;
+            PICKED_SUMMARY_REASSERTS.store(n, Ordering::SeqCst);
+            unsafe { reassert_body_records(slot, live, n, drifts) };
+        }
+    }
+}
+
+/// Re-read the staged container and rewrite the records from its bodies, because something replaced
+/// them. Logged loudly every time: a silent correction here would hide the writer that caused it.
+///
+/// # Safety
+///
+/// Game thread only; the summary pointer is re-resolved and null-checked here rather than trusted
+/// from the earlier refresh, because the allocation can be freed and replaced between them.
+unsafe fn reassert_body_records(slot: i32, live: RecordIdentity, n: usize, drifts: usize) {
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == NULL_SUMMARY {
+        return;
+    }
+    let Some(path) = active_save_file_for_system_quit() else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        append_autoload_debug(format_args!(
+            "picked-summary: RE-ASSERT #{n} aborted -- staged container '{}' unreadable",
+            path.display()
+        ));
+        return;
+    };
+    let Some((mask, decoded)) = (unsafe { rewrite_records_from_bytes(base, summary, &bytes) })
+    else {
+        append_autoload_debug(format_args!(
+            "picked-summary: RE-ASSERT #{n} aborted -- staged container '{}' has no readable character slots",
+            path.display()
+        ));
+        return;
+    };
+    PICKED_SUMMARY_REFRESH_SLOT_MASK.store(mask, Ordering::SeqCst);
+    let now = unsafe { record_identity(slot) };
+    append_autoload_debug(format_args!(
+        "picked-summary: *** RECORD DRIFT #{drifts} -- RE-ASSERTED the container's bodies *** slot {slot} had been overwritten with level={} name_hash=0x{:016x}; the body says level={} name_hash=0x{:016x}; rewrite #{n} restored slots mask=0x{mask:x} caches={decoded}/10 -> record now level={} name_hash=0x{:016x}. Something else writes these records after we do (the game's own boot ProfileSummary read is the known one) and the loading-screen portrait + stats read whatever is there.",
+        live.level,
+        live.name_hash,
+        watched_body_identity().unwrap_or_default().level,
+        watched_body_identity().unwrap_or_default().name_hash,
+        now.level,
+        now.name_hash
+    ));
 }

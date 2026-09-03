@@ -36,6 +36,7 @@ set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
+
 # --- who may run this, and how many at once -------------------------------------------------
 # BOTH REFUSALS BELOW ARE MEASUREMENTS, NOT POLICY PREFERENCES. On 2026-09-02 three subagents
 # dispatched to do reverse engineering each ran ~72 minutes. The research was not the cost: the
@@ -392,6 +393,18 @@ _check_summary() {
 	echo "per-step state (passed / FAILED / INCONCLUSIVE / SKIPPED / NOT RUN):"
 	printf '%s' "$table"
 
+	# DID THIS SUITE DAMAGE THE CHECKOUT IT WAS CHECKING? Snapshotted by the preflight below the
+	# preamble marker. Counted as a failure before the rc decision, because a suite that disarms
+	# the hooks or bares the repo has done more harm than any finding it could have reported.
+	#
+	# `declare -F` because scripts/test-check-sh-accumulates.py lifts THIS function out of THIS
+	# file and runs it over synthetic suites that never source the guard -- an unconditional call
+	# there fails every one of its cases on a missing function. It cannot silently skip in a real
+	# run: the preflight asserts the function exists immediately after sourcing it, and refuses.
+	if declare -F gate_config_report >/dev/null; then
+		gate_config_report || failed=$((failed + 1))
+	fi
+
 	if [[ $_check_reached_end -ne 1 ]]; then
 		echo
 		echo "!! THE SUITE DID NOT REACH THE END. The $not_run step(s) marked NOT RUN above have"
@@ -429,6 +442,62 @@ _check_summary() {
 }
 trap _check_summary EXIT
 # -------------------------------------------------------------------------------------------
+
+# --- preflight, inherited from scripts/ci-local-check.sh, DELETED 2026-09-03 -----------------
+#
+# BELOW the accumulation preamble on purpose: scripts/test-check-sh-accumulates.py lifts
+# everything above the marker line and drives it over synthetic suites in a temp directory,
+# where neither vendor/minhook nor the guard file exists. Preflight that refuses in that
+# fixture would fail all sixteen of its cases for reasons unrelated to accumulation.
+# That file was the pre-push hook's own 13-gate list while this file held 153, so a gate added
+# here became push-invisible the moment it was written and CI was the first place it ever ran.
+# One violation reached origin that way (check-fnv1a-owner.py, PR #398). The hook now runs THIS
+# file, which makes the two sets the same set by construction rather than by anyone maintaining a
+# list. Two things it carried had to survive the deletion, and they are both preambles, not gates.
+
+# 1. MINHOOK, because a `git worktree` checkout starts without it. `vendor/` is gitignored, so an
+#    agent sandbox under `.claude/worktrees/` or a `.worktrees/` lab has no MinHook while the main
+#    checkout it was made from already does -- and this file is now what a push runs, so the first
+#    thing such a worktree would otherwise learn is that its push is refused. The shared git dir
+#    names that main checkout exactly, so link its vendor tree in rather than re-cloning ~1MB of C.
+#    Fail closed and unchanged when the link cannot be made: a missing MinHook breaks the
+#    cross-compile gates below, and a skipped cross-compile is not a pass.
+if [[ ! -f "$repo_root/vendor/minhook/src/buffer.c" ]]; then
+	_check_main_checkout=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+	_check_main_checkout=${_check_main_checkout%/.git}
+	if [[ -n "$_check_main_checkout" ]] && [[ "$_check_main_checkout" != "$repo_root" ]] &&
+		[[ -f "$_check_main_checkout/vendor/minhook/src/buffer.c" ]]; then
+		mkdir -p "$repo_root/vendor"
+		ln -sfn "$_check_main_checkout/vendor/minhook" "$repo_root/vendor/minhook"
+		echo "[check.sh] git worktree: linked vendor/minhook -> $_check_main_checkout/vendor/minhook" >&2
+	fi
+fi
+if [[ ! -f "$repo_root/vendor/minhook/src/buffer.c" ]]; then
+	cat >&2 <<'EOF'
+check.sh: REFUSED -- missing vendor/minhook/src/buffer.c
+
+CI checks it out with:
+  git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
+
+A git worktree normally self-heals here by linking the main checkout's vendor directory; reaching
+this message from one means that checkout has no MinHook either, so clone it there first.
+EOF
+	exit 2
+fi
+
+# 2. THE GATE MUST NOT DAMAGE THE THING IT GATES. The logic lives in its own file because
+#    scripts/test-check-config-guard.sh drives it against fixture repositories and must drive the
+#    REAL text rather than a copy that can drift; the reasoning and the 2026-08-31 measurement are
+#    in that file's header. The verdict is applied by _check_summary, below.
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+source "$repo_root/scripts/check-gate-config-guard.sh"
+# The summary calls this through `declare -F` so the accumulation fixture can lift it; that is a
+# tolerance for the fixture, NOT for a real run, so refuse here if the source did not define it.
+if ! declare -F gate_config_report >/dev/null || ! declare -F gate_config_snapshot >/dev/null; then
+	echo "check.sh: REFUSED -- scripts/check-gate-config-guard.sh defined no gate_config_* functions." >&2
+	exit 2
+fi
+gate_config_snapshot "$repo_root"
 
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
 # THE METER ON THE METERS. Almost every gate below is prefaced by its own `--selftest`, and the
@@ -1133,6 +1202,27 @@ python3 "$repo_root/scripts/check-double-resolved-hook-targets.py" --selftest
 # without the two gitignored images.
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" --selftest
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
+# THE MAPPER'S OWN SELFTEST, wired 2026-09-01; it had existed for weeks and was invoked by nothing.
+# It asserts three things no other gate does. (1) The two mappings established by reading the LIVE
+# 1.17 process are re-derived from bytes alone. (2) `0x1409a5810` is the 39th of 51 shape matches
+# for `0x1409a4670`, which is why `CANDIDATE_CEILING` is not 9 -- the old cap ended the candidate
+# list thirty short of the answer and the table recorded the loss as "UNRESOLVED: 9 shape matches".
+# (3) The four ProfileSelect/System-Quit addresses er-effects-rs-4uw5.13 was filed about resolve
+# ONE AT A TIME, which they can only do from the anchor rows in
+# docs/recon/rva-map-1162-to-1170.verified.tsv -- so deleting one of those rows goes red here
+# naming the address, rather than quietly taking a region's coverage with it. Negative control run
+# 2026-09-01: with the eight anchor rows removed, 0x875590 and 0x920c90 both go UNMAPPED and this
+# exits 1. Re-execs itself under `uv` when capstone is absent, so the step stays spelled `python3`.
+python3 "$repo_root/scripts/map-rvas-1162-to-1170.py" --selftest
+# THE INDEPENDENT OPINION ON THOSE SAME ANCHORS. Everything above reads the two flat images with
+# one decoder under one normalisation, so a wrong destination that decodes into the right shape is
+# invisible to all of it. This asks both Ghidra dumps instead -- 1.16.2 on :8765, 1.17 on :8767 --
+# whether each half of a pair is a declared function ENTRY and whether the call graph carries
+# across. Its refusals are the control: six destinations that are wrong in a named way (0x10 past
+# the entry, or another anchor's entry) must all be refused, and the clause that refuses a
+# differing size with too few carried callees exists BECAUSE the swapped cases passed without it.
+# Skips at exit 0 when either daemon is down.
+python3 "$repo_root/scripts/confirm-1170-pair-in-dumps.py" --selftest
 # THE FIELD-OFFSET GATE (2026-08-30). The three ways to be wrong about a 1.17 address are not
 # equally loud. A stale DETOUR target is REFUSED by er-hook and logged; an unmapped CALL/data RVA
 # resolves to 0 and the caller says so; a stale STRUCT FIELD OFFSET returns the NEIGHBOURING
@@ -1320,8 +1410,8 @@ shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/check-committed-compiles.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
-shellcheck "$repo_root/scripts/ci-local-check.sh"
-shellcheck "$repo_root/scripts/test-ci-local-check-config-guard.sh"
+shellcheck "$repo_root/scripts/check-gate-config-guard.sh"
+shellcheck "$repo_root/scripts/test-check-config-guard.sh"
 shellcheck "$repo_root/scripts/measure-git-hook-env.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
 shellcheck "$repo_root/scripts/er-tree-bisect-run.sh"
@@ -1617,6 +1707,28 @@ python3 "$repo_root/scripts/check-test-target-coverage.py" --selftest
 python3 "$repo_root/scripts/check-test-target-coverage.py" --prove-selftest-catches-regression
 python3 "$repo_root/scripts/check-test-target-coverage.py"
 
+# THE SHIPPED MOVESET TABLE, crates/er-npc-possess/data/moveset.tbl. Two gates in one script:
+# the grammar/invariant checks always run, and the full regeneration-and-diff runs only where the
+# unpacked chr corpus exists. It SKIPS loudly rather than passing quietly when it does not -- the
+# corpus is game-derived and will never be in the repo, so CI can prove the table is well-formed
+# and self-consistent but not that it is what the generator produces. Set ER_CHR_CORPUS_ROOT (or
+# pass --root) on a machine with an extraction to get the real check.
+python3 "$repo_root/scripts/check-moveset-table.py" --selftest
+python3 "$repo_root/scripts/check-moveset-table.py"
+
+# ...AND THAT THE TABLE ACTUALLY GIVES CREATURES THEIR ATTACKS. The regeneration diff above proves
+# the shipped file is what the generator produces; it says nothing about whether the generator is
+# producing the right answer, and for a third of the roster it was not. The generator joined the
+# behaviour graph against `<chr>.tae` by chr id on BOTH sides, and 133 creatures do not own their
+# TimeAct -- c4351 Godrick Knight's anibnd is a skeleton and nothing else, because the whole 435x
+# family plays out of c4350.tae. Every attack those creatures can fire was denied
+# `no-damage-window` and then trimmed by the in-span rule, so they shipped as twelve W_Step walk
+# clips with `denied=0`, which reads as "this creature has no attacks" everywhere it is reported.
+# This gate opens the TimeAct that describes each attackless creature and fails when it finds
+# attack-band animations the table is not offering. Corpus-gated and SKIPS loudly, like the above.
+python3 "$repo_root/scripts/er-moveset-coverage.py" --selftest
+python3 "$repo_root/scripts/er-moveset-coverage.py" --check
+
 # EVERY REMAINING HOST-TESTABLE CRATE, IN TWO BATCHES. Up to this line the crates above were
 # added one at a time, each by somebody who tripped over the fact that theirs had never run --
 # `default-members = ["crates/er-quickload"]` means a bare `cargo test` selects ONE of 64
@@ -1650,7 +1762,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
 	-p er-better-refills -p er-inventory-sort -p er-loading-bar \
-	-p er-loading-portrait -p er-save-disable
+	-p er-loading-portrait -p er-save-disable -p er-npc-possess
+# er-npc-possess joined this batch when the crate landed. Its whole point is that everything
+# above the possession seam -- the TOML reader, the schema, the not-live `[target]` staging, the
+# hotkey edge latches and the possession state machine -- is decidable without the game, so it
+# would be exactly the kind of crate that reports nothing if it were not named here. The
+# er-refill-all pad-chord tests moved INTO er-hotkey-config at the same time (the module was
+# promoted so both DLLs share one edge detector), so that crate's count grew rather than a new
+# line appearing for them.
 
 # er-build-export -- the crate that WRITES the `?i=` share link, and the only one of the fifteen
 # unreachable crates that was in neither batch. 50 lib tests plus 37 in five integration targets,
@@ -1729,12 +1848,8 @@ python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 python3 "$repo_root/scripts/er_run_lib.py"
 python3 "$repo_root/scripts/er-dll-closure.py" --selftest
 python3 "$repo_root/scripts/er-dll-provenance.py" --selftest
-# ...and the launch-time half of it, shared by five launch scripts as `require_fresh_dlls`. Its
-# selftest was written and left unwired, which is the same decorative green the gates above exist
-# to refuse. Positive-controlled 2026-08-31 rather than taken on trust: disabling the refusal, and
-# silently skipping an artifact name the workspace does not build, each turn it red; so does making
-# er-dll-provenance's `verify` always agree or its source hash a constant.
-bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
+# (The launch-time half of that pair, `er-dll-freshness.sh --selftest`, would sit here with its
+# siblings but CANNOT: it needs a linked DLL to exist. It runs after check-rust-build.sh below.)
 python3 "$repo_root/scripts/er-pick-save.py" --selftest
 python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
 python3 "$repo_root/scripts/er-run-reaper.py" --selftest
@@ -1752,6 +1867,20 @@ python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
 python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
 bash "$repo_root/scripts/check-rust-build.sh"
+
+# THE LAUNCH-TIME FRESHNESS GATE, shared by five launch scripts as `require_fresh_dlls`. Its
+# selftest was written and left unwired, which is the same decorative green the gates above exist
+# to refuse. Positive-controlled 2026-08-31 rather than taken on trust: disabling the refusal, and
+# silently skipping an artifact name the workspace does not build, each turn it red; so does making
+# er-dll-provenance's `verify` always agree or its source hash a constant.
+#
+# IT LIVES HERE, below the link, and not with the other launch-pipeline selftests ~20 lines above,
+# because it needs a real linked DLL: the provenance record it exercises fingerprints the artifact's
+# CODE SECTION, so it parses a PE header and a placeholder file raises instead of standing in.
+# Measured 2026-09-01 in a fresh agent worktree with an empty target/ -- it went red with "no built
+# DLL at .../er_crash_logging.dll" while the change under test was fine, which is a gate teaching
+# people to read past it. Above the link this step is a property of the CHECKOUT, not of the code.
+bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
 
 # DOES THE COMMITTED STATE COMPILE -- not "does my working tree compile", which is the only
 # question every gate above this one, this file included, is able to ask. A pathspec commit is
@@ -1774,7 +1903,7 @@ bash "$repo_root/scripts/check-committed-compiles.sh"
 
 # ...and whether any of this runs on a commit at all. This clone's core.hooksPath was the
 # ABSOLUTE pre-rename path left behind by 39a919e0, so for a while NO hook ran -- not the
-# main-push guard, not ci-local-check.sh -- and nothing said so, because a hook git cannot find
+# main-push guard, not this suite -- and nothing said so, because a hook git cannot find
 # is indistinguishable from a hook that passed. That is this suite's own defect applied to the
 # gates themselves. It asserts the value is set, that it resolves to a real directory holding an
 # executable pre-push, and that it is RELATIVE: an absolute path is correct right up until the
@@ -1787,9 +1916,9 @@ bash "$repo_root/scripts/check-git-hooks-installed.sh"
 # main checkout's -- scripts/measure-git-hook-env.sh measures both, which is why this looked
 # unreachable for a day), `git -C <fixture>` does not override it, and the fixture commands landed
 # on the SHARED config -- core.bare = true, core.hooksPath gone, a push through the hole. The
-# offending script now scrubs its environment; ci-local-check.sh carries a trap that catches the
-# CLASS, and this proves that trap still fires in both directions.
-bash "$repo_root/scripts/test-ci-local-check-config-guard.sh"
+# offending script now scrubs its environment; scripts/check-gate-config-guard.sh catches the
+# CLASS for this whole suite, and this proves it still fires in both directions.
+bash "$repo_root/scripts/test-check-config-guard.sh"
 
 
 # Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one

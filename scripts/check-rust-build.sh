@@ -146,6 +146,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-loading-bar:er_loading_bar
 		er-loading-portrait:er_loading_portrait
 		er-net-effects:er_net_effects
+		er-npc-possess:er_npc_possess
 		er-player-name-filter:er_player_name_filter
 		er-quit-menu:er_quit_menu
 		er-reload-trace:er_reload_trace

@@ -172,7 +172,18 @@ def row_names(stem):
     for e in d:
         if isinstance(e, dict):
             i = e.get('ID', e.get('id'))
+            # The Smithbox row-name schema nests a SECOND 'Entries' inside each row:
+            #   {"Name": "NpcParam", "Entries": [{"ID": 40700000, "Entries": ["Wolf"]}]}
+            # This used to read e['Name'], which that shape does not have, so --names
+            # printed `'name': None` for all 6864 named NpcParam rows and looked like
+            # a missing checkout rather than a wrong key.
             nm = e.get('Name', e.get('name'))
+            if nm is None:
+                inner = e.get('Entries', e.get('entries'))
+                if isinstance(inner, list) and inner:
+                    nm = inner[0]
+                elif isinstance(inner, str):
+                    nm = inner
             if i is not None:
                 out[int(i)] = nm
     return out
