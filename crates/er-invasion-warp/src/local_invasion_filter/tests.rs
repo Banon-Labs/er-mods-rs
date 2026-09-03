@@ -1,0 +1,942 @@
+//! Tests for the local invasion filter.
+//!
+//! In their own file since 2026-09-02, when the parent crossed the 3200-line limit. That is not
+//! purely cosmetic: several of these tests read the parent's SOURCE with `include_str!` and assert
+//! on what is and is not in a particular function's body, and a test that scans the file it lives
+//! in finds its own assertion text. That had already bitten twice, which is why the needles below
+//! are assembled at runtime rather than written out; from here the scanned file no longer contains
+//! them at all.
+
+use super::*;
+
+/// EVERY option that changes behaviour has to show up in the `config loaded` line.
+///
+/// Not a style rule -- it is the difference between a hot-reload you can verify and one you can
+/// only hope about. Measured cost of the gap, 2026-08-06: `dll_users_only` was toggled mid-run,
+/// the line reprinted (so the file had certainly been re-read), and it still did not say what
+/// the option was now set to. The A/B could not be confirmed until a `lobby-pool` line happened
+/// to appear on the next query. "The config reloaded" is a fact nobody needs; "here is what is
+/// in force" is the one they do.
+///
+/// Checked against the struct's real field list rather than a copy of it, so adding a field and
+/// forgetting the log line fails HERE instead of silently on someone's live run.
+#[test]
+fn every_behaviour_changing_option_is_named_in_the_config_line() {
+    let config_source = include_str!("../../../er-invasion-warp-core/src/local_invasion.rs");
+    let start = config_source
+        .find("pub struct LocalInvasionConfig")
+        .expect("the config struct");
+    let body = &config_source[start..];
+    let end = body.find("\n}").expect("end of the struct");
+    let fields: Vec<&str> = body[..end]
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("pub "))
+        // A field declaration, not the `pub struct ... {` header the scrape starts on: it must
+        // carry a type, and its name must be a plain identifier.
+        .filter(|rest| rest.contains(':'))
+        .filter_map(|rest| rest.split(':').next())
+        .map(str::trim)
+        .filter(|name| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+        .collect();
+    assert!(
+        fields.len() >= 8,
+        "field scrape found only {fields:?} -- the struct's shape changed and this test is no \
+         longer reading it"
+    );
+
+    let source = include_str!("../local_invasion_filter.rs");
+    let line_start = source
+        .find("local-invasion: config loaded")
+        .expect("the config-loaded log line");
+    // The format string plus its whole argument list, bounded by the call's own closing `));`
+    // rather than by a character count -- a fixed window silently truncates the moment a
+    // comment is added to the argument list, and then this test starts failing on fields that
+    // are in fact present.
+    let call_end = source[line_start..]
+        .find("));")
+        .expect("the log call must be closed");
+    // COMMENTS ARE STRIPPED, and the check is for the READ ITSELF rather than the bare name.
+    // Both guards earn their place: a first version of this test looked for the bare field name
+    // anywhere in the call, and a negative control proved it toothless -- the explanatory
+    // comment in the argument list mentions `dll_users_only`, so deleting the actual argument
+    // left the test passing on prose alone. A gate that cannot fail is worse than no gate,
+    // because it is mistaken for coverage.
+    let call: String = source[line_start..line_start + call_end]
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for field in fields {
+        // The two keybinds are reported by NAME rather than by number, so they appear as
+        // `key_name(outcome.config.mark_key)` -- still the read, just rendered for a human.
+        assert!(
+            call.contains(&format!("outcome.config.{field}")),
+            "config option `{field}` never reaches the `config loaded` line, so a user who \
+             changes it cannot tell from the log whether it took effect"
+        );
+    }
+}
+
+/// The dwell figure exists to be compared against the game's real frame rate; one that rounds
+/// to zero on a plausible interval would read as "the task stopped ticking" and send the next
+/// reader hunting a hang that never happened.
+#[test]
+fn a_dwell_at_a_normal_frame_rate_reports_that_frame_rate() {
+    // 600 ticks over 10s -- the shape of the measured `0x11` retry dwell at 60fps.
+    assert_eq!(implied_fps(600, 10_000), Some(60));
+    // The same wall-clock dwell at half the frame rate: HALF the ticks. This is the frame-vs-
+    // clock discriminator in miniature -- if the retry is a clock, this is what the log shows.
+    assert_eq!(implied_fps(300, 10_000), Some(30));
+    // The same TICK dwell at half the frame rate: twice the wall clock. If the retry is a frame
+    // counter, this is what the log shows instead. The two are distinguishable only because
+    // both columns are recorded.
+    assert_eq!(implied_fps(600, 20_000), Some(30));
+}
+
+/// Degenerate intervals must decline to divide rather than emit a misleading number: two
+/// transitions inside one tick say nothing about the frame rate.
+#[test]
+fn an_interval_too_short_to_divide_reports_nothing_rather_than_zero() {
+    assert_eq!(implied_fps(0, 10_000), None, "no ticks elapsed");
+    assert_eq!(implied_fps(600, 0), None, "no time elapsed");
+    assert_eq!(implied_fps(0, 0), None);
+}
+
+/// A dwell shorter than a millisecond per tick must not be reported as zero fps -- it is a very
+/// FAST interval, and zero would read as a stall.
+#[test]
+fn a_sub_millisecond_dwell_never_reports_as_a_stalled_task() {
+    assert_ne!(implied_fps(1, 1), Some(0));
+    assert_eq!(implied_fps(1, 1), Some(1000));
+}
+
+#[test]
+fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_keys() {
+    let defaults = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
+    assert_eq!(defaults.mark_key, 0x2d, "VK_INSERT");
+    assert_eq!(defaults.unmark_key, 0x2e, "VK_DELETE");
+    // Sharing a key with the warp driver would make the two pollers eat each other's
+    // GetAsyncKeyState "pressed since last call" edge.
+    //
+    // Only the DEFAULTS can be checked here: the keys are configurable now, so a player is free
+    // to name a warp key and collide on purpose. That is their choice to make and the log line
+    // reports which keys are live, but the shipped defaults must not collide out of the box.
+    for warp_key in [
+        crate::drive::VK_WARP_NEAREST,
+        crate::drive::VK_WARP_NEXT,
+        crate::drive::VK_WARP_OTHER_AREA,
+    ] {
+        assert_ne!(defaults.mark_key, warp_key);
+        assert_ne!(defaults.unmark_key, warp_key);
+    }
+}
+
+/// A player who names a key must be able to SEE which key is live, or a typo that parsed into
+/// some other valid key is indistinguishable from the feature being broken.
+#[test]
+fn the_configured_keys_render_names_a_player_would_recognise() {
+    let defaults = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
+    assert_eq!(
+        er_invasion_warp_core::keybind::key_name(defaults.mark_key),
+        "Insert"
+    );
+    assert_eq!(
+        er_invasion_warp_core::keybind::key_name(defaults.unmark_key),
+        "Delete"
+    );
+}
+
+#[test]
+fn this_module_installs_exactly_three_detours_and_both_seamless_ones_are_read_only() {
+    // The budget, made explicit so growing it is a decision rather than a drift:
+    //   ORIG_SET_JOIN_DATA    -- the GAME's SetMultiplayJoinData, where matches are judged.
+    //   ORIG_SHOW             -- ersc's menu builder, observation only, because OSM has no
+    //                            static to read it out of (see NEXT_OBJECT_OFFSET's docs).
+    //   ORIG_BUILD_LOBBY_KEY  -- ersc's lobby-key builder, observation only. Grown from two to
+    //                            three deliberately: the key is the single value that decides
+    //                            whether two Seamless players can see each other, it exists
+    //                            only as a stack `std::string` inside one function, and no
+    //                            field holds it afterwards -- so there is nothing to read
+    //                            passively and a hook is the only way to observe it.
+    // The two option ACTIONS are deliberately not hooked: they read `rcx` only, so calling
+    // them with `(OSM, 0, 1, 1)` needs no captured arguments and therefore no detour.
+    let source = include_str!("../local_invasion_filter.rs");
+    let orig_slots = source.matches("\nstatic ORIG_").count();
+    assert_eq!(orig_slots, 3, "detour budget is three trampolines");
+    assert!(source.contains("\nstatic ORIG_SET_JOIN_DATA"));
+    assert!(source.contains("\nstatic ORIG_SHOW"));
+    assert!(source.contains("\nstatic ORIG_BUILD_LOBBY_KEY"));
+    for banned in ["ORIG_INVADE_ACTION", "ORIG_CANCEL_ACTION"] {
+        assert!(
+            !source.contains(&format!("static {banned}")),
+            "{banned}: the option actions must stay un-hooked -- they ignore every argument \
+             past rcx, so there is nothing to capture"
+        );
+    }
+}
+
+/// The lobby-key observer must stay an OBSERVER. Altering `lobby_key` changes what every other
+/// Seamless client's filter matches, which is not this DLL's to do.
+///
+/// AMENDED 2026-08-06, deliberately and narrowly. The original banned `SetLobbyData(` and
+/// `AddRequestLobbyListStringFilter(` outright, which was broader than its own stated reason:
+/// the harm it names is to `lobby_key`, and publishing a SEPARATE namespaced key does not touch
+/// it. Measured that day: a host publishes 7 keys and an invader filters on 5 of them, and a
+/// lobby lacking a filtered key is EXCLUDED (baseline 13 lobbies -> 0 with a filter on an
+/// unpublished key, reproduced). So one extra key is exactly how a location filter can exist,
+/// and it is invisible to vanilla Seamless players -- they never query it, and their own
+/// matching is on `lobby_key`, which stays untouched.
+///
+/// What remains absolute: `lobby_key` itself is never written, and no filter is ever added on
+/// `lobby_key` or `lobby_type`. Those two decide who can see whom at all.
+#[test]
+fn the_lobby_key_is_never_published_or_altered() {
+    let code = product_code();
+    // The keys that decide MUTUAL VISIBILITY. Writing or filtering on either changes what other
+    // players match, so they stay banned by name rather than by call.
+    for reserved in ["lobby_key", "lobby_type"] {
+        assert!(
+            !code.contains(&format!("\"{reserved}\"")),
+            "{reserved}: this key decides who can see whom -- publishing or filtering on it \
+             changes what every other Seamless player matches"
+        );
+    }
+    // And the observer calls the original before reading, so a fault in our read can never
+    // change the key Seamless publishes.
+    let source = include_str!("../local_invasion_filter.rs");
+    let observer = source
+        .split("unsafe extern \"system\" fn build_lobby_key_observer")
+        .nth(1)
+        .expect("the observer exists");
+    let body = &observer[..observer.find("\n}\n").unwrap_or(observer.len())];
+    let call_at = body.find("ErscActionFn").expect("calls the trampoline");
+    let read_at = body
+        .find("read_std_string")
+        .expect("reads the produced string");
+    assert!(
+        call_at < read_at,
+        "the original must run before the string is read"
+    );
+}
+
+/// This module's SHIPPING code, with comments and the test module removed.
+///
+/// Both exclusions are load-bearing and were learned by the guards failing on themselves:
+/// * COMMENTS, because these names appear throughout the documentation, where describing what
+///   Seamless does is the entire point. A check that cannot tell prose from a call site either
+///   fails on its own docs or forces the docs to go quiet about the mechanism.
+/// * THE TEST MODULE, because a ban list is written in code -- `["lobby_key", ...]` is a string
+///   literal, so a guard scanning the whole file trips on the very list that defines it. Both
+///   new guards failed exactly that way on first run.
+fn product_code() -> String {
+    let source = include_str!("../local_invasion_filter.rs");
+    let shipping = source
+        .split_once("#[cfg(test)]")
+        .map_or(source, |(before, _)| before);
+    shipping
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// No invasion target may ever be chosen by WHO the other player is.
+///
+/// # The line, and why it is drawn here rather than left to judgement
+///
+/// Measured 2026-08-06: a lobby query returns a real candidate SET (13 lobbies), ersc picks one
+/// (index 14, then 7), and `GetLobbyOwner` / `GetLobbyMemberByIndex` are both called on the
+/// result. So selecting a candidate by SteamID is not merely conceivable -- every primitive it
+/// needs is already in the process, it needs nothing from the host, and it would work today.
+///
+/// That is exactly what makes it unacceptable. Its one advantage and its one abuse are the SAME
+/// property: needing nothing from the target. Any consent check would require the target to run
+/// this DLL, which removes the advantage entirely, so there is no version of it that is both
+/// useful and safe. And a location is somewhere a player chose to stand; an account is the
+/// player, everywhere, forever.
+///
+/// The principle this encodes, which generalises past this one call: filtering may DECLINE, it
+/// may never SELECT A PERSON. Declining removes options from ourselves -- the worst case is not
+/// invading someone, which the user could do by hand. Selecting imposes on somebody who never
+/// opted in. `er_map` passes because a host is findable by location only if that host chose to
+/// broadcast it; consent is structural rather than a policy someone can quietly drop.
+#[test]
+fn no_invasion_target_is_ever_chosen_by_steam_id() {
+    let code = product_code();
+    // The primitives that turn a candidate set into a named person. Reading an owner to LOG it
+    // would be equally targetable once the value exists, so the call itself is the line.
+    for banned in [
+        "GetLobbyOwner",
+        "GetLobbyMemberByIndex",
+        "GetNumLobbyMembers",
+        "GetLobbyByIndex",
+    ] {
+        assert!(
+            !code.contains(&format!("{banned}(")),
+            "{banned}: choosing a lobby by who is in it targets a person who never opted in -- \
+             filtering may decline, it may never select a person"
+        );
+    }
+    // And no allowlist of accounts, however it is spelled.
+    for banned in [
+        "steam_id_allow",
+        "steamid_allow",
+        "target_steam_id",
+        "friend_steam_id",
+    ] {
+        assert!(
+            !code.contains(banned),
+            "{banned}: an account allowlist is person-targeting with extra steps"
+        );
+    }
+}
+
+/// The watched window must actually cover the fields the static read identified, or a VM write
+/// to one of them is invisible and the whole point of the tracing is lost.
+#[test]
+fn the_session_watch_window_covers_every_known_field() {
+    let begin = SESSION_WATCH_BEGIN;
+    let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
+    // EVERY build's state field, not just the installed one's: the window is a compile-time
+    // constant and the same code traces whichever build is loaded, so a window that covers
+    // v1.9.9's `0x110` but not v2.0.0's `0x150` would trace nothing on half the machines.
+    for abi in ersc::SUPPORTED {
+        assert!(
+            abi.session_state_offset >= begin && abi.session_state_offset < end,
+            "{}'s state field at {:#x} is outside the watched window {begin:#x}..{end:#x}",
+            abi.version,
+            abi.session_state_offset,
+        );
+        assert!(
+            abi.session_guard_offset >= begin && abi.session_guard_offset < end,
+            "{}'s guard field at {:#x} is outside the watched window {begin:#x}..{end:#x}",
+            abi.version,
+            abi.session_guard_offset,
+        );
+    }
+    for (name, offset) in [
+        ("lobby id", 0x178),
+        ("lobby owner", 0x180),
+        ("offer block start", 0x190),
+        ("seek flag", 0x1d4),
+        ("seek latch", 0x1f0),
+        ("offer block end", 0x220),
+        ("lobby-key flag byte", 0x229),
+    ] {
+        assert!(
+            offset >= begin && offset < end,
+            "{name} at {offset:#x} is outside the watched window {begin:#x}..{end:#x}"
+        );
+    }
+}
+
+/// The window is read every frame, so it must stay small enough to be free.
+#[test]
+fn the_session_watch_window_stays_small() {
+    const {
+        assert!(
+            SESSION_WATCH_WORDS * 8 <= 0x200,
+            "a per-frame read of this size is no longer negligible"
+        )
+    };
+}
+
+/// The digest is SHA-256 hex. A probe that expected the 16-character `%016llX` intermediate
+/// would print a truncation of the wrong string and answer "did the key change" with noise --
+/// which is the one question this probe exists to answer.
+#[test]
+fn the_lobby_key_is_a_sha256_hex_digest_not_the_sixteen_char_intermediate() {
+    assert_eq!(ersc::LOBBY_KEY_HEX_LEN, 64);
+    assert_ne!(ersc::LOBBY_KEY_HEX_LEN, 16);
+}
+
+/// `mov dword ptr [rdi + displacement], immediate` -- `C7 /0` with a disp32 on `rdi`.
+///
+/// The option-action pins run through the state WRITE, so this is how a test asks "does the
+/// pin actually encode the offset and the code this [`ersc::Abi`] claims". It is the check
+/// that keeps the table honest: the bytes come from `build.rs` and were ground-truthed against
+/// a real copy of that Seamless build, so a hand-edited field number stops agreeing with them.
+fn mov_dword_rdi(displacement: usize, immediate: u32) -> Vec<u8> {
+    let mut bytes = vec![0xc7, 0x87];
+    bytes.extend_from_slice(&(displacement as u32).to_le_bytes());
+    bytes.extend_from_slice(&immediate.to_le_bytes());
+    bytes
+}
+
+/// `cmp dword ptr [rdi + displacement], imm8` -- `83 /7`, the form both builds use for the
+/// small idle sentinel.
+fn cmp_dword_rdi_imm8(displacement: usize, immediate: u8) -> Vec<u8> {
+    let mut bytes = vec![0x83, 0xbf];
+    bytes.extend_from_slice(&(displacement as u32).to_le_bytes());
+    bytes.push(immediate);
+    bytes
+}
+
+/// `cmp dword ptr [rdi + displacement], imm32` -- `81 /7`, used for the guard poison value,
+/// which does not fit an imm8.
+fn cmp_dword_rdi_imm32(displacement: usize, immediate: u32) -> Vec<u8> {
+    let mut bytes = vec![0x81, 0xbf];
+    bytes.extend_from_slice(&(displacement as u32).to_le_bytes());
+    bytes.extend_from_slice(&immediate.to_le_bytes());
+    bytes
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Every declared offset and state code must appear, encoded, inside the pin it describes.
+///
+/// This is the load-bearing test of the whole re-pin. The pins are generated by `build.rs` from
+/// named instructions and verified there against a real copy of each Seamless build, located by
+/// the version string inside the file. So if `session_state_offset` or `state_searching` is
+/// ever edited without re-measuring, the number stops matching the bytes and this fails --
+/// rather than the module quietly writing a renumbered code into a neighbouring field of a
+/// live multiplayer session.
+#[test]
+fn every_abi_number_is_encoded_in_the_bytes_that_were_measured_for_it() {
+    for abi in ersc::SUPPORTED {
+        let invade = abi.invade_prologue;
+        let cancel = abi.cancel_prologue;
+        assert!(
+            contains(
+                invade,
+                &mov_dword_rdi(abi.session_state_offset, abi.state_searching)
+            ),
+            "{}: the invade pin does not write {:#x} to S+{:#x}",
+            abi.version,
+            abi.state_searching,
+            abi.session_state_offset,
+        );
+        assert!(
+            contains(
+                cancel,
+                &mov_dword_rdi(abi.session_state_offset, abi.state_cancelling)
+            ),
+            "{}: the cancel pin does not write {:#x} to S+{:#x}",
+            abi.version,
+            abi.state_cancelling,
+            abi.session_state_offset,
+        );
+        assert!(
+            contains(
+                invade,
+                &cmp_dword_rdi_imm8(abi.session_state_offset, abi.state_idle as u8)
+            ),
+            "{}: the invade pin does not gate on S+{:#x} == {:#x}",
+            abi.version,
+            abi.session_state_offset,
+            abi.state_idle,
+        );
+        for (name, pin) in [("invade", invade), ("cancel", cancel)] {
+            assert!(
+                contains(
+                    pin,
+                    &cmp_dword_rdi_imm32(abi.session_guard_offset, ersc::SESSION_GUARD_POISON)
+                ),
+                "{}: the {name} pin does not check the guard at S+{:#x}",
+                abi.version,
+                abi.session_guard_offset,
+            );
+        }
+    }
+}
+
+/// One row of [`the_pinned_abis_are_the_ones_measured_out_of_the_two_seamless_builds`], named
+/// rather than left as a four-element tuple so the numbers say which is which.
+struct Measured {
+    version: &'static str,
+    /// `show`, invade action, cancel action, `BuildLobbyKey`.
+    rvas: [usize; 4],
+    /// Session state, session guard.
+    fields: [usize; 2],
+    /// Idle, searching, cancelling, offer-received.
+    states: [u32; 4],
+}
+
+/// The exact addresses and numbers, so a change to any of them is a deliberate edit to a test
+/// that says where its value came from -- not a silent drift.
+#[test]
+fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
+    // v2.0.0, measured 2026-09-02 -- see this module's `ersc` docs for what identifies each
+    // address; none was taken from a byte match alone. v1.9.9 is no longer here because it is no
+    // longer driven; what remains of it is `ersc::RETIRED`, checked below.
+    let expected = [Measured {
+        version: "Seamless Co-op v2.0.0",
+        rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d590],
+        fields: [0x150, 0x14c],
+        states: [0x01, 0x0e, 0x23, 0x13],
+    }];
+    assert_eq!(ersc::SUPPORTED.len(), expected.len());
+    for (
+        abi,
+        Measured {
+            version,
+            rvas,
+            fields,
+            states,
+        },
+    ) in ersc::SUPPORTED.iter().zip(&expected)
+    {
+        assert_eq!(&abi.version, version);
+        assert_eq!(
+            [
+                abi.show_rva,
+                abi.invade_action_rva,
+                abi.cancel_action_rva,
+                abi.build_lobby_key_rva
+            ],
+            *rvas,
+            "{version} addresses"
+        );
+        assert_eq!(
+            [abi.session_state_offset, abi.session_guard_offset],
+            *fields,
+            "{version} session fields"
+        );
+        assert_eq!(
+            [
+                abi.state_idle,
+                abi.state_searching,
+                abi.state_cancelling,
+                abi.state_offer_received
+            ],
+            *states,
+            "{version} state codes"
+        );
+    }
+}
+
+/// v2.0.0 renumbered the whole session-state enum by `+1`, proven by a scan of every immediate
+/// store to the state field in both builds: seven distinct values, matching site counts, one
+/// uniform shift. That shift is the PROVENANCE of every number in the supported ABI, so it stays
+/// pinned even though v1.9.9 is no longer a build this mod drives -- a future edit to a state
+/// code has to argue with the derivation rather than slip through.
+///
+/// The v1.9.9 numbers are literals here, deliberately. They are the input to a measurement, not
+/// an ABI anything can be driven with, so a test is where they belong now.
+#[test]
+fn the_supported_state_enum_is_the_retired_one_shifted_by_exactly_one() {
+    /// v1.9.9 idle/searching/cancelling/offer-received, measured 2026-08-05.
+    const RETIRED_STATES: [u32; 4] = [0x00, 0x0d, 0x22, 0x12];
+    /// v1.9.9 session state and guard offsets, from the same measurement.
+    const RETIRED_FIELDS: [usize; 2] = [0x110, 0x10c];
+
+    let new = &ersc::SUPPORTED[0];
+    for (name, before, after) in [
+        ("idle", RETIRED_STATES[0], new.state_idle),
+        ("searching", RETIRED_STATES[1], new.state_searching),
+        ("cancelling", RETIRED_STATES[2], new.state_cancelling),
+        (
+            "offer received",
+            RETIRED_STATES[3],
+            new.state_offer_received,
+        ),
+    ] {
+        assert_eq!(before + 1, after, "{name} did not shift by exactly one");
+    }
+    // And the field group moved as a block, keeping its internal spacing: guard = mutex+0x4c,
+    // state = mutex+0x50, so state - guard is invariant across the move.
+    assert_eq!(new.session_state_offset - RETIRED_FIELDS[0], 0x40);
+    assert_eq!(new.session_guard_offset - RETIRED_FIELDS[1], 0x40);
+    assert_eq!(
+        RETIRED_FIELDS[0] - RETIRED_FIELDS[1],
+        new.session_state_offset - new.session_guard_offset,
+    );
+}
+
+/// The version gate has to be able to TELL THE BUILDS APART, and each pin has to identify a
+/// function rather than a shape.
+///
+/// Measured 2026-09-02 against the two DLLs in place: each invade pin occurs exactly once in
+/// its own build and not at all in the other. That measurement cannot run here (it needs the
+/// files), so what this pins is the property the code depends on and the reason the previous
+/// pins could not do it: the fourteen bytes every option action shares are not a
+/// discriminator, and five different v2.0.0 functions have them.
+#[test]
+fn the_version_discriminator_actually_discriminates() {
+    const SHARED_OPTION_ACTION_OPENING: usize = 14;
+    let old = &ersc::RETIRED[0];
+    let new = &ersc::SUPPORTED[0];
+
+    // Same address would mean the gate cannot even look in two places.
+    assert_ne!(old.invade_action_rva, new.invade_action_rva);
+    // Different bytes, and different WITHIN the shared opening's length is not enough -- they
+    // must differ somewhere a byte comparison of the full pin will reach.
+    assert_ne!(old.invade_prologue, new.invade_prologue);
+    assert_eq!(
+        old.invade_prologue[..SHARED_OPTION_ACTION_OPENING],
+        new.invade_prologue[..SHARED_OPTION_ACTION_OPENING],
+        "the shared opening really is shared -- which is why the pins cannot stop there"
+    );
+    assert!(
+        old.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3
+            && new.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3,
+        "a pin that stops near the shared opening identifies a code shape, not a function"
+    );
+    // Neither pin is a prefix of the other, so neither build's gate can accept the other's
+    // bytes no matter which is longer.
+    let shorter = old.invade_prologue.len().min(new.invade_prologue.len());
+    assert_ne!(
+        old.invade_prologue[..shorter],
+        new.invade_prologue[..shorter]
+    );
+
+    for abi in ersc::SUPPORTED {
+        // Within one build the four entry points must be four different addresses.
+        let mut rvas = [
+            abi.show_rva,
+            abi.invade_action_rva,
+            abi.cancel_action_rva,
+            abi.build_lobby_key_rva,
+        ];
+        rvas.sort_unstable();
+        let unique = rvas.windows(2).all(|pair| pair[0] != pair[1]);
+        assert!(unique, "{}: two entry points share an address", abi.version);
+        // And invade must be distinguishable from cancel, which the old fourteen-byte pins
+        // were not -- they were byte-identical.
+        assert_ne!(
+            abi.invade_prologue, abi.cancel_prologue,
+            "{}: invade and cancel must not share a pin",
+            abi.version
+        );
+    }
+}
+
+/// The refusal is fail-closed and says which builds it knows, so an unrecognised Seamless
+/// produces an actionable line rather than a filter that silently does nothing.
+#[test]
+fn an_unrecognised_seamless_build_is_refused_rather_than_guessed_at() {
+    let source = include_str!("../local_invasion_filter.rs");
+    let resolver = source
+        .split_once("fn resolve_ersc_abi(")
+        .expect("the version gate exists")
+        .1
+        .split_once("\n}")
+        .expect("gate body")
+        .0;
+    // Exactly one match. Zero is an unknown build; two would mean the discriminator does not
+    // discriminate. Both refuse.
+    assert!(
+        resolver.contains("ambiguous"),
+        "a build matching two ABIs must be refused, not resolved to whichever came first"
+    );
+    assert!(
+        resolver.contains("ABI_REFUSED"),
+        "the refusal has to be remembered, or it is re-reported every tick"
+    );
+    assert!(
+        resolver.contains("invade_prologue"),
+        "the discriminator must be the invade action -- `show` is byte-identical between the \
+         builds AND is hooked by this module"
+    );
+    assert!(
+        !resolver.contains("show_prologue"),
+        "`show` cannot discriminate: it is the same code at a different address in both builds"
+    );
+    // Every refusal path has to leave the caller with nothing to call.
+    assert!(
+        resolver.contains("None"),
+        "an unrecognised build must yield no ABI at all"
+    );
+}
+
+#[test]
+fn capturing_the_menu_object_is_not_gated_on_the_seamless_tag() {
+    // Regression, 2026-08-05. `show_observer` used to store OSM only if `+0x68` held the ASCII
+    // `seamless` tag. The tag had been measured ONCE in one live frida session; as a
+    // precondition it never matched, OSM was never stored, and the feature failed exactly
+    // where it was supposed to work -- the live log read `REJECT ...` immediately followed by
+    // `cannot cancel -- session is not resolvable`. A single observation is evidence, not a
+    // gate. The tag is now a diagnostic string and nothing branches on it.
+    let source = include_str!("../local_invasion_filter.rs");
+    let observer = source
+        .split_once("fn show_observer(")
+        .expect("show_observer exists")
+        .1
+        .split_once("\n}")
+        .expect("observer body")
+        .0;
+    assert!(
+        observer.contains("OSM.swap(a,"),
+        "the observer must store the pointer it was handed"
+    );
+    assert!(
+        !observer.contains("if a != 0 && osm_tag_matches"),
+        "storing OSM must not be conditional on the tag"
+    );
+    // And the resolver must validate the shape it actually depends on instead.
+    let resolver = source
+        .split_once("fn resolve_session(")
+        .expect("resolve_session exists")
+        .1
+        .split_once("\n}")
+        .expect("resolver body")
+        .0;
+    assert!(
+        !resolver.contains("osm_tag_matches"),
+        "no tag gate in the resolver either"
+    );
+    assert!(
+        resolver.contains("read_session_state"),
+        "validate the state field instead"
+    );
+}
+
+#[test]
+fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
+    // THE HAZARD, and why this is a test rather than a comment. Restarting whenever the session
+    // is idle is what makes the loop survive a Seamless stall -- but a SUCCESSFUL invasion
+    // unwinds through exactly the same states as a failed one. Measured 2026-08-06: `KEEP` was
+    // followed by `0x15 -> 0x22 -> 0x23 -> 0x00 IDLE`, identical to a rejection. So idle alone
+    // cannot tell "the attempt died" from "you are standing in their world", and a restart on
+    // the latter would yank the player back out into a search they never asked for.
+    //
+    // What separates them is that `Verdict::Keep` DISARMS the loop. That makes the disarm check
+    // load-bearing rather than incidental, which is precisely the kind of thing a later tidy-up
+    // reorders without noticing.
+    let source = include_str!("../local_invasion_filter.rs");
+    let recovery = source
+        .split_once("fn arm_self_recovery(")
+        .expect("self-recovery exists")
+        .1
+        .split_once("\n}")
+        .expect("self-recovery body")
+        .0;
+    assert!(
+        recovery.contains("AUTO_SEARCH_ARMED"),
+        "self-recovery must consult the armed flag -- it is the ONLY thing distinguishing a \
+         dead attempt from a successful invasion, both of which sit at idle"
+    );
+    let armed_at = recovery.find("AUTO_SEARCH_ARMED").expect("checked above");
+    let invade_at = recovery.find("PENDING_REINVADE.store(true");
+    assert!(
+        invade_at.is_none_or(|at| armed_at < at),
+        "the armed check must come BEFORE arming a restart, or a kept match restarts once \
+         before the guard is consulted"
+    );
+    // And the disarm on Keep is the other half of the same invariant.
+    let keep = source
+        .split_once("Verdict::Keep(reason) => {")
+        .expect("keep arm exists")
+        .1;
+    assert!(
+        keep[..keep.find("Verdict::Reject").unwrap_or(keep.len())]
+            .contains("AUTO_SEARCH_ARMED.store(false"),
+        "a kept match must disarm the loop; self-recovery relies on it"
+    );
+}
+
+#[test]
+fn the_stall_detector_never_times_the_searching_state() {
+    // SEARCHING means "nobody has matched yet" and is unbounded by nature -- three consecutive
+    // live queries on 2026-08-06 returned 0, 0 and 1 lobbies. Timing it would cancel a healthy
+    // search in a quiet bracket, which is the single most obvious way to get a stall detector
+    // wrong. The rule lives in `stall_watchdog::is_transient`; this pins that the caller does
+    // not reintroduce a timer of its own alongside it.
+    let source = include_str!("../local_invasion_filter.rs");
+    let watcher = source
+        .split_once("fn watch_for_stall(")
+        .expect("stall watcher exists")
+        .1
+        .split_once("\n}")
+        .expect("watcher body")
+        .0;
+    assert!(
+        !watcher.contains("SESSION_STATE_SEARCHING"),
+        "the watcher must not special-case SEARCHING -- the detector decides what is timed, \
+         and it deliberately never times a state that is unbounded by nature"
+    );
+    assert!(
+        watcher.contains("observe("),
+        "the watcher feeds the detector rather than deciding staleness itself"
+    );
+    // THE REGRESSION THIS PINS, 2026-08-06: the watchdog cancelled a match it had just KEPT,
+    // five seconds after accepting it, because the session dwells in 0x15 while loading into
+    // the host's world. No choice of timed states fixes that -- a successful join walks 0x22
+    // and 0x23 exactly like a cancel does -- so the arming gate is the whole defence.
+    let armed_at = watcher
+        .find("AUTO_SEARCH_ARMED")
+        .expect("the watcher must only run while the hunt is armed");
+    let observe_at = watcher.find("observe(").expect("checked above");
+    assert!(
+        armed_at < observe_at,
+        "the armed check must come BEFORE any observation, or a kept match is timed as a \
+         stalled handshake and the invasion is cancelled out from under the player"
+    );
+}
+
+#[test]
+fn the_auto_search_arms_on_the_invade_transition_not_on_merely_being_busy() {
+    // Regression, 2026-08-05, caught live. Arming used to be "state != IDLE, so a search must
+    // be running". That made standing down when the menu opened useless: you open the menu
+    // DURING a search, the loop stands down, and one frame later the session is still non-idle
+    // so it re-arms. The log read `stood down` and then `0x11 -> 0x0d` with another automatic
+    // restart immediately after.
+    //
+    // Arming now keys on the transition into SEARCHING, which is sound because the static scan
+    // found `S+0x110 = 0x0d` written at exactly ONE site in the whole unpacked .text.
+    let source = include_str!("../local_invasion_filter.rs");
+    // Assembled, not written out: a test that scans its own file finds its own assertion text.
+    // That has now bitten twice in this module, so every needle here is built at runtime.
+    assert!(
+        !source.contains(&format!("fn observe_{}", "user_search")),
+        "the not-idle heuristic must stay gone, not sit alongside the replacement"
+    );
+    let tracer = source
+        .split_once("fn trace_session_state(")
+        .expect("tracer exists")
+        .1
+        .split_once("\n}")
+        .expect("tracer body")
+        .0;
+    assert!(
+        tracer.contains("state_searching") && tracer.contains("AUTO_SEARCH_ARMED"),
+        "arming belongs on the SEARCHING transition"
+    );
+    assert!(
+        !tracer.contains("!= abi.state_idle") && !tracer.contains("!= session.abi.state_idle"),
+        "not-idle must never again stand in for a search having been started"
+    );
+    // Our own restart writes the same value the option does, so it has to be claimed first or
+    // the tracer credits the user for it.
+    assert!(source.contains("fn note_state_after_our_action"));
+    let reinvade = source
+        .split_once("fn drive_pending_reinvade(")
+        .expect("re-invade exists")
+        .1
+        .split_once("\n}")
+        .expect("re-invade body")
+        .0;
+    assert!(
+        reinvade.contains("note_state_after_our_action"),
+        "an unclaimed restart is indistinguishable from the user pressing Invade world"
+    );
+}
+
+#[test]
+fn starting_or_ending_an_invasion_attempt_invalidates_the_pin_cache() {
+    // The coupling that makes the dim appear on a map that is ALREADY OPEN. `restyle_live_pins`
+    // early-returns when this signature is unchanged, so without the attempt state mixed in the
+    // pins would keep their idle frames for the whole search and only dim on the next map open
+    // -- i.e. never, for the player who noticed by trying to click one.
+    //
+    // Restores the latch afterwards: it is process-global and every other test in this binary
+    // reads it through the same accessor.
+    let restore = er_invasion_warp_core::warp::invasion_attempt_in_flight();
+    er_invasion_warp_core::warp::set_invasion_attempt_in_flight(false);
+    let idle = pin_choice_signature();
+    er_invasion_warp_core::warp::set_invasion_attempt_in_flight(true);
+    let searching = pin_choice_signature();
+    er_invasion_warp_core::warp::set_invasion_attempt_in_flight(false);
+    let idle_again = pin_choice_signature();
+    er_invasion_warp_core::warp::set_invasion_attempt_in_flight(restore);
+    assert_ne!(
+        idle, searching,
+        "an attempt starting must invalidate the pin cache or the live map never dims"
+    );
+    assert_eq!(
+        idle, idle_again,
+        "and it must go back, or the map would never un-dim"
+    );
+}
+
+#[test]
+fn nothing_writes_one_icon_id_across_every_param_row() {
+    // Regression, 2026-08-05, caught live. The map's param rows are built with a per-location
+    // icon and were then re-stamped with a SINGLE id over every row, so the tiers were
+    // computed correctly (`chosen=3` then `chosen=96` in the log as marks were added) and then
+    // flattened before anything rendered. Every write of the icon field must come from the
+    // per-appearance helper.
+    let source = include_str!("../map_hooks.rs");
+    assert!(
+        source.contains("invasion_pin_icon_id_for("),
+        "the map must choose icons per location"
+    );
+    // Anchored on a string unique to the re-stamp. `PARAM_ICON_ID_OFFSET;` is not: an earlier
+    // `use` of the same constant matched first and put the window over unrelated code.
+    let restamp = source
+        .split_once("let stamp_signature")
+        .expect("re-stamp block")
+        .1;
+    let restamp = &restamp[..restamp.len().min(2_000)];
+    assert!(
+        !restamp.contains(&format!("invasion_pin_icon_id{}", "(")),
+        "the re-stamp must not use the single-icon helper -- that is what flattened the tiers"
+    );
+    assert!(
+        restamp.contains("for (index, row) in rows.iter_mut().enumerate()"),
+        "the re-stamp has to be per row, with the index that identifies the location"
+    );
+}
+
+#[test]
+fn the_recurring_build_fingerprint_never_reads_a_function_this_module_hooks() {
+    // Regression, 2026-08-05. `resolve_session` fingerprinted ersc.dll by comparing `show`'s
+    // opening bytes -- and this module HOOKS `show`. MinHook overwrote those bytes with its
+    // jump, so from the first install onward the check compared Seamless against our own
+    // detour, failed, and reported `ErscUnrecognised`. A live invasion was judged, rejected,
+    // and then NOT cancelled because of it. Whatever the recurring check reads must be
+    // something nothing patches.
+    let source = include_str!("../local_invasion_filter.rs");
+    let resolver = source
+        .split_once("fn resolve_session(")
+        .expect("resolve_session exists")
+        .1
+        .split_once("\n}")
+        .expect("resolver body")
+        .0;
+    assert!(
+        !resolver.contains("show_prologue"),
+        "the recurring fingerprint must not read `show` -- it is hooked, so its bytes are ours"
+    );
+    assert!(
+        resolver.contains("invade_prologue"),
+        "fingerprint an entry point that is called but never hooked"
+    );
+    // And `invade` must in fact stay un-hooked, or this fix silently rots. The needle is
+    // assembled rather than written out, because a test that scans its own file finds its own
+    // assertion text -- which is exactly how this test first failed.
+    assert!(!source.contains(&format!("static ORIG_{}", "INVADE_ACTION")));
+}
+
+#[test]
+fn the_ersc_action_prologues_are_the_bytes_read_out_of_the_shipped_dlls() {
+    // Read from the two Seamless builds in place -- v1.9.9 on 2026-08-05, v2.0.0 on
+    // 2026-09-02. If these ever need changing, re-read the DLL; do not adjust them to make a
+    // hook install.
+    for abi in ersc::SUPPORTED {
+        for (name, pin) in [
+            ("invade", abi.invade_prologue),
+            ("cancel", abi.cancel_prologue),
+        ] {
+            assert_eq!(
+                &pin[..4],
+                &[0xf3, 0x0f, 0x1e, 0xfa],
+                "{}: the {name} action opens with endbr64",
+                abi.version
+            );
+        }
+        // The two functions this module does not CALL open with the eight callee-saved pushes
+        // instead, so a pin swapped between the two groups fails here rather than at runtime.
+        for (name, pin) in [
+            ("show", abi.show_prologue),
+            ("lobby-key builder", abi.build_lobby_key_prologue),
+        ] {
+            assert_ne!(
+                &pin[..4],
+                &[0xf3, 0x0f, 0x1e, 0xfa],
+                "{}: {name} has no endbr64",
+                abi.version
+            );
+            assert_eq!(
+                &pin[..2],
+                &[0x55, 0x41],
+                "{}: {name} pushes rbp, r15",
+                abi.version
+            );
+        }
+    }
+}

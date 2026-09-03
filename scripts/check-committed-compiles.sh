@@ -104,16 +104,32 @@ link_sibling() {
 link_vendor() {
 	# vendor/ is gitignored, so a worktree starts without MinHook while the checkout it was made
 	# from already has it. Same self-heal scripts/ci-local-check.sh does, for the same reason.
-	if [[ ! -f "$worktree/vendor/minhook/src/buffer.c" ]]; then
-		if [[ -f "$repo_root/vendor/minhook/src/buffer.c" ]]; then
-			mkdir -p "$worktree/vendor"
-			ln -sfn "$repo_root/vendor/minhook" "$worktree/vendor/minhook"
-		else
-			echo "[committed-compiles] FAIL: no vendor/minhook in $repo_root" >&2
-			echo "  git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook" >&2
-			exit 2
-		fi
+	#
+	# Two places are searched, and the second is not optional. `$repo_root` is whichever checkout
+	# invoked this script -- and when that is itself an agent worktree (`.claude/worktrees/...`,
+	# `.worktrees/...`), it is gitignored-empty too, so looking only there fails the gate with
+	# "clone MinHook" for a tree that has a perfectly good copy one directory up. The MAIN
+	# checkout is found through `--git-common-dir`, which every linked worktree shares: its
+	# parent is the checkout the whole worktree family was made from.
+	if [[ -f "$worktree/vendor/minhook/src/buffer.c" ]]; then
+		return
 	fi
+	local common main_checkout source=""
+	common="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+	main_checkout="${common:+$(dirname -- "$common")}"
+	for candidate in "$repo_root" "$main_checkout"; do
+		if [[ -n "$candidate" && -f "$candidate/vendor/minhook/src/buffer.c" ]]; then
+			source="$candidate/vendor/minhook"
+			break
+		fi
+	done
+	if [[ -z "$source" ]]; then
+		echo "[committed-compiles] FAIL: no vendor/minhook in $repo_root${main_checkout:+ or $main_checkout}" >&2
+		echo "  git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook" >&2
+		exit 2
+	fi
+	mkdir -p "$worktree/vendor"
+	ln -sfn "$source" "$worktree/vendor/minhook"
 }
 
 # --- pin the worktree to one commit -----------------------------------------------------------
