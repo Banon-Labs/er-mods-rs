@@ -477,7 +477,23 @@ enough to start co-loading a pair on a user's machine, and only ONE of the two i
 (the other has the refusal firing, which changes the boot path). Demoting needs the `slot = 0` run \
 repeated -- ideally on the original `--seed 2073568449` character, so the A/B above is comparing \
 like with like -- after which this row should be REPLACED by a `[compatible]` entry rather than \
-softened into a vaguer warning."""
+softened into a vaguer warning.
+
+AND THE SEED ITSELF WAS INVALID -- found 2026-09-03 while trying to schedule exactly that repeat. \
+`--seed 2073568449` resolves to `save-files/50-Merchant-Unleveled/ER0000.sl2` SLOT 8, and that \
+container's `USER_DATA010.active_slot` bitmap holds exactly ONE character: slot 0, "Invader \
+Merchant" level 50. `scripts/er-pick-save.py` decided occupancy from "the body decodes to a name \
+and a level > 0", and deleting a character clears the bitmap while LEAVING the body, so it offered \
+ten slots where the game has one. So all four bisect runs above were invalid-slot launches too -- \
+the same boot path the six crashes share -- and this row has never once been measured against a \
+valid slot. The picker now reads the bitmap (its selftest pins both the deleted-slot case and the \
+unreadable-bitmap case), and the same seed now yields slot 0 "Invader Merchant".
+
+WHAT THAT DOES AND DOES NOT SETTLE. It removes the last evidence that this pair is dangerous with \
+a VALID slot: every crash on record now has an invalid slot in it. It does not prove the pair is \
+safe -- that still needs the repeat, which is now finally runnable because the seed picks a real \
+character. Until that run exists the row stays, because refusing a pair costs a feature and \
+co-loading a bad one costs a session."""
 evidence = """crates/er-invasion-warp/src/lib.rs:195 `map_gfx::install_world_map_gfx_hook(base)`; \
 crates/er-invasion-warp/src/lib.rs:197 (local_invasion_filter's SetMultiplayJoinData game detour, \
 crates/er-invasion-warp/src/local_invasion_filter.rs:175); crates/er-invasion-warp/src/lib.rs:235-236 \
